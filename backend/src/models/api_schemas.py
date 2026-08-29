@@ -252,7 +252,7 @@ class DocumentResponse(BaseModel):
     document_id: str = Field(..., description="Unique document identifier")
     job_id: Optional[str] = Field(None, description="Background processing job ID")
     user_id: int = Field(..., description="Owner user ID from PostgreSQL users table")
-    filename: str = Field(..., description="Original filename")
+    filename: str = Field(..., description="Current source PDF filename")
     title: Optional[str] = Field(None, description="User-defined display title")
     status: str = Field(..., description="Processing status (PENDING, PROCESSING, COMPLETED, FAILED)")
     upload_timestamp: datetime = Field(..., description="When document was uploaded")

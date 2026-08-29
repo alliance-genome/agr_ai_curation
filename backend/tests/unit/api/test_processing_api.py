@@ -94,7 +94,7 @@ async def test_reprocess_document_treats_unknown_status_as_pending(monkeypatch, 
 
     monkeypatch.setattr(processing, "get_document", _get_document)
     monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(processing, "_owned_source_file_path", lambda *_args: file_dir / filename)
     monkeypatch.setattr(processing, "update_document_status", _update_status)
     monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
@@ -132,7 +132,7 @@ async def test_reprocess_document_success_schedules_background_task(monkeypatch,
 
     monkeypatch.setattr(processing, "get_document", _get_document)
     monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(processing, "_owned_source_file_path", lambda *_args: file_dir / filename)
     monkeypatch.setattr(processing, "update_document_status", _update_status)
     monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
@@ -197,7 +197,7 @@ async def test_reprocess_background_failure_reports_observability(
 
     monkeypatch.setattr(processing, "get_document", _get_document)
     monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(processing, "_owned_source_file_path", lambda *_args: file_dir / filename)
     monkeypatch.setattr(processing, "update_document_status", _update_status)
     monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
     monkeypatch.setattr(processing, "get_connection", lambda: object())
@@ -424,7 +424,7 @@ async def test_reprocess_document_allows_stale_processing_status_when_job_termin
     monkeypatch.setattr(processing, "get_document", _get_document)
     monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: SimpleNamespace(status="failed"))
     monkeypatch.setattr(processing.pipeline_tracker, "get_pipeline_status", _pipeline_status)
-    monkeypatch.setattr(processing, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(processing, "_owned_source_file_path", lambda *_args: file_dir / filename)
     monkeypatch.setattr(processing, "update_document_status", _update_status)
     monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)

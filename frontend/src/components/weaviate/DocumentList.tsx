@@ -113,8 +113,8 @@ interface DocumentListProps {
   selectedIds?: string[];
   /** Called when selection changes with array of selected IDs */
   onSelectionChange?: (ids: string[]) => void;
-  /** Called when document title is updated */
-  onTitleUpdate?: (documentId: string, title: string) => Promise<void>;
+  /** Called when document title or source filename is updated */
+  onMetadataUpdate?: (documentId: string, title: string, filename: string) => Promise<void>;
   /** Optional filter bar component to render above the table */
   filterBar?: React.ReactNode;
   /** Show PDF upload and extraction-health controls above the inventory table */
@@ -298,7 +298,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
   checkboxSelection = false,
   selectedIds,
   onSelectionChange,
-  onTitleUpdate,
+  onMetadataUpdate,
   filterBar,
   showUploadControls = true,
   paginationModel: controlledPaginationModel,
@@ -779,8 +779,8 @@ const DocumentList: React.FC<DocumentListProps> = ({
     documentColumnHelper.display({
       id: 'actions',
       header: 'Actions',
-      size: onTitleUpdate ? 280 : 240,
-      minSize: onTitleUpdate ? 280 : 240,
+      size: onMetadataUpdate ? 280 : 240,
+      minSize: onMetadataUpdate ? 280 : 240,
       enableSorting: false,
       cell: ({ row }) => {
         const summary = row.original;
@@ -827,17 +827,20 @@ const DocumentList: React.FC<DocumentListProps> = ({
                 </IconButton>
               </span>
             </Tooltip>
-            {onTitleUpdate && (
-              <Tooltip title="Edit display title">
-                <IconButton
-                  size="small"
-                  onClick={() => {
-                    setEditDocument(summary);
-                    setEditDialogOpen(true);
-                  }}
-                >
-                  <Edit fontSize="small" />
-                </IconButton>
+            {onMetadataUpdate && (
+              <Tooltip title="Edit title and PDF filename">
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={isDocumentBusy(summary)}
+                    onClick={() => {
+                      setEditDocument(summary);
+                      setEditDialogOpen(true);
+                    }}
+                  >
+                    <Edit fontSize="small" />
+                  </IconButton>
+                </span>
               </Tooltip>
             )}
             <Tooltip title="Delete">
@@ -862,7 +865,7 @@ const DocumentList: React.FC<DocumentListProps> = ({
     handleViewDetails,
     onDelete,
     onReembed,
-    onTitleUpdate,
+    onMetadataUpdate,
   ]);
 
   const tanStackSorting = useMemo(() => toTanStackSorting(sortModel), [sortModel]);
@@ -1459,18 +1462,18 @@ const DocumentList: React.FC<DocumentListProps> = ({
         documentId={downloadDocumentId}
         onClose={handleCloseDownload}
       />
-      {onTitleUpdate && (
+      {onMetadataUpdate && (
         <EditDocumentDialog
           open={editDialogOpen}
           documentId={editDocument?.id ?? ''}
           currentTitle={editDocument?.title ?? null}
-          originalFilename={editDocument?.filename ?? null}
+          currentFilename={editDocument?.filename ?? ''}
           onClose={() => {
             setEditDialogOpen(false);
             setEditDocument(null);
           }}
-          onSave={async (docId, title) => {
-            await onTitleUpdate(docId, title);
+          onSave={async (docId, title, filename) => {
+            await onMetadataUpdate(docId, title, filename);
             onRefresh();
           }}
         />

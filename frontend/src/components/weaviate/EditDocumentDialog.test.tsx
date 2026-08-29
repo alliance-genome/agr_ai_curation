@@ -7,7 +7,7 @@ describe('EditDocumentDialog', () => {
     open: true,
     documentId: 'test-doc-123',
     currentTitle: 'Original Title',
-    originalFilename: 'original-paper.pdf',
+    currentFilename: 'original-paper.pdf',
     onClose: vi.fn(),
     onSave: vi.fn(),
   };
@@ -20,7 +20,7 @@ describe('EditDocumentDialog', () => {
     render(<EditDocumentDialog {...defaultProps} />);
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText('Edit display title')).toBeInTheDocument();
+    expect(screen.getByText('Edit document metadata')).toBeInTheDocument();
   });
 
   it('does not render the dialog when closed', () => {
@@ -34,7 +34,7 @@ describe('EditDocumentDialog', () => {
 
     const titleInput = screen.getByLabelText(/^display title$/i);
     expect(titleInput).toHaveValue('Original Title');
-    expect(screen.getByText('Original filename remains original-paper.pdf')).toBeInTheDocument();
+    expect(screen.getByLabelText(/pdf filename/i)).toHaveValue('original-paper.pdf');
   });
 
   it('displays empty text field when currentTitle is null', () => {
@@ -70,8 +70,36 @@ describe('EditDocumentDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
     await waitFor(() => {
-      expect(onSave).toHaveBeenCalledWith('test-doc-123', 'New Title');
+      expect(onSave).toHaveBeenCalledWith('test-doc-123', 'New Title', 'original-paper.pdf');
     });
+  });
+
+  it('calls onSave with an independently edited PDF filename', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<EditDocumentDialog {...defaultProps} onSave={onSave} />);
+
+    fireEvent.change(screen.getByLabelText(/pdf filename/i), {
+      target: { value: 'renamed-paper.pdf' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(
+        'test-doc-123',
+        'Original Title',
+        'renamed-paper.pdf',
+      );
+    });
+  });
+
+  it('disables save for a filename without a PDF extension', () => {
+    render(<EditDocumentDialog {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText(/pdf filename/i), {
+      target: { value: 'not-a-pdf.txt' },
+    });
+
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
   });
 
   it('shows loading state while saving', async () => {
@@ -118,15 +146,24 @@ describe('EditDocumentDialog', () => {
 
     const titleInput = screen.getByLabelText(/^display title$/i);
     expect(titleInput).toHaveAttribute('maxLength', '255');
+    expect(screen.getByLabelText(/pdf filename/i)).toHaveAttribute('maxLength', '255');
   });
 
   it('resets form state when dialog reopens', () => {
     const { rerender } = render(<EditDocumentDialog {...defaultProps} open={false} />);
 
     // Open dialog with different title
-    rerender(<EditDocumentDialog {...defaultProps} open={true} currentTitle="Different Title" />);
+    rerender(
+      <EditDocumentDialog
+        {...defaultProps}
+        open={true}
+        currentTitle="Different Title"
+        currentFilename="different.pdf"
+      />,
+    );
 
     const titleInput = screen.getByLabelText(/^display title$/i);
     expect(titleInput).toHaveValue('Different Title');
+    expect(screen.getByLabelText(/pdf filename/i)).toHaveValue('different.pdf');
   });
 });

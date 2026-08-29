@@ -253,7 +253,7 @@ async def async_list_documents(
                 doc = {
                     "document_id": doc_id,  # Contract field name
                     "user_id": user_id,  # Required by contract
-                    "filename": doc_props.get("filename"),
+                    "filename": pg_doc.filename,
                     "title": pg_doc.title,
                     "status": processing_status.upper(),  # Contract requires uppercase enum
                     "upload_timestamp": pg_doc.upload_timestamp.isoformat() if pg_doc.upload_timestamp else doc_props.get("creationDate"),
@@ -356,6 +356,30 @@ def list_documents(
             pagination_model.model_dump()
         )
     )
+
+
+async def update_document_filename(
+    user_id: str,
+    document_id: str,
+    filename: str,
+) -> None:
+    """Update the tenant-scoped indexed filename used by search, sort, and chat."""
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped document updates")
+
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+
+    with connection.session() as client:
+        _, pdf_collection = get_user_collections(client, user_id)
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: pdf_collection.data.update(
+                uuid=document_id,
+                properties={"filename": filename},
+            ),
+        )
 
 
 async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:

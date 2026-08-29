@@ -243,7 +243,7 @@ async def test_get_document_endpoint_raises_500_on_backend_error(monkeypatch, ca
 @pytest.mark.asyncio
 async def test_update_document_endpoint_updates_title_and_commits(monkeypatch):
     session = _FakeSession()
-    document = SimpleNamespace(title="old")
+    document = SimpleNamespace(title="old", filename="paper.pdf")
     monkeypatch.setattr(documents, "SessionLocal", lambda: session)
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
 
@@ -255,6 +255,7 @@ async def test_update_document_endpoint_updates_title_and_commits(monkeypatch):
 
     assert response.document_id == "doc-1"
     assert response.title == "new-title"
+    assert response.filename == "paper.pdf"
     assert document.title == "new-title"
     assert session.commits == 1
     assert session.closed is True
@@ -277,7 +278,230 @@ async def test_update_document_endpoint_rolls_back_on_error(monkeypatch, caplog)
     assert exc.value.detail == "Failed to update document"
     assert session.rollbacks == 1
     assert session.closed is True
-    assert "db exploded" in caplog.text
+    assert "Document metadata update failed (RuntimeError)" in caplog.text
+    assert "db exploded" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_update_document_endpoint_renames_source_and_index(monkeypatch, tmp_path):
+    document_id = str(uuid4())
+    relative_path = f"user-1/{document_id}/old.pdf"
+    source_path = tmp_path / relative_path
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"%PDF-1.7")
+    document = SimpleNamespace(
+        title="Title",
+        filename="old.pdf",
+        file_path=relative_path,
+        status="completed",
+        user_id=7,
+    )
+    session = _FakeSession()
+    index_updates = []
+
+    async def _update_index(user_sub, doc_id, filename):
+        index_updates.append((user_sub, doc_id, filename))
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+    monkeypatch.setattr(documents, "update_document_filename", _update_index)
+
+    response = await documents.update_document_endpoint(
+        DocumentUpdateRequest(title="New title", filename="renamed.pdf"),
+        document_id,
+        {"sub": "user-1"},
+    )
+
+    assert response.document_id == document_id
+    assert response.title == "New title"
+    assert response.filename == "renamed.pdf"
+    assert document.file_path == f"user-1/{document_id}/renamed.pdf"
+    assert not source_path.exists()
+    assert source_path.with_name("renamed.pdf").read_bytes() == b"%PDF-1.7"
+    assert index_updates == [("user-1", document_id, "renamed.pdf")]
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_update_document_endpoint_rejects_active_processing_rename(monkeypatch):
+    document_id = str(uuid4())
+    document = SimpleNamespace(
+        title=None,
+        filename="old.pdf",
+        file_path=f"user-1/{document_id}/old.pdf",
+        status="processing",
+        user_id=7,
+    )
+    session = _FakeSession()
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.update_document_endpoint(
+            DocumentUpdateRequest(filename="renamed.pdf"),
+            document_id,
+            {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 409
+    assert "processing is active" in exc.value.detail
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_update_document_endpoint_rejects_filename_collision(monkeypatch, tmp_path):
+    document_id = str(uuid4())
+    source_path = tmp_path / "user-1" / document_id / "old.pdf"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"old")
+    source_path.with_name("taken.pdf").write_bytes(b"taken")
+    document = SimpleNamespace(
+        title=None,
+        filename="old.pdf",
+        file_path=str(source_path.relative_to(tmp_path)),
+        status="completed",
+        user_id=7,
+    )
+    session = _FakeSession()
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.update_document_endpoint(
+            DocumentUpdateRequest(filename="taken.pdf"),
+            document_id,
+            {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 409
+    assert source_path.read_bytes() == b"old"
+    assert source_path.with_name("taken.pdf").read_bytes() == b"taken"
+
+
+@pytest.mark.asyncio
+async def test_update_document_endpoint_rejects_database_path_collision(monkeypatch, tmp_path):
+    document_id = str(uuid4())
+    source_path = tmp_path / "user-1" / document_id / "old.pdf"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"old")
+    document = SimpleNamespace(
+        title=None,
+        filename="old.pdf",
+        file_path=str(source_path.relative_to(tmp_path)),
+        status="completed",
+        user_id=7,
+    )
+    session = _FakeSession(execute_doc=uuid4())
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.update_document_endpoint(
+            DocumentUpdateRequest(filename="taken.pdf"),
+            document_id,
+            {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 409
+    assert source_path.read_bytes() == b"old"
+    assert not source_path.with_name("taken.pdf").exists()
+
+
+@pytest.mark.asyncio
+async def test_update_document_endpoint_restores_source_when_index_update_fails(monkeypatch, tmp_path):
+    document_id = str(uuid4())
+    source_path = tmp_path / "user-1" / document_id / "old.pdf"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"old")
+    document = SimpleNamespace(
+        title=None,
+        filename="old.pdf",
+        file_path=str(source_path.relative_to(tmp_path)),
+        status="completed",
+        user_id=7,
+    )
+    session = _FakeSession()
+    index_updates = []
+
+    async def _fail_index(_user_sub, _doc_id, filename):
+        index_updates.append(filename)
+        if filename == "renamed.pdf":
+            raise RuntimeError("index details")
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+    monkeypatch.setattr(documents, "update_document_filename", _fail_index)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.update_document_endpoint(
+            DocumentUpdateRequest(filename="renamed.pdf"),
+            document_id,
+            {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 500
+    assert source_path.read_bytes() == b"old"
+    assert not source_path.with_name("renamed.pdf").exists()
+    assert document.filename == "old.pdf"
+    assert index_updates == ["renamed.pdf", "old.pdf"]
+    assert session.rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_update_document_endpoint_restores_index_and_source_when_commit_fails(monkeypatch, tmp_path):
+    document_id = str(uuid4())
+    source_path = tmp_path / "user-1" / document_id / "old.pdf"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"old")
+    document = SimpleNamespace(
+        title=None,
+        filename="old.pdf",
+        file_path=str(source_path.relative_to(tmp_path)),
+        status="completed",
+        user_id=7,
+    )
+    session = _FakeSession()
+    index_updates = []
+
+    def _fail_commit():
+        raise RuntimeError("commit details")
+
+    async def _update_index(_user_sub, _doc_id, filename):
+        index_updates.append(filename)
+
+    session.commit = _fail_commit
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+    monkeypatch.setattr(documents, "update_document_filename", _update_index)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.update_document_endpoint(
+            DocumentUpdateRequest(filename="renamed.pdf"),
+            document_id,
+            {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 500
+    assert index_updates == ["renamed.pdf", "old.pdf"]
+    assert source_path.read_bytes() == b"old"
+    assert not source_path.with_name("renamed.pdf").exists()
+    assert session.rollbacks == 1
 
 
 @pytest.mark.asyncio

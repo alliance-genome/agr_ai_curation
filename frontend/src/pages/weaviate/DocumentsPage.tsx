@@ -206,29 +206,31 @@ const DocumentsPage: React.FC = () => {
     }
   }, [handleRefresh, reembedDocument]);
 
-  const handleTitleUpdate = React.useCallback(async (documentId: string, title: string) => {
+  const handleMetadataUpdate = React.useCallback(async (
+    documentId: string,
+    title: string,
+    filename: string,
+  ) => {
     const response = await fetch(`/api/weaviate/documents/${documentId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, filename }),
     });
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || 'Failed to update title');
+      throw new Error(errorData.detail || 'Failed to update document metadata');
     }
-    const payload = (await response.json()) as { title?: string | null };
+    const payload = (await response.json()) as { title?: string | null; filename: string };
     const savedTitle = payload.title ?? null;
     setDocuments((previousDocuments) => previousDocuments.map((document) => (
       document.id === documentId
-        ? { ...document, title: savedTitle }
+        ? { ...document, title: savedTitle, filename: payload.filename }
         : document
     )));
     setSnackbar({
       open: true,
-      message: savedTitle
-        ? 'Display title updated. The original filename was not changed.'
-        : 'Display title cleared. The original filename was not changed.',
+      message: 'Document title and PDF filename updated.',
       severity: 'success',
     });
   }, []);
@@ -371,7 +373,7 @@ const DocumentsPage: React.FC = () => {
             onDelete={handleDelete}
             onReembed={handleReembed}
             onRefresh={handleRefresh}
-            onTitleUpdate={handleTitleUpdate}
+            onMetadataUpdate={handleMetadataUpdate}
             showUploadControls={false}
             checkboxSelection={true}
             selectedIds={selectedDocumentIds}

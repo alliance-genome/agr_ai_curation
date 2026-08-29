@@ -44,6 +44,7 @@ from ..lib.document_sources.identifier_import import (
 from ..lib.document_sources.provenance import build_document_source_provenance
 from ..lib.document_sources.registry import get_document_source_provider_metadata
 from ..lib.http_errors import log_exception, raise_sanitized_http_exception
+from ..lib.observability.runtime import report_runtime_exception
 from ..lib.pdf_jobs import service as pdf_job_service
 from ..lib.pdf_jobs.upload_execution_service import (
     UploadExecutionService,
@@ -63,6 +64,7 @@ from ..lib.weaviate_client.documents import (
 from ..lib.weaviate_client.documents import (
     delete_document,
     get_document,
+    update_document_filename,
 )
 from ..lib.weaviate_helpers import get_tenant_name
 from ..models.api_schemas import (
@@ -125,6 +127,22 @@ identifier_import_service = IdentifierImportService(upload_execution_service=upl
 
 _pdf_extraction_service_token: str | None = None
 _pdf_extraction_service_token_expires_at: float = 0.0
+
+
+class _DocumentMetadataUpdateError(RuntimeError):
+    """Sanitized metadata failure safe for logs and Sentry."""
+
+
+def _sanitized_document_metadata_error(exc: BaseException) -> _DocumentMetadataUpdateError:
+    """Build a safe exception without retaining storage paths or SQL parameters."""
+    try:
+        raise _DocumentMetadataUpdateError(
+            f"Document metadata update failed ({type(exc).__name__})"
+        ) from None
+    except _DocumentMetadataUpdateError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
 
 
 def _effective_processing_status(raw_document_status: Any, pipeline_status: Any) -> str:
@@ -533,6 +551,174 @@ def validate_user_file_path(
             status_code=500,
             detail="File path validation error"
         ) from e
+
+
+def _rename_source_pdf(
+    *,
+    document: ViewerPDFDocument,
+    filename: str,
+    user_sub: str,
+) -> tuple[FilePath, FilePath, str]:
+    """Move an owned source PDF and return paths needed for compensation."""
+    storage_root = FilePath(get_pdf_storage_path())
+    source_path = validate_user_file_path(
+        storage_root / document.file_path,
+        storage_root,
+        user_sub,
+    )
+    if not source_path.is_file():
+        raise HTTPException(status_code=404, detail="Source PDF file not found")
+
+    destination_path = validate_user_file_path(
+        source_path.with_name(filename),
+        storage_root,
+        user_sub,
+    )
+    try:
+        destination_path.hardlink_to(source_path)
+    except FileExistsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="A document file with that filename already exists",
+        ) from exc
+
+    try:
+        source_path.unlink()
+    except Exception:
+        destination_path.unlink(missing_ok=True)
+        raise
+    relative_destination = destination_path.relative_to(storage_root.resolve()).as_posix()
+    return source_path, destination_path, relative_destination
+
+
+async def _restore_renamed_document(
+    *,
+    document_id: str,
+    user_sub: str,
+    old_filename: str,
+    source_path: FilePath,
+    destination_path: FilePath,
+    restore_index: bool,
+) -> None:
+    """Best-effort compensation after an indexed or database update failure."""
+    if restore_index:
+        try:
+            await update_document_filename(user_sub, document_id, old_filename)
+        except Exception as exc:  # pragma: no cover - exercised through reporting mock
+            report_runtime_exception(
+                _sanitized_document_metadata_error(exc),
+                component="documents",
+                operation="filename_index_rollback_failed",
+                context={"document_id": document_id},
+            )
+
+    try:
+        if destination_path.exists() and not source_path.exists():
+            destination_path.rename(source_path)
+    except Exception as exc:  # pragma: no cover - exercised through reporting mock
+        report_runtime_exception(
+            _sanitized_document_metadata_error(exc),
+            component="documents",
+            operation="filename_storage_rollback_failed",
+            context={"document_id": document_id},
+        )
+
+
+async def _update_owned_document_metadata(
+    *,
+    session: Session,
+    document: ViewerPDFDocument,
+    request: DocumentUpdateRequest,
+    document_id: str,
+    user_sub: str,
+) -> DocumentUpdateResponse:
+    """Coordinate indexed, filesystem, and PostgreSQL metadata updates."""
+    moved_paths: tuple[FilePath, FilePath] | None = None
+    old_filename: str | None = None
+    index_update_attempted = False
+    sanitized_failure: _DocumentMetadataUpdateError | None = None
+    try:
+        metadata_changed = False
+        if request.filename is not None and request.filename != document.filename:
+            latest_job = pdf_job_service.get_latest_job_for_document(
+                document_id=document_id,
+                user_id=document.user_id,
+                reconcile_stale=True,
+            )
+            pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+            processing_status = _canonical_processing_status(
+                sql_processing_status=document.status,
+                weaviate_processing_status=None,
+                pipeline_status=pipeline_status,
+                job=latest_job,
+            )
+            if processing_status in _ACTIVE_PROCESSING_STATUSES:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Document filename cannot be changed while processing is active",
+                )
+
+            target_relative_path = FilePath(document.file_path).with_name(
+                request.filename
+            ).as_posix()
+            path_owner = session.execute(
+                select(ViewerPDFDocument.id).where(
+                    ViewerPDFDocument.file_path == target_relative_path,
+                    ViewerPDFDocument.id != _parse_document_uuid(document_id),
+                )
+            ).scalar_one_or_none()
+            if path_owner is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A document file with that filename already exists",
+                )
+
+            old_filename = document.filename
+            source_path, destination_path, relative_destination = _rename_source_pdf(
+                document=document,
+                filename=request.filename,
+                user_sub=user_sub,
+            )
+            moved_paths = (source_path, destination_path)
+            index_update_attempted = True
+            await update_document_filename(user_sub, document_id, request.filename)
+            document.filename = request.filename
+            document.file_path = relative_destination
+            metadata_changed = True
+
+        if request.title is not None:
+            document.title = request.title
+            metadata_changed = True
+
+        if metadata_changed:
+            session.commit()
+            logger.info("Updated metadata for document %s", document_id)
+
+        return DocumentUpdateResponse(
+            document_id=document_id,
+            title=document.title,
+            filename=document.filename,
+        )
+    except Exception as exc:
+        session.rollback()
+        if moved_paths is not None and old_filename is not None:
+            await _restore_renamed_document(
+                document_id=document_id,
+                user_sub=user_sub,
+                old_filename=old_filename,
+                source_path=moved_paths[0],
+                destination_path=moved_paths[1],
+                restore_index=index_update_attempted,
+            )
+        if isinstance(exc, HTTPException):
+            raise
+        if isinstance(exc, _DocumentMetadataUpdateError):
+            raise
+        sanitized_failure = _sanitized_document_metadata_error(exc)
+
+    if sanitized_failure is None:  # pragma: no cover - defensive invariant
+        raise _DocumentMetadataUpdateError("Document metadata update failed")
+    raise sanitized_failure
 
 
 def _unlink_user_storage_file_if_present(
@@ -1205,9 +1391,7 @@ async def update_document_endpoint(
     user: dict[str, Any] = get_auth_dependency(),
 ):
     """
-    Update document metadata (e.g., title).
-
-    Allows users to set a custom title for batch processing clarity.
+    Update a document's display title and source PDF filename independently.
 
     Requirements:
         - FR-014: Verify document ownership, return 403 for cross-user access
@@ -1216,27 +1400,28 @@ async def update_document_endpoint(
     session = SessionLocal()
     try:
         pg_doc = verify_document_ownership(session, document_id, user)
-
-        # Update title if provided
-        if request.title is not None:
-            pg_doc.title = request.title
-            session.commit()
-            logger.debug("Updated document %s title to: %s", document_id, request.title)
-
-        return DocumentUpdateResponse(
+        return await _update_owned_document_metadata(
+            session=session,
+            document=pg_doc,
+            request=request,
             document_id=document_id,
-            title=pg_doc.title,
+            user_sub=user["sub"],
         )
     except HTTPException:
         raise
     except Exception as e:
-        session.rollback()
+        if not isinstance(e, _DocumentMetadataUpdateError):
+            session.rollback()
+        sanitized_error = (
+            e if isinstance(e, _DocumentMetadataUpdateError)
+            else _sanitized_document_metadata_error(e)
+        )
         raise_sanitized_http_exception(
             logger,
             status_code=500,
             detail="Failed to update document",
             log_message=f"Error updating document {document_id}",
-            exc=e,
+            exc=sanitized_error,
         )
     finally:
         session.close()

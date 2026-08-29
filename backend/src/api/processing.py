@@ -34,6 +34,7 @@ from ..services.processing_status_policy import (
 from ..models.sql.database import SessionLocal
 from ..services.user_service import principal_from_claims, provision_user
 from ..config import get_pdf_storage_path
+from .documents import validate_user_file_path, verify_document_ownership
 
 # Create a global tracker instance for the API
 pipeline_tracker = PipelineTracker()
@@ -60,6 +61,21 @@ def _latest_job_for_user_document(document_id: str, auth_user: Dict[str, Any]):
         session.close()
 
 
+def _owned_source_file_path(document_id: str, auth_user: Dict[str, Any]):
+    """Resolve the canonical owned source path stored with the PDF document."""
+    session = SessionLocal()
+    try:
+        document = verify_document_ownership(session, document_id, auth_user)
+        storage_root = get_pdf_storage_path()
+        return validate_user_file_path(
+            storage_root / document.file_path,
+            storage_root,
+            auth_user["sub"],
+        )
+    finally:
+        session.close()
+
+
 @router.post("/documents/{document_id}/reprocess", response_model=OperationResult)
 async def reprocess_document_endpoint(
     background_tasks: BackgroundTasks,
@@ -75,8 +91,8 @@ async def reprocess_document_endpoint(
 
     Requires authentication (FR-009, FR-010, FR-011, FR-014).
     """
+    user_id = user["sub"]
     try:
-        user_id = user['sub']
         document_data = await get_document(user_id, document_id)
 
         if not document_data:
@@ -102,7 +118,7 @@ async def reprocess_document_endpoint(
         if doc_status in _ACTIVE_PROCESSING_STATUSES:
             pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
             if _is_pipeline_status_active(pipeline_status):
-                stage_label = _stage_value(pipeline_status.current_stage)
+                stage_label = _stage_value(getattr(pipeline_status, "current_stage", None))
                 raise HTTPException(
                     status_code=409,
                     detail=f"Document is currently being processed (stage: {stage_label})"
@@ -121,22 +137,12 @@ async def reprocess_document_endpoint(
                     detail=f"Document is currently being processed (stage: {stage_label})"
                 )
 
-        # Get filename to construct path
-        filename = document_data["document"].get("filename")
-        if not filename:
-             raise HTTPException(
-                status_code=500,
-                detail="Document metadata missing filename"
-            )
-            
-        base_storage = get_pdf_storage_path()
-        # Fix: File is stored in a subdirectory named after document_id
-        file_path = base_storage / user_id / document_id / filename
+        file_path = _owned_source_file_path(document_id, user)
         
         if not file_path.exists():
              raise HTTPException(
                 status_code=404,
-                detail=f"Source file not found at {file_path}"
+                detail="Source PDF file not found"
             )
 
         await update_document_status(document_id, user_id, ProcessingStatus.PROCESSING)
@@ -244,8 +250,8 @@ async def reembed_document_endpoint(
 
     Requires authentication (FR-009, FR-010, FR-011, FR-014).
     """
+    user_id = user["sub"]
     try:
-        user_id = user['sub']
         document = await get_document(user_id, document_id)
 
         if not document:
@@ -271,7 +277,7 @@ async def reembed_document_endpoint(
         if doc_status in _ACTIVE_PROCESSING_STATUSES:
             pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
             if _is_pipeline_status_active(pipeline_status):
-                stage_label = _stage_value(pipeline_status.current_stage)
+                stage_label = _stage_value(getattr(pipeline_status, "current_stage", None))
                 raise HTTPException(
                     status_code=409,
                     detail=f"Document is currently being processed (stage: {stage_label})"

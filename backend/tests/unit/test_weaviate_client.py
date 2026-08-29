@@ -28,6 +28,38 @@ class DummyCollection:
 
 
 @pytest.mark.asyncio
+async def test_update_document_filename_updates_tenant_index():
+    collection = MagicMock()
+    mock_client = MagicMock()
+
+    @contextmanager
+    def fake_session():
+        yield mock_client
+
+    connection = MagicMock()
+    connection.session.side_effect = fake_session
+    event_loop = MagicMock()
+    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
+         patch(
+             "src.lib.weaviate_client.documents.get_user_collections",
+             return_value=(MagicMock(), collection),
+         ), \
+         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop):
+        await _documents_module().update_document_filename(
+            "auth-sub-1",
+            "00000000-0000-0000-0000-000000000111",
+            "renamed.pdf",
+        )
+
+    collection.data.update.assert_called_once_with(
+        uuid="00000000-0000-0000-0000-000000000111",
+        properties={"filename": "renamed.pdf"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_async_list_documents_normalises_results():
     mock_uuid = UUID("00000000-0000-0000-0000-000000000001")
     fetch_result = SimpleNamespace(
@@ -69,6 +101,7 @@ async def test_async_list_documents_normalises_results():
 
     mock_db_doc = SimpleNamespace(
         id=mock_uuid,
+        filename="paper.pdf",
         title=None,
         status="completed",
         error_message=None,
@@ -123,6 +156,7 @@ async def test_async_list_documents_normalises_results():
     assert result["limit"] == 10
     assert result["offset"] == 0
     assert result["documents"][0]["document_id"] == str(mock_uuid)
+    assert result["documents"][0]["filename"] == "paper.pdf"
     assert result["documents"][0]["user_id"] == "test_user_user_id"  # user_id is the auth_sub string, not db id
     assert result["documents"][0]["vector_count"] == 10
     assert result["documents"][0]["weaviate_tenant"] == "test_tenant"
@@ -314,6 +348,7 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
 
     mock_pg_doc = SimpleNamespace(
         id=owned_uuid,
+        filename="owned-paper.pdf",
         title=None,
         status="pending",
         error_message=None,
@@ -407,6 +442,7 @@ async def test_async_list_documents_applies_date_filters():
     mock_db_user = SimpleNamespace(id=42)
     mock_pg_doc = SimpleNamespace(
         id=mock_uuid,
+        filename="dated-paper.pdf",
         title=None,
         status="pending",
         error_message=None,

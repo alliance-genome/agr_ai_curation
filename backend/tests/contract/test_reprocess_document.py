@@ -48,7 +48,8 @@ def test_reprocess_success_returns_operation_result(client: TestClient, tmp_path
     file_path.write_bytes(b"%PDF-1.7")
 
     with patch("src.api.processing.get_document", new_callable=AsyncMock) as mock_get_document, \
-         patch("src.api.processing.get_pdf_storage_path", return_value=base_storage), \
+         patch("src.api.processing._latest_job_for_user_document", return_value=None), \
+         patch("src.api.processing._owned_source_file_path", return_value=file_path), \
          patch("src.api.processing.update_document_status", new_callable=AsyncMock) as mock_update_status, \
          patch("src.api.processing.pipeline_tracker.track_pipeline_progress", new_callable=AsyncMock) as mock_track, \
          patch("src.api.processing.BackgroundTasks.add_task", autospec=True, return_value=None):
@@ -82,6 +83,7 @@ def test_reprocess_returns_409_when_processing_active(client: TestClient):
     document_id = "11111111-1111-1111-1111-111111111111"
     now = datetime.now(timezone.utc)
     with patch("src.api.processing.get_document", new_callable=AsyncMock) as mock_get_document, \
+         patch("src.api.processing._latest_job_for_user_document", return_value=None), \
          patch("src.api.processing.pipeline_tracker.get_pipeline_status", new_callable=AsyncMock) as mock_pipeline_status:
         mock_get_document.return_value = _ready_document(processing_status="processing")
         mock_pipeline_status.return_value = PipelineStatus(
@@ -104,8 +106,10 @@ def test_reprocess_returns_409_when_processing_active(client: TestClient):
 def test_reprocess_returns_404_when_source_file_missing(client: TestClient, tmp_path: Path):
     document_id = "11111111-1111-1111-1111-111111111111"
     base_storage = tmp_path / "pdf_storage"
+    missing_path = base_storage / "contract-user" / document_id / "missing.pdf"
     with patch("src.api.processing.get_document", new_callable=AsyncMock) as mock_get_document, \
-         patch("src.api.processing.get_pdf_storage_path", return_value=base_storage):
+         patch("src.api.processing._latest_job_for_user_document", return_value=None), \
+         patch("src.api.processing._owned_source_file_path", return_value=missing_path):
         mock_get_document.return_value = _ready_document(filename="missing.pdf")
         response = client.post(
             f"/weaviate/documents/{document_id}/reprocess",
@@ -113,4 +117,4 @@ def test_reprocess_returns_404_when_source_file_missing(client: TestClient, tmp_
         )
 
     assert response.status_code == 404
-    assert "source file not found" in response.json()["detail"].lower()
+    assert "source pdf file not found" in response.json()["detail"].lower()

@@ -1,10 +1,8 @@
 """Tests for document update (PATCH) endpoint."""
 import pytest
-from unittest.mock import patch, MagicMock
 from uuid import uuid4
 
 from pydantic import ValidationError
-from fastapi import HTTPException
 
 
 class TestDocumentUpdateEndpoint:
@@ -30,12 +28,14 @@ class TestDocumentUpdateEndpoint:
         """Verify the DocumentUpdateResponse schema exists."""
         from src.schemas.documents import DocumentUpdateResponse
 
-        # Response should include document_id, title, and updated_at
+        # Response should include document_id, title, and filename.
         response = DocumentUpdateResponse(
             document_id=str(uuid4()),
             title="Updated Title",
+            filename="paper.pdf",
         )
         assert response.title == "Updated Title"
+        assert response.filename == "paper.pdf"
 
     def test_update_document_title_max_length(self):
         """Title should enforce max_length=255."""
@@ -43,8 +43,34 @@ class TestDocumentUpdateEndpoint:
 
         # 255 characters should pass
         request = DocumentUpdateRequest(title="x" * 255)
+        assert request.title is not None
         assert len(request.title) == 255
 
         # 256 characters should fail
         with pytest.raises(ValidationError):
             DocumentUpdateRequest(title="x" * 256)
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "",
+            "   ",
+            "paper.txt",
+            "../paper.pdf",
+            "folder/paper.pdf",
+            "folder\\paper.pdf",
+            "paper\n.pdf",
+            "x" * 252 + ".pdf",
+        ],
+    )
+    def test_update_document_rejects_invalid_filename(self, filename):
+        from src.schemas.documents import DocumentUpdateRequest
+
+        with pytest.raises(ValidationError):
+            DocumentUpdateRequest(filename=filename)
+
+    def test_update_document_accepts_pdf_filename(self):
+        from src.schemas.documents import DocumentUpdateRequest
+
+        request = DocumentUpdateRequest(filename="curator name.PDF")
+        assert request.filename == "curator name.PDF"
