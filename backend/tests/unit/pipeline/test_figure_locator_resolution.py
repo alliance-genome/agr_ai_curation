@@ -385,6 +385,42 @@ async def test_singleton_canonical_is_normalized_from_structured_panel(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_panel_only_singleton_without_figure_number_is_downgraded_to_uncertain(
+    monkeypatch,
+) -> None:
+    chunk = _chunk("chunk-0", "Figure 5. (D) Representative image.")
+    monkeypatch.setattr(
+        locator,
+        "_call_figure_locator_classifier",
+        AsyncMock(
+            return_value=locator.FigureLocatorBatchOutput(
+                candidates=[
+                    locator.FigureLocatorCandidateOutput(
+                        candidate_id=chunk.id,
+                        mentions=[
+                            locator.FigureLocatorMentionOutput(
+                                text="(D)",
+                                cardinality="single",
+                                kind="figure",
+                                number=None,
+                                panels=["D"],
+                                canonical_reference=None,
+                            )
+                        ],
+                    )
+                ]
+            )
+        ),
+    )
+
+    await locator.resolve_figure_locators([chunk])
+
+    annotation = _resolution_for(chunk).annotations[0]
+    assert annotation.cardinality == "uncertain"
+    assert annotation.canonical_reference is None
+
+
+@pytest.mark.asyncio
 async def test_malformed_singleton_number_is_downgraded_to_uncertain(monkeypatch) -> None:
     chunk = _chunk("chunk-0", "Figures 2-4 summarize the experiments.")
     monkeypatch.setattr(

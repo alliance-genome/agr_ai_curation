@@ -362,7 +362,7 @@ def build_trial_flow(trial: CorpusTrial) -> dict[str, Any]:
         edges.append({"id": f"edge_{index}", "source": previous_node, "target": node_id})
         previous_node = node_id
     return {
-        "version": "1.0",
+        "version": "1.1",
         "entry_node_id": "task_input_1",
         "nodes": nodes,
         "edges": edges,
