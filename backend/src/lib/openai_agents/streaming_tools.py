@@ -1199,6 +1199,7 @@ def _emit_specialist_evidence_summary_or_raise(
         len(live_evidence_records),
         unverified_record_ids,
         evidence_reference_report,
+        extra={"sentry_skip_event": True},
     )
     add_specialist_event({
         "type": "SPECIALIST_ERROR",
@@ -5335,6 +5336,7 @@ async def run_specialist_with_events(
             e,
             total_event_count,
             event_type_counts,
+            extra={"sentry_skip_event": True},
         )
         builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
         raise
@@ -5406,6 +5408,7 @@ async def run_specialist_with_events(
             "%s required-tool enforcement failure: %s",
             specialist_name,
             required_tool_error,
+            extra={"sentry_skip_event": True},
         )
         add_specialist_event({
             "type": "SPECIALIST_ERROR",
@@ -5797,6 +5800,7 @@ async def run_specialist_with_events(
                             specialist_name,
                             retry_event_count,
                             retry_duration_ms,
+                            extra={"sentry_skip_event": True},
                         )
 
                         # Emit ERROR audit event so it shows in the audit panel
@@ -5837,7 +5841,12 @@ async def run_specialist_with_events(
                     raise
                 except Exception as e:
                     # Retry mechanism itself failed
-                    logger.error("%s retry mechanism error: %s", specialist_name, e)
+                    logger.error(
+                        "%s retry mechanism error: %s",
+                        specialist_name,
+                        e,
+                        extra={"sentry_skip_event": True},
+                    )
                     error_message = f"{specialist_name} retry failed with error: {str(e)}"
                     _record_builder_specialist_output_failure(
                         builder_workspace=builder_workspace,
@@ -5889,6 +5898,7 @@ async def run_specialist_with_events(
                         "finalizerToolCalls"
                     ],
                     "operation": "builder_finalization_missing",
+                    "sentry_skip_event": True,
                 },
             )
             add_specialist_event({
@@ -5927,6 +5937,7 @@ async def run_specialist_with_events(
                     "builder_run_id": builder_workspace.run_id,
                     "builder_invocation_id": builder_workspace.builder_invocation_id,
                     "operation": "builder_materializer_tool_name_missing",
+                    "sentry_skip_event": True,
                 },
             )
             add_specialist_event({

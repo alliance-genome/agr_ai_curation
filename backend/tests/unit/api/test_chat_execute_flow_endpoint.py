@@ -909,6 +909,12 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
     execute_calls = []
+    runtime_reports = []
+    monkeypatch.setattr(
+        chat,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
 
     async def _fake_execute_flow(**_kwargs):
         execute_calls.append(_kwargs["flow_run_id"])
@@ -998,6 +1004,16 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
         chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
     assert not any(message.message_type == "file_download" for message in stored_messages)
+    assert len(runtime_reports) == 1
+    reported_exc, report_kwargs = runtime_reports[0]
+    assert str(reported_exc) == "extraction_persistence_failed during flow_execution"
+    assert report_kwargs["tags"] == {
+        "ai_curation.flow.id_hash": chat.hash_sentry_identifier(flow_id),
+        "flow_failure_type": "extraction_persistence_failed",
+        "phase": "flow_execution",
+        "provider": None,
+        "tool_name": None,
+    }
 
 
 
@@ -2196,6 +2212,12 @@ def test_execute_flow_endpoint_suppresses_terminal_sse_when_failure_cannot_persi
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    runtime_reports = []
+    monkeypatch.setattr(
+        chat,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
 
     async def _fake_execute_flow(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-double-failure"}}
@@ -2273,6 +2295,21 @@ def test_execute_flow_endpoint_suppresses_terminal_sse_when_failure_cannot_persi
     assert all("RUN_ERROR" not in event for event in executable_run.events)
     assert "completion transcript write 1 failed" in caplog.text
     assert "completion transcript write 2 failed" in caplog.text
+    assert [str(exc) for exc, _kwargs in runtime_reports] == [
+        "completion transcript write 1 failed",
+        "completion transcript write 2 failed",
+    ]
+    assert [kwargs["operation"] for _exc, kwargs in runtime_reports] == [
+        "event_generator_failed",
+        "failure_outcome_persistence_failed",
+    ]
+    recovery_logs = [
+        record
+        for record in caplog.records
+        if record.message == "Failed to persist recoverable execute-flow failure outcome"
+    ]
+    assert len(recovery_logs) == 1
+    assert recovery_logs[0].sentry_skip_event is True
 
     retry_response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -2562,6 +2599,13 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     assert report_kwargs == {
         "component": "execute_flow_stream",
         "operation": "event_generator_failed",
+        "tags": {
+            "ai_curation.flow.id_hash": chat.hash_sentry_identifier(flow_id),
+            "flow_failure_type": "RuntimeError",
+            "phase": "event_generator",
+            "provider": None,
+            "tool_name": None,
+        },
         "context": {
             "session_id": "session-flow-error",
             "turn_id": ANY,
@@ -2592,6 +2636,12 @@ def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, cap
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    runtime_reports = []
+    monkeypatch.setattr(
+        chat,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
 
     async def _fake_execute_flow(**_kwargs):
         yield {
@@ -2619,6 +2669,25 @@ def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, cap
     assert events[0]["details"]["error"] == "Flow execution failed unexpectedly."
     assert "runner exploded" not in json.dumps(events)
     assert "runner exploded" in caplog.text
+    assert len(runtime_reports) == 1
+    reported_exc, report_kwargs = runtime_reports[0]
+    assert str(reported_exc) == "RuntimeError during runner"
+    assert "runner exploded" not in str(reported_exc)
+    assert report_kwargs["operation"] == "terminal_outcome_failed"
+    assert report_kwargs["tags"] == {
+        "ai_curation.flow.id_hash": chat.hash_sentry_identifier(flow_id),
+        "flow_failure_type": "RuntimeError",
+        "phase": "runner",
+        "provider": None,
+        "tool_name": None,
+    }
+    failure_logs = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Flow runner emitted RUN_ERROR")
+    ]
+    assert len(failure_logs) == 1
+    assert failure_logs[0].sentry_skip_event is True
     assert calls["unregister"] == [("session-flow-run-error", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-run-error"]
 

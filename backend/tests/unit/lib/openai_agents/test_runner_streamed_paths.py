@@ -705,6 +705,74 @@ async def test_run_agent_streamed_specialist_output_error_path(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_flow_owned_specialist_output_error_propagates_without_notification(
+    monkeypatch,
+    caplog,
+):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "flush_agent_configs", lambda _span: 0)
+
+    class _RootSpan:
+        trace_id = "trace-flow-specialist"
+        id = "span-flow-specialist"
+
+        def update(self, **_kwargs):
+            return None
+
+    class _Langfuse:
+        def start_as_current_observation(self, **_kwargs):
+            return _FakeContextManager(_RootSpan())
+
+    monkeypatch.setattr(runner, "get_langfuse", lambda: _Langfuse())
+    monkeypatch.setattr(
+        runner,
+        "propagate_attributes",
+        lambda **_kwargs: _FakeContextManager(),
+    )
+    notifications = []
+
+    async def _notify_tool_failure(**kwargs):
+        notifications.append(kwargs)
+
+    async def _raising_stream(**_kwargs):
+        if False:
+            yield {}
+        logging.getLogger("openai.agents").error("SDK propagation failure")
+        raise runner.SpecialistOutputError("Gene Specialist", "GeneResultEnvelope")
+
+    monkeypatch.setattr(runner, "notify_tool_failure", _notify_tool_failure)
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _raising_stream)
+    caplog.set_level(logging.ERROR, logger=runner.logger.name)
+
+    with pytest.raises(runner.SpecialistOutputError):
+        await _collect_events(
+            runner.run_agent_streamed(
+                context_messages=[{"role": "user", "content": "hello"}],
+                user_id="user-flow",
+                agent=SimpleNamespace(name="Flow Supervisor", model="gpt-5", tools=[]),
+                propagate_runtime_exceptions=True,
+            )
+        )
+
+    assert notifications == []
+    specialist_records = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Specialist output error")
+    ]
+    assert len(specialist_records) == 1
+    assert specialist_records[0].sentry_skip_event is True
+    logging.getLogger("openai.agents").error("Independent SDK failure")
+    sdk_records = [
+        record for record in caplog.records if record.name == "openai.agents"
+    ]
+    assert len(sdk_records) == 2
+    assert sdk_records[0].sentry_skip_event is True
+    assert not hasattr(sdk_records[1], "sentry_skip_event")
+
+
+@pytest.mark.asyncio
 async def test_provided_agent_keeps_runtime_error_events_by_default(monkeypatch):
     """Agent Studio-style callers must retain RUN_ERROR and Sentry notification."""
     captured = {}

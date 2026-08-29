@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import hashlib
 import importlib
@@ -78,6 +79,10 @@ _SPAN_NUMERIC_KEYS = {"client_sample_rate", "exclusive_time"}
 _SPAN_TIMESTAMP_KEYS = {"start_timestamp", "timestamp"}
 _SENTRY_TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T[0-9:.+-]+Z?$")
 _SENTRY_SKIP_LOG_EVENT_ATTRIBUTE = "sentry_skip_event"
+_TERMINAL_FAILURE_CAPTURE_OWNED: ContextVar[bool] = ContextVar(
+    "terminal_failure_capture_owned",
+    default=False,
+)
 _SENTRY_CORRELATION_TAG_KEYS = {
     "document_id": "ai_curation.document.id_hash",
     "flow_id": "ai_curation.flow.id_hash",
@@ -130,6 +135,32 @@ _RUNTIME_TEXT_CONTEXT_KEYS = {
     "operation",
     "type",
 }
+
+
+class _OpenAIAgentsPropagationFilter(logging.Filter):
+    """Mark SDK ERROR records when an application layer owns final capture."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if _TERMINAL_FAILURE_CAPTURE_OWNED.get() and record.levelno >= logging.ERROR:
+            setattr(record, _SENTRY_SKIP_LOG_EVENT_ATTRIBUTE, True)
+        return True
+
+
+_OPENAI_AGENTS_PROPAGATION_FILTER = _OpenAIAgentsPropagationFilter()
+logging.getLogger("openai.agents").addFilter(_OPENAI_AGENTS_PROPAGATION_FILTER)
+
+
+@contextmanager
+def application_owned_terminal_failure_capture():
+    """Make SDK propagation logs breadcrumbs while the app owns final capture."""
+
+    token = _TERMINAL_FAILURE_CAPTURE_OWNED.set(True)
+    try:
+        yield
+    finally:
+        _TERMINAL_FAILURE_CAPTURE_OWNED.reset(token)
+
+
 _RUNTIME_TEXT_LIST_CONTEXT_KEYS = {"stages_completed"}
 
 _SECRET_PATTERNS = (

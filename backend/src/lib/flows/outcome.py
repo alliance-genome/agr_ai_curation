@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -10,6 +11,7 @@ FlowRunStatus = Literal["running", "completed", "failed"]
 FlowPersistenceStatus = Literal["pending", "succeeded", "failed"]
 
 _TYPED_SUCCESS_OUTPUT_EVENTS = {"FILE_READY", "CHAT_OUTPUT_READY"}
+_MACHINE_FAILURE_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
 
 
 def flow_typed_output_transcript_values(
@@ -36,6 +38,15 @@ class FlowRunOutcomeNotDurableError(RuntimeError):
     """Signal that no terminal event may publish for the failed outcome."""
 
 
+class FlowTerminalOutcomeError(RuntimeError):
+    """Synthetic exception for a durable, non-exception flow failure."""
+
+    def __init__(self, *, error_type: str, phase: str) -> None:
+        self.error_type = error_type
+        self.phase = phase
+        super().__init__(f"{error_type} during {phase}")
+
+
 @dataclass
 class FlowRunOutcome:
     """Reduce runtime events to the durable, user-visible flow outcome.
@@ -48,6 +59,10 @@ class FlowRunOutcome:
 
     status: FlowRunStatus = "running"
     failure_reason: str | None = None
+    failure_type: str | None = None
+    failure_phase: str | None = None
+    failure_tool: str | None = None
+    failure_provider: str | None = None
     final_user_visible_text: str | None = None
     persistence_status: FlowPersistenceStatus = "pending"
     persistence_result: dict[str, Any] = field(default_factory=dict)
@@ -89,10 +104,36 @@ class FlowRunOutcome:
             self.status = "failed"
             self._run_error_event = dict(event)
             self.failure_reason = str(event.get("message") or "Flow execution failed.")
+            self.failure_type = (
+                self._machine_failure_value(event, "error_type") or "FlowRunError"
+            )
+            self.failure_phase = self._machine_failure_value(event, "phase") or "runner"
+            self.failure_tool = self._machine_failure_value(event, "tool_name")
+            self.failure_provider = self._machine_failure_value(event, "provider")
             self.final_user_visible_text = None
             self._success_output_events = []
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
+            return
+
+        if event_type == "FLOW_ERROR":
+            # Retain only stable machine metadata. The accompanying message and
+            # other details may contain curator or provider content.
+            self.failure_type = (
+                self.failure_type
+                or self._machine_failure_value(event, "error_type", "reason")
+            )
+            self.failure_phase = (
+                self.failure_phase
+                or self._machine_failure_value(event, "phase")
+                or "flow_execution"
+            )
+            self.failure_tool = (
+                self.failure_tool or self._machine_failure_value(event, "tool_name")
+            )
+            self.failure_provider = (
+                self.failure_provider or self._machine_failure_value(event, "provider")
+            )
             return
 
         if event_type != "FLOW_FINISHED":
@@ -111,9 +152,19 @@ class FlowRunOutcome:
             self._curation_handoff_ready_event = None
             self._flow_finished_event["status"] = "failed"
             self._flow_finished_event["failure_reason"] = self.failure_reason
+            self.failure_type = (
+                self.failure_type
+                or self._machine_failure_value(event, "error_type", "reason")
+                or "FlowTerminalFailure"
+            )
+            self.failure_phase = self.failure_phase or "flow_finalization"
         else:
             self.status = "completed"
             self.failure_reason = None
+            self.failure_type = None
+            self.failure_phase = None
+            self.failure_tool = None
+            self.failure_provider = None
 
     @property
     def terminal(self) -> bool:
@@ -157,6 +208,8 @@ class FlowRunOutcome:
         self.persistence_result = {"reason": reason}
         self.status = "failed"
         self.failure_reason = reason
+        self.failure_type = "FlowOutcomePersistenceFailure"
+        self.failure_phase = "outcome_persistence"
         self.final_user_visible_text = None
         self._success_output_events = []
         self._run_finished_event = None
@@ -171,6 +224,36 @@ class FlowRunOutcome:
         if self.persistence_status != "succeeded":
             return []
         return self.events_for_persistence()
+
+    def terminal_failure_exception(self) -> FlowTerminalOutcomeError:
+        """Return stable, payload-free exception context for canonical capture."""
+
+        return FlowTerminalOutcomeError(
+            error_type=self.failure_type or "FlowTerminalFailure",
+            phase=self.failure_phase or "flow_finalization",
+        )
+
+    @staticmethod
+    def _failure_value(event: dict[str, Any], *keys: str) -> str | None:
+        sources = [event]
+        for container_key in ("data", "details"):
+            value = event.get(container_key)
+            if isinstance(value, dict):
+                sources.append(value)
+        for key in keys:
+            for source in sources:
+                value = source.get(key)
+                normalized = str(value or "").strip()
+                if normalized:
+                    return normalized
+        return None
+
+    @classmethod
+    def _machine_failure_value(cls, event: dict[str, Any], *keys: str) -> str | None:
+        value = cls._failure_value(event, *keys)
+        if value and _MACHINE_FAILURE_VALUE_RE.fullmatch(value):
+            return value
+        return None
 
     @staticmethod
     def _extract_visible_text(event: dict[str, Any]) -> str | None:
