@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
+from uuid import UUID
 
 from agents import function_tool
 
@@ -600,6 +601,7 @@ def _build_span_resolution_error_result(
     span_ids: list[str],
     failed_span_id: str | None,
     failed_span_error: str,
+    resolution_failure: str,
     failed_span_index: int | None = None,
     chunk_id: str | None = None,
     chunk_text: str | None = None,
@@ -608,6 +610,7 @@ def _build_span_resolution_error_result(
     error: dict[str, Any] = {
         "span_id": failed_span_id,
         "message": failed_span_error,
+        "resolution_failure": resolution_failure,
     }
     if failed_span_index is not None:
         error["span_index"] = failed_span_index
@@ -620,6 +623,7 @@ def _build_span_resolution_error_result(
         "span_ids": span_ids,
         "failed_span_id": failed_span_id,
         "failed_span_error": failed_span_error,
+        "resolution_failure": resolution_failure,
         "span_resolution_errors": [error],
         "message": (
             f"Evidence span could not be resolved: {failed_span_error}. "
@@ -960,6 +964,7 @@ def create_record_evidence_tool(
                 _build_span_resolution_error_result(
                     entity=normalized_entity,
                     span_ids=normalized_span_ids,
+                    resolution_failure="invalid_span_ids",
                     extra_fields=error_extra_fields,
                     **span_ids_error,
                 ),
@@ -985,10 +990,30 @@ def create_record_evidence_tool(
                         failed_span_id=span_id,
                         failed_span_index=index,
                         failed_span_error=f"{exc}. Call read_chunk again for current span IDs.",
+                        resolution_failure="invalid_span_id",
                         extra_fields=error_extra_fields,
                     ),
                     document_id=document_id,
                     verification_method="invalid_span_id",
+                )
+            try:
+                UUID(parsed.chunk_id)
+            except (AttributeError, ValueError):
+                return _log_record_evidence_result(
+                    _build_span_resolution_error_result(
+                        entity=normalized_entity,
+                        span_ids=normalized_span_ids,
+                        failed_span_id=span_id,
+                        failed_span_index=index,
+                        failed_span_error=(
+                            "Evidence span chunk ID must be a UUID. "
+                            "Call read_chunk again for current span IDs."
+                        ),
+                        resolution_failure="invalid_chunk_id",
+                        extra_fields=error_extra_fields,
+                    ),
+                    document_id=document_id,
+                    verification_method="invalid_chunk_id",
                 )
             chunk_ids_by_span_id[span_id] = parsed.chunk_id
 
@@ -1012,6 +1037,7 @@ def create_record_evidence_tool(
                             if span_chunk_id == chunk_id
                         ),
                         failed_span_error="Chunk could not be loaded for this span ID",
+                        resolution_failure="chunk_load_error",
                         chunk_id=chunk_id,
                         extra_fields=error_extra_fields,
                     ),
@@ -1032,6 +1058,7 @@ def create_record_evidence_tool(
                         failed_span_error=(
                             "Chunk referenced by this span ID was not found in the active document"
                         ),
+                        resolution_failure="missing_chunk",
                         chunk_id=chunk_id,
                         extra_fields=error_extra_fields,
                     ),
@@ -1056,6 +1083,7 @@ def create_record_evidence_tool(
                         failed_span_error=(
                             "Chunk referenced by this span ID has no exact raw text content"
                         ),
+                        resolution_failure="missing_chunk_text",
                         chunk_id=chunk_id,
                         extra_fields=error_extra_fields,
                     ),
@@ -1082,6 +1110,7 @@ def create_record_evidence_tool(
                         failed_span_id=span_id,
                         failed_span_index=index,
                         failed_span_error=f"{exc}. Call read_chunk again for current span IDs.",
+                        resolution_failure="stale_span_id",
                         chunk_id=chunk_id,
                         chunk_text=chunk_text,
                         extra_fields=error_extra_fields,

@@ -247,7 +247,7 @@ async def test_record_evidence_aggregates_only_one_safe_reference(
             }
         )
     chunk = {
-        "id": "chunk-aggregate",
+        "id": "44444444-4444-4444-8444-444444444444",
         "text": text,
         "parent_section": "Results",
         "metadata": {

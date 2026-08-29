@@ -475,6 +475,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
 
     stored_chunk = provider_chunk.model_dump()
     stored_chunk["text"] = stored_chunk.pop("content")
+    stored_chunk["id"] = "55555555-5555-4555-8555-555555555555"
 
     async def fake_get_chunk_by_id(**_kwargs):
         return stored_chunk
@@ -484,7 +485,7 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
     span = next(
         candidate
         for candidate in build_evidence_spans(
-            chunk_id=provider_chunk.id,
+            chunk_id=stored_chunk["id"],
             chunk_text=provider_chunk.content,
             page_number=provider_chunk.page_number,
             section_title=provider_chunk.section_title,

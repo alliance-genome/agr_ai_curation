@@ -4,7 +4,7 @@
   "chunks": [
     {
       "case_id": "pat_unc_tln_expression",
-      "chunk_id": "sandbox-pat-unc-tln-expression",
+      "chunk_id": "11111111-1111-4111-8111-111111111111",
       "chunk_index": 12,
       "page_number": 8,
       "section_title": "Results",
@@ -13,7 +13,7 @@
     },
     {
       "case_id": "tln_rpm_colocalization",
-      "chunk_id": "sandbox-tln-rpm-colocalization",
+      "chunk_id": "22222222-2222-4222-8222-222222222222",
       "chunk_index": 18,
       "page_number": 10,
       "section_title": "Figure 6. TLN-1 and RPM-1 colocalize in mechanosensory neurons",
@@ -22,7 +22,7 @@
     },
     {
       "case_id": "weak_marker_context",
-      "chunk_id": "sandbox-weak-marker-context",
+      "chunk_id": "33333333-3333-4333-8333-333333333333",
       "chunk_index": 19,
       "page_number": 10,
       "section_title": "Methods",

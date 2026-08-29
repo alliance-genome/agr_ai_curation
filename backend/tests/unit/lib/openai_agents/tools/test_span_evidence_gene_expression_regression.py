@@ -21,6 +21,9 @@ from src.lib.openai_agents.evidence_summary import (
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 
+_PAT_UNC_TLN_CHUNK_ID = "11111111-1111-4111-8111-111111111111"
+_WEAK_MARKER_CHUNK_ID = "33333333-3333-4333-8333-333333333333"
+
 
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
@@ -122,7 +125,7 @@ async def _record_pat_unc_tln_expression_evidence(document_id: str) -> dict[str,
     read_tool = weaviate_search.create_read_chunk_tool(document_id, "user-1")
     record_tool = record_evidence.create_record_evidence_tool(document_id, "user-1")
 
-    expression_read = await read_tool("sandbox-pat-unc-tln-expression")
+    expression_read = await read_tool(_PAT_UNC_TLN_CHUNK_ID)
     assert expression_read.chunk is not None
     expression_span = next(
         span
@@ -341,7 +344,7 @@ async def test_span_evidence_workspace_lists_discards_replaces_and_finalizes_act
             "user-1",
         )
 
-        weak_read = await read_tool("sandbox-weak-marker-context")
+        weak_read = await read_tool(_WEAK_MARKER_CHUNK_ID)
         assert weak_read.chunk is not None
         weak_span = weak_read.chunk.evidence_spans[0]
         weak_result = await record_tool(
