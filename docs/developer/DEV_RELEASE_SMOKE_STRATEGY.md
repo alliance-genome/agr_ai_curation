@@ -252,7 +252,8 @@ Historical note:
    - user identity verification
    - PDFX readiness and wake
    - upload + processing
-   - chunks + download-info + PDFX JSON artifact checks
+   - chunks + download-info + canonical text-artifact checks (PDFX JSON for
+     local ingestion, provider source Markdown for ABC-backed ingestion)
    - regular chat
    - streaming chat
    - custom agent creation
