@@ -54,6 +54,7 @@ from src.lib.openai_agents.config import (
     get_inspect_results_validation_page_size,
     get_openai_responses_websocket_ping_timeout_seconds,
     get_pdf_document_error_message_max_chars,
+    get_pdf_extraction_receipt_token_max_chars,
     get_pdf_max_file_size_bytes,
     get_pdf_no_job_orphan_batch_size,
     get_pdf_no_job_orphan_repair_apply,
@@ -1043,6 +1044,17 @@ def test_pdf_document_error_message_max_chars_is_configurable(monkeypatch):
 
     monkeypatch.setenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", "0")
     assert get_pdf_document_error_message_max_chars() == 1
+
+
+def test_pdf_extraction_receipt_token_max_chars_is_configurable(monkeypatch):
+    monkeypatch.delenv("PDF_EXTRACTION_RECEIPT_TOKEN_MAX_CHARS", raising=False)
+    assert get_pdf_extraction_receipt_token_max_chars() == 128
+
+    monkeypatch.setenv("PDF_EXTRACTION_RECEIPT_TOKEN_MAX_CHARS", "32")
+    assert get_pdf_extraction_receipt_token_max_chars() == 32
+
+    monkeypatch.setenv("PDF_EXTRACTION_RECEIPT_TOKEN_MAX_CHARS", "0")
+    assert get_pdf_extraction_receipt_token_max_chars() == 1
 
 
 def test_pdf_no_job_orphan_repair_limits_and_mode_are_configurable(monkeypatch):

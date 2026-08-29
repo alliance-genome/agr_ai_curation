@@ -141,6 +141,7 @@ async def test_pdfx_failure_keeps_operator_evidence_but_persists_safe_message(
     sample_pdf,
     monkeypatch,
 ):
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
     orchestrator._sync_sql_document_status = AsyncMock()
     runtime_reports = []
     monkeypatch.setattr(
@@ -161,6 +162,7 @@ async def test_pdfx_failure_keeps_operator_evidence_but_persists_safe_message(
                 "submit_attempt_count": 1,
                 "poll_attempt_count": 4,
                 "timeout_seconds": 300,
+                "provider_error": sentinel,
             },
         },
     )
@@ -185,6 +187,7 @@ async def test_pdfx_failure_keeps_operator_evidence_but_persists_safe_message(
     )
     assert len(runtime_reports) == 1
     assert runtime_reports[0][0] is provider_error
+    assert sentinel not in str(runtime_reports[0])
     assert runtime_reports[0][1]["context"] == {
         "document_id": "doc-safe",
         "stages_completed_count": 0,
@@ -204,6 +207,7 @@ async def test_pdfx_failure_keeps_operator_evidence_but_persists_safe_message(
     tracked_errors = orchestrator.tracker.processing_errors["doc-safe"]
     assert tracked_errors[0].error_message == PDFX_PROVIDER_FAILURE_MESSAGE
     assert "publish_failed" not in tracked_errors[0].error_message
+    assert sentinel not in str(result.observability_receipt)
 
 
 @pytest.mark.asyncio

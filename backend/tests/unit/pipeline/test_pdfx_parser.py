@@ -15,8 +15,10 @@ from src.lib.pipeline.pdfx_parser import (
     PDFXParser,
     _build_progress_message,
     _cache_hit_from_payloads,
+    _safe_provider_token,
     markdown_to_pipeline_elements,
 )
+from src.lib.pipeline.processing_receipt import PDFProcessingReceipt
 
 
 class _DummyResponse:
@@ -183,6 +185,13 @@ def test_build_progress_message_uses_ready_queue_fallback():
 )
 def test_cache_hit_normalization_requires_explicit_boolean(payloads, expected):
     assert _cache_hit_from_payloads(*payloads) is expected
+
+
+def test_safe_provider_token_obeys_configured_bound(monkeypatch):
+    monkeypatch.setenv("PDF_EXTRACTION_RECEIPT_TOKEN_MAX_CHARS", "8")
+
+    assert _safe_provider_token("safe-123") == "safe-123"
+    assert _safe_provider_token("too-long-token") is None
 
 
 @pytest.mark.asyncio
@@ -394,6 +403,54 @@ async def test_parse_reports_external_failure_outcome(
 
 
 @pytest.mark.asyncio
+async def test_parse_sanitizes_unclassified_provider_exception(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    parser = PDFXParser()
+    receipt = PDFProcessingReceipt(document_id="doc-private")
+
+    async def _submit_extraction(*_args, **_kwargs):
+        raise PDFParsingError(f"provider returned {sentinel}")
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    with pytest.raises(PDFParsingError) as raised:
+        await parser.parse_pdf_document(
+            pdf_path,
+            "doc-private",
+            "user-private",
+            observability_callback=receipt.record_external_observation,
+        )
+
+    stored_receipt = receipt.finalize("failed")
+    assert sentinel not in str(raised.value)
+    assert sentinel not in repr(raised.value.__cause__)
+    assert sentinel not in caplog.text
+    assert sentinel not in str(stored_receipt)
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY]["failure_category"] == (
+        "unknown_provider_failure"
+    )
+
+
+@pytest.mark.asyncio
 async def test_download_markdown_retries_transient_503(parser_env, monkeypatch):
     async def _no_sleep(_seconds):
         return None
@@ -522,7 +579,11 @@ async def test_poll_retries_transient_missing_status_until_complete(parser_env, 
 
 
 @pytest.mark.asyncio
-async def test_poll_classifies_terminal_failure_without_provider_prose(parser_env):
+async def test_poll_classifies_terminal_failure_without_provider_prose(
+    parser_env,
+    caplog,
+):
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
     parser = PDFXParser()
     session = _SequenceSession(
         get_responses=[
@@ -532,22 +593,30 @@ async def test_poll_classifies_terminal_failure_without_provider_prose(parser_en
                     {
                         "status": "failed",
                         "error_code": "publish_failed",
-                        "error": "private free-form provider explanation",
+                        "message": sentinel,
+                        "error": f"private free-form provider explanation {sentinel}",
                     }
                 ),
             )
         ]
     )
+    progress_messages = []
+
+    async def on_progress(message: str):
+        progress_messages.append(message)
 
     with pytest.raises(PDFParsingError) as raised:
         await parser._poll_until_complete(
             session=session,
             process_id="proc-terminal",
             headers={},
-            progress_callback=None,
+            progress_callback=on_progress,
         )
 
     assert "private free-form" not in str(raised.value)
+    assert sentinel not in str(raised.value)
+    assert sentinel not in caplog.text
+    assert progress_messages == []
     assert raised.value.details[PDFX_PUBLIC_MESSAGE_DETAILS_KEY] == PDFX_PROVIDER_FAILURE_MESSAGE
     assert raised.value.details[PDFX_FAILURE_DETAILS_KEY] == {
         "failure_category": "provider_terminal_failure",
