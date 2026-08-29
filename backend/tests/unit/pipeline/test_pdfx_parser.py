@@ -464,6 +464,68 @@ async def test_parse_sanitizes_unclassified_provider_exception(
 
 
 @pytest.mark.asyncio
+async def test_parse_preserves_sanitized_download_http_status_in_observation(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+):
+    sentinel = "PRIVATE_PROVIDER_SENTINEL"
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, *_args, **_kwargs):
+            return _DummyResponse(403, sentinel)
+
+    parser = PDFXParser()
+    parser.download_retry_seconds = 0
+    observations = []
+
+    async def _submit_extraction(*_args, **_kwargs):
+        parser._submit_attempt_count = 1
+        return {"process_id": "proc-download"}
+
+    async def _poll_until_complete(**_kwargs):
+        parser._poll_attempt_count = 2
+        return {"status": "complete"}
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    monkeypatch.setattr(parser, "_poll_until_complete", _poll_until_complete)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    with pytest.raises(PDFParsingError) as raised:
+        await parser.parse_pdf_document(
+            pdf_path,
+            "doc-download",
+            "user-download",
+            observability_callback=observations.append,
+        )
+
+    assert sentinel not in str(raised.value)
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY] == {
+        "failure_category": "unknown_provider_failure",
+        "failure_boundary": "download",
+        "process_id": "proc-download",
+        "http_status": 403,
+        "submit_attempt_count": 1,
+        "poll_attempt_count": 2,
+        "timeout_seconds": 300,
+    }
+    assert observations[0]["http_status"] == 403
+    assert observations[0]["failure_boundary"] == "download"
+    assert sentinel not in str(observations)
+
+
+@pytest.mark.asyncio
 async def test_download_markdown_retries_transient_503(parser_env, monkeypatch):
     async def _no_sleep(_seconds):
         return None

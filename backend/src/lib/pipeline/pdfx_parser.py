@@ -859,7 +859,14 @@ class PDFXParser:
                         )
                         await asyncio.sleep(self.poll_interval_seconds)
                         continue
-                    raise PDFParsingError(error_message)
+                    raise _pdfx_failure_error(
+                        error_message,
+                        category="unknown_provider_failure",
+                        boundary="download",
+                        public_message=PDFX_UNKNOWN_FAILURE_MESSAGE,
+                        process_id=_safe_provider_token(process_id),
+                        http_status=response.status,
+                    )
             except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
                 if time.monotonic() < download_deadline:
                     logger.warning(
