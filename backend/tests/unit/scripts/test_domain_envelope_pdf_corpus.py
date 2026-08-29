@@ -427,6 +427,7 @@ def test_build_trial_flow_uses_agent_specific_cross_domain_prompts():
         node for node in flow["nodes"] if node["type"] == "agent"
     ]
 
+    assert flow["version"] == "1.1"
     assert [node["data"]["agent_id"] for node in agent_nodes] == [
         "phenotype_extractor",
         "gene_extractor",

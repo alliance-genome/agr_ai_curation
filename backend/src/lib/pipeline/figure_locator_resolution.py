@@ -69,8 +69,6 @@ class FigureLocatorMentionOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_canonical_reference(self) -> "FigureLocatorMentionOutput":
-        if self.cardinality == "single" and self.canonical_reference is None:
-            raise ValueError("single locators require canonical_reference")
         if self.cardinality != "single" and self.canonical_reference is not None:
             raise ValueError("only single locators may have canonical_reference")
         return self
