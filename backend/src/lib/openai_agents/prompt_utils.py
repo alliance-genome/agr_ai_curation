@@ -327,7 +327,8 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
     try:
         from openai import AsyncOpenAI
 
-        async with AsyncOpenAI() as client:
+        client = AsyncOpenAI()
+        try:
             # Use the configured abstract-extraction model (.env, no code fallback).
             from src.lib.config.env import require_env
             model = require_env("ABSTRACT_EXTRACTION_MODEL")
@@ -375,6 +376,15 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
                 return None
 
             return result
+        finally:
+            try:
+                await client.close()
+            except Exception as close_error:
+                logger.warning(
+                    'Failed to close abstract extraction LLM client: %s: %s',
+                    type(close_error).__name__,
+                    close_error,
+                )
 
     except Exception as e:
         logger.warning('LLM abstract extraction failed: %s: %s', type(e).__name__, e)
