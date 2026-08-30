@@ -1,0 +1,35 @@
+beforeEach:
+  - smoke.beginCase:
+      caseName: edit-rewire
+afterEach:
+  - smoke.finishCase: {}
+cases:
+  - name: Edit and rewire
+    tags: [flow, curator-ui, pilot]
+    steps:
+      - flow.seed:
+          name: ${editFlowName}
+          instructions: ${originalEditInstructions}
+          formatter: json_formatter
+      - smoke.gotoPath:
+          path: /agent-studio
+      - aiAct:
+          prompt: >-
+            Open the Flows tab, use File then Open Flow, and open the flow named exactly
+            "${editFlowName}". Change Initial Instructions to exactly
+            "${editedInstructions}" and apply it. Remove the JSON Formatter. Add exactly
+            one CSV Formatter. Connect the Gene Extractor's bottom output/result handle—not
+            its control-flow handle—to the CSV Formatter target so the formatter card names
+            Gene Extractor as its source. Click Save once. Once Save has been clicked and no
+            error is visible, the task is complete; do not wait for a success message and do
+            not click Save again.
+          options:
+            deepThink: false
+      - aiAssert:
+          prompt: >-
+            The open flow visibly contains Initial Instructions, Gene Extractor, and CSV Formatter;
+            JSON Formatter is absent, the intended connections are visible, and there is no save error.
+          message: The curator flow was not visibly rewired to CSV.
+      - flow.assertGraph:
+          instructions: ${editedInstructions}
+          formatter: csv_formatter

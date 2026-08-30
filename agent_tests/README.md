@@ -77,3 +77,16 @@ Use a second reviewer or subagent when possible:
 Keep system invariants separate from content-quality judgment. If the LLM
 extracts a different biological set, mark content review as `partial` without
 overclaiming, while still recording whether the platform mechanics passed.
+
+## Local Midscene Curator-Agent Pilot
+
+`agent_tests/midscene/` is a separate Beta pilot for four deployed curator
+UI/API seams: flow authoring, flow rewiring, Add Literature plus grounded chat,
+and saved-flow execution. It uses Midscene for visible curator actions and
+semantic UI checks, then typed deterministic API nodes for persisted state,
+provenance, evidence, and cleanup.
+
+The pilot runs only against the local Docker development stack and is
+non-blocking. It is not part of CI, shared-dev validation, or release
+automation. See `agent_tests/midscene/README.md` for locked installation,
+security boundaries, evidence paths, and on-demand local usage.

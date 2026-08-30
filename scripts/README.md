@@ -452,6 +452,63 @@ python3 scripts/testing/dev_release_smoke.py \
   --include-rerank-provider-smoke
 ```
 
+### testing/agent_ui_smoke.sh
+
+Runs the on-demand Midscene curator-agent Beta pilot against the same-host Docker
+frontend/proxy at `http://localhost:3002`. This includes a designated dev server
+when the harness runs on that server. It covers flow creation, flow rewiring,
+Add Literature plus grounded chat, and saved-flow execution. Visible curator
+actions use Midscene; durable state, traces, evidence, and cleanup use typed API
+checks.
+
+Install the exact locked package and Chromium once:
+
+```bash
+cd agent_tests/midscene
+npm ci
+npx playwright install chromium
+cd ../..
+```
+
+Use local `TESTING_API_KEY` authentication for the pilot:
+
+```bash
+export TESTING_API_KEY=...
+./scripts/testing/agent_ui_smoke.sh --offline
+./scripts/testing/agent_ui_smoke.sh --preflight-only
+./scripts/testing/agent_ui_smoke.sh
+```
+
+Useful selections:
+
+```bash
+./scripts/testing/agent_ui_smoke.sh --case create
+./scripts/testing/agent_ui_smoke.sh --case upload --headed
+./scripts/testing/agent_ui_smoke.sh --tag flow
+./scripts/testing/agent_ui_smoke.sh --retain-resources
+./scripts/testing/agent_ui_smoke.sh --provider openai --case create --cost-warning-usd 5
+```
+
+Codex app-server with `gpt-5.6-sol` and low reasoning is the default and does
+not use or fall back to `OPENAI_API_KEY`. Direct OpenAI billing requires the
+explicit `--provider openai` option. Curator-cookie support is retained for a
+local cookie-auth stack, but the harness rejects non-loopback application URLs.
+The runner account must own the Codex login; see the package README for safe
+device-auth and protected credential-cache guidance. OpenAI runs write
+deduplicated token totals and an estimated API cost to each verdict. The cost
+warning is emitted after the run and is not a hard billing cap.
+
+The strict preflight includes authenticated loopback app access, an end-to-end backend
+file-output storage write probe, PDF worker readiness, Chromium launch, and the
+selected Midscene provider/model. OpenAI selection performs an authenticated,
+non-billable model-metadata lookup before any inference. Verdicts record the
+runner Git SHA and require every selected case plus identified model usage and
+clean teardown before reporting a pass.
+
+Evidence is written to `file_outputs/temp/agent_ui_smoke/<run-id>/`. The suite
+is local-only and non-blocking: it is not in CI or release automation. See
+`agent_tests/midscene/README.md` for the local-only usage and evidence contract.
+
 ### testing/abc_literature_live_smoke.py
 
 Runs the durable ABC Literature stage smoke for release evidence:
