@@ -949,18 +949,18 @@ async def _run_streaming_specialist_tool(
                 validated_handoff_callback(handoff)
 
         run_config_for_specialist = effective_run_config
-        isolated_provider = None
-        close_isolated_provider = None
+        isolated_resources = None
+        close_isolated_resources = None
         if isolate_run_config:
             from src.lib.openai_agents.runner import (
                 build_isolated_openai_run_config as _build_isolated_openai_run_config,
-                close_isolated_openai_provider as _close_isolated_openai_provider,
+                close_owned_openai_resources as _close_owned_openai_resources,
             )
 
-            run_config_for_specialist, isolated_provider = (
+            run_config_for_specialist, isolated_resources = (
                 _build_isolated_openai_run_config(effective_run_config)
             )
-            close_isolated_provider = _close_isolated_openai_provider
+            close_isolated_resources = _close_owned_openai_resources
 
         try:
             specialist_input = _build_specialist_input(
@@ -983,9 +983,9 @@ async def _run_streaming_specialist_tool(
                 ledger.record_extraction_handoff(tool_name, query, handoff)
             return result
         finally:
-            if isolated_provider is not None and close_isolated_provider is not None:
-                await close_isolated_provider(
-                    isolated_provider,
+            if isolated_resources is not None and close_isolated_resources is not None:
+                await close_isolated_resources(
+                    isolated_resources,
                     trace_id=get_current_trace_id(),
                     user_id=get_current_user_id(),
                 )

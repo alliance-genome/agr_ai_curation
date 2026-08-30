@@ -436,23 +436,23 @@ async def test_flow_streaming_tool_uses_isolated_run_config_and_closes(monkeypat
         tracing_disabled=True,
         trace_include_sensitive_data=True,
     )
-    provider = object()
+    resources = object()
     calls = []
     captured = {}
 
     def _build_isolated(parent):
         calls.append(("build", parent))
-        return child_config, provider
+        return child_config, resources
 
-    async def _close_isolated(close_provider, **kwargs):
-        calls.append(("close", close_provider, kwargs))
+    async def _close_isolated(close_resources, **kwargs):
+        calls.append(("close", close_resources, kwargs))
 
     async def _run_specialist_with_events(**kwargs):
         captured.update(kwargs)
         return "flow step output"
 
     monkeypatch.setattr(runner, "build_isolated_openai_run_config", _build_isolated)
-    monkeypatch.setattr(runner, "close_isolated_openai_provider", _close_isolated)
+    monkeypatch.setattr(runner, "close_owned_openai_resources", _close_isolated)
     monkeypatch.setattr(
         supervisor,
         "run_specialist_with_events",
@@ -486,7 +486,7 @@ async def test_flow_streaming_tool_uses_isolated_run_config_and_closes(monkeypat
         ("build", parent_config),
         (
             "close",
-            provider,
+            resources,
             {"trace_id": "trace-1", "user_id": "user-1"},
         ),
     ]
@@ -507,21 +507,21 @@ async def test_flow_streaming_tool_closes_isolated_provider_after_error(monkeypa
         tracing_disabled=True,
         trace_include_sensitive_data=True,
     )
-    provider = object()
+    resources = object()
     close_calls = []
 
     def _build_isolated(parent):
         assert parent is parent_config
-        return child_config, provider
+        return child_config, resources
 
-    async def _close_isolated(close_provider, **kwargs):
-        close_calls.append((close_provider, kwargs))
+    async def _close_isolated(close_resources, **kwargs):
+        close_calls.append((close_resources, kwargs))
 
     async def _run_specialist_with_events(**_kwargs):
         raise RuntimeError("specialist failed")
 
     monkeypatch.setattr(runner, "build_isolated_openai_run_config", _build_isolated)
-    monkeypatch.setattr(runner, "close_isolated_openai_provider", _close_isolated)
+    monkeypatch.setattr(runner, "close_owned_openai_resources", _close_isolated)
     monkeypatch.setattr(
         supervisor,
         "run_specialist_with_events",
@@ -547,5 +547,5 @@ async def test_flow_streaming_tool_closes_isolated_provider_after_error(monkeypa
         )
 
     assert close_calls == [
-        (provider, {"trace_id": "trace-1", "user_id": "user-1"}),
+        (resources, {"trace_id": "trace-1", "user_id": "user-1"}),
     ]
