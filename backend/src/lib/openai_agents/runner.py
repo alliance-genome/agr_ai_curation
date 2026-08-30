@@ -975,6 +975,53 @@ async def _run_agent_with_tracing(
     sentry_span_data: Optional[Dict[str, Any]] = None,
     defer_terminal_failure_capture: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    """Run one request while owning its OpenAI resources for the full lifetime."""
+
+    owned_openai_resources = _build_owned_openai_resources()
+    request_events = _run_agent_with_owned_resources(
+        owned_openai_resources=owned_openai_resources,
+        agent=agent,
+        input_items=input_items,
+        user_id=user_id,
+        document_id=document_id,
+        document_name=document_name,
+        user_message=user_message,
+        trace_id=trace_id,
+        chat_session_id=chat_session_id,
+        chat_turn_id=chat_turn_id,
+        sentry_workflow=sentry_workflow,
+        sentry_span_data=sentry_span_data,
+        defer_terminal_failure_capture=defer_terminal_failure_capture,
+    )
+    try:
+        async for event in request_events:
+            yield event
+    finally:
+        try:
+            await request_events.aclose()
+        finally:
+            await close_owned_openai_resources(
+                owned_openai_resources,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
+
+
+async def _run_agent_with_owned_resources(
+    owned_openai_resources: OwnedOpenAIResources,
+    agent: Agent,
+    input_items: List[Dict[str, Any]],
+    user_id: str,
+    document_id: Optional[str],
+    document_name: Optional[str],
+    user_message: str,
+    trace_id: str,
+    chat_session_id: Optional[str] = None,
+    chat_turn_id: Optional[str] = None,
+    sentry_workflow: Optional[str] = None,
+    sentry_span_data: Optional[Dict[str, Any]] = None,
+    defer_terminal_failure_capture: bool = False,
+) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Internal generator that runs the agent within Langfuse trace context.
 
@@ -997,7 +1044,6 @@ async def _run_agent_with_tracing(
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
     reasoning_summary_chunks: List[str] = []
 
-    owned_openai_resources = _build_owned_openai_resources()
     openai_client = owned_openai_resources.client
     openai_provider = owned_openai_resources.provider
     run_config = _build_agents_run_config(
@@ -1780,14 +1826,6 @@ async def _run_agent_with_tracing(
             sentry_span_context_manager.__exit__(None, None, None)
         if conversation_context_manager is not None:
             conversation_context_manager.__exit__(None, None, None)
-        # Close the request-owned provider first, then its client, before the
-        # request loop can end. Cleanup preserves cancellation and cannot mask
-        # an ordinary provider/stream failure.
-        await close_owned_openai_resources(
-            owned_openai_resources,
-            trace_id=trace_id,
-            user_id=user_id,
-        )
 
     # Get final output if not captured from streaming
     if hasattr(result, "final_output"):
