@@ -129,6 +129,15 @@ else
 fi
 [[ -n "${!key_env:-}" ]] || { echo "${key_env} must be set for ${app_auth} app authentication" >&2; exit 2; }
 
+# The pilot validates and reports one model/provider slot. Remove inherited
+# intent-specific Midscene slots before Node imports Midscene so planning and
+# insight calls cannot bypass that selection or use a separate billing key.
+while IFS= read -r env_name; do
+  case "$env_name" in
+    MIDSCENE_PLANNING_MODEL_*|MIDSCENE_INSIGHT_MODEL_*) unset "$env_name" ;;
+  esac
+done < <(compgen -e)
+
 if [[ "$provider" == "codex" ]]; then
   unset MIDSCENE_MODEL_API_KEY
   unset OPENAI_API_KEY

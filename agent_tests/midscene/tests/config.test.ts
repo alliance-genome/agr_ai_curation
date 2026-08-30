@@ -81,12 +81,24 @@ describe('smoke configuration', () => {
     const env: Record<string, string | undefined> = {
       OPENAI_API_KEY: 'sk-direct-billing-secret',
       MIDSCENE_MODEL_API_KEY: 'stale-secret',
+      MIDSCENE_PLANNING_MODEL_BASE_URL: 'https://api.openai.com/v1',
+      MIDSCENE_PLANNING_MODEL_NAME: 'billing-model',
+      MIDSCENE_PLANNING_MODEL_API_KEY: 'sk-planning-bypass',
+      MIDSCENE_PLANNING_MODEL_TEMPERATURE: '0',
+      MIDSCENE_INSIGHT_MODEL_BASE_URL: 'https://api.openai.com/v1',
+      MIDSCENE_INSIGHT_MODEL_NAME: 'billing-model',
+      MIDSCENE_INSIGHT_MODEL_API_KEY: 'sk-insight-bypass',
+      MIDSCENE_INSIGHT_MODEL_TEMPERATURE: '0',
     }
     const config = loadConfig(env, options)
     applyProviderEnvironment(config, env)
     assert.equal(env.MIDSCENE_MODEL_BASE_URL, 'codex://app-server')
     assert.equal(env.MIDSCENE_MODEL_API_KEY, undefined)
     assert.equal(env.OPENAI_API_KEY, 'sk-direct-billing-secret')
+    for (const name of Object.keys(env)) {
+      assert.equal(name.startsWith('MIDSCENE_PLANNING_MODEL_'), false)
+      assert.equal(name.startsWith('MIDSCENE_INSIGHT_MODEL_'), false)
+    }
   })
 
   it('installs the key only when OpenAI is explicitly selected', () => {

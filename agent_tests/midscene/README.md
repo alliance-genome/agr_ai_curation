@@ -39,6 +39,9 @@ MIDSCENE_MODEL_TEMPERATURE=1
 
 The explicit temperature avoids Midscene 1.12.2's package default of `0`,
 which GPT-5.6 Sol rejects; `1` is the model's supported API default.
+The wrapper also clears inherited `MIDSCENE_PLANNING_MODEL_*` and
+`MIDSCENE_INSIGHT_MODEL_*` overrides so every intent uses this one validated
+provider/model slot and the verdict describes the provider that actually ran.
 
 Export `TESTING_API_KEY` from the local stack configuration, then run:
 

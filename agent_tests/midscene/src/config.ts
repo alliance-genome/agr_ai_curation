@@ -262,6 +262,11 @@ export function loadConfig(
 }
 
 export function applyProviderEnvironment(config: SmokeConfig, env: Environment = process.env): void {
+  for (const name of Object.keys(env)) {
+    if (name.startsWith('MIDSCENE_PLANNING_MODEL_') || name.startsWith('MIDSCENE_INSIGHT_MODEL_')) {
+      delete env[name]
+    }
+  }
   env.MIDSCENE_MODEL_BASE_URL = config.model.baseUrl
   env.MIDSCENE_MODEL_NAME = config.model.name
   env.MIDSCENE_MODEL_FAMILY = config.model.family
