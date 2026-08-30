@@ -19,7 +19,7 @@ import uuid
 from collections import deque
 from contextlib import nullcontext
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Literal, Optional, List
 
@@ -198,6 +198,56 @@ def _build_request_openai_provider(openai_client: AsyncOpenAI) -> OpenAIProvider
             responses_websocket_options=keepalive_options,
         )
     return OpenAIProvider(openai_client=openai_client)
+
+
+@dataclass
+class OwnedOpenAIResources:
+    """One lifecycle-owned OpenAI client/provider pair."""
+
+    client: AsyncOpenAI
+    provider: OpenAIProvider
+    closed: bool = False
+
+
+def _build_owned_openai_resources() -> OwnedOpenAIResources:
+    client = SafeLangfuseAsyncOpenAI()
+    return OwnedOpenAIResources(
+        client=client,
+        provider=_build_request_openai_provider(client),
+    )
+
+
+async def close_owned_openai_resources(
+    resources: OwnedOpenAIResources,
+    *,
+    trace_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    """Close one owned provider/client pair once without masking run failures."""
+
+    if resources.closed:
+        return
+    resources.closed = True
+
+    cancellation: asyncio.CancelledError | None = None
+    for resource_name, resource, close_method_name in (
+        ("provider websocket", resources.provider, "aclose"),
+        ("OpenAI client", resources.client, "close"),
+    ):
+        try:
+            await getattr(resource, close_method_name)()
+        except asyncio.CancelledError as exc:
+            cancellation = cancellation or exc
+        except Exception:
+            logger.warning(
+                "Failed to close owned %s",
+                resource_name,
+                extra={"trace_id": trace_id, "user_id": user_id},
+                exc_info=True,
+            )
+
+    if cancellation is not None:
+        raise cancellation
 
 
 def _configure_api_mode():
@@ -423,7 +473,9 @@ def _build_agents_run_config(
     )
 
 
-def build_isolated_openai_run_config(parent_run_config: Any | None) -> tuple[Any, OpenAIProvider]:
+def build_isolated_openai_run_config(
+    parent_run_config: Any | None,
+) -> tuple[Any, OwnedOpenAIResources]:
     """Create a child RunConfig with its own OpenAI provider/websocket lifecycle.
 
     Chat turns intentionally reuse one warm provider across the supervisor and nested
@@ -432,37 +484,18 @@ def build_isolated_openai_run_config(parent_run_config: Any | None) -> tuple[Any
     child step.
     """
 
-    openai_client = SafeAsyncOpenAI()
-    openai_provider = _build_request_openai_provider(openai_client)
+    resources = _build_owned_openai_resources()
     base_config = parent_run_config or RunConfig(
-        model_provider=openai_provider,
+        model_provider=resources.provider,
         tracing_disabled=not is_openai_agents_tracing_enabled(),
         trace_include_sensitive_data=True,
     )
     run_config = replace(
         base_config,
-        model_provider=openai_provider,
+        model_provider=resources.provider,
         trace_include_sensitive_data=True,
     )
-    return run_config, openai_provider
-
-
-async def close_isolated_openai_provider(
-    openai_provider: OpenAIProvider,
-    *,
-    trace_id: str | None = None,
-    user_id: str | None = None,
-) -> None:
-    """Close an isolated OpenAI provider without masking the run outcome."""
-
-    try:
-        await openai_provider.aclose()
-    except Exception:
-        logger.warning(
-            "Failed to close isolated OpenAI provider websocket",
-            extra={"trace_id": trace_id, "user_id": user_id},
-            exc_info=True,
-        )
+    return run_config, resources
 
 
 def _now_iso() -> str:
@@ -942,6 +975,53 @@ async def _run_agent_with_tracing(
     sentry_span_data: Optional[Dict[str, Any]] = None,
     defer_terminal_failure_capture: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    """Run one request while owning its OpenAI resources for the full lifetime."""
+
+    owned_openai_resources = _build_owned_openai_resources()
+    request_events = _run_agent_with_owned_resources(
+        owned_openai_resources=owned_openai_resources,
+        agent=agent,
+        input_items=input_items,
+        user_id=user_id,
+        document_id=document_id,
+        document_name=document_name,
+        user_message=user_message,
+        trace_id=trace_id,
+        chat_session_id=chat_session_id,
+        chat_turn_id=chat_turn_id,
+        sentry_workflow=sentry_workflow,
+        sentry_span_data=sentry_span_data,
+        defer_terminal_failure_capture=defer_terminal_failure_capture,
+    )
+    try:
+        async for event in request_events:
+            yield event
+    finally:
+        try:
+            await request_events.aclose()
+        finally:
+            await close_owned_openai_resources(
+                owned_openai_resources,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
+
+
+async def _run_agent_with_owned_resources(
+    owned_openai_resources: OwnedOpenAIResources,
+    agent: Agent,
+    input_items: List[Dict[str, Any]],
+    user_id: str,
+    document_id: Optional[str],
+    document_name: Optional[str],
+    user_message: str,
+    trace_id: str,
+    chat_session_id: Optional[str] = None,
+    chat_turn_id: Optional[str] = None,
+    sentry_workflow: Optional[str] = None,
+    sentry_span_data: Optional[Dict[str, Any]] = None,
+    defer_terminal_failure_capture: bool = False,
+) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Internal generator that runs the agent within Langfuse trace context.
 
@@ -964,8 +1044,8 @@ async def _run_agent_with_tracing(
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
     reasoning_summary_chunks: List[str] = []
 
-    openai_client = SafeLangfuseAsyncOpenAI()
-    openai_provider = _build_request_openai_provider(openai_client)
+    openai_client = owned_openai_resources.client
+    openai_provider = owned_openai_resources.provider
     run_config = _build_agents_run_config(
         model_provider=openai_provider,
         agent=agent,
@@ -1746,16 +1826,6 @@ async def _run_agent_with_tracing(
             sentry_span_context_manager.__exit__(None, None, None)
         if conversation_context_manager is not None:
             conversation_context_manager.__exit__(None, None, None)
-        # Close the per-request provider's warm websocket connection once the stream
-        # is fully drained. Guarded so a close failure cannot mask the real outcome.
-        try:
-            await openai_provider.aclose()
-        except Exception:
-            logger.warning(
-                "Failed to close per-request OpenAI provider websocket",
-                extra={"trace_id": trace_id, "user_id": user_id},
-                exc_info=True,
-            )
 
     # Get final output if not captured from streaming
     if hasattr(result, "final_output"):

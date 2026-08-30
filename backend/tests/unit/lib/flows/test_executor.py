@@ -6962,6 +6962,10 @@ class TestExecuteFlowTermination:
             async def aclose(self):
                 lifecycle_order.append("provider_closed")
 
+        class _FakeClient:
+            async def close(self):
+                lifecycle_order.append("client_closed")
+
         def _fake_sdk_run_streamed(*_args, **_kwargs):
             # The SDK may finish both calls before execute_flow consumes either
             # TOOL_COMPLETE translated by the production runner.
@@ -7017,7 +7021,7 @@ class TestExecuteFlowTermination:
             lambda **event: event,
         )
         monkeypatch.setattr(runner, "_log_used_prompts_to_db", lambda **_kwargs: 0)
-        monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda: object())
+        monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", _FakeClient)
         monkeypatch.setattr(
             runner,
             "_build_request_openai_provider",
@@ -7043,8 +7047,9 @@ class TestExecuteFlowTermination:
                 if event.get("type") == "TOOL_COMPLETE":
                     break
             await flow_events.aclose()
-            assert lifecycle_order[-1] == "provider_closed"
+            assert lifecycle_order[-2:] == ["provider_closed", "client_closed"]
             assert lifecycle_order.count("provider_closed") == 1
+            assert lifecycle_order.count("client_closed") == 1
             assert reported_drain_errors == []
             assert persisted_requests == []
             return
@@ -7052,7 +7057,7 @@ class TestExecuteFlowTermination:
         if drain_error_timing == "pre-output":
             with pytest.raises(RuntimeError, match="pre-output supervisor failure"):
                 _ = [event async for event in flow_events]
-            assert lifecycle_order == ["provider_closed"]
+            assert lifecycle_order == ["provider_closed", "client_closed"]
             assert reported_drain_errors == []
             assert persisted_requests == []
             return
@@ -7085,7 +7090,7 @@ class TestExecuteFlowTermination:
             "FLOW_FINISHED"
         )
         assert "RUN_FINISHED" not in event_types
-        expected_lifecycle_order = ["provider_closed"]
+        expected_lifecycle_order = ["provider_closed", "client_closed"]
         if drain_error_timing is None:
             expected_lifecycle_order.insert(0, "sdk_stream_drained")
             assert reported_drain_errors == []

@@ -1,8 +1,11 @@
 """Unit tests for runner core helper behavior."""
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from datetime import datetime
+
+import pytest
 
 from src.lib.openai_agents import runner
 from src.lib.prompts.context import PromptAssemblyMetadata, PromptRun
@@ -151,8 +154,9 @@ def test_build_request_openai_provider_passes_websocket_keepalive_options(monkey
 
 
 def test_build_isolated_openai_run_config_replaces_provider_and_preserves_trace(monkeypatch):
+    client = object()
     provider = object()
-    monkeypatch.setattr(runner, "SafeAsyncOpenAI", lambda: object())
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda: client)
     monkeypatch.setattr(
         runner,
         "_build_request_openai_provider",
@@ -167,9 +171,11 @@ def test_build_isolated_openai_run_config_replaces_provider_and_preserves_trace(
         trace_metadata={"langfuse_trace_id": "trace-1"},
     )
 
-    child_config, child_provider = runner.build_isolated_openai_run_config(parent_config)
+    child_config, child_resources = runner.build_isolated_openai_run_config(parent_config)
 
-    assert child_provider is provider
+    assert child_resources.client is client
+    assert child_resources.provider is provider
+    assert child_resources.closed is False
     assert child_config.model_provider is provider
     assert child_config.tracing_disabled is False
     assert child_config.trace_include_sensitive_data is True
@@ -178,6 +184,91 @@ def test_build_isolated_openai_run_config_replaces_provider_and_preserves_trace(
     assert child_config.trace_metadata["langfuse_trace_id"] == "trace-1"
     assert parent_config.model_provider is not provider
     assert parent_config.trace_include_sensitive_data is False
+
+
+@pytest.mark.asyncio
+async def test_close_owned_openai_resources_orders_and_deduplicates_cleanup():
+    calls = []
+
+    class Provider:
+        async def aclose(self):
+            calls.append("provider")
+
+    class Client:
+        async def close(self):
+            calls.append("client")
+
+    resources = runner.OwnedOpenAIResources(client=Client(), provider=Provider())
+
+    await runner.close_owned_openai_resources(resources)
+    await runner.close_owned_openai_resources(resources)
+
+    assert calls == ["provider", "client"]
+    assert resources.closed is True
+
+
+@pytest.mark.asyncio
+async def test_close_owned_openai_resources_closes_client_after_provider_error(caplog):
+    calls = []
+
+    class Provider:
+        async def aclose(self):
+            calls.append("provider")
+            raise RuntimeError("provider close failed")
+
+    class Client:
+        async def close(self):
+            calls.append("client")
+
+    resources = runner.OwnedOpenAIResources(client=Client(), provider=Provider())
+
+    with caplog.at_level(logging.WARNING, logger=runner.logger.name):
+        await runner.close_owned_openai_resources(resources)
+
+    assert calls == ["provider", "client"]
+    assert "Failed to close owned provider websocket" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_close_owned_openai_resources_preserves_cancellation_after_cleanup():
+    calls = []
+
+    class Provider:
+        async def aclose(self):
+            calls.append("provider")
+            raise asyncio.CancelledError
+
+    class Client:
+        async def close(self):
+            calls.append("client")
+
+    resources = runner.OwnedOpenAIResources(client=Client(), provider=Provider())
+
+    with pytest.raises(asyncio.CancelledError):
+        await runner.close_owned_openai_resources(resources)
+
+    assert calls == ["provider", "client"]
+    assert resources.closed is True
+
+
+def test_close_owned_openai_resources_finishes_inside_short_lived_batch_loop():
+    calls = []
+
+    class Provider:
+        async def aclose(self):
+            calls.append(("provider", id(asyncio.get_running_loop())))
+
+    class Client:
+        async def close(self):
+            calls.append(("client", id(asyncio.get_running_loop())))
+
+    resources = runner.OwnedOpenAIResources(client=Client(), provider=Provider())
+
+    asyncio.run(runner.close_owned_openai_resources(resources))
+
+    assert [name for name, _loop_id in calls] == ["provider", "client"]
+    assert calls[0][1] == calls[1][1]
+    assert resources.closed is True
 
 
 def test_create_openai_client_kwargs_includes_configured_key_and_base(monkeypatch):

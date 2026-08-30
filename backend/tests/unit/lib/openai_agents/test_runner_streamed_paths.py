@@ -294,6 +294,65 @@ async def test_run_agent_with_tracing_compacts_standard_chat_session_before_prov
     assert events[-1]["data"]["response"] == "precall compacted"
 
 
+@pytest.mark.parametrize(
+    "compaction_error",
+    [RuntimeError("compaction failed"), asyncio.CancelledError()],
+    ids=["failure", "cancellation"],
+)
+@pytest.mark.asyncio
+async def test_run_agent_with_tracing_closes_owned_resources_after_compaction_error(
+    monkeypatch,
+    compaction_error,
+):
+    captured = {}
+    lifecycle_order = []
+
+    class _FakeCompactionSession:
+        async def run_compaction(self, _args):
+            raise compaction_error
+
+    class _FakeClient:
+        async def close(self):
+            lifecycle_order.append("client_closed")
+
+    class _FakeProvider:
+        async def aclose(self):
+            lifecycle_order.append("provider_closed")
+
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_max_turns", lambda: 4)
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", _FakeClient)
+    monkeypatch.setattr(
+        runner,
+        "_build_request_openai_provider",
+        lambda _client: _FakeProvider(),
+    )
+    monkeypatch.setattr(runner, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        runner,
+        "build_standard_chat_compaction_session",
+        lambda **_kwargs: _FakeCompactionSession(),
+    )
+
+    with pytest.raises(type(compaction_error)) as exc_info:
+        await _collect_events(
+            runner._run_agent_with_tracing(
+                agent=SimpleNamespace(name="Supervisor", model="gpt-5.5", tools=[]),
+                input_items=[{"role": "user", "content": "current"}],
+                user_id="user-1",
+                document_id=None,
+                document_name=None,
+                user_message="current",
+                trace_id="trace-compact-error",
+                chat_session_id="session-1",
+                chat_turn_id="turn-1",
+            )
+        )
+
+    assert exc_info.value is compaction_error
+    assert lifecycle_order == ["provider_closed", "client_closed"]
+
+
 @pytest.mark.asyncio
 async def test_run_agent_streamed_preserves_bound_prompt_runs_for_provided_agent(monkeypatch):
     captured = {}
