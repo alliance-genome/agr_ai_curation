@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { CASE_NAMES } from '../src/config.js'
-import { canonicalCaseStatuses, executedCanonicalCases } from '../src/run-results.js'
+import { canonicalCaseStatuses, executedCanonicalCases, runAcceptancePassed, selectedCasesSucceeded } from '../src/run-results.js'
 
 const canonicalResult = {
   cases: CASE_NAMES.map((name) => ({ sourcePath: `/repo/cases/${name}.yaml`, status: 'success' })),
@@ -26,5 +26,19 @@ describe('run result accounting', () => {
   it('derives cleanup scope from cases actually present after tag filtering', () => {
     assert.deepEqual(executedCanonicalCases({ cases: [canonicalResult.cases[3]!] }), ['run-saved-flow'])
     assert.deepEqual(executedCanonicalCases(undefined), [])
+  })
+
+  it('requires every selected canonical case to succeed', () => {
+    const statuses = canonicalCaseStatuses(canonicalResult)
+    assert.equal(selectedCasesSucceeded(statuses, ['create-connect-save', 'edit-rewire']), true)
+    assert.equal(selectedCasesSucceeded({ ...statuses, 'edit-rewire': 'not-run' }, ['create-connect-save', 'edit-rewire']), false)
+    assert.equal(selectedCasesSucceeded({ ...statuses, 'edit-rewire': 'failed' }, ['create-connect-save', 'edit-rewire']), false)
+  })
+
+  it('requires identified model usage before accepting a successful AI run', () => {
+    const statuses = canonicalCaseStatuses(canonicalResult)
+    assert.equal(runAcceptancePassed(statuses, ['create-connect-save'], 1), true)
+    assert.equal(runAcceptancePassed(statuses, ['create-connect-save'], 0), false)
+    assert.equal(runAcceptancePassed({ ...statuses, 'create-connect-save': 'not-run' }, ['create-connect-save'], 1), false)
   })
 })

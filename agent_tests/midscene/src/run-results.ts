@@ -19,3 +19,18 @@ export function executedCanonicalCases(result: RunResultLike | undefined): CaseN
     return result.cases.some((item) => item.sourcePath.endsWith(suffix))
   })
 }
+
+export function selectedCasesSucceeded(
+  statuses: Record<CaseName, string>,
+  selectedCases: readonly CaseName[],
+): boolean {
+  return selectedCases.every((caseName) => statuses[caseName] === 'success')
+}
+
+export function runAcceptancePassed(
+  statuses: Record<CaseName, string>,
+  selectedCases: readonly CaseName[],
+  identifiedModelRequests: number,
+): boolean {
+  return selectedCasesSucceeded(statuses, selectedCases) && identifiedModelRequests > 0
+}

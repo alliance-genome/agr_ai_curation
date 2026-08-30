@@ -278,6 +278,7 @@ export function applyProviderEnvironment(config: SmokeConfig, env: Environment =
   env.MIDSCENE_MODEL_RETRY_INTERVAL = String(config.model.retryIntervalMs)
   if (config.provider === 'codex') {
     delete env.MIDSCENE_MODEL_API_KEY
+    delete env.OPENAI_API_KEY
   } else {
     env.MIDSCENE_MODEL_API_KEY = env.OPENAI_API_KEY
   }

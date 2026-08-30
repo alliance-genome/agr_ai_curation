@@ -6,7 +6,8 @@ import { runTestProject, type TestProjectRunResult } from '@midscene/test/config
 import { applyProviderEnvironment, loadConfig } from './config.js'
 import { runPreflight } from './preflight.js'
 import { createFreshRunDirectory } from './run-directory.js'
-import { canonicalCaseStatuses, executedCanonicalCases } from './run-results.js'
+import { canonicalCaseStatuses, executedCanonicalCases, runAcceptancePassed, selectedCasesSucceeded } from './run-results.js'
+import { readRunnerProvenance } from './provenance.js'
 import { summarizeModelUsage } from './model-usage.js'
 import { buildRedactedVerdict } from './verdict.js'
 
@@ -30,6 +31,8 @@ function markdownVerdict(verdict: Record<string, any>): string {
 - Run ID: ${verdict.run_id}
 - Environment: local Docker development stack
 - Provider: ${verdict.model.provider} / ${verdict.model.name}
+- Runner Git SHA: ${verdict.runner.git_sha}
+- Runner hostname: ${verdict.runner.hostname}
 - Started: ${verdict.started_at}
 - Finished: ${verdict.finished_at}
 - Result: ${verdict.result}
@@ -64,6 +67,7 @@ Use each run's verdict and sanitized evidence to assess that invocation.
 
 const config = loadConfig(process.env, { cwd: process.cwd(), requireSecrets: true })
 applyProviderEnvironment(config)
+const runner = await readRunnerProvenance(config.repoRoot, config.preflightTimeoutMs)
 await createFreshRunDirectory(config.outputRoot, config.runDir, config.runId)
 const startedAt = new Date().toISOString()
 let result: TestProjectRunResult | undefined
@@ -91,18 +95,22 @@ const modelUsage = await summarizeModelUsage(
   config.model.name,
   config.openaiCostWarningUsd,
 )
-const succeeded = !failure && result?.status === 'success' && cleanupClean && !config.retainResources
+const allSelectedCasesSucceeded = selectedCasesSucceeded(canonicalStatuses, config.cases)
+const acceptancePassed = runAcceptancePassed(canonicalStatuses, config.cases, modelUsage.request_count)
+const executionSucceeded = !failure && result?.status === 'success' && acceptancePassed
+const succeeded = executionSucceeded && cleanupClean && !config.retainResources
 const verdict = buildRedactedVerdict({
-  schema_version: 1,
+  schema_version: 2,
   run_id: config.runId,
   started_at: startedAt,
   finished_at: new Date().toISOString(),
-  result: succeeded ? 'pass' : config.retainResources && result?.status === 'success' ? 'partial' : 'fail',
+  result: succeeded ? 'pass' : config.retainResources && executionSucceeded ? 'partial' : 'fail',
   local_only: true,
   blocking_release_gate: false,
   midscene_beta: true,
   app_url: config.appUrl,
   app_auth: config.appAuth,
+  runner,
   model: {
     provider: config.provider,
     base_url: config.model.baseUrl,
@@ -116,6 +124,11 @@ const verdict = buildRedactedVerdict({
   },
   preflight,
   cases: caseStatuses,
+  acceptance: {
+    all_selected_cases_succeeded: allSelectedCasesSucceeded,
+    identified_model_requests: modelUsage.request_count,
+    passed: acceptancePassed,
+  },
   cleanup_clean: cleanupClean,
   resources_retained: config.retainResources,
   test_runner: result ? { result_dir: result.resultDir, summary_path: result.summaryPath, report_dir: result.reportDir, summary: result.summary } : null,

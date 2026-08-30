@@ -21,6 +21,27 @@ interface RpcMessage {
   error?: { message?: string }
 }
 
+export async function openAiModelPreflight(
+  options: { baseUrl: string; model: string; apiKey: string; timeoutMs: number },
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ id: string }> {
+  const modelUrl = new URL(`models/${encodeURIComponent(options.model)}`, `${options.baseUrl.replace(/\/$/, '')}/`)
+  const response = await fetchImpl(modelUrl, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${options.apiKey}` },
+    signal: AbortSignal.timeout(options.timeoutMs),
+  })
+  if (!response.ok) {
+    throw new Error(`OpenAI model preflight failed for ${options.model}: HTTP ${response.status}`)
+  }
+  const payload = recordValue(await response.json())
+  const id = stringValue(payload?.id)
+  if (id !== options.model) {
+    throw new Error(`OpenAI model preflight returned unexpected model id ${id || 'missing'}`)
+  }
+  return { id }
+}
+
 async function codexModels(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
   const child = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] })
   if (!child.stdin || !child.stdout || !child.stderr) throw new Error('codex app-server stdio is unavailable')
@@ -145,7 +166,19 @@ export async function runPreflight(): Promise<Record<string, unknown>> {
     }
     checks.model = { ok: true, provider: 'codex', name: config.model.name, reasoning_effort: config.model.reasoningEffort }
   } else {
-    checks.model = { ok: true, provider: 'openai', name: config.model.name, note: 'key presence validated; preflight sends no billable model request' }
+    await openAiModelPreflight({
+      baseUrl: config.model.baseUrl,
+      model: config.model.name,
+      apiKey: process.env.OPENAI_API_KEY!,
+      timeoutMs: config.preflightTimeoutMs,
+    })
+    checks.model = {
+      ok: true,
+      provider: 'openai',
+      name: config.model.name,
+      reasoning_effort: config.model.reasoningEffort,
+      note: 'authenticated model metadata lookup passed; no inference request sent',
+    }
   }
   return checks
 }

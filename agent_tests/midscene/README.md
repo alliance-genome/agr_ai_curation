@@ -53,7 +53,8 @@ scripts/testing/agent_ui_smoke.sh
 
 The strict preflight verifies authenticated app access, end-to-end backend
 file-output writeability, PDF worker readiness, Chromium launch, Codex login,
-model availability, and the configured reasoning effort.
+model availability, and the configured reasoning effort. The OpenAI path uses
+an authenticated model-metadata lookup; it does not send an inference request.
 
 The explicit direct-billing alternative is:
 
@@ -113,8 +114,8 @@ for device-auth and credential-cache behavior.
 The direct OpenAI path is operationally simpler for a slow dev-server trial:
 inject a dedicated-project API key into the runner environment from the dev
 server's approved secret mechanism, select `--provider openai`, and run one case
-at a time. The preflight checks only that a key is present and deliberately
-does not make a billable model request.
+at a time. The preflight verifies that the selected model exists with a
+non-billable metadata request before starting a UI journey.
 
 ## Journeys and evidence
 
@@ -156,10 +157,13 @@ documents. It verifies file absence before reporting cleanup clean. A cleanup
 failure fails the case. `--retain-resources` is a debugging mode and produces a
 partial verdict.
 
-`verdict.json` and `verdict.md` include per-run token totals and the current
-GPT-5.6 Sol API-cost estimate or conservative range. Usage objects without a stable request identity,
-conflicting duplicates, parse failures, and requests for models without a known
-pricing table are surfaced rather than silently priced.
+`verdict.json` and `verdict.md` include the runner Git SHA/hostname, per-run
+token totals, and the current GPT-5.6 Sol API-cost estimate or conservative
+range. Usage objects without a stable request identity, conflicting duplicates,
+parse failures, and requests for models without a known pricing table are
+surfaced rather than silently priced.
+The verdict cannot pass unless every selected canonical case succeeds, at
+least one model request is identified, and cleanup is clean.
 
 Teardown drains in-flight response capture before deleting resources; a bounded
 drain timeout is itself a cleanup failure. Run IDs are normalized to the

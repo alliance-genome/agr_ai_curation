@@ -500,7 +500,10 @@ warning is emitted after the run and is not a hard billing cap.
 
 The strict preflight includes authenticated loopback app access, an end-to-end backend
 file-output storage write probe, PDF worker readiness, Chromium launch, and the
-selected Midscene provider/model.
+selected Midscene provider/model. OpenAI selection performs an authenticated,
+non-billable model-metadata lookup before any inference. Verdicts record the
+runner Git SHA and require every selected case plus identified model usage and
+clean teardown before reporting a pass.
 
 Evidence is written to `file_outputs/temp/agent_ui_smoke/<run-id>/`. The suite
 is local-only and non-blocking: it is not in CI or release automation. See

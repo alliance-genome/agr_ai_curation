@@ -94,7 +94,7 @@ describe('smoke configuration', () => {
     applyProviderEnvironment(config, env)
     assert.equal(env.MIDSCENE_MODEL_BASE_URL, 'codex://app-server')
     assert.equal(env.MIDSCENE_MODEL_API_KEY, undefined)
-    assert.equal(env.OPENAI_API_KEY, 'sk-direct-billing-secret')
+    assert.equal(env.OPENAI_API_KEY, undefined)
     for (const name of Object.keys(env)) {
       assert.equal(name.startsWith('MIDSCENE_PLANNING_MODEL_'), false)
       assert.equal(name.startsWith('MIDSCENE_INSIGHT_MODEL_'), false)
