@@ -72,6 +72,7 @@ from src.lib.openai_agents.config import (
     get_weaviate_search_mmr_lambda,
     is_retryable_groq_tool_call_error,
     resolve_model_provider,
+    runtime_model_uses_provider,
     supports_reasoning,
     supports_temperature,
 )
@@ -1262,7 +1263,7 @@ def test_get_model_for_agent_requires_native_provider_key(monkeypatch, api_key):
 def test_get_model_for_agent_supports_openai_compatible_provider(monkeypatch):
     captured = {}
 
-    model_object = object()
+    model_object = SimpleNamespace()
 
     class FakeOpenAIProvider:
         def __init__(self, **kwargs):
@@ -1308,12 +1309,65 @@ def test_get_model_for_agent_supports_openai_compatible_provider(monkeypatch):
 
     assert model is model_object
     assert captured["model"] == "model-x"
-    assert captured["provider_kwargs"] == {
-        "base_url": "https://runtime-org.example/v1",
-        "api_key": "org-key",
-        "use_responses": False,
-        "strict_feature_validation": True,
-    }
+    assert captured["provider_kwargs"]["use_responses"] is False
+    assert captured["provider_kwargs"]["use_responses_websocket"] is False
+    assert captured["provider_kwargs"]["strict_feature_validation"] is True
+    compatible_client = captured["provider_kwargs"]["openai_client"]
+    assert str(compatible_client.base_url) == "https://runtime-org.example/v1/"
+    assert compatible_client.api_key == "org-key"
+    assert getattr(model, "_agr_provider_id") == "org_custom"
+
+
+@pytest.mark.asyncio
+async def test_get_model_for_agent_explicit_client_ignores_registered_native_default(
+    monkeypatch,
+):
+    from agents.models import openai_provider
+    from openai import AsyncOpenAI
+
+    native_client = AsyncOpenAI(
+        api_key="native-key",
+        base_url="https://api.openai.com/v1",
+    )
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(provider="groq"),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(
+                provider_id="groq",
+                driver="openai_compatible",
+                api_key_env="GROQ_API_KEY",
+                base_url_env="GROQ_BASE_URL",
+                default_base_url="https://api.groq.com/openai/v1",
+                api_mode="chat_completions",
+                supports_parallel_tool_calls=True,
+            )
+            if provider_id == "groq"
+            else None
+        ),
+    )
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+    monkeypatch.setenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+
+    monkeypatch.setattr(
+        openai_provider._openai_shared,
+        "_default_openai_client",
+        native_client,
+    )
+    model = get_model_for_agent("stub-groq-model")
+
+    compatible_client = getattr(model, "_client")
+    try:
+        assert str(compatible_client.base_url) == "https://api.groq.com/openai/v1/"
+        assert compatible_client.api_key == "groq-key"
+        assert runtime_model_uses_provider(model, "groq") is True
+        assert runtime_model_uses_provider(model, "openai") is False
+    finally:
+        await compatible_client.close()
+        await native_client.close()
 
 
 def test_get_model_for_agent_preserves_namespaced_model_id(monkeypatch):
@@ -1325,7 +1379,7 @@ def test_get_model_for_agent_preserves_namespaced_model_id(monkeypatch):
 
         def get_model(self, model):
             captured["model"] = model
-            return object()
+            return SimpleNamespace()
 
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",
@@ -1362,8 +1416,9 @@ def test_get_model_for_agent_preserves_namespaced_model_id(monkeypatch):
         get_model_for_agent("stub-groq-model")
 
     assert captured["model"] == "stub-groq-model"
-    assert captured["provider_kwargs"]["base_url"] == "https://api.groq.com/openai/v1"
-    assert captured["provider_kwargs"]["api_key"] == "groq-key"
+    compatible_client = captured["provider_kwargs"]["openai_client"]
+    assert str(compatible_client.base_url) == "https://api.groq.com/openai/v1/"
+    assert compatible_client.api_key == "groq-key"
 
 
 @pytest.mark.parametrize(

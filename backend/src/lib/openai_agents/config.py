@@ -260,6 +260,32 @@ def resolve_model_provider(model_name: str, provider_override: Optional[str] = N
     return provider_id
 
 
+def runtime_model_uses_provider(model: object, provider_id: str) -> bool:
+    """Return whether a runtime model carries or resolves to ``provider_id``.
+
+    Direct compatible models carry provider metadata because their stable upstream
+    model IDs intentionally do not encode the provider. String models continue to
+    resolve through the canonical model catalog.
+    """
+    expected_provider_id = _normalize_provider_id(provider_id)
+    if not expected_provider_id:
+        raise ValueError("provider_id is required")
+
+    explicit_provider_id = _normalize_provider_id(
+        getattr(model, "_agr_provider_id", None)
+    )
+    if explicit_provider_id:
+        return explicit_provider_id == expected_provider_id
+
+    model_id = model if isinstance(model, str) else getattr(model, "model", None)
+    if not str(model_id or "").strip():
+        return False
+    try:
+        return resolve_model_provider(str(model_id).strip()) == expected_provider_id
+    except ValueError:
+        return False
+
+
 def get_api_key(provider_override: Optional[str] = None) -> Optional[str]:
     """Get API key for a specific provider (or default runner provider)."""
     provider_id = _resolve_provider_from_override(provider_override)
@@ -305,6 +331,7 @@ def get_model_for_agent(
 
     if provider.driver == "openai_compatible":
         from agents import OpenAIProvider
+        from openai import AsyncOpenAI
 
         base_url = get_base_url(provider.provider_id)
         if not str(base_url or "").strip():
@@ -318,13 +345,16 @@ def get_model_for_agent(
             model_name,
             provider.api_mode,
         )
+        openai_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         model_provider = OpenAIProvider(
-            base_url=base_url,
-            api_key=api_key,
+            openai_client=openai_client,
             use_responses=provider.api_mode == "responses",
+            use_responses_websocket=False,
             strict_feature_validation=True,
         )
-        return model_provider.get_model(model_name)
+        model = model_provider.get_model(model_name)
+        setattr(model, "_agr_provider_id", provider.provider_id)
+        return model
 
     raise ValueError(
         f"Provider '{provider.provider_id}' has unsupported driver '{provider.driver}'"

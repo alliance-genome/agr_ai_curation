@@ -69,6 +69,7 @@ from .config import (
     is_retryable_groq_tool_call_error,
     reasoning_summary_request_settings,
     resolve_model_provider,
+    runtime_model_uses_provider,
 )
 from src.lib.runtime_payload_budget import provider_context_preflight
 from .extraction_trace_events import (
@@ -723,18 +724,8 @@ def _reasoning_request_metadata(agent: Agent) -> Dict[str, Any]:
 
 
 def _is_groq_runtime_model(model: Any) -> bool:
-    """Detect whether runtime model appears to be Groq-backed."""
-    model_id = _extract_model_identifier(model).lower()
-    if model_id.startswith("groq/"):
-        return True
-    if "groq" in model_id and "/" in model_id:
-        return True
-
-    base_url = str(getattr(model, "base_url", "") or "").lower()
-    if "api.groq.com" in base_url:
-        return True
-
-    return False
+    """Detect Groq from explicit adapter metadata or the canonical catalog."""
+    return runtime_model_uses_provider(model, "groq")
 
 
 def _safe_reset_run_context_token(

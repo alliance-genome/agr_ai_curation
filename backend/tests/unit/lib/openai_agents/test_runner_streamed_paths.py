@@ -1236,7 +1236,10 @@ async def test_run_agent_streamed_retries_transient_groq_tool_call_parse_failure
             user_id="user-5",
             agent=SimpleNamespace(
                 name="Flow Supervisor",
-                model=SimpleNamespace(model="groq/stub-groq-model"),
+                model=SimpleNamespace(
+                    model="stub-groq-model",
+                    _agr_provider_id="groq",
+                ),
                 tools=[],
             ),
         )
