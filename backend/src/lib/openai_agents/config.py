@@ -331,6 +331,7 @@ def get_model_for_agent(
 
     if provider.driver == "openai_compatible":
         from agents import OpenAIProvider
+        from agents.models.openai_provider import shared_http_client
         from openai import AsyncOpenAI
 
         base_url = get_base_url(provider.provider_id)
@@ -345,7 +346,11 @@ def get_model_for_agent(
             model_name,
             provider.api_mode,
         )
-        openai_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        openai_client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=shared_http_client(),
+        )
         model_provider = OpenAIProvider(
             openai_client=openai_client,
             use_responses=provider.api_mode == "responses",

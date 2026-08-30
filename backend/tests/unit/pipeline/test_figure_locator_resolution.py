@@ -954,7 +954,7 @@ async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    model_object = object()
+    model_object = SimpleNamespace()
     compatible_provider = MagicMock()
     compatible_provider.return_value.get_model.return_value = model_object
     monkeypatch.setattr(
@@ -984,13 +984,23 @@ async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
     )
 
     assert result is output
-    compatible_provider.assert_called_once_with(
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key="test-gemini-key",
-        use_responses=False,
-        strict_feature_validation=True,
+    provider_kwargs = compatible_provider.call_args.kwargs
+    compatible_client = provider_kwargs["openai_client"]
+    assert str(compatible_client.base_url) == (
+        "https://generativelanguage.googleapis.com/v1beta/openai/"
     )
+    assert compatible_client.api_key == "test-gemini-key"
+    assert set(provider_kwargs) == {
+        "openai_client",
+        "use_responses",
+        "use_responses_websocket",
+        "strict_feature_validation",
+    }
+    assert provider_kwargs["use_responses"] is False
+    assert provider_kwargs["use_responses_websocket"] is False
+    assert provider_kwargs["strict_feature_validation"] is True
     compatible_provider.return_value.get_model.assert_called_once_with(model_id)
+    assert model_object._agr_provider_id == "gemini"
     assert agent_factory.call_args is not None
     assert agent_factory.call_args.kwargs["model"] is model_object
     runner.assert_awaited_once()

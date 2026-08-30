@@ -1363,10 +1363,10 @@ async def test_get_model_for_agent_explicit_client_ignores_registered_native_def
     try:
         assert str(compatible_client.base_url) == "https://api.groq.com/openai/v1/"
         assert compatible_client.api_key == "groq-key"
+        assert compatible_client._client is openai_provider.shared_http_client()
         assert runtime_model_uses_provider(model, "groq") is True
         assert runtime_model_uses_provider(model, "openai") is False
     finally:
-        await compatible_client.close()
         await native_client.close()
 
 
