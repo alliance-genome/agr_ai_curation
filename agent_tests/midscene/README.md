@@ -1,10 +1,11 @@
 # Midscene Curator-Agent Smoke Pilot
 
 This directory is an isolated, on-demand Midscene Test Runner pilot for the
-local Docker development stack. It complements `scripts/testing/dev_release_smoke.py`
+Docker development stack on the same trusted host. It complements `scripts/testing/dev_release_smoke.py`
 by exercising curator-visible UI actions and then proving the resulting state
-through deterministic APIs. It is not a CI job, a shared-dev test, or a release
-gate.
+through deterministic APIs. This includes a designated dev server when the
+harness runs on that server and targets its loopback proxy; remote shared-dev
+URLs, production, CI, and release gating remain outside this pilot.
 
 Midscene Test Runner 1.x is Beta. The package pins `@midscene/test` and
 `@midscene/web` 1.12.2 plus Playwright 1.62.1. The current locked Midscene
@@ -23,9 +24,9 @@ npm ci
 npx playwright install chromium
 ```
 
-The default model path uses the current Codex subscription and requires
-`codex login status` to report a valid login. It never falls back to an
-OpenAI API key:
+The default model path uses the Codex subscription authenticated for the exact
+OS account running the harness and requires `codex login status` to report a
+valid login. It never falls back to an OpenAI API key:
 
 ```text
 MIDSCENE_MODEL_BASE_URL=codex://app-server
@@ -50,8 +51,23 @@ model availability, and the configured reasoning effort.
 The explicit direct-billing alternative is:
 
 ```bash
-OPENAI_API_KEY=... scripts/testing/agent_ui_smoke.sh --provider openai
+export OPENAI_API_KEY=... # obtain this from the approved secret source
+scripts/testing/agent_ui_smoke.sh --provider openai --case create --cost-warning-usd 5
 ```
+
+Start with one focused case and inspect `model_usage` in `verdict.json` before
+running another. The verdict deduplicates Midscene usage by provider request ID,
+records input/cached-input/cache-write/output tokens, and estimates direct API
+cost using the versioned GPT-5.6 Sol pricing reference embedded in the report.
+The direct OpenAI usage shape is read from `prompt_tokens_details`; if cache-write
+detail alone is absent, the verdict emits a conservative cost range and applies
+the warning threshold to its upper bound. An unknown model or incomplete,
+unidentified, or conflicting usage report makes the cost and warning status
+explicitly unavailable rather than presenting a misleading finite bound.
+For Codex runs, the same number is an API-equivalent estimate—not a subscription
+charge. For OpenAI runs, it is an estimate and may differ from the provider's
+final invoice. `--cost-warning-usd` is an after-run warning, not a hard cap.
+See the official [GPT-5.6 Sol model and pricing reference](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
 
 No provider fallback exists. Cookie authentication is retained for testing a
 local cookie-auth stack; the application URL remains loopback-only:
@@ -60,6 +76,38 @@ local cookie-auth stack; the application URL remains loopback-only:
 CURATOR_COOKIE='name=value' \
   scripts/testing/agent_ui_smoke.sh --app-auth cookie --url http://127.0.0.1:3002
 ```
+
+## Running on a trusted dev host
+
+Install and run the harness directly on the host that runs the Docker
+development stack, under a dedicated trusted OS account, and keep the app URL
+on loopback. The Codex app server and its authentication are local to that
+runner account; they are not supplied by the application containers.
+
+For an interactive or headless host, the preferred setup is:
+
+```bash
+codex login --device-auth
+codex login status
+```
+
+OpenAI's documented fallback is to transfer the existing Codex credential cache
+to that account's `~/.codex/auth.json`. If that route is necessary, transfer it
+through an approved secret channel, restrict the directory and file to the
+runner account, and leave the file writable so refreshed tokens can be saved.
+Treat it like a password: never commit it, paste it into tickets/logs, store it
+in this repository or `.env`, or bake it into a Docker image. A personal Codex
+credential must not become unattended application or production-service
+configuration; production enablement needs a separate security and operations
+review.
+See the official [Codex authentication guide](https://learn.chatgpt.com/docs/auth)
+for device-auth and credential-cache behavior.
+
+The direct OpenAI path is operationally simpler for a slow dev-server trial:
+inject a dedicated-project API key into the runner environment from the dev
+server's approved secret mechanism, select `--provider openai`, and run one case
+at a time. The preflight checks only that a key is present and deliberately
+does not make a billable model request.
 
 ## Journeys and evidence
 
@@ -101,6 +149,11 @@ documents. It verifies file absence before reporting cleanup clean. A cleanup
 failure fails the case. `--retain-resources` is a debugging mode and produces a
 partial verdict.
 
+`verdict.json` and `verdict.md` include per-run token totals and the current
+GPT-5.6 Sol API-cost estimate or conservative range. Usage objects without a stable request identity,
+conflicting duplicates, parse failures, and requests for models without a known
+pricing table are surfaced rather than silently priced.
+
 Teardown drains in-flight response capture before deleting resources; a bounded
 drain timeout is itself a cleanup failure. Run IDs are normalized to the
 backend-stable filename form and length, and generated-file deletion requires
@@ -108,7 +161,7 @@ the captured UUID and exact filename plus the run-prefix boundary.
 
 ## Pilot status
 
-This suite is an on-demand dev-server smoke. Each invocation writes its own
+This suite is an on-demand, same-host dev-server smoke. Each invocation writes its own
 verdict and sanitized evidence; it does not aggregate a reliability ledger or
 gate commits and pull requests on a multi-run quota. Run IDs cannot reuse an
 existing evidence directory. Keep it out of CI and release automation unless

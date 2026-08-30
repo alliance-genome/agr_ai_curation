@@ -454,8 +454,9 @@ python3 scripts/testing/dev_release_smoke.py \
 
 ### testing/agent_ui_smoke.sh
 
-Runs the on-demand Midscene curator-agent Beta pilot against the local Docker
-frontend/proxy at `http://localhost:3002`. It covers flow creation, flow rewiring,
+Runs the on-demand Midscene curator-agent Beta pilot against the same-host Docker
+frontend/proxy at `http://localhost:3002`. This includes a designated dev server
+when the harness runs on that server. It covers flow creation, flow rewiring,
 Add Literature plus grounded chat, and saved-flow execution. Visible curator
 actions use Midscene; durable state, traces, evidence, and cleanup use typed API
 checks.
@@ -485,12 +486,17 @@ Useful selections:
 ./scripts/testing/agent_ui_smoke.sh --case upload --headed
 ./scripts/testing/agent_ui_smoke.sh --tag flow
 ./scripts/testing/agent_ui_smoke.sh --retain-resources
+./scripts/testing/agent_ui_smoke.sh --provider openai --case create --cost-warning-usd 5
 ```
 
 Codex app-server with `gpt-5.6-sol` and low reasoning is the default and does
 not use or fall back to `OPENAI_API_KEY`. Direct OpenAI billing requires the
 explicit `--provider openai` option. Curator-cookie support is retained for a
 local cookie-auth stack, but the harness rejects non-loopback application URLs.
+The runner account must own the Codex login; see the package README for safe
+device-auth and protected credential-cache guidance. OpenAI runs write
+deduplicated token totals and an estimated API cost to each verdict. The cost
+warning is emitted after the run and is not a hard billing cap.
 
 The strict preflight includes authenticated loopback app access, an end-to-end backend
 file-output storage write probe, PDF worker readiness, Chromium launch, and the

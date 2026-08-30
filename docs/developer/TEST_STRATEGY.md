@@ -94,13 +94,16 @@ scripts/testing/agent_ui_smoke.sh --preflight-only
 scripts/testing/agent_ui_smoke.sh
 ```
 
-This is a local-only, non-blocking Midscene Test Runner Beta pilot. Run it on
-demand against the local development server. Do not add it to CI, use it against
-shared dev, or treat it as release evidence unless the project explicitly
-promotes it later.
+This is a same-host, non-blocking Midscene Test Runner Beta pilot. Run it on
+demand on the trusted machine hosting the Docker development stack and target
+that stack through loopback; this can be a designated dev server. Do not point
+the harness at a remote shared-dev URL, add it to CI, run it on production, or
+treat it as release evidence unless the project explicitly promotes it later.
 Artifacts live under `file_outputs/temp/agent_ui_smoke/<run-id>/` and are ignored
 by Git. `--retain-resources` is debugging-only and cannot produce a passing
-verdict.
+verdict. Each verdict includes deduplicated provider token usage and a versioned
+GPT-5.6 Sol API-cost estimate. The estimate warning is not a hard provider cap;
+run focused direct-OpenAI cases serially and inspect each verdict.
 
 The runner enforces a loopback application origin. It scopes browser API-key
 headers to that origin and verifies deletion of generated file rows and storage

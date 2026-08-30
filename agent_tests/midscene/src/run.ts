@@ -5,9 +5,10 @@ import { runTestProject, type TestProjectRunResult } from '@midscene/test/config
 
 import { applyProviderEnvironment, loadConfig } from './config.js'
 import { runPreflight } from './preflight.js'
-import { redactSecrets } from './redaction.js'
 import { createFreshRunDirectory } from './run-directory.js'
 import { canonicalCaseStatuses, executedCanonicalCases } from './run-results.js'
+import { summarizeModelUsage } from './model-usage.js'
+import { buildRedactedVerdict } from './verdict.js'
 
 async function cleanupIsClean(config: ReturnType<typeof loadConfig>, runResult: TestProjectRunResult | undefined): Promise<boolean> {
   const executedCases = executedCanonicalCases(runResult)
@@ -34,6 +35,21 @@ function markdownVerdict(verdict: Record<string, any>): string {
 - Result: ${verdict.result}
 - Resources retained: ${verdict.resources_retained}
 - Cleanup clean: ${verdict.cleanup_clean}
+
+## Model usage
+
+- Requests: ${verdict.model_usage.request_count}
+- Input tokens: ${verdict.model_usage.input_tokens}
+- Cached input tokens: ${verdict.model_usage.cached_input_tokens}
+- Reported cache-write input tokens: ${verdict.model_usage.reported_cache_write_input_tokens}
+- Requests missing cache-write detail: ${verdict.model_usage.requests_missing_cache_write_tokens}
+- Output tokens: ${verdict.model_usage.output_tokens}
+- Cost estimate status: ${verdict.model_usage.cost_estimate_status}
+- Estimated OpenAI API cost: ${verdict.model_usage.estimated_openai_api_cost_usd === null ? 'not exact' : `$${Number(verdict.model_usage.estimated_openai_api_cost_usd).toFixed(6)}`}
+- Estimated OpenAI API cost range: ${verdict.model_usage.estimated_openai_api_cost_lower_bound_usd === null ? 'unavailable' : `$${Number(verdict.model_usage.estimated_openai_api_cost_lower_bound_usd).toFixed(6)}–$${Number(verdict.model_usage.estimated_openai_api_cost_upper_bound_usd).toFixed(6)}`}
+- Cost estimate unavailable reasons: ${verdict.model_usage.cost_estimate_unavailable_reasons.join(', ') || 'none'}
+- Billing basis: ${verdict.model_usage.billing_basis}
+- OpenAI cost warning status: ${verdict.model_usage.cost_warning_status}
 
 ## Cases
 
@@ -69,8 +85,14 @@ try {
 const canonicalStatuses = canonicalCaseStatuses(result)
 const caseStatuses = Object.fromEntries(config.cases.map((caseName) => [caseName, canonicalStatuses[caseName]]))
 const cleanupClean = await cleanupIsClean(config, result)
+const modelUsage = await summarizeModelUsage(
+  path.join(config.runDir, 'midscene-reports', 'report'),
+  config.provider,
+  config.model.name,
+  config.openaiCostWarningUsd,
+)
 const succeeded = !failure && result?.status === 'success' && cleanupClean && !config.retainResources
-const verdict = redactSecrets({
+const verdict = buildRedactedVerdict({
   schema_version: 1,
   run_id: config.runId,
   started_at: startedAt,
@@ -97,8 +119,18 @@ const verdict = redactSecrets({
   resources_retained: config.retainResources,
   test_runner: result ? { result_dir: result.resultDir, summary_path: result.summaryPath, report_dir: result.reportDir, summary: result.summary } : null,
   failure: failure instanceof Error ? { name: failure.name, message: failure.message } : failure ? String(failure) : null,
-}) as Record<string, any>
+}, modelUsage) as Record<string, any>
 await writeFile(path.join(config.runDir, 'verdict.json'), `${JSON.stringify(verdict, null, 2)}\n`, { mode: 0o600 })
 await writeFile(path.join(config.runDir, 'verdict.md'), markdownVerdict(verdict), { mode: 0o600 })
 process.stdout.write(`Verdict: ${path.join(config.runDir, 'verdict.md')}\n`)
+if (modelUsage.cost_warning_exceeded && modelUsage.estimated_openai_api_cost_upper_bound_usd !== null) {
+  process.stderr.write(
+    `Warning: estimated OpenAI API cost upper bound $${modelUsage.estimated_openai_api_cost_upper_bound_usd.toFixed(6)} exceeds `
+      + `$${modelUsage.cost_warning_usd.toFixed(2)}; this is an after-run warning, not a hard billing cap.\n`,
+  )
+} else if (modelUsage.cost_warning_status === 'unknown') {
+  process.stderr.write(
+    `Warning: OpenAI API cost could not be bounded: ${modelUsage.cost_estimate_unavailable_reasons.join(', ')}.\n`,
+  )
+}
 if (!succeeded) process.exitCode = 1

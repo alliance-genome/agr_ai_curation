@@ -20,6 +20,7 @@ describe('smoke configuration', () => {
     assert.equal(config.model.retryCount, 1)
     assert.equal(config.caseRetryCount, 0)
     assert.equal(config.maxConcurrency, 1)
+    assert.equal(config.openaiCostWarningUsd, 5)
     assert.equal(config.runPrefix, 'agent-smoke-20260830t120000z')
   })
 
@@ -32,6 +33,7 @@ describe('smoke configuration', () => {
       AGENT_UI_SMOKE_TEST_TIMEOUT_MS: '12345',
       MIDSCENE_MODEL_NAME: 'gpt-5.6-terra',
       MIDSCENE_MODEL_RETRY_COUNT: '2',
+      AGENT_UI_SMOKE_OPENAI_COST_WARNING_USD: '2.5',
     }, options)
     assert.equal(config.appUrl, 'http://127.0.0.1:3999')
     assert.equal(config.runId, 'manual-42')
@@ -40,6 +42,7 @@ describe('smoke configuration', () => {
     assert.equal(config.testTimeoutMs, 12345)
     assert.equal(config.model.name, 'gpt-5.6-terra')
     assert.equal(config.model.retryCount, 2)
+    assert.equal(config.openaiCostWarningUsd, 2.5)
   })
 
   it('requires the selected application auth secret', () => {
@@ -97,6 +100,7 @@ describe('smoke configuration', () => {
   it('rejects invalid operational limits and parallel execution', () => {
     assert.throws(() => loadConfig({ AGENT_UI_SMOKE_CASE_RETRY_COUNT: '-1' }, options))
     assert.throws(() => loadConfig({ AGENT_UI_SMOKE_MAX_CONCURRENCY: '2' }, options))
+    assert.throws(() => loadConfig({ AGENT_UI_SMOKE_OPENAI_COST_WARNING_USD: '-0.01' }, options))
   })
 
   it('normalizes run IDs to the backend-stable 42-character ownership prefix', () => {

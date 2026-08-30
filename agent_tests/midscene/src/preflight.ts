@@ -125,7 +125,14 @@ export async function runPreflight(): Promise<Record<string, unknown>> {
   checks.browser = { ok: true, executable }
 
   if (config.provider === 'codex') {
-    const login = await execFileAsync('codex', ['login', 'status'], { timeout: config.preflightTimeoutMs })
+    let login
+    try {
+      login = await execFileAsync('codex', ['login', 'status'], { timeout: config.preflightTimeoutMs })
+    } catch {
+      throw new Error(
+        'Codex login is unavailable for the runner OS account; use device auth or the protected credential-cache procedure in agent_tests/midscene/README.md',
+      )
+    }
     const loginStatus = `${login.stdout}\n${login.stderr}`.trim()
     if (!/logged in/i.test(loginStatus)) throw new Error(`Codex login is unavailable: ${loginStatus}`)
     const models = await codexModels(config.preflightTimeoutMs)

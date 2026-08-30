@@ -43,6 +43,7 @@ const DEFAULTS = {
   replanningCycleLimit: 24,
   waitAfterActionMs: 300,
   evidencePreviewChars: 4_000,
+  openaiCostWarningUsd: 5,
   codexBaseUrl: 'codex://app-server',
   codexModel: 'gpt-5.6-sol',
   codexFamily: 'gpt-5',
@@ -70,6 +71,17 @@ function readInteger(
   if (raw === undefined || raw.trim() === '') return fallback
   const parsed = z.coerce.number().int().min(options.min)
   return (options.max === undefined ? parsed : parsed.max(options.max)).parse(raw)
+}
+
+function readNumber(
+  env: Environment,
+  name: string,
+  fallback: number,
+  options: { min: number },
+): number {
+  const raw = env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  return z.coerce.number().finite().min(options.min).parse(raw)
 }
 
 function readNonEmpty(env: Environment, name: string, fallback: string): string {
@@ -148,6 +160,7 @@ export interface SmokeConfig {
   replanningCycleLimit: number
   waitAfterActionMs: number
   evidencePreviewChars: number
+  openaiCostWarningUsd: number
   model: {
     baseUrl: string
     name: string
@@ -231,6 +244,7 @@ export function loadConfig(
     replanningCycleLimit: readInteger(env, 'AGENT_UI_SMOKE_REPLANNING_CYCLE_LIMIT', DEFAULTS.replanningCycleLimit, { min: 1 }),
     waitAfterActionMs: readInteger(env, 'AGENT_UI_SMOKE_WAIT_AFTER_ACTION_MS', DEFAULTS.waitAfterActionMs, { min: 0 }),
     evidencePreviewChars: readInteger(env, 'AGENT_UI_SMOKE_EVIDENCE_PREVIEW_CHARS', DEFAULTS.evidencePreviewChars, { min: 100 }),
+    openaiCostWarningUsd: readNumber(env, 'AGENT_UI_SMOKE_OPENAI_COST_WARNING_USD', DEFAULTS.openaiCostWarningUsd, { min: 0 }),
     model: {
       baseUrl: modelBaseUrl,
       name: modelName,

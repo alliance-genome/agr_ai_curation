@@ -4,7 +4,7 @@
 
 - Branch: `codex/midscene-curator-agent-smoke`
 - Base: clean `origin/main` worktree
-- Target: local Docker development stack; default `http://localhost:3002`
+- Target: same-host Docker development stack; default `http://localhost:3002`
 - Validation URL: loopback proxy `http://127.0.0.1:13004`
 - Status: pilot implementation; non-blocking and local-only
 
@@ -21,7 +21,7 @@
   cleanup behavior.
 - [x] All four cases pass headlessly against the local Docker stack.
 - [x] Independent GPT-5.6 Sol high-reasoning rigorous review is clean.
-- [ ] Isolated commit and PR contain the implementation and review evidence.
+- [x] Isolated commit and PR contain the implementation and review evidence.
 
 ## Progress trail
 
@@ -65,3 +65,14 @@
 - 2026-08-30: Final residue audit found zero `agent-smoke-%` file rows, storage
   files, flows, documents, and visible chat sessions. The testing API key was
   absent from all smoke artifacts.
+- 2026-08-30: Added request-ID-deduplicated token accounting, versioned GPT-5.6
+  Sol API-cost estimates, and an after-run cost warning. Documented safe
+  same-host dev-server execution with runner-account Codex device auth or an
+  explicitly selected OpenAI key; production remains outside the pilot. The
+  expanded offline suite passes 38 tests plus TypeScript and all four YAML
+  validations. Changed-file diagnostics are clean; the frontend compiler still
+  reports only its unrelated dependency-install baseline.
+- 2026-08-30: The same independent high-reasoning reviewer found and verified
+  fixes for verdict token-count redaction and false-finite cost bounds when
+  usage data is incomplete or unpriced. Final signoff is clean with direct
+  OpenAI nested cache-write accounting and explicit unknown-cost states.

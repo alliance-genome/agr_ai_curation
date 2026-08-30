@@ -9,7 +9,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/testing/agent_ui_smoke.sh [options]
 
-Local-only Midscene curator-agent smoke pilot.
+Same-host Midscene curator-agent smoke pilot.
 
 Options:
   --case NAME             all, create, edit, upload, run, or canonical case name
@@ -17,6 +17,7 @@ Options:
   --headed                show Chromium
   --headless              run Chromium headlessly (default)
   --provider NAME         codex (default) or openai
+  --cost-warning-usd USD  after-run OpenAI API cost warning (default 5)
   --app-auth MODE         api-key (default) or cookie
   --url URL               loopback application URL (default http://localhost:3002)
   --retain-resources      retain prefixed app resources for debugging
@@ -37,6 +38,7 @@ app_auth="${AGENT_UI_SMOKE_APP_AUTH:-api-key}"
 app_url="${AGENT_UI_SMOKE_APP_URL:-http://localhost:3002}"
 headless="${AGENT_UI_SMOKE_HEADLESS:-true}"
 retain="${AGENT_UI_SMOKE_RETAIN_RESOURCES:-false}"
+cost_warning_usd="${AGENT_UI_SMOKE_OPENAI_COST_WARNING_USD:-5}"
 run_id="${AGENT_UI_SMOKE_RUN_ID:-}"
 preflight_only=false
 offline=false
@@ -67,6 +69,10 @@ while (($#)); do
     --provider)
       [[ $# -ge 2 ]] || { echo "--provider requires a value" >&2; exit 2; }
       provider="$2"; shift 2
+      ;;
+    --cost-warning-usd)
+      [[ $# -ge 2 ]] || { echo "--cost-warning-usd requires a value" >&2; exit 2; }
+      cost_warning_usd="$2"; shift 2
       ;;
     --app-auth)
       [[ $# -ge 2 ]] || { echo "--app-auth requires a value" >&2; exit 2; }
@@ -106,6 +112,7 @@ export AGENT_UI_SMOKE_APP_AUTH="$app_auth"
 export AGENT_UI_SMOKE_PROVIDER="$provider"
 export AGENT_UI_SMOKE_HEADLESS="$headless"
 export AGENT_UI_SMOKE_RETAIN_RESOURCES="$retain"
+export AGENT_UI_SMOKE_OPENAI_COST_WARNING_USD="$cost_warning_usd"
 export AGENT_UI_SMOKE_CASE="$case_name"
 if ((${#tags[@]})); then
   tag_csv="$(IFS=,; echo "${tags[*]}")"
