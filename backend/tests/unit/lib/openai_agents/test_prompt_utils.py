@@ -1,5 +1,6 @@
 """Unit tests for prompt utility helpers."""
 
+import asyncio
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
@@ -219,6 +220,12 @@ async def test_extract_abstract_with_llm_omits_temperature_for_gpt5(monkeypatch)
         def __init__(self):
             self.chat = SimpleNamespace(completions=_FakeCompletions())
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
     monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
 
@@ -244,6 +251,12 @@ async def test_extract_abstract_with_llm_sets_temperature_for_non_gpt5(monkeypat
         def __init__(self):
             self.chat = SimpleNamespace(completions=_FakeCompletions())
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
     monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-4o-mini")
 
@@ -266,10 +279,57 @@ async def test_extract_abstract_with_llm_returns_none_for_short_or_missing_outpu
         def __init__(self):
             self.chat = SimpleNamespace(completions=_FakeCompletionsNone())
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
     monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
 
     assert await prompt_utils._extract_abstract_with_llm("raw text") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "error", "cancelled"])
+async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
+    monkeypatch, outcome
+):
+    lifecycle = {"entered": 0, "exited": 0}
+
+    class _FakeCompletions:
+        async def create(self, **_kwargs):
+            if outcome == "error":
+                raise RuntimeError("request failed")
+            if outcome == "cancelled":
+                raise asyncio.CancelledError
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="C" * 80))]
+            )
+
+    class _FakeAsyncOpenAI:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+        async def __aenter__(self):
+            lifecycle["entered"] += 1
+            return self
+
+        async def __aexit__(self, *_args):
+            lifecycle["exited"] += 1
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
+
+    if outcome == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await prompt_utils._extract_abstract_with_llm("raw text")
+    else:
+        result = await prompt_utils._extract_abstract_with_llm("raw text")
+        assert result == ("C" * 80 if outcome == "success" else None)
+
+    assert lifecycle == {"entered": 1, "exited": 1}
 
 
 @pytest.mark.asyncio

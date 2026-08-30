@@ -327,55 +327,54 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
     try:
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI()
+        async with AsyncOpenAI() as client:
+            # Use the configured abstract-extraction model (.env, no code fallback).
+            from src.lib.config.env import require_env
+            model = require_env("ABSTRACT_EXTRACTION_MODEL")
 
-        # Use the configured abstract-extraction model (.env, no code fallback).
-        from src.lib.config.env import require_env
-        model = require_env("ABSTRACT_EXTRACTION_MODEL")
+            # GPT-5 models use max_completion_tokens, others use max_tokens
+            is_gpt5 = model.startswith("gpt-5")
+            completion_kwargs = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Extract ONLY the abstract from the provided text. "
+                            "The abstract is typically a single paragraph summarizing the paper's "
+                            "purpose, methods, key findings, and conclusions. "
+                            "Do NOT include: keywords, article info, author affiliations, "
+                            "introduction text, or section headers. "
+                            "Return ONLY the abstract text, nothing else. "
+                            "If no clear abstract is found, return 'NO_ABSTRACT_FOUND'."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Extract the abstract from this text:\n\n{raw_text[:4000]}"  # Limit input
+                    }
+                ],
+            }
 
-        # GPT-5 models use max_completion_tokens, others use max_tokens
-        is_gpt5 = model.startswith("gpt-5")
-        completion_kwargs = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Extract ONLY the abstract from the provided text. "
-                        "The abstract is typically a single paragraph summarizing the paper's "
-                        "purpose, methods, key findings, and conclusions. "
-                        "Do NOT include: keywords, article info, author affiliations, "
-                        "introduction text, or section headers. "
-                        "Return ONLY the abstract text, nothing else. "
-                        "If no clear abstract is found, return 'NO_ABSTRACT_FOUND'."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": f"Extract the abstract from this text:\n\n{raw_text[:4000]}"  # Limit input
-                }
-            ],
-        }
+            # GPT-5 models don't support temperature; non-GPT5 models use it
+            if not is_gpt5:
+                completion_kwargs["temperature"] = 0
 
-        # GPT-5 models don't support temperature; non-GPT5 models use it
-        if not is_gpt5:
-            completion_kwargs["temperature"] = 0
+            response = await client.chat.completions.create(**completion_kwargs)
 
-        response = await client.chat.completions.create(**completion_kwargs)
+            content = response.choices[0].message.content
+            if content is None:
+                logger.warning("LLM returned None content for abstract extraction")
+                return None
 
-        content = response.choices[0].message.content
-        if content is None:
-            logger.warning("LLM returned None content for abstract extraction")
-            return None
+            result = content.strip()
+            logger.debug('LLM abstract extraction result: %s chars', len(result))
 
-        result = content.strip()
-        logger.debug('LLM abstract extraction result: %s chars', len(result))
+            if result == "NO_ABSTRACT_FOUND" or len(result) < 50:
+                logger.debug('LLM could not extract a clear abstract (result=%s)', result[:50] if result else 'empty')
+                return None
 
-        if result == "NO_ABSTRACT_FOUND" or len(result) < 50:
-            logger.debug('LLM could not extract a clear abstract (result=%s)', result[:50] if result else 'empty')
-            return None
-
-        return result
+            return result
 
     except Exception as e:
         logger.warning('LLM abstract extraction failed: %s: %s', type(e).__name__, e)
