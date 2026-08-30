@@ -267,13 +267,13 @@ def _run_live_flow_case(
             run_started = next(event for event in events if event.get("type") == "RUN_STARTED")
             model_blob = str(run_started.get("model", "")).lower()
             assert model_blob, run_started
-            # OpenAI native emits model IDs directly.
-            # LiteLLM-backed providers may emit an object repr in RUN_STARTED.
+            # Native OpenAI emits model IDs directly; compatible providers may
+            # emit a concrete Agents SDK model repr in RUN_STARTED.
             if provider == "openai":
                 assert model_id.lower() in model_blob, run_started
             else:
                 expected_suffix = model_id.lower().split("/")[-1]
-                assert expected_suffix in model_blob or "litellmmodel" in model_blob, run_started
+                assert expected_suffix in model_blob, run_started
         finally:
             if flow_id:
                 active_client.delete(f"/api/flows/{flow_id}", headers=headers)

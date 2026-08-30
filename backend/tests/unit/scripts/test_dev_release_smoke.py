@@ -1254,12 +1254,12 @@ def test_require_text_contains_any_snippet_accepts_focus_gene_answer():
     )
 
 
-def test_require_model_looks_expected_rejects_generic_litellm_repr():
+def test_require_model_looks_expected_rejects_generic_object_repr():
     smoke = _load_smoke_module()
 
     with pytest.raises(smoke.SmokeFailure, match="did not match"):
         smoke.require_model_looks_expected(
-            "<agents.extensions.models.litellm_model.LitellmModel object at 0x1234>",
+            "<object object at 0x1234>",
             expected_model="gpt-5.6-sol",
             context="Streaming chat RUN_STARTED",
         )

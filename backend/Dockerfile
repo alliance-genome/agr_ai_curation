@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.lock.txt --retries 3
 
 # Post-install security check: only allow known .pth files (supply chain defense)
-# The litellm 1.82.8 attack (2026-03-24) used a malicious .pth file to execute
+# The 2026-03-24 dependency attack used a malicious .pth file to execute
 # obfuscated code on every Python startup. This whitelist catches any new .pth files.
 RUN KNOWN_PTH="a1_coverage.pth distutils-precedence.pth sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth" && \
     UNKNOWN="" && \

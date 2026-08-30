@@ -14,11 +14,10 @@ def _provider(provider_id: str, *, driver: str = "openai_native"):
         provider_id=provider_id,
         driver=driver,
         supports_parallel_tool_calls=True,
-        drop_params=False,
         api_key_env="OPENAI_API_KEY",
         base_url_env=None,
         default_base_url=None,
-        litellm_prefix=None,
+        api_mode="responses",
     )
 
 
@@ -93,14 +92,14 @@ def test_reasoning_summary_settings_report_not_supported_for_non_reasoning_model
     assert settings["requested_summary"] is None
 
 
-def test_reasoning_summary_settings_report_not_supported_for_litellm_provider(monkeypatch):
+def test_reasoning_summary_settings_report_not_supported_for_compatible_provider(monkeypatch):
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",
         lambda _model_id: _model("gemini", supports_reasoning=True),
     )
     monkeypatch.setattr(
         "src.lib.config.providers_loader.get_provider",
-        lambda provider_id: _provider(provider_id, driver="litellm"),
+        lambda provider_id: _provider(provider_id, driver="openai_compatible"),
     )
 
     settings = reasoning_summary_request_settings(

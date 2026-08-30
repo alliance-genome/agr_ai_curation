@@ -2,7 +2,7 @@
 
 Audit date: 2026-03-24
 
-This note records the ALL-148 verification pass for backend Docker CLI hardening after the litellm 1.82.8 supply-chain incident.
+This note records the ALL-148 verification pass for backend Docker CLI hardening after the 2026-03-24 Python dependency supply-chain incident.
 
 ## Summary
 

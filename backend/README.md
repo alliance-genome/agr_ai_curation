@@ -307,7 +307,7 @@ full developer contract.
 ### AI & Chat
 - **OpenAI Agents SDK** - AI agent framework
 - **OpenAI** - LLM provider (native driver)
-- **LiteLLM** - Multi-provider LLM gateway (Gemini, Groq)
+- **OpenAI-compatible provider driver** - Direct Gemini and Groq routes
 - **Anthropic** - Opus chat in Agent Studio
 - **Langfuse** - Observability
 - **OpenInference** - Instrumentation

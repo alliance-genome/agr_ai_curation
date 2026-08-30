@@ -554,7 +554,7 @@ def test_repo_alliance_package_runtime_requirements_include_shared_runtime_depen
         if line.strip() and not line.lstrip().startswith("#")
     }
 
-    assert "openai-agents[litellm]" in normalized
+    assert "openai-agents" in normalized
     assert "psycopg2-binary" in normalized
 
 

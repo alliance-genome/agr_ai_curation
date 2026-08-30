@@ -50,6 +50,7 @@ from .config import (
     get_structured_finalization_retry_max_turns,
     reasoning_summary_request_settings,
     resolve_model_provider,
+    runtime_model_uses_provider,
 )
 from .evidence_summary import (
     build_record_evidence_summary_record,
@@ -643,15 +644,7 @@ def _should_use_groq_tool_json_compat(agent: Agent) -> bool:
     if len(tools) == 0:
         return False
 
-    model_id = _extract_model_identifier(getattr(agent, "model", None)).lower()
-    if model_id.startswith("groq/"):
-        return True
-
-    # Safety net for alternate naming conventions if encountered in runtime model IDs.
-    if "groq" in model_id and "/" in model_id:
-        return True
-
-    return False
+    return runtime_model_uses_provider(getattr(agent, "model", None), "groq")
 
 
 def _build_json_only_instruction(output_type: Any) -> str:

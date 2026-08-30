@@ -462,7 +462,9 @@ models:
 
 ### providers.yaml
 
-Defines how to reach each LLM backend. Supports two driver types: `openai_native` for direct OpenAI API access and `litellm` for third-party providers routed through LiteLLM.
+Defines how to reach each LLM backend. Supports `openai_native` for the default
+OpenAI runtime and `openai_compatible` for providers reached directly through
+their OpenAI-compatible endpoint.
 
 Located at: `config/providers.yaml`
 
@@ -479,22 +481,20 @@ providers:
       parallel_tool_calls: true
 
   gemini:
-    driver: litellm                      # Route through LiteLLM
+    driver: openai_compatible            # Direct OpenAI-compatible endpoint
     api_key_env: GEMINI_API_KEY
     base_url_env: GEMINI_BASE_URL
     default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
-    litellm_prefix: gemini               # Required for litellm driver
-    drop_params: true                    # Drop unsupported params for this provider
+    api_mode: chat_completions
     supports:
-      parallel_tool_calls: false
+      parallel_tool_calls: true
 
   groq:
-    driver: litellm
+    driver: openai_compatible
     api_key_env: GROQ_API_KEY
     base_url_env: GROQ_BASE_URL
     default_base_url: "https://api.groq.com/openai/v1"
-    litellm_prefix: groq
-    drop_params: true
+    api_mode: chat_completions
     supports:
       parallel_tool_calls: true
 ```
@@ -503,13 +503,11 @@ providers:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `driver` | Yes | `openai_native` or `litellm` |
+| `driver` | Yes | `openai_native` or `openai_compatible` |
 | `api_key_env` | Yes | Name of the environment variable holding the API key |
 | `base_url_env` | No | Env var for base URL override |
 | `default_base_url` | No | Fallback base URL when env var is not set |
-| `litellm_prefix` | Conditional | Required when `driver: litellm` (e.g., `gemini`, `groq`) |
-| `drop_params` | No | Drop unsupported params for non-OpenAI providers (default: true for litellm) |
-| `api_mode` | No | `responses` or `chat_completions` (default: `responses`) |
+| `api_mode` | Conditional | `responses` or `chat_completions`; required for `openai_compatible`, and defaults to `responses` for `openai_native` |
 | `default_for_runner` | No | Whether this provider is the default runner (exactly one must be `true`) |
 | `supports.parallel_tool_calls` | No | Whether parallel tool calls are supported (default: `true`) |
 
@@ -543,11 +541,10 @@ providers:
   # ... existing providers ...
 
   my_provider:
-    driver: litellm
+    driver: openai_compatible
     api_key_env: MY_PROVIDER_API_KEY
     default_base_url: "https://api.myprovider.com/v1"
-    litellm_prefix: my_provider
-    drop_params: true
+    api_mode: chat_completions
     supports:
       parallel_tool_calls: true
 ```
@@ -1209,7 +1206,7 @@ print(json.dumps(report, indent=2))
 | Startup crash with "LLM provider validation failed" | Required API key env var is not set. Check `providers.yaml` for which env var is expected. |
 | Model references unknown provider | The `provider` field in `models.yaml` doesn't match a key in `providers.yaml`. |
 | "must define exactly one provider with default_for_runner=true" | Check `providers.yaml` - exactly one provider needs `default_for_runner: true`. |
-| LiteLLM provider not routing correctly | Verify `litellm_prefix` is set and `drop_params: true` for non-OpenAI providers. |
+| Compatible provider not routing correctly | Verify its configured base URL and `api_mode` match the provider endpoint. |
 | Provider validation warnings but no errors | Set `LLM_PROVIDER_STRICT_MODE=false` if unused providers missing keys is acceptable. |
 
 ### Health Checks Failing

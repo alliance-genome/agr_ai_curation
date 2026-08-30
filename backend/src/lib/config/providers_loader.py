@@ -26,8 +26,6 @@ class ProviderDefinition:
     api_key_env: str
     base_url_env: Optional[str] = None
     default_base_url: Optional[str] = None
-    litellm_prefix: Optional[str] = None
-    drop_params: bool = False
     api_mode: str = "responses"
     default_for_runner: bool = False
     supports_parallel_tool_calls: bool = True
@@ -47,10 +45,10 @@ class ProviderDefinition:
             )
 
         driver = str(data.get("driver", "")).strip().lower()
-        if driver not in {"openai_native", "litellm"}:
+        if driver not in {"openai_native", "openai_compatible"}:
             raise ValueError(
                 f"Provider '{provider_id}' in {source_label} has invalid driver '{driver}'. "
-                "Supported: openai_native, litellm"
+                "Supported: openai_native, openai_compatible"
             )
 
         api_key_env = str(data.get("api_key_env", "")).strip()
@@ -60,7 +58,13 @@ class ProviderDefinition:
                 f"'api_key_env'"
             )
 
-        api_mode = str(data.get("api_mode", "responses")).strip().lower() or "responses"
+        configured_api_mode = str(data.get("api_mode", "")).strip().lower()
+        if driver == "openai_compatible" and not configured_api_mode:
+            raise ValueError(
+                f"Provider '{provider_id}' in {source_label} with "
+                "driver=openai_compatible requires 'api_mode'"
+            )
+        api_mode = configured_api_mode or "responses"
         if api_mode not in {"responses", "chat_completions"}:
             raise ValueError(
                 f"Provider '{provider_id}' in {source_label} has invalid api_mode '{api_mode}'. "
@@ -75,21 +79,21 @@ class ProviderDefinition:
                 f"Provider '{provider_id}' in {source_label} field 'supports' must be a mapping"
             )
 
-        litellm_prefix = str(data.get("litellm_prefix", "")).strip() or None
-        if driver == "litellm" and not litellm_prefix:
+        base_url_env = str(data.get("base_url_env", "")).strip() or None
+        default_base_url = str(data.get("default_base_url", "")).strip() or None
+        if driver == "openai_compatible" and not (base_url_env or default_base_url):
             raise ValueError(
-                f"Provider '{provider_id}' in {source_label} with driver=litellm "
-                f"requires 'litellm_prefix'"
+                f"Provider '{provider_id}' in {source_label} with "
+                "driver=openai_compatible requires 'base_url_env' or "
+                "'default_base_url'"
             )
 
         return cls(
             provider_id=provider_id,
             driver=driver,
             api_key_env=api_key_env,
-            base_url_env=str(data.get("base_url_env", "")).strip() or None,
-            default_base_url=str(data.get("default_base_url", "")).strip() or None,
-            litellm_prefix=litellm_prefix,
-            drop_params=bool(data.get("drop_params", driver == "litellm")),
+            base_url_env=base_url_env,
+            default_base_url=default_base_url,
             api_mode=api_mode,
             default_for_runner=bool(data.get("default_for_runner", False)),
             supports_parallel_tool_calls=bool(supports.get("parallel_tool_calls", True)),

@@ -19,9 +19,9 @@ Provider Configuration:
   Unknown providers/models fail fast (no implicit fallback behavior).
 """
 
-import os
 import logging
-from typing import Optional, Literal, TYPE_CHECKING, Union
+import os
+from typing import Literal, Optional, TYPE_CHECKING, Union
 from dataclasses import dataclass
 
 from src.lib.flow_contract_limits import (
@@ -36,7 +36,7 @@ from src.lib.flow_contract_limits import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from agents.extensions.models.litellm_model import LitellmModel
+    from agents import Model
 
 # =============================================================================
 # LLM Provider Configuration
@@ -260,6 +260,32 @@ def resolve_model_provider(model_name: str, provider_override: Optional[str] = N
     return provider_id
 
 
+def runtime_model_uses_provider(model: object, provider_id: str) -> bool:
+    """Return whether a runtime model carries or resolves to ``provider_id``.
+
+    Direct compatible models carry provider metadata because their stable upstream
+    model IDs intentionally do not encode the provider. String models continue to
+    resolve through the canonical model catalog.
+    """
+    expected_provider_id = _normalize_provider_id(provider_id)
+    if not expected_provider_id:
+        raise ValueError("provider_id is required")
+
+    explicit_provider_id = _normalize_provider_id(
+        getattr(model, "_agr_provider_id", None)
+    )
+    if explicit_provider_id:
+        return explicit_provider_id == expected_provider_id
+
+    model_id = model if isinstance(model, str) else getattr(model, "model", None)
+    if not str(model_id or "").strip():
+        return False
+    try:
+        return resolve_model_provider(str(model_id).strip()) == expected_provider_id
+    except ValueError:
+        return False
+
+
 def get_api_key(provider_override: Optional[str] = None) -> Optional[str]:
     """Get API key for a specific provider (or default runner provider)."""
     provider_id = _resolve_provider_from_override(provider_override)
@@ -281,20 +307,18 @@ def get_base_url(provider_override: Optional[str] = None) -> Optional[str]:
 def get_model_for_agent(
     model_name: str,
     provider_override: Optional[str] = None,
-) -> Union[str, "LitellmModel"]:
+) -> Union[str, "Model"]:
     """Get the appropriate model object for an agent.
 
-    For OpenAI provider: returns model name string (SDK handles it directly)
-    For Gemini provider: returns LitellmModel instance (handles thought_signature)
-
-    Gemini 3 requires thought_signature handling for function calling, which
-    LiteLLM handles automatically. This function abstracts that complexity.
+    Native OpenAI uses the runner's request-scoped provider by returning the model
+    name. Other OpenAI-compatible providers receive a concrete Agents SDK model
+    backed by their own direct ``OpenAIProvider`` client.
 
     Args:
         model_name: The model name (e.g., "gpt-5.6-terra", "gemini-3-pro-preview")
 
     Returns:
-        Model name string for OpenAI, or LitellmModel instance for Gemini
+        Model name string for native OpenAI, or a direct SDK model otherwise.
     """
     provider_id = resolve_model_provider(model_name, provider_override)
     provider = _get_provider_definition(provider_id)
@@ -305,29 +329,37 @@ def get_model_for_agent(
     if provider.driver == "openai_native":
         return model_name
 
-    if provider.driver == "litellm":
-        from agents.extensions.models.litellm_model import LitellmModel
-        import litellm
-
-        litellm.drop_params = bool(provider.drop_params)
-
-        litellm_model_name = model_name
-        prefix = str(provider.litellm_prefix or "").strip()
-        if prefix and not model_name.startswith(f"{prefix}/"):
-            litellm_model_name = f"{prefix}/{model_name}"
+    if provider.driver == "openai_compatible":
+        from agents import OpenAIProvider
+        from agents.models.openai_provider import shared_http_client
+        from openai import AsyncOpenAI
 
         base_url = get_base_url(provider.provider_id)
+        if not str(base_url or "").strip():
+            raise ValueError(
+                f"Provider '{provider.provider_id}' requires a configured OpenAI-compatible "
+                "base URL"
+            )
         logger.info(
-            "[LiteLLM] Creating model for %s: %s (drop_params=%s)",
+            "Creating direct OpenAI-compatible model for %s: %s (api_mode=%s)",
             provider.provider_id,
-            litellm_model_name,
-            provider.drop_params,
+            model_name,
+            provider.api_mode,
         )
-        return LitellmModel(
-            model=litellm_model_name,
-            base_url=base_url,
+        openai_client = AsyncOpenAI(
             api_key=api_key,
+            base_url=base_url,
+            http_client=shared_http_client(),
         )
+        model_provider = OpenAIProvider(
+            openai_client=openai_client,
+            use_responses=provider.api_mode == "responses",
+            use_responses_websocket=False,
+            strict_feature_validation=True,
+        )
+        model = model_provider.get_model(model_name)
+        setattr(model, "_agr_provider_id", provider.provider_id)
+        return model
 
     raise ValueError(
         f"Provider '{provider.provider_id}' has unsupported driver '{provider.driver}'"

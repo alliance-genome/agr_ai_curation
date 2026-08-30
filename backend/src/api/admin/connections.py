@@ -66,7 +66,9 @@ class LLMProviderHealthItem(BaseModel):
     mapped_model_ids: List[str]
     mapped_curator_visible_model_ids: List[str]
     supports_parallel_tool_calls: bool
-    readiness: str  # "ready" | "missing_api_key" | "unused"
+    # "ready" | "missing_api_key" | "missing_base_url" |
+    # "missing_api_key_and_base_url" | "unused"
+    readiness: str
 
 
 class LLMModelHealthItem(BaseModel):

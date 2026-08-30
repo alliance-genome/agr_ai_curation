@@ -1770,7 +1770,7 @@ def create_supervisor_agent(
 
     model_provider = resolve_model_provider(effective_model)
 
-    # Get the model (returns LitellmModel for Gemini/Groq, string for OpenAI)
+    # Resolve a concrete SDK model for compatible providers or a name for native OpenAI.
     model = get_model_for_agent(effective_model, provider_override=model_provider)
 
     # Build model settings for supervisor
@@ -2066,12 +2066,11 @@ def create_supervisor_agent(
     # Note: We don't use output_type=Answer here to preserve streaming text
     # (structured output generates JSON tokens which don't stream nicely)
     # Note: 'model' variable was set earlier via get_model_for_agent()
-    # For Gemini: returns LitellmModel (handles thought_signature)
-    # For OpenAI: returns model name string
+    # Compatible providers return a concrete SDK model; native OpenAI returns a name.
     supervisor = Agent(
         name="Query Supervisor",
         instructions=instructions,
-        model=model,  # LitellmModel for Gemini, string for OpenAI
+        model=model,
         model_settings=supervisor_settings,
         input_guardrails=input_guardrails,
         tools=specialist_tools,

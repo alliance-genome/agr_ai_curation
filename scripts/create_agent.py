@@ -266,7 +266,7 @@ def create_{config.agent_id}_agent(
         except Exception as e:
             logger.error(f"Failed to inject group rules: {{e}}")
 
-    # Get model (returns LitellmModel for Gemini, string for OpenAI)
+    # Resolve a concrete SDK model for compatible providers or a name for native OpenAI.
     model = get_model_for_agent(agent_config.model)
 
     # Build model settings

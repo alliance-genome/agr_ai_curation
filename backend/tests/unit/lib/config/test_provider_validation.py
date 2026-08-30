@@ -95,6 +95,40 @@ def test_build_provider_runtime_report_downgrades_missing_key_in_non_strict_mode
     assert any("OPENAI_API_KEY" in msg for msg in report["warnings"])
 
 
+def test_build_provider_runtime_report_rejects_missing_compatible_base_url(monkeypatch):
+    import src.lib.config.provider_validation as module
+
+    monkeypatch.setattr(module, "load_providers", lambda: {"compatible": object()})
+    monkeypatch.setattr(module, "list_providers", lambda: [
+        SimpleNamespace(
+            provider_id="compatible",
+            driver="openai_compatible",
+            api_mode="chat_completions",
+            api_key_env="COMPATIBLE_API_KEY",
+            base_url_env="COMPATIBLE_BASE_URL",
+            default_base_url=None,
+            default_for_runner=True,
+            supports_parallel_tool_calls=True,
+        )
+    ])
+    monkeypatch.setattr(module, "load_models", lambda: {"compatible-model": object()})
+    monkeypatch.setattr(module, "list_models", lambda: [
+        SimpleNamespace(
+            model_id="compatible-model",
+            provider="compatible",
+            curator_visible=True,
+        )
+    ])
+    monkeypatch.setenv("COMPATIBLE_API_KEY", "test-key")
+    monkeypatch.delenv("COMPATIBLE_BASE_URL", raising=False)
+
+    report = module.build_provider_runtime_report(strict_mode=True)
+
+    assert report["status"] == "unhealthy"
+    assert report["providers"][0]["readiness"] == "missing_base_url"
+    assert any("base URL is not configured" in msg for msg in report["errors"])
+
+
 def test_validate_and_cache_provider_runtime_contracts_caches_startup_report(monkeypatch):
     import src.lib.config.provider_validation as module
 

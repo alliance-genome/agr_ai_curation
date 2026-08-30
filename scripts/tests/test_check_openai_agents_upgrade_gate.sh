@@ -33,7 +33,7 @@ make_repo() {
   git -C "${repo_dir}" config user.email "smoke-gate@example.test"
   mkdir -p "${repo_dir}/backend"
   cat > "${repo_dir}/backend/requirements.txt" <<'EOF'
-openai-agents[litellm]==0.17.4  # Upgrade-gated exact pin.
+openai-agents==0.17.4  # Upgrade-gated exact pin.
 EOF
   cat > "${repo_dir}/backend/requirements.lock.txt" <<'EOF'
 openai-agents==0.17.4

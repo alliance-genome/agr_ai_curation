@@ -76,7 +76,7 @@ def test_configure_api_mode_keeps_websocket_disabled_for_non_responses_provider(
         "get_default_runner_provider",
         lambda: SimpleNamespace(
             provider_id="gemini",
-            driver="litellm",
+            driver="openai_compatible",
             api_mode="chat_completions",
         ),
     )
