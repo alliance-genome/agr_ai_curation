@@ -51,6 +51,7 @@ const DEFAULTS = {
   openaiModel: 'gpt-5.6-sol',
   reasoningEnabled: true,
   reasoningEffort: 'low',
+  modelTemperature: 1,
   modelTimeoutMs: 300_000,
   modelRetryCount: 1,
   modelRetryIntervalMs: 1_000,
@@ -167,6 +168,7 @@ export interface SmokeConfig {
     family: string
     reasoningEnabled: boolean
     reasoningEffort: string
+    temperature: number
     timeoutMs: number
     retryCount: number
     retryIntervalMs: number
@@ -251,6 +253,7 @@ export function loadConfig(
       family: readNonEmpty(env, 'MIDSCENE_MODEL_FAMILY', DEFAULTS.codexFamily),
       reasoningEnabled: readBoolean(env, 'MIDSCENE_MODEL_REASONING_ENABLED', DEFAULTS.reasoningEnabled),
       reasoningEffort: readNonEmpty(env, 'MIDSCENE_MODEL_REASONING_EFFORT', DEFAULTS.reasoningEffort),
+      temperature: readNumber(env, 'MIDSCENE_MODEL_TEMPERATURE', DEFAULTS.modelTemperature, { min: 0 }),
       timeoutMs: readInteger(env, 'MIDSCENE_MODEL_TIMEOUT', DEFAULTS.modelTimeoutMs, { min: 1 }),
       retryCount: readInteger(env, 'MIDSCENE_MODEL_RETRY_COUNT', DEFAULTS.modelRetryCount, { min: 0, max: 10 }),
       retryIntervalMs: readInteger(env, 'MIDSCENE_MODEL_RETRY_INTERVAL', DEFAULTS.modelRetryIntervalMs, { min: 1 }),
@@ -264,6 +267,7 @@ export function applyProviderEnvironment(config: SmokeConfig, env: Environment =
   env.MIDSCENE_MODEL_FAMILY = config.model.family
   env.MIDSCENE_MODEL_REASONING_ENABLED = String(config.model.reasoningEnabled)
   env.MIDSCENE_MODEL_REASONING_EFFORT = config.model.reasoningEffort
+  env.MIDSCENE_MODEL_TEMPERATURE = String(config.model.temperature)
   env.MIDSCENE_MODEL_TIMEOUT = String(config.model.timeoutMs)
   env.MIDSCENE_MODEL_RETRY_COUNT = String(config.model.retryCount)
   env.MIDSCENE_MODEL_RETRY_INTERVAL = String(config.model.retryIntervalMs)

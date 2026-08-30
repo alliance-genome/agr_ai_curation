@@ -17,6 +17,7 @@ describe('smoke configuration', () => {
     assert.equal(config.model.baseUrl, 'codex://app-server')
     assert.equal(config.model.name, 'gpt-5.6-sol')
     assert.equal(config.model.reasoningEffort, 'low')
+    assert.equal(config.model.temperature, 1)
     assert.equal(config.model.retryCount, 1)
     assert.equal(config.caseRetryCount, 0)
     assert.equal(config.maxConcurrency, 1)
@@ -33,6 +34,7 @@ describe('smoke configuration', () => {
       AGENT_UI_SMOKE_TEST_TIMEOUT_MS: '12345',
       MIDSCENE_MODEL_NAME: 'gpt-5.6-terra',
       MIDSCENE_MODEL_RETRY_COUNT: '2',
+      MIDSCENE_MODEL_TEMPERATURE: '0.7',
       AGENT_UI_SMOKE_OPENAI_COST_WARNING_USD: '2.5',
     }, options)
     assert.equal(config.appUrl, 'http://127.0.0.1:3999')
@@ -42,6 +44,7 @@ describe('smoke configuration', () => {
     assert.equal(config.testTimeoutMs, 12345)
     assert.equal(config.model.name, 'gpt-5.6-terra')
     assert.equal(config.model.retryCount, 2)
+    assert.equal(config.model.temperature, 0.7)
     assert.equal(config.openaiCostWarningUsd, 2.5)
   })
 
@@ -95,12 +98,14 @@ describe('smoke configuration', () => {
     applyProviderEnvironment(config, env)
     assert.equal(env.MIDSCENE_MODEL_BASE_URL, 'https://api.openai.com/v1')
     assert.equal(env.MIDSCENE_MODEL_API_KEY, 'sk-direct-billing-secret')
+    assert.equal(env.MIDSCENE_MODEL_TEMPERATURE, '1')
   })
 
   it('rejects invalid operational limits and parallel execution', () => {
     assert.throws(() => loadConfig({ AGENT_UI_SMOKE_CASE_RETRY_COUNT: '-1' }, options))
     assert.throws(() => loadConfig({ AGENT_UI_SMOKE_MAX_CONCURRENCY: '2' }, options))
     assert.throws(() => loadConfig({ AGENT_UI_SMOKE_OPENAI_COST_WARNING_USD: '-0.01' }, options))
+    assert.throws(() => loadConfig({ MIDSCENE_MODEL_TEMPERATURE: '-0.01' }, options))
   })
 
   it('normalizes run IDs to the backend-stable 42-character ownership prefix', () => {

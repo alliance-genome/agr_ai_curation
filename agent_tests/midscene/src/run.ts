@@ -110,6 +110,7 @@ const verdict = buildRedactedVerdict({
     family: config.model.family,
     reasoning_enabled: config.model.reasoningEnabled,
     reasoning_effort: config.model.reasoningEffort,
+    temperature: config.model.temperature,
     provider_retry_count: config.model.retryCount,
     whole_case_retry_count: config.caseRetryCount,
   },

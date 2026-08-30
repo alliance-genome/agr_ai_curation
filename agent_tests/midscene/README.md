@@ -34,7 +34,11 @@ MIDSCENE_MODEL_NAME=gpt-5.6-sol
 MIDSCENE_MODEL_FAMILY=gpt-5
 MIDSCENE_MODEL_REASONING_ENABLED=true
 MIDSCENE_MODEL_REASONING_EFFORT=low
+MIDSCENE_MODEL_TEMPERATURE=1
 ```
+
+The explicit temperature avoids Midscene 1.12.2's package default of `0`,
+which GPT-5.6 Sol rejects; `1` is the model's supported API default.
 
 Export `TESTING_API_KEY` from the local stack configuration, then run:
 
