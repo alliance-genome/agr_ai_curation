@@ -119,26 +119,47 @@ def build_provider_runtime_report(
         mapped_models = sorted(model_ids_by_provider.get(provider.provider_id, []))
         mapped_visible_models = sorted(visible_model_ids_by_provider.get(provider.provider_id, []))
         used_by_models = bool(mapped_models)
-        api_key_present = bool(os.getenv(provider.api_key_env))
+        api_key_present = bool(str(os.getenv(provider.api_key_env, "")).strip())
         required_for_runtime = bool(provider.default_for_runner or used_by_models)
-        base_url_present = bool(os.getenv(provider.base_url_env)) if provider.base_url_env else False
+        base_url_present = (
+            bool(str(os.getenv(provider.base_url_env, "")).strip())
+            if provider.base_url_env
+            else False
+        )
         base_url_configured = bool(base_url_present or provider.default_base_url)
 
         readiness = "ready"
-        if required_for_runtime and not api_key_present:
-            readiness = "missing_api_key"
-            missing_key_provider_count += 1
-            message = (
-                f"Provider '{provider.provider_id}'{_format_source_suffix(provider)} "
-                f"is required by runtime "
-                f"but env var '{provider.api_key_env}' is not set"
-            )
-            if strict:
-                errors.append(message)
-            else:
-                warnings.append(message)
-        elif not required_for_runtime:
+        if not required_for_runtime:
             readiness = "unused"
+        else:
+            if not api_key_present:
+                readiness = "missing_api_key"
+                missing_key_provider_count += 1
+                message = (
+                    f"Provider '{provider.provider_id}'{_format_source_suffix(provider)} "
+                    f"is required by runtime "
+                    f"but env var '{provider.api_key_env}' is not set"
+                )
+                if strict:
+                    errors.append(message)
+                else:
+                    warnings.append(message)
+
+            if provider.driver == "openai_compatible" and not base_url_configured:
+                readiness = (
+                    "missing_api_key_and_base_url"
+                    if readiness == "missing_api_key"
+                    else "missing_base_url"
+                )
+                message = (
+                    f"Provider '{provider.provider_id}'{_format_source_suffix(provider)} "
+                    "is required by runtime but its OpenAI-compatible base URL is not "
+                    "configured"
+                )
+                if strict:
+                    errors.append(message)
+                else:
+                    warnings.append(message)
 
         if readiness == "ready":
             ready_provider_count += 1

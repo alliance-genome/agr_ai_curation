@@ -19,9 +19,9 @@ Provider Configuration:
   Unknown providers/models fail fast (no implicit fallback behavior).
 """
 
-import os
 import logging
-from typing import Optional, Literal, TYPE_CHECKING, Union
+import os
+from typing import Literal, Optional, TYPE_CHECKING, Union
 from dataclasses import dataclass
 
 from src.lib.flow_contract_limits import (
@@ -36,7 +36,7 @@ from src.lib.flow_contract_limits import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from agents.extensions.models.litellm_model import LitellmModel
+    from agents import Model
 
 # =============================================================================
 # LLM Provider Configuration
@@ -281,20 +281,18 @@ def get_base_url(provider_override: Optional[str] = None) -> Optional[str]:
 def get_model_for_agent(
     model_name: str,
     provider_override: Optional[str] = None,
-) -> Union[str, "LitellmModel"]:
+) -> Union[str, "Model"]:
     """Get the appropriate model object for an agent.
 
-    For OpenAI provider: returns model name string (SDK handles it directly)
-    For Gemini provider: returns LitellmModel instance (handles thought_signature)
-
-    Gemini 3 requires thought_signature handling for function calling, which
-    LiteLLM handles automatically. This function abstracts that complexity.
+    Native OpenAI uses the runner's request-scoped provider by returning the model
+    name. Other OpenAI-compatible providers receive a concrete Agents SDK model
+    backed by their own direct ``OpenAIProvider`` client.
 
     Args:
         model_name: The model name (e.g., "gpt-5.6-terra", "gemini-3-pro-preview")
 
     Returns:
-        Model name string for OpenAI, or LitellmModel instance for Gemini
+        Model name string for native OpenAI, or a direct SDK model otherwise.
     """
     provider_id = resolve_model_provider(model_name, provider_override)
     provider = _get_provider_definition(provider_id)
@@ -305,29 +303,28 @@ def get_model_for_agent(
     if provider.driver == "openai_native":
         return model_name
 
-    if provider.driver == "litellm":
-        from agents.extensions.models.litellm_model import LitellmModel
-        import litellm
-
-        litellm.drop_params = bool(provider.drop_params)
-
-        litellm_model_name = model_name
-        prefix = str(provider.litellm_prefix or "").strip()
-        if prefix and not model_name.startswith(f"{prefix}/"):
-            litellm_model_name = f"{prefix}/{model_name}"
+    if provider.driver == "openai_compatible":
+        from agents import OpenAIProvider
 
         base_url = get_base_url(provider.provider_id)
+        if not str(base_url or "").strip():
+            raise ValueError(
+                f"Provider '{provider.provider_id}' requires a configured OpenAI-compatible "
+                "base URL"
+            )
         logger.info(
-            "[LiteLLM] Creating model for %s: %s (drop_params=%s)",
+            "Creating direct OpenAI-compatible model for %s: %s (api_mode=%s)",
             provider.provider_id,
-            litellm_model_name,
-            provider.drop_params,
+            model_name,
+            provider.api_mode,
         )
-        return LitellmModel(
-            model=litellm_model_name,
+        model_provider = OpenAIProvider(
             base_url=base_url,
             api_key=api_key,
+            use_responses=provider.api_mode == "responses",
+            strict_feature_validation=True,
         )
+        return model_provider.get_model(model_name)
 
     raise ValueError(
         f"Provider '{provider.provider_id}' has unsupported driver '{provider.driver}'"

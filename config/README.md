@@ -193,11 +193,11 @@ providers:
       parallel_tool_calls: true
 
   org_custom:
-    driver: litellm
+    driver: openai_compatible
     api_key_env: ORG_CUSTOM_API_KEY
     base_url_env: ORG_CUSTOM_BASE_URL
-    litellm_prefix: acme
-    drop_params: true
+    default_base_url: https://api.example.com/openai/v1
+    api_mode: chat_completions
     supports:
       parallel_tool_calls: true
 ```
@@ -206,7 +206,7 @@ Notes:
 - Installed packages may export provider defaults first; this file is merged afterward and wins on key collisions.
 - Override entries replace the full provider definition for the same provider key.
 - Exactly one provider must set `default_for_runner: true`.
-- `driver: litellm` providers must include `litellm_prefix`.
+- `driver: openai_compatible` providers must define `base_url_env` or `default_base_url` and set `api_mode` explicitly.
 - API key values are never stored in YAML, only env var names.
 
 ### models.yaml

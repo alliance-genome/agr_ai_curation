@@ -1243,8 +1243,7 @@ def test_get_model_for_agent_requires_native_provider_key(monkeypatch, api_key):
                 api_key_env="OPENAI_API_KEY",
                 base_url_env="OPENAI_BASE_URL",
                 default_base_url=None,
-                litellm_prefix=None,
-                drop_params=False,
+                api_mode="responses",
                 supports_parallel_tool_calls=True,
             )
             if provider_id == "openai"
@@ -1260,14 +1259,18 @@ def test_get_model_for_agent_requires_native_provider_key(monkeypatch, api_key):
         get_model_for_agent("gpt-test")
 
 
-def test_get_model_for_agent_supports_synthetic_litellm_provider(monkeypatch):
+def test_get_model_for_agent_supports_openai_compatible_provider(monkeypatch):
     captured = {}
 
-    class FakeLitellmModel:
-        def __init__(self, model, base_url=None, api_key=None):
+    model_object = object()
+
+    class FakeOpenAIProvider:
+        def __init__(self, **kwargs):
+            captured["provider_kwargs"] = kwargs
+
+        def get_model(self, model):
             captured["model"] = model
-            captured["base_url"] = base_url
-            captured["api_key"] = api_key
+            return model_object
 
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",
@@ -1278,12 +1281,11 @@ def test_get_model_for_agent_supports_synthetic_litellm_provider(monkeypatch):
         lambda provider_id: (
             SimpleNamespace(
                 provider_id="org_custom",
-                driver="litellm",
+                driver="openai_compatible",
                 api_key_env="ORG_CUSTOM_API_KEY",
                 base_url_env="ORG_CUSTOM_BASE_URL",
                 default_base_url="https://org-custom.example/v1",
-                litellm_prefix="acme",
-                drop_params=True,
+                api_mode="chat_completions",
                 supports_parallel_tool_calls=True,
             )
             if provider_id == "org_custom"
@@ -1291,8 +1293,8 @@ def test_get_model_for_agent_supports_synthetic_litellm_provider(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "agents.extensions.models.litellm_model.LitellmModel",
-        FakeLitellmModel,
+        "agents.OpenAIProvider",
+        FakeOpenAIProvider,
     )
 
     with patch.dict(
@@ -1304,20 +1306,26 @@ def test_get_model_for_agent_supports_synthetic_litellm_provider(monkeypatch):
     ):
         model = get_model_for_agent("model-x")
 
-    assert model is not None
-    assert captured["model"] == "acme/model-x"
-    assert captured["base_url"] == "https://runtime-org.example/v1"
-    assert captured["api_key"] == "org-key"
+    assert model is model_object
+    assert captured["model"] == "model-x"
+    assert captured["provider_kwargs"] == {
+        "base_url": "https://runtime-org.example/v1",
+        "api_key": "org-key",
+        "use_responses": False,
+        "strict_feature_validation": True,
+    }
 
 
-def test_get_model_for_agent_keeps_namespaced_model_with_groq_prefix(monkeypatch):
+def test_get_model_for_agent_preserves_namespaced_model_id(monkeypatch):
     captured = {}
 
-    class FakeLitellmModel:
-        def __init__(self, model, base_url=None, api_key=None):
+    class FakeOpenAIProvider:
+        def __init__(self, **kwargs):
+            captured["provider_kwargs"] = kwargs
+
+        def get_model(self, model):
             captured["model"] = model
-            captured["base_url"] = base_url
-            captured["api_key"] = api_key
+            return object()
 
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",
@@ -1328,12 +1336,11 @@ def test_get_model_for_agent_keeps_namespaced_model_with_groq_prefix(monkeypatch
         lambda provider_id: (
             SimpleNamespace(
                 provider_id="groq",
-                driver="litellm",
+                driver="openai_compatible",
                 api_key_env="GROQ_API_KEY",
                 base_url_env="GROQ_BASE_URL",
                 default_base_url="https://api.groq.com/openai/v1",
-                litellm_prefix="groq",
-                drop_params=True,
+                api_mode="chat_completions",
                 supports_parallel_tool_calls=True,
             )
             if provider_id == "groq"
@@ -1341,8 +1348,8 @@ def test_get_model_for_agent_keeps_namespaced_model_with_groq_prefix(monkeypatch
         ),
     )
     monkeypatch.setattr(
-        "agents.extensions.models.litellm_model.LitellmModel",
-        FakeLitellmModel,
+        "agents.OpenAIProvider",
+        FakeOpenAIProvider,
     )
 
     with patch.dict(
@@ -1354,6 +1361,46 @@ def test_get_model_for_agent_keeps_namespaced_model_with_groq_prefix(monkeypatch
     ):
         get_model_for_agent("stub-groq-model")
 
-    assert captured["model"] == "groq/stub-groq-model"
-    assert captured["base_url"] == "https://api.groq.com/openai/v1"
-    assert captured["api_key"] == "groq-key"
+    assert captured["model"] == "stub-groq-model"
+    assert captured["provider_kwargs"]["base_url"] == "https://api.groq.com/openai/v1"
+    assert captured["provider_kwargs"]["api_key"] == "groq-key"
+
+
+@pytest.mark.parametrize(
+    ("api_mode", "expected_type_name"),
+    [
+        ("chat_completions", "OpenAIChatCompletionsModel"),
+        ("responses", "OpenAIResponsesModel"),
+    ],
+)
+def test_get_model_for_agent_selects_direct_agents_sdk_adapter(
+    monkeypatch,
+    api_mode,
+    expected_type_name,
+):
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(provider="compatible"),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(
+                provider_id="compatible",
+                driver="openai_compatible",
+                api_key_env="COMPATIBLE_API_KEY",
+                base_url_env=None,
+                default_base_url="https://compatible.example/v1",
+                api_mode=api_mode,
+                supports_parallel_tool_calls=True,
+            )
+            if provider_id == "compatible"
+            else None
+        ),
+    )
+    monkeypatch.setenv("COMPATIBLE_API_KEY", "test-compatible-key")
+
+    model = get_model_for_agent("compatible-model")
+
+    assert type(model).__name__ == expected_type_name
+    assert getattr(model, "model") == "compatible-model"

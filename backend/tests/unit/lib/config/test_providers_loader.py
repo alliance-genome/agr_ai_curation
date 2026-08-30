@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +49,36 @@ exports:
     )
 
 
+def test_shipped_provider_catalogs_match_direct_driver_contract():
+    from src.lib.config.providers_loader import ProviderDefinition
+
+    repo_root = Path(__file__).resolve().parents[5]
+    deployment_catalog = yaml.safe_load(
+        (repo_root / "config" / "providers.yaml").read_text(encoding="utf-8")
+    )
+    package_catalog = yaml.safe_load(
+        (repo_root / "packages" / "core" / "config" / "providers.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert deployment_catalog == package_catalog
+    providers = deployment_catalog["providers"]
+    assert providers["openai"]["driver"] == "openai_native"
+    assert providers["openai"]["api_mode"] == "responses"
+    assert providers["openai"]["default_for_runner"] is True
+    for provider_id in ("gemini", "groq"):
+        provider = ProviderDefinition.from_yaml(
+            provider_id,
+            providers[provider_id],
+            source_label="shipped provider catalog",
+        )
+        assert provider.driver == "openai_compatible"
+        assert provider.api_mode == "chat_completions"
+        assert provider.default_base_url
+        assert provider.supports_parallel_tool_calls is True
+
+
 def test_load_providers_reads_yaml(tmp_path: Path):
     import src.lib.config.providers_loader as providers_loader_module
 
@@ -63,12 +94,11 @@ providers:
     supports:
       parallel_tool_calls: true
   groq:
-    driver: litellm
+    driver: openai_compatible
     api_key_env: GROQ_API_KEY
     base_url_env: GROQ_BASE_URL
     default_base_url: https://api.groq.com/openai/v1
-    litellm_prefix: groq
-    drop_params: true
+    api_mode: chat_completions
     supports:
       parallel_tool_calls: false
         """.strip(),
@@ -83,8 +113,8 @@ providers:
 
     assert "openai" in loaded
     assert "groq" in loaded
-    assert loaded["groq"].driver == "litellm"
-    assert loaded["groq"].litellm_prefix == "groq"
+    assert loaded["groq"].driver == "openai_compatible"
+    assert loaded["groq"].api_mode == "chat_completions"
     assert loaded["groq"].supports_parallel_tool_calls is False
     assert loaded["openai"].source_label == f"runtime override 'providers.yaml' at {config_path}"
     assert providers_loader_module.get_default_runner_provider().provider_id == "openai"
@@ -102,9 +132,10 @@ providers:
     api_key_env: OPENAI_API_KEY
     default_for_runner: false
   groq:
-    driver: litellm
+    driver: openai_compatible
     api_key_env: GROQ_API_KEY
-    litellm_prefix: groq
+    default_base_url: https://api.groq.com/openai/v1
+    api_mode: chat_completions
     default_for_runner: false
         """.strip(),
         encoding="utf-8",
@@ -114,7 +145,7 @@ providers:
         providers_loader_module.load_providers(providers_path=config_path, force_reload=True)
 
 
-def test_litellm_provider_requires_prefix(tmp_path: Path):
+def test_openai_compatible_provider_requires_base_url_config(tmp_path: Path):
     import src.lib.config.providers_loader as providers_loader_module
 
     config_path = tmp_path / "providers.yaml"
@@ -125,14 +156,38 @@ providers:
     driver: openai_native
     api_key_env: OPENAI_API_KEY
     default_for_runner: true
-  bad_litellm:
-    driver: litellm
+  incomplete:
+    driver: openai_compatible
     api_key_env: BAD_KEY
+    api_mode: chat_completions
         """.strip(),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="requires 'litellm_prefix'"):
+    with pytest.raises(ValueError, match="requires 'base_url_env' or 'default_base_url'"):
+        providers_loader_module.load_providers(providers_path=config_path, force_reload=True)
+
+
+def test_openai_compatible_provider_requires_explicit_api_mode(tmp_path: Path):
+    import src.lib.config.providers_loader as providers_loader_module
+
+    config_path = tmp_path / "providers.yaml"
+    config_path.write_text(
+        """
+providers:
+  openai:
+    driver: openai_native
+    api_key_env: OPENAI_API_KEY
+    default_for_runner: true
+  incomplete:
+    driver: openai_compatible
+    api_key_env: COMPATIBLE_KEY
+    default_base_url: https://compatible.example/v1
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires 'api_mode'"):
         providers_loader_module.load_providers(providers_path=config_path, force_reload=True)
 
 
@@ -160,9 +215,10 @@ providers:
         providers_text="""
 providers:
   shared:
-    driver: litellm
+    driver: openai_compatible
     api_key_env: ORG_KEY
-    litellm_prefix: org
+    default_base_url: https://org.example/v1
+    api_mode: chat_completions
     default_for_runner: true
 """,
     )
@@ -183,7 +239,7 @@ providers:
         force_reload=True,
     )
 
-    assert loaded["shared"].driver == "litellm"
+    assert loaded["shared"].driver == "openai_compatible"
     assert loaded["shared"].api_key_env == "ORG_KEY"
     assert loaded["shared"].source_label is not None
     assert "package default 'org.custom'" in loaded["shared"].source_label
@@ -214,9 +270,10 @@ providers:
     api_key_env: RUNTIME_OPENAI_KEY
     default_for_runner: true
   groq:
-    driver: litellm
+    driver: openai_compatible
     api_key_env: GROQ_API_KEY
-    litellm_prefix: groq
+    default_base_url: https://api.groq.com/openai/v1
+    api_mode: chat_completions
     default_for_runner: false
 """.strip(),
         encoding="utf-8",
@@ -232,7 +289,7 @@ providers:
     assert loaded["openai"].source_label == (
         f"runtime override 'providers.yaml' at {override_path}"
     )
-    assert loaded["groq"].driver == "litellm"
+    assert loaded["groq"].driver == "openai_compatible"
 
 
 def test_load_providers_reports_runtime_override_source_on_invalid_entry(tmp_path: Path):

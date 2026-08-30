@@ -46,8 +46,8 @@ def test_llm_providers_health_contract_shape(client, monkeypatch):
             },
             {
                 "provider_id": "groq",
-                "driver": "litellm",
-                "api_mode": "responses",
+                "driver": "openai_compatible",
+                "api_mode": "chat_completions",
                 "api_key_env": "GROQ_API_KEY",
                 "api_key_present": False,
                 "base_url_env": "GROQ_BASE_URL",

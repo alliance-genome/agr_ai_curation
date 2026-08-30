@@ -21,7 +21,7 @@ Safe rollout and rollback process for changes to:
 1. **Config review complete:**
    - `providers.yaml` has exactly one provider with `default_for_runner: true` (currently: `openai`).
    - Every model's `provider` field in `models.yaml` references an existing provider ID in `providers.yaml`.
-   - Each `litellm` driver provider has a `litellm_prefix` defined.
+   - Each `openai_compatible` provider defines a base URL source and explicit API mode.
    - `supports.parallel_tool_calls` is explicitly set for each provider.
 
 2. **CI and tests pass:**
