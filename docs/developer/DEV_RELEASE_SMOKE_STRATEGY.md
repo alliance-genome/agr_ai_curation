@@ -782,6 +782,15 @@ Before a production rollout is considered, the following should all be true:
    `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>` line
    pointing to the full smoke evidence from the upgraded SDK run.
 
+The local Midscene curator-agent suite in `agent_tests/midscene/` does not alter
+these acceptance criteria during its pilot. It runs only against the local
+Docker development stack, is non-blocking, and neither replaces Chris's manual
+shared-dev browser sign-off nor supplies release evidence. Its four journeys and
+per-run evidence may inform a later release-gate decision only if the project
+explicitly promotes the suite in a separate change.
+The pilot enforces a loopback application origin and treats generated formatter
+file rows and storage objects as resources that must be removed and verified.
+
 If the deep smoke fails, the release candidate should be considered blocked
 until the failure is explained and resolved.
 

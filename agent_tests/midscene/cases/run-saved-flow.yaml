@@ -1,0 +1,32 @@
+beforeEach:
+  - smoke.beginCase:
+      caseName: run-saved-flow
+afterEach:
+  - smoke.finishCase: {}
+cases:
+  - name: Run a saved flow
+    tags: [flow, document, curator-ui, pilot]
+    steps:
+      - document.prepareSaltedPdf: {}
+      - document.uploadPreparedFile: {}
+      - document.awaitProcessing: {}
+      - document.loadViaApi: {}
+      - flow.seed:
+          name: ${runFlowName}
+          instructions: ${runInstructions}
+          formatter: json_formatter
+      - smoke.gotoPath:
+          path: /
+      - aiAct:
+          prompt: >-
+            Open the Tools tab, find the saved Curation Flow named exactly "${runFlowName}",
+            and run it once. Wait until the visible flow completion card reports completion
+            and shows a Run ID. Do not run any other flow.
+          options:
+            deepThink: false
+      - aiAssert:
+          prompt: >-
+            A visible completion card for "${runFlowName}" reports a successful completed run,
+            includes a non-empty Run ID, and shows evidence rather than an error.
+          message: The saved flow did not visibly complete with a real Run ID and evidence.
+      - flow.assertDurableRun: {}

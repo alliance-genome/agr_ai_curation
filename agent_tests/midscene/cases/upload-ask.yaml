@@ -1,0 +1,41 @@
+beforeEach:
+  - smoke.beginCase:
+      caseName: upload-ask
+afterEach:
+  - smoke.finishCase: {}
+cases:
+  - name: Upload and ask
+    tags: [document, chat, curator-ui, pilot]
+    steps:
+      - document.prepareSaltedPdf: {}
+      - smoke.gotoPath:
+          path: /weaviate/add
+      - aiAct:
+          prompt: Open the Upload PDFs area under Add Literature and leave it ready for file selection.
+          options:
+            deepThink: false
+      - document.selectPreparedFile: {}
+      - aiAssert:
+          prompt: The Add Literature UI visibly shows the uploaded file named exactly "${uploadFilename}" as queued or processing, with no upload error.
+          message: The salted PDF was not visibly accepted by Add Literature.
+      - document.awaitProcessing: {}
+      - smoke.gotoPath:
+          path: /weaviate/documents
+      - aiAct:
+          prompt: Find the document row named exactly "${uploadFilename}" and click its Load for Chat action.
+          options:
+            deepThink: false
+      - document.assertActive: {}
+      - smoke.gotoPath:
+          path: /
+      - aiAct:
+          prompt: >-
+            In the curator chat, ask exactly "${chatQuestion}". Submit it once and wait until
+            the assistant has visibly finished answering. Do not start a new conversation.
+          options:
+            deepThink: false
+      - aiAssert:
+          prompt: The visible completed assistant answer says that crb or Crumbs is a focus gene of the publication.
+          message: The grounded curator answer did not visibly mention crb or Crumbs.
+      - chat.assertDurableGroundedAnswer:
+          question: ${chatQuestion}

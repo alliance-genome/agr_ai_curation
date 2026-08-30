@@ -1,0 +1,33 @@
+beforeEach:
+  - smoke.beginCase:
+      caseName: create-connect-save
+afterEach:
+  - smoke.finishCase: {}
+cases:
+  - name: Create, connect, and save
+    tags: [flow, curator-ui, pilot]
+    steps:
+      - smoke.gotoPath:
+          path: /agent-studio
+      - aiAct:
+          prompt: >-
+            Open the Flows tab. On the new flow canvas, select Initial Instructions,
+            set Task Instructions exactly to "${createInstructions}", and apply it.
+            Add exactly one Gene Extractor and exactly one JSON Formatter from the palette.
+            Connect Initial Instructions to Gene Extractor as the main flow, then connect
+            Gene Extractor to JSON Formatter as its output. Save the flow with the exact
+            name "${createFlowName}". Once Save has been clicked and the named flow appears
+            in the Flows toolbar, the task is complete; do not wait for a success message and
+            do not click Save again. Ignore service-availability banners unrelated to saving.
+          options:
+            deepThink: false
+      - aiAssert:
+          prompt: >-
+            Regardless of unrelated service-availability banners, the Flows UI visibly shows
+            the saved flow named "${createFlowName}" with Initial Instructions, Gene Extractor,
+            and JSON Formatter connected in that order, and there is no error specifically
+            saying the flow could not be saved.
+          message: The curator flow was not visibly saved with the intended graph.
+      - flow.assertGraph:
+          instructions: ${createInstructions}
+          formatter: json_formatter

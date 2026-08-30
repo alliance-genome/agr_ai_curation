@@ -74,6 +74,38 @@ diagnostic for concurrency-sensitive failures, not the CI-equivalent command.
 existing errors outside changed frontend files. Record the baseline debt, but do
 not treat it as ticket-local failure.
 
+## Local Curator UI/API Smoke Pilot
+
+The isolated Midscene package in `agent_tests/midscene/` complements the Python
+API smoke with four curator-visible journeys. It intentionally keeps natural
+language model work to UI actions and semantic visible assertions. Zod-validated
+nodes perform document setup and polling, exact graph checks, durable transcript
+and flow-run checks, evidence capture, and resource cleanup.
+
+Install and validate the locked package separately from the frontend workspace:
+
+```bash
+cd agent_tests/midscene
+npm ci
+npx playwright install chromium
+cd ../..
+scripts/testing/agent_ui_smoke.sh --offline
+scripts/testing/agent_ui_smoke.sh --preflight-only
+scripts/testing/agent_ui_smoke.sh
+```
+
+This is a local-only, non-blocking Midscene Test Runner Beta pilot. Run it on
+demand against the local development server. Do not add it to CI, use it against
+shared dev, or treat it as release evidence unless the project explicitly
+promotes it later.
+Artifacts live under `file_outputs/temp/agent_ui_smoke/<run-id>/` and are ignored
+by Git. `--retain-resources` is debugging-only and cannot produce a passing
+verdict.
+
+The runner enforces a loopback application origin. It scopes browser API-key
+headers to that origin and verifies deletion of generated file rows and storage
+objects as part of each cleanup verdict.
+
 For syntax-only Python checks, keep cache artifacts outside the workspace:
 
 ```bash
