@@ -3,10 +3,10 @@ import path from 'node:path'
 
 import { runTestProject, type TestProjectRunResult } from '@midscene/test/config'
 
-import { applyProviderEnvironment, loadConfig } from './config.js'
+import { applyProviderEnvironment, loadConfig, pinRunId } from './config.js'
 import { runPreflight } from './preflight.js'
 import { createFreshRunDirectory } from './run-directory.js'
-import { canonicalCaseStatuses, executedCanonicalCases, runAcceptancePassed, selectedCasesSucceeded } from './run-results.js'
+import { acceptanceCases, canonicalCaseStatuses, executedCanonicalCases, runAcceptancePassed, selectedCasesSucceeded } from './run-results.js'
 import { readRunnerProvenance } from './provenance.js'
 import { summarizeModelUsage } from './model-usage.js'
 import { buildRedactedVerdict } from './verdict.js'
@@ -66,6 +66,7 @@ Use each run's verdict and sanitized evidence to assess that invocation.
 }
 
 const config = loadConfig(process.env, { cwd: process.cwd(), requireSecrets: true })
+pinRunId(config)
 applyProviderEnvironment(config)
 const runner = await readRunnerProvenance(config.repoRoot, config.preflightTimeoutMs)
 await createFreshRunDirectory(config.outputRoot, config.runDir, config.runId)
@@ -95,8 +96,10 @@ const modelUsage = await summarizeModelUsage(
   config.model.name,
   config.openaiCostWarningUsd,
 )
-const allSelectedCasesSucceeded = selectedCasesSucceeded(canonicalStatuses, config.cases)
-const acceptancePassed = runAcceptancePassed(canonicalStatuses, config.cases, modelUsage.request_count)
+const evaluatedCases = acceptanceCases(result, config.cases, config.tags)
+const allSelectedCasesSucceeded = evaluatedCases.length > 0
+  && selectedCasesSucceeded(canonicalStatuses, evaluatedCases)
+const acceptancePassed = runAcceptancePassed(canonicalStatuses, evaluatedCases, modelUsage.request_count)
 const executionSucceeded = !failure && result?.status === 'success' && acceptancePassed
 const succeeded = executionSucceeded && cleanupClean && !config.retainResources
 const verdict = buildRedactedVerdict({
@@ -125,6 +128,7 @@ const verdict = buildRedactedVerdict({
   preflight,
   cases: caseStatuses,
   acceptance: {
+    evaluated_cases: evaluatedCases,
     all_selected_cases_succeeded: allSelectedCasesSucceeded,
     identified_model_requests: modelUsage.request_count,
     passed: acceptancePassed,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { CASE_NAMES } from '../src/config.js'
-import { canonicalCaseStatuses, executedCanonicalCases, runAcceptancePassed, selectedCasesSucceeded } from '../src/run-results.js'
+import { acceptanceCases, canonicalCaseStatuses, executedCanonicalCases, runAcceptancePassed, selectedCasesSucceeded } from '../src/run-results.js'
 
 const canonicalResult = {
   cases: CASE_NAMES.map((name) => ({ sourcePath: `/repo/cases/${name}.yaml`, status: 'success' })),
@@ -40,5 +40,16 @@ describe('run result accounting', () => {
     assert.equal(runAcceptancePassed(statuses, ['create-connect-save'], 1), true)
     assert.equal(runAcceptancePassed(statuses, ['create-connect-save'], 0), false)
     assert.equal(runAcceptancePassed({ ...statuses, 'create-connect-save': 'not-run' }, ['create-connect-save'], 1), false)
+    assert.equal(runAcceptancePassed(statuses, [], 1), false)
+  })
+
+  it('evaluates configured cases normally and only executed cases under tag filtering', () => {
+    const configured = ['create-connect-save', 'edit-rewire', 'upload-ask'] as const
+    assert.deepEqual(acceptanceCases(canonicalResult, configured, []), configured)
+    assert.deepEqual(
+      acceptanceCases({ cases: [canonicalResult.cases[2]!] }, configured, ['chat']),
+      ['upload-ask'],
+    )
+    assert.deepEqual(acceptanceCases({ cases: [] }, configured, ['missing-tag']), [])
   })
 })

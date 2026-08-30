@@ -118,9 +118,10 @@ if ((${#tags[@]})); then
   tag_csv="$(IFS=,; echo "${tags[*]}")"
   export AGENT_UI_SMOKE_TAGS="$tag_csv"
 fi
-if [[ -n "$run_id" ]]; then
-  export AGENT_UI_SMOKE_RUN_ID="$run_id"
+if [[ -z "$run_id" ]]; then
+  run_id="$(date -u +%Y%m%dt%H%M%Sz | tr '[:upper:]' '[:lower:]')"
 fi
+export AGENT_UI_SMOKE_RUN_ID="$run_id"
 
 if [[ "$app_auth" == "api-key" ]]; then
   key_env="${AGENT_UI_SMOKE_API_KEY_ENV:-TESTING_API_KEY}"

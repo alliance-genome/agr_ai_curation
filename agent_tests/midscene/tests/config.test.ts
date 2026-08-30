@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { applyProviderEnvironment, loadConfig } from '../src/config.js'
+import { applyProviderEnvironment, loadConfig, pinRunId } from '../src/config.js'
 
 const options = {
   cwd: '/repo/agent_tests/midscene',
@@ -124,5 +124,14 @@ describe('smoke configuration', () => {
     assert.equal(loadConfig({ AGENT_UI_SMOKE_RUN_ID: 'Run..1--Part' }, options).runId, 'run-1-part')
     assert.equal(loadConfig({ AGENT_UI_SMOKE_RUN_ID: 'a'.repeat(42) }, options).runId, 'a'.repeat(42))
     assert.throws(() => loadConfig({ AGENT_UI_SMOKE_RUN_ID: 'a'.repeat(43) }, options), /1-42/)
+  })
+
+  it('pins one generated run ID for every later config load in the process', () => {
+    const env: Record<string, string | undefined> = {}
+    const first = loadConfig(env, { ...options, now: new Date('2026-08-30T12:00:00Z') })
+    pinRunId(first, env)
+    const second = loadConfig(env, { ...options, now: new Date('2026-08-30T12:00:07Z') })
+    assert.equal(second.runId, first.runId)
+    assert.equal(second.runDir, first.runDir)
   })
 })

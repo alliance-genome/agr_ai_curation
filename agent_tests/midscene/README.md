@@ -164,6 +164,10 @@ parse failures, and requests for models without a known pricing table are
 surfaced rather than silently priced.
 The verdict cannot pass unless every selected canonical case succeeds, at
 least one model request is identified, and cleanup is clean.
+When `--tag` narrows the runner selection, the verdict evaluates the non-empty
+intersection of configured and actually executed canonical cases. A generated
+run ID is resolved once per invocation so reports, API evidence, and cleanup
+records cannot split across directories during longer preflight checks.
 
 Teardown drains in-flight response capture before deleting resources; a bounded
 drain timeout is itself a cleanup failure. Run IDs are normalized to the

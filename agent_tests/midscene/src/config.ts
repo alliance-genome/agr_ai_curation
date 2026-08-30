@@ -261,6 +261,10 @@ export function loadConfig(
   }
 }
 
+export function pinRunId(config: SmokeConfig, env: Environment = process.env): void {
+  env.AGENT_UI_SMOKE_RUN_ID = config.runId
+}
+
 export function applyProviderEnvironment(config: SmokeConfig, env: Environment = process.env): void {
   for (const name of Object.keys(env)) {
     if (name.startsWith('MIDSCENE_PLANNING_MODEL_') || name.startsWith('MIDSCENE_INSIGHT_MODEL_')) {

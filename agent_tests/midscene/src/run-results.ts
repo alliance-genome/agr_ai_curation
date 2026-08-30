@@ -32,5 +32,17 @@ export function runAcceptancePassed(
   selectedCases: readonly CaseName[],
   identifiedModelRequests: number,
 ): boolean {
-  return selectedCasesSucceeded(statuses, selectedCases) && identifiedModelRequests > 0
+  return selectedCases.length > 0
+    && selectedCasesSucceeded(statuses, selectedCases)
+    && identifiedModelRequests > 0
+}
+
+export function acceptanceCases(
+  result: RunResultLike | undefined,
+  configuredCases: readonly CaseName[],
+  tags: readonly string[],
+): CaseName[] {
+  if (tags.length === 0) return [...configuredCases]
+  const executed = new Set(executedCanonicalCases(result))
+  return configuredCases.filter((caseName) => executed.has(caseName))
 }
