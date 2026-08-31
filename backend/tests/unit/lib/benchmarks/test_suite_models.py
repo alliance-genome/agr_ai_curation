@@ -1,5 +1,6 @@
 import pytest
 from pydantic import ValidationError
+from typing import Any, cast
 
 from src.lib.benchmarks.models import BenchmarkSuite
 
@@ -41,6 +42,14 @@ def test_suite_v2_is_strict_and_immutable():
     assert suite.repetitions == 1
     with pytest.raises(ValidationError, match="frozen"):
         suite.suite_id = "changed"
+    with pytest.raises(ValidationError, match="frozen"):
+        suite.cases[0].target.id = "changed"
+    with pytest.raises(TypeError, match="does not support item assignment"):
+        cast(Any, suite.configurations[0].routes)["agent:other"] = (
+            suite.configurations[0].routes["agent:extractor"]
+        )
+    with pytest.raises(ValidationError, match="frozen"):
+        suite.configurations[0].routes["agent:extractor"].model = "changed"
 
 
 @pytest.mark.parametrize("field", ["expected", "gold", "scorers", "adjudicator"])

@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from .models import (
+    BenchmarkExecutionTarget,
     BenchmarkModelCatalogEntry,
     BenchmarkRoute,
     BenchmarkRouteCatalog,
     BenchmarkRouteSlot,
-    BenchmarkTarget,
     BenchmarkTargetCatalogEntry,
 )
 
@@ -23,12 +23,21 @@ def build_route_catalog(
     agent_targets: Iterable[str],
     flow_agents: Mapping[str, Iterable[str]],
     flow_model_validators: Mapping[str, Iterable[str]],
+    agent_aliases: Mapping[str, str] | None = None,
 ) -> BenchmarkRouteCatalog:
     """Build slots from deployment catalogs without provider-specific assumptions.
 
     Deterministic validators have no model route and therefore are intentionally
     absent from ``model_validator_defaults`` and the resulting catalog.
     """
+
+    aliases = agent_aliases or {}
+    unknown_alias_targets = set(aliases.values()) - set(agent_defaults)
+    if unknown_alias_targets:
+        raise ValueError(
+            "agent aliases reference entries without defaults: "
+            + ", ".join(sorted(unknown_alias_targets))
+        )
 
     slots = [
         BenchmarkRouteSlot(
@@ -50,13 +59,17 @@ def build_route_catalog(
 
     targets = [
         BenchmarkTargetCatalogEntry(
-            target=BenchmarkTarget(kind="agent", id=agent_id),
+            target=BenchmarkExecutionTarget(kind="agent", id=agent_id),
             route_slots=(f"agent:{agent_id}",),
         )
         for agent_id in sorted(set(agent_targets))
     ]
     for flow_id in sorted(flow_agents):
-        agent_ids = tuple(sorted(set(flow_agents[flow_id])))
+        agent_ids = tuple(
+            sorted(
+                {aliases.get(agent_id, agent_id) for agent_id in flow_agents[flow_id]}
+            )
+        )
         validator_ids = tuple(sorted(set(flow_model_validators.get(flow_id, ()))))
         missing_agents = set(agent_ids) - set(agent_defaults)
         missing_validators = set(validator_ids) - set(model_validator_defaults)
@@ -68,7 +81,7 @@ def build_route_catalog(
             )
         targets.append(
             BenchmarkTargetCatalogEntry(
-                target=BenchmarkTarget(kind="flow", id=flow_id),
+                target=BenchmarkExecutionTarget(kind="flow", id=flow_id),
                 route_slots=(
                     "supervisor",
                     *(f"agent:{agent_id}" for agent_id in agent_ids),

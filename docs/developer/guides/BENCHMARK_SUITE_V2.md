@@ -33,6 +33,8 @@ Resolver registration and materialization are separate runtime concerns.
 
 Configurations are explicit named experiment arms. A list of models does not
 create a Cartesian product. `repetitions` defaults to one.
+Names such as `all-sol` do not imply routing behavior: a whole-target arm must
+explicitly name every applicable model-backed slot.
 
 The schema forbids unknown fields. In particular, `expected`, `gold`,
 `scorers`, and `adjudicator` are invalid at every suite boundary.
@@ -57,8 +59,10 @@ values for every applicable slot in every cell. Planning rejects unknown
 targets, slots, provider/model pairs, and unsupported reasoning efforts before
 execution.
 
-`suite_digest` hashes canonical suite JSON. `catalog_digest` hashes the catalog
-used for resolution. `plan_digest` hashes the complete normalized plan,
+Suite, catalog, and resolved-plan objects are deeply immutable, including their
+targets and route maps. `suite_digest` hashes canonical suite JSON.
+`catalog_digest` hashes the catalog used for resolution. `plan_digest` hashes
+the complete normalized plan,
 including immutable input provenance, resolved routes, repetitions, and cell
 identities. Mapping keys are sorted and compact canonical JSON is used, so YAML
 and equivalent ad hoc JSON produce identical digests.
@@ -72,4 +76,3 @@ The plan bounds are environment-configurable:
 
 Checked-in suites live in `packages/<package>/benchmarks/suites/`. The Alliance
 synthetic suites demonstrate explicit named arms without correctness data.
-

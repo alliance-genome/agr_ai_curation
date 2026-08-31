@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
+import yaml
 
 from src.lib.benchmarks.catalog import build_route_catalog
 from src.lib.benchmarks.loader import BenchmarkCatalogError
@@ -18,6 +21,7 @@ from src.lib.benchmarks.suites import (
 
 
 ROOT = Path(__file__).resolve().parents[5] / "packages" / "alliance" / "benchmarks"
+ALLIANCE_ROOT = ROOT.parent
 
 
 def _route(model: str = "model-a", effort: str | None = "high") -> BenchmarkRoute:
@@ -70,18 +74,34 @@ def _checked_in_catalog():
     terra = BenchmarkRoute(
         provider="openai", model="gpt-5.6-terra", reasoning_effort="medium"
     )
+    flow_recipe_path = ALLIANCE_ROOT / "config" / "flow_recipes.yaml"
+    flow_recipe_data = yaml.safe_load(flow_recipe_path.read_text(encoding="utf-8"))
+    gene_curation = next(
+        recipe
+        for recipe in flow_recipe_data["recipes"]
+        if recipe["name"] == "Gene Curation"
+    )
+    flow_agents = [step["agent_id"] for step in gene_curation["steps"]]
+    chat_output_definition = yaml.safe_load(
+        (ALLIANCE_ROOT / "agents" / "chat_output" / "agent.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    chat_output_alias = chat_output_definition["agent_id"]
     return build_route_catalog(
         models=models,
         supervisor_default=sol,
         agent_defaults={
             "pdf_extraction": sol,
             "gene_validation": terra,
+            "chat_output": terra,
             "ontology_term_validation": terra,
         },
         model_validator_defaults={},
         agent_targets={"gene_validation", "ontology_term_validation"},
-        flow_agents={"Gene Curation": ["pdf_extraction", "gene_validation"]},
+        flow_agents={"Gene Curation": flow_agents},
         flow_model_validators={},
+        agent_aliases={chat_output_alias: "chat_output"},
     )
 
 
@@ -165,6 +185,24 @@ def test_plan_digests_are_stable_and_change_with_execution_inputs():
     assert first.suite_digest == second.suite_digest
     assert first.plan_digest != third.plan_digest
     assert first.suite_digest != third.suite_digest
+
+
+def test_resolved_plan_is_deeply_immutable():
+    plan = _resolve(_payload())
+    original_digest = plan.plan_digest
+
+    with pytest.raises(ValidationError, match="frozen"):
+        plan.cases[0].target.id = "changed"
+    with pytest.raises(TypeError, match="does not support item assignment"):
+        cast(Any, plan.configurations[0].routes)["supervisor"] = _route(
+            model="model-b"
+        )
+    with pytest.raises(TypeError, match="does not support item assignment"):
+        cast(Any, plan.cells[0].routes)["supervisor"] = _route(model="model-b")
+    with pytest.raises(ValidationError, match="frozen"):
+        plan.cells[0].routes["supervisor"].model = "changed"
+
+    assert plan.plan_digest == original_digest
 
 
 @pytest.mark.parametrize(
@@ -258,3 +296,15 @@ def test_every_checked_in_suite_is_v2_and_deterministic():
         assert first == second
         assert first.plan_digest == second.plan_digest
         assert all(cell.routes for cell in first.cells)
+        if suite.suite_id == "flow-canary-gene-curation-v2":
+            expected_slots = {
+                "supervisor",
+                "agent:chat_output",
+                "agent:gene_validation",
+                "agent:pdf_extraction",
+            }
+            assert all(
+                set(configuration.routes) == expected_slots
+                for configuration in suite.configurations
+            )
+            assert all(set(cell.routes) == expected_slots for cell in first.cells)
