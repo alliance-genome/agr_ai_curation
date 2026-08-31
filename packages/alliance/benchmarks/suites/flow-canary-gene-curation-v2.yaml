@@ -1,0 +1,42 @@
+schema_version: 2
+suite_id: flow-canary-gene-curation-v2
+cases:
+  - case_id: synthetic-gene-flow-canary-1
+    target: {kind: flow, id: Gene Curation}
+    input:
+      resolver: checked_in_fixture
+      reference: cases/synthetic-gene-flow-canary-1/input.json
+      version: "1"
+      digest: sha256:27bc000dd85054acd375a82168ed6943c360da972a4a111bcd2894b2eb599cfa
+configurations:
+  - configuration_id: all-sol
+    routes:
+      supervisor: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
+      agent:pdf_extraction: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
+      agent:gene_validation: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
+      agent:chat_output: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
+  - configuration_id: all-terra
+    routes:
+      supervisor: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
+      agent:pdf_extraction: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
+      agent:gene_validation: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
+      agent:chat_output: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
+  - configuration_id: all-deepseek
+    routes:
+      supervisor: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
+      agent:pdf_extraction: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
+      agent:gene_validation: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
+      agent:chat_output: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
+  - configuration_id: all-gemini
+    routes:
+      supervisor: {provider: openrouter, model: google/gemini-3.7-flash}
+      agent:pdf_extraction: {provider: openrouter, model: google/gemini-3.7-flash}
+      agent:gene_validation: {provider: openrouter, model: google/gemini-3.7-flash}
+      agent:chat_output: {provider: openrouter, model: google/gemini-3.7-flash}
+  - configuration_id: all-qwen
+    routes:
+      supervisor: {provider: openrouter, model: qwen/qwen3.8-27b}
+      agent:pdf_extraction: {provider: openrouter, model: qwen/qwen3.8-27b}
+      agent:gene_validation: {provider: openrouter, model: qwen/qwen3.8-27b}
+      agent:chat_output: {provider: openrouter, model: qwen/qwen3.8-27b}
+repetitions: 1

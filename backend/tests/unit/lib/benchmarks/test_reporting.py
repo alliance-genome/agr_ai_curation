@@ -253,6 +253,15 @@ def test_artifacts_are_allowlisted_redacted_and_stable():
     assert first.manifest.adjudicator_versions == [
         "rubric:1:prompt:benchmark-adjudication-v1:model:judge-model-v3"
     ]
+    report_payload = json.loads(first.report_bytes)
+    manifest_payload = json.loads(first.manifest_bytes)
+    assert report_payload["cases"][0]["requested_route"] == {
+        "provider": "router",
+        "model": "model-a",
+    }
+    assert manifest_payload["requested_routes"] == [
+        {"provider": "router", "model": "model-a"}
+    ]
 
 
 def test_allowlist_rejects_sensitive_or_unknown_artifact_content():

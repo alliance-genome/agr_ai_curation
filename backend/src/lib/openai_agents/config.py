@@ -1052,6 +1052,26 @@ def get_benchmark_root() -> str:
     return os.getenv("BENCHMARK_ROOT", "").strip()
 
 
+def get_benchmark_max_cases() -> int:
+    """Maximum cases accepted by an execution-only benchmark suite."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CASES", 50))
+
+
+def get_benchmark_max_configurations() -> int:
+    """Maximum named configuration arms accepted by one benchmark suite."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CONFIGURATIONS", 10))
+
+
+def get_benchmark_max_repetitions() -> int:
+    """Maximum repetitions accepted for each case/configuration cell."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_REPETITIONS", 5))
+
+
+def get_benchmark_max_cells() -> int:
+    """Maximum fully expanded cells in one frozen benchmark plan."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CELLS", 250))
+
+
 def get_benchmark_max_concurrency() -> int:
     """Maximum benchmark case runs executing concurrently."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CONCURRENCY", 2))

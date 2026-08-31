@@ -8,8 +8,11 @@ from .models import (
     BenchmarkDeterministicScore,
     BenchmarkScoringRecord,
     BenchmarkSelection,
+    BenchmarkSuite,
     DryRunPlan,
+    ResolvedBenchmarkPlan,
 )
+from .suites import load_checked_in_suites, load_suite, resolve_suite, validate_suite
 from .scoring import aggregate_scores, score_case
 from .service import BenchmarkService
 
@@ -23,7 +26,13 @@ __all__ = [
     "BenchmarkScoringRecord",
     "BenchmarkSelection",
     "BenchmarkService",
+    "BenchmarkSuite",
     "DryRunPlan",
+    "ResolvedBenchmarkPlan",
     "aggregate_scores",
     "score_case",
+    "load_checked_in_suites",
+    "load_suite",
+    "resolve_suite",
+    "validate_suite",
 ]
