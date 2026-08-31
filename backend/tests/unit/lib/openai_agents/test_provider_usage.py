@@ -206,3 +206,50 @@ def test_emit_provider_usage_publishes_only_bounded_trace_metadata(monkeypatch):
     assert "summary" not in serialized
     assert "pipeline" not in serialized
     assert "prompt" not in serialized
+
+
+def test_emit_provider_usage_reports_sanitized_emission_failure_without_raising(
+    monkeypatch,
+):
+    captured = []
+    sensitive_detail = "secret prompt and bearer token"
+
+    class _FailingLangfuse:
+        def create_event(self, **_kwargs):
+            raise RuntimeError(sensitive_detail)
+
+    def _failing_report(exc, **kwargs):
+        captured.append((exc, kwargs))
+        raise RuntimeError("Sentry unavailable")
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.langfuse_client.get_langfuse",
+        lambda: _FailingLangfuse(),
+    )
+    monkeypatch.setattr("src.lib.context.get_current_trace_id", lambda: "trace-123")
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        _failing_report,
+    )
+    record = normalize_openrouter_usage(
+        {},
+        requested_model="model-name",
+        latency_ms=10,
+    )
+
+    assert emit_provider_usage(record) is None
+
+    assert len(captured) == 1
+    reported_exc, kwargs = captured[0]
+    assert str(reported_exc) == (
+        "Provider usage trace event emission failed (RuntimeError)"
+    )
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__context__ is None
+    assert reported_exc.__cause__ is None
+    assert sensitive_detail not in str(reported_exc)
+    assert kwargs == {
+        "component": "provider_usage",
+        "operation": "trace_event_emission_failed",
+        "tags": {"provider": "openrouter"},
+    }

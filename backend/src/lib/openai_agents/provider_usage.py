@@ -13,6 +13,21 @@ from typing import Any, Iterator, Mapping, Optional
 logger = logging.getLogger(__name__)
 
 
+class _ProviderUsageEmissionError(RuntimeError):
+    """Sanitized provider-usage telemetry failure safe for reporting."""
+
+
+def _sanitized_emission_error(orig_type_name: str) -> _ProviderUsageEmissionError:
+    try:
+        raise _ProviderUsageEmissionError(
+            f"Provider usage trace event emission failed ({orig_type_name})"
+        ) from None
+    except _ProviderUsageEmissionError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
 @dataclass(frozen=True)
 class BilledCost:
     """An authoritative billed amount returned by the upstream routing API."""
@@ -111,10 +126,25 @@ def _emit_provider_usage_trace_event(record: ProviderUsageRecord) -> None:
     except Exception as exc:
         # Telemetry transport must not change the model-call result. Retain only
         # the exception type because provider errors can contain request data.
+        sanitized_exc = _sanitized_emission_error(type(exc).__name__)
         logger.warning(
             "Failed to emit provider usage trace event (%s)",
             type(exc).__name__,
         )
+        try:
+            from src.lib.observability.runtime import report_runtime_exception
+
+            report_runtime_exception(
+                sanitized_exc,
+                component="provider_usage",
+                operation="trace_event_emission_failed",
+                tags={"provider": record.requested_provider},
+            )
+        except Exception as report_exc:
+            logger.warning(
+                "Failed to report provider usage trace event loss (%s)",
+                type(report_exc).__name__,
+            )
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
