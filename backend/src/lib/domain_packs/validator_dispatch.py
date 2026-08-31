@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, cast
+from typing import Any, Literal, Mapping, Protocol, cast
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
@@ -48,6 +48,7 @@ from src.lib.observability.sentry import (
     gen_ai_invoke_agent_span,
     set_redacted_ai_span_data,
 )
+from src.lib.observability.runtime import report_runtime_exception
 
 from .input_selectors import build_domain_validation_request
 from .materialization import (
@@ -102,6 +103,53 @@ _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS = frozenset(
         "evidence_record_id",
     }
 )
+_VALIDATOR_EXECUTION_FAILURE_EXPLANATION = (
+    "Validator execution could not be completed. Curator review is required."
+)
+
+
+class _ValidatorDispatchRuntimeError(RuntimeError):
+    """Sanitized validator dispatch failure safe for operational reporting."""
+
+
+def _sanitized_validator_dispatch_error() -> _ValidatorDispatchRuntimeError:
+    try:
+        raise _ValidatorDispatchRuntimeError(
+            "Package validator execution failed"
+        ) from None
+    except _ValidatorDispatchRuntimeError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
+def _report_validator_dispatch_failure(
+    request: DomainValidationRequest,
+    *,
+    phase: Literal["single", "batch"],
+    request_count: int,
+) -> None:
+    try:
+        report_runtime_exception(
+            _sanitized_validator_dispatch_error(),
+            component="domain_pack_validator_dispatch",
+            operation=f"{phase}_validator_run_failed",
+            tags={"phase": phase},
+            context={
+                "domain_pack_id": request.target.domain_pack_id,
+                "validator_package_id": request.validator_agent.package_id,
+                "validator_agent_id": request.validator_agent.agent_id,
+                "validator_binding_id": request.validator_binding_id,
+                "request_count": request_count,
+            },
+            level="error",
+        )
+    except Exception:
+        LOGGER.warning(
+            "Runtime reporting failed for package-scoped validator %s failure",
+            phase,
+            exc_info=True,
+        )
 
 
 def _provider_id_for_model(model: Any) -> str | None:
@@ -1230,12 +1278,17 @@ def _run_validator_job_batch(
             [job.request.request_id for job in jobs],
             exc_info=exc,
         )
+        _report_validator_dispatch_failure(
+            representative.request,
+            phase="batch",
+            request_count=len(jobs),
+        )
         validator_results = [
             _finalize_validator_result(
                 _unresolved_result_for_dispatch_problem(
                     job.request,
                     reason="validator_agent_error",
-                    explanation=f"Validator batch execution failed: {exc}",
+                    explanation=_VALIDATOR_EXECUTION_FAILURE_EXPLANATION,
                 ),
                 request=job.request,
             )
@@ -1250,7 +1303,7 @@ def _run_validator_job_batch(
                 3,
             ),
             "status": "error",
-            "error": str(exc),
+            "error": _VALIDATOR_EXECUTION_FAILURE_EXPLANATION,
             "resolved_count": 0,
             "unresolved_count": len(validator_results),
         }
@@ -1296,10 +1349,15 @@ def _run_single_validator_job(
             request.request_id,
             exc_info=exc,
         )
+        _report_validator_dispatch_failure(
+            request,
+            phase="single",
+            request_count=1,
+        )
         validator_result = _unresolved_result_for_dispatch_problem(
             request,
             reason="validator_agent_error",
-            explanation=f"Validator agent execution failed: {exc}",
+            explanation=_VALIDATOR_EXECUTION_FAILURE_EXPLANATION,
         )
     return _finalize_validator_result(validator_result, request=request)
 

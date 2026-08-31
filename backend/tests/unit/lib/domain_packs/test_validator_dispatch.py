@@ -1160,8 +1160,17 @@ def test_dispatch_skips_active_binding_without_inputs_or_expected_results(
 
 def test_dispatch_active_binding_returns_unresolved_validator_result(
     tmp_path: Path,
+    monkeypatch,
 ):
     pack = _loaded_pack(tmp_path)
+
+    def _unexpected_report(*args, **kwargs):  # pragma: no cover - must not be called
+        raise AssertionError("ordinary unresolved outcomes must not report")
+
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.report_runtime_exception",
+        _unexpected_report,
+    )
 
     def _runner(request, *, binding):
         return _result_payload(
@@ -1459,6 +1468,72 @@ def test_bad_batch_extra_request_id_becomes_controlled_unresolved_results(
         "unexpected request IDs" in item.explanation
         for item in result.validator_results
     )
+
+
+def test_batch_runner_error_reports_one_sanitized_batch_failure(
+    tmp_path: Path,
+    monkeypatch,
+):
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+    captured: list[tuple[BaseException, dict[str, Any]]] = []
+
+    def _capture(exc, **kwargs):
+        captured.append((exc, kwargs))
+
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.report_runtime_exception",
+        _capture,
+    )
+
+    def _batch_runner(jobs, *, binding):
+        raise RuntimeError("sensitive batch validator failure")
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(["BAD:0001", "BAD:0002"]),
+        pack,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+
+    assert [item.status for item in result.validator_results] == [
+        "unresolved",
+        "unresolved",
+    ]
+    assert {
+        item.lookup_attempts[0].method for item in result.validator_results
+    } == {"validator_agent_error"}
+    assert all(
+        item.explanation
+        == "Validator execution could not be completed. Curator review is required."
+        for item in result.validator_results
+    )
+    persisted = json.dumps(
+        {
+            "results": [item.model_dump(mode="json") for item in result.validator_results],
+            "summaries": result.validator_batch_groups,
+        }
+    )
+    assert "sensitive batch validator failure" not in persisted
+    assert len(captured) == 1
+    reported_exc, report_kwargs = captured[0]
+    assert type(reported_exc).__name__ == "_ValidatorDispatchRuntimeError"
+    assert str(reported_exc) == "Package validator execution failed"
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__context__ is None
+    assert reported_exc.__cause__ is None
+    assert report_kwargs == {
+        "component": "domain_pack_validator_dispatch",
+        "operation": "batch_validator_run_failed",
+        "tags": {"phase": "batch"},
+        "context": {
+            "domain_pack_id": "fixture.dispatch",
+            "validator_package_id": "fixture.validators",
+            "validator_agent_id": "identifier_validator",
+            "validator_binding_id": "fixture.identifier_lookup",
+            "request_count": 2,
+        },
+        "level": "error",
+    }
 
 
 def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context():
@@ -2435,9 +2510,18 @@ def test_unresolved_array_validator_outcomes_remain_field_addressed(outcome: str
     assert result.lookup_attempts[0].outcome == outcome
 
 
-def test_runner_error_becomes_controlled_unresolved_result(tmp_path: Path):
+def test_runner_error_reports_sanitized_single_failure(tmp_path: Path, monkeypatch):
     pack = _loaded_pack(tmp_path, max_tool_calls=1)
     captured = {}
+    reports: list[tuple[BaseException, dict[str, Any]]] = []
+
+    def _capture(exc, **kwargs):
+        reports.append((exc, kwargs))
+
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.report_runtime_exception",
+        _capture,
+    )
 
     def _runner(request, *, binding):
         captured["max_tool_calls"] = binding.max_tool_calls
@@ -2452,8 +2536,63 @@ def test_runner_error_becomes_controlled_unresolved_result(tmp_path: Path):
     finding = _single_result_finding(result)
     assert captured["max_tool_calls"] == 1
     assert result.validator_results[0].status == "unresolved"
-    assert "tool budget exhausted" in result.validator_results[0].explanation
+    persisted = json.dumps(result.validator_results[0].model_dump(mode="json"))
+    assert "tool budget exhausted" not in persisted
+    assert result.validator_results[0].explanation == (
+        "Validator execution could not be completed. Curator review is required."
+    )
     assert finding.details["failure_classification"] == "transient"
+    assert len(reports) == 1
+    reported_exc, report_kwargs = reports[0]
+    assert type(reported_exc).__name__ == "_ValidatorDispatchRuntimeError"
+    assert str(reported_exc) == "Package validator execution failed"
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__context__ is None
+    assert reported_exc.__cause__ is None
+    assert report_kwargs == {
+        "component": "domain_pack_validator_dispatch",
+        "operation": "single_validator_run_failed",
+        "tags": {"phase": "single"},
+        "context": {
+            "domain_pack_id": "fixture.dispatch",
+            "validator_package_id": "fixture.validators",
+            "validator_agent_id": "identifier_validator",
+            "validator_binding_id": "fixture.identifier_lookup",
+            "request_count": 1,
+        },
+        "level": "error",
+    }
+
+
+def test_runtime_reporting_failure_does_not_mask_validator_failure(
+    tmp_path: Path,
+    monkeypatch,
+):
+    pack = _loaded_pack(tmp_path)
+
+    def _report_failure(*args, **kwargs):
+        raise RuntimeError("Sentry transport failed")
+
+    def _runner(request, *, binding):
+        raise RuntimeError("sensitive validator failure")
+
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.report_runtime_exception",
+        _report_failure,
+    )
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+    )
+
+    persisted = json.dumps(result.validator_results[0].model_dump(mode="json"))
+    assert result.validator_results[0].status == "unresolved"
+    assert result.validator_results[0].explanation == (
+        "Validator execution could not be completed. Curator review is required."
+    )
+    assert "sensitive validator failure" not in persisted
 
 
 def test_ambiguous_optional_selector_still_blocks_dispatch(tmp_path: Path):
