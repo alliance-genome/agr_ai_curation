@@ -43,13 +43,18 @@ The wrapper also clears inherited `MIDSCENE_PLANNING_MODEL_*` and
 `MIDSCENE_INSIGHT_MODEL_*` overrides so every intent uses this one validated
 provider/model slot and the verdict describes the provider that actually ran.
 
-Export `TESTING_API_KEY` from the local stack configuration, then run:
+For the ordinary login-free development stack, run explicitly in dev mode. The
+harness sends no application credential and verifies the disposable
+`dev-user-123` principal during preflight:
 
 ```bash
-scripts/testing/agent_ui_smoke.sh --offline
-scripts/testing/agent_ui_smoke.sh --preflight-only
-scripts/testing/agent_ui_smoke.sh
+scripts/testing/agent_ui_smoke.sh --offline --app-auth dev-mode
+scripts/testing/agent_ui_smoke.sh --preflight-only --app-auth dev-mode
+scripts/testing/agent_ui_smoke.sh --app-auth dev-mode
 ```
+
+API-key mode remains the default when no mode is selected and is available for
+its existing authenticated automation coverage by exporting `TESTING_API_KEY`.
 
 The strict preflight verifies authenticated app access, end-to-end backend
 file-output writeability, PDF worker readiness, Chromium launch, Codex login,

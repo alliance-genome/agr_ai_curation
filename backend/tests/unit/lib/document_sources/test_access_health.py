@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.lib.document_sources.access import build_document_source_request_context
+from src.lib.document_sources.dev_curator_auth import DevCuratorCredentials
 from src.lib.document_sources.health import check_configured_document_source_health
 from src.lib.document_sources.models import (
     DocumentSourceConfigError,
@@ -33,15 +34,29 @@ class FakeProvider:
     async def health(self) -> DocumentSourceHealth:
         return self.health_payload
 
+    async def find_artifacts_by_checksum(
+        self,
+        checksum: str,
+        *,
+        request_bearer_token: str | None = None,
+    ):
+        self.checksum_lookup = (checksum, request_bearer_token)
+        return []
+
 
 def request_with_cookies(cookies: dict[str, str]):
     return SimpleNamespace(cookies=cookies)
 
 
-def test_build_document_source_request_context_maps_groups_and_token() -> None:
+@pytest.mark.asyncio
+async def test_build_document_source_request_context_maps_groups_and_token(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.renewable_dev_curator_auth_required",
+        lambda: False,
+    )
     request = request_with_cookies({"auth_token": "curator-token"})
 
-    context = build_document_source_request_context(
+    context = await build_document_source_request_context(
         request=request,  # type: ignore[arg-type]
         user_claims={
             "cognito:groups": ["MGIStaff", "unknown-group"],
@@ -56,10 +71,15 @@ def test_build_document_source_request_context_maps_groups_and_token() -> None:
     assert "curator-token" not in repr(context)
 
 
-def test_build_document_source_request_context_ignores_cookie_for_api_key_claims() -> None:
+@pytest.mark.asyncio
+async def test_build_document_source_request_context_ignores_cookie_for_api_key_claims(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.renewable_dev_curator_auth_required",
+        lambda: False,
+    )
     request = request_with_cookies({"auth_token": "unvalidated-cookie-token"})
 
-    context = build_document_source_request_context(
+    context = await build_document_source_request_context(
         request=request,  # type: ignore[arg-type]
         user_claims={
             "sub": "api-key-test-user",
@@ -72,18 +92,17 @@ def test_build_document_source_request_context_ignores_cookie_for_api_key_claims
     assert context.has_curator_token is False
 
 
-def test_build_document_source_request_context_uses_real_cookie_in_dev_mode(
+@pytest.mark.asyncio
+async def test_build_document_source_request_context_uses_real_cookie_outside_renewable_dev_mode(
     monkeypatch,
 ) -> None:
     request = request_with_cookies({"auth_token": "dev-cookie-token"})
-    monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
-
     monkeypatch.setattr(
-        "src.lib.document_sources.access.get_configured_document_source_dev_mode_static_curator_token",
-        lambda: pytest.fail("static token lookup must not run when a cookie token exists"),
+        "src.lib.document_sources.access.renewable_dev_curator_auth_required",
+        lambda: False,
     )
 
-    context = build_document_source_request_context(
+    context = await build_document_source_request_context(
         request=request,  # type: ignore[arg-type]
         user_claims={
             "sub": "dev-user-123",
@@ -96,18 +115,26 @@ def test_build_document_source_request_context_uses_real_cookie_in_dev_mode(
     assert context.has_curator_token is True
 
 
-def test_build_document_source_request_context_uses_static_abc_token_in_dev_mode(
+@pytest.mark.asyncio
+async def test_build_document_source_request_context_uses_renewable_token_and_claims_in_dev_mode(
     monkeypatch,
 ) -> None:
-    request = request_with_cookies({})
-    monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
-
+    request = request_with_cookies({"auth_token": "browser-token-must-be-ignored"})
     monkeypatch.setattr(
-        "src.lib.document_sources.access.get_configured_document_source_dev_mode_static_curator_token",
-        lambda: " static-dev-token ",
+        "src.lib.document_sources.access.renewable_dev_curator_auth_required",
+        lambda: True,
     )
 
-    context = build_document_source_request_context(
+    async def _credentials():
+        return DevCuratorCredentials(
+            token="renewable-dev-token",
+            claims={"cognito:groups": ["FBStaff", "FlyBaseCurator"]},
+            expires_at=9999999999,
+        )
+
+    monkeypatch.setattr("src.lib.document_sources.access.get_dev_curator_credentials", _credentials)
+
+    context = await build_document_source_request_context(
         request=request,  # type: ignore[arg-type]
         user_claims={
             "sub": "dev-user-123",
@@ -115,49 +142,44 @@ def test_build_document_source_request_context_uses_static_abc_token_in_dev_mode
         },
     )
 
-    assert context.authorized_group_ids == ("ZFIN",)
-    assert context.curator_token == "static-dev-token"
+    assert context.provider_groups == ("FBStaff", "FlyBaseCurator")
+    assert context.authorized_group_ids == ("FB",)
+    assert context.curator_token == "renewable-dev-token"
     assert context.has_curator_token is True
-    assert "static-dev-token" not in repr(context)
+    assert "renewable-dev-token" not in repr(context)
 
 
-def test_repeated_dev_static_token_lookup_does_not_construct_provider(
+@pytest.mark.asyncio
+async def test_non_renewable_path_does_not_invoke_dev_credentials(
     monkeypatch,
 ) -> None:
     request = request_with_cookies({})
-
-    monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: True)
     monkeypatch.setattr(
-        "src.lib.document_sources.registry.get_document_source_provider",
-        lambda: "abc_literature",
+        "src.lib.document_sources.access.renewable_dev_curator_auth_required",
+        lambda: False,
     )
-    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "static_bearer")
-    monkeypatch.setenv("ABC_LITERATURE_BEARER_TOKEN", " repeated-dev-token ")
-    monkeypatch.delenv("ABC_LITERATURE_API_BASE_URL", raising=False)
+    async def _fail():
+        pytest.fail("dev credential lookup must not run")
+    monkeypatch.setattr("src.lib.document_sources.access.get_dev_curator_credentials", _fail)
 
-    contexts = [
-        build_document_source_request_context(
+    contexts = []
+    for _ in range(3):
+        contexts.append(await build_document_source_request_context(
             request=request,  # type: ignore[arg-type]
             user_claims={"sub": "dev-user-123"},
-        )
-        for _ in range(3)
-    ]
+        ))
 
-    assert [context.curator_token for context in contexts] == [
-        "repeated-dev-token",
-        "repeated-dev-token",
-        "repeated-dev-token",
-    ]
+    assert [context.curator_token for context in contexts] == [None, None, None]
 
 
-def test_non_dev_request_does_not_read_static_token_configuration(monkeypatch) -> None:
-    monkeypatch.setattr("src.lib.document_sources.access.is_dev_mode", lambda: False)
+@pytest.mark.asyncio
+async def test_non_dev_request_does_not_read_dev_token_configuration(monkeypatch) -> None:
     monkeypatch.setattr(
-        "src.lib.document_sources.access.get_configured_document_source_dev_mode_static_curator_token",
-        lambda: pytest.fail("production authentication must not read a dev token"),
+        "src.lib.document_sources.access.renewable_dev_curator_auth_required",
+        lambda: False,
     )
 
-    context = build_document_source_request_context(
+    context = await build_document_source_request_context(
         request=request_with_cookies({}),  # type: ignore[arg-type]
         user_claims={"sub": "production-user-123"},
     )
@@ -165,8 +187,13 @@ def test_non_dev_request_does_not_read_static_token_configuration(monkeypatch) -
     assert context.curator_token is None
 
 
-def test_build_document_source_request_context_accepts_comma_group_string() -> None:
-    context = build_document_source_request_context(
+@pytest.mark.asyncio
+async def test_build_document_source_request_context_accepts_comma_group_string(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.renewable_dev_curator_auth_required",
+        lambda: False,
+    )
+    context = await build_document_source_request_context(
         request=None,
         user_claims={"groups": "flybase-curators, wormbase-curators"},
     )
@@ -326,3 +353,85 @@ async def test_document_source_health_sanitizes_unhealthy_provider_message(monke
     assert result.ok is False
     assert result.message == "Document-source provider unavailable"
     assert "raw provider failure" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_document_source_health_uses_authenticated_dev_lookup(monkeypatch):
+    fake_provider = FakeProvider(
+        DocumentSourceHealth(provider="abc_literature", ok=True, message="unused")
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.get_document_source_import_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.get_document_source_provider",
+        lambda: "abc_literature",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.renewable_dev_curator_auth_required",
+        lambda: True,
+    )
+
+    async def _credentials():
+        return DevCuratorCredentials(
+            token="renewable-health-token",
+            claims={"cognito:groups": ["FBStaff"]},
+            expires_at=9999999999,
+        )
+
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.get_dev_curator_credentials",
+        _credentials,
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.get_configured_document_source_provider",
+        lambda _provider_id: fake_provider,
+    )
+
+    result = await check_configured_document_source_health()
+
+    assert result.ok is True
+    assert result.metadata["auth"] == "renewable_dev_curator"
+    assert fake_provider.checksum_lookup == (
+        "00000000000000000000000000000000",
+        "renewable-health-token",
+    )
+    assert fake_provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_document_source_health_auth_failure_precedes_provider_construction(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.get_document_source_import_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.get_document_source_provider",
+        lambda: "abc_literature",
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.renewable_dev_curator_auth_required",
+        lambda: True,
+    )
+
+    async def _unavailable():
+        from src.lib.document_sources.dev_curator_auth import (
+            DevCuratorCredentialUnavailable,
+        )
+
+        raise DevCuratorCredentialUnavailable("sanitized unavailable")
+
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.get_dev_curator_credentials",
+        _unavailable,
+    )
+    monkeypatch.setattr(
+        "src.lib.document_sources.health.get_configured_document_source_provider",
+        lambda _provider_id: pytest.fail("provider must not be constructed"),
+    )
+
+    result = await check_configured_document_source_health()
+
+    assert result.ok is False
+    assert result.metadata["reason"] == "authentication"

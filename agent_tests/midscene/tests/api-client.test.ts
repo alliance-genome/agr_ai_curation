@@ -4,6 +4,22 @@ import { describe, it } from 'node:test'
 import { ApiClient, ApiError } from '../src/api-client.js'
 
 describe('API client', () => {
+  it('sends no application credential in dev-mode', async () => {
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:3002',
+      authMode: 'dev-mode',
+      secret: '',
+      timeoutMs: 100,
+      fetchImpl: async (_input, init) => {
+        const headers = new Headers(init?.headers)
+        assert.equal(headers.has('X-API-Key'), false)
+        assert.equal(headers.has('Cookie'), false)
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+    })
+    await client.get('/api/users/me')
+  })
+
   it('throws a structured redacted error for non-success responses', async () => {
     const evidence: import('../src/api-client.js').ApiEvidence[] = []
     const client = new ApiClient({

@@ -110,7 +110,36 @@ PY
 # Exercise the environment created by a fresh `make setup` and the effective
 # development Compose interpolation, without starting containers.
 cp "${repo_root}/.env.example" "${development_env_file}"
-docker compose \
+cat >>"${development_env_file}" <<'ENV'
+SENTRY_DEV_DSN=http://dev-public-key@dev-ingest.example.internal/3
+SENTRY_ENVIRONMENT=dev
+SENTRY_RELEASE=dev-candidate-sha
+SENTRY_LOG_EVENT_LEVEL=ERROR
+SENTRY_TRACES_SAMPLE_RATE=1.0
+SENTRY_PROFILES_SAMPLE_RATE=
+SENTRY_ALLOW_INSECURE_DSN=true
+SENTRY_SYNTHETIC_TEST_ENDPOINTS_ENABLED=false
+SENTRY_AI_AGENTS_MONITORING_ENABLED=true
+SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=false
+SENTRY_OPENAI_INTEGRATION_ENABLED=false
+SENTRY_GEN_AI_STREAM_SPANS_ENABLED=false
+SENTRY_SEND_DEFAULT_PII=false
+SENTRY_OPENAI_INCLUDE_PROMPTS=false
+SENTRY_AI_CONTENT_CAPTURE_TIER=2
+SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
+SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50
+ENV
+# Deliberately inject production-shaped shell variables. The shared dev stack
+# must still resolve the dev-only DSN and its service-env capture settings.
+env \
+  AGR_DEV_ENV_FILE="${development_env_file}" \
+  SENTRY_DSN='https://prod-public-key@prod-ingest.example.internal/4' \
+  SENTRY_ENVIRONMENT=production \
+  SENTRY_RELEASE=production-candidate-sha \
+  SENTRY_LOG_EVENT_LEVEL=CRITICAL \
+  SENTRY_TRACES_SAMPLE_RATE=0.1 \
+  SENTRY_AI_AGENTS_MONITORING_ENABLED=false \
+  docker compose \
   --env-file "${development_env_file}" \
   -f "${repo_root}/docker-compose.yml" \
   config --format json >"${development_rendered_file}"
@@ -130,6 +159,24 @@ weaviate_env = weaviate["environment"]
 assert trace_review["image"].endswith(":latest")
 assert str(trace_review_env["DEV_MODE"]).lower() == "true"
 assert str(trace_review_env["SECURE_COOKIES"]).lower() == "false"
+assert backend_env["SENTRY_DSN"] == "http://dev-public-key@dev-ingest.example.internal/3"
+assert backend_env["SENTRY_DEV_DSN"] == ""
+assert backend_env["SENTRY_ENVIRONMENT"] == "dev"
+assert backend_env["SENTRY_RELEASE"] == "dev-candidate-sha"
+assert backend_env["SENTRY_LOG_EVENT_LEVEL"] == "ERROR"
+assert str(backend_env["SENTRY_TRACES_SAMPLE_RATE"]) == "1.0"
+assert backend_env["SENTRY_PROFILES_SAMPLE_RATE"] == ""
+assert str(backend_env["SENTRY_ALLOW_INSECURE_DSN"]).lower() == "true"
+assert str(backend_env["SENTRY_SYNTHETIC_TEST_ENDPOINTS_ENABLED"]).lower() == "false"
+assert str(backend_env["SENTRY_AI_AGENTS_MONITORING_ENABLED"]).lower() == "true"
+assert str(backend_env["SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED"]).lower() == "false"
+assert str(backend_env["SENTRY_OPENAI_INTEGRATION_ENABLED"]).lower() == "false"
+assert str(backend_env["SENTRY_GEN_AI_STREAM_SPANS_ENABLED"]).lower() == "false"
+assert str(backend_env["SENTRY_SEND_DEFAULT_PII"]).lower() == "false"
+assert str(backend_env["SENTRY_OPENAI_INCLUDE_PROMPTS"]).lower() == "false"
+assert str(backend_env["SENTRY_AI_CONTENT_CAPTURE_TIER"]) == "2"
+assert str(backend_env["SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS"]) == "2000"
+assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 assert str(backend_env["HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS"]).lower() == "false"
 assert str(backend_env["HEALTH_CHECK_REQUIRE_LITERATURE_DB"]).lower() == "false"
 assert backend_env["ELASTICSEARCH_HOST"] == ""

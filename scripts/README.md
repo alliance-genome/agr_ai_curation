@@ -433,12 +433,18 @@ Typical usage on the dev host:
 
 ```bash
 cd ~/agr_ai_curation
-python3 scripts/testing/dev_release_smoke.py --base-url http://localhost:8000
+python3 scripts/testing/dev_release_smoke.py \
+  --base-url http://localhost:8000 \
+  --auth-mode dev-mode
 ```
 
 Notes:
 
 - The script auto-loads `TESTING_API_KEY` from `.env` when available.
+- `--auth-mode dev-mode` is the ordinary login-free dev-host mode. It is
+  loopback-only, sends neither a cookie nor API key, and verifies
+  `dev-user-123`. API-key and curator-cookie modes remain available for their
+  existing coverage.
 - Default PDFs come from `backend/tests/fixtures/`.
 - Use `--skip-chat`, `--skip-flow`, or `--skip-batch` to isolate one stage while debugging.
 - Add `--include-rerank-provider-smoke` when you also want the local

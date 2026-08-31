@@ -139,9 +139,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # Environment loaded from shell (via Makefile) or optional local .env
+    # Make targets point this at the same private env used for interpolation;
+    # direct Docker Compose use retains the optional checkout-local fallback.
     env_file:
-      - path: .env
+      - path: ${AGR_DEV_ENV_FILE:-.env}
         required: false
     command: bash -c "cd /app/backend && if [[ \"${RUN_DB_BOOTSTRAP_ON_START:-false}\" == \"true\" ]]; then /app/scripts/utilities/ensure_postgres_db_exists.sh; fi && if [[ \"${RUN_DB_MIGRATIONS_ON_START:-false}\" == \"true\" ]]; then alembic upgrade head; fi && /app/scripts/refresh_prefixes_on_start.sh && exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     restart: unless-stopped
@@ -162,6 +163,10 @@ services:
       - PYTHONUNBUFFERED=1
       - AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START=${AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START:-true}
       - DEV_MODE=${DEV_MODE:-false}  # Set to true to bypass Cognito auth for local development
+      # Never let generic production-shaped shell exports choose the dev DSN.
+      - SENTRY_DSN=${SENTRY_DEV_DSN:-}
+      # Keep the Compose-only alias out of the running container.
+      - SENTRY_DEV_DSN=
       - PDF_EXTRACTION_SERVICE_URL=${PDF_EXTRACTION_SERVICE_URL:-}
       - PDF_MAX_FILE_SIZE_BYTES=${PDF_MAX_FILE_SIZE_BYTES:-524288000}
       - PDF_UPLOAD_MAX_PAGE_COUNT=${PDF_UPLOAD_MAX_PAGE_COUNT:-300}
@@ -178,6 +183,14 @@ services:
       - PDF_EXTRACTION_COGNITO_SCOPE=${PDF_EXTRACTION_COGNITO_SCOPE:-}
       - DOCUMENT_SOURCE_PROVIDER=${DOCUMENT_SOURCE_PROVIDER:-local_pdf}
       - DOCUMENT_SOURCE_IMPORT_ENABLED=${DOCUMENT_SOURCE_IMPORT_ENABLED:-false}
+      - DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE=${DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE:-none}
+      - DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_REGION=${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_REGION:-us-east-1}
+      - DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_USER_POOL_ID=${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_USER_POOL_ID:-}
+      - DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_ID=${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_ID:-}
+      - DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_SECRET=${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_SECRET:-}
+      - DOCUMENT_SOURCE_DEV_CURATOR_USERNAME=${DOCUMENT_SOURCE_DEV_CURATOR_USERNAME:-}
+      - DOCUMENT_SOURCE_DEV_CURATOR_PASSWORD=${DOCUMENT_SOURCE_DEV_CURATOR_PASSWORD:-}
+      - DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS=${DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS:-600}
       - ABC_LITERATURE_API_BASE_URL=${ABC_LITERATURE_API_BASE_URL:-}
       - ABC_LITERATURE_AUTH_MODE=${ABC_LITERATURE_AUTH_MODE:-none}
       - ABC_LITERATURE_BEARER_TOKEN=${ABC_LITERATURE_BEARER_TOKEN:-}

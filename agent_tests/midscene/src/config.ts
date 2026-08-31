@@ -5,13 +5,13 @@ import { z } from 'zod'
 export const CASE_NAMES = ['create-connect-save', 'edit-rewire', 'upload-ask', 'run-saved-flow'] as const
 export type CaseName = (typeof CASE_NAMES)[number]
 export type Provider = 'codex' | 'openai'
-export type AppAuthMode = 'api-key' | 'cookie'
+export type AppAuthMode = 'api-key' | 'cookie' | 'dev-mode'
 
 type Environment = NodeJS.ProcessEnv | Record<string, string | undefined>
 
 const booleanSchema = z.enum(['true', 'false'])
 const providerSchema = z.enum(['codex', 'openai'])
-const authSchema = z.enum(['api-key', 'cookie'])
+const authSchema = z.enum(['api-key', 'cookie', 'dev-mode'])
 
 const DEFAULTS = {
   appUrl: 'http://localhost:3002',
@@ -188,8 +188,8 @@ export function loadConfig(
   const apiKeyEnv = readNonEmpty(env, 'AGENT_UI_SMOKE_API_KEY_ENV', DEFAULTS.apiKeyEnv)
   const cookieEnv = readNonEmpty(env, 'AGENT_UI_SMOKE_COOKIE_ENV', DEFAULTS.cookieEnv)
   const secretEnvName = appAuth === 'api-key' ? apiKeyEnv : cookieEnv
-  const appSecret = env[secretEnvName]?.trim() ?? ''
-  if (options.requireSecrets !== false && !appSecret) {
+  const appSecret = appAuth === 'dev-mode' ? '' : env[secretEnvName]?.trim() ?? ''
+  if (options.requireSecrets !== false && appAuth !== 'dev-mode' && !appSecret) {
     throw new Error(`${secretEnvName} is required for ${appAuth} application authentication`)
   }
   if (options.requireSecrets !== false && provider === 'openai' && !env.OPENAI_API_KEY?.trim()) {

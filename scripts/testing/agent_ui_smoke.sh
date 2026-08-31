@@ -18,7 +18,7 @@ Options:
   --headless              run Chromium headlessly (default)
   --provider NAME         codex (default) or openai
   --cost-warning-usd USD  after-run OpenAI API cost warning (default 5)
-  --app-auth MODE         api-key (default) or cookie
+  --app-auth MODE         api-key (default), cookie, or dev-mode (loopback only)
   --url URL               loopback application URL (default http://localhost:3002)
   --retain-resources      retain prefixed app resources for debugging
   --run-id ID             explicit safe run/evidence identifier
@@ -27,7 +27,8 @@ Options:
   -h, --help              show this help
 
 Secrets are accepted only through the selected environment variable:
-TESTING_API_KEY for api-key auth, CURATOR_COOKIE for cookie auth, and
+TESTING_API_KEY for api-key auth, CURATOR_COOKIE for cookie auth, no application
+credential for loopback-only dev-mode auth, and
 OPENAI_API_KEY only when --provider openai is explicitly selected.
 EOF
 }
@@ -95,7 +96,7 @@ while (($#)); do
 done
 
 [[ "$provider" == "codex" || "$provider" == "openai" ]] || { echo "Provider must be codex or openai" >&2; exit 2; }
-[[ "$app_auth" == "api-key" || "$app_auth" == "cookie" ]] || { echo "App auth must be api-key or cookie" >&2; exit 2; }
+[[ "$app_auth" == "api-key" || "$app_auth" == "cookie" || "$app_auth" == "dev-mode" ]] || { echo "App auth must be api-key, cookie, or dev-mode" >&2; exit 2; }
 
 if [[ ! -d "${PACKAGE_ROOT}/node_modules" ]]; then
   echo "Missing locked dependencies. Run: cd agent_tests/midscene && npm ci" >&2
@@ -125,10 +126,14 @@ export AGENT_UI_SMOKE_RUN_ID="$run_id"
 
 if [[ "$app_auth" == "api-key" ]]; then
   key_env="${AGENT_UI_SMOKE_API_KEY_ENV:-TESTING_API_KEY}"
-else
+elif [[ "$app_auth" == "cookie" ]]; then
   key_env="${AGENT_UI_SMOKE_COOKIE_ENV:-CURATOR_COOKIE}"
+else
+  key_env=""
 fi
-[[ -n "${!key_env:-}" ]] || { echo "${key_env} must be set for ${app_auth} app authentication" >&2; exit 2; }
+if [[ -n "$key_env" ]]; then
+  [[ -n "${!key_env:-}" ]] || { echo "${key_env} must be set for ${app_auth} app authentication" >&2; exit 2; }
+fi
 
 # The pilot validates and reports one model/provider slot. Remove inherited
 # intent-specific Midscene slots before Node imports Midscene so planning and

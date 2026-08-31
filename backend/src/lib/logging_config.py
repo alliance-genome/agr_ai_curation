@@ -33,6 +33,13 @@ from typing import Any, Dict, Optional
 request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
 
 
+def suppress_sensitive_aws_sdk_debug_logging() -> None:
+    """Prevent AWS request parameters and token responses from reaching logs."""
+
+    logging.getLogger("boto3").setLevel(logging.WARNING)
+    logging.getLogger("botocore").setLevel(logging.WARNING)
+
+
 class ContextFilter(logging.Filter):
     """Inject request-scoped context into every log record."""
 
@@ -160,6 +167,7 @@ def configure_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
     logging.getLogger("langfuse").setLevel(logging.WARNING)
+    suppress_sensitive_aws_sdk_debug_logging()
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("watchfiles").setLevel(logging.ERROR)
 

@@ -72,7 +72,7 @@ OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH = Path("backend/requirements.lock.txt")
 EXPECTED_BATCH_PLUMBING_COLUMN_KEYS = ("item", "evidence_record_ids")
 DEFAULT_WORKSPACE_ADAPTER_KEY = "gene"
 DEFAULT_AUTH_MODE = "api-key"
-SUPPORTED_AUTH_MODES = ("api-key", "curator-cookie")
+SUPPORTED_AUTH_MODES = ("api-key", "curator-cookie", "dev-mode")
 DEFAULT_SHARED_SAMPLE_PDF = Path(__file__).resolve().parents[2] / "sample_fly_publication.pdf"
 KNOWN_CHAT_FAILURE_SNIPPETS = (
     "no document is currently loaded",
@@ -926,6 +926,28 @@ def resolve_auth_context(args: argparse.Namespace, env_file: Path) -> AuthContex
             },
         )
 
+    if args.auth_mode == "dev-mode":
+        parsed_base_url = urllib.parse.urlparse(args.base_url)
+        require(
+            parsed_base_url.hostname in {"localhost", "127.0.0.1", "::1"},
+            "--auth-mode dev-mode requires a loopback --base-url.",
+        )
+        return AuthContext(
+            mode="dev-mode",
+            headers=build_headers(None),
+            used_api_key_auth=False,
+            expected_auth_sub="dev-user-123",
+            expected_email="dev@localhost",
+            expected_provider_groups=(),
+            evidence={
+                "mode": "dev-mode",
+                "expected_dev_principal": {
+                    "auth_sub": "dev-user-123",
+                    "email": "dev@localhost",
+                },
+            },
+        )
+
     token, auth_evidence = resolve_curator_cookie_token(args, env_file)
     headers = build_headers(None)
     headers["Cookie"] = f"auth_token={token}"
@@ -1058,14 +1080,23 @@ def check_current_user(
                 actual_email,
                 f"Current-user email did not look like a real curator principal: {response.json_body}",
             )
-        if expected_provider_groups and actual_email != "dev@localhost":
-            require(
-                any(group in set(provider_groups) for group in expected_provider_groups),
-                (
-                    "Current-user provider groups did not include an expected ABC/Literature "
-                    f"group. Expected one of {expected_provider_groups!r}, got {provider_groups!r}"
-                ),
-            )
+            if expected_provider_groups:
+                require(
+                    any(group in set(provider_groups) for group in expected_provider_groups),
+                    (
+                        "Current-user provider groups did not include an expected ABC/Literature "
+                        f"group. Expected one of {expected_provider_groups!r}, got {provider_groups!r}"
+                    ),
+                )
+    elif expected_auth_mode == "dev-mode":
+        require(
+            actual_auth_sub == "dev-user-123",
+            f"DEV_MODE smoke expected dev-user-123, got {actual_auth_sub!r}.",
+        )
+        require(
+            actual_email == "dev@localhost",
+            f"DEV_MODE smoke expected dev@localhost, got {actual_email!r}.",
+        )
     append_check(
         checks,
         step="current_user",
@@ -3464,9 +3495,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         choices=SUPPORTED_AUTH_MODES,
         default=default_auth_mode_from_env(),
         help=(
-            "Authentication mode for backend requests. Use curator-cookie when "
-            "the deployed stack uses ABC Literature and upload/import paths need "
-            "a real Cognito bearer forwarded to the document-source provider."
+            "Authentication mode for backend requests. Use dev-mode only from "
+            "the deployed host's loopback interface; it sends no cookie or API key."
         ),
     )
     parser.add_argument("--api-key", default=None, help="Override TESTING_API_KEY for API-key auth")

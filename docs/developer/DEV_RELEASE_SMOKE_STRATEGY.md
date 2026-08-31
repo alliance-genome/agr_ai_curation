@@ -26,15 +26,16 @@ what actually runs before production.
 
 Auth mode split: `scripts/testing/dev_release_smoke.py` is the generic deployed
 backend smoke for chat, flow, batch, export/download, and artifact behavior. On
-ABC-backed dev stacks, run it with `--auth-mode curator-cookie` and a local
-secret-bearing env file so document upload can forward a real curator bearer to
-ABC Literature. Keep ABC-specific provenance/source-Markdown/identifier-import
+the login-free ABC-backed dev stack, run it on the host loopback interface with
+`--auth-mode dev-mode`; the backend obtains the dedicated provider bearer and
+keeps the application owner as `dev-user-123`. Keep ABC-specific
+provenance/source-Markdown/identifier-import
 assertions in `abc_literature_ready_upload_smoke.py`,
 `abc_literature_identifier_import_smoke.py`, and
 `add_literature_upload_smoke.py`.
-The domain-envelope corpus runner also accepts the same `--auth-mode
-curator-cookie` path because it uploads real PDFs before exercising the
-agent/validator corpus. On ABC-backed dev stacks, run the corpus with
+The domain-envelope corpus runner retains `--auth-mode curator-cookie` for
+explicit real-curator coverage. On the login-free ABC-backed dev stack, run the
+ordinary corpus in dev mode and use
 `--salt-upload-pdfs` so public corpus fixtures avoid source-document checksum
 matches and MOD-specific ABC access policy. ABC provenance/source-document
 behavior is covered separately by the scoped ABC smokes.
@@ -541,6 +542,13 @@ Acceptance:
 
 1. API-key auth is active.
 2. Backend is healthy enough to proceed.
+
+For the VPN-only login-free development stack, use the explicit
+`--auth-mode dev-mode` (or `DEV_RELEASE_SMOKE_AUTH_MODE=dev-mode`) instead of
+the release API-key mode. This mode is rejected for non-loopback targets, sends
+neither a cookie nor `X-API-Key`, and requires `/api/users/me` to resolve to the
+disposable `dev-user-123` principal. API-key and curator-cookie modes remain
+available for their existing release and authenticated-curator coverage.
 
 ### Stage 1: PDF extraction and ingestion
 

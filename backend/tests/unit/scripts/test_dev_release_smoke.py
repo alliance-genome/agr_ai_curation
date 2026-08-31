@@ -93,6 +93,39 @@ def test_parse_args_accepts_auth_mode_env_default(monkeypatch):
     assert args.auth_mode == "curator-cookie"
 
 
+def test_parse_args_accepts_explicit_dev_mode_env_default(monkeypatch):
+    monkeypatch.setenv("DEV_RELEASE_SMOKE_AUTH_MODE", "dev-mode")
+    smoke = _load_smoke_module()
+
+    args = smoke.parse_args([])
+
+    assert args.auth_mode == "dev-mode"
+
+
+def test_resolve_auth_context_dev_mode_sends_no_credential(tmp_path):
+    smoke = _load_smoke_module()
+    args = smoke.parse_args(
+        ["--auth-mode", "dev-mode", "--base-url", "http://127.0.0.1:8000"]
+    )
+
+    auth_context = smoke.resolve_auth_context(args, tmp_path / "missing.env")
+
+    assert auth_context.mode == "dev-mode"
+    assert auth_context.expected_auth_sub == "dev-user-123"
+    assert "X-API-Key" not in auth_context.headers
+    assert "Cookie" not in auth_context.headers
+
+
+def test_resolve_auth_context_rejects_remote_dev_mode(tmp_path):
+    smoke = _load_smoke_module()
+    args = smoke.parse_args(
+        ["--auth-mode", "dev-mode", "--base-url", "https://dev.example.org"]
+    )
+
+    with pytest.raises(smoke.SmokeFailure, match="loopback"):
+        smoke.resolve_auth_context(args, tmp_path / "missing.env")
+
+
 def test_parse_args_allows_stream_chat_message_override():
     smoke = _load_smoke_module()
 
@@ -199,6 +232,36 @@ def test_check_current_user_accepts_curator_cookie_principal(monkeypatch):
 
     assert payload["auth_sub"] == "cognito-user-123"
     assert checks[0]["step"] == "current_user"
+
+
+def test_check_current_user_rejects_curator_without_expected_provider_group(monkeypatch):
+    smoke = _load_smoke_module()
+
+    monkeypatch.setattr(
+        smoke,
+        "http_request",
+        lambda *_args, **_kwargs: smoke.Response(
+            status_code=200,
+            body=b"{}",
+            text="{}",
+            json_body={
+                "auth_sub": "cognito-user-123",
+                "email": "smoke-curator@example.org",
+                "provider_groups": ["OtherMODStaff"],
+            },
+        ),
+    )
+
+    with pytest.raises(smoke.SmokeFailure, match="expected ABC/Literature group"):
+        smoke.check_current_user(
+            base_url="http://backend.test",
+            headers={"Cookie": "auth_token=unit-curator-token"},
+            checks=[],
+            expected_auth_sub=None,
+            expected_email=None,
+            expected_auth_mode="curator-cookie",
+            expected_provider_groups=("FBStaff",),
+        )
 
 
 def test_check_current_user_accepts_dev_mode_curator_cookie_group_context(monkeypatch):

@@ -50,6 +50,7 @@ describe('smoke configuration', () => {
 
   it('requires the selected application auth secret', () => {
     assert.throws(() => loadConfig({ AGENT_UI_SMOKE_APP_AUTH: 'cookie' }, { ...options, requireSecrets: true }), /CURATOR_COOKIE is required/)
+    assert.doesNotThrow(() => loadConfig({ AGENT_UI_SMOKE_APP_AUTH: 'dev-mode' }, { ...options, requireSecrets: true }))
   })
 
   it('rejects non-loopback targets and URL smuggling components', () => {

@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from ..config import get_pdf_storage_path
 from ..lib.document_cleanup import cleanup_document_curation_dependencies
 from ..lib.document_sources.access import build_document_source_request_context
+from ..lib.document_sources.dev_curator_auth import DevCuratorCredentialUnavailable
 from ..lib.document_sources.identifier_import import (
     IdentifierImportService,
     IdentifierImportValidationError,
@@ -131,6 +132,33 @@ _pdf_extraction_service_token_expires_at: float = 0.0
 
 class _DocumentMetadataUpdateError(RuntimeError):
     """Sanitized metadata failure safe for logs and Sentry."""
+
+
+async def _document_source_context_or_503(
+    *,
+    request: Request,
+    user: dict[str, Any],
+):
+    """Resolve provider authorization before any document intake side effects."""
+
+    try:
+        return await build_document_source_request_context(
+            request=request,
+            user_claims=user,
+        )
+    except DevCuratorCredentialUnavailable as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=503,
+            detail={
+                "error": "document_source_curator_token_unavailable",
+                "message": "Document-source curator authentication is unavailable.",
+                "suggestion": "Try again later or contact support if this persists.",
+            },
+            log_message="Development document-source curator authentication unavailable",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
 
 def _sanitized_document_metadata_error(exc: BaseException) -> _DocumentMetadataUpdateError:
@@ -1768,15 +1796,16 @@ async def upload_document_endpoint(
         - FR-016: Track ownership through document lifecycle
         - T029: Return Document schema with ownership metadata (user_id, weaviate_tenant)
     """
+    document_source_context = await _document_source_context_or_503(
+        request=request,
+        user=user,
+    )
     try:
         intake_result = await upload_intake_service.intake_upload(
             background_tasks=background_tasks,
             file=file,
             user=user,
-            document_source_context=build_document_source_request_context(
-                request=request,
-                user_claims=user,
-            ),
+            document_source_context=document_source_context,
         )
         return DocumentResponse(
             document_id=intake_result.document_id,
@@ -1839,15 +1868,16 @@ async def import_documents_by_source_identifiers(
             status_code=503,
             detail="Document-source import is disabled",
         )
+    document_source_context = await _document_source_context_or_503(
+        request=request,
+        user=user,
+    )
     try:
         result = await identifier_import_service.import_identifiers(
             background_tasks=background_tasks,
             identifiers=payload.identifiers,
             user=user,
-            document_source_context=build_document_source_request_context(
-                request=request,
-                user_claims=user,
-            ),
+            document_source_context=document_source_context,
         )
         return result.to_dict()
     except IdentifierImportValidationError as validation_error:
@@ -1884,14 +1914,15 @@ async def resolve_documents_by_source_identifiers(
             status_code=503,
             detail="Document-source import is disabled",
         )
+    document_source_context = await _document_source_context_or_503(
+        request=request,
+        user=user,
+    )
     try:
         result = await identifier_import_service.resolve_identifiers(
             identifiers=payload.identifiers,
             user=user,
-            document_source_context=build_document_source_request_context(
-                request=request,
-                user_claims=user,
-            ),
+            document_source_context=document_source_context,
         )
         return result.to_dict()
     except IdentifierImportValidationError as validation_error:

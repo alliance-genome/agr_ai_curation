@@ -201,6 +201,54 @@ def test_dev_compose_trace_review_defaults_to_local_langfuse_bootstrap_keys():
     )
 
 
+def test_dev_curator_credentials_are_development_compose_only():
+    dev_backend = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
+    production_backend = _load_compose()["services"]["backend"]["environment"]
+    expected = {
+        "DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE": "${DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE:-none}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_REGION": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_REGION:-us-east-1}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_USER_POOL_ID": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_USER_POOL_ID:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_ID": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_ID:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_SECRET": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_SECRET:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_USERNAME": "${DOCUMENT_SOURCE_DEV_CURATOR_USERNAME:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_PASSWORD": "${DOCUMENT_SOURCE_DEV_CURATOR_PASSWORD:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS": "${DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS:-600}",
+    }
+
+    for key, value in expected.items():
+        assert dev_backend[key] == value
+        assert key not in production_backend
+    assert production_backend["DEV_MODE"] == "false"
+
+
+def test_development_sentry_dsn_uses_an_isolated_compose_input():
+    dev_backend = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_backend = _load_compose()["services"]["backend"]["environment"]
+    production_only_explicit_keys = {
+        key for key in production_backend if key.startswith("SENTRY_")
+    } - {"SENTRY_DSN"}
+
+    assert dev_backend["SENTRY_DSN"] == "${SENTRY_DEV_DSN:-}"
+    assert dev_backend["SENTRY_DEV_DSN"] == ""
+    assert _load_dev_compose()["services"]["backend"]["env_file"] == [
+        {"path": "${AGR_DEV_ENV_FILE:-.env}", "required": False}
+    ]
+    assert "export AGR_DEV_ENV_FILE := $(ENV_FILE)" in MAKEFILE_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert production_only_explicit_keys.isdisjoint(dev_backend)
+    assert production_backend["SENTRY_DSN"] == "${SENTRY_DSN:-}"
+
+
+def test_env_example_documents_the_development_sentry_dsn_input():
+    assignments = _load_env_assignments(ENV_EXAMPLE_PATH)
+
+    assert assignments["SENTRY_DEV_DSN"] == ""
+    assert assignments["SENTRY_DSN"] == ""
+
+
 def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]

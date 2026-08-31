@@ -17,6 +17,7 @@ git:
 
 ```bash
 SENTRY_DSN=
+SENTRY_DEV_DSN=
 SENTRY_ENVIRONMENT=local
 SENTRY_RELEASE=
 SENTRY_ALLOW_INSECURE_DSN=false
@@ -43,6 +44,38 @@ TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS=500
 Use `SENTRY_RELEASE` for every deployed candidate so events can be tied back to
 the exact commit. Leave tracing and profiling blank unless transport and
 redaction have been explicitly validated for that environment.
+
+The shared VPN-only release-validation server is a validated exception to the
+blank tracing default. Keep it on the separate development Sentry project and
+configure the production safety shape with complete test-traffic sampling.
+Development Compose accepts the DSN only through `SENTRY_DEV_DSN`; generic
+`SENTRY_DSN` shell exports cannot select the dev backend's project. The standard
+Make targets also make Compose load backend settings from the same private
+`~/.agr_ai_curation/.env` file used for interpolation:
+
+```bash
+SENTRY_DEV_DSN=<development project private/VPC DSN>
+SENTRY_ENVIRONMENT=dev
+SENTRY_RELEASE=<exact deployed git SHA>
+SENTRY_LOG_EVENT_LEVEL=ERROR
+SENTRY_TRACES_SAMPLE_RATE=1.0
+SENTRY_PROFILES_SAMPLE_RATE=
+SENTRY_AI_AGENTS_MONITORING_ENABLED=true
+SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED=false
+SENTRY_OPENAI_INTEGRATION_ENABLED=false
+SENTRY_GEN_AI_STREAM_SPANS_ENABLED=false
+SENTRY_SEND_DEFAULT_PII=false
+SENTRY_OPENAI_INCLUDE_PROMPTS=false
+SENTRY_AI_CONTENT_CAPTURE_TIER=2
+SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
+SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50
+```
+
+Use the development project DSN, never the production DSN. A release candidate
+is not ready for manual dev acceptance until a real application path produces
+a transaction with the candidate release and expected manual `gen_ai.*` spans.
+Keep synthetic endpoints disabled except during a bounded ingestion smoke, and
+return them to `404` afterward.
 
 `SENTRY_LOG_EVENT_LEVEL` controls whether ordinary backend Python logs create
 Sentry error events. Blank keeps logs as breadcrumbs only. `WARNING`, `ERROR`,
