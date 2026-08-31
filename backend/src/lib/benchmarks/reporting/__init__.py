@@ -5,7 +5,6 @@ from .models import (
     ArtifactBundle,
     ArtifactManifest,
     BenchmarkReport,
-    BenchmarkScoreRecord,
     ReportProvenance,
     StoredArtifactReceipt,
 )
@@ -22,7 +21,6 @@ __all__ = [
     "ArtifactManifest",
     "ArtifactStorageError",
     "BenchmarkReport",
-    "BenchmarkScoreRecord",
     "DuplicateLogicalRunError",
     "ReportProvenance",
     "S3ArtifactStore",

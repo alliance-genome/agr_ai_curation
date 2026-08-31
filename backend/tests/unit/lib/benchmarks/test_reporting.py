@@ -1,22 +1,25 @@
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from src.lib.benchmarks.models import (
+    BenchmarkAdjudicationResult,
     BenchmarkCaseRun,
+    BenchmarkDeterministicScore,
     BenchmarkFailure,
     BenchmarkOutput,
     BenchmarkRoute,
+    BenchmarkScoringRecord,
     BenchmarkTarget,
     BilledCost,
     ProviderUsage,
 )
 from src.lib.benchmarks.reporting import (
     BenchmarkReport,
-    BenchmarkScoreRecord,
     ReportProvenance,
     build_artifact_bundle,
     build_benchmark_report,
@@ -26,6 +29,36 @@ from src.lib.benchmarks.reporting import (
 NOW = datetime(2026, 8, 30, 12, tzinfo=timezone.utc)
 
 
+def _canonical_score(*, adjudicated: bool = False) -> BenchmarkScoringRecord:
+    fixture = Path(__file__).parent / "fixtures" / "deterministic_score_v1.json"
+    deterministic = BenchmarkDeterministicScore.model_validate_json(
+        fixture.read_text(encoding="utf-8")
+    )
+    adjudication = None
+    if adjudicated:
+        adjudication = BenchmarkAdjudicationResult(
+            status="completed",
+            outcome="supports_actual",
+            reason="private adjudication rationale with extracted evidence",
+            confidence=Decimal("0.75"),
+            uncertainty="private evidence uncertainty",
+            prompt_id="benchmark-adjudication-v1",
+            model="judge-model-v3",
+            latency_ms=25,
+            input_tokens=8,
+            output_tokens=3,
+            billed_cost=BilledCost(
+                amount=Decimal("0.01"),
+                unit="USD",
+                source="provider-telemetry",
+            ),
+        )
+    return BenchmarkScoringRecord(
+        deterministic=deterministic,
+        adjudication=adjudication,
+    )
+
+
 def _run(
     run_id: str,
     *,
@@ -33,6 +66,7 @@ def _run(
     actual_provider: str | None = "provider-a",
     cost: Decimal | None = Decimal("0.125"),
     failed: bool = False,
+    scoring: list[BenchmarkScoringRecord] | None = None,
 ) -> BenchmarkCaseRun:
     usage = ProviderUsage(
         requested_provider="router",
@@ -79,6 +113,7 @@ def _run(
             },
             size_bytes=100,
         ),
+        scoring=scoring or [],
     )
 
 
@@ -92,9 +127,13 @@ def _provenance(logical_run_id: str = "logical-1") -> ReportProvenance:
     )
 
 
-def test_report_reconciles_accuracy_usage_latency_cost_routes_and_failures():
+def test_report_consumes_canonical_scoring_and_reconciles_run_metrics():
     runs = [
-        _run("run-1", case_id="case-1"),
+        _run(
+            "run-1",
+            case_id="case-1",
+            scoring=[_canonical_score(adjudicated=True)],
+        ),
         _run(
             "run-2",
             case_id="case-1",
@@ -103,48 +142,72 @@ def test_report_reconciles_accuracy_usage_latency_cost_routes_and_failures():
             failed=True,
         ),
     ]
-    scores = [
-        BenchmarkScoreRecord(
-            run_id="run-1",
-            scorer_id="exact",
-            scorer_version="1",
-            method="deterministic",
-            outcome="passed",
-            score=Decimal("1"),
-        ),
-        BenchmarkScoreRecord(
-            run_id="run-1",
-            scorer_id="judge",
-            scorer_version="2",
-            method="adjudicated",
-            adjudicator_version="judge-model:3",
-            outcome="failed",
-            score=Decimal("0.25"),
-        ),
-    ]
 
-    report = build_benchmark_report(runs, scores, _provenance())
+    report = build_benchmark_report(runs, _provenance())
 
     assert report.aggregate.run_count == 2
     assert report.aggregate.failed == 1
-    assert report.aggregate.deterministic_accuracy.pass_rate == Decimal("1")
-    assert report.aggregate.adjudicated_accuracy.pass_rate == Decimal("0")
+    assert report.aggregate.deterministic_accuracy.partial == 1
+    assert report.aggregate.deterministic_accuracy.pass_rate == Decimal("0")
+    assert report.aggregate.deterministic_accuracy.weighted_score == Decimal("2.5") / 3
+    assert report.aggregate.adjudication.completed == 1
+    assert report.aggregate.adjudication.supports_actual == 1
     assert report.aggregate.latency.total_ms == 20
     assert report.aggregate.usage.total_tokens == 24
     assert report.aggregate.cost.exact_totals[0].amount == Decimal("0.125")
-    assert report.aggregate.cost.exact_totals[0].source == "provider-telemetry"
     assert report.aggregate.cost.records_missing_exact_cost == 1
+    assert report.aggregate.adjudication_cost.exact_totals[0].amount == Decimal("0.01")
     assert [summary.key for summary in report.by_route] == [
         "provider-a/model-a",
         "unavailable",
     ]
     assert report.failures[0].category == "runtime_error"
+    case_score = report.cases[0].scores[0]
+    assert case_score.deterministic.outcome == "partial"
+    assert case_score.adjudication is not None
+    assert case_score.adjudication.billed_cost is not None
+    assert case_score.adjudication.billed_cost.amount == Decimal("0.01")
     assert report.cases[1].actual_route is None
+
+
+def test_usage_preserves_partial_and_absent_unknown_token_fields():
+    partial_usage = ProviderUsage(
+        requested_provider="router",
+        requested_model="model-a",
+        latency_ms=10,
+        input_tokens=5,
+        output_tokens=None,
+        total_tokens=None,
+    )
+    partial = _run("run-1", case_id="case-1").model_copy(
+        update={"provider_usage": partial_usage}
+    )
+    absent = _run("run-2", case_id="case-2").model_copy(
+        update={"provider_usage": None}
+    )
+
+    usage = build_benchmark_report([partial, absent], _provenance()).aggregate.usage
+
+    assert usage.input_tokens == 5
+    assert usage.output_tokens == 0
+    assert usage.total_tokens == 0
+    assert usage.records_missing_usage == 1
+    assert usage.records_missing_input_tokens == 1
+    assert usage.records_missing_output_tokens == 2
+    assert usage.records_missing_total_tokens == 2
 
 
 def test_artifacts_are_allowlisted_redacted_and_stable():
     report = build_benchmark_report(
-        [_run("run-1", case_id="case-1", failed=True)], [], _provenance()
+        [
+            _run(
+                "run-1",
+                case_id="case-1",
+                failed=True,
+                scoring=[_canonical_score(adjudicated=True)],
+            )
+        ],
+        _provenance(),
     )
     first = build_artifact_bundle(report)
     second = build_artifact_bundle(report)
@@ -158,11 +221,18 @@ def test_artifacts_are_allowlisted_redacted_and_stable():
         "restricted document",
         "private evidence",
         "Authorization",
+        "private adjudication rationale",
+        "private evidence uncertainty",
+        "values differ under configured rule",
     ):
         assert forbidden not in serialized
         assert forbidden not in first.manifest_bytes.decode()
     assert first.manifest.artifacts[0].sha256.startswith("sha256:")
     assert first.manifest.fixture_digests == [f"sha256:{'a' * 64}"]
+    assert first.manifest.scorer_versions == ["deterministic-v1:1"]
+    assert first.manifest.adjudicator_versions == [
+        "rubric:1:prompt:benchmark-adjudication-v1:model:judge-model-v3"
+    ]
 
 
 def test_allowlist_rejects_sensitive_or_unknown_artifact_content():
@@ -173,36 +243,31 @@ def test_allowlist_rejects_sensitive_or_unknown_artifact_content():
         config_revision="config-git:123",
         code_revision="git:456",
     )
-    report = build_benchmark_report(
-        [_run("run-1", case_id="case-1")], [], provenance
-    )
+    report = build_benchmark_report([_run("run-1", case_id="case-1")], provenance)
     with pytest.raises(ValueError, match="secret"):
         canonical_json_bytes(report, secret_patterns=["deployment-secret"])
 
-    payload = json.loads(canonical_json_bytes(build_benchmark_report(
-        [_run("run-1", case_id="case-1")], [], _provenance()
-    )))
+    payload = json.loads(
+        canonical_json_bytes(
+            build_benchmark_report(
+                [_run("run-1", case_id="case-1")], _provenance()
+            )
+        )
+    )
     payload["raw_prompt"] = "must not enter"
     with pytest.raises(ValidationError, match="raw_prompt"):
         BenchmarkReport.model_validate(payload)
 
 
-def test_score_records_must_reference_a_canonical_run():
-    score = BenchmarkScoreRecord(
-        run_id="unknown",
-        scorer_id="exact",
-        scorer_version="1",
-        method="deterministic",
-        outcome="passed",
-    )
-    with pytest.raises(ValueError, match="unknown runs"):
-        build_benchmark_report([], [score], _provenance())
+def test_canonical_run_ids_must_be_unique():
+    run = _run("duplicate", case_id="case-1")
+    with pytest.raises(ValueError, match="unique run IDs"):
+        build_benchmark_report([run, run], _provenance())
 
 
 def test_human_readable_actual_provider_is_preserved():
     report = build_benchmark_report(
         [_run("run-1", case_id="case-1", actual_provider="Test Provider")],
-        [],
         _provenance(),
     )
     assert report.cases[0].actual_route is not None

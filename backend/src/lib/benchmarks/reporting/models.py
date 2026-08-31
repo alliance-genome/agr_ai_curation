@@ -6,44 +6,28 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from ..models import BenchmarkRoute, BenchmarkTarget, StrictModel
 
-_ARTIFACT_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
 _LOGICAL_RUN_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
-
-
-class BenchmarkScoreRecord(StrictModel):
-    """Versioned score outcome consumed without reinterpreting scorer semantics."""
-
-    schema_version: Literal[1] = 1
-    run_id: str = Field(min_length=1, max_length=255)
-    scorer_id: str = Field(
-        min_length=1, max_length=128, pattern=_ARTIFACT_IDENTIFIER_PATTERN
-    )
-    scorer_version: str = Field(
-        min_length=1, max_length=128, pattern=_ARTIFACT_IDENTIFIER_PATTERN
-    )
-    method: Literal["deterministic", "adjudicated"]
-    outcome: Literal["passed", "failed", "error"]
-    score: Decimal | None = Field(default=None, ge=0, le=1, strict=False)
-    adjudicator_version: str | None = Field(default=None, max_length=128)
-
-    @model_validator(mode="after")
-    def validate_adjudicator(self) -> "BenchmarkScoreRecord":
-        if self.method == "adjudicated" and not self.adjudicator_version:
-            raise ValueError("adjudicated scores require adjudicator_version")
-        if self.method == "deterministic" and self.adjudicator_version is not None:
-            raise ValueError("deterministic scores cannot name an adjudicator")
-        return self
 
 
 class AccuracySummary(StrictModel):
     passed: int = Field(ge=0)
+    partial: int = Field(ge=0)
     failed: int = Field(ge=0)
-    errors: int = Field(ge=0)
     pass_rate: Decimal | None = Field(default=None, ge=0, le=1, strict=False)
+    weighted_score: Decimal | None = Field(default=None, ge=0, le=1, strict=False)
+
+
+class AdjudicationSummary(StrictModel):
+    not_requested: int = Field(ge=0)
+    completed: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    supports_expected: int = Field(ge=0)
+    supports_actual: int = Field(ge=0)
+    uncertain: int = Field(ge=0)
 
 
 class UsageSummary(StrictModel):
@@ -51,6 +35,9 @@ class UsageSummary(StrictModel):
     output_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
     records_missing_usage: int = Field(ge=0)
+    records_missing_input_tokens: int = Field(ge=0)
+    records_missing_output_tokens: int = Field(ge=0)
+    records_missing_total_tokens: int = Field(ge=0)
 
 
 class CostTotal(StrictModel):
@@ -73,13 +60,37 @@ class LatencySummary(StrictModel):
     mean_ms: Decimal | None = Field(default=None, ge=0, strict=False)
 
 
-class ScoreOutcome(StrictModel):
+class DeterministicScoreOutcome(StrictModel):
     scorer_id: str
-    scorer_version: str
-    method: Literal["deterministic", "adjudicated"]
-    outcome: Literal["passed", "failed", "error"]
-    score: Decimal | None = None
-    adjudicator_version: str | None = None
+    scoring_version: int = Field(ge=1)
+    outcome: Literal["pass", "partial", "fail"]
+    weighted_score: Decimal = Field(ge=0, le=1, strict=False)
+    earned_weight: Decimal = Field(ge=0, strict=False)
+    total_weight: Decimal = Field(gt=0, strict=False)
+
+
+class AdjudicationFailureOutcome(StrictModel):
+    category: str
+    attempts: int = Field(ge=0)
+
+
+class AdjudicationOutcome(StrictModel):
+    rubric_version: int = Field(ge=1)
+    status: Literal["not_requested", "completed", "failed"]
+    outcome: Literal["supports_expected", "supports_actual", "uncertain"] | None
+    confidence: Decimal | None = Field(default=None, ge=0, le=1, strict=False)
+    prompt_id: str
+    model: str
+    latency_ms: int | None = Field(default=None, ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    billed_cost: CostTotal | None
+    failure: AdjudicationFailureOutcome | None
+
+
+class ScoreOutcome(StrictModel):
+    deterministic: DeterministicScoreOutcome
+    adjudication: AdjudicationOutcome | None
 
 
 class ReportFailure(StrictModel):
@@ -106,6 +117,7 @@ class CaseReport(StrictModel):
     failure: ReportFailure | None
     usage: UsageSummary
     cost: CostSummary
+    adjudication_cost: CostSummary
     scores: list[ScoreOutcome]
 
 
@@ -116,10 +128,11 @@ class DimensionSummary(StrictModel):
     succeeded: int = Field(ge=0)
     failed: int = Field(ge=0)
     deterministic_accuracy: AccuracySummary
-    adjudicated_accuracy: AccuracySummary
+    adjudication: AdjudicationSummary
     latency: LatencySummary
     usage: UsageSummary
     cost: CostSummary
+    adjudication_cost: CostSummary
 
 
 class FailureCount(StrictModel):

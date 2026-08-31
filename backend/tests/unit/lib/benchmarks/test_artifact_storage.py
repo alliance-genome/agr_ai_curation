@@ -1,3 +1,4 @@
+import base64
 import hashlib
 from datetime import datetime, timezone
 
@@ -30,10 +31,12 @@ class FakeS3:
         self.next_upload = 1
         self.next_version = 1
         self.fail_part_once = False
+        self.fail_part_number_once: int | None = None
         self.fail_head_once = False
         self.deny_head = False
 
-    def head_object(self, *, Bucket, Key):
+    def head_object(self, *, Bucket, Key, ChecksumMode):
+        assert ChecksumMode == "ENABLED"
         if self.fail_head_once:
             self.fail_head_once = False
             raise FakeS3Error(503, "SlowDown")
@@ -47,8 +50,9 @@ class FakeS3:
         key = kwargs["Key"]
         if kwargs.get("IfNoneMatch") == "*" and key in self.objects:
             raise FakeS3Error(412, "PreconditionFailed")
-        self._store(key, kwargs["Body"], kwargs["Metadata"])
-        return {}
+        checksum = self._sha256_base64(kwargs["Body"])
+        self._store(key, kwargs["Body"], kwargs["Metadata"], checksum)
+        return {"ChecksumSHA256": checksum}
 
     def list_multipart_uploads(self, *, Bucket, Prefix):
         return {
@@ -80,8 +84,9 @@ class FakeS3:
         }
 
     def upload_part(self, **kwargs):
-        if self.fail_part_once:
+        if self.fail_part_once or self.fail_part_number_once == kwargs["PartNumber"]:
             self.fail_part_once = False
+            self.fail_part_number_once = None
             raise FakeS3Error(503, "SlowDown")
         etag = hashlib.md5(kwargs["Body"], usedforsecurity=False).hexdigest()
         self.uploads[kwargs["UploadId"]]["parts"][kwargs["PartNumber"]] = (
@@ -94,10 +99,19 @@ class FakeS3:
     def complete_multipart_upload(self, **kwargs):
         upload = self.uploads.pop(kwargs["UploadId"])
         body = b"".join(value[1] for _, value in sorted(upload["parts"].items()))
-        self._store(upload["key"], body, upload["metadata"])
-        return {}
+        part_digests = b"".join(
+            base64.b64decode(value[2])
+            for _, value in sorted(upload["parts"].items())
+        )
+        checksum = f"{self._sha256_base64(part_digests)}-{len(upload['parts'])}"
+        self._store(upload["key"], body, upload["metadata"], checksum)
+        return {"ChecksumSHA256": checksum}
 
-    def _store(self, key, body, metadata):
+    @staticmethod
+    def _sha256_base64(body):
+        return base64.b64encode(hashlib.sha256(body).digest()).decode()
+
+    def _store(self, key, body, metadata, checksum):
         version = f"version-{self.next_version}"
         self.next_version += 1
         self.objects[key] = {
@@ -106,6 +120,7 @@ class FakeS3:
             "VersionId": version,
             "ETag": f'"{hashlib.md5(body, usedforsecurity=False).hexdigest()}"',
             "Body": body,
+            "ChecksumSHA256": checksum,
         }
 
 
@@ -128,7 +143,6 @@ def _bundle(logical_run_id="logical-1", case_count=1):
     ]
     report = build_benchmark_report(
         runs,
-        [],
         ReportProvenance(
             logical_run_id=logical_run_id,
             generated_at=now,
@@ -177,7 +191,7 @@ def test_interrupted_multipart_upload_resumes_without_duplicate_logical_run():
     bundle = _bundle(case_count=12)
     assert len(bundle.report_bytes) > 2_000
     assert len(bundle.manifest_bytes) < 2_000
-    client.fail_part_once = True
+    client.fail_part_number_once = 2
 
     with pytest.raises(ArtifactStorageError, match="operation failed"):
         store.upload_bundle(bundle)
@@ -187,6 +201,46 @@ def test_interrupted_multipart_upload_resumes_without_duplicate_logical_run():
     assert len(receipts) == 2
     assert client.uploads == {}
     assert len(client.objects) == 2
+
+
+def test_resume_reuploads_a_part_when_s3_checksum_does_not_match():
+    client = FakeS3()
+    store = _store(client, part_size=2_000, retries=0)
+    bundle = _bundle(case_count=12)
+    client.fail_part_number_once = 2
+    with pytest.raises(ArtifactStorageError):
+        store.upload_bundle(bundle)
+
+    upload = next(iter(client.uploads.values()))
+    first_part = upload["parts"][1]
+    upload["parts"][1] = (first_part[0], b"tampered-part", "forged-checksum")
+
+    receipts = store.upload_bundle(bundle)
+
+    assert len(receipts) == 2
+    report = client.objects[receipts[0].key]
+    assert report["Body"] == bundle.report_bytes
+
+
+def test_existing_same_length_object_with_forged_metadata_is_rejected():
+    client = FakeS3()
+    store = _store(client)
+    bundle = _bundle()
+    report_sha = hashlib.sha256(bundle.report_bytes).hexdigest()
+    report_key = (
+        "approved/benchmarks/runs/logical-1/artifacts/"
+        f"{report_sha}/report.json"
+    )
+    tampered = b"x" * len(bundle.report_bytes)
+    client._store(
+        report_key,
+        tampered,
+        {"sha256": report_sha},
+        client._sha256_base64(tampered),
+    )
+
+    with pytest.raises(ArtifactStorageError, match="checksum does not match"):
+        store.upload_bundle(bundle)
 
 
 def test_different_manifest_cannot_overwrite_a_logical_run():

@@ -98,16 +98,19 @@ telemetry but are not duplicated into this single slot.
 
 ## Reports and Immutable Manifests
 
-`src.lib.benchmarks.reporting` turns canonical case-run and score records into a
+`src.lib.benchmarks.reporting` turns canonical case runs and their embedded
+`BenchmarkScoringRecord` values into a
 versioned developer report. It provides per-case, per-agent, actual-route,
 cross-route, aggregate accuracy/cost/latency/usage, and normalized failure
-summaries. Deterministic and adjudicated outcomes remain separate. Exact billed
-cost is grouped by telemetry source and unit; a missing cost stays explicitly
-missing and is never estimated.
+summaries. Deterministic pass/partial/fail and weighted results remain separate
+from supplemental adjudication status/outcomes. Provider-execution and
+adjudication billed costs are reported separately and grouped by telemetry source
+and unit; a missing cost stays explicitly missing and is never estimated.
 
 Create `ReportProvenance` with the logical run ID, fixed generation timestamp,
 and the exact profile, config, and code revisions. Then call
-`build_benchmark_report(...)` and `build_artifact_bundle(...)`. The resulting
+`build_benchmark_report(runs, provenance)` and `build_artifact_bundle(report)`.
+The resulting
 canonical JSON is stable for identical inputs and can be reviewed or saved
 locally without AWS credentials.
 
@@ -126,7 +129,10 @@ Set `BENCHMARK_ARTIFACT_UPLOAD_ENABLED=true`, then construct the store with
 `upload_bundle(...)`. The client uses the standard AWS environment/role
 resolution chain; this code does not accept or materialize credentials.
 
-Reports use content-addressed object keys and resumable multipart uploads. The
+Reports use content-addressed object keys and resumable multipart uploads. Every
+existing object, uploaded object, and resumed part is checked against the
+S3-returned SHA-256 checksum before it is accepted; multipart object checks use
+S3's composite checksum semantics. The
 logical run's `manifest.json` uses a conditional create, so a different manifest
 cannot silently replace it. A retry of identical content returns the existing
 version receipt. The stored manifest includes the report object's bucket, key,

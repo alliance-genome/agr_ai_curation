@@ -100,7 +100,7 @@ class S3ArtifactStore:
         digest_hex = hashlib.sha256(data).hexdigest()
         existing = self._head(key)
         if existing is not None:
-            if existing.get("Metadata", {}).get("sha256") != digest_hex:
+            if not self._object_matches(existing, data):
                 if immutable:
                     raise DuplicateLogicalRunError(
                         "logical run already has a different immutable manifest"
@@ -125,10 +125,13 @@ class S3ArtifactStore:
                 self._call("put_object", **kwargs)
             except ArtifactStorageError:
                 existing = self._head(key)
-                if (
-                    existing is None
-                    or existing.get("Metadata", {}).get("sha256") != digest_hex
-                ):
+                if existing is None:
+                    raise
+                if not self._object_matches(existing, data):
+                    if immutable:
+                        raise DuplicateLogicalRunError(
+                            "logical run already has a different immutable manifest"
+                        ) from None
                     raise
         else:
             if immutable:
@@ -138,10 +141,8 @@ class S3ArtifactStore:
             self._multipart_upload(key, data, media_type, digest_hex)
 
         verified = self._head(key)
-        if verified is None or verified.get("Metadata", {}).get("sha256") != digest_hex:
+        if verified is None or not self._object_matches(verified, data):
             raise ArtifactStorageError("uploaded artifact checksum verification failed")
-        if verified.get("ContentLength") != len(data):
-            raise ArtifactStorageError("uploaded artifact size verification failed")
         return self._receipt(name, key, len(data), digest_hex, verified)
 
     def _multipart_upload(
@@ -171,21 +172,21 @@ class S3ArtifactStore:
         listed = self._call(
             "list_parts", Bucket=self.bucket, Key=key, UploadId=upload_id
         )
-        completed = {
-            part["PartNumber"]: {
-                "PartNumber": part["PartNumber"],
-                "ETag": part["ETag"],
-                "ChecksumSHA256": part["ChecksumSHA256"],
-            }
-            for part in listed.get("Parts", [])
-        }
+        listed_parts = {part["PartNumber"]: part for part in listed.get("Parts", [])}
+        completed: dict[int, dict[str, Any]] = {}
         part_count = (len(data) + self.part_size_bytes - 1) // self.part_size_bytes
         for part_number in range(1, part_count + 1):
-            if part_number in completed:
-                continue
             start = (part_number - 1) * self.part_size_bytes
             body = data[start : start + self.part_size_bytes]
-            checksum = base64.b64encode(hashlib.sha256(body).digest()).decode()
+            checksum = self._sha256_base64(body)
+            listed_part = listed_parts.get(part_number)
+            if listed_part is not None and listed_part.get("ChecksumSHA256") == checksum:
+                completed[part_number] = {
+                    "PartNumber": part_number,
+                    "ETag": listed_part["ETag"],
+                    "ChecksumSHA256": checksum,
+                }
+                continue
             uploaded = self._call(
                 "upload_part",
                 Bucket=self.bucket,
@@ -195,12 +196,14 @@ class S3ArtifactStore:
                 Body=body,
                 ChecksumSHA256=checksum,
             )
+            if uploaded.get("ChecksumSHA256") != checksum:
+                raise ArtifactStorageError("uploaded part checksum verification failed")
             completed[part_number] = {
                 "PartNumber": part_number,
                 "ETag": uploaded["ETag"],
-                "ChecksumSHA256": uploaded.get("ChecksumSHA256", checksum),
+                "ChecksumSHA256": checksum,
             }
-        self._call(
+        completed_upload = self._call(
             "complete_multipart_upload",
             Bucket=self.bucket,
             Key=key,
@@ -209,11 +212,35 @@ class S3ArtifactStore:
                 "Parts": [completed[number] for number in range(1, part_count + 1)]
             },
         )
+        if completed_upload.get("ChecksumSHA256") != self._object_checksum(data):
+            raise ArtifactStorageError("multipart object checksum verification failed")
+
+    @staticmethod
+    def _sha256_base64(data: bytes) -> str:
+        return base64.b64encode(hashlib.sha256(data).digest()).decode()
+
+    def _object_checksum(self, data: bytes) -> str:
+        if len(data) <= self.part_size_bytes:
+            return self._sha256_base64(data)
+        part_digests = [
+            hashlib.sha256(data[start : start + self.part_size_bytes]).digest()
+            for start in range(0, len(data), self.part_size_bytes)
+        ]
+        composite = base64.b64encode(hashlib.sha256(b"".join(part_digests)).digest())
+        return f"{composite.decode()}-{len(part_digests)}"
+
+    def _object_matches(self, head: dict[str, Any], data: bytes) -> bool:
+        return (
+            head.get("ContentLength") == len(data)
+            and head.get("ChecksumSHA256") == self._object_checksum(data)
+        )
 
     def _head(self, key: str) -> dict[str, Any] | None:
         for attempt in range(self.retries + 1):
             try:
-                return self.client.head_object(Bucket=self.bucket, Key=key)
+                return self.client.head_object(
+                    Bucket=self.bucket, Key=key, ChecksumMode="ENABLED"
+                )
             except Exception as exc:
                 response = getattr(exc, "response", {})
                 status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")

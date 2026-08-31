@@ -89,10 +89,20 @@ def build_artifact_bundle(
         provenance=report.provenance,
         fixture_digests=sorted({case.fixture_digest for case in report.cases}),
         scorer_versions=sorted(
-            {f"{score.scorer_id}:{score.scorer_version}" for score in scores}
+            {
+                f"{score.deterministic.scorer_id}:"
+                f"{score.deterministic.scoring_version}"
+                for score in scores
+            }
         ),
         adjudicator_versions=sorted(
-            {score.adjudicator_version for score in scores if score.adjudicator_version}
+            {
+                f"rubric:{score.adjudication.rubric_version}:"
+                f"prompt:{score.adjudication.prompt_id}:"
+                f"model:{score.adjudication.model}"
+                for score in scores
+                if score.adjudication is not None
+            }
         ),
         requested_routes=_unique_routes(case.requested_route for case in report.cases),
         actual_routes=_unique_routes(

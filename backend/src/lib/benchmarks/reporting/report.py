@@ -7,16 +7,19 @@ from collections.abc import Callable, Iterable
 from decimal import Decimal
 from typing import Literal
 
-from ..models import BenchmarkCaseRun
+from ..models import BenchmarkCaseRun, BenchmarkScoringRecord
 from .models import (
     AccuracySummary,
     ActualRoute,
+    AdjudicationFailureOutcome,
+    AdjudicationOutcome,
+    AdjudicationSummary,
     BenchmarkReport,
-    BenchmarkScoreRecord,
     CaseReport,
     CostSummary,
     CostTotal,
     DimensionSummary,
+    DeterministicScoreOutcome,
     FailureCount,
     LatencySummary,
     ReportFailure,
@@ -26,14 +29,37 @@ from .models import (
 )
 
 
-def _accuracy(scores: Iterable[BenchmarkScoreRecord], method: str) -> AccuracySummary:
-    outcomes = Counter(score.outcome for score in scores if score.method == method)
-    decided = outcomes["passed"] + outcomes["failed"]
+def _accuracy(scores: Iterable[BenchmarkScoringRecord]) -> AccuracySummary:
+    records = list(scores)
+    outcomes = Counter(score.deterministic.outcome for score in records)
+    total_weight = sum(
+        (score.deterministic.total_weight for score in records), Decimal("0")
+    )
+    earned_weight = sum(
+        (score.deterministic.earned_weight for score in records), Decimal("0")
+    )
     return AccuracySummary(
-        passed=outcomes["passed"],
-        failed=outcomes["failed"],
-        errors=outcomes["error"],
-        pass_rate=(Decimal(outcomes["passed"]) / Decimal(decided) if decided else None),
+        passed=outcomes["pass"],
+        partial=outcomes["partial"],
+        failed=outcomes["fail"],
+        pass_rate=(
+            Decimal(outcomes["pass"]) / Decimal(len(records)) if records else None
+        ),
+        weighted_score=(earned_weight / total_weight if total_weight else None),
+    )
+
+
+def _adjudication(scores: Iterable[BenchmarkScoringRecord]) -> AdjudicationSummary:
+    records = [score.adjudication for score in scores if score.adjudication is not None]
+    statuses = Counter(record.status for record in records)
+    outcomes = Counter(record.outcome for record in records if record.outcome is not None)
+    return AdjudicationSummary(
+        not_requested=statuses["not_requested"],
+        completed=statuses["completed"],
+        failed=statuses["failed"],
+        supports_expected=outcomes["supports_expected"],
+        supports_actual=outcomes["supports_actual"],
+        uncertain=outcomes["uncertain"],
     )
 
 
@@ -41,10 +67,24 @@ def _usage(runs: Iterable[BenchmarkCaseRun]) -> UsageSummary:
     records = list(runs)
     present = [run.provider_usage for run in records if run.provider_usage is not None]
     return UsageSummary(
-        input_tokens=sum(item.input_tokens or 0 for item in present),
-        output_tokens=sum(item.output_tokens or 0 for item in present),
-        total_tokens=sum(item.total_tokens or 0 for item in present),
+        input_tokens=sum(item.input_tokens for item in present if item.input_tokens is not None),
+        output_tokens=sum(
+            item.output_tokens for item in present if item.output_tokens is not None
+        ),
+        total_tokens=sum(item.total_tokens for item in present if item.total_tokens is not None),
         records_missing_usage=len(records) - len(present),
+        records_missing_input_tokens=sum(
+            run.provider_usage is None or run.provider_usage.input_tokens is None
+            for run in records
+        ),
+        records_missing_output_tokens=sum(
+            run.provider_usage is None or run.provider_usage.output_tokens is None
+            for run in records
+        ),
+        records_missing_total_tokens=sum(
+            run.provider_usage is None or run.provider_usage.total_tokens is None
+            for run in records
+        ),
     )
 
 
@@ -54,6 +94,25 @@ def _cost(runs: Iterable[BenchmarkCaseRun]) -> CostSummary:
     present = 0
     for run in records:
         cost = run.provider_usage.billed_cost if run.provider_usage else None
+        if cost is not None:
+            totals[(cost.unit, cost.source)] += cost.amount
+            present += 1
+    return CostSummary(
+        exact_totals=[
+            CostTotal(unit=unit, source=source, amount=totals[(unit, source)])
+            for unit, source in sorted(totals)
+        ],
+        records_with_exact_cost=present,
+        records_missing_exact_cost=len(records) - present,
+    )
+
+
+def _adjudication_cost(scores: Iterable[BenchmarkScoringRecord]) -> CostSummary:
+    records = [score.adjudication for score in scores if score.adjudication is not None]
+    totals: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
+    present = 0
+    for adjudication in records:
+        cost = adjudication.billed_cost
         if cost is not None:
             totals[(cost.unit, cost.source)] += cost.amount
             present += 1
@@ -84,20 +143,20 @@ def _summary(
     dimension: Literal["agent", "route", "case"],
     key: str,
     runs: list[BenchmarkCaseRun],
-    scores_by_run: dict[str, list[BenchmarkScoreRecord]],
 ) -> DimensionSummary:
-    scores = [score for run in runs for score in scores_by_run.get(run.run_id, [])]
+    scores = [score for run in runs for score in run.scoring]
     return DimensionSummary(
         dimension=dimension,
         key=key,
         run_count=len(runs),
         succeeded=sum(run.status == "succeeded" for run in runs),
         failed=sum(run.status == "failed" for run in runs),
-        deterministic_accuracy=_accuracy(scores, "deterministic"),
-        adjudicated_accuracy=_accuracy(scores, "adjudicated"),
+        deterministic_accuracy=_accuracy(scores),
+        adjudication=_adjudication(scores),
         latency=_latency(runs),
         usage=_usage(runs),
         cost=_cost(runs),
+        adjudication_cost=_adjudication_cost(scores),
     )
 
 
@@ -126,33 +185,17 @@ def _grouped(
 
 def build_benchmark_report(
     runs: Iterable[BenchmarkCaseRun],
-    scores: Iterable[BenchmarkScoreRecord],
     provenance: ReportProvenance,
 ) -> BenchmarkReport:
-    """Build a stable, sensitive-content-free report from canonical records."""
+    """Build a stable, sensitive-content-free report from canonical runs."""
 
     ordered_runs = sorted(runs, key=lambda run: run.run_id)
-    score_records = sorted(
-        scores, key=lambda score: (score.run_id, score.method, score.scorer_id)
-    )
     known_run_ids = {run.run_id for run in ordered_runs}
     if len(known_run_ids) != len(ordered_runs):
         raise ValueError("canonical run records must have unique run IDs")
-    unknown = sorted({score.run_id for score in score_records} - known_run_ids)
-    if unknown:
-        raise ValueError(f"score records reference unknown runs: {', '.join(unknown)}")
-    score_keys = {
-        (score.run_id, score.scorer_id, score.method) for score in score_records
-    }
-    if len(score_keys) != len(score_records):
-        raise ValueError("score records must be unique per run, scorer, and method")
-    scores_by_run: dict[str, list[BenchmarkScoreRecord]] = defaultdict(list)
-    for score in score_records:
-        scores_by_run[score.run_id].append(score)
 
     cases = []
     for run in ordered_runs:
-        run_scores = scores_by_run.get(run.run_id, [])
         cases.append(
             CaseReport(
                 run_id=run.run_id,
@@ -169,16 +212,51 @@ def build_benchmark_report(
                 failure=(ReportFailure(category=run.failure.category) if run.failure else None),
                 usage=_usage([run]),
                 cost=_cost([run]),
+                adjudication_cost=_adjudication_cost(run.scoring),
                 scores=[
                     ScoreOutcome(
-                        scorer_id=score.scorer_id,
-                        scorer_version=score.scorer_version,
-                        method=score.method,
-                        outcome=score.outcome,
-                        score=score.score,
-                        adjudicator_version=score.adjudicator_version,
+                        deterministic=DeterministicScoreOutcome(
+                            scorer_id=score.deterministic.scorer_id,
+                            scoring_version=score.deterministic.scoring_version,
+                            outcome=score.deterministic.outcome,
+                            weighted_score=score.deterministic.weighted_score,
+                            earned_weight=score.deterministic.earned_weight,
+                            total_weight=score.deterministic.total_weight,
+                        ),
+                        adjudication=(
+                            AdjudicationOutcome(
+                                rubric_version=score.adjudication.rubric_version,
+                                status=score.adjudication.status,
+                                outcome=score.adjudication.outcome,
+                                confidence=score.adjudication.confidence,
+                                prompt_id=score.adjudication.prompt_id,
+                                model=score.adjudication.model,
+                                latency_ms=score.adjudication.latency_ms,
+                                input_tokens=score.adjudication.input_tokens,
+                                output_tokens=score.adjudication.output_tokens,
+                                billed_cost=(
+                                    CostTotal(
+                                        unit=score.adjudication.billed_cost.unit,
+                                        source=score.adjudication.billed_cost.source,
+                                        amount=score.adjudication.billed_cost.amount,
+                                    )
+                                    if score.adjudication.billed_cost is not None
+                                    else None
+                                ),
+                                failure=(
+                                    AdjudicationFailureOutcome(
+                                        category=score.adjudication.failure.category,
+                                        attempts=score.adjudication.failure.attempts,
+                                    )
+                                    if score.adjudication.failure is not None
+                                    else None
+                                ),
+                            )
+                            if score.adjudication is not None
+                            else None
+                        ),
                     )
-                    for score in run_scores
+                    for score in run.scoring
                 ],
             )
         )
@@ -197,7 +275,6 @@ def build_benchmark_report(
                 dimension="agent",
                 key=key,
                 runs=agent_groups[key],
-                scores_by_run=scores_by_run,
             )
             for key in sorted(agent_groups)
         ],
@@ -206,7 +283,6 @@ def build_benchmark_report(
                 dimension="route",
                 key=key,
                 runs=route_groups[key],
-                scores_by_run=scores_by_run,
             )
             for key in sorted(route_groups)
         ],
@@ -215,7 +291,6 @@ def build_benchmark_report(
                 dimension="case",
                 key=key,
                 runs=case_groups[key],
-                scores_by_run=scores_by_run,
             )
             for key in sorted(case_groups)
         ],
@@ -223,7 +298,6 @@ def build_benchmark_report(
             dimension="case",
             key="all",
             runs=ordered_runs,
-            scores_by_run=scores_by_run,
         ),
         failures=[
             FailureCount(category=key, count=failures[key]) for key in sorted(failures)
