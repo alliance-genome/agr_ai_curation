@@ -8,6 +8,8 @@
 # Environment file locations
 ENV_FILE := $(HOME)/.agr_ai_curation/.env
 TRACE_REVIEW_ENV_FILE := $(HOME)/.agr_ai_curation/trace_review/.env
+# Let service env_file loading use the same private file as Compose interpolation.
+export AGR_DEV_ENV_FILE := $(ENV_FILE)
 
 # Colors for output
 GREEN := \033[0;32m

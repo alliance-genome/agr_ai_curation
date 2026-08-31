@@ -221,6 +221,34 @@ def test_dev_curator_credentials_are_development_compose_only():
     assert production_backend["DEV_MODE"] == "false"
 
 
+def test_development_sentry_dsn_uses_an_isolated_compose_input():
+    dev_backend = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_backend = _load_compose()["services"]["backend"]["environment"]
+    production_only_explicit_keys = {
+        key for key in production_backend if key.startswith("SENTRY_")
+    } - {"SENTRY_DSN"}
+
+    assert dev_backend["SENTRY_DSN"] == "${SENTRY_DEV_DSN:-}"
+    assert dev_backend["SENTRY_DEV_DSN"] == ""
+    assert _load_dev_compose()["services"]["backend"]["env_file"] == [
+        {"path": "${AGR_DEV_ENV_FILE:-.env}", "required": False}
+    ]
+    assert "export AGR_DEV_ENV_FILE := $(ENV_FILE)" in MAKEFILE_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert production_only_explicit_keys.isdisjoint(dev_backend)
+    assert production_backend["SENTRY_DSN"] == "${SENTRY_DSN:-}"
+
+
+def test_env_example_documents_the_development_sentry_dsn_input():
+    assignments = _load_env_assignments(ENV_EXAMPLE_PATH)
+
+    assert assignments["SENTRY_DEV_DSN"] == ""
+    assert assignments["SENTRY_DSN"] == ""
+
+
 def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]
