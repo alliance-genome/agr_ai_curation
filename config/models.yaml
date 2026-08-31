@@ -63,6 +63,32 @@ models:
     avoid_for:
       - Work that must remain on the default OpenAI route
 
+  - model_id: google/gemini-3.7-flash
+    name: Gemini 3.7 Flash (OpenRouter)
+    provider: openrouter
+    description: Fast multimodal model for responsive agentic workflows and multi-step reasoning.
+    guidance: Select explicitly when evaluating this OpenRouter route; OpenAI remains the default.
+    default: false
+    supports_reasoning: true
+    supports_temperature: true
+    recommended_for:
+      - Explicit OpenRouter route evaluation
+    avoid_for:
+      - Work that must remain on the default OpenAI route
+
+  - model_id: qwen/qwen3.8-27b
+    name: Qwen3.8 27B (OpenRouter)
+    provider: openrouter
+    description: Open-weight multimodal model for coding, research, and long-running agent tasks.
+    guidance: Select explicitly when evaluating this OpenRouter route; OpenAI remains the default.
+    default: false
+    supports_reasoning: true
+    supports_temperature: true
+    recommended_for:
+      - Explicit OpenRouter route evaluation
+    avoid_for:
+      - Work that must remain on the default OpenAI route
+
   # gpt-4o is intentionally NOT registered. It is retired; do not re-add it.
   # Alembic migration lineage moves persisted retired OpenAI model IDs forward
   # to the supported GPT-5.6 Sol/Terra catalog; do not re-add compatibility entries.

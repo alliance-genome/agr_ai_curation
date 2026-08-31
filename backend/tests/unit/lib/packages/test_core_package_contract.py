@@ -150,7 +150,7 @@ def test_core_package_mirrors_shipped_runtime_config_files():
         )
 
 
-def test_shipped_catalog_keeps_gpt56_default_and_adds_openrouter_route():
+def test_shipped_catalog_keeps_gpt56_default_and_approved_openrouter_routes():
     runtime_catalog = yaml.safe_load(
         (REPO_ROOT / "config" / "models.yaml").read_text(encoding="utf-8")
     )["models"]
@@ -163,9 +163,17 @@ def test_shipped_catalog_keeps_gpt56_default_and_adds_openrouter_route():
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "deepseek/deepseek-v4-pro-0813",
+        "google/gemini-3.7-flash",
+        "qwen/qwen3.8-27b",
     ]
-    assert [model["default"] for model in runtime_catalog] == [True, False, False]
-    assert runtime_catalog[2]["provider"] == "openrouter"
+    assert [model["default"] for model in runtime_catalog] == [
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
+    assert all(model["provider"] == "openrouter" for model in runtime_catalog[2:])
     for model in runtime_catalog[:2]:
         assert model["reasoning_options"] == ["low", "medium", "high", "xhigh"]
         assert model["default_reasoning"] == "medium"

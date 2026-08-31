@@ -39,6 +39,20 @@ Set `BENCHMARK_ROOT` to the benchmark package for the active deployment. The
 Alliance Docker deployment uses `/runtime/packages/alliance/benchmarks`; when
 running the CLI from a repository checkout, use `packages/alliance/benchmarks`.
 
+The checked-in Alliance release profiles use this exact ordered route matrix:
+
+1. `openai` / `gpt-5.6-sol`
+2. `openai` / `gpt-5.6-terra`
+3. `openrouter` / `deepseek/deepseek-v4-pro-0813`
+4. `openrouter` / `google/gemini-3.7-flash`
+5. `openrouter` / `qwen/qwen3.8-27b`
+
+Each profile route is the requested provider/model identity. Runtime usage and
+reports preserve that requested identity separately from the actual provider and
+model returned by provider telemetry. In particular, an OpenRouter request may
+report the upstream provider that served it; that actual route is evidence, not a
+rewrite of the requested route. Missing actual-route telemetry remains missing.
+
 ## Validate Without Model Calls
 
 Validation loads every reference and expands the bounded case/route matrix. It
