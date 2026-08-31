@@ -30,8 +30,10 @@ class TokenAnalysisAnalyzer:
             billed_cost = provider_usage.get("billed_cost")
             records.append(
                 {
+                    "route_slot": provider_usage.get("route_slot"),
                     "requested_provider": provider_usage.get("requested_provider"),
                     "requested_model": provider_usage.get("requested_model"),
+                    "reasoning_effort": provider_usage.get("reasoning_effort"),
                     "actual_provider": provider_usage.get("actual_provider"),
                     "actual_model": provider_usage.get("actual_model"),
                     "routing_attempt": provider_usage.get("routing_attempt"),
@@ -48,8 +50,17 @@ class TokenAnalysisAnalyzer:
                         if isinstance(billed_cost, dict)
                         else None
                     ),
+                    "sequence": provider_usage.get("sequence"),
+                    "status": provider_usage.get("status"),
+                    "failure_detail": provider_usage.get("failure_detail"),
                 }
             )
+        records.sort(
+            key=lambda record: (
+                not isinstance(record["sequence"], int),
+                record["sequence"] if isinstance(record["sequence"], int) else 0,
+            )
+        )
         return records
 
     @staticmethod

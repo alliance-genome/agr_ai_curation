@@ -51,12 +51,14 @@ def test_token_analysis_reports_v2_cache_buckets_and_skips_zero_wrapper():
 def test_token_analysis_decodes_bounded_provider_usage_without_generation():
     observations = [
         {
-            "id": "provider-usage-1",
+            "id": "provider-usage-2",
             "type": "EVENT",
             "metadata": {
                 "provider_usage": {
+                    "route_slot": "validator:evidence",
                     "requested_provider": "openrouter",
                     "requested_model": "deepseek/deepseek-v4-pro-0813",
+                    "reasoning_effort": "low",
                     "actual_provider": "DeepInfra",
                     "actual_model": "deepseek/deepseek-v4-pro-0813",
                     "routing_attempt": 1,
@@ -70,11 +72,38 @@ def test_token_analysis_decodes_bounded_provider_usage_without_generation():
                         "source": "openrouter_usage",
                         "future": "ignored",
                     },
+                    "sequence": 2,
+                    "status": "completed",
+                    "failure_detail": None,
                     "summary": "ignored",
                     "pipeline": [{"prompt": "ignored"}],
                 }
             },
-        }
+        },
+        {
+            "id": "provider-usage-1",
+            "type": "EVENT",
+            "metadata": {
+                "provider_usage": {
+                    "route_slot": "agent:gene_expression_extraction",
+                    "requested_provider": "openai",
+                    "requested_model": "gpt-5.6-terra",
+                    "reasoning_effort": "high",
+                    "actual_provider": None,
+                    "actual_model": None,
+                    "routing_attempt": None,
+                    "latency_ms": 321,
+                    "input_tokens": None,
+                    "output_tokens": None,
+                    "total_tokens": None,
+                    "billed_cost": None,
+                    "sequence": 1,
+                    "status": "failed",
+                    "failure_detail": "ProviderError; status_code=503",
+                    "raw_error": "ignored provider response",
+                }
+            },
+        },
     ]
 
     analysis = TokenAnalysisAnalyzer.analyze({"id": "trace-1"}, observations)
@@ -85,8 +114,27 @@ def test_token_analysis_decodes_bounded_provider_usage_without_generation():
     assert analysis["total_completion_tokens"] == 0
     assert analysis["provider_usage"] == [
         {
+            "route_slot": "agent:gene_expression_extraction",
+            "requested_provider": "openai",
+            "requested_model": "gpt-5.6-terra",
+            "reasoning_effort": "high",
+            "actual_provider": None,
+            "actual_model": None,
+            "routing_attempt": None,
+            "latency_ms": 321,
+            "input_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+            "billed_cost": None,
+            "sequence": 1,
+            "status": "failed",
+            "failure_detail": "ProviderError; status_code=503",
+        },
+        {
+            "route_slot": "validator:evidence",
             "requested_provider": "openrouter",
             "requested_model": "deepseek/deepseek-v4-pro-0813",
+            "reasoning_effort": "low",
             "actual_provider": "DeepInfra",
             "actual_model": "deepseek/deepseek-v4-pro-0813",
             "routing_attempt": 1,
@@ -99,5 +147,8 @@ def test_token_analysis_decodes_bounded_provider_usage_without_generation():
                 "unit": "credits",
                 "source": "openrouter_usage",
             },
+            "sequence": 2,
+            "status": "completed",
+            "failure_detail": None,
         }
     ]
