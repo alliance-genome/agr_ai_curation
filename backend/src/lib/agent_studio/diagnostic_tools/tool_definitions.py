@@ -1162,7 +1162,7 @@ continuation chunks; small method/PDF details remain a single call.""",
     # -------------------------------------------------------------------------
     registry.register(
         name="search_codebase",
-        description="""Search the AGR AI Curation runtime repository in read-only mode.
+        description="""Search the runtime repository in read-only mode.
 
 Use this when a curator asks whether the current code supports a feature,
 contains a limitation, or implements a specific Agent Studio behavior.
@@ -1227,7 +1227,7 @@ current repository checkout and never executes code.""",
     # -------------------------------------------------------------------------
     registry.register(
         name="read_source_file",
-        description="""Read a text file from the AGR AI Curation runtime repository.
+        description="""Read a text file from the runtime repository.
 
 Use this after search_codebase identifies the relevant file. The response is
 line-numbered so you can cite the implementation precisely when explaining a

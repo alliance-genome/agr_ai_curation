@@ -305,6 +305,8 @@ def test_core_only_diagnostic_registry_excludes_alliance_content(monkeypatch):
     serialized_registry = repr(registry.get_anthropic_tools())
 
     forbidden_patterns = (
+        r"\bAGR\b",
+        r"\bAlliance\b",
         r"\bagr_curation_query\b",
         r"\bcuration_db_sql\b",
         r"\bchebi_api_call\b",
