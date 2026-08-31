@@ -24,7 +24,6 @@ from .models import (
 )
 
 ADJUDICATION_RUBRIC_VERSION = 1
-ADJUDICATION_MODEL = "gpt-5.6-sol"
 _RUBRIC = """You are adjudicating only an explicitly ambiguous benchmark mismatch.
 The deterministic score remains authoritative. Decide whether the expected value or
 actual value is better supported by the supplied case, or return uncertain. Do not
@@ -119,6 +118,7 @@ class SupplementalAdjudicator:
         *,
         executor: AdjudicationExecutor,
         enabled: bool,
+        model: str,
         timeout_seconds: float,
         retries: int,
         turn_limit: int,
@@ -129,6 +129,7 @@ class SupplementalAdjudicator:
             raise ValueError("direct benchmark adjudication does not permit tools")
         self.executor = executor
         self.enabled = enabled
+        self.model = model
         self.timeout_seconds = timeout_seconds
         self.retries = retries
         self.turn_limit = turn_limit
@@ -140,7 +141,7 @@ class SupplementalAdjudicator:
         return BenchmarkAdjudicationResult(
             status="not_requested",
             prompt_id=ADJUDICATION_PROMPT_ID,
-            model=ADJUDICATION_MODEL,
+            model=self.model,
             failure=BenchmarkAdjudicationFailure(
                 category=category, message=message, attempts=0
             ),
@@ -178,7 +179,7 @@ class SupplementalAdjudicator:
                 try:
                     response = await asyncio.wait_for(
                         self.executor(
-                            ADJUDICATION_MODEL,
+                            self.model,
                             prompt,
                             self.result_max_bytes,
                         ),
@@ -225,7 +226,7 @@ class SupplementalAdjudicator:
                         operation="provider_call_failed",
                         context={
                             "attempt": attempts,
-                            "model": ADJUDICATION_MODEL,
+                            "model": self.model,
                             "retry": retry,
                             "turn": turn + 1,
                         },
@@ -256,7 +257,7 @@ class SupplementalAdjudicator:
                 return BenchmarkAdjudicationResult(
                     status="failed",
                     prompt_id=ADJUDICATION_PROMPT_ID,
-                    model=ADJUDICATION_MODEL,
+                    model=self.model,
                     latency_ms=max(0, int((time.monotonic() - started) * 1000)),
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -276,7 +277,7 @@ class SupplementalAdjudicator:
             return BenchmarkAdjudicationResult(
                 status="failed",
                 prompt_id=ADJUDICATION_PROMPT_ID,
-                model=ADJUDICATION_MODEL,
+                model=self.model,
                 latency_ms=max(0, int((time.monotonic() - started) * 1000)),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -296,7 +297,7 @@ class SupplementalAdjudicator:
             confidence=final.decision.confidence,
             uncertainty=final.decision.uncertainty,
             prompt_id=ADJUDICATION_PROMPT_ID,
-            model=ADJUDICATION_MODEL,
+            model=self.model,
             latency_ms=max(0, int((time.monotonic() - started) * 1000)),
             input_tokens=input_tokens,
             output_tokens=output_tokens,

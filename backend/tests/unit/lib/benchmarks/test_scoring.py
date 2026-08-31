@@ -27,7 +27,7 @@ def _scorer(*fields) -> BenchmarkScorerReference:
     [
         ("exact", {"a": 1}, {"a": 1}),
         ("normalized_string", "  Gene\n Name ", "gene name"),
-        ("normalized_identifier", " HGNC : 123 ", "hgnc:123"),
+        ("normalized_identifier", " REF : 123 ", "ref:123"),
         ("unordered_collection", ["B", "a"], ["a", "B"]),
         ("structured", {"a": 1, "b": 2}, {"b": 2, "a": 1}),
     ],

@@ -13,6 +13,7 @@ from src.lib.flows.executor import execute_flow
 from src.lib.openai_agents.config import (
     get_benchmark_adjudication_case_limit,
     get_benchmark_adjudication_enabled,
+    get_benchmark_adjudication_model,
     get_benchmark_adjudication_result_max_bytes,
     get_benchmark_adjudication_retries,
     get_benchmark_adjudication_timeout_seconds,
@@ -89,6 +90,7 @@ def build_default_service(root: Path | None = None) -> BenchmarkService:
         adjudicator=SupplementalAdjudicator(
             executor=execute_direct_openai_adjudication,
             enabled=get_benchmark_adjudication_enabled(),
+            model=get_benchmark_adjudication_model(),
             timeout_seconds=get_benchmark_adjudication_timeout_seconds(),
             retries=get_benchmark_adjudication_retries(),
             turn_limit=get_benchmark_adjudication_turn_limit(),

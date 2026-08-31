@@ -306,6 +306,7 @@ async def test_service_enforces_adjudication_case_cap(benchmark_root):
     adjudicator = SupplementalAdjudicator(
         executor=adjudication_executor,
         enabled=True,
+        model="test-adjudicator",
         timeout_seconds=1,
         retries=0,
         turn_limit=1,
@@ -371,6 +372,7 @@ async def test_service_redacts_adjudication_egress_without_altering_scoring(
     adjudicator = SupplementalAdjudicator(
         executor=adjudication_executor,
         enabled=True,
+        model="test-adjudicator",
         timeout_seconds=1,
         retries=0,
         turn_limit=1,

@@ -14,6 +14,7 @@ def test_benchmark_operational_defaults(monkeypatch):
         "BENCHMARK_PREVIEW_MAX_CHARS",
         "BENCHMARK_INLINE_MAX_BYTES",
         "BENCHMARK_ADJUDICATION_ENABLED",
+        "BENCHMARK_ADJUDICATION_MODEL",
         "BENCHMARK_ADJUDICATION_CASE_LIMIT",
         "BENCHMARK_ADJUDICATION_TURN_LIMIT",
         "BENCHMARK_ADJUDICATION_TOOL_CALL_LIMIT",
@@ -34,6 +35,7 @@ def test_benchmark_operational_defaults(monkeypatch):
     assert config.get_benchmark_preview_max_chars() == 1000
     assert config.get_benchmark_inline_max_bytes() == 20000
     assert config.get_benchmark_adjudication_enabled() is False
+    assert config.get_benchmark_adjudication_model() == "gpt-5.6-sol"
     assert config.get_benchmark_adjudication_case_limit() == 2
     assert config.get_benchmark_adjudication_turn_limit() == 1
     assert config.get_benchmark_adjudication_tool_call_limit() == 0
@@ -49,6 +51,7 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_RETRIES", "-2")
     monkeypatch.setenv("BENCHMARK_ADJUDICATION_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_ADJUDICATION_MODEL", "  deployment-judge  ")
     monkeypatch.setenv("BENCHMARK_ADJUDICATION_CASE_LIMIT", "0")
     monkeypatch.setenv("BENCHMARK_ADJUDICATION_TOOL_CALL_LIMIT", "-1")
 
@@ -58,5 +61,6 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_timeout_seconds() == 0.1
     assert config.get_benchmark_retries() == 0
     assert config.get_benchmark_adjudication_enabled() is True
+    assert config.get_benchmark_adjudication_model() == "deployment-judge"
     assert config.get_benchmark_adjudication_case_limit() == 1
     assert config.get_benchmark_adjudication_tool_call_limit() == 0

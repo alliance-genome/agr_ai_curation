@@ -5,7 +5,6 @@ from decimal import Decimal
 import pytest
 
 from src.lib.benchmarks.adjudication import (
-    ADJUDICATION_MODEL,
     ADJUDICATION_PROMPT_ID,
     AdjudicationDecision,
     RawAdjudicationResponse,
@@ -41,6 +40,7 @@ def _score(*, ambiguous=True, malformed=False, provider_failure=False):
 def _adjudicator(executor, **overrides):
     values = {
         "enabled": True,
+        "model": "gpt-5.6-sol",
         "timeout_seconds": 0.1,
         "retries": 0,
         "turn_limit": 1,
@@ -88,7 +88,7 @@ async def test_completed_adjudication_preserves_structured_provenance():
     assert result.outcome == "supports_expected"
     assert result.confidence == Decimal("0.8")
     assert result.prompt_id == ADJUDICATION_PROMPT_ID
-    assert result.model == ADJUDICATION_MODEL
+    assert result.model == "gpt-5.6-sol"
     assert result.input_tokens == 100
     assert result.output_tokens == 20
     assert len(result.attempts) == 1
@@ -318,7 +318,7 @@ async def test_failure_after_paid_turn_preserves_usage_and_attempts(monkeypatch)
     assert metadata["operation"] == "provider_call_failed"
     assert metadata["context"] == {
         "attempt": 2,
-        "model": ADJUDICATION_MODEL,
+        "model": "gpt-5.6-sol",
         "retry": 0,
         "turn": 2,
     }
@@ -357,3 +357,18 @@ def test_tool_calls_are_forbidden():
 
     with pytest.raises(ValueError, match="does not permit tools"):
         _adjudicator(executor, tool_call_limit=1)
+
+
+async def test_configured_model_reaches_executor_and_provenance():
+    calls = []
+
+    async def executor(model, *_args):
+        calls.append(model)
+        return _response()
+
+    result = await _adjudicator(
+        executor, model="deployment-adjudicator-v2"
+    ).adjudicate(expected={}, actual={}, score=_score())
+
+    assert calls == ["deployment-adjudicator-v2"]
+    assert result.model == "deployment-adjudicator-v2"

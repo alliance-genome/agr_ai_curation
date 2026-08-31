@@ -1028,6 +1028,14 @@ def get_benchmark_adjudication_enabled() -> bool:
     return _get_env_bool("BENCHMARK_ADJUDICATION_ENABLED", False)
 
 
+def get_benchmark_adjudication_model() -> str:
+    """Model used for direct supplemental benchmark adjudication."""
+    return (
+        os.getenv("BENCHMARK_ADJUDICATION_MODEL", "gpt-5.6-sol").strip()
+        or "gpt-5.6-sol"
+    )
+
+
 def get_benchmark_adjudication_case_limit() -> int:
     """Maximum ambiguous cases sent to the direct adjudicator per execution."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_CASE_LIMIT", 2))
