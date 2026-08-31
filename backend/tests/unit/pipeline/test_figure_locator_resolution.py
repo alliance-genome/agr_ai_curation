@@ -962,7 +962,10 @@ async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
         compatible_provider,
     )
     agent_factory = MagicMock(
-        side_effect=lambda **kwargs: SimpleNamespace(name=kwargs["name"])
+        side_effect=lambda **kwargs: SimpleNamespace(
+            name=kwargs["name"],
+            model=kwargs["model"],
+        )
     )
     monkeypatch.setattr("agents.Agent", agent_factory)
 

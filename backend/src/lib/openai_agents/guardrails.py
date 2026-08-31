@@ -25,7 +25,6 @@ from typing import Optional, List, Sequence
 from pydantic import BaseModel
 from agents import (
     Agent,
-    Runner,
     input_guardrail,
     GuardrailFunctionOutput,
     RunContextWrapper,
@@ -40,6 +39,26 @@ from src.lib.observability.sentry import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_guardrail_agent_with_owned_openai_resources(
+    guardrail_agent: Agent,
+    input_data: str | List[TResponseInputItem],
+    *,
+    context: object,
+    max_turns: int,
+):
+    """Run a nested guardrail without relying on SDK-internal context fields."""
+
+    # Deferred to avoid the runner -> guardrails module import cycle.
+    from .runner import run_agent_with_owned_openai_resources
+
+    return await run_agent_with_owned_openai_resources(
+        guardrail_agent,
+        input_data,
+        context=context,
+        max_turns=max_turns,
+    )
 
 
 # ============================================================================
@@ -200,7 +219,7 @@ async def llm_safety_guardrail(
         finalization_required=False,
     ) as sentry_span:
         try:
-            result = await Runner.run(
+            result = await _run_guardrail_agent_with_owned_openai_resources(
                 _safety_guardrail_agent,
                 input_data,
                 context=ctx.context,
@@ -314,7 +333,7 @@ Scientific questions are ALWAYS on-topic even if not directly about the allowed 
             span_data={"ai_curation.validation.detail": {"allowed_topics": allowed_topics}},
         ) as sentry_span:
             try:
-                result = await Runner.run(
+                result = await _run_guardrail_agent_with_owned_openai_resources(
                     topic_agent,
                     input_data,
                     context=ctx.context,

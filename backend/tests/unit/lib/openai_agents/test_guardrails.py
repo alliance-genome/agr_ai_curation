@@ -117,7 +117,12 @@ async def test_llm_safety_guardrail_maps_runner_result(monkeypatch):
         sentry_calls.append(("span", kwargs))
         return _FakeContextManager(FakeSentrySpan())
 
-    async def _fake_run(_guardrail_agent, _input_data, context, max_turns):
+    async def _fake_run(
+        _guardrail_agent,
+        _input_data,
+        context,
+        max_turns,
+    ):
         assert context == {"trace_id": "trace-1"}
         assert max_turns == 3
         return SimpleNamespace(
@@ -128,7 +133,11 @@ async def test_llm_safety_guardrail_maps_runner_result(monkeypatch):
             )
         )
 
-    monkeypatch.setattr(guardrails.Runner, "run", _fake_run)
+    monkeypatch.setattr(
+        guardrails,
+        "_run_guardrail_agent_with_owned_openai_resources",
+        _fake_run,
+    )
     monkeypatch.setattr(guardrails, "gen_ai_invoke_agent_span", _fake_sentry_span)
 
     output = await guardrails.llm_safety_guardrail.guardrail_function(
@@ -163,7 +172,11 @@ async def test_llm_safety_guardrail_records_sentry_error_before_reraising(monkey
     async def _fake_run(*_args, **_kwargs):
         raise TimeoutError("guardrail timed out")
 
-    monkeypatch.setattr(guardrails.Runner, "run", _fake_run)
+    monkeypatch.setattr(
+        guardrails,
+        "_run_guardrail_agent_with_owned_openai_resources",
+        _fake_run,
+    )
     monkeypatch.setattr(guardrails, "gen_ai_invoke_agent_span", _fake_sentry_span)
 
     with pytest.raises(TimeoutError, match="guardrail timed out"):
@@ -212,7 +225,11 @@ async def test_create_topic_guardrail_trips_for_off_topic_query(monkeypatch):
             )
         )
 
-    monkeypatch.setattr(guardrails.Runner, "run", _fake_run)
+    monkeypatch.setattr(
+        guardrails,
+        "_run_guardrail_agent_with_owned_openai_resources",
+        _fake_run,
+    )
     monkeypatch.setattr(guardrails, "gen_ai_invoke_agent_span", _fake_sentry_span)
     topic_guardrail = guardrails.create_topic_guardrail(["biology"], guardrail_name="Bio Check")
 
