@@ -80,7 +80,8 @@ result-size settings bound that path.
 
 Case-run responses contain stable target/route/fixture identity, timing, normalized
 failure metadata, bounded redacted output, normalized provider usage, and separate
-deterministic/adjudication records. Profile-and-scorer aggregates contain only the
+deterministic/adjudication records. Profile, requested-route, and scorer aggregates
+contain only the
 deterministic metrics. Adjudication records retain rubric/prompt/model identity,
 reason, confidence, uncertainty, tokens, billed cost when the provider supplies
 one, latency, and normalized failure metadata. They are not an upload manifest or

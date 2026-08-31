@@ -226,10 +226,20 @@ def _compare(
         for path in rule.evidence_paths:
             expected_evidence = _pointer(expected, path)
             actual_evidence = _pointer(actual, path)
+            if expected_evidence is _MISSING:
+                return (
+                    Decimal("0"),
+                    "malformed_output",
+                    f"gold evidence path is absent: {path}",
+                )
+            if actual_evidence is _MISSING:
+                return (
+                    Decimal("0"),
+                    "missing_required",
+                    f"required evidence path is absent: {path}",
+                )
             evidence_scores.append(
-                expected_evidence is not _MISSING
-                and actual_evidence is not _MISSING
-                and _strict_equal(expected_evidence, actual_evidence)
+                _strict_equal(expected_evidence, actual_evidence)
             )
         if not all(evidence_scores):
             score, mismatch = Decimal("0"), "evidence_mismatch"
@@ -303,20 +313,27 @@ def score_case(
 
 
 def aggregate_scores(runs: list[BenchmarkCaseRun]) -> list[BenchmarkAggregateScore]:
-    grouped: dict[tuple[str, str], list[BenchmarkDeterministicScore]] = {}
+    grouped: dict[tuple[str, str, str, str], list[BenchmarkDeterministicScore]] = {}
     for run in runs:
         for record in run.scoring:
             grouped.setdefault(
-                (run.profile_id, record.deterministic.scorer_id), []
+                (
+                    run.profile_id,
+                    run.requested_route.provider,
+                    run.requested_route.model,
+                    record.deterministic.scorer_id,
+                ),
+                [],
             ).append(record.deterministic)
     aggregates = []
-    for profile_id, scorer_id in sorted(grouped):
-        scores = grouped[(profile_id, scorer_id)]
+    for profile_id, provider, model, scorer_id in sorted(grouped):
+        scores = grouped[(profile_id, provider, model, scorer_id)]
         total_weight = sum((score.total_weight for score in scores), Decimal("0"))
         earned_weight = sum((score.earned_weight for score in scores), Decimal("0"))
         aggregates.append(
             BenchmarkAggregateScore(
                 profile_id=profile_id,
+                requested_route={"provider": provider, "model": model},
                 scorer_id=scorer_id,
                 case_count=len(scores),
                 pass_count=sum(score.outcome == "pass" for score in scores),

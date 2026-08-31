@@ -84,6 +84,56 @@ def test_evidence_sensitive_output_classifies_evidence_mismatch():
 
 
 @pytest.mark.parametrize(
+    ("expected", "actual", "mismatch"),
+    [
+        (
+            {"value": "x", "evidence": {"quote": "q"}},
+            {"value": "x", "evidence": {}},
+            "missing_required",
+        ),
+        (
+            {"value": "x", "evidence": {}},
+            {"value": "x", "evidence": {"quote": "q"}},
+            "malformed_output",
+        ),
+    ],
+)
+def test_missing_evidence_is_never_adjudication_eligible(expected, actual, mismatch):
+    result = score_case(
+        scorer=_scorer(
+            {
+                "comparison": "evidence",
+                "evidence_paths": ["/evidence/quote"],
+                "ambiguous": True,
+            }
+        ),
+        expected=expected,
+        actual=actual,
+    )
+
+    assert result.fields[0].mismatch_class == mismatch
+    assert result.fields[0].adjudication_eligible is False
+
+
+def test_present_semantic_evidence_mismatch_remains_adjudication_eligible():
+    result = score_case(
+        scorer=_scorer(
+            {
+                "comparison": "evidence",
+                "evidence_paths": ["/evidence/quote"],
+                "ambiguous": True,
+            }
+        ),
+        expected={"evidence": {"quote": "expected interpretation"}},
+        actual={"evidence": {"quote": "actual interpretation"}},
+    )
+
+    assert result.fields[0].mismatch_class == "ambiguous"
+    assert result.fields[0].base_mismatch_class == "evidence_mismatch"
+    assert result.fields[0].adjudication_eligible is True
+
+
+@pytest.mark.parametrize(
     ("expected", "actual", "provider_failure", "mismatch"),
     [
         ({"required": 1}, {}, False, "missing_required"),
@@ -165,5 +215,24 @@ def test_golden_score_and_aggregate_are_identical_across_reruns():
     aggregate = aggregate_scores([run])[0]
     assert aggregate.case_count == 1
     assert aggregate.profile_id == "profile-1"
+    assert aggregate.requested_route == BenchmarkRoute(
+        provider="openai", model="gpt-5.6-sol"
+    )
     assert aggregate.partial_count == 1
     assert aggregate.weighted_score == first.weighted_score
+
+    second_route_run = run.model_copy(
+        update={
+            "run_id": "run-2",
+            "requested_route": BenchmarkRoute(
+                provider="openrouter", model="openai/gpt-5.6-sol"
+            ),
+        }
+    )
+    route_aggregates = aggregate_scores([run, second_route_run])
+    assert len(route_aggregates) == 2
+    assert [item.case_count for item in route_aggregates] == [1, 1]
+    assert [item.requested_route.provider for item in route_aggregates] == [
+        "openai",
+        "openrouter",
+    ]

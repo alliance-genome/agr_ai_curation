@@ -12,7 +12,10 @@ from typing import Any, Literal
 
 from pydantic import Field, ValidationError
 
+from src.lib.observability.runtime import report_runtime_exception
+
 from .models import (
+    BenchmarkAdjudicationAttempt,
     BenchmarkAdjudicationFailure,
     BenchmarkAdjudicationResult,
     BenchmarkDeterministicScore,
@@ -46,6 +49,44 @@ class RawAdjudicationResponse(StrictModel):
 
 
 AdjudicationExecutor = Callable[[str, str, int], Awaitable[RawAdjudicationResponse]]
+
+
+class _AdjudicationProviderError(RuntimeError):
+    """Sanitized provider failure safe for operational reporting."""
+
+
+def _sanitized_provider_error(error_type: str) -> _AdjudicationProviderError:
+    try:
+        raise _AdjudicationProviderError(
+            f"Benchmark adjudicator provider failed ({error_type})"
+        ) from None
+    except _AdjudicationProviderError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
+def _usage_totals(
+    attempts: list[BenchmarkAdjudicationAttempt],
+) -> tuple[int | None, int | None, BilledCost | None]:
+    input_values = [item.input_tokens for item in attempts if item.input_tokens is not None]
+    output_values = [
+        item.output_tokens for item in attempts if item.output_tokens is not None
+    ]
+    costs = [item.billed_cost for item in attempts if item.billed_cost is not None]
+    total_cost = None
+    if costs and len({cost.unit for cost in costs}) == 1:
+        sources = {cost.source for cost in costs}
+        total_cost = BilledCost(
+            amount=sum((cost.amount for cost in costs), Decimal("0")),
+            unit=costs[0].unit,
+            source=(sources.pop() if len(sources) == 1 else "summed_adjudication_attempts"),
+        )
+    return (
+        sum(input_values) if input_values else None,
+        sum(output_values) if output_values else None,
+        total_cost,
+    )
 
 
 def is_adjudication_eligible(score: BenchmarkDeterministicScore) -> bool:
@@ -125,6 +166,7 @@ class SupplementalAdjudicator:
         started = time.monotonic()
         attempts = 0
         decisions: list[RawAdjudicationResponse] = []
+        attempt_records: list[BenchmarkAdjudicationAttempt] = []
         last_category: Literal[
             "timeout", "refusal", "invalid_result", "provider_error"
         ] = "provider_error"
@@ -132,6 +174,7 @@ class SupplementalAdjudicator:
             response: RawAdjudicationResponse | None = None
             for retry in range(self.retries + 1):
                 attempts += 1
+                attempt_started = time.monotonic()
                 try:
                     response = await asyncio.wait_for(
                         self.executor(
@@ -146,28 +189,79 @@ class SupplementalAdjudicator:
                     ).encode("utf-8")
                     if len(serialized) > self.result_max_bytes:
                         raise ValueError("adjudication result exceeds configured size")
+                    attempt_records.append(
+                        BenchmarkAdjudicationAttempt(
+                            turn=turn + 1,
+                            attempt=attempts,
+                            retry=retry,
+                            status="completed",
+                            latency_ms=max(
+                                0, int((time.monotonic() - attempt_started) * 1000)
+                            ),
+                            outcome=response.decision.outcome,
+                            reason=response.decision.reason,
+                            confidence=response.decision.confidence,
+                            uncertainty=response.decision.uncertainty,
+                            input_tokens=response.input_tokens,
+                            output_tokens=response.output_tokens,
+                            billed_cost=response.billed_cost,
+                        )
+                    )
                     break
                 except TimeoutError:
                     response = None
                     last_category = "timeout"
                 except (ValidationError, ValueError, json.JSONDecodeError):
-                    response = None
                     last_category = "invalid_result"
                 except PermissionError:
                     response = None
                     last_category = "refusal"
-                    break
-                except Exception:
+                except Exception as exc:
                     response = None
                     last_category = "provider_error"
+                    report_runtime_exception(
+                        _sanitized_provider_error(type(exc).__name__),
+                        component="benchmark_adjudication",
+                        operation="provider_call_failed",
+                        context={
+                            "attempt": attempts,
+                            "model": ADJUDICATION_MODEL,
+                            "retry": retry,
+                            "turn": turn + 1,
+                        },
+                    )
+                attempt_records.append(
+                    BenchmarkAdjudicationAttempt(
+                        turn=turn + 1,
+                        attempt=attempts,
+                        retry=retry,
+                        status=last_category,
+                        latency_ms=max(
+                            0, int((time.monotonic() - attempt_started) * 1000)
+                        ),
+                        input_tokens=(response.input_tokens if response else None),
+                        output_tokens=(response.output_tokens if response else None),
+                        billed_cost=(response.billed_cost if response else None),
+                    )
+                )
+                response = None
+                if last_category == "refusal":
+                    break
                 if retry == self.retries:
                     break
             if response is None:
+                input_tokens, output_tokens, billed_cost = _usage_totals(
+                    attempt_records
+                )
                 return BenchmarkAdjudicationResult(
                     status="failed",
                     prompt_id=ADJUDICATION_PROMPT_ID,
                     model=ADJUDICATION_MODEL,
                     latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    billed_cost=billed_cost,
+                    attempts=attempt_records,
                     failure=BenchmarkAdjudicationFailure(
                         category=last_category,
                         message="supplemental adjudication did not return a valid result",
@@ -177,12 +271,17 @@ class SupplementalAdjudicator:
             decisions.append(response)
 
         outcomes = {response.decision.outcome for response in decisions}
+        input_tokens, output_tokens, billed_cost = _usage_totals(attempt_records)
         if len(outcomes) != 1:
             return BenchmarkAdjudicationResult(
                 status="failed",
                 prompt_id=ADJUDICATION_PROMPT_ID,
                 model=ADJUDICATION_MODEL,
                 latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                billed_cost=billed_cost,
+                attempts=attempt_records,
                 failure=BenchmarkAdjudicationFailure(
                     category="non_reproducible",
                     message="adjudication turns returned conflicting outcomes",
@@ -199,9 +298,10 @@ class SupplementalAdjudicator:
             prompt_id=ADJUDICATION_PROMPT_ID,
             model=ADJUDICATION_MODEL,
             latency_ms=max(0, int((time.monotonic() - started) * 1000)),
-            input_tokens=sum(item.input_tokens or 0 for item in decisions),
-            output_tokens=sum(item.output_tokens or 0 for item in decisions),
-            billed_cost=final.billed_cost,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            billed_cost=billed_cost,
+            attempts=attempt_records,
         )
 
 

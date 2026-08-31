@@ -2,6 +2,7 @@
 
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
 from .models import (
+    BenchmarkAdjudicationAttempt,
     BenchmarkAggregateScore,
     BenchmarkCaseRun,
     BenchmarkDeterministicScore,
@@ -13,6 +14,7 @@ from .scoring import aggregate_scores, score_case
 from .service import BenchmarkService
 
 __all__ = [
+    "BenchmarkAdjudicationAttempt",
     "BenchmarkAggregateScore",
     "BenchmarkCaseRun",
     "BenchmarkCatalog",

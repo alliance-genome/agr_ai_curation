@@ -214,6 +214,43 @@ class BenchmarkAdjudicationFailure(StrictModel):
     attempts: int = Field(ge=0)
 
 
+class BenchmarkAdjudicationAttempt(StrictModel):
+    """Bounded, content-safe provenance for one adjudicator invocation."""
+
+    turn: int = Field(ge=1)
+    attempt: int = Field(ge=1)
+    retry: int = Field(ge=0)
+    status: Literal[
+        "completed", "timeout", "refusal", "invalid_result", "provider_error"
+    ]
+    latency_ms: int = Field(ge=0)
+    outcome: Literal["supports_expected", "supports_actual", "uncertain"] | None = None
+    reason: str | None = Field(default=None, max_length=2000)
+    confidence: Decimal | None = Field(default=None, ge=0, le=1, strict=False)
+    uncertainty: str | None = Field(default=None, max_length=1000)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    billed_cost: BilledCost | None = None
+
+    @model_validator(mode="after")
+    def require_completed_decision(self) -> "BenchmarkAdjudicationAttempt":
+        decision_values = (
+            self.outcome,
+            self.reason,
+            self.confidence,
+            self.uncertainty,
+        )
+        if self.status == "completed" and any(
+            value is None for value in decision_values
+        ):
+            raise ValueError("completed adjudication attempt requires a decision")
+        if self.status != "completed" and any(
+            value is not None for value in decision_values
+        ):
+            raise ValueError("failed adjudication attempt cannot contain a decision")
+        return self
+
+
 class BenchmarkAdjudicationResult(StrictModel):
     """Supplemental semantic evidence kept separate from deterministic truth."""
 
@@ -229,6 +266,7 @@ class BenchmarkAdjudicationResult(StrictModel):
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     billed_cost: BilledCost | None = None
+    attempts: list[BenchmarkAdjudicationAttempt] = Field(default_factory=list)
     failure: BenchmarkAdjudicationFailure | None = None
 
     @model_validator(mode="after")
@@ -243,16 +281,19 @@ class BenchmarkAdjudicationResult(StrictModel):
             if (
                 any(value is None for value in completed_values)
                 or self.failure is not None
+                or not self.attempts
             ):
                 raise ValueError(
-                    "completed adjudication requires a decision and no failure"
+                    "completed adjudication requires attempts, a decision, and no failure"
                 )
         elif (
             any(value is not None for value in completed_values) or self.failure is None
         ):
             raise ValueError(
-                "non-completed adjudication requires only failure metadata"
+                "non-completed adjudication requires a failure and no final decision"
             )
+        if self.failure is not None and self.failure.attempts != len(self.attempts):
+            raise ValueError("failure attempt count must match attempt provenance")
         return self
 
 
@@ -264,6 +305,7 @@ class BenchmarkScoringRecord(StrictModel):
 class BenchmarkAggregateScore(StrictModel):
     scoring_version: Literal[1] = 1
     profile_id: str
+    requested_route: BenchmarkRoute
     scorer_id: str
     case_count: int = Field(ge=1)
     pass_count: int = Field(ge=0)
