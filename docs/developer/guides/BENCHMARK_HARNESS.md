@@ -96,9 +96,55 @@ receive the same capabilities only through groups explicitly configured in
 scope and group mappings default to blank and therefore deny access; the
 `X-API-Key` testing bypass is not accepted by benchmark routes. The stable
 authorization contract also defines `benchmark:cancel`, `benchmark:delete`,
-and `benchmark:source:read` for downstream routes that enforce those
-operations, but configuring those mappings does not grant access to a route
-that does not exist. The feature gate continues to return 404 when disabled.
+and `benchmark:source:read`. The feature gate continues to return 404 when
+disabled.
+
+## Versioned Input Sources
+
+`POST /api/v1/benchmarks/sources/materialize` accepts only the strict
+`resolver`, `reference`, `version`, and `sha256` digest contract used by suite
+v2. It returns UTF-8 canonical extracted content plus fixed-shape metadata and
+an immutable provenance receipt. The route requires `benchmark:source:read`;
+the ordinary read/run capabilities do not grant source access.
+
+The public application registers two resolvers at startup:
+
+- `checked_in_fixture` reads only the input references declared by suites
+  loaded from `BENCHMARK_ROOT`. Other files beneath that root, including gold
+  fixtures, are not source references.
+- `local_document` reads the completed processed-JSON artifact of a persisted
+  AI Curation document only when the authenticated principal owns that
+  document. Its authoritative version is the processing-completion timestamp.
+
+Both resolvers read at most `BENCHMARK_MAX_INPUT_BYTES`, recompute the digest
+from the exact returned bytes, and fail when the requested identity is stale.
+`BENCHMARK_SOURCE_TIMEOUT_SECONDS` bounds the complete resolver call. URLs,
+absolute/traversing fixture paths, request-supplied Python import paths,
+unregistered resolver IDs, unversioned documents, and cross-owner documents
+are rejected before any benchmark work is queued. Unexpected resolver or
+storage failures are normalized to the sanitized `source_unavailable` error.
+
+Queue/worker implementations must call `materialize_plan_inputs(...)` and use
+the returned frozen bundle. The function resolves every case and returns
+nothing if any source fails, so unresolved or partially verified case
+references cannot be handed to a queue.
+
+Private deployments may package an approved resolver in their private
+application and pass its instance to
+`install_benchmark_input_resolvers(app, extra_resolvers=(resolver,))` during
+application construction. The resolver must implement `BenchmarkInputResolver`
+and provide a strict Pydantic `reference_schema`; registration IDs are simple
+lowercase identifiers. Registration is code/configuration owned: request data
+must never select an import path or network destination. Duplicate IDs fail
+application construction instead of overriding another resolver. Keep remote
+credentials and destination configuration in the private deployment's secret
+store; do not add them to this repository, fixture metadata, provenance, or
+logs.
+
+Registration validates resolver IDs during application construction, but the
+checked-in suite catalog is loaded and memoized only when an enabled source
+request first materializes input. This keeps ordinary backend startup and health
+routes independent of optional benchmark package configuration.
 
 Operational concurrency, matrix/case/result caps, timeouts, retries, output
 preview/inline limits, and all adjudication bounds are documented under
