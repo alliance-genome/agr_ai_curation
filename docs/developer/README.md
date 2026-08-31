@@ -60,6 +60,7 @@ Start here for new developers:
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
 | [BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md) | Durable batch worker leases, startup scan behavior, stale processing policy, and counter invariants |
 | [BENCHMARK_HARNESS.md](guides/BENCHMARK_HARNESS.md) | Developer-only checked-in benchmark profiles, dry-run validation, explicit routes, admin API, and CLI |
+| [BENCHMARK_SUITE_V2.md](guides/BENCHMARK_SUITE_V2.md) | Strict execution-only suite v2 schema, route slots, frozen plans, and stable digests |
 | [ABC Literature API Contract Verification](integrations/abc_literature/api_contract_verification.md) | Verified Literature OpenAPI hostnames, endpoint allowlist, forbidden endpoints, and fixture-backed live-check procedure |
 | [ABC Literature Conversion Handoff](integrations/abc_literature/conversion_handoff.md) | Boundary between AI Curation, ABC Literature conversion_request, nXML/TEI behavior, and local PDFX fallback |
 | [ABC Literature Import Lifecycle](integrations/abc_literature/import_lifecycle.md) | Provider-neutral ABC import lifecycle, conversion polling/status mapping, failures, cancellation, and timeout behavior |

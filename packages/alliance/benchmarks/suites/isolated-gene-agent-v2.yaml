@@ -1,0 +1,27 @@
+schema_version: 2
+suite_id: isolated-gene-agent-v2
+cases:
+  - case_id: synthetic-gene-lookup-1
+    target: {kind: agent, id: gene_validation}
+    input:
+      resolver: checked_in_fixture
+      reference: cases/synthetic-gene-lookup-1/input.json
+      version: "1"
+      digest: sha256:be0974a67dbeb4f9c530c76628972f436ad15934ef6dcbc1ccb49aef96036e76
+configurations:
+  - configuration_id: sol
+    routes:
+      agent:gene_validation: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
+  - configuration_id: terra
+    routes:
+      agent:gene_validation: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
+  - configuration_id: deepseek
+    routes:
+      agent:gene_validation: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
+  - configuration_id: gemini
+    routes:
+      agent:gene_validation: {provider: openrouter, model: google/gemini-3.7-flash}
+  - configuration_id: qwen
+    routes:
+      agent:gene_validation: {provider: openrouter, model: qwen/qwen3.8-27b}
+repetitions: 1
