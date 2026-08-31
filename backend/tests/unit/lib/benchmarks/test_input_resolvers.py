@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
+import time
 from types import SimpleNamespace
 from typing import Annotated, cast
 
@@ -58,7 +59,11 @@ def test_checked_in_fixture_materializes_digest_verified_immutable_content(tmp_p
     fixture.parent.mkdir(parents=True)
     fixture.write_bytes(payload)
     catalog = BenchmarkInputResolverCatalog(
-        [CheckedInFixtureResolver(tmp_path)],
+        [
+            CheckedInFixtureResolver(
+                tmp_path, allowed_references={"cases/case-1/input.json"}
+            )
+        ],
         timeout_seconds=1,
         max_input_bytes=1024,
     )
@@ -85,7 +90,16 @@ def test_checked_in_fixture_materializes_digest_verified_immutable_content(tmp_p
 def test_shipped_suite_fixture_references_materialize_with_checked_in_receipts():
     benchmark_root = REPOSITORY_ROOT / "packages" / "alliance" / "benchmarks"
     catalog = BenchmarkInputResolverCatalog(
-        [CheckedInFixtureResolver(benchmark_root)],
+        [
+            CheckedInFixtureResolver(
+                benchmark_root,
+                allowed_references={
+                    case.input.reference
+                    for suite in load_checked_in_suites(benchmark_root)
+                    for case in suite.cases
+                },
+            )
+        ],
         timeout_seconds=1,
         max_input_bytes=1024 * 1024,
     )
@@ -111,7 +125,7 @@ def test_checked_in_fixture_rejects_non_allowlisted_reference_shapes(
     tmp_path, reference, code
 ):
     catalog = BenchmarkInputResolverCatalog(
-        [CheckedInFixtureResolver(tmp_path)],
+        [CheckedInFixtureResolver(tmp_path, allowed_references=set())],
         timeout_seconds=1,
         max_input_bytes=1024,
     )
@@ -140,8 +154,41 @@ def test_common_input_schema_rejects_network_destinations():
         )
 
 
+def test_checked_in_fixture_rejects_gold_fixture_even_beneath_root(tmp_path):
+    input_payload = b'{"messages": []}\n'
+    gold_payload = b'{"expected": []}\n'
+    case_root = tmp_path / "cases" / "case-1"
+    case_root.mkdir(parents=True)
+    (case_root / "input.json").write_bytes(input_payload)
+    (case_root / "gold.json").write_bytes(gold_payload)
+    catalog = BenchmarkInputResolverCatalog(
+        [
+            CheckedInFixtureResolver(
+                tmp_path, allowed_references={"cases/case-1/input.json"}
+            )
+        ],
+        timeout_seconds=1,
+        max_input_bytes=1024,
+    )
+
+    with pytest.raises(BenchmarkSourceError) as exc_info:
+        asyncio.run(
+            catalog.materialize(
+                _reference(
+                    resolver="checked_in_fixture",
+                    reference="cases/case-1/gold.json",
+                    version="1",
+                    digest=_digest(gold_payload),
+                ),
+                principal_subject="operator",
+            )
+        )
+
+    assert exc_info.value.code == "invalid_reference"
+
+
 def test_catalog_rejects_unknown_and_duplicate_resolvers(tmp_path):
-    resolver = CheckedInFixtureResolver(tmp_path)
+    resolver = CheckedInFixtureResolver(tmp_path, allowed_references=set())
     with pytest.raises(BenchmarkResolverRegistrationError, match="Duplicate") as exc_info:
         BenchmarkInputResolverCatalog(
             [resolver, resolver], timeout_seconds=1, max_input_bytes=1024
@@ -177,7 +224,7 @@ def test_checked_in_fixture_rejects_stale_digest_and_oversize(tmp_path):
         digest="sha256:" + "0" * 64,
     )
     catalog = BenchmarkInputResolverCatalog(
-        [CheckedInFixtureResolver(tmp_path)],
+        [CheckedInFixtureResolver(tmp_path, allowed_references={"input.json"})],
         timeout_seconds=1,
         max_input_bytes=1024,
     )
@@ -186,7 +233,7 @@ def test_checked_in_fixture_rejects_stale_digest_and_oversize(tmp_path):
     assert exc_info.value.code == "digest_conflict"
 
     bounded = BenchmarkInputResolverCatalog(
-        [CheckedInFixtureResolver(tmp_path)],
+        [CheckedInFixtureResolver(tmp_path, allowed_references={"input.json"})],
         timeout_seconds=1,
         max_input_bytes=len(payload) - 1,
     )
@@ -272,6 +319,75 @@ def test_catalog_bounds_registered_resolver_timeout():
     assert exc_info.value.code == "source_unavailable"
 
 
+def test_catalog_bounds_blocking_local_document_resolver_timeout(tmp_path):
+    def blocking_loader(reference: str, _subject: str) -> LocalDocumentSourceRecord:
+        time.sleep(0.05)
+        return LocalDocumentSourceRecord(
+            reference=reference,
+            version="v1",
+            title="Example paper",
+            content_path="owner/processed.json",
+        )
+
+    catalog = BenchmarkInputResolverCatalog(
+        [
+            LocalDocumentResolver(
+                storage_root_provider=lambda: tmp_path,
+                document_loader=blocking_loader,
+            )
+        ],
+        timeout_seconds=0.001,
+        max_input_bytes=100,
+    )
+    with pytest.raises(BenchmarkSourceError) as exc_info:
+        asyncio.run(
+            catalog.materialize(
+                _reference(
+                    resolver="local_document",
+                    reference="4b6ea638-9755-4d95-b523-e98b2493d8b1",
+                    version="v1",
+                    digest=_digest(b"[]"),
+                ),
+                principal_subject="owner",
+            )
+        )
+    assert exc_info.value.code == "source_unavailable"
+
+
+def test_catalog_normalizes_unexpected_local_document_storage_failure(tmp_path):
+    def failing_loader(
+        _reference: str, _subject: str
+    ) -> LocalDocumentSourceRecord:
+        raise RuntimeError("password=secret-database-value")
+
+    catalog = BenchmarkInputResolverCatalog(
+        [
+            LocalDocumentResolver(
+                storage_root_provider=lambda: tmp_path,
+                document_loader=failing_loader,
+            )
+        ],
+        timeout_seconds=1,
+        max_input_bytes=100,
+    )
+    with pytest.raises(BenchmarkSourceError) as exc_info:
+        asyncio.run(
+            catalog.materialize(
+                _reference(
+                    resolver="local_document",
+                    reference="4b6ea638-9755-4d95-b523-e98b2493d8b1",
+                    version="v1",
+                    digest=_digest(b"[]"),
+                ),
+                principal_subject="owner",
+            )
+        )
+    assert exc_info.value.code == "source_unavailable"
+    assert "secret-database-value" not in str(exc_info.value)
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
+
+
 def test_catalog_verifies_registered_resolver_content_receipt():
     class InconsistentResolver(_VersionedResolver):
         async def materialize(self, *args, **kwargs):
@@ -302,7 +418,11 @@ def test_materialize_plan_inputs_resolves_every_case_before_handoff(tmp_path):
     (tmp_path / "first.json").write_bytes(first)
     (tmp_path / "second.json").write_bytes(second)
     catalog = BenchmarkInputResolverCatalog(
-        [CheckedInFixtureResolver(tmp_path)],
+        [
+            CheckedInFixtureResolver(
+                tmp_path, allowed_references={"first.json", "second.json"}
+            )
+        ],
         timeout_seconds=1,
         max_input_bytes=1024,
     )

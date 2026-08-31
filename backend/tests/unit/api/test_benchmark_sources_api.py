@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Annotated
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import Field, RootModel
 
 import src.api.benchmark_sources as sources_api
 from src.api.benchmark_auth import require_benchmark_source_read
@@ -22,7 +24,7 @@ def _app(tmp_path, monkeypatch) -> FastAPI:
     monkeypatch.setattr(sources_api, "get_benchmark_enabled", lambda: True)
     application = FastAPI()
     application.state.benchmark_input_resolvers = BenchmarkInputResolverCatalog(
-        [CheckedInFixtureResolver(tmp_path)],
+        [CheckedInFixtureResolver(tmp_path, allowed_references={"input.json"})],
         timeout_seconds=1,
         max_input_bytes=1024,
     )
@@ -157,3 +159,50 @@ def test_unavailable_source_reports_only_sanitized_failure(monkeypatch):
     assert captured["exc"].__context__ is None
     assert captured["exc"].__cause__ is None
     assert "secret-paper" not in str(captured["exc"])
+
+
+def test_unexpected_private_resolver_failure_returns_sanitized_source_error(
+    tmp_path, monkeypatch
+):
+    class PrivateReference(RootModel[str]):
+        root: Annotated[str, Field(min_length=1)]
+
+    class FailingPrivateResolver:
+        resolver_id = "private_source"
+        reference_schema = PrivateReference
+
+        async def materialize(self, *args, **kwargs):
+            raise RuntimeError("token=private-resolver-secret")
+
+    captured = {}
+
+    def report_and_raise(_logger, *, status_code, detail, log_message, exc):
+        captured.update(exc=exc, detail=detail)
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    monkeypatch.setattr(
+        sources_api, "raise_sanitized_http_exception", report_and_raise
+    )
+    application = _app(tmp_path, monkeypatch)
+    application.state.benchmark_input_resolvers = BenchmarkInputResolverCatalog(
+        [FailingPrivateResolver()], timeout_seconds=1, max_input_bytes=1024
+    )
+
+    response = TestClient(application).post(
+        "/api/v1/benchmarks/sources/materialize",
+        json={
+            "resolver": "private_source",
+            "reference": "approved-id",
+            "version": "v1",
+            "digest": "sha256:" + "0" * 64,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "error": "source_unavailable",
+        "message": "Benchmark input source is unavailable",
+    }
+    assert captured["exc"].__context__ is None
+    assert captured["exc"].__cause__ is None
+    assert "private-resolver-secret" not in str(captured["exc"])

@@ -160,6 +160,8 @@ class BenchmarkInputResolverCatalog:
                 "invalid_reference", "Benchmark input reference is invalid"
             ) from exc
 
+        result: MaterializedBenchmarkInput | None = None
+        failure: BenchmarkSourceError | None = None
         try:
             result = await asyncio.wait_for(
                 resolver.materialize(
@@ -170,47 +172,76 @@ class BenchmarkInputResolverCatalog:
                 ),
                 timeout=self._timeout_seconds,
             )
-        except TimeoutError as exc:
-            raise BenchmarkSourceError(
+        except BenchmarkSourceError:
+            raise
+        except TimeoutError:
+            failure = BenchmarkSourceError(
                 "source_unavailable", "Benchmark input source timed out"
-            ) from exc
+            )
+        except Exception:
+            failure = BenchmarkSourceError(
+                "source_unavailable", "Benchmark input source is unavailable"
+            )
+        if failure is not None:
+            raise failure
+        if result is None:
+            raise BenchmarkSourceError(
+                "source_unavailable", "Benchmark resolver returned an invalid result"
+            )
 
-        if result.resolver != reference.resolver or result.reference != reference.reference:
-            raise BenchmarkSourceError(
-                "source_unavailable", "Benchmark resolver returned inconsistent identity"
+        verification_failure: BenchmarkSourceError | None = None
+        try:
+            if (
+                result.resolver != reference.resolver
+                or result.reference != reference.reference
+            ):
+                raise BenchmarkSourceError(
+                    "source_unavailable",
+                    "Benchmark resolver returned inconsistent identity",
+                )
+            provenance = result.provenance
+            if (
+                provenance.resolver != result.resolver
+                or provenance.reference != result.reference
+                or provenance.version != result.version
+                or provenance.digest != result.digest
+            ):
+                raise BenchmarkSourceError(
+                    "source_unavailable",
+                    "Benchmark resolver returned inconsistent provenance",
+                )
+            content_bytes = result.content.encode("utf-8")
+            if len(content_bytes) != result.metadata.content_bytes:
+                raise BenchmarkSourceError(
+                    "source_unavailable",
+                    "Benchmark resolver returned inconsistent content size",
+                )
+            actual_digest = f"sha256:{hashlib.sha256(content_bytes).hexdigest()}"
+            if actual_digest != result.digest:
+                raise BenchmarkSourceError(
+                    "source_unavailable",
+                    "Benchmark resolver returned inconsistent content digest",
+                )
+            if result.version != reference.version:
+                raise BenchmarkSourceError(
+                    "version_conflict", "Benchmark input version does not match the source"
+                )
+            if result.digest != reference.digest:
+                raise BenchmarkSourceError(
+                    "digest_conflict", "Benchmark input digest does not match the source"
+                )
+            if len(content_bytes) > self._max_input_bytes:
+                raise BenchmarkSourceError(
+                    "oversize_payload", "Benchmark input exceeds the materialization limit"
+                )
+        except BenchmarkSourceError:
+            raise
+        except Exception:
+            verification_failure = BenchmarkSourceError(
+                "source_unavailable", "Benchmark resolver returned an invalid result"
             )
-        provenance = result.provenance
-        if (
-            provenance.resolver != result.resolver
-            or provenance.reference != result.reference
-            or provenance.version != result.version
-            or provenance.digest != result.digest
-        ):
-            raise BenchmarkSourceError(
-                "source_unavailable", "Benchmark resolver returned inconsistent provenance"
-            )
-        content_bytes = result.content.encode("utf-8")
-        if len(content_bytes) != result.metadata.content_bytes:
-            raise BenchmarkSourceError(
-                "source_unavailable", "Benchmark resolver returned inconsistent content size"
-            )
-        actual_digest = f"sha256:{hashlib.sha256(content_bytes).hexdigest()}"
-        if actual_digest != result.digest:
-            raise BenchmarkSourceError(
-                "source_unavailable", "Benchmark resolver returned inconsistent content digest"
-            )
-        if result.version != reference.version:
-            raise BenchmarkSourceError(
-                "version_conflict", "Benchmark input version does not match the source"
-            )
-        if result.digest != reference.digest:
-            raise BenchmarkSourceError(
-                "digest_conflict", "Benchmark input digest does not match the source"
-            )
-        if len(content_bytes) > self._max_input_bytes:
-            raise BenchmarkSourceError(
-                "oversize_payload", "Benchmark input exceeds the materialization limit"
-            )
+        if verification_failure is not None:
+            raise verification_failure
         return result
 
 
@@ -234,13 +265,14 @@ async def materialize_plan_inputs(
 
 
 class CheckedInFixtureResolver:
-    """Materialize JSON fixtures strictly beneath the configured benchmark root."""
+    """Materialize only registered suite inputs beneath the benchmark root."""
 
     resolver_id = "checked_in_fixture"
     reference_schema = CheckedInFixtureReference
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, allowed_references: Iterable[str]) -> None:
         self._root = root.expanduser().resolve(strict=False)
+        self._allowed_references = frozenset(allowed_references)
 
     async def materialize(
         self,
@@ -250,7 +282,27 @@ class CheckedInFixtureResolver:
         max_bytes: int,
         principal_subject: str,
     ) -> MaterializedBenchmarkInput:
+        return await asyncio.to_thread(
+            self._materialize_sync,
+            reference,
+            validated_reference,
+            max_bytes=max_bytes,
+            principal_subject=principal_subject,
+        )
+
+    def _materialize_sync(
+        self,
+        reference: BenchmarkInputReference,
+        validated_reference: str,
+        *,
+        max_bytes: int,
+        principal_subject: str,
+    ) -> MaterializedBenchmarkInput:
         del principal_subject
+        if validated_reference not in self._allowed_references:
+            raise BenchmarkSourceError(
+                "invalid_reference", "Benchmark fixture is not a registered suite input"
+            )
         path = (self._root / validated_reference).resolve(strict=False)
         if not path.is_relative_to(self._root):
             raise BenchmarkSourceError(

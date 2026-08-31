@@ -21,6 +21,7 @@ from src.lib.benchmarks.input_resolvers import (
     MaterializedBenchmarkInput,
 )
 from src.lib.benchmarks.models import BenchmarkInputReference
+from src.lib.benchmarks.suites import load_checked_in_suites
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import (
     get_benchmark_enabled,
@@ -76,8 +77,17 @@ def build_default_input_resolver_catalog(
 ) -> BenchmarkInputResolverCatalog:
     """Build the startup-owned catalog; duplicate IDs fail construction."""
 
+    benchmark_root = Path(get_benchmark_root())
+    fixture_references = {
+        case.input.reference
+        for suite in load_checked_in_suites(benchmark_root)
+        for case in suite.cases
+        if case.input.resolver == CheckedInFixtureResolver.resolver_id
+    }
     resolvers: tuple[BenchmarkInputResolver, ...] = (
-        CheckedInFixtureResolver(Path(get_benchmark_root())),
+        CheckedInFixtureResolver(
+            benchmark_root, allowed_references=fixture_references
+        ),
         LocalDocumentResolver(storage_root_provider=get_pdf_storage_path),
         *tuple(extra_resolvers),
     )

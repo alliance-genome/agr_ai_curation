@@ -109,8 +109,9 @@ the ordinary read/run capabilities do not grant source access.
 
 The public application registers two resolvers at startup:
 
-- `checked_in_fixture` reads a relative JSON file strictly beneath
-  `BENCHMARK_ROOT`.
+- `checked_in_fixture` reads only the input references declared by suites
+  loaded from `BENCHMARK_ROOT`. Other files beneath that root, including gold
+  fixtures, are not source references.
 - `local_document` reads the completed processed-JSON artifact of a persisted
   AI Curation document only when the authenticated principal owns that
   document. Its authoritative version is the processing-completion timestamp.
@@ -120,7 +121,8 @@ from the exact returned bytes, and fail when the requested identity is stale.
 `BENCHMARK_SOURCE_TIMEOUT_SECONDS` bounds the complete resolver call. URLs,
 absolute/traversing fixture paths, request-supplied Python import paths,
 unregistered resolver IDs, unversioned documents, and cross-owner documents
-are rejected before any benchmark work is queued.
+are rejected before any benchmark work is queued. Unexpected resolver or
+storage failures are normalized to the sanitized `source_unavailable` error.
 
 Queue/worker implementations must call `materialize_plan_inputs(...)` and use
 the returned frozen bundle. The function resolves every case and returns

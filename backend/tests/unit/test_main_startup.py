@@ -21,6 +21,10 @@ def _main_module():
 def set_pdf_extraction_timeout(monkeypatch):
     """Set PDF_EXTRACTION_TIMEOUT to valid value for all tests in this module."""
     monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "300")
+    monkeypatch.setenv(
+        "BENCHMARK_ROOT",
+        str(Path(__file__).resolve().parents[3] / "packages/alliance/benchmarks"),
+    )
     monkeypatch.delenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", raising=False)
     monkeypatch.delenv("AGR_PACKAGE_ENVS_PREPARED", raising=False)
 

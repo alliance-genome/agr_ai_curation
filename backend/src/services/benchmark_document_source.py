@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
@@ -105,6 +106,22 @@ class LocalDocumentResolver:
         self._document_loader = document_loader
 
     async def materialize(
+        self,
+        reference: BenchmarkInputReference,
+        validated_reference: str,
+        *,
+        max_bytes: int,
+        principal_subject: str,
+    ) -> MaterializedBenchmarkInput:
+        return await asyncio.to_thread(
+            self._materialize_sync,
+            reference,
+            validated_reference,
+            max_bytes=max_bytes,
+            principal_subject=principal_subject,
+        )
+
+    def _materialize_sync(
         self,
         reference: BenchmarkInputReference,
         validated_reference: str,
