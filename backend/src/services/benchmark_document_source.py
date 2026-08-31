@@ -70,16 +70,16 @@ def load_owned_local_document(
         try:
             document = require_owned_document(session, UUID(reference), owner.id)
         except HTTPException as exc:
-            code = "forbidden_source" if exc.status_code == 403 else "source_unavailable"
+            code = "forbidden_source" if exc.status_code == 403 else "missing_source"
             message = (
                 "Authenticated principal cannot access this document"
                 if code == "forbidden_source"
-                else "Local benchmark document is unavailable"
+                else "Local benchmark document was not found"
             )
             raise BenchmarkSourceError(code, message) from exc
         if document.processing_completed_at is None or not document.processed_json_path:
             raise BenchmarkSourceError(
-                "source_unavailable",
+                "missing_source",
                 "Local benchmark document has no versioned extracted content",
             )
         return LocalDocumentSourceRecord(

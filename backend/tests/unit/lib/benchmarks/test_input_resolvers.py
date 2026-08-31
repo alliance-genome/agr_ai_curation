@@ -11,8 +11,10 @@ from types import SimpleNamespace
 from typing import Annotated, cast
 
 import pytest
+from fastapi import HTTPException
 from pydantic import Field, RootModel, ValidationError
 
+import src.services.benchmark_document_source as document_source
 from src.lib.benchmarks.input_resolvers import (
     BenchmarkInputResolverCatalog,
     BenchmarkResolverRegistrationError,
@@ -28,6 +30,7 @@ from src.lib.benchmarks.suites import load_checked_in_suites
 from src.services.benchmark_document_source import (
     LocalDocumentResolver,
     LocalDocumentSourceRecord,
+    load_owned_local_document,
 )
 
 
@@ -545,3 +548,60 @@ def test_local_document_resolver_requires_uuid_reference(tmp_path):
             )
         )
     assert exc_info.value.code == "invalid_reference"
+
+
+class _OwnedDocumentSession:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def query(self, _model):
+        return self
+
+    def filter(self, *_criteria):
+        return self
+
+    def one_or_none(self):
+        return SimpleNamespace(id=7)
+
+
+def test_local_document_loader_classifies_missing_document_as_expected_404(
+    monkeypatch,
+):
+    monkeypatch.setattr(document_source, "SessionLocal", _OwnedDocumentSession)
+
+    def missing_document(*_args):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    monkeypatch.setattr(document_source, "require_owned_document", missing_document)
+
+    with pytest.raises(BenchmarkSourceError) as exc_info:
+        load_owned_local_document(
+            "4b6ea638-9755-4d95-b523-e98b2493d8b1", "owner-sub"
+        )
+
+    assert exc_info.value.code == "missing_source"
+    assert "Document not found" not in str(exc_info.value)
+
+
+def test_local_document_loader_classifies_unprocessed_document_as_expected_404(
+    monkeypatch,
+):
+    monkeypatch.setattr(document_source, "SessionLocal", _OwnedDocumentSession)
+    monkeypatch.setattr(
+        document_source,
+        "require_owned_document",
+        lambda *_args: SimpleNamespace(
+            processing_completed_at=None,
+            processed_json_path=None,
+        ),
+    )
+
+    with pytest.raises(BenchmarkSourceError) as exc_info:
+        load_owned_local_document(
+            "4b6ea638-9755-4d95-b523-e98b2493d8b1", "owner-sub"
+        )
+
+    assert exc_info.value.code == "missing_source"

@@ -21,10 +21,7 @@ def _main_module():
 def set_pdf_extraction_timeout(monkeypatch):
     """Set PDF_EXTRACTION_TIMEOUT to valid value for all tests in this module."""
     monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "300")
-    monkeypatch.setenv(
-        "BENCHMARK_ROOT",
-        str(Path(__file__).resolve().parents[3] / "packages/alliance/benchmarks"),
-    )
+    monkeypatch.delenv("BENCHMARK_ROOT", raising=False)
     monkeypatch.delenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", raising=False)
     monkeypatch.delenv("AGR_PACKAGE_ENVS_PREPARED", raising=False)
 
@@ -45,17 +42,15 @@ def make_connection(list_all_return=None):
     return connection, client
 
 
-def test_create_app_installs_registered_benchmark_source_catalog(monkeypatch):
+def test_create_app_registers_benchmark_sources_without_loading_catalog(monkeypatch):
     main = _main_module()
     monkeypatch.setattr(main, "initialize_sentry_if_configured", lambda: None)
     monkeypatch.setattr(main, "ensure_writable_directory", lambda _path: None)
 
     application = main.create_app()
 
-    assert application.state.benchmark_input_resolvers.resolver_ids == (
-        "checked_in_fixture",
-        "local_document",
-    )
+    assert application.state.benchmark_input_resolver_extensions == ()
+    assert not hasattr(application.state, "benchmark_input_resolvers")
     assert any(
         route.path == "/api/v1/benchmarks/sources/materialize"
         for route in application.routes

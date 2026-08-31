@@ -117,6 +117,15 @@ class BenchmarkInputResolverCatalog:
     ) -> None:
         if timeout_seconds <= 0 or max_input_bytes <= 0:
             raise ValueError("benchmark source limits must be positive")
+        registered = self._validated_registrations(resolvers)
+        self._resolvers = registered
+        self._timeout_seconds = timeout_seconds
+        self._max_input_bytes = max_input_bytes
+
+    @staticmethod
+    def _validated_registrations(
+        resolvers: Iterable[BenchmarkInputResolver],
+    ) -> dict[str, BenchmarkInputResolver]:
         registered: dict[str, BenchmarkInputResolver] = {}
         for resolver in resolvers:
             resolver_id = resolver.resolver_id
@@ -131,9 +140,15 @@ class BenchmarkInputResolverCatalog:
                     f"Duplicate benchmark input resolver registration: {resolver_id}",
                 )
             registered[resolver_id] = resolver
-        self._resolvers = registered
-        self._timeout_seconds = timeout_seconds
-        self._max_input_bytes = max_input_bytes
+        return registered
+
+    @classmethod
+    def validate_registration(
+        cls, resolvers: Iterable[BenchmarkInputResolver]
+    ) -> None:
+        """Validate startup-owned resolver IDs without materializing sources."""
+
+        cls._validated_registrations(resolvers)
 
     @property
     def resolver_ids(self) -> tuple[str, ...]:

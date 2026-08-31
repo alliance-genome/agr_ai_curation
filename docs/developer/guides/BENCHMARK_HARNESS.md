@@ -141,6 +141,11 @@ credentials and destination configuration in the private deployment's secret
 store; do not add them to this repository, fixture metadata, provenance, or
 logs.
 
+Registration validates resolver IDs during application construction, but the
+checked-in suite catalog is loaded and memoized only when an enabled source
+request first materializes input. This keeps ordinary backend startup and health
+routes independent of optional benchmark package configuration.
+
 Operational concurrency, matrix/case/result caps, timeouts, retries, output
 preview/inline limits, and all adjudication bounds are documented under
 `BENCHMARK_*` in `.env.example`. `BENCHMARK_ADJUDICATION_ENABLED` defaults to

@@ -20,6 +20,7 @@ from src.lib.benchmarks.input_resolvers import (
     CheckedInFixtureResolver,
     MaterializedBenchmarkInput,
 )
+from src.lib.benchmarks.loader import BenchmarkCatalogError
 from src.lib.benchmarks.models import BenchmarkInputReference
 from src.lib.benchmarks.suites import load_checked_in_suites
 from src.lib.http_errors import raise_sanitized_http_exception
@@ -67,6 +68,7 @@ _ERROR_STATUS = {
     "version_conflict": 409,
     "digest_conflict": 409,
     "oversize_payload": 413,
+    "missing_source": 404,
     "source_unavailable": 503,
 }
 
@@ -103,23 +105,32 @@ def install_benchmark_input_resolvers(
     *,
     extra_resolvers: Iterable[BenchmarkInputResolver] = (),
 ) -> None:
-    """Install a reviewed deployment catalog before the application serves traffic."""
+    """Register reviewed resolver extensions without loading source metadata."""
 
-    application.state.benchmark_input_resolvers = build_default_input_resolver_catalog(
-        extra_resolvers=extra_resolvers
+    extensions = tuple(extra_resolvers)
+    BenchmarkInputResolverCatalog.validate_registration(
+        (
+            CheckedInFixtureResolver(Path("."), allowed_references=()),
+            LocalDocumentResolver(storage_root_provider=get_pdf_storage_path),
+            *extensions,
+        )
     )
+    application.state.benchmark_input_resolver_extensions = extensions
 
 
 def _catalog(request: Request) -> BenchmarkInputResolverCatalog:
     catalog = getattr(request.app.state, "benchmark_input_resolvers", None)
-    if not isinstance(catalog, BenchmarkInputResolverCatalog):
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "source_unavailable",
-                "message": "Benchmark input resolver catalog is unavailable",
-            },
+    if isinstance(catalog, BenchmarkInputResolverCatalog):
+        return catalog
+    extensions = getattr(request.app.state, "benchmark_input_resolver_extensions", ())
+    try:
+        catalog = build_default_input_resolver_catalog(extra_resolvers=extensions)
+    except BenchmarkCatalogError:
+        raise BenchmarkSourceError(
+            "source_unavailable",
+            "Benchmark input resolver catalog is unavailable",
         )
+    request.app.state.benchmark_input_resolvers = catalog
     return catalog
 
 
