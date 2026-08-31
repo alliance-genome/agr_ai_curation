@@ -1,6 +1,6 @@
 # LLM Provider Smoke Test Matrix
 
-Last updated: 2026-02-24
+Last updated: 2026-08-31
 
 ## Purpose
 
@@ -15,7 +15,7 @@ Validate that config-defined LLM providers and models work end-to-end in real ru
 
 - Core services are up and healthy (`docker compose ps` shows no exited core containers; verify Loki separately with `curl -fsS http://localhost:3100/ready` when log aggregation matters).
 - `config/providers.yaml` and `config/models.yaml` are in sync (every model references a valid provider).
-- API keys are configured for each provider under test (`OPENAI_API_KEY`, `GROQ_API_KEY`, etc.).
+- API keys are configured for each provider under test (`OPENAI_API_KEY`, `GROQ_API_KEY`, etc.). `OPENROUTER_API_KEY` may remain unset for structural readiness checks.
 - `LLM_PROVIDER_STRICT_MODE=true` is recommended for smoke testing.
 
 ## Automated Smoke Script
@@ -58,10 +58,11 @@ Record each manual test case with:
 | ID | Test | Steps | Pass Criteria | Automated |
 |---|---|---|---|---|
 | `BASE_HEALTH` | Backend health | `GET /health` returns 200. | HTTP 200. | Yes |
-| `A1` | Provider health endpoint | `GET /api/admin/health/llm-providers` | HTTP 200, `errors` is empty, all mapped providers show `readiness: ready`. | Yes |
+| `A1` | Provider health endpoint | `GET /api/admin/health/llm-providers` | HTTP 200 and `errors` is empty. Required mapped providers are ready; optional OpenRouter may report `missing_api_key`. | Yes |
 | `A1B` | Model list endpoint | `GET /api/agent-studio/models` | HTTP 200, response contains expected models. | Yes |
 | `A1_STRUCTURAL` | Provider health body analysis | Parse `A1` response body. | `errors` array is empty (no structural contract violations). | Yes |
 | `A2` | Provider/model drift detection | Temporarily introduce an invalid model-to-provider reference in a local branch. | Startup validation or the health endpoint reports a clear error. | No |
+| `A3` | OpenRouter structural readiness | Inspect the `openrouter` provider item. | It is optional, maps `deepseek/deepseek-v4-pro-0813`, and reports consistent `route_available` state without exposing a key value. | Yes |
 
 ### B. Runtime Path (Manual, Per Provider/Model)
 
@@ -88,6 +89,9 @@ Run each scenario for every curator-visible model defined in `models.yaml`.
 | `D1` | Missing API key | Unset the provider API key in the local environment and restart. | Startup fails with an explicit missing env var error (strict mode) or health endpoint reports `missing_api_key` readiness. |
 | `D2` | Invalid base URL | Set an invalid provider base URL and attempt a request. | Request fails with a provider-specific error. No silent reroute to another provider. |
 | `D3` | Unknown model ID | Force an invalid model selection request via the API. | Explicit validation error. No fallback model is used. |
+| `D4` | Unsupported OpenRouter parameters | Use a parameter unsupported by every endpoint for the selected model. | The selected route fails explicitly because `require_parameters` is enabled; no provider or model fallback occurs. |
+
+Paid OpenRouter inference is not part of this structural smoke. Live route certification must be run only through the separately approved release process.
 
 ---
 

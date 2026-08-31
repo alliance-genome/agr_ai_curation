@@ -200,6 +200,24 @@ providers:
     api_mode: chat_completions
     supports:
       parallel_tool_calls: true
+
+  openrouter:
+    driver: openai_compatible
+    api_key_env: OPENROUTER_API_KEY
+    default_base_url: https://openrouter.ai/api/v1
+    api_mode: chat_completions
+    optional_for_runtime: true
+    request:
+      omit_usage_request: true
+      headers:
+        X-OpenRouter-Metadata: enabled
+      extra_body:
+        provider:
+          allow_fallbacks: false
+          require_parameters: true
+      forbidden_fields: [models, fallbacks]
+    telemetry:
+      adapter: openrouter
 ```
 
 Notes:
@@ -207,6 +225,9 @@ Notes:
 - Override entries replace the full provider definition for the same provider key.
 - Exactly one provider must set `default_for_runner: true`.
 - `driver: openai_compatible` providers must define `base_url_env` or `default_base_url` and set `api_mode` explicitly.
+- `optional_for_runtime: true` keeps a missing credential visible as degraded route readiness without preventing a valid default provider from starting.
+- `request` defines immutable headers/body policy and fields that callers may not add. `omit_usage_request` suppresses deprecated provider usage-inclusion flags when accounting is automatic. Configured policy currently applies to `chat_completions` routes.
+- `telemetry.adapter` enables a content-free response decoder. The OpenRouter adapter records only selected route identifiers, routing attempt, latency, tokens, and authoritative billed cost.
 - API key values are never stored in YAML, only env var names.
 
 ### models.yaml

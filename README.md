@@ -81,6 +81,8 @@ For local product development in a repository checkout:
    At minimum, set these values in `~/.agr_ai_curation/.env`:
    ```
    OPENAI_API_KEY=your_openai_api_key_here
+   # Optional; required only when explicitly selecting an OpenRouter model.
+   OPENROUTER_API_KEY=
    ```
 
 2. **Start the services**
@@ -246,7 +248,7 @@ All runtime configuration is done through environment variables. See `.env.examp
 
 | Section | Variables | Description |
 |---------|-----------|-------------|
-| API Keys | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY` | LLM provider credentials |
+| API Keys | `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY` | LLM provider credentials; OpenRouter is opt-in |
 | Database | `DATABASE_URL` | PostgreSQL connection |
 | Weaviate | `WEAVIATE_HOST`, `WEAVIATE_PORT` | Vector store connection |
 | LLM Settings | `DEFAULT_AGENT_MODEL`, `DEFAULT_AGENT_REASONING` | Global model defaults |

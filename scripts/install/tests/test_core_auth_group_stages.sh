@@ -247,6 +247,7 @@ test_core_config_generates_env_and_backups() {
   }
 
   assert_contains '^OPENAI_API_KEY=sk-openai-first$' "$env_file"
+  assert_contains '^OPENROUTER_API_KEY=$' "$env_file"
   assert_contains '^GROQ_API_KEY=$' "$env_file"
   assert_contains '^ANTHROPIC_API_KEY=$' "$env_file"
   assert_contains '^GEMINI_API_KEY=$' "$env_file"

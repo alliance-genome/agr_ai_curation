@@ -126,6 +126,7 @@ raw = sys.argv[1] if len(sys.argv) > 1 else ""
 out = {
     "status": "not_json",
     "error_count": None,
+    "openrouter_status": "not_evaluated",
 }
 
 try:
@@ -138,7 +139,29 @@ errors = payload.get("errors", [])
 if isinstance(errors, list):
     out["error_count"] = len(errors)
     out["errors"] = errors
-    out["status"] = "pass" if len(errors) == 0 else "fail"
+    providers = payload.get("providers", [])
+    openrouter = next(
+        (item for item in providers if isinstance(item, dict) and item.get("provider_id") == "openrouter"),
+        None,
+    )
+    if openrouter is None:
+        out["openrouter_status"] = "missing"
+    else:
+        readiness = openrouter.get("readiness")
+        route_available = openrouter.get("route_available")
+        mapped_models = openrouter.get("mapped_model_ids", [])
+        valid = (
+            openrouter.get("optional_for_runtime") is True
+            and "deepseek/deepseek-v4-pro-0813" in mapped_models
+            and readiness in {"ready", "missing_api_key"}
+            and route_available is (readiness == "ready")
+        )
+        out["openrouter_status"] = "pass" if valid else "invalid"
+    out["status"] = (
+        "pass"
+        if len(errors) == 0 and out["openrouter_status"] == "pass"
+        else "fail"
+    )
 else:
     out["status"] = "invalid_errors_field"
 print(json.dumps(out))

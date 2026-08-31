@@ -234,6 +234,21 @@ def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
     )
 
 
+def test_compose_propagates_optional_openrouter_key_name_only():
+    dev_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    test_env = _list_environment(
+        _load_test_compose()["services"]["backend-unit-tests"]["environment"]
+    )
+
+    expected = "${OPENROUTER_API_KEY:-}"
+    assert dev_env["OPENROUTER_API_KEY"] == expected
+    assert production_env["OPENROUTER_API_KEY"] == expected
+    assert test_env["OPENROUTER_API_KEY"] == expected
+
+
 def test_agent_studio_compose_and_env_example_default_to_opus_5():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]

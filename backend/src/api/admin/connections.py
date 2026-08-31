@@ -63,6 +63,10 @@ class LLMProviderHealthItem(BaseModel):
     base_url_env: Optional[str]
     base_url_configured: bool
     default_for_runner: bool
+    optional_for_runtime: bool = False
+    required_for_runtime: bool = False
+    route_configured: bool = False
+    route_available: bool = False
     mapped_model_ids: List[str]
     mapped_curator_visible_model_ids: List[str]
     supports_parallel_tool_calls: bool

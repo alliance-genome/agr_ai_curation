@@ -357,7 +357,33 @@ def get_model_for_agent(
             use_responses_websocket=False,
             strict_feature_validation=True,
         )
-        model = model_provider.get_model(model_name)
+        has_configured_adapter = bool(
+            getattr(provider, "request_extra_body", {})
+            or getattr(provider, "request_headers", {})
+            or getattr(provider, "forbidden_request_fields", ())
+            or getattr(provider, "omit_usage_request", False)
+            or getattr(provider, "telemetry_adapter", None)
+        )
+        if has_configured_adapter:
+            from src.lib.openai_agents.provider_model import (
+                ProviderConfiguredChatCompletionsModel,
+            )
+
+            model = ProviderConfiguredChatCompletionsModel(
+                model=model_name,
+                openai_client=openai_client,
+                strict_feature_validation=True,
+                provider_id=provider.provider_id,
+                request_extra_body=getattr(provider, "request_extra_body", {}),
+                request_headers=getattr(provider, "request_headers", {}),
+                forbidden_request_fields=getattr(
+                    provider, "forbidden_request_fields", ()
+                ),
+                omit_usage_request=getattr(provider, "omit_usage_request", False),
+                telemetry_adapter=getattr(provider, "telemetry_adapter", None),
+            )
+        else:
+            model = model_provider.get_model(model_name)
         setattr(model, "_agr_provider_id", provider.provider_id)
         return model
 

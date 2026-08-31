@@ -1,6 +1,6 @@
 # LLM Provider Rollout Runbook
 
-Last updated: 2026-02-24
+Last updated: 2026-08-31
 
 ## Scope
 
@@ -15,6 +15,7 @@ Safe rollout and rollback process for changes to:
 - Add, update, or remove a provider entry
 - Add, update, or remove a model mapping
 - Change a provider's `supports.parallel_tool_calls` flag
+- Change immutable routed-provider request policy or safe usage telemetry
 
 ## Pre-Deploy Checklist
 
@@ -29,12 +30,16 @@ Safe rollout and rollback process for changes to:
    - No unexpected failures in Agent Studio or provider-related test suites.
 
 3. **Secrets and connectivity:**
-   - Required API key env vars are prepared in the target environment (e.g., `OPENAI_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`).
+   - Required API key env vars are prepared in the target environment (e.g., `OPENAI_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`). `OPENROUTER_API_KEY` is optional until an OpenRouter model is explicitly selected.
    - Env var names match the `api_key_env` values in `providers.yaml`.
    - If a provider uses a non-default base URL, the corresponding `base_url_env` is set or `default_base_url` is correct.
 
 4. **Strict mode:**
-   - `LLM_PROVIDER_STRICT_MODE` defaults to `true`. In strict mode, a missing API key for any provider that is referenced by a model causes a startup validation error. Set to `false` only if intentionally deploying with unused providers unconfigured.
+   - `LLM_PROVIDER_STRICT_MODE` defaults to `true`. In strict mode, missing credentials for required routes cause startup failure. Providers marked `optional_for_runtime` remain visible as degraded with `readiness: missing_api_key` and `route_available: false` without disabling the default OpenAI route.
+
+5. **OpenRouter policy review:**
+   - Keep `provider.allow_fallbacks: false`, `provider.require_parameters: true`, and `X-OpenRouter-Metadata: enabled` in the provider catalog.
+   - Do not add `models`, `fallbacks`, deprecated usage-inclusion flags, or a local price estimate.
 
 ## Deployment Steps
 
@@ -43,7 +48,7 @@ Safe rollout and rollback process for changes to:
 3. Monitor startup logs for provider validation output. The backend runs `validate_and_cache_provider_runtime_contracts()` at startup and will fail fast if strict mode catches errors.
 4. Check the diagnostics endpoint:
    - `GET /api/admin/health/llm-providers`
-   - Verify `status` is `healthy`, `errors` is empty, and all expected providers show `readiness: ready`.
+   - Verify `errors` is empty. Required providers must show `readiness: ready`; an uncredentialed optional OpenRouter route may show degraded `missing_api_key` readiness.
 5. Run smoke checks:
    - `make smoke-llm-local` for automated health endpoint verification.
    - Manually verify: one chat call per critical model, one tool-calling scenario, one flow execution.
@@ -84,6 +89,8 @@ Safe rollout and rollback process for changes to:
 | Missing API key / runtime readiness failure | Verify the env var named in `api_key_env` is set and non-empty in the runtime environment. |
 | Provider request failures (timeouts, auth errors) | Verify `base_url_env` or `default_base_url` is correct. Validate API credentials and network egress. |
 | Tool-calling regression on one provider | Check `supports.parallel_tool_calls` in `providers.yaml` for that provider. |
+| OpenRouter route unavailable | Check `OPENROUTER_API_KEY`, `route_configured`, `route_available`, and the mapped model ID. Do not enable fallback routing as a workaround. |
+| OpenRouter route identity or cost absent | Verify metadata opt-in is enabled. Preserve null actual-route or billed-cost fields when authoritative response data is absent; never infer or estimate them. |
 
 ## Communication Template
 

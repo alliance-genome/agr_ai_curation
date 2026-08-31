@@ -1421,6 +1421,46 @@ def test_get_model_for_agent_preserves_namespaced_model_id(monkeypatch):
     assert compatible_client.api_key == "groq-key"
 
 
+def test_get_model_for_agent_builds_configured_openrouter_adapter(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(provider="openrouter"),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(
+                provider_id="openrouter",
+                driver="openai_compatible",
+                api_key_env="OPENROUTER_API_KEY",
+                base_url_env=None,
+                default_base_url="https://openrouter.ai/api/v1",
+                api_mode="chat_completions",
+                supports_parallel_tool_calls=True,
+                request_extra_body={
+                    "provider": {
+                        "allow_fallbacks": False,
+                        "require_parameters": True,
+                    }
+                },
+                request_headers={"X-OpenRouter-Metadata": "enabled"},
+                forbidden_request_fields=("models", "fallbacks"),
+                omit_usage_request=True,
+                telemetry_adapter="openrouter",
+            )
+            if provider_id == "openrouter"
+            else None
+        ),
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-openrouter-key")
+
+    model = get_model_for_agent("deepseek/deepseek-v4-pro-0813")
+
+    assert type(model).__name__ == "ProviderConfiguredChatCompletionsModel"
+    assert getattr(model, "model") == "deepseek/deepseek-v4-pro-0813"
+    assert getattr(model, "_agr_provider_id") == "openrouter"
+
+
 @pytest.mark.parametrize(
     ("api_mode", "expected_type_name"),
     [

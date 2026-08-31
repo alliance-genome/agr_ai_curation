@@ -28,7 +28,7 @@ def test_llm_providers_health_contract_shape(client, monkeypatch):
         "strict_mode": False,
         "validated_at": "2026-02-26T00:00:00+00:00",
         "errors": [],
-        "warnings": ["Provider 'groq' missing GROQ_API_KEY"],
+        "warnings": ["Provider 'openrouter' missing OPENROUTER_API_KEY"],
         "providers": [
             {
                 "provider_id": "openai",
@@ -45,16 +45,20 @@ def test_llm_providers_health_contract_shape(client, monkeypatch):
                 "readiness": "ready",
             },
             {
-                "provider_id": "groq",
+                "provider_id": "openrouter",
                 "driver": "openai_compatible",
                 "api_mode": "chat_completions",
-                "api_key_env": "GROQ_API_KEY",
+                "api_key_env": "OPENROUTER_API_KEY",
                 "api_key_present": False,
-                "base_url_env": "GROQ_BASE_URL",
+                "base_url_env": None,
                 "base_url_configured": True,
                 "default_for_runner": False,
-                "mapped_model_ids": ["stub-groq-model"],
-                "mapped_curator_visible_model_ids": ["stub-groq-model"],
+                "optional_for_runtime": True,
+                "required_for_runtime": False,
+                "route_configured": True,
+                "route_available": False,
+                "mapped_model_ids": ["deepseek/deepseek-v4-pro-0813"],
+                "mapped_curator_visible_model_ids": ["deepseek/deepseek-v4-pro-0813"],
                 "supports_parallel_tool_calls": True,
                 "readiness": "missing_api_key",
             },
@@ -105,7 +109,10 @@ def test_llm_providers_health_contract_shape(client, monkeypatch):
     assert data["summary"]["missing_key_provider_count"] == 1
     assert len(data["providers"]) == 2
     assert data["providers"][0]["provider_id"] == "openai"
-    assert data["providers"][1]["provider_id"] == "groq"
+    assert data["providers"][1]["provider_id"] == "openrouter"
+    assert data["providers"][1]["optional_for_runtime"] is True
+    assert data["providers"][1]["route_configured"] is True
+    assert data["providers"][1]["route_available"] is False
     assert data["startup_report"]["status"] == "healthy"
     # Contract should expose env names/presence only; never raw secrets.
     assert "api_key" not in data["providers"][0]
