@@ -121,7 +121,9 @@ def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch
     monkeypatch.setattr(
         flow_executor,
         "get_model_for_agent",
-        lambda model, provider_override=None: (model, provider_override),
+        lambda model, provider_override=None: SimpleNamespace(
+            model=model, provider=provider_override
+        ),
     )
     monkeypatch.setattr(flow_executor, "build_model_settings", lambda **kwargs: kwargs)
 
@@ -156,7 +158,8 @@ def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch
         captured["tool_kwargs"]["model_id_override"] == "deepseek/deepseek-v4-pro-0813"
     )
     assert captured["tool_kwargs"]["model_provider_override"] == "openrouter"
-    assert supervisor.model == ("deepseek/deepseek-v4-pro-0813", "openrouter")
+    assert supervisor.model.model == "deepseek/deepseek-v4-pro-0813"
+    assert supervisor.model.provider == "openrouter"
 
     captured.clear()
     benchmark_routes = {
@@ -172,7 +175,8 @@ def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch
             cast(Any, flow), benchmark_routes=benchmark_routes
         )
 
-    assert routed_supervisor.model == ("supervisor-model", "openai")
+    assert routed_supervisor.model.model == "supervisor-model"
+    assert routed_supervisor.model.provider == "openai"
     assert routed_supervisor.model_settings["reasoning_effort"] == "high"
     assert captured["tool_kwargs"]["benchmark_routes"] == benchmark_routes
 
