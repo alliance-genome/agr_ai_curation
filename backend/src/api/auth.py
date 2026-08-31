@@ -47,12 +47,12 @@ class _InvalidAuthTokenError(InvalidTokenError):
     """Raised when authenticated claims are structurally invalid."""
 
 
-def _is_unknown_signing_key_error(exc: PyJWKClientError) -> bool:
+def is_unknown_signing_key_error(exc: PyJWKClientError) -> bool:
     """Return whether PyJWT rejected the token because its key ID is unknown."""
     return str(exc).startswith("Unable to find a signing key that matches:")
 
 
-def _expected_token_failure_reason(exc: Exception) -> str:
+def expected_token_failure_reason(exc: Exception) -> str:
     """Return a non-sensitive category for expected credential rejection."""
     if isinstance(exc, _InvalidAuthTokenError):
         return "missing_subject"
@@ -289,7 +289,7 @@ async def _get_user_from_cookie_impl(
             exc=exc,
         )
     except PyJWKClientError as exc:
-        if not _is_unknown_signing_key_error(exc):
+        if not is_unknown_signing_key_error(exc):
             raise_sanitized_http_exception(
                 logger,
                 status_code=503,
@@ -305,7 +305,7 @@ async def _get_user_from_cookie_impl(
     except InvalidTokenError as exc:
         logger.info(
             "Authentication token rejected",
-            extra={"reason": _expected_token_failure_reason(exc)},
+            extra={"reason": expected_token_failure_reason(exc)},
         )
         raise HTTPException(status_code=401, detail="Invalid authentication token")
     except Exception as exc:
@@ -435,7 +435,9 @@ __all__ = [
     "router",
     "get_auth_dependency",
     "get_auth_or_trace_review_service_dependency",
+    "expected_token_failure_reason",
     "get_db",
+    "is_unknown_signing_key_error",
     "auth",
     "reset_auth_provider_cache",
 ]

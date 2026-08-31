@@ -24,6 +24,8 @@ class OIDCAuthProvider(AuthProvider):
     def __init__(self, config: Dict[str, Any]):
         self.issuer_url = config["issuer_url"].rstrip("/")
         self.client_id = config["client_id"]
+        self.audience = config.get("audience", self.client_id)
+        self.validation_issuer = config.get("validation_issuer")
         self.client_secret = config.get("client_secret")
         self.redirect_uri = config.get("redirect_uri", "http://localhost:3002/auth/callback")
         self.scopes = config.get("scopes", "openid profile email")
@@ -32,7 +34,11 @@ class OIDCAuthProvider(AuthProvider):
         self.logout_redirect_param = config.get(
             "logout_redirect_param", "post_logout_redirect_uri"
         )
-        self.timeout_seconds = int(config.get("timeout_seconds", 10))
+        self.timeout_seconds = float(config.get("timeout_seconds", 10))
+        self.jwks_timeout_seconds = config.get("jwks_timeout_seconds")
+        self.jwks_cache_ttl_seconds = config.get("jwks_cache_ttl_seconds")
+        self.clock_skew_seconds = config.get("clock_skew_seconds", 0)
+        self.required_claims = list(config.get("required_claims", ()))
 
         self._discovery: Optional[Dict[str, Any]] = None
         self._jwks_client: Optional[PyJWKClient] = None
@@ -51,6 +57,7 @@ class OIDCAuthProvider(AuthProvider):
             response = httpx.get(discovery_url, timeout=self.timeout_seconds)
             response.raise_for_status()
             self._discovery = response.json()
+        assert self._discovery is not None
         return self._discovery
 
     async def _discover_async(self) -> Dict[str, Any]:
@@ -70,7 +77,12 @@ class OIDCAuthProvider(AuthProvider):
             if not jwks_uri:
                 raise ValueError("OIDC discovery missing jwks_uri")
 
-            self._jwks_client = PyJWKClient(jwks_uri)
+            jwks_options: Dict[str, Any] = {}
+            if self.jwks_timeout_seconds is not None:
+                jwks_options["timeout"] = self.jwks_timeout_seconds
+            if self.jwks_cache_ttl_seconds is not None:
+                jwks_options["lifespan"] = self.jwks_cache_ttl_seconds
+            self._jwks_client = PyJWKClient(jwks_uri, **jwks_options)
         return self._jwks_client
 
     def _extract_groups(self, claims: Dict[str, Any]) -> List[str]:
@@ -159,14 +171,17 @@ class OIDCAuthProvider(AuthProvider):
         jwks_client = self._get_jwks_client()
         signing_key = await asyncio.to_thread(jwks_client.get_signing_key_from_jwt, token)
 
-        issuer = discovery.get("issuer", self.issuer_url)
+        issuer = self.validation_issuer or discovery.get("issuer", self.issuer_url)
+        options = {"require": self.required_claims} if self.required_claims else None
         return await asyncio.to_thread(
             jwt.decode,
             token,
             signing_key.key,
             algorithms=DEFAULT_JWT_ALGORITHMS,
-            audience=self.client_id,
+            audience=self.audience,
             issuer=issuer,
+            leeway=self.clock_skew_seconds,
+            options=options,
         )
 
     def extract_principal(self, claims: Dict[str, Any]) -> AuthPrincipal:

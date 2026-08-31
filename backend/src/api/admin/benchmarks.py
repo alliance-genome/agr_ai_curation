@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.api.admin.auth import require_admin
+from src.api.benchmark_auth import require_benchmark_read, require_benchmark_run
 from src.lib.benchmarks.loader import BenchmarkCatalogError
 from src.lib.benchmarks.models import (
     BenchmarkExecutionResponse,
@@ -30,7 +30,7 @@ def _service():
 
 
 @router.get("/profiles")
-async def list_profiles(_admin: dict = Depends(require_admin)) -> dict:
+async def list_profiles(_principal: dict = Depends(require_benchmark_read)) -> dict:
     _require_enabled()
     service = _service()
     return {
@@ -43,7 +43,7 @@ async def list_profiles(_admin: dict = Depends(require_admin)) -> dict:
 
 
 @router.get("/cases")
-async def list_cases(_admin: dict = Depends(require_admin)) -> dict:
+async def list_cases(_principal: dict = Depends(require_benchmark_read)) -> dict:
     _require_enabled()
     service = _service()
     return {
@@ -65,7 +65,7 @@ async def list_cases(_admin: dict = Depends(require_admin)) -> dict:
 @router.post("/validate", response_model=DryRunPlan)
 async def validate_selection(
     selection: BenchmarkSelection,
-    _admin: dict = Depends(require_admin),
+    _principal: dict = Depends(require_benchmark_read),
 ) -> DryRunPlan:
     _require_enabled()
     try:
@@ -77,7 +77,7 @@ async def validate_selection(
 @router.post("/execute", response_model=BenchmarkExecutionResponse)
 async def execute_selection(
     selection: BenchmarkSelection,
-    _admin: dict = Depends(require_admin),
+    _principal: dict = Depends(require_benchmark_run),
 ) -> BenchmarkExecutionResponse:
     _require_enabled()
     try:
