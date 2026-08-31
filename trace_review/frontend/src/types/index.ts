@@ -215,6 +215,23 @@ export interface ModelBreakdown {
   };
 }
 
+export interface ProviderUsageRecord {
+  requested_provider: string | null;
+  requested_model: string | null;
+  actual_provider: string | null;
+  actual_model: string | null;
+  routing_attempt: number | null;
+  latency_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  billed_cost: {
+    amount: string | null;
+    unit: string | null;
+    source: string | null;
+  } | null;
+}
+
 export interface TokenAnalysisData {
   found: boolean;
   total_cost: number;
@@ -225,6 +242,7 @@ export interface TokenAnalysisData {
   generations: GenerationData[];
   context_growth: ContextGrowth[];
   model_breakdown: ModelBreakdown;
+  provider_usage: ProviderUsageRecord[];
   context_overflow_detected: boolean;
   context_overflow_details?: {
     generation: number;

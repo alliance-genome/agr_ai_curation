@@ -16,6 +16,43 @@ class TokenAnalysisAnalyzer:
     """Analyzes token usage and cost patterns in traces"""
 
     @staticmethod
+    def _provider_usage(observations: List[Dict]) -> List[Dict[str, Any]]:
+        """Decode the bounded provider-usage events emitted by the runtime."""
+
+        records = []
+        for observation in observations:
+            metadata = observation.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            provider_usage = metadata.get("provider_usage")
+            if not isinstance(provider_usage, dict):
+                continue
+            billed_cost = provider_usage.get("billed_cost")
+            records.append(
+                {
+                    "requested_provider": provider_usage.get("requested_provider"),
+                    "requested_model": provider_usage.get("requested_model"),
+                    "actual_provider": provider_usage.get("actual_provider"),
+                    "actual_model": provider_usage.get("actual_model"),
+                    "routing_attempt": provider_usage.get("routing_attempt"),
+                    "latency_ms": provider_usage.get("latency_ms"),
+                    "input_tokens": provider_usage.get("input_tokens"),
+                    "output_tokens": provider_usage.get("output_tokens"),
+                    "total_tokens": provider_usage.get("total_tokens"),
+                    "billed_cost": (
+                        {
+                            "amount": billed_cost.get("amount"),
+                            "unit": billed_cost.get("unit"),
+                            "source": billed_cost.get("source"),
+                        }
+                        if isinstance(billed_cost, dict)
+                        else None
+                    ),
+                }
+            )
+        return records
+
+    @staticmethod
     def _parse_time(time_val: Any) -> Optional[datetime]:
         """Parse timestamp string or return datetime object"""
         if not time_val:
@@ -54,18 +91,22 @@ class TokenAnalysisAnalyzer:
         # Filter and sort GENERATION observations
         generations = [o for o in observations if o.get("type") == "GENERATION"]
         generations.sort(key=lambda x: x.get("startTime", ""))
+        provider_usage = cls._provider_usage(observations)
 
         if not generations:
             return {
-                "found": False,
+                "found": bool(provider_usage),
                 "total_cost": 0,
                 "total_latency": 0,
                 "total_generations": 0,
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
                 "generations": [],
                 "context_growth": [],
                 "model_breakdown": {},
                 "context_overflow_detected": False,
-                "context_overflow_details": None
+                "context_overflow_details": None,
+                "provider_usage": provider_usage,
             }
 
         # Analyze each generation
@@ -196,6 +237,7 @@ class TokenAnalysisAnalyzer:
             "generations": generation_data,
             "context_growth": context_growth,
             "model_breakdown": dict(model_breakdown),
+            "provider_usage": provider_usage,
             "context_overflow_detected": context_overflow_detected,
             "context_overflow_details": context_overflow_details
         }

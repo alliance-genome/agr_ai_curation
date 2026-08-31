@@ -5,7 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 import pytest
+from openai import InternalServerError
 
 from src.lib.openai_agents.config import (
     AgentConfig,
@@ -53,6 +55,7 @@ from src.lib.openai_agents.config import (
     get_inspect_results_validation_detail_list_limit,
     get_inspect_results_validation_page_size,
     get_openai_responses_websocket_ping_timeout_seconds,
+    get_openai_compatible_http_max_retries,
     get_pdf_document_error_message_max_chars,
     get_pdf_extraction_receipt_token_max_chars,
     get_pdf_max_file_size_bytes,
@@ -810,6 +813,34 @@ def test_build_model_settings_retry_disabled_when_max_retries_zero(monkeypatch):
     assert settings.retry is None
 
 
+def test_build_model_settings_disables_runner_retry_for_openrouter(monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "9")
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(
+            provider="openrouter",
+            supports_reasoning=False,
+            supports_temperature=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(
+                provider_id="openrouter",
+                supports_parallel_tool_calls=True,
+                telemetry_adapter="openrouter",
+            )
+            if provider_id == "openrouter"
+            else None
+        ),
+    )
+
+    settings = build_model_settings(model="deepseek/deepseek-v4-pro-0813")
+
+    assert settings.retry is None
+
+
 def _responses_websocket_error(
     *,
     event_type="error",
@@ -1315,6 +1346,7 @@ def test_get_model_for_agent_supports_openai_compatible_provider(monkeypatch):
     compatible_client = captured["provider_kwargs"]["openai_client"]
     assert str(compatible_client.base_url) == "https://runtime-org.example/v1/"
     assert compatible_client.api_key == "org-key"
+    assert compatible_client.max_retries == 2
     assert getattr(model, "_agr_provider_id") == "org_custom"
 
 
@@ -1419,6 +1451,79 @@ def test_get_model_for_agent_preserves_namespaced_model_id(monkeypatch):
     compatible_client = captured["provider_kwargs"]["openai_client"]
     assert str(compatible_client.base_url) == "https://api.groq.com/openai/v1/"
     assert compatible_client.api_key == "groq-key"
+
+
+@pytest.mark.asyncio
+async def test_get_model_for_agent_builds_single_attempt_openrouter_adapter(monkeypatch):
+    attempts = 0
+
+    async def failing_route(_request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(500, json={"error": {"message": "redacted"}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(failing_route))
+    monkeypatch.setattr(
+        "agents.models.openai_provider.shared_http_client",
+        lambda: http_client,
+    )
+    monkeypatch.setattr(
+        "src.lib.config.models_loader.get_model",
+        lambda _model_id: SimpleNamespace(provider="openrouter"),
+    )
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_provider",
+        lambda provider_id: (
+            SimpleNamespace(
+                provider_id="openrouter",
+                driver="openai_compatible",
+                api_key_env="OPENROUTER_API_KEY",
+                base_url_env=None,
+                default_base_url="https://openrouter.ai/api/v1",
+                api_mode="chat_completions",
+                supports_parallel_tool_calls=True,
+                request_extra_body={
+                    "provider": {
+                        "allow_fallbacks": False,
+                        "require_parameters": True,
+                    }
+                },
+                request_headers={"X-OpenRouter-Metadata": "enabled"},
+                forbidden_request_fields=("models", "fallbacks"),
+                omit_usage_request=True,
+                telemetry_adapter="openrouter",
+            )
+            if provider_id == "openrouter"
+            else None
+        ),
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-openrouter-key")
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_HTTP_MAX_RETRIES", "7")
+    model = get_model_for_agent("deepseek/deepseek-v4-pro-0813")
+
+    assert type(model).__name__ == "ProviderConfiguredChatCompletionsModel"
+    assert getattr(model, "model") == "deepseek/deepseek-v4-pro-0813"
+    assert getattr(model, "_agr_provider_id") == "openrouter"
+    client = getattr(model, "_client")
+    assert client.max_retries == 0
+
+    with pytest.raises(InternalServerError):
+        await client.chat.completions.create(
+            model="deepseek/deepseek-v4-pro-0813",
+            messages=[{"role": "user", "content": "redacted"}],
+        )
+
+    assert attempts == 1
+    await client.close()
+
+
+def test_openai_compatible_http_max_retries_is_environment_configurable(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPATIBLE_HTTP_MAX_RETRIES", "4")
+    assert get_openai_compatible_http_max_retries() == 4
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_HTTP_MAX_RETRIES", "-1")
+    assert get_openai_compatible_http_max_retries() == 0
 
 
 @pytest.mark.parametrize(

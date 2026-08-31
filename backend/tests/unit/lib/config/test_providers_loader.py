@@ -67,7 +67,7 @@ def test_shipped_provider_catalogs_match_direct_driver_contract():
     assert providers["openai"]["driver"] == "openai_native"
     assert providers["openai"]["api_mode"] == "responses"
     assert providers["openai"]["default_for_runner"] is True
-    for provider_id in ("gemini", "groq"):
+    for provider_id in ("gemini", "groq", "openrouter"):
         provider = ProviderDefinition.from_yaml(
             provider_id,
             providers[provider_id],
@@ -77,6 +77,50 @@ def test_shipped_provider_catalogs_match_direct_driver_contract():
         assert provider.api_mode == "chat_completions"
         assert provider.default_base_url
         assert provider.supports_parallel_tool_calls is True
+    openrouter = ProviderDefinition.from_yaml(
+        "openrouter",
+        providers["openrouter"],
+        source_label="shipped provider catalog",
+    )
+    assert openrouter.optional_for_runtime is True
+    assert openrouter.request_extra_body == {
+        "provider": {"allow_fallbacks": False, "require_parameters": True}
+    }
+    assert openrouter.request_headers == {"X-OpenRouter-Metadata": "enabled"}
+    assert openrouter.forbidden_request_fields == ("models", "fallbacks")
+    assert openrouter.omit_usage_request is True
+    assert openrouter.telemetry_adapter == "openrouter"
+
+
+def test_openrouter_adapter_requires_strict_routing_and_metadata_policy(tmp_path: Path):
+    import src.lib.config.providers_loader as providers_loader_module
+
+    config_path = tmp_path / "providers.yaml"
+    config_path.write_text(
+        """
+providers:
+  openai:
+    driver: openai_native
+    api_key_env: OPENAI_API_KEY
+    default_for_runner: true
+  openrouter:
+    driver: openai_compatible
+    api_key_env: OPENROUTER_API_KEY
+    default_base_url: https://openrouter.ai/api/v1
+    api_mode: chat_completions
+    optional_for_runtime: true
+    telemetry:
+      adapter: openrouter
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing required no-fallback"):
+        providers_loader_module.load_providers(
+            providers_path=config_path,
+            packages_dir=tmp_path / "missing-packages",
+            force_reload=True,
+        )
 
 
 def test_load_providers_reads_yaml(tmp_path: Path):

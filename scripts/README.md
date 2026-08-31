@@ -302,7 +302,8 @@ Checks:
 - `/health`
 - `/api/admin/health/llm-providers`
 - `/api/agent-studio/models`
-- derived structural check that provider-health `errors` is empty
+- derived structural checks that provider-health `errors` is empty and readiness agrees with route availability
+- optional provider/model mapping when `SMOKE_OPTIONAL_PROVIDER_ID` and `SMOKE_OPTIONAL_MODEL_ID` are both set
 
 ```bash
 # Run directly (defaults to http://localhost:8000)
@@ -310,6 +311,11 @@ Checks:
 
 # Run against a custom backend URL
 ./scripts/testing/llm_provider_smoke_local.sh http://localhost:18000
+
+# Verify an instance-specific optional route without reading its credential
+SMOKE_OPTIONAL_PROVIDER_ID=openrouter \
+SMOKE_OPTIONAL_MODEL_ID=deepseek/deepseek-v4-pro-0813 \
+./scripts/testing/llm_provider_smoke_local.sh
 
 # Or via Make target (sources ~/.agr_ai_curation/.env and ensures backend is up)
 make smoke-llm-local

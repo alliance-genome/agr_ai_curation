@@ -50,6 +50,19 @@ models:
     avoid_for:
       - Deep multi-step adjudication with conflicting evidence
 
+  - model_id: deepseek/deepseek-v4-pro-0813
+    name: DeepSeek V4 Pro 0813 (OpenRouter)
+    provider: openrouter
+    description: Explicit non-default OpenRouter route for controlled evaluation.
+    guidance: Select explicitly when evaluating the OpenRouter route; OpenAI remains the default.
+    default: false
+    supports_reasoning: true
+    supports_temperature: true
+    recommended_for:
+      - Explicit OpenRouter route evaluation
+    avoid_for:
+      - Work that must remain on the default OpenAI route
+
   # gpt-4o is intentionally NOT registered. It is retired; do not re-add it.
   # Alembic migration lineage moves persisted retired OpenAI model IDs forward
   # to the supported GPT-5.6 Sol/Terra catalog; do not re-add compatibility entries.

@@ -38,3 +38,25 @@ providers:
     api_mode: chat_completions
     supports:
       parallel_tool_calls: true
+
+  openrouter:
+    driver: openai_compatible
+    api_key_env: OPENROUTER_API_KEY
+    default_base_url: https://openrouter.ai/api/v1
+    api_mode: chat_completions
+    optional_for_runtime: true
+    supports:
+      parallel_tool_calls: true
+    request:
+      omit_usage_request: true
+      headers:
+        X-OpenRouter-Metadata: enabled
+      extra_body:
+        provider:
+          allow_fallbacks: false
+          require_parameters: true
+      forbidden_fields:
+        - models
+        - fallbacks
+    telemetry:
+      adapter: openrouter

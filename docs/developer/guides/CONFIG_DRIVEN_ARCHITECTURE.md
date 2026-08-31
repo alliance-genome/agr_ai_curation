@@ -497,6 +497,24 @@ providers:
     api_mode: chat_completions
     supports:
       parallel_tool_calls: true
+
+  openrouter:
+    driver: openai_compatible
+    api_key_env: OPENROUTER_API_KEY
+    default_base_url: "https://openrouter.ai/api/v1"
+    api_mode: chat_completions
+    optional_for_runtime: true
+    request:
+      omit_usage_request: true
+      headers:
+        X-OpenRouter-Metadata: enabled
+      extra_body:
+        provider:
+          allow_fallbacks: false
+          require_parameters: true
+      forbidden_fields: [models, fallbacks]
+    telemetry:
+      adapter: openrouter
 ```
 
 #### Provider Definition Fields
@@ -509,14 +527,17 @@ providers:
 | `default_base_url` | No | Fallback base URL when env var is not set |
 | `api_mode` | Conditional | `responses` or `chat_completions`; required for `openai_compatible`, and defaults to `responses` for `openai_native` |
 | `default_for_runner` | No | Whether this provider is the default runner (exactly one must be `true`) |
+| `optional_for_runtime` | No | Missing credentials degrade only this explicitly selected route rather than default-provider startup |
 | `supports.parallel_tool_calls` | No | Whether parallel tool calls are supported (default: `true`) |
+| `request` | No | Immutable extra body/headers, prohibited caller fields, and automatic-usage behavior for direct chat-completions adapters |
+| `telemetry.adapter` | No | Content-free provider response decoder; currently `openrouter` |
 
 ### Provider Validation
 
 At startup, `provider_validation.py` cross-validates the loaded providers and models:
 
 - Every model's `provider` field must reference a key defined in `providers.yaml`
-- Providers used by at least one model (or marked `default_for_runner`) must have their API key set in the environment
+- Required providers used by a model (or marked `default_for_runner`) must have their API key set. Missing keys for `optional_for_runtime` providers remain visible as degraded route readiness.
 - Exactly one provider must have `default_for_runner: true`
 
 The validation runs in **strict mode** by default (`LLM_PROVIDER_STRICT_MODE=true`), which causes the backend to fail fast on startup if any required API key is missing. Set `LLM_PROVIDER_STRICT_MODE=false` to downgrade missing keys to warnings instead of errors.
@@ -1098,6 +1119,7 @@ DATABASE_URL=postgresql://postgres:secret@localhost:5432/ai_curation
 
 # LLM Provider API Keys
 OPENAI_API_KEY=sk-...              # Required (default runner provider)
+OPENROUTER_API_KEY=...             # Optional (explicit OpenRouter routes)
 GEMINI_API_KEY=...                 # Optional (for Gemini provider)
 GROQ_API_KEY=gsk_...               # Optional (for Groq provider)
 

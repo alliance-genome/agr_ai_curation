@@ -8,6 +8,7 @@ provider_boundary_contract="${repo_root}/scripts/testing/fixtures/agent_studio_p
 
 required_env_keys=(
   OPENAI_API_KEY
+  OPENROUTER_API_KEY
   GROQ_API_KEY
   ANTHROPIC_API_KEY
   GEMINI_API_KEY
