@@ -230,6 +230,134 @@ def test_repository_persists_plan_pages_without_envelopes_and_replays_events():
         db.close()
 
 
+def test_terminal_cell_seals_invocations_and_requires_settled_invocations():
+    db = SessionLocal()
+    job_id = None
+    try:
+        job = _create_job(db, owner="cell-owner", cells=1)
+        job_id = job.id
+        db.commit()
+        repository = BenchmarkRepository(db)
+        now = datetime.now(timezone.utc)
+        assert repository.claim_next_job(
+            lease_owner=uuid4(),
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+        ) is not None
+        cell = repository.claim_next_cell(
+            job_id=job.id,
+            lease_owner=uuid4(),
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+        )
+        assert cell is not None
+        invocation = repository.append_invocation(
+            cell_id=cell.id,
+            ordinal=0,
+            attempt=cell.attempt_count,
+            route_slot="supervisor",
+            request_digest=_digest("1"),
+            started_at=now,
+        )
+        invocation_id = invocation.id
+        db.commit()
+
+        with pytest.raises(ValueError, match="running invocations"):
+            repository.finish_cell(
+                cell_id=cell.id,
+                status=BenchmarkCellStatus.CANCELLED,
+                completed_at=now,
+            )
+
+        with pytest.raises(DBAPIError, match="cannot have running invocations"):
+            db.execute(
+                update(BenchmarkCell)
+                .where(BenchmarkCell.id == cell.id)
+                .values(
+                    status=BenchmarkCellStatus.CANCELLED,
+                    completed_at=now,
+                    lease_owner=None,
+                    lease_expires_at=None,
+                    lease_heartbeat_at=None,
+                )
+            )
+            db.commit()
+        db.rollback()
+
+        repository.finish_invocation(
+            invocation_id=invocation_id,
+            status=BenchmarkInvocationStatus.SUCCEEDED,
+            completed_at=now,
+            response_digest=_digest("2"),
+        )
+        repository.finish_cell(
+            cell_id=cell.id,
+            status=BenchmarkCellStatus.SUCCEEDED,
+            completed_at=now,
+            generated_envelope={"ok": True},
+        )
+        db.commit()
+
+        with pytest.raises(ValueError, match="require a running cell"):
+            repository.append_invocation(
+                cell_id=cell.id,
+                ordinal=1,
+                attempt=cell.attempt_count,
+                route_slot="supervisor",
+                request_digest=_digest("3"),
+                started_at=now,
+            )
+
+        db.add(
+            BenchmarkInvocation(
+                cell_id=cell.id,
+                ordinal=1,
+                attempt=cell.attempt_count,
+                route_slot="supervisor",
+                request_digest=_digest("3"),
+                status=BenchmarkInvocationStatus.RUNNING,
+                started_at=now,
+            )
+        )
+        with pytest.raises(DBAPIError, match="requires a running cell"):
+            db.commit()
+        db.rollback()
+
+        with pytest.raises(DBAPIError, match="requires a running cell"):
+            db.execute(
+                update(BenchmarkInvocation)
+                .where(BenchmarkInvocation.id == invocation_id)
+                .values(route_slot="mutated")
+            )
+            db.commit()
+        db.rollback()
+
+        persisted_invocation = db.get(BenchmarkInvocation, invocation_id)
+        assert persisted_invocation is not None
+        db.delete(persisted_invocation)
+        with pytest.raises(DBAPIError, match="requires a running cell"):
+            db.commit()
+        db.rollback()
+
+        repository.complete_job(job_id=job.id, completed_at=now)
+        db.commit()
+    finally:
+        db.rollback()
+        if job_id is not None:
+            job = db.get(BenchmarkJob, job_id)
+            if job is not None and job.status in {
+                BenchmarkJobStatus.COMPLETED,
+                BenchmarkJobStatus.COMPLETED_WITH_FAILURES,
+                BenchmarkJobStatus.CANCELLED,
+                BenchmarkJobStatus.FAILED,
+            }:
+                BenchmarkRepository(db).delete_terminal_job(
+                    job_id=job_id, owner_subject="cell-owner"
+                )
+                db.commit()
+        db.close()
+
+
 def test_envelope_limit_terminal_immutability_rerun_lineage_and_cascade(monkeypatch):
     db = SessionLocal()
     source_id = rerun_id = None
@@ -324,6 +452,17 @@ def test_envelope_limit_terminal_immutability_rerun_lineage_and_cascade(monkeypa
         with pytest.raises(DBAPIError, match="child content is immutable"):
             db.commit()
         db.rollback()
+
+        loaded_job = db.get(BenchmarkJob, rerun.id)
+        assert loaded_job is not None
+        loaded_cells = tuple(loaded_job.cells)
+        loaded_invocations = tuple(
+            invocation
+            for loaded_cell in loaded_cells
+            for invocation in loaded_cell.invocations
+        )
+        loaded_events = tuple(loaded_job.events)
+        assert loaded_cells and loaded_invocations and loaded_events
 
         assert repository.delete_terminal_job(
             job_id=rerun.id, owner_subject="lineage-owner"

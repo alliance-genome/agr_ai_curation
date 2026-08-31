@@ -355,6 +355,70 @@ def upgrade() -> None:
 
     op.execute(
         """
+        CREATE FUNCTION benchmark_require_settled_invocations() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.status IN ('succeeded', 'failed', 'cancelled')
+               AND OLD.status = 'running'
+               AND EXISTS (
+                   SELECT 1 FROM benchmark_invocations
+                   WHERE cell_id = NEW.id AND status = 'running'
+               ) THEN
+                RAISE EXCEPTION 'terminal benchmark cells cannot have running invocations';
+            END IF;
+            RETURN NEW;
+        END;
+        $$
+        """
+    )
+    op.execute(
+        "CREATE TRIGGER trg_benchmark_cells_settled_invocations "
+        "BEFORE UPDATE OF status ON benchmark_cells FOR EACH ROW "
+        "EXECUTE FUNCTION benchmark_require_settled_invocations()"
+    )
+
+    op.execute(
+        """
+        CREATE FUNCTION benchmark_require_running_invocation_cell() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        DECLARE old_cell_status TEXT;
+        DECLARE old_job_status TEXT;
+        DECLARE new_cell_status TEXT;
+        DECLARE new_job_status TEXT;
+        BEGIN
+            IF TG_OP IN ('UPDATE', 'DELETE') THEN
+                SELECT cells.status, jobs.status INTO old_cell_status, old_job_status
+                FROM benchmark_cells AS cells
+                JOIN benchmark_jobs AS jobs ON jobs.id = cells.job_id
+                WHERE cells.id = OLD.cell_id
+                FOR UPDATE OF cells;
+                IF old_job_status IS NOT NULL AND old_cell_status <> 'running' THEN
+                    RAISE EXCEPTION 'benchmark invocation content requires a running cell';
+                END IF;
+            END IF;
+            IF TG_OP IN ('INSERT', 'UPDATE') THEN
+                SELECT cells.status, jobs.status INTO new_cell_status, new_job_status
+                FROM benchmark_cells AS cells
+                JOIN benchmark_jobs AS jobs ON jobs.id = cells.job_id
+                WHERE cells.id = NEW.cell_id
+                FOR UPDATE OF cells;
+                IF new_job_status IS NOT NULL AND new_cell_status <> 'running' THEN
+                    RAISE EXCEPTION 'benchmark invocation content requires a running cell';
+                END IF;
+            END IF;
+            RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+        END;
+        $$
+        """
+    )
+    op.execute(
+        "CREATE TRIGGER trg_benchmark_invocations_running_cell "
+        "BEFORE INSERT OR UPDATE OR DELETE ON benchmark_invocations FOR EACH ROW "
+        "EXECUTE FUNCTION benchmark_require_running_invocation_cell()"
+    )
+
+    op.execute(
+        """
         CREATE FUNCTION benchmark_restrict_job_delete() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
@@ -464,6 +528,16 @@ def downgrade() -> None:
             f"DROP TRIGGER IF EXISTS trg_{table}_terminal_job_content ON {table}"
         )
     op.execute("DROP FUNCTION IF EXISTS benchmark_restrict_terminal_job_content()")
+    op.execute(
+        "DROP TRIGGER IF EXISTS trg_benchmark_invocations_running_cell "
+        "ON benchmark_invocations"
+    )
+    op.execute("DROP FUNCTION IF EXISTS benchmark_require_running_invocation_cell()")
+    op.execute(
+        "DROP TRIGGER IF EXISTS trg_benchmark_cells_settled_invocations "
+        "ON benchmark_cells"
+    )
+    op.execute("DROP FUNCTION IF EXISTS benchmark_require_settled_invocations()")
     op.execute(
         "DROP TRIGGER IF EXISTS trg_benchmark_cells_envelope_bound ON benchmark_cells"
     )

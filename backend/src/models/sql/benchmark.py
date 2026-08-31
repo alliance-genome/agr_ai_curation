@@ -105,10 +105,10 @@ class BenchmarkJob(Base):
     lease_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     cells: Mapped[list["BenchmarkCell"]] = relationship(
-        back_populates="job", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="job", passive_deletes="all"
     )
     events: Mapped[list["BenchmarkEvent"]] = relationship(
-        back_populates="job", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="job", passive_deletes="all"
     )
 
     __table_args__ = (
@@ -208,7 +208,7 @@ class BenchmarkCell(Base):
 
     job: Mapped[BenchmarkJob] = relationship(back_populates="cells")
     invocations: Mapped[list["BenchmarkInvocation"]] = relationship(
-        back_populates="cell", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="cell", passive_deletes="all"
     )
 
     __table_args__ = (

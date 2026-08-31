@@ -28,9 +28,11 @@ Jobs use `queued`, `running`, `completed`, `completed_with_failures`,
 counters, envelopes, and failures consistent with those states.
 
 Once a job, cell, or invocation is terminal, a database trigger rejects all
-updates. Only terminal jobs may be hard-deleted. That deletion cascades to the
-job's cells, invocations, and replay events; references from later reruns remain
-restrictive so lineage cannot be silently severed.
+updates. A cell cannot become terminal while an invocation is running, and a
+terminal cell rejects later invocation inserts, updates, or deletes. Only terminal
+jobs may be hard-deleted. That deletion cascades to the job's cells, invocations,
+and replay events; references from later reruns remain restrictive so lineage
+cannot be silently severed.
 
 ## Results, paging, and replay
 

@@ -8,7 +8,7 @@ import json
 from typing import Any, Generic, TypeVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, or_, select, text
+from sqlalchemy import case, delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from src.lib.benchmarks.models import BenchmarkSuite, ResolvedBenchmarkPlan
@@ -499,6 +499,17 @@ class BenchmarkRepository:
             raise LookupError("benchmark cell not found")
         if cell.status != BenchmarkCellStatus.RUNNING:
             raise ValueError("only a running benchmark cell may finish")
+        running_invocation = self.session.scalar(
+            select(BenchmarkInvocation.id)
+            .where(
+                BenchmarkInvocation.cell_id == cell_id,
+                BenchmarkInvocation.status == BenchmarkInvocationStatus.RUNNING,
+            )
+            .with_for_update()
+            .limit(1)
+        )
+        if running_invocation is not None:
+            raise ValueError("benchmark cell has running invocations")
         envelope_size = None
         if status == BenchmarkCellStatus.SUCCEEDED:
             if generated_envelope is None:
@@ -543,6 +554,15 @@ class BenchmarkRepository:
         request_digest: str,
         started_at: datetime,
     ) -> BenchmarkInvocation:
+        cell = self.session.scalar(
+            select(BenchmarkCell)
+            .where(BenchmarkCell.id == cell_id)
+            .with_for_update()
+        )
+        if cell is None:
+            raise LookupError("benchmark cell not found")
+        if cell.status != BenchmarkCellStatus.RUNNING:
+            raise ValueError("benchmark invocations require a running cell")
         invocation = BenchmarkInvocation(
             id=uuid4(),
             cell_id=cell_id,
@@ -568,6 +588,22 @@ class BenchmarkRepository:
     ) -> BenchmarkInvocation:
         if status == BenchmarkInvocationStatus.RUNNING:
             raise ValueError("finish_invocation requires a terminal status")
+        cell_id = self.session.scalar(
+            select(BenchmarkInvocation.cell_id).where(
+                BenchmarkInvocation.id == invocation_id
+            )
+        )
+        if cell_id is None:
+            raise LookupError("benchmark invocation not found")
+        cell = self.session.scalar(
+            select(BenchmarkCell)
+            .where(BenchmarkCell.id == cell_id)
+            .with_for_update()
+        )
+        if cell is None:
+            raise LookupError("benchmark cell not found")
+        if cell.status != BenchmarkCellStatus.RUNNING:
+            raise ValueError("benchmark invocations require a running cell")
         invocation = self.session.scalar(
             select(BenchmarkInvocation)
             .where(BenchmarkInvocation.id == invocation_id)
@@ -733,7 +769,7 @@ class BenchmarkRepository:
             return False
         if job.status not in _TERMINAL_JOB_STATUSES:
             raise ValueError("only terminal benchmark jobs may be deleted")
-        self.session.delete(job)
+        self.session.execute(delete(BenchmarkJob).where(BenchmarkJob.id == job.id))
         self.session.flush()
         return True
 
