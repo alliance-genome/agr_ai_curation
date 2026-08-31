@@ -416,6 +416,151 @@ async def test_parse_reports_external_failure_outcome(
 
 
 @pytest.mark.asyncio
+async def test_observation_callback_failure_reports_sanitized_warning_without_masking_success(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: tmp_path)
+    callback_sentinel = "PRIVATE_CALLBACK_SENTINEL"
+    reported = []
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    parser = PDFXParser()
+
+    async def _submit_extraction(*_args, **_kwargs):
+        return {"process_id": "proc-success"}
+
+    async def _poll_until_complete(**_kwargs):
+        return {"status": "complete"}
+
+    async def _download_markdown(*_args, **_kwargs):
+        return "# Results\n\nBody\n"
+
+    def _failing_callback(observation):
+        raise RuntimeError(f"{callback_sentinel}: {observation!r}")
+
+    def _report_runtime_exception(exc, **kwargs):
+        reported.append((exc, kwargs))
+        return False
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    monkeypatch.setattr(parser, "_poll_until_complete", _poll_until_complete)
+    monkeypatch.setattr(parser, "_download_markdown", _download_markdown)
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.report_runtime_exception",
+        _report_runtime_exception,
+    )
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    result = await parser.parse_pdf_document(
+        pdf_path,
+        "doc-private",
+        "user-private",
+        observability_callback=_failing_callback,
+    )
+
+    assert [element["text"] for element in result["elements"]] == ["Results", "Body"]
+    assert len(reported) == 1
+    reported_exc, report_kwargs = reported[0]
+    assert str(reported_exc) == "PDF extraction observability callback failed"
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__context__ is None
+    assert reported_exc.__cause__ is None
+    assert report_kwargs == {
+        "component": "pdfx_parser",
+        "operation": "external_observation_callback_failed",
+        "level": "warning",
+    }
+    assert callback_sentinel not in str(reported_exc)
+    assert callback_sentinel not in caplog.text
+    assert "doc-private" not in str(reported_exc)
+    callback_warning = next(
+        record
+        for record in caplog.records
+        if record.getMessage().startswith(
+            "Failed to record PDF extraction boundary observability"
+        )
+    )
+    assert callback_warning.sentry_skip_event is True
+
+
+@pytest.mark.asyncio
+async def test_observation_callback_failure_does_not_mask_active_parser_exception(
+    parser_env,
+    monkeypatch,
+    tmp_path,
+):
+    callback_sentinel = "PRIVATE_CALLBACK_SENTINEL"
+    provider_sentinel = "PRIVATE_PROVIDER_SENTINEL"
+    reported = []
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    parser = PDFXParser()
+
+    async def _submit_extraction(*_args, **_kwargs):
+        raise PDFParsingError(provider_sentinel)
+
+    def _failing_callback(observation):
+        raise RuntimeError(f"{callback_sentinel}: {observation!r}")
+
+    def _report_runtime_exception(exc, **kwargs):
+        reported.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.aiohttp.ClientSession",
+        lambda timeout: _SessionContext(),
+    )
+    monkeypatch.setattr(parser, "_submit_extraction", _submit_extraction)
+    monkeypatch.setattr(
+        "src.lib.pipeline.pdfx_parser.report_runtime_exception",
+        _report_runtime_exception,
+    )
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    with pytest.raises(PDFParsingError) as raised:
+        await parser.parse_pdf_document(
+            pdf_path,
+            "doc-private",
+            "user-private",
+            observability_callback=_failing_callback,
+        )
+
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY]["failure_boundary"] == "submit"
+    assert provider_sentinel not in str(raised.value)
+    assert callback_sentinel not in str(raised.value)
+    assert len(reported) == 1
+    reported_exc, report_kwargs = reported[0]
+    assert str(reported_exc) == "PDF extraction observability callback failed"
+    assert reported_exc.__context__ is None
+    assert reported_exc.__cause__ is None
+    assert report_kwargs["level"] == "warning"
+    assert callback_sentinel not in str(reported_exc)
+    assert provider_sentinel not in str(reported_exc)
+
+
+@pytest.mark.asyncio
 async def test_parse_sanitizes_unclassified_provider_exception(
     parser_env,
     monkeypatch,
