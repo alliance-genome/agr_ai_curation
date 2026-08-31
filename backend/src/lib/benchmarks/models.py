@@ -125,6 +125,163 @@ class BenchmarkOutput(StrictModel):
     size_bytes: int = Field(ge=0)
 
 
+class BenchmarkFieldScore(StrictModel):
+    """One deterministic, machine-readable comparison outcome."""
+
+    path: str
+    rule: Literal[
+        "exact",
+        "normalized_string",
+        "normalized_identifier",
+        "ordered_collection",
+        "unordered_collection",
+        "structured",
+        "evidence",
+    ]
+    weight: Decimal = Field(gt=0, strict=False)
+    score: Decimal = Field(ge=0, le=1, strict=False)
+    outcome: Literal["pass", "partial", "fail"]
+    mismatch_class: Literal[
+        "none",
+        "value_mismatch",
+        "collection_mismatch",
+        "evidence_mismatch",
+        "missing_required",
+        "malformed_output",
+        "provider_failure",
+        "ambiguous",
+    ]
+    base_mismatch_class: (
+        Literal["value_mismatch", "collection_mismatch", "evidence_mismatch"] | None
+    ) = None
+    diagnostic: str
+    adjudication_eligible: bool = False
+
+    @model_validator(mode="after")
+    def require_consistent_ambiguity(self) -> "BenchmarkFieldScore":
+        is_ambiguous = self.mismatch_class == "ambiguous"
+        if is_ambiguous != self.adjudication_eligible:
+            raise ValueError("only ambiguous mismatches may be adjudication eligible")
+        if is_ambiguous != (self.base_mismatch_class is not None):
+            raise ValueError(
+                "ambiguous mismatches require their deterministic base class"
+            )
+        return self
+
+
+class BenchmarkDeterministicScore(StrictModel):
+    """Versioned deterministic result; supplemental judging never mutates it."""
+
+    scoring_version: Literal[1] = 1
+    scorer_id: str
+    outcome: Literal["pass", "partial", "fail"]
+    weighted_score: Decimal = Field(ge=0, le=1, strict=False)
+    earned_weight: Decimal = Field(ge=0, strict=False)
+    total_weight: Decimal = Field(gt=0, strict=False)
+    fields: list[BenchmarkFieldScore] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_consistent_metrics(self) -> "BenchmarkDeterministicScore":
+        total = sum((field.weight for field in self.fields), Decimal("0"))
+        earned = sum(
+            (field.weight * field.score for field in self.fields), Decimal("0")
+        )
+        expected_outcome = (
+            "pass" if earned == total else "fail" if earned == 0 else "partial"
+        )
+        if (
+            self.total_weight != total
+            or self.earned_weight != earned
+            or self.weighted_score != earned / total
+            or self.outcome != expected_outcome
+        ):
+            raise ValueError("deterministic score metrics are inconsistent")
+        return self
+
+
+class BenchmarkAdjudicationFailure(StrictModel):
+    category: Literal[
+        "disabled",
+        "ineligible",
+        "case_limit",
+        "timeout",
+        "refusal",
+        "invalid_result",
+        "provider_error",
+        "non_reproducible",
+    ]
+    message: str = Field(max_length=512)
+    attempts: int = Field(ge=0)
+
+
+class BenchmarkAdjudicationResult(StrictModel):
+    """Supplemental semantic evidence kept separate from deterministic truth."""
+
+    rubric_version: Literal[1] = 1
+    status: Literal["not_requested", "completed", "failed"]
+    outcome: Literal["supports_expected", "supports_actual", "uncertain"] | None = None
+    reason: str | None = Field(default=None, max_length=2000)
+    confidence: Decimal | None = Field(default=None, ge=0, le=1, strict=False)
+    uncertainty: str | None = Field(default=None, max_length=1000)
+    prompt_id: str
+    model: str
+    latency_ms: int | None = Field(default=None, ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    billed_cost: BilledCost | None = None
+    failure: BenchmarkAdjudicationFailure | None = None
+
+    @model_validator(mode="after")
+    def require_consistent_status(self) -> "BenchmarkAdjudicationResult":
+        completed_values = (
+            self.outcome,
+            self.reason,
+            self.confidence,
+            self.uncertainty,
+        )
+        if self.status == "completed":
+            if (
+                any(value is None for value in completed_values)
+                or self.failure is not None
+            ):
+                raise ValueError(
+                    "completed adjudication requires a decision and no failure"
+                )
+        elif (
+            any(value is not None for value in completed_values) or self.failure is None
+        ):
+            raise ValueError(
+                "non-completed adjudication requires only failure metadata"
+            )
+        return self
+
+
+class BenchmarkScoringRecord(StrictModel):
+    deterministic: BenchmarkDeterministicScore
+    adjudication: BenchmarkAdjudicationResult | None = None
+
+
+class BenchmarkAggregateScore(StrictModel):
+    scoring_version: Literal[1] = 1
+    profile_id: str
+    scorer_id: str
+    case_count: int = Field(ge=1)
+    pass_count: int = Field(ge=0)
+    partial_count: int = Field(ge=0)
+    fail_count: int = Field(ge=0)
+    weighted_score: Decimal = Field(ge=0, le=1, strict=False)
+    earned_weight: Decimal = Field(ge=0, strict=False)
+    total_weight: Decimal = Field(gt=0, strict=False)
+
+    @model_validator(mode="after")
+    def require_consistent_counts(self) -> "BenchmarkAggregateScore":
+        if self.pass_count + self.partial_count + self.fail_count != self.case_count:
+            raise ValueError("aggregate outcome counts must equal case_count")
+        if self.weighted_score != self.earned_weight / self.total_weight:
+            raise ValueError("aggregate weighted score is inconsistent")
+        return self
+
+
 class BenchmarkCaseRun(StrictModel):
     schema_version: Literal[1] = 1
     run_id: str
@@ -140,11 +297,13 @@ class BenchmarkCaseRun(StrictModel):
     failure: BenchmarkFailure | None = None
     fixture_digest: str
     output: BenchmarkOutput | None = None
+    scoring: list[BenchmarkScoringRecord] = Field(default_factory=list)
 
 
 class BenchmarkExecutionResponse(StrictModel):
     schema_version: Literal[1] = 1
     runs: list[BenchmarkCaseRun]
+    aggregates: list[BenchmarkAggregateScore] = Field(default_factory=list)
 
 
 class ExecutionResult(StrictModel):

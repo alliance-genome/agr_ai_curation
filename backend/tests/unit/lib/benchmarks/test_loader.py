@@ -94,3 +94,20 @@ def test_rejects_route_semantics_from_injected_canonical_validator(benchmark_roo
 
     with pytest.raises(BenchmarkCatalogError, match="Invalid route"):
         _load(benchmark_root, route_validator=reject)
+
+
+def test_rejects_unknown_or_malformed_scorer_configuration(benchmark_root):
+    profile = benchmark_root / "profiles" / "profile.yaml"
+    content = profile.read_text(encoding="utf-8").replace(
+        "  - id: exact-json",
+        "  - id: deterministic-v1\n"
+        "    configuration:\n"
+        "      scoring_version: 1\n"
+        "      fields:\n"
+        "        - path: not-a-json-pointer\n"
+        "          comparison: exact",
+    )
+    profile.write_text(content, encoding="utf-8")
+
+    with pytest.raises(BenchmarkCatalogError, match="Invalid scorer"):
+        _load(benchmark_root)

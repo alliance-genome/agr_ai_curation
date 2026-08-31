@@ -1023,6 +1023,49 @@ def get_benchmark_inline_max_bytes() -> int:
     return max(1, _get_env_int_with_fallback("BENCHMARK_INLINE_MAX_BYTES", 20000))
 
 
+def get_benchmark_adjudication_enabled() -> bool:
+    """Whether explicitly ambiguous benchmark mismatches may be adjudicated."""
+    return _get_env_bool("BENCHMARK_ADJUDICATION_ENABLED", False)
+
+
+def get_benchmark_adjudication_case_limit() -> int:
+    """Maximum ambiguous cases sent to the direct adjudicator per execution."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_CASE_LIMIT", 2))
+
+
+def get_benchmark_adjudication_turn_limit() -> int:
+    """Maximum independent structured decisions requested for one mismatch."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_TURN_LIMIT", 1))
+
+
+def get_benchmark_adjudication_tool_call_limit() -> int:
+    """Tool calls allowed during direct adjudication; the canonical value is zero."""
+    return max(
+        0, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_TOOL_CALL_LIMIT", 0)
+    )
+
+
+def get_benchmark_adjudication_timeout_seconds() -> float:
+    """Per-attempt timeout for direct supplemental adjudication."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("BENCHMARK_ADJUDICATION_TIMEOUT_SECONDS", 60.0),
+    )
+
+
+def get_benchmark_adjudication_retries() -> int:
+    """Retries after a failed direct adjudication attempt."""
+    return max(0, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_RETRIES", 1))
+
+
+def get_benchmark_adjudication_result_max_bytes() -> int:
+    """Maximum accepted structured adjudication result size."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_RESULT_MAX_BYTES", 10000),
+    )
+
+
 def get_go_annotations_request_timeout_seconds() -> float:
     """HTTP timeout for typed existing-GO annotation lookups."""
     return max(

@@ -17,6 +17,7 @@ from src.lib.openai_agents.provider_usage import (
     provider_usage_metadata,
 )
 
+from .adjudication import SupplementalAdjudicator, is_adjudication_eligible
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
 from .models import (
     BenchmarkCaseRun,
@@ -24,12 +25,14 @@ from .models import (
     BenchmarkFailure,
     BenchmarkOutput,
     BenchmarkRoute,
+    BenchmarkScoringRecord,
     BenchmarkSelection,
     DryRunPlan,
     ExecutionResult,
     PlannedCaseRun,
     ProviderUsage,
 )
+from .scoring import aggregate_scores, score_case
 
 BenchmarkExecutor = Callable[
     [str, dict[str, Any], BenchmarkRoute, str], Awaitable[ExecutionResult]
@@ -91,6 +94,8 @@ class BenchmarkService:
         retries: int,
         preview_max_chars: int,
         inline_max_bytes: int,
+        adjudicator: SupplementalAdjudicator | None = None,
+        adjudication_case_limit: int = 1,
     ) -> None:
         self.catalog = catalog
         self._executors = {"agent": agent_executor, "flow": flow_executor}
@@ -102,6 +107,8 @@ class BenchmarkService:
         self.retries = retries
         self.preview_max_chars = preview_max_chars
         self.inline_max_bytes = inline_max_bytes
+        self.adjudicator = adjudicator
+        self.adjudication_case_limit = adjudication_case_limit
 
     def plan(self, selection: BenchmarkSelection) -> DryRunPlan:
         if selection.route is not None:
@@ -178,15 +185,44 @@ class BenchmarkService:
         plan = self.plan(selection)
         semaphore = asyncio.Semaphore(self.max_concurrency)
 
-        async def run(planned: PlannedCaseRun) -> BenchmarkCaseRun:
+        async def run(planned: PlannedCaseRun) -> tuple[BenchmarkCaseRun, Any]:
             async with semaphore:
                 return await self._execute_case(planned)
 
-        return BenchmarkExecutionResponse(
-            runs=list(await asyncio.gather(*(run(item) for item in plan.runs)))
-        )
+        completed = list(await asyncio.gather(*(run(item) for item in plan.runs)))
+        runs = [item[0] for item in completed]
+        if self.adjudicator is not None:
+            adjudicated_cases = 0
+            for run_record, raw_output in completed:
+                loaded = self.catalog.get_profile(run_record.profile_id)
+                case = next(
+                    item for item in loaded.cases if item.case_id == run_record.case_id
+                )
+                for scoring_record in run_record.scoring:
+                    score = scoring_record.deterministic
+                    if not is_adjudication_eligible(score):
+                        continue
+                    if (
+                        self.adjudicator.enabled
+                        and adjudicated_cases >= self.adjudication_case_limit
+                    ):
+                        scoring_record.adjudication = self.adjudicator.unavailable(
+                            "case_limit",
+                            "supplemental adjudication case limit was reached",
+                        )
+                        continue
+                    if self.adjudicator.enabled:
+                        adjudicated_cases += 1
+                    scoring_record.adjudication = await self.adjudicator.adjudicate(
+                        expected=case.expected,
+                        actual=raw_output,
+                        score=score,
+                    )
+        return BenchmarkExecutionResponse(runs=runs, aggregates=aggregate_scores(runs))
 
-    async def _execute_case(self, planned: PlannedCaseRun) -> BenchmarkCaseRun:
+    async def _execute_case(
+        self, planned: PlannedCaseRun
+    ) -> tuple[BenchmarkCaseRun, Any]:
         loaded = self.catalog.get_profile(planned.profile_id)
         case = next(case for case in loaded.cases if case.case_id == planned.case_id)
         started_at = datetime.now(timezone.utc)
@@ -249,7 +285,7 @@ class BenchmarkService:
                 break
         completed_at = datetime.now(timezone.utc)
         output = self._bounded_output(result.output) if result is not None else None
-        return BenchmarkCaseRun(
+        run_record = BenchmarkCaseRun(
             run_id=planned.run_id,
             profile_id=planned.profile_id,
             case_id=planned.case_id,
@@ -264,6 +300,19 @@ class BenchmarkService:
             fixture_digest=planned.fixture_digest,
             output=output,
         )
+        raw_output = result.output if result is not None else None
+        run_record.scoring = [
+            BenchmarkScoringRecord(
+                deterministic=score_case(
+                    scorer=scorer,
+                    expected=case.expected,
+                    actual=raw_output,
+                    provider_failure=result is None,
+                )
+            )
+            for scorer in loaded.profile.scorers
+        ]
+        return run_record, raw_output
 
     def _bounded_output(self, value: Any) -> BenchmarkOutput:
         value = _redact_restricted(value)

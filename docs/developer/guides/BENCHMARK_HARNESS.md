@@ -2,7 +2,7 @@
 
 The benchmark harness runs checked-in, versioned cases against explicit model
 routes without changing curator-facing model defaults. It is developer-only,
-disabled by default, and does not persist reports or scores.
+disabled by default, and returns scoring records without persisting reports.
 
 ## Definitions
 
@@ -13,8 +13,23 @@ shipped Alliance profiles and synthetic cases are under
 
 Profiles declare an agent or configured flow-recipe target, explicit
 provider/model routes, case fixture and expected-output references, and scorer
-references. Scorer implementations and durable reports are separate concerns.
-Inputs and gold files must be synthetic, redistributable, or otherwise authorized.
+references. Inputs and gold files must be synthetic, redistributable, or otherwise
+authorized.
+
+`exact-json` compares the whole output using version 1 exact JSON semantics. For
+field-level scoring, use `deterministic-v1` with RFC 6901 JSON-pointer paths and
+the `exact`, `normalized_string`, `normalized_identifier`,
+`ordered_collection`, `unordered_collection`, `structured`, or `evidence`
+comparison. Fields may declare positive weights. Collection fields may select an
+item comparison, and evidence fields must list the evidence paths they require.
+Catalog validation rejects unknown scorers and malformed configuration before any
+model call.
+
+A field can set `ambiguous: true` only to classify an ordinary value, collection,
+or evidence mismatch as eligible for supplemental adjudication. Missing required
+fields, malformed output, provider failures, and any case containing a mixture of
+hard and ambiguous failures remain ineligible. Adjudication never changes the
+deterministic score.
 
 Set `BENCHMARK_ROOT` to the benchmark package for the active deployment. The
 Alliance Docker deployment uses `/runtime/packages/alliance/benchmarks`; when
@@ -56,11 +71,20 @@ targeted execution below `/api/admin/benchmarks`. Every route requires the
 canonical `ADMIN_EMAILS` allowlist policy; the feature gate returns 404 when
 disabled.
 
-Operational concurrency, matrix/case/result caps, timeouts, retries, and output
-preview/inline limits are documented under `BENCHMARK_*` in `.env.example`.
+Operational concurrency, matrix/case/result caps, timeouts, retries, output
+preview/inline limits, and all adjudication bounds are documented under
+`BENCHMARK_*` in `.env.example`. `BENCHMARK_ADJUDICATION_ENABLED` defaults to
+false. When explicitly enabled, only eligible records use the direct
+`gpt-5.6-sol` structured-output adjudicator; case, turn, tool, timeout, retry, and
+result-size settings bound that path.
+
 Case-run responses contain stable target/route/fixture identity, timing, normalized
-failure metadata, bounded redacted output, and the normalized provider-usage slot.
-They are not an upload manifest or durable report.
+failure metadata, bounded redacted output, normalized provider usage, and separate
+deterministic/adjudication records. Profile-and-scorer aggregates contain only the
+deterministic metrics. Adjudication records retain rubric/prompt/model identity,
+reason, confidence, uncertainty, tokens, billed cost when the provider supplies
+one, latency, and normalized failure metadata. They are not an upload manifest or
+durable report.
 
 The case-run provider-usage slot contains the final normalized provider request
 emitted during that case and remains null when the runtime emits no usage. Earlier
