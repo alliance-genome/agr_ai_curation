@@ -85,9 +85,20 @@ BENCHMARK_ENABLED=true \
 ```
 
 The protected API exposes profile and case discovery, dry-run validation, and
-targeted execution below `/api/admin/benchmarks`. Every route requires the
-canonical `ADMIN_EMAILS` allowlist policy; the feature gate returns 404 when
-disabled.
+targeted execution below `/api/admin/benchmarks`. Profile discovery, case
+discovery, and validation require `benchmark:read`; execution requires
+`benchmark:run`. Bearer callers must present an OIDC access token validated
+against `BENCHMARK_OIDC_ISSUER_URL`, `BENCHMARK_OIDC_AUDIENCE`, and
+`BENCHMARK_OIDC_ALLOWED_CLIENT_IDS`, with a scope configured for the capability
+in `BENCHMARK_OIDC_READ_SCOPES` or `BENCHMARK_OIDC_RUN_SCOPES`. Browser callers
+receive the same capabilities only through groups explicitly configured in
+`BENCHMARK_OPERATOR_READ_GROUPS` or `BENCHMARK_OPERATOR_RUN_GROUPS`. These
+scope and group mappings default to blank and therefore deny access; the
+`X-API-Key` testing bypass is not accepted by benchmark routes. The stable
+authorization contract also defines `benchmark:cancel`, `benchmark:delete`,
+and `benchmark:source:read` for downstream routes that enforce those
+operations, but configuring those mappings does not grant access to a route
+that does not exist. The feature gate continues to return 404 when disabled.
 
 Operational concurrency, matrix/case/result caps, timeouts, retries, output
 preview/inline limits, and all adjudication bounds are documented under
