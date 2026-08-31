@@ -185,3 +185,56 @@ async def test_non_streaming_telemetry_is_captured(monkeypatch):
     assert records[0].actual_provider == "Together"
     assert records[0].input_tokens == 7
     assert records[0].billed_cost is not None
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_is_recorded_with_route_sequence_and_bounded_detail(
+    monkeypatch,
+):
+    async def fake_fetch(self, *args, **kwargs):
+        raise RuntimeError("bearer top-secret " + "x" * 100)
+
+    monkeypatch.setattr(OpenAIChatCompletionsModel, "_fetch_response", fake_fetch)
+    model = _model(telemetry_adapter="openrouter")
+    model._benchmark_route_slot = "agent:extractor"
+    model._benchmark_requested_provider = "openrouter"
+    model._benchmark_requested_model = "extractor-model"
+    model._benchmark_reasoning_effort = "high"
+
+    with capture_provider_usage(max_records=2, max_failure_detail_chars=40) as records:
+        with pytest.raises(RuntimeError, match="top-secret"):
+            await model._fetch_response(
+                None, [], ModelSettings(), [], None, [], None, None, False
+            )
+
+    assert len(records) == 1
+    assert records[0].route_slot == "agent:extractor"
+    assert records[0].sequence == 1
+    assert records[0].status == "failed"
+    assert records[0].reasoning_effort == "high"
+    assert records[0].failure_detail is not None
+    assert "top-secret" not in records[0].failure_detail
+    assert len(records[0].failure_detail) <= 40
+
+
+@pytest.mark.asyncio
+async def test_invocation_limit_fails_before_next_provider_call(monkeypatch):
+    calls = 0
+
+    async def fake_fetch(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return {}
+
+    monkeypatch.setattr(OpenAIChatCompletionsModel, "_fetch_response", fake_fetch)
+    model = _model(telemetry_adapter="openrouter")
+    with capture_provider_usage(max_records=1, max_failure_detail_chars=20):
+        await model._fetch_response(
+            None, [], ModelSettings(), [], None, [], None, None, False
+        )
+        with pytest.raises(RuntimeError, match="exceeded 1"):
+            await model._fetch_response(
+                None, [], ModelSettings(), [], None, [], None, None, False
+            )
+
+    assert calls == 1

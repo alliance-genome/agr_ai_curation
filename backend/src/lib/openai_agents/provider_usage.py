@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 import logging
 from typing import Any, Iterator, Mapping, Optional
@@ -51,20 +51,60 @@ class ProviderUsageRecord:
     output_tokens: Optional[int]
     total_tokens: Optional[int]
     billed_cost: Optional[BilledCost]
+    route_slot: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    sequence: Optional[int] = None
+    status: str = "completed"
+    failure_detail: Optional[str] = None
 
 
-_provider_usage_records: ContextVar[Optional[list[ProviderUsageRecord]]] = ContextVar(
+@dataclass(frozen=True)
+class PendingProviderInvocation:
+    route_slot: Optional[str]
+    requested_provider: str
+    requested_model: str
+    reasoning_effort: Optional[str]
+    sequence: int
+    started_at: float
+
+
+@dataclass
+class _ProviderUsageCapture:
+    records: list[ProviderUsageRecord]
+    max_records: int
+    max_failure_detail_chars: int
+    reserved: int = 0
+
+
+_provider_usage_records: ContextVar[Optional[_ProviderUsageCapture]] = ContextVar(
     "provider_usage_records",
     default=None,
 )
 
 
 @contextmanager
-def capture_provider_usage() -> Iterator[list[ProviderUsageRecord]]:
+def capture_provider_usage(
+    *, max_records: int | None = None, max_failure_detail_chars: int | None = None
+) -> Iterator[list[ProviderUsageRecord]]:
     """Capture normalized provider usage emitted in the current async context."""
 
+    if max_records is None or max_failure_detail_chars is None:
+        from src.lib.openai_agents.config import (
+            get_benchmark_max_failure_detail_chars,
+            get_benchmark_max_invocations_per_cell,
+        )
+
+        max_records = max_records or get_benchmark_max_invocations_per_cell()
+        max_failure_detail_chars = (
+            max_failure_detail_chars or get_benchmark_max_failure_detail_chars()
+        )
     records: list[ProviderUsageRecord] = []
-    token = _provider_usage_records.set(records)
+    capture = _ProviderUsageCapture(
+        records=records,
+        max_records=max_records,
+        max_failure_detail_chars=max_failure_detail_chars,
+    )
+    token = _provider_usage_records.set(capture)
     try:
         yield records
     finally:
@@ -74,10 +114,148 @@ def capture_provider_usage() -> Iterator[list[ProviderUsageRecord]]:
 def emit_provider_usage(record: ProviderUsageRecord) -> None:
     """Capture a record and publish its bounded fields to the active trace."""
 
-    records = _provider_usage_records.get()
-    if records is not None:
-        records.append(record)
+    capture = _provider_usage_records.get()
+    if capture is not None:
+        if len(capture.records) >= capture.max_records:
+            raise RuntimeError(
+                f"Benchmark cell exceeded {capture.max_records} provider invocations"
+            )
+        capture.records.append(record)
     _emit_provider_usage_trace_event(record)
+
+
+def begin_provider_invocation(
+    *,
+    requested_provider: str,
+    requested_model: str,
+    route_slot: str | None = None,
+    reasoning_effort: str | None = None,
+    started_at: float,
+) -> PendingProviderInvocation | None:
+    """Reserve a stable sequence number before making a provider call."""
+
+    capture = _provider_usage_records.get()
+    if capture is None:
+        return None
+    if capture.reserved >= capture.max_records:
+        raise RuntimeError(
+            f"Benchmark cell exceeded {capture.max_records} provider invocations"
+        )
+    capture.reserved += 1
+    return PendingProviderInvocation(
+        route_slot=route_slot,
+        requested_provider=requested_provider,
+        requested_model=requested_model,
+        reasoning_effort=reasoning_effort,
+        sequence=capture.reserved,
+        started_at=started_at,
+    )
+
+
+def complete_provider_invocation(
+    pending: PendingProviderInvocation | None,
+    record: ProviderUsageRecord,
+) -> None:
+    if pending is None:
+        emit_provider_usage(record)
+        return
+    emit_provider_usage(
+        replace(
+            record,
+            route_slot=pending.route_slot,
+            requested_provider=pending.requested_provider,
+            requested_model=pending.requested_model,
+            reasoning_effort=pending.reasoning_effort,
+            sequence=pending.sequence,
+            status="completed",
+            failure_detail=None,
+        )
+    )
+
+
+def fail_provider_invocation(
+    pending: PendingProviderInvocation | None,
+    exc: BaseException,
+    *,
+    latency_ms: int,
+) -> None:
+    """Record bounded, content-free failure detail without swallowing it."""
+
+    if pending is None:
+        return
+    capture = _provider_usage_records.get()
+    max_chars = capture.max_failure_detail_chars if capture is not None else 0
+    detail_parts = [type(exc).__name__]
+    for field in ("status_code", "code"):
+        value = getattr(exc, field, None)
+        if isinstance(value, (int, str)) and str(value).strip():
+            detail_parts.append(f"{field}={str(value).strip()}")
+    detail = "; ".join(detail_parts)[:max_chars]
+    emit_provider_usage(
+        ProviderUsageRecord(
+            route_slot=pending.route_slot,
+            requested_provider=pending.requested_provider,
+            requested_model=pending.requested_model,
+            reasoning_effort=pending.reasoning_effort,
+            actual_provider=None,
+            actual_model=None,
+            routing_attempt=None,
+            latency_ms=max(0, latency_ms),
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+            billed_cost=None,
+            sequence=pending.sequence,
+            status="failed",
+            failure_detail=detail,
+        )
+    )
+
+
+def complete_generic_provider_invocation(
+    pending: PendingProviderInvocation | None,
+    response: Any,
+    *,
+    latency_ms: int,
+) -> None:
+    """Complete a native/SDK call from its content-free response metadata."""
+
+    if pending is None:
+        return
+    payload = _as_mapping(response)
+    usage = _as_mapping(payload.get("usage") or getattr(response, "usage", None))
+    input_tokens = _optional_int(
+        usage.get("input_tokens") or usage.get("prompt_tokens")
+    )
+    output_tokens = _optional_int(
+        usage.get("output_tokens") or usage.get("completion_tokens")
+    )
+    total_tokens = _optional_int(usage.get("total_tokens"))
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    complete_provider_invocation(
+        pending,
+        ProviderUsageRecord(
+            requested_provider=pending.requested_provider,
+            requested_model=pending.requested_model,
+            actual_provider=pending.requested_provider,
+            actual_model=(
+                _optional_text(
+                    payload.get("model")
+                    or payload.get("model_id")
+                    or getattr(response, "model", None)
+                    or getattr(response, "model_id", None)
+                )
+                or pending.requested_model
+            ),
+            routing_attempt=0,
+            latency_ms=max(0, latency_ms),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            billed_cost=None,
+        ),
+    )
 
 
 def provider_usage_metadata(record: ProviderUsageRecord) -> dict[str, Any]:
@@ -85,8 +263,10 @@ def provider_usage_metadata(record: ProviderUsageRecord) -> dict[str, Any]:
 
     billed_cost = record.billed_cost
     return {
+        "route_slot": record.route_slot,
         "requested_provider": record.requested_provider,
         "requested_model": record.requested_model,
+        "reasoning_effort": record.reasoning_effort,
         "actual_provider": record.actual_provider,
         "actual_model": record.actual_model,
         "routing_attempt": record.routing_attempt,
@@ -103,6 +283,9 @@ def provider_usage_metadata(record: ProviderUsageRecord) -> dict[str, Any]:
             if billed_cost is not None
             else None
         ),
+        "sequence": record.sequence,
+        "status": record.status,
+        "failure_detail": record.failure_detail,
     }
 
 

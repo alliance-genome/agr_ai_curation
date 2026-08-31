@@ -655,6 +655,23 @@ def test_normalize_reasoning_effort_drops_invalid_values():
         assert normalize_reasoning_effort(invalid) is None
 
 
+def test_benchmark_invocation_limits_use_reviewed_defaults_and_overrides(monkeypatch):
+    from src.lib.openai_agents.config import (
+        get_benchmark_max_failure_detail_chars,
+        get_benchmark_max_invocations_per_cell,
+    )
+
+    monkeypatch.delenv("BENCHMARK_MAX_INVOCATIONS_PER_CELL", raising=False)
+    monkeypatch.delenv("BENCHMARK_MAX_FAILURE_DETAIL_CHARS", raising=False)
+    assert get_benchmark_max_invocations_per_cell() == 100
+    assert get_benchmark_max_failure_detail_chars() == 8192
+
+    monkeypatch.setenv("BENCHMARK_MAX_INVOCATIONS_PER_CELL", "7")
+    monkeypatch.setenv("BENCHMARK_MAX_FAILURE_DETAIL_CHARS", "321")
+    assert get_benchmark_max_invocations_per_cell() == 7
+    assert get_benchmark_max_failure_detail_chars() == 321
+
+
 def test_build_model_settings_drops_invalid_reasoning_without_crashing(monkeypatch):
     # Regression (0.7.2): a flow/agent carrying reasoning='disabled' must NOT crash
     # Reasoning(effort=...) construction (the flow terminal-formatter projection path).

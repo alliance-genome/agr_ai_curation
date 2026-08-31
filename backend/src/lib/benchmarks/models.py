@@ -341,8 +341,10 @@ class BilledCost(StrictModel):
 
 
 class ProviderUsage(StrictModel):
+    route_slot: str | None = None
     requested_provider: str
     requested_model: str
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
     actual_provider: str | None = None
     actual_model: str | None = None
     routing_attempt: int | None = Field(default=None, ge=0)
@@ -351,6 +353,16 @@ class ProviderUsage(StrictModel):
     output_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
     billed_cost: BilledCost | None = None
+    sequence: int | None = Field(default=None, ge=1)
+    status: Literal["completed", "failed"] = "completed"
+    failure_detail: str | None = None
+
+
+class BenchmarkCellExecutionResult(StrictModel):
+    """Ephemeral worker handoff for one resolved suite-v2 cell."""
+
+    output: Any
+    invocations: list[ProviderUsage]
 
 
 class BenchmarkFailure(StrictModel):

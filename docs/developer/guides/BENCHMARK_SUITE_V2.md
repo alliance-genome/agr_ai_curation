@@ -76,3 +76,22 @@ The plan bounds are environment-configurable:
 
 Checked-in suites live in `packages/<package>/benchmarks/suites/`. The Alliance
 synthetic suites demonstrate explicit named arms without correctness data.
+
+## Execution routing and invocation telemetry
+
+Execution activates one frozen cell route map for the complete nested runtime.
+The flow supervisor resolves `supervisor`, each model-bearing flow step resolves
+its own `agent:<agent-id>` slot, and agent-backed validators resolve their
+`validator:<validator-id>` slot. Deterministic validators and formatter-only
+steps never resolve a model slot. Reasoning effort travels with the selected
+provider and model; ordinary non-benchmark execution continues to use the
+checked-in scientific defaults.
+
+Provider calls reserve a sequence number before dispatch. Their bounded records
+retain route slot, requested and observed provider/model, reasoning effort,
+latency, tokens, authoritative billed cost when supplied, routing attempt,
+status, and content-free failure type/code detail. Observation of a different
+actual provider/model is telemetry only and never authorizes provider fallback.
+`BENCHMARK_MAX_INVOCATIONS_PER_CELL` (default `100`) bounds records per cell and
+fails before an excess call. `BENCHMARK_MAX_FAILURE_DETAIL_CHARS` (default
+`8192`) bounds each sanitized failure detail.

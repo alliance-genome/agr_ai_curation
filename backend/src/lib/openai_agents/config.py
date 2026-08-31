@@ -1088,6 +1088,24 @@ def get_benchmark_max_cells() -> int:
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CELLS", 250))
 
 
+def get_benchmark_max_invocations_per_cell() -> int:
+    """Maximum model-provider invocations retained for one benchmark cell."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_MAX_INVOCATIONS_PER_CELL", 100),
+    )
+
+
+def get_benchmark_max_failure_detail_chars() -> int:
+    """Maximum sanitized failure-detail characters retained per invocation."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_MAX_FAILURE_DETAIL_CHARS", 8192),
+    )
+
+
 def get_benchmark_max_concurrency() -> int:
     """Maximum benchmark case runs executing concurrently."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CONCURRENCY", 2))

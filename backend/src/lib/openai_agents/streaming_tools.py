@@ -4795,6 +4795,12 @@ async def run_specialist_with_events(
                 },
             ):
                 pass
+    from src.lib.openai_agents.benchmark_routing import (
+        reset_benchmark_invocation_route,
+        set_benchmark_invocation_route,
+    )
+
+    benchmark_route_token = set_benchmark_invocation_route(runtime_agent)
     try:
         result = Runner.run_streamed(
             runtime_agent,
@@ -4803,6 +4809,7 @@ async def run_specialist_with_events(
             run_config=effective_config
         )
     except BaseException as exc:
+        reset_benchmark_invocation_route(benchmark_route_token)
         sentry_stream_finalization_status = (
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
         )
@@ -5385,6 +5392,7 @@ async def run_specialist_with_events(
         reset_active_evidence_records(evidence_workspace_token)
         reset_active_resolver_call_ledger(resolver_call_ledger_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
+        reset_benchmark_invocation_route(benchmark_route_token)
 
     stream_duration = datetime.now(timezone.utc) - start_time
     stream_duration_ms = int(stream_duration.total_seconds() * 1000)
@@ -5708,6 +5716,15 @@ async def run_specialist_with_events(
                         # NO output_guardrails - the original guardrail would trip with 0 tool calls
                         output_guardrails=[],
                     )
+                    benchmark_route_slot = getattr(
+                        runtime_agent, "benchmark_route_slot", None
+                    )
+                    if benchmark_route_slot:
+                        from src.lib.openai_agents.benchmark_routing import (
+                            attach_benchmark_route,
+                        )
+
+                        attach_benchmark_route(retry_agent, benchmark_route_slot)
 
                     logger.info(
                         "%s retry: created simplified retry agent without tools or guardrails for output synthesis",
@@ -5722,22 +5739,26 @@ async def run_specialist_with_events(
                     )
 
                     retry_start_time = datetime.now(timezone.utc)
-                    retry_result = Runner.run_streamed(
-                        retry_agent,  # Use simplified retry agent, NOT original agent
-                        input=retry_input,  # Include full conversation history
-                        # Reduced turns - just need output synthesis.
-                        # Env-configurable via STRUCTURED_FINALIZATION_RETRY_MAX_TURNS.
-                        max_turns=get_structured_finalization_retry_max_turns(),
-                        run_config=effective_config
-                    )
+                    retry_route_token = set_benchmark_invocation_route(retry_agent)
+                    try:
+                        retry_result = Runner.run_streamed(
+                            retry_agent,  # Use simplified retry agent, NOT original agent
+                            input=retry_input,  # Include full conversation history
+                            # Reduced turns - just need output synthesis.
+                            # Env-configurable via STRUCTURED_FINALIZATION_RETRY_MAX_TURNS.
+                            max_turns=get_structured_finalization_retry_max_turns(),
+                            run_config=effective_config
+                        )
 
-                    # Consume the retry stream with debug logging
-                    retry_event_count = 0
-                    async for retry_event in retry_result.stream_events():
-                        retry_event_count += 1
-                        # Log every event type for debugging
-                        event_type = getattr(retry_event, 'type', str(type(retry_event).__name__))
-                        logger.debug("%s retry event %s: %s", specialist_name, retry_event_count, event_type)
+                        # Consume the retry stream with debug logging
+                        retry_event_count = 0
+                        async for retry_event in retry_result.stream_events():
+                            retry_event_count += 1
+                            # Log every event type for debugging
+                            event_type = getattr(retry_event, 'type', str(type(retry_event).__name__))
+                            logger.debug("%s retry event %s: %s", specialist_name, retry_event_count, event_type)
+                    finally:
+                        reset_benchmark_invocation_route(retry_route_token)
 
                     retry_duration_ms = (datetime.now(timezone.utc) - retry_start_time).total_seconds() * 1000
                     logger.info(

@@ -11,7 +11,13 @@ from typing import Any
 from agents import ModelSettings
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
-from .provider_usage import emit_provider_usage, normalize_provider_usage
+from .provider_usage import (
+    begin_provider_invocation,
+    complete_provider_invocation,
+    fail_provider_invocation,
+    normalize_provider_usage,
+    ProviderUsageRecord,
+)
 
 
 def _payload_mapping(value: Any) -> Mapping[str, Any]:
@@ -35,12 +41,14 @@ class _ProviderTelemetryStream:
         adapter: str,
         requested_model: str,
         started_at: float,
+        pending_invocation: Any,
     ) -> None:
         self._source = source
         self._iterator: AsyncIterator[Any] = source.__aiter__()
         self._adapter = adapter
         self._requested_model = requested_model
         self._started_at = started_at
+        self._pending_invocation = pending_invocation
         self._usage: Mapping[str, Any] = {}
         self._metadata: Mapping[str, Any] = {}
         self._emitted = False
@@ -53,6 +61,14 @@ class _ProviderTelemetryStream:
             chunk = await self._iterator.__anext__()
         except StopAsyncIteration:
             self._emit()
+            raise
+        except BaseException as exc:
+            fail_provider_invocation(
+                self._pending_invocation,
+                exc,
+                latency_ms=round((monotonic() - self._started_at) * 1000),
+            )
+            self._emitted = True
             raise
 
         payload = _payload_mapping(chunk)
@@ -69,7 +85,8 @@ class _ProviderTelemetryStream:
             return
         self._emitted = True
         latency_ms = round((monotonic() - self._started_at) * 1000)
-        emit_provider_usage(
+        complete_provider_invocation(
+            self._pending_invocation,
             normalize_provider_usage(
                 self._adapter,
                 {
@@ -78,7 +95,7 @@ class _ProviderTelemetryStream:
                 },
                 requested_model=self._requested_model,
                 latency_ms=latency_ms,
-            )
+            ),
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -108,6 +125,7 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
         self._omit_usage_request = omit_usage_request
         self._telemetry_adapter = telemetry_adapter
         self._disable_model_retries = disable_model_retries
+        self._benchmark_provider_call_capture = True
 
     def _apply_provider_policy(self, settings: ModelSettings) -> ModelSettings:
         caller_body = deepcopy(dict(settings.extra_body or {}))
@@ -150,8 +168,42 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
             raise TypeError("model_settings is required")
 
         started_at = monotonic()
-        response = await super()._fetch_response(*args, **kwargs)
+        pending_invocation = begin_provider_invocation(
+            requested_provider=str(
+                getattr(self, "_benchmark_requested_provider", self._provider_id)
+            ),
+            requested_model=str(
+                getattr(self, "_benchmark_requested_model", self.model)
+            ),
+            route_slot=getattr(self, "_benchmark_route_slot", None),
+            reasoning_effort=getattr(self, "_benchmark_reasoning_effort", None),
+            started_at=started_at,
+        )
+        try:
+            response = await super()._fetch_response(*args, **kwargs)
+        except BaseException as exc:
+            fail_provider_invocation(
+                pending_invocation,
+                exc,
+                latency_ms=round((monotonic() - started_at) * 1000),
+            )
+            raise
         if not self._telemetry_adapter:
+            complete_provider_invocation(
+                pending_invocation,
+                ProviderUsageRecord(
+                    requested_provider=self._provider_id,
+                    requested_model=str(self.model),
+                    actual_provider=self._provider_id,
+                    actual_model=str(self.model),
+                    routing_attempt=0,
+                    latency_ms=round((monotonic() - started_at) * 1000),
+                    input_tokens=None,
+                    output_tokens=None,
+                    total_tokens=None,
+                    billed_cost=None,
+                ),
+            )
             return response
 
         if isinstance(response, tuple):
@@ -163,16 +215,18 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
                     adapter=self._telemetry_adapter,
                     requested_model=str(self.model),
                     started_at=started_at,
+                    pending_invocation=pending_invocation,
                 ),
             )
 
         latency_ms = round((monotonic() - started_at) * 1000)
-        emit_provider_usage(
+        complete_provider_invocation(
+            pending_invocation,
             normalize_provider_usage(
                 self._telemetry_adapter,
                 response,
                 requested_model=str(self.model),
                 latency_ms=latency_ms,
-            )
+            ),
         )
         return response

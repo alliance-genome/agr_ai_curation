@@ -206,15 +206,24 @@ class OwnedOpenAIResources:
     """One lifecycle-owned OpenAI client/provider pair."""
 
     client: AsyncOpenAI
-    provider: OpenAIProvider
+    provider: Any
     closed: bool = False
 
 
 def _build_owned_openai_resources() -> OwnedOpenAIResources:
     client = SafeLangfuseAsyncOpenAI()
+    from src.lib.openai_agents.benchmark_routing import (
+        BenchmarkTelemetryProvider,
+        benchmark_route_plan_active,
+    )
+
+    provider = _build_request_openai_provider(client)
+    if benchmark_route_plan_active():
+        provider = BenchmarkTelemetryProvider(provider)
+
     return OwnedOpenAIResources(
         client=client,
-        provider=_build_request_openai_provider(client),
+        provider=provider,
     )
 
 
@@ -444,7 +453,7 @@ set_default_openai_client(_default_client)
 
 def _build_agents_run_config(
     *,
-    model_provider: OpenAIProvider,
+    model_provider: Any,
     agent: Agent,
     trace_id: str,
     session_id: Optional[str],
@@ -528,27 +537,39 @@ async def run_agent_with_owned_openai_resources(
     """Run one non-streaming agent with provider cleanup before loop shutdown."""
 
     agent_model = getattr(agent, "model", None)
+    from src.lib.openai_agents.benchmark_routing import (
+        reset_benchmark_invocation_route,
+        set_benchmark_invocation_route,
+    )
+
+    benchmark_route_token = set_benchmark_invocation_route(agent)
     if agent_model is not None and not isinstance(agent_model, str):
         # OpenAI-compatible providers expose concrete model objects backed by the
         # shared HTTP client. They do not use the native Responses WebSocket and
         # therefore must retain their provider-specific model instead of creating
         # an unused native OpenAI lifecycle.
-        return await Runner.run(
-            agent,
-            input_value,
-            max_turns=max_turns,
-            **run_kwargs,
-        )
+        try:
+            return await Runner.run(
+                agent,
+                input_value,
+                max_turns=max_turns,
+                **run_kwargs,
+            )
+        finally:
+            reset_benchmark_invocation_route(benchmark_route_token)
 
     parent_run_config = run_kwargs.pop("run_config", None)
-    async with owned_openai_run_config(parent_run_config) as run_config:
-        return await Runner.run(
-            agent,
-            input_value,
-            run_config=run_config,
-            max_turns=max_turns,
-            **run_kwargs,
-        )
+    try:
+        async with owned_openai_run_config(parent_run_config) as run_config:
+            return await Runner.run(
+                agent,
+                input_value,
+                run_config=run_config,
+                max_turns=max_turns,
+                **run_kwargs,
+            )
+    finally:
+        reset_benchmark_invocation_route(benchmark_route_token)
 
 
 def run_agent_sync_with_owned_openai_resources(
@@ -1289,6 +1310,12 @@ async def _run_agent_with_owned_resources(
                 },
             ):
                 pass
+    from src.lib.openai_agents.benchmark_routing import (
+        reset_benchmark_invocation_route,
+        set_benchmark_invocation_route,
+    )
+
+    benchmark_route_token = set_benchmark_invocation_route(agent)
     try:
         result = Runner.run_streamed(
             agent,
@@ -1298,6 +1325,7 @@ async def _run_agent_with_owned_resources(
             session=sdk_session,
         )
     except BaseException as exc:
+        reset_benchmark_invocation_route(benchmark_route_token)
         sentry_stream_finalization_status = (
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
         )
@@ -1900,6 +1928,7 @@ async def _run_agent_with_owned_resources(
             sentry_span_context_manager.__exit__(None, None, None)
         if conversation_context_manager is not None:
             conversation_context_manager.__exit__(None, None, None)
+        reset_benchmark_invocation_route(benchmark_route_token)
 
     # Get final output if not captured from streaming
     if hasattr(result, "final_output"):

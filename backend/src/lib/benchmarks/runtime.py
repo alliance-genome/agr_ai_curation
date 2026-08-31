@@ -23,6 +23,8 @@ from src.lib.openai_agents.config import (
     get_benchmark_inline_max_bytes,
     get_benchmark_matrix_limit,
     get_benchmark_max_concurrency,
+    get_benchmark_max_failure_detail_chars,
+    get_benchmark_max_invocations_per_cell,
     get_benchmark_preview_max_chars,
     get_benchmark_root,
     get_benchmark_result_limit,
@@ -31,13 +33,41 @@ from src.lib.openai_agents.config import (
     resolve_model_provider,
 )
 from src.lib.openai_agents.runner import run_agent_streamed
+from src.lib.openai_agents.benchmark_routing import (
+    attach_benchmark_route,
+    benchmark_route_plan,
+)
+from src.lib.openai_agents.provider_usage import (
+    capture_provider_usage,
+    provider_usage_metadata,
+)
 from src.lib.packages.flow_recipes import load_flow_recipe_catalog
 from src.models.sql.curation_flow import CurationFlow
 
 from .adjudication import SupplementalAdjudicator, execute_direct_openai_adjudication
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
-from .models import BenchmarkRoute, ExecutionResult
+from .models import (
+    BenchmarkCellExecutionResult,
+    BenchmarkRoute,
+    ExecutionResult,
+    ProviderUsage,
+    ResolvedBenchmarkCell,
+)
 from .service import BenchmarkService
+
+
+def _stable_invocations(records: list[Any]) -> list[ProviderUsage]:
+    ordered = sorted(
+        enumerate(records),
+        key=lambda item: (
+            item[1].sequence if item[1].sequence is not None else float("inf"),
+            item[0],
+        ),
+    )
+    return [
+        ProviderUsage.model_validate(provider_usage_metadata(record))
+        for _, record in ordered
+    ]
 
 
 def get_default_benchmark_root() -> Path:
@@ -142,6 +172,64 @@ async def execute_agent_case(
     return ExecutionResult(output=output)
 
 
+async def execute_resolved_agent_cell(
+    cell: ResolvedBenchmarkCell,
+    case_input: dict[str, Any],
+    run_id: str,
+) -> BenchmarkCellExecutionResult:
+    """Execute an agent cell with its frozen route and complete invocation ledger."""
+
+    if cell.target.kind != "agent":
+        raise ValueError("resolved agent execution requires an agent target")
+    slot = f"agent:{cell.target.id}"
+    route = cell.routes.get(slot)
+    if route is None:
+        raise ValueError(f"Frozen benchmark route plan has no slot '{slot}'")
+    messages = case_input.get("messages")
+    if not isinstance(messages, list):
+        raise ValueError("Agent benchmark input must contain messages")
+    active_groups = case_input.get("active_groups") or []
+    with benchmark_route_plan(cell.routes), capture_provider_usage(
+        max_records=get_benchmark_max_invocations_per_cell(),
+        max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),
+    ) as usage_records:
+        agent = get_agent_by_id(
+            cell.target.id,
+            db_user_id=case_input.get("db_user_id"),
+            authenticated_groups=active_groups,
+            model_id_override=route.model,
+            model_provider_override=route.provider,
+            model_reasoning_override=route.reasoning_effort,
+            benchmark_route_slot=slot,
+        )
+        attach_benchmark_route(agent, slot)
+        output: Any = None
+        terminal_seen = False
+        async for event in run_agent_streamed(
+            context_messages=messages,
+            user_id=str(case_input.get("user_id") or "benchmark"),
+            session_id=run_id,
+            active_groups=active_groups,
+            agent=agent,
+            sentry_workflow="benchmark_agent",
+            chat_route_mode="agent",
+            chat_route_target_id=cell.target.id,
+            propagate_runtime_exceptions=True,
+        ):
+            if event.get("type") == "RUN_ERROR":
+                raise RuntimeError("Agent benchmark target failed")
+            if event.get("type") == "RUN_FINISHED":
+                terminal_seen = True
+                data = event.get("data") or {}
+                output = data.get("structured_result", data.get("response"))
+        if not terminal_seen:
+            raise RuntimeError("Agent benchmark target ended without a terminal event")
+    return BenchmarkCellExecutionResult(
+        output=output,
+        invocations=_stable_invocations(usage_records),
+    )
+
+
 def _flow_from_recipe(target_id: str) -> CurationFlow:
     catalog = load_flow_recipe_catalog()
     matches = [
@@ -201,3 +289,48 @@ async def execute_flow_case(
     if not terminal_seen:
         raise RuntimeError("Flow benchmark target ended without a terminal event")
     return ExecutionResult(output=output)
+
+
+async def execute_resolved_flow_cell(
+    cell: ResolvedBenchmarkCell,
+    case_input: dict[str, Any],
+    run_id: str,
+) -> BenchmarkCellExecutionResult:
+    """Execute a flow with independent supervisor, agent, and validator routes."""
+
+    if cell.target.kind != "flow":
+        raise ValueError("resolved flow execution requires a flow target")
+    if "supervisor" not in cell.routes:
+        raise ValueError("Frozen benchmark route plan has no slot 'supervisor'")
+    flow = _flow_from_recipe(cell.target.id)
+    with benchmark_route_plan(cell.routes), capture_provider_usage(
+        max_records=get_benchmark_max_invocations_per_cell(),
+        max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),
+    ) as usage_records:
+        output: Any = None
+        terminal_seen = False
+        async for event in execute_flow(
+            flow=flow,
+            user_id=str(case_input.get("user_id") or "benchmark"),
+            session_id=run_id,
+            db_user_id=case_input.get("db_user_id"),
+            document_id=case_input.get("document_id"),
+            document_name=case_input.get("document_name"),
+            user_query=str(case_input.get("user_query") or ""),
+            active_groups=case_input.get("active_groups") or [],
+            flow_run_id=run_id,
+            chat_route_mode="flow",
+            chat_route_target_id=str(flow.id),
+            benchmark_routes=cell.routes,
+        ):
+            if event.get("type") == "FLOW_ERROR":
+                raise RuntimeError("Flow benchmark target failed")
+            if event.get("type") == "FLOW_FINISHED":
+                terminal_seen = True
+                output = event.get("data") or event.get("details")
+        if not terminal_seen:
+            raise RuntimeError("Flow benchmark target ended without a terminal event")
+    return BenchmarkCellExecutionResult(
+        output=output,
+        invocations=_stable_invocations(usage_records),
+    )

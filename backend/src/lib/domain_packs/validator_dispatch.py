@@ -1403,8 +1403,14 @@ def run_package_scoped_validator_agent(
         )
 
     authenticated_groups = _normalized_authenticated_groups(runtime_context)
+    from src.lib.openai_agents.benchmark_routing import benchmark_route_kwargs
+
+    benchmark_kwargs = benchmark_route_kwargs(
+        f"validator:{request.validator_binding_id}"
+    )
     agent = get_agent_by_id(
         canonical_system_agent_key(agent_definition),
+        **benchmark_kwargs,
         **(
             {"authenticated_groups": list(authenticated_groups)}
             if authenticated_groups is not None
@@ -1589,8 +1595,14 @@ def run_package_scoped_validator_agent_batch(
         )
 
     authenticated_groups = _normalized_authenticated_groups(runtime_context)
+    from src.lib.openai_agents.benchmark_routing import benchmark_route_kwargs
+
+    benchmark_kwargs = benchmark_route_kwargs(
+        f"validator:{representative_request.validator_binding_id}"
+    )
     agent = get_agent_by_id(
         canonical_system_agent_key(agent_definition),
+        **benchmark_kwargs,
         **(
             {"authenticated_groups": list(authenticated_groups)}
             if authenticated_groups is not None

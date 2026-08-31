@@ -2537,19 +2537,30 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ], source_node_id="n1", output_node_id="n2")
 
+        from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
+
+        benchmark_routes = {
+            "agent:gene": {
+                "provider": "openrouter",
+                "model": "gene-benchmark-model",
+                "reasoning_effort": "high",
+            }
+        }
         clear_collected_events()
         try:
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-                flow_run_id="flow-run-123",
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
-            result_text = asyncio.run(
-                tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
-            )
-            collected_events = list(get_collected_events())
+            with benchmark_route_plan(benchmark_routes):
+                tools, _, _, execution_state = get_all_agent_tools(
+                    flow,
+                    include_unavailable=True,
+                    flow_run_id="flow-run-123",
+                    benchmark_routes=benchmark_routes,
+                )
+                tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+                asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+                result_text = asyncio.run(
+                    tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
+                )
+                collected_events = list(get_collected_events())
         finally:
             clear_collected_events()
 
@@ -2560,7 +2571,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "csv_formatter",
         ]
         assert len(formatter_invocations) == 1
+        assert agent_builds[0]["kwargs"]["model_id_override"] == "gene-benchmark-model"
         formatter_kwargs = formatter_invocations[0]["agent_kwargs"]
+        assert "model_id_override" not in formatter_kwargs
+        assert "model_provider_override" not in formatter_kwargs
+        assert "model_reasoning_override" not in formatter_kwargs
         assert formatter_kwargs["formatter_output_format"] == "csv"
         assert formatter_kwargs["formatter_agent_id"] == "csv_formatter"
         assert len(formatter_kwargs["formatter_bundle"].artifacts) == 1
