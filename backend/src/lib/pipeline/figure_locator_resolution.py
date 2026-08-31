@@ -185,12 +185,13 @@ async def _call_figure_locator_classifier(
     model_name: str,
     reasoning_effort: ReasoningEffort,
 ) -> FigureLocatorBatchOutput:
-    from agents import Agent, Runner  # pyright: ignore[reportMissingImports]
+    from agents import Agent  # pyright: ignore[reportMissingImports]
     from src.lib.openai_agents.config import (
         build_model_settings,
         get_figure_locator_resolution_max_turns,
         get_model_for_agent,
     )
+    from src.lib.openai_agents.runner import run_agent_with_owned_openai_resources
 
     settings = build_model_settings(
         model_name,
@@ -220,7 +221,7 @@ async def _call_figure_locator_classifier(
         finalization_required=False,
     ) as sentry_span:
         try:
-            result = await Runner.run(
+            result = await run_agent_with_owned_openai_resources(
                 agent,
                 prompt,
                 max_turns=get_figure_locator_resolution_max_turns(),

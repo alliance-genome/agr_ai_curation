@@ -1381,12 +1381,15 @@ def run_package_scoped_validator_agent(
 ) -> Any:
     """Execute the package-owned validator through the unified agent runtime."""
 
-    from agents import AgentOutputSchema, Runner, function_tool
+    from agents import AgentOutputSchema, function_tool
 
     from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
         canonical_system_agent_key,
         get_agent_definition_for_package,
+    )
+    from src.lib.openai_agents.runner import (
+        run_agent_sync_with_owned_openai_resources,
     )
 
     agent_definition = get_agent_definition_for_package(
@@ -1460,94 +1463,92 @@ def run_package_scoped_validator_agent(
         emit_runtime_event=True,
     )
     payload = json.dumps(provider_payload, sort_keys=True)
-    if hasattr(Runner, "run_sync"):
-        run_kwargs: dict[str, Any] = {"input": payload}
-        effective_max_tool_calls = _effective_validator_max_tool_calls(binding)
-        run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
-            effective_max_tool_calls,
-            minimum=4,
+    run_kwargs: dict[str, Any] = {"input": payload}
+    effective_max_tool_calls = _effective_validator_max_tool_calls(binding)
+    run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
+        effective_max_tool_calls,
+        minimum=4,
+    )
+    run_started_at = time.monotonic()
+    conversation_context_manager = gen_ai_conversation_scope(request.request_id)
+    sentry_span_context_manager = gen_ai_invoke_agent_span(
+        agent_name=str(getattr(agent, "name", None) or request.validator_agent.agent_id),
+        model=validator_model,
+        conversation_id=request.request_id,
+        workflow="domain_validator",
+        tool_name="finalize_validator_result",
+        agent_key=request.validator_agent.agent_id,
+        agent_source="package_validator",
+        document_id=runtime_context.document_id if runtime_context else None,
+        document_present=bool(runtime_context and runtime_context.document_id),
+        finalization_required=True,
+        finalization_tool="finalize_validator_result",
+        input_preview=provider_payload,
+        span_data={
+            "ai_curation.validator.package_id": request.validator_agent.package_id,
+            "ai_curation.validator.agent_id": request.validator_agent.agent_id,
+            "ai_curation.validator.binding_id": request.validator_binding_id,
+            "ai_curation.validator.request_id": request.request_id,
+        },
+    )
+    conversation_context_manager.__enter__()
+    sentry_span = sentry_span_context_manager.__enter__()
+    run_failed = False
+    try:
+        result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
+    except Exception:
+        run_failed = True
+        set_redacted_ai_span_data(
+            sentry_span,
+            "ai_curation.validation.status",
+            "error",
         )
-        run_started_at = time.monotonic()
-        conversation_context_manager = gen_ai_conversation_scope(request.request_id)
-        sentry_span_context_manager = gen_ai_invoke_agent_span(
-            agent_name=str(getattr(agent, "name", None) or request.validator_agent.agent_id),
-            model=validator_model,
-            conversation_id=request.request_id,
-            workflow="domain_validator",
-            tool_name="finalize_validator_result",
-            agent_key=request.validator_agent.agent_id,
-            agent_source="package_validator",
-            document_id=runtime_context.document_id if runtime_context else None,
-            document_present=bool(runtime_context and runtime_context.document_id),
-            finalization_required=True,
-            finalization_tool="finalize_validator_result",
-            input_preview=provider_payload,
-            span_data={
-                "ai_curation.validator.package_id": request.validator_agent.package_id,
-                "ai_curation.validator.agent_id": request.validator_agent.agent_id,
-                "ai_curation.validator.binding_id": request.validator_binding_id,
-                "ai_curation.validator.request_id": request.request_id,
-            },
-        )
-        conversation_context_manager.__enter__()
-        sentry_span = sentry_span_context_manager.__enter__()
-        run_failed = False
-        try:
-            result = Runner.run_sync(agent, **run_kwargs)
-        except Exception:
-            run_failed = True
-            set_redacted_ai_span_data(
-                sentry_span,
-                "ai_curation.validation.status",
-                "error",
-            )
-            LOGGER.warning(
-                "Package-scoped validator Runner.run_sync failed for %s:%s "
-                "binding %s request %s after %.3fs",
-                request.validator_agent.package_id,
-                request.validator_agent.agent_id,
-                request.validator_binding_id,
-                request.request_id,
-                time.monotonic() - run_started_at,
-                exc_info=True,
-            )
-            raise
-        finally:
-            if not run_failed:
-                if finalization_state.accepted_result is not None:
-                    set_redacted_ai_span_data(
-                        sentry_span,
-                        "ai_curation.validation.status",
-                        "accepted",
-                    )
-                else:
-                    set_redacted_ai_span_data(
-                        sentry_span,
-                        "ai_curation.validation.status",
-                        "rejected",
-                    )
-            sentry_span_context_manager.__exit__(None, None, None)
-            conversation_context_manager.__exit__(None, None, None)
-        LOGGER.info(
-            "Package-scoped validator Runner.run_sync completed for %s:%s "
-            "binding %s request %s in %.3fs (payload_bytes=%s)",
+        LOGGER.warning(
+            "Package-scoped owned validator run failed for %s:%s "
+            "binding %s request %s after %.3fs",
             request.validator_agent.package_id,
             request.validator_agent.agent_id,
             request.validator_binding_id,
             request.request_id,
             time.monotonic() - run_started_at,
-            len(payload),
+            exc_info=True,
         )
-        if finalization_state.accepted_result is not None:
-            return _ValidatorAgentRunOutput(
-                raw_output=result,
-                accepted_result=finalization_state.accepted_result,
-            )
-        raise ValueError(
-            "Validator agent did not complete mandatory finalize_validator_result "
-            "tool call with status accepted."
+        raise
+    finally:
+        if not run_failed:
+            if finalization_state.accepted_result is not None:
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.validation.status",
+                    "accepted",
+                )
+            else:
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.validation.status",
+                    "rejected",
+                )
+        sentry_span_context_manager.__exit__(None, None, None)
+        conversation_context_manager.__exit__(None, None, None)
+    LOGGER.info(
+        "Package-scoped owned validator run completed for %s:%s "
+        "binding %s request %s in %.3fs (payload_bytes=%s)",
+        request.validator_agent.package_id,
+        request.validator_agent.agent_id,
+        request.validator_binding_id,
+        request.request_id,
+        time.monotonic() - run_started_at,
+        len(payload),
+    )
+    if finalization_state.accepted_result is not None:
+        return _ValidatorAgentRunOutput(
+            raw_output=result,
+            accepted_result=finalization_state.accepted_result,
         )
-    raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
+    raise ValueError(
+        "Validator agent did not complete mandatory finalize_validator_result "
+        "tool call with status accepted."
+    )
 
 
 def run_package_scoped_validator_agent_batch(
@@ -1558,12 +1559,15 @@ def run_package_scoped_validator_agent_batch(
 ) -> Any:
     """Execute one package validator batch through the unified agent runtime."""
 
-    from agents import AgentOutputSchema, Runner, function_tool
+    from agents import AgentOutputSchema, function_tool
 
     from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
         canonical_system_agent_key,
         get_agent_definition_for_package,
+    )
+    from src.lib.openai_agents.runner import (
+        run_agent_sync_with_owned_openai_resources,
     )
 
     representative_request = jobs[0].request
@@ -1665,107 +1669,105 @@ def run_package_scoped_validator_agent_batch(
         emit_runtime_event=True,
     )
     payload = json.dumps(provider_payload, sort_keys=True)
-    if hasattr(Runner, "run_sync"):
-        run_kwargs: dict[str, Any] = {"input": payload}
-        effective_max_tool_calls = _effective_validator_max_tool_calls(binding)
-        # Per-JOB-aware budget: the batch agent validates every job in one run and
-        # a composite validator (e.g. experimental_condition) makes several
-        # per-component lookups per job, so the turn budget must scale with
-        # len(jobs) * per-job tool calls, not just max(per-job, job-count). The
-        # batch size is capped (``_DEFAULT_VALIDATOR_BATCH_MAX_SIZE`` /
-        # binding.batch_max_size) so this product stays bounded per run.
-        run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
-            len(jobs) * effective_max_tool_calls,
-            minimum=len(jobs) + 3,
+    run_kwargs: dict[str, Any] = {"input": payload}
+    effective_max_tool_calls = _effective_validator_max_tool_calls(binding)
+    # Per-JOB-aware budget: the batch agent validates every job in one run and
+    # a composite validator (e.g. experimental_condition) makes several
+    # per-component lookups per job, so the turn budget must scale with
+    # len(jobs) * per-job tool calls, not just max(per-job, job-count). The
+    # batch size is capped (``_DEFAULT_VALIDATOR_BATCH_MAX_SIZE`` /
+    # binding.batch_max_size) so this product stays bounded per run.
+    run_kwargs["max_turns"] = _max_turns_with_validator_finalization(
+        len(jobs) * effective_max_tool_calls,
+        minimum=len(jobs) + 3,
+    )
+    run_started_at = time.monotonic()
+    first_request_id = jobs[0].request.request_id if jobs else None
+    conversation_context_manager = gen_ai_conversation_scope(first_request_id)
+    sentry_span_context_manager = gen_ai_invoke_agent_span(
+        agent_name=str(getattr(agent, "name", None) or representative_request.validator_agent.agent_id),
+        model=validator_model,
+        conversation_id=first_request_id,
+        workflow="domain_validator_batch",
+        tool_name="finalize_validator_batch_results",
+        agent_key=representative_request.validator_agent.agent_id,
+        agent_source="package_validator",
+        document_id=runtime_context.document_id if runtime_context else None,
+        document_present=bool(runtime_context and runtime_context.document_id),
+        finalization_required=True,
+        finalization_tool="finalize_validator_batch_results",
+        input_preview=provider_payload,
+        span_data={
+            "ai_curation.validator.package_id": representative_request.validator_agent.package_id,
+            "ai_curation.validator.agent_id": representative_request.validator_agent.agent_id,
+            "ai_curation.validator.binding_id": representative_request.validator_binding_id,
+            "ai_curation.validator.request_id": first_request_id,
+            "ai_curation.validator.batch_size": len(jobs),
+        },
+    )
+    conversation_context_manager.__enter__()
+    sentry_span = sentry_span_context_manager.__enter__()
+    run_failed = False
+    try:
+        result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
+    except Exception:
+        run_failed = True
+        set_redacted_ai_span_data(
+            sentry_span,
+            "ai_curation.validation.status",
+            "error",
         )
-        run_started_at = time.monotonic()
-        first_request_id = jobs[0].request.request_id if jobs else None
-        conversation_context_manager = gen_ai_conversation_scope(first_request_id)
-        sentry_span_context_manager = gen_ai_invoke_agent_span(
-            agent_name=str(getattr(agent, "name", None) or representative_request.validator_agent.agent_id),
-            model=validator_model,
-            conversation_id=first_request_id,
-            workflow="domain_validator_batch",
-            tool_name="finalize_validator_batch_results",
-            agent_key=representative_request.validator_agent.agent_id,
-            agent_source="package_validator",
-            document_id=runtime_context.document_id if runtime_context else None,
-            document_present=bool(runtime_context and runtime_context.document_id),
-            finalization_required=True,
-            finalization_tool="finalize_validator_batch_results",
-            input_preview=provider_payload,
-            span_data={
-                "ai_curation.validator.package_id": representative_request.validator_agent.package_id,
-                "ai_curation.validator.agent_id": representative_request.validator_agent.agent_id,
-                "ai_curation.validator.binding_id": representative_request.validator_binding_id,
-                "ai_curation.validator.request_id": first_request_id,
-                "ai_curation.validator.batch_size": len(jobs),
-            },
-        )
-        conversation_context_manager.__enter__()
-        sentry_span = sentry_span_context_manager.__enter__()
-        run_failed = False
-        try:
-            result = Runner.run_sync(agent, **run_kwargs)
-        except Exception:
-            run_failed = True
-            set_redacted_ai_span_data(
-                sentry_span,
-                "ai_curation.validation.status",
-                "error",
-            )
-            LOGGER.warning(
-                "Package-scoped validator batch Runner.run_sync failed for %s:%s "
-                "binding %s request_count=%s after %.3fs",
-                representative_request.validator_agent.package_id,
-                representative_request.validator_agent.agent_id,
-                representative_request.validator_binding_id,
-                len(jobs),
-                time.monotonic() - run_started_at,
-                exc_info=True,
-            )
-            raise
-        finally:
-            if not run_failed:
-                if finalization_state.accepted_results:
-                    set_redacted_ai_span_data(
-                        sentry_span,
-                        "ai_curation.validation.status",
-                        "accepted",
-                    )
-                    set_redacted_ai_span_data(
-                        sentry_span,
-                        "ai_curation.candidate.count",
-                        len(finalization_state.accepted_results),
-                    )
-                else:
-                    set_redacted_ai_span_data(
-                        sentry_span,
-                        "ai_curation.validation.status",
-                        "rejected",
-                    )
-            sentry_span_context_manager.__exit__(None, None, None)
-            conversation_context_manager.__exit__(None, None, None)
-        LOGGER.info(
-            "Package-scoped validator batch Runner.run_sync completed for %s:%s "
-            "binding %s request_count=%s in %.3fs (payload_bytes=%s)",
+        LOGGER.warning(
+            "Package-scoped owned validator batch run failed for %s:%s "
+            "binding %s request_count=%s after %.3fs",
             representative_request.validator_agent.package_id,
             representative_request.validator_agent.agent_id,
             representative_request.validator_binding_id,
             len(jobs),
             time.monotonic() - run_started_at,
-            len(payload),
+            exc_info=True,
         )
-        if finalization_state.accepted_results:
-            return _ValidatorBatchAgentRunOutput(
-                raw_output=result,
-                accepted_results=finalization_state.accepted_results,
-            )
-        raise ValueError(
-            "Validator batch agent did not complete mandatory "
-            "finalize_validator_batch_results tool call with status accepted."
+        raise
+    finally:
+        if not run_failed:
+            if finalization_state.accepted_results:
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.validation.status",
+                    "accepted",
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.candidate.count",
+                    len(finalization_state.accepted_results),
+                )
+            else:
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.validation.status",
+                    "rejected",
+                )
+        sentry_span_context_manager.__exit__(None, None, None)
+        conversation_context_manager.__exit__(None, None, None)
+    LOGGER.info(
+        "Package-scoped owned validator batch run completed for %s:%s "
+        "binding %s request_count=%s in %.3fs (payload_bytes=%s)",
+        representative_request.validator_agent.package_id,
+        representative_request.validator_agent.agent_id,
+        representative_request.validator_binding_id,
+        len(jobs),
+        time.monotonic() - run_started_at,
+        len(payload),
+    )
+    if finalization_state.accepted_results:
+        return _ValidatorBatchAgentRunOutput(
+            raw_output=result,
+            accepted_results=finalization_state.accepted_results,
         )
-    raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
+    raise ValueError(
+        "Validator batch agent did not complete mandatory "
+        "finalize_validator_batch_results tool call with status accepted."
+    )
 
 
 def _copy_agent_for_validator_runtime(agent: Any) -> Any:

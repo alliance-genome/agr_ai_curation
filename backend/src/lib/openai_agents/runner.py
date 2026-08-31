@@ -17,11 +17,11 @@ import os
 import time
 import uuid
 from collections import deque
-from contextlib import nullcontext
+from contextlib import asynccontextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Literal, Optional, List
+from typing import TYPE_CHECKING, AsyncGenerator, AsyncIterator, Dict, Any, Literal, Optional, List
 
 from agents import (
     Agent,
@@ -497,6 +497,89 @@ def build_isolated_openai_run_config(
         trace_include_sensitive_data=True,
     )
     return run_config, resources
+
+
+@asynccontextmanager
+async def owned_openai_run_config(
+    parent_run_config: Any | None = None,
+) -> AsyncIterator[RunConfig]:
+    """Yield an isolated run config and close its provider on the same event loop.
+
+    Non-streaming ``Runner.run`` callers outside the main chat runner must use an
+    explicit provider lifecycle too. Otherwise the Agents SDK creates a temporary
+    default WebSocket provider whose connection can outlive a short-lived ingestion
+    or validator event loop.
+    """
+
+    run_config, resources = build_isolated_openai_run_config(parent_run_config)
+    try:
+        yield run_config
+    finally:
+        await close_owned_openai_resources(resources)
+
+
+async def run_agent_with_owned_openai_resources(
+    agent: Agent,
+    input_value: Any,
+    *,
+    max_turns: int,
+    **run_kwargs: Any,
+) -> Any:
+    """Run one non-streaming agent with provider cleanup before loop shutdown."""
+
+    agent_model = getattr(agent, "model", None)
+    if agent_model is not None and not isinstance(agent_model, str):
+        # OpenAI-compatible providers expose concrete model objects backed by the
+        # shared HTTP client. They do not use the native Responses WebSocket and
+        # therefore must retain their provider-specific model instead of creating
+        # an unused native OpenAI lifecycle.
+        return await Runner.run(
+            agent,
+            input_value,
+            max_turns=max_turns,
+            **run_kwargs,
+        )
+
+    parent_run_config = run_kwargs.pop("run_config", None)
+    async with owned_openai_run_config(parent_run_config) as run_config:
+        return await Runner.run(
+            agent,
+            input_value,
+            run_config=run_config,
+            max_turns=max_turns,
+            **run_kwargs,
+        )
+
+
+def run_agent_sync_with_owned_openai_resources(
+    agent: Agent,
+    *,
+    input: Any,
+    max_turns: int,
+    **run_kwargs: Any,
+) -> Any:
+    """Run native owned resources safely while preserving compatible-provider loops."""
+
+    agent_model = getattr(agent, "model", None)
+    if agent_model is not None and not isinstance(agent_model, str):
+        # Compatible-provider models use the SDK's shared async HTTP client. Keep
+        # Runner.run_sync's persistent thread-loop behavior for those shared
+        # primitives; there are no native Responses WebSocket resources to close.
+        return Runner.run_sync(
+            agent,
+            input=input,
+            max_turns=max_turns,
+            **run_kwargs,
+        )
+
+    return asyncio.run(
+        run_agent_with_owned_openai_resources(
+            agent,
+            input,
+            max_turns=max_turns,
+            **run_kwargs,
+        )
+    )
 
 
 def _now_iso() -> str:

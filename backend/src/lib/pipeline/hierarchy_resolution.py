@@ -289,9 +289,10 @@ async def _call_llm_for_hierarchy(
     Returns:
         Tuple of (list of SectionItem, abstract_section_title, raw LLM response for debugging)
     """
-    from agents import Agent, Runner, ModelSettings
+    from agents import Agent, ModelSettings
     from openai.types.shared import Reasoning
     from src.lib.openai_agents.config import get_hierarchy_resolution_max_turns
+    from src.lib.openai_agents.runner import run_agent_with_owned_openai_resources
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -412,7 +413,7 @@ Common abstract locations when not explicitly labeled:
             finalization_required=False,
         ) as sentry_span:
             try:
-                result = await Runner.run(
+                result = await run_agent_with_owned_openai_resources(
                     hierarchy_agent,
                     user_prompt,
                     max_turns=get_hierarchy_resolution_max_turns(),

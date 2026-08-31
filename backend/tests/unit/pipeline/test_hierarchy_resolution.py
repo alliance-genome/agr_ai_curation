@@ -192,7 +192,7 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
 
     class FakeRunner:
         @staticmethod
-        async def run(agent, user_prompt, max_turns):
+        async def run(agent, user_prompt, max_turns, **_kwargs):
             captured["run_agent"] = agent
             captured["user_prompt"] = user_prompt
             captured["max_turns"] = max_turns
@@ -214,6 +214,10 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
 
     monkeypatch.setitem(sys.modules, "agents", agents_module)
     monkeypatch.setitem(sys.modules, "openai.types.shared", shared_module)
+    monkeypatch.setattr(
+        "src.lib.openai_agents.runner.run_agent_with_owned_openai_resources",
+        FakeRunner.run,
+    )
     return captured, FakeReasoning
 
 

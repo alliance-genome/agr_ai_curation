@@ -4,6 +4,7 @@ import asyncio
 import logging
 from types import SimpleNamespace
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -269,6 +270,195 @@ def test_close_owned_openai_resources_finishes_inside_short_lived_batch_loop():
     assert [name for name, _loop_id in calls] == ["provider", "client"]
     assert calls[0][1] == calls[1][1]
     assert resources.closed is True
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_owned_runner_closes_resources_after_success(monkeypatch):
+    calls = []
+    agent = SimpleNamespace(model="gpt-5.6-terra")
+
+    class Client:
+        async def close(self):
+            calls.append("client")
+
+    class Provider:
+        async def aclose(self):
+            calls.append("provider")
+
+    resources = runner.OwnedOpenAIResources(
+        client=Client(),
+        provider=Provider(),
+    )
+    monkeypatch.setattr(runner, "_build_owned_openai_resources", lambda: resources)
+
+    async def _run(agent, input_value, **kwargs):
+        calls.append(("run", agent, input_value, kwargs["run_config"].model_provider))
+        return "result"
+
+    monkeypatch.setattr(runner.Runner, "run", _run)
+
+    result = await runner.run_agent_with_owned_openai_resources(
+        agent,
+        "input",
+        max_turns=3,
+    )
+
+    assert result == "result"
+    assert calls == [
+        ("run", agent, "input", resources.provider),
+        "provider",
+        "client",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_owned_runner_uses_owned_provider_for_default_model(
+    monkeypatch,
+):
+    calls = []
+    agent = SimpleNamespace(model=None)
+    resources = runner.OwnedOpenAIResources(client=AsyncMock(), provider=object())
+    monkeypatch.setattr(runner, "_build_owned_openai_resources", lambda: resources)
+
+    async def _run(_agent, _input_value, **kwargs):
+        calls.append(kwargs["run_config"].model_provider)
+        return "result"
+
+    monkeypatch.setattr(runner.Runner, "run", _run)
+
+    result = await runner.run_agent_with_owned_openai_resources(
+        agent,
+        "input",
+        max_turns=3,
+    )
+
+    assert result == "result"
+    assert calls == [resources.provider]
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_owned_runner_preserves_parent_run_metadata(monkeypatch):
+    agent = SimpleNamespace(model="gpt-5.6-terra")
+    resources = runner.OwnedOpenAIResources(client=AsyncMock(), provider=object())
+    monkeypatch.setattr(runner, "_build_owned_openai_resources", lambda: resources)
+    parent_run_config = runner.RunConfig(
+        model_provider=object(),
+        workflow_name="validator",
+        group_id="request-1",
+    )
+
+    async def _run(_agent, _input_value, **kwargs):
+        child_run_config = kwargs["run_config"]
+        assert child_run_config.model_provider is resources.provider
+        assert child_run_config.workflow_name == "validator"
+        assert child_run_config.group_id == "request-1"
+        return "result"
+
+    monkeypatch.setattr(runner.Runner, "run", _run)
+
+    result = await runner.run_agent_with_owned_openai_resources(
+        agent,
+        "input",
+        max_turns=3,
+        run_config=parent_run_config,
+    )
+
+    assert result == "result"
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_owned_runner_closes_resources_after_failure(monkeypatch):
+    calls = []
+    agent = SimpleNamespace(model="gpt-5.6-terra")
+
+    class Client:
+        async def close(self):
+            calls.append("client")
+
+    class Provider:
+        async def aclose(self):
+            calls.append("provider")
+
+    resources = runner.OwnedOpenAIResources(
+        client=Client(),
+        provider=Provider(),
+    )
+    monkeypatch.setattr(runner, "_build_owned_openai_resources", lambda: resources)
+
+    async def _run(*args, **kwargs):
+        raise RuntimeError("provider failed")
+
+    monkeypatch.setattr(runner.Runner, "run", _run)
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        await runner.run_agent_with_owned_openai_resources(
+            agent,
+            "input",
+            max_turns=3,
+        )
+
+    assert calls == ["provider", "client"]
+
+
+def test_sync_owned_runner_closes_resources_before_event_loop_shutdown(monkeypatch):
+    calls = []
+    agent = SimpleNamespace(model="gpt-5.6-terra")
+
+    class Client:
+        async def close(self):
+            calls.append(("client", id(asyncio.get_running_loop())))
+
+    class Provider:
+        async def aclose(self):
+            calls.append(("provider", id(asyncio.get_running_loop())))
+
+    resources = runner.OwnedOpenAIResources(
+        client=Client(),
+        provider=Provider(),
+    )
+    monkeypatch.setattr(runner, "_build_owned_openai_resources", lambda: resources)
+
+    async def _run(*args, **kwargs):
+        calls.append(("run", id(asyncio.get_running_loop())))
+        return "result"
+
+    monkeypatch.setattr(runner.Runner, "run", _run)
+
+    result = runner.run_agent_sync_with_owned_openai_resources(
+        agent,
+        input="input",
+        max_turns=3,
+    )
+
+    assert result == "result"
+    assert [name for name, _loop_id in calls] == ["run", "provider", "client"]
+    assert len({loop_id for _name, loop_id in calls}) == 1
+
+
+def test_sync_owned_runner_preserves_compatible_provider_loop(monkeypatch):
+    model = object()
+    agent = SimpleNamespace(model=model)
+    expected_result = object()
+    run_sync = MagicMock(return_value=expected_result)
+    monkeypatch.setattr(runner.Runner, "run_sync", run_sync)
+    build_resources = MagicMock()
+    monkeypatch.setattr(runner, "_build_owned_openai_resources", build_resources)
+
+    result = runner.run_agent_sync_with_owned_openai_resources(
+        agent,
+        input="input",
+        max_turns=3,
+        context={"trace_id": "trace-1"},
+    )
+
+    assert result is expected_result
+    run_sync.assert_called_once_with(
+        agent,
+        input="input",
+        max_turns=3,
+        context={"trace_id": "trace-1"},
+    )
+    build_resources.assert_not_called()
 
 
 def test_create_openai_client_kwargs_includes_configured_key_and_base(monkeypatch):

@@ -2550,7 +2550,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
         _unwrap_function_tool(tool)(result=_result_payload(request))
         return {"status": "resolved"}
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     binding = cast(Any, SimpleNamespace(max_tool_calls=16))
     run_package_scoped_validator_agent(
@@ -2659,7 +2659,7 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
         _unwrap_function_tool(tool)(result=_result_payload(request))
         return {"status": "resolved"}
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     raw_output = run_package_scoped_validator_agent(
         request,
@@ -2747,7 +2747,7 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
         _unwrap_function_tool(tool)(result=_result_payload(request))
         return {"status": "resolved"}
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     run_package_scoped_validator_agent(
         request,
@@ -2828,7 +2828,7 @@ def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
         _unwrap_function_tool(tool)(result=_result_payload(request))
         return {"status": "resolved"}
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     run_package_scoped_validator_agent(
         request,
@@ -2886,7 +2886,7 @@ def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
         finalize(result=_result_payload(request, outcome="ambiguous"))
         return _result_payload(request)
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     with pytest.raises(ValueError, match="mandatory finalize_validator_result"):
         run_package_scoped_validator_agent(
@@ -2921,7 +2921,7 @@ def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
         lambda agent_key: source_agent,
     )
     monkeypatch.setattr(
-        "agents.Runner.run_sync",
+        "src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources",
         lambda agent, **kwargs: _result_payload(request),
     )
 
@@ -2987,7 +2987,7 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
         _unwrap_function_tool(tool)(results=[_result_payload(request)])
         return {"results": [_result_payload(request)]}
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     binding = cast(Any, SimpleNamespace(max_tool_calls=4))
     run_package_scoped_validator_agent_batch(
@@ -3200,7 +3200,7 @@ def test_package_scoped_validator_agent_sets_max_turns_when_max_tool_calls_unset
         _unwrap_function_tool(tool)(result=_result_payload(request))
         return {"status": "resolved"}
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     run_package_scoped_validator_agent(
         request,
@@ -3261,7 +3261,7 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
         _unwrap_function_tool(tool)(results=[_result_payload(request)])
         return {"results": [_result_payload(request)]}
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     run_package_scoped_validator_agent_batch(
         cast(Any, [SimpleNamespace(request=request)]),
@@ -3340,7 +3340,7 @@ def test_package_scoped_validator_batch_agent_max_turns_scales_with_job_count(
         captured["kwargs"] = kwargs
         raise RuntimeError("captured max_turns")
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     with pytest.raises(RuntimeError, match="captured max_turns"):
         run_package_scoped_validator_agent_batch(
@@ -3397,7 +3397,7 @@ def test_package_scoped_validator_batch_agent_prefers_accepted_finalization_resu
         _unwrap_function_tool(tool)(results=[_result_payload(request)])
         return {"results": [conflicting_final_result]}
 
-    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     raw_output = run_package_scoped_validator_agent_batch(
         [job],
@@ -3437,7 +3437,7 @@ def test_package_scoped_validator_batch_agent_requires_accepted_finalization_too
         lambda agent_key: source_agent,
     )
     monkeypatch.setattr(
-        "agents.Runner.run_sync",
+        "src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources",
         lambda agent, **kwargs: {"results": [_result_payload(request)]},
     )
 
