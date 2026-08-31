@@ -29,3 +29,13 @@ def test_tool_catalog_matches_baseline():
         "removal or reviewed voice pass), delete the baseline json and rerun to "
         "regenerate, then review the diff."
     )
+
+
+def test_agr_curation_catalog_excludes_retired_force_parameters():
+    schema = _current_tool_snapshot()["agr_curation_query"]["agent_studio"]["diagnostic"][
+        "input_schema"
+    ]
+    properties = schema.get("properties") or {}
+
+    assert "force" not in properties
+    assert "force_reason" not in properties

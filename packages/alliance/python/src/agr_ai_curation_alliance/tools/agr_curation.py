@@ -1233,8 +1233,7 @@ def agr_curation_query(
     include_synonyms: bool = True,
     include_obsolete: bool = False,
     limit: Optional[int] = None,
-    force: bool = False,
-    force_reason: Optional[str] = None,
+    # Removed legacy force/force_reason no-ops — local symbol-shape override was retired and canonical search has no override.
     validation_retry_context: Optional[Dict[str, Any]] = None
 ) -> AgrQueryResult:
     """
@@ -1290,9 +1289,6 @@ def agr_curation_query(
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
         include_obsolete: Include obsolete controlled vocabulary terms
         limit: Maximum results to return
-        force: Accepted for backward-compatible callers; search methods no longer
-            perform local symbol validation before querying.
-        force_reason: Accepted for backward-compatible callers.
         validation_retry_context: Optional supervisor-owned context for bounded
             validator reruns, such as missing declared result projections.
 
@@ -1398,7 +1394,6 @@ def agr_curation_query(
                 data_provider=data_provider,
                 include_synonyms=include_synonyms,
                 limit=limit_value,
-                force=force or None,
             )
         if method in {"get_allele_by_exact_symbol", "search_alleles"}:
             return _attempt_query(
@@ -1415,7 +1410,6 @@ def agr_curation_query(
                 data_provider=data_provider,
                 include_synonyms=include_synonyms,
                 limit=limit_value,
-                force=force or None,
             )
         return _attempt_query(method)
 

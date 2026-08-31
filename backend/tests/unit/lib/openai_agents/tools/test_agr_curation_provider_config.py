@@ -71,6 +71,9 @@ def test_tool_schema_requires_only_method():
     """With strict_mode=False, only 'method' is required (optional params are truly optional)."""
     schema = getattr(agr_curation.agr_curation_query, "params_json_schema", {}) or {}
     assert schema.get("required") == ["method"]
+    properties = schema.get("properties") or {}
+    assert "force" not in properties
+    assert "force_reason" not in properties
 
 
 def test_optional_arg_keys_are_derived_from_tool_contract():

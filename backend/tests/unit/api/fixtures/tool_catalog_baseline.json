@@ -182,14 +182,6 @@
               "description": "Require exact match",
               "type": "boolean"
             },
-            "force": {
-              "description": "Backward-compatible no-op; search methods no longer perform local symbol-shape validation",
-              "type": "boolean"
-            },
-            "force_reason": {
-              "description": "Backward-compatible no-op for older callers",
-              "type": "string"
-            },
             "gene_id": {
               "description": "Gene CURIE for direct lookup",
               "type": "string"
