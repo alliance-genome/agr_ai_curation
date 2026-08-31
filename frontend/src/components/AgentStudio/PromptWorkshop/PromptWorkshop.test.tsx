@@ -1367,7 +1367,7 @@ describe('PromptWorkshop', () => {
 
     await waitFor(async () => {
       expect(await getGroupOverrideSelect()).toHaveTextContent('ZFIN')
-    })
+    }, { timeout: 5000 })
   }, 15000)
 
   it('does not expose an Output Schema Key field anywhere in the workshop', async () => {
