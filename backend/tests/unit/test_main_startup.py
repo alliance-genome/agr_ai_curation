@@ -536,7 +536,11 @@ class TestLifespan:
                 pass
 
 @pytest.mark.asyncio
-async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_path):
+async def test_lifespan_supports_core_only_runtime_packages(
+    monkeypatch,
+    tmp_path,
+    request,
+):
     repo_root = Path(__file__).resolve().parents[3]
     runtime_root = tmp_path / "runtime"
     packages_dir = runtime_root / "packages"
@@ -562,6 +566,7 @@ async def test_lifespan_supports_core_only_runtime_packages(monkeypatch, tmp_pat
     reset_model_cache()
     reset_provider_cache()
     catalog_service.clear_package_tool_runtime_caches()
+    request.addfinalizer(catalog_service.clear_package_tool_runtime_caches)
 
     main = _main_module()
     connection, client = make_connection()
