@@ -14,8 +14,10 @@ from jwt.exceptions import (
 from src.api import benchmark_auth
 
 
-def _request(*, authorization: str = ""):
+def _request(*, authorization: str = "", api_key: str = ""):
     headers = {"authorization": authorization} if authorization else {}
+    if api_key:
+        headers["X-API-Key"] = api_key
     return SimpleNamespace(headers=headers, cookies={})
 
 
@@ -130,6 +132,25 @@ async def test_missing_authentication_remains_401(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await benchmark_auth.require_benchmark_read(_request())
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_testing_api_key_cannot_grant_benchmark_capability(monkeypatch):
+    monkeypatch.setenv("TESTING_API_KEY", "testing-secret")
+    monkeypatch.setenv("TESTING_API_KEY_GROUPS", "benchmark-readers")
+    monkeypatch.setattr(
+        benchmark_auth,
+        "get_benchmark_operator_capability_groups",
+        lambda _capability: ("benchmark-readers",),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await benchmark_auth.require_benchmark_read(
+            _request(api_key="testing-secret")
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Benchmark OIDC bearer token or browser session required"
 
 
 @pytest.mark.parametrize(

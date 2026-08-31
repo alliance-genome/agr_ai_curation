@@ -161,7 +161,7 @@ def test_benchmark_oidc_defaults_and_overrides(monkeypatch):
     monkeypatch.setenv("BENCHMARK_OIDC_JWKS_CACHE_TTL_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_OIDC_CLOCK_SKEW_SECONDS", "-1")
 
-    assert config.get_benchmark_oidc_issuer_url() == "https://issuer.example.org"
+    assert config.get_benchmark_oidc_issuer_url() == "https://issuer.example.org/"
     assert config.get_benchmark_oidc_audience() == "benchmark-api"
     assert config.get_benchmark_oidc_allowed_client_ids() == (
         "portal-client",

@@ -124,11 +124,44 @@ def test_get_jwks_client_is_cached(monkeypatch):
     assert first is second
 
 
+def test_discovery_normalizes_trailing_slash_without_altering_validation_issuer(
+    monkeypatch,
+):
+    provider = OIDCAuthProvider(
+        {
+            "issuer_url": "https://issuer.example.org/",
+            "validation_issuer": "https://issuer.example.org/",
+            "client_id": "oidc-client",
+        }
+    )
+    captured = {}
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"issuer": "https://issuer.example.org/"}
+
+    def _get(url, *, timeout):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(oidc_module.httpx, "get", _get)
+
+    assert provider._discover() == {"issuer": "https://issuer.example.org/"}
+    assert captured["url"] == (
+        "https://issuer.example.org/.well-known/openid-configuration"
+    )
+    assert provider.validation_issuer == "https://issuer.example.org/"
+
+
 def test_benchmark_validation_options_configure_jwks_and_time_claims(monkeypatch):
     provider = OIDCAuthProvider(
         {
-            "issuer_url": "https://issuer.example.org",
-            "validation_issuer": "https://issuer.example.org",
+            "issuer_url": "https://issuer.example.org/",
+            "validation_issuer": "https://issuer.example.org/",
             "client_id": "benchmark-api",
             "audience": "benchmark-api",
             "jwks_timeout_seconds": 5,
@@ -169,6 +202,6 @@ def test_benchmark_validation_options_configure_jwks_and_time_claims(monkeypatch
     assert asyncio.run(provider.validate_token("access-token")) == {"sub": "service"}
     assert captured["jwks_options"] == {"timeout": 5, "lifespan": 300}
     assert captured["decode"]["audience"] == "benchmark-api"
-    assert captured["decode"]["issuer"] == "https://issuer.example.org"
+    assert captured["decode"]["issuer"] == "https://issuer.example.org/"
     assert captured["decode"]["leeway"] == 60
     assert captured["decode"]["options"] == {"require": ["exp", "iat", "sub"]}

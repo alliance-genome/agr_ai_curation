@@ -169,6 +169,12 @@ async def _authorize(capability: str, request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=401, detail="Invalid benchmark authorization header")
         return await _authenticate_bearer(token.strip(), capability)
 
+    if request.headers.get("X-API-Key") is not None:
+        raise HTTPException(
+            status_code=401,
+            detail="Benchmark OIDC bearer token or browser session required",
+        )
+
     user = await browser_auth._get_user_from_cookie_impl(request, SecurityScopes())
     configured_groups = set(get_benchmark_operator_capability_groups(capability))
     user_groups = {

@@ -988,7 +988,7 @@ def get_benchmark_enabled() -> bool:
 
 def get_benchmark_oidc_issuer_url() -> str:
     """Trusted issuer for benchmark bearer access tokens."""
-    return os.getenv("BENCHMARK_OIDC_ISSUER_URL", "").strip().rstrip("/")
+    return os.getenv("BENCHMARK_OIDC_ISSUER_URL", "").strip()
 
 
 def get_benchmark_oidc_audience() -> str:
