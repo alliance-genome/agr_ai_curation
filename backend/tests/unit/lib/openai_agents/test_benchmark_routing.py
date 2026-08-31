@@ -63,6 +63,24 @@ def test_attach_route_preserves_runtime_identity_on_agent_and_model():
     assert model._benchmark_reasoning_effort == "medium"
 
 
+def test_attach_route_rejects_unattachable_concrete_model():
+    class ImmutableModel:
+        __slots__ = ()
+
+    agent = SimpleNamespace(model=ImmutableModel())
+    with benchmark_route_plan(
+        {
+            "agent:extractor": {
+                "provider": "openrouter",
+                "model": "extractor-model",
+                "reasoning_effort": "high",
+            }
+        }
+    ):
+        with pytest.raises(AttributeError, match="_benchmark_route_slot"):
+            attach_benchmark_route(agent, "agent:extractor")
+
+
 @pytest.mark.asyncio
 async def test_native_provider_proxy_reserves_sequence_at_each_call_boundary():
     class FakeModel:

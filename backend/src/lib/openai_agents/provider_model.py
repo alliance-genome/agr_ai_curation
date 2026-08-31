@@ -125,7 +125,6 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
         self._omit_usage_request = omit_usage_request
         self._telemetry_adapter = telemetry_adapter
         self._disable_model_retries = disable_model_retries
-        self._benchmark_provider_call_capture = True
 
     def _apply_provider_policy(self, settings: ModelSettings) -> ModelSettings:
         caller_body = deepcopy(dict(settings.extra_body or {}))

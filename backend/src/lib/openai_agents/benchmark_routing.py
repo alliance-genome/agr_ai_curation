@@ -102,15 +102,10 @@ def attach_benchmark_route(agent: Any, slot: str) -> Any:
     for target in (agent, getattr(agent, "model", None)):
         if target is None or isinstance(target, str):
             continue
-        try:
-            setattr(target, "_benchmark_route_slot", slot)
-            setattr(target, "_benchmark_requested_provider", route.provider)
-            setattr(target, "_benchmark_requested_model", route.model)
-            setattr(target, "_benchmark_reasoning_effort", route.reasoning_effort)
-        except (AttributeError, TypeError):
-            # Immutable model stand-ins (and native string model IDs above) carry
-            # route identity on the Agent, which is the native-usage boundary.
-            pass
+        setattr(target, "_benchmark_route_slot", slot)
+        setattr(target, "_benchmark_requested_provider", route.provider)
+        setattr(target, "_benchmark_requested_model", route.model)
+        setattr(target, "_benchmark_reasoning_effort", route.reasoning_effort)
     setattr(agent, "benchmark_route_slot", slot)
     setattr(agent, "benchmark_requested_provider", route.provider)
     setattr(agent, "benchmark_requested_model", route.model)
