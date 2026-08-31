@@ -488,6 +488,14 @@ async def test_observation_callback_failure_reports_sanitized_warning_without_ma
     assert callback_sentinel not in str(reported_exc)
     assert callback_sentinel not in caplog.text
     assert "doc-private" not in str(reported_exc)
+    callback_warning = next(
+        record
+        for record in caplog.records
+        if record.getMessage().startswith(
+            "Failed to record PDF extraction boundary observability"
+        )
+    )
+    assert callback_warning.sentry_skip_event is True
 
 
 @pytest.mark.asyncio

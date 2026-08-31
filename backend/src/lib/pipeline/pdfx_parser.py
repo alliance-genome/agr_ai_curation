@@ -442,6 +442,7 @@ class PDFXParser:
                     logger.warning(
                         "Failed to record PDF extraction boundary observability: %s",
                         type(exc).__name__,
+                        extra={"sentry_skip_event": True},
                     )
 
         cleaned_elements = markdown_to_pipeline_elements(
