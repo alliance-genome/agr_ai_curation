@@ -21,6 +21,14 @@ def test_benchmark_operational_defaults(monkeypatch):
         "BENCHMARK_ADJUDICATION_TIMEOUT_SECONDS",
         "BENCHMARK_ADJUDICATION_RETRIES",
         "BENCHMARK_ADJUDICATION_RESULT_MAX_BYTES",
+        "BENCHMARK_ARTIFACT_UPLOAD_ENABLED",
+        "BENCHMARK_ARTIFACT_MAX_BYTES",
+        "BENCHMARK_ARTIFACT_PART_SIZE_BYTES",
+        "BENCHMARK_ARTIFACT_UPLOAD_RETRIES",
+        "BENCHMARK_ARTIFACT_RETRY_BACKOFF_SECONDS",
+        "BENCHMARK_ARTIFACT_UPLOAD_TIMEOUT_SECONDS",
+        "BENCHMARK_ARTIFACT_UPLOAD_CONCURRENCY",
+        "BENCHMARK_ARTIFACT_SECRET_PATTERNS",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -42,6 +50,14 @@ def test_benchmark_operational_defaults(monkeypatch):
     assert config.get_benchmark_adjudication_timeout_seconds() == 60
     assert config.get_benchmark_adjudication_retries() == 1
     assert config.get_benchmark_adjudication_result_max_bytes() == 10000
+    assert config.get_benchmark_artifact_upload_enabled() is False
+    assert config.get_benchmark_artifact_max_bytes() == 10_485_760
+    assert config.get_benchmark_artifact_part_size_bytes() == 8_388_608
+    assert config.get_benchmark_artifact_upload_retries() == 3
+    assert config.get_benchmark_artifact_retry_backoff_seconds() == 0.5
+    assert config.get_benchmark_artifact_upload_timeout_seconds() == 30
+    assert config.get_benchmark_artifact_upload_concurrency() == 2
+    assert config.get_benchmark_artifact_secret_patterns() == ()
 
 
 def test_benchmark_operational_overrides_are_bounded(monkeypatch):
@@ -54,6 +70,14 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_ADJUDICATION_MODEL", "  deployment-judge  ")
     monkeypatch.setenv("BENCHMARK_ADJUDICATION_CASE_LIMIT", "0")
     monkeypatch.setenv("BENCHMARK_ADJUDICATION_TOOL_CALL_LIMIT", "-1")
+    monkeypatch.setenv("BENCHMARK_ARTIFACT_UPLOAD_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_ARTIFACT_MAX_BYTES", "0")
+    monkeypatch.setenv("BENCHMARK_ARTIFACT_PART_SIZE_BYTES", "1")
+    monkeypatch.setenv("BENCHMARK_ARTIFACT_UPLOAD_RETRIES", "-1")
+    monkeypatch.setenv("BENCHMARK_ARTIFACT_RETRY_BACKOFF_SECONDS", "-1")
+    monkeypatch.setenv("BENCHMARK_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_ARTIFACT_UPLOAD_CONCURRENCY", "0")
+    monkeypatch.setenv("BENCHMARK_ARTIFACT_SECRET_PATTERNS", " secret-a\nsecret-b ")
 
     assert config.get_benchmark_enabled() is True
     assert config.get_benchmark_root() == "/tmp/custom-benchmarks"
@@ -64,3 +88,11 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_adjudication_model() == "deployment-judge"
     assert config.get_benchmark_adjudication_case_limit() == 1
     assert config.get_benchmark_adjudication_tool_call_limit() == 0
+    assert config.get_benchmark_artifact_upload_enabled() is True
+    assert config.get_benchmark_artifact_max_bytes() == 1
+    assert config.get_benchmark_artifact_part_size_bytes() == 5_242_880
+    assert config.get_benchmark_artifact_upload_retries() == 0
+    assert config.get_benchmark_artifact_retry_backoff_seconds() == 0
+    assert config.get_benchmark_artifact_upload_timeout_seconds() == 0.1
+    assert config.get_benchmark_artifact_upload_concurrency() == 1
+    assert config.get_benchmark_artifact_secret_patterns() == ("secret-a", "secret-b")

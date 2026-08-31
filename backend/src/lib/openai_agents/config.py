@@ -1074,6 +1074,65 @@ def get_benchmark_adjudication_result_max_bytes() -> int:
     )
 
 
+def get_benchmark_artifact_upload_enabled() -> bool:
+    """Whether explicit developer benchmark artifact uploads are permitted."""
+    return _get_env_bool("BENCHMARK_ARTIFACT_UPLOAD_ENABLED", False)
+
+
+def get_benchmark_artifact_max_bytes() -> int:
+    """Maximum bytes accepted for one serialized benchmark artifact."""
+    return max(
+        1, _get_env_int_with_fallback("BENCHMARK_ARTIFACT_MAX_BYTES", 10_485_760)
+    )
+
+
+def get_benchmark_artifact_part_size_bytes() -> int:
+    """Bytes per resumable S3 multipart upload part."""
+    return max(
+        5_242_880,
+        _get_env_int_with_fallback("BENCHMARK_ARTIFACT_PART_SIZE_BYTES", 8_388_608),
+    )
+
+
+def get_benchmark_artifact_upload_retries() -> int:
+    """Retries for an individual benchmark artifact S3 operation."""
+    return max(0, _get_env_int_with_fallback("BENCHMARK_ARTIFACT_UPLOAD_RETRIES", 3))
+
+
+def get_benchmark_artifact_retry_backoff_seconds() -> float:
+    """Initial exponential backoff between benchmark artifact upload retries."""
+    return max(
+        0.0,
+        _get_env_float_with_fallback(
+            "BENCHMARK_ARTIFACT_RETRY_BACKOFF_SECONDS", 0.5
+        ),
+    )
+
+
+def get_benchmark_artifact_upload_timeout_seconds() -> float:
+    """Connection and read timeout for benchmark artifact S3 operations."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback(
+            "BENCHMARK_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", 30.0
+        ),
+    )
+
+
+def get_benchmark_artifact_upload_concurrency() -> int:
+    """Maximum pooled S3 connections available to artifact uploads."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_ARTIFACT_UPLOAD_CONCURRENCY", 2),
+    )
+
+
+def get_benchmark_artifact_secret_patterns() -> tuple[str, ...]:
+    """Additional newline-separated regexes rejected from serialized artifacts."""
+    raw = os.getenv("BENCHMARK_ARTIFACT_SECRET_PATTERNS", "")
+    return tuple(pattern.strip() for pattern in raw.splitlines() if pattern.strip())
+
+
 def get_go_annotations_request_timeout_seconds() -> float:
     """HTTP timeout for typed existing-GO annotation lookups."""
     return max(
