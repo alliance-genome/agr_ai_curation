@@ -11,7 +11,6 @@ Authorization: Email allowlist via ADMIN_EMAILS environment variable.
 """
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
@@ -23,8 +22,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from psycopg2.errors import CheckViolation, UniqueViolation
 
-from src.api.auth import get_auth_dependency
 from src.lib.config import get_valid_group_ids
+from src.api.admin.auth import require_admin
 
 from src.lib.prompts import cache as prompt_cache
 from src.models.sql.database import get_db
@@ -32,72 +31,6 @@ from src.models.sql.prompts import PromptTemplate
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin/prompts", tags=["Admin - Prompts"])
-
-
-# =============================================================================
-# Authorization
-# =============================================================================
-
-
-def _parse_admin_emails() -> set:
-    """Parse admin emails from environment variable (internal helper)."""
-    admin_emails_str = os.getenv("ADMIN_EMAILS", "")
-    if not admin_emails_str:
-        return set()
-    return {email.strip().lower() for email in admin_emails_str.split(",") if email.strip()}
-
-
-# Cache admin emails at module load time (env vars are static at runtime)
-_admin_emails_cache: set = _parse_admin_emails()
-
-
-def get_admin_emails() -> set:
-    """Get the set of admin emails from cached environment variable.
-
-    ADMIN_EMAILS should be a comma-separated list of email addresses.
-    Example: ADMIN_EMAILS=admin@example.com,super@example.com
-
-    Note: Cached at module load time for efficiency. Restart backend to pick up changes.
-    """
-    return _admin_emails_cache
-
-
-async def require_admin(user: dict = get_auth_dependency()) -> dict:
-    """Dependency that requires the user to be an admin.
-
-    Checks if the user's email is in the ADMIN_EMAILS allowlist.
-
-    Args:
-        user: Authenticated user from auth dependency
-
-    Returns:
-        The user dict if they are an admin
-
-    Raises:
-        HTTPException 403: If user is not an admin
-    """
-    admin_emails = get_admin_emails()
-
-    # In DEV_MODE, allow all authenticated users if no ADMIN_EMAILS is set
-    if not admin_emails:
-        dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
-        if dev_mode:
-            logger.warning("ADMIN_EMAILS not set, allowing access in DEV_MODE")
-            return user
-        raise HTTPException(
-            status_code=403,
-            detail="Admin access not configured. Set ADMIN_EMAILS environment variable.",
-        )
-
-    user_email = user.get("email", "").lower()
-    if user_email not in admin_emails:
-        logger.warning('Admin access denied for user: %s', user_email)
-        raise HTTPException(
-            status_code=403,
-            detail="Admin access required. Contact your administrator.",
-        )
-
-    return user
 
 
 # =============================================================================

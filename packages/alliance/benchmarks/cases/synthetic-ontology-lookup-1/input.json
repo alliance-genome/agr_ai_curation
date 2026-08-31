@@ -1,0 +1,9 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Resolve the deliberately synthetic ontology identifier SYNTH:0000001. Return an empty result when it is not present."
+    }
+  ],
+  "active_groups": []
+}

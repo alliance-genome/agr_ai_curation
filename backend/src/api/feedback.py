@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from src.api.admin.prompts import get_admin_emails
+from src.api.admin.auth import get_admin_emails
 from src.api.auth import get_auth_dependency
 from src.lib.feedback.service import FeedbackDebugDetailForbidden, FeedbackService
 from src.lib.observability.background_tasks import report_background_task_exception

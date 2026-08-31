@@ -1,0 +1,16 @@
+schema_version: 1
+profile_id: isolated-gene-agent-v1
+target:
+  kind: agent
+  id: gene_validation
+routes:
+  - provider: openai
+    model: gpt-5.6-sol
+  - provider: openrouter
+    model: deepseek/deepseek-v4-pro-0813
+cases:
+  - case_id: synthetic-gene-lookup-1
+    fixture: cases/synthetic-gene-lookup-1/input.json
+    expected: cases/synthetic-gene-lookup-1/gold.json
+scorers:
+  - id: exact-json
