@@ -29,4 +29,47 @@ describe('API client', () => {
     assert.equal(JSON.stringify(evidence).includes('local-secret'), false)
     assert.equal(JSON.stringify(evidence).includes('do-not-leak'), false)
   })
+
+  it('bounds failed response bodies and messages with the configured evidence limit', async () => {
+    const evidencePreviewChars = 120
+    const client = new ApiClient({
+      baseUrl: 'http://app.test',
+      authMode: 'api-key',
+      secret: 'local-secret',
+      timeoutMs: 100,
+      evidencePreviewChars,
+      fetchImpl: async () => Response.json({ detail: `Bearer do-not-leak ${'x'.repeat(1_000)}` }, { status: 503 }),
+    })
+
+    await assert.rejects(client.get('/api/fail'), (error: unknown) => {
+      assert.ok(error instanceof ApiError)
+      assert.ok(JSON.stringify(error.body).length <= evidencePreviewChars)
+      assert.ok(error.message.length <= `GET /api/fail failed with 503: `.length + evidencePreviewChars)
+      assert.doesNotMatch(`${error.message}${JSON.stringify(error.body)}`, /do-not-leak/)
+      return true
+    })
+  })
+
+  it('uses the configured evidence limit for failed form posts and downloads', async () => {
+    const evidencePreviewChars = 120
+    for (const invoke of [
+      (client: ApiClient) => client.postForm('/api/upload', new FormData(), { filename: 'input.pdf' }),
+      (client: ApiClient) => client.download('/api/files/output'),
+    ]) {
+      const client = new ApiClient({
+        baseUrl: 'http://app.test',
+        authMode: 'api-key',
+        secret: 'local-secret',
+        timeoutMs: 100,
+        evidencePreviewChars,
+        fetchImpl: async () => new Response(`Bearer do-not-leak ${'x'.repeat(1_000)}`, { status: 503 }),
+      })
+      await assert.rejects(invoke(client), (error: unknown) => {
+        assert.ok(error instanceof ApiError)
+        assert.ok(JSON.stringify(error.body).length <= evidencePreviewChars)
+        assert.doesNotMatch(`${error.message}${JSON.stringify(error.body)}`, /do-not-leak/)
+        return true
+      })
+    }
+  })
 })

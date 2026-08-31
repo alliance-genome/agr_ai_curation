@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { openAiModelPreflight } from '../src/preflight.js'
+import { appendStderrPreview, openAiModelPreflight } from '../src/preflight.js'
 
 describe('OpenAI model preflight', () => {
   it('performs an authenticated metadata lookup without inference', async () => {
@@ -34,5 +34,25 @@ describe('OpenAI model preflight', () => {
         return true
       },
     )
+  })
+
+  it('bounds and redacts Codex stderr with the configured evidence limit', () => {
+    const evidencePreviewChars = 120
+    let stderr = appendStderrPreview(
+      '',
+      `Bearer ${'x'.repeat(200)}UNIQUE_SECRET_MARKER\nuseful tail diagnostic`,
+      evidencePreviewChars,
+    )
+    assert.doesNotMatch(stderr, /UNIQUE_SECRET_MARKER/)
+    assert.match(stderr, /useful tail diagnostic/)
+
+    for (let index = 0; index < 10; index += 1) {
+      stderr = appendStderrPreview(stderr, `diagnostic ${index} ${'x'.repeat(40)}\n`, evidencePreviewChars)
+    }
+    stderr = appendStderrPreview(stderr, 'FATAL: newest crash reason\n', evidencePreviewChars)
+
+    assert.ok(stderr.length <= evidencePreviewChars)
+    assert.doesNotMatch(stderr, /UNIQUE_SECRET_MARKER/)
+    assert.match(stderr, /FATAL: newest crash reason/)
   })
 })

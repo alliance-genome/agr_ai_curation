@@ -1,7 +1,10 @@
+import { compactDiagnostic } from './redaction.js'
+
 export interface PollOptions {
   label: string
   intervalMs: number
   limit: number
+  evidencePreviewChars: number
   signal?: AbortSignal
 }
 
@@ -25,13 +28,8 @@ export async function pollUntil<T>(
       })
     }
   }
-  throw new Error(`${options.label} did not succeed after ${options.limit} attempts; last value: ${safePreview(lastValue)}`)
-}
-
-function safePreview(value: unknown): string {
-  try {
-    return JSON.stringify(value)?.slice(0, 500) ?? String(value)
-  } catch {
-    return '[unserializable]'
-  }
+  throw new Error(
+    `${options.label} did not succeed after ${options.limit} attempts; last value: `
+      + compactDiagnostic(lastValue, options.evidencePreviewChars),
+  )
 }

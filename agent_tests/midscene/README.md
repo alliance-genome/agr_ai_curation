@@ -148,8 +148,9 @@ file_outputs/temp/agent_ui_smoke/<run-id>/
 └── verdict.md
 ```
 
-Secrets and auth headers are never written. API bodies are recursively redacted
-and bounded by `AGENT_UI_SMOKE_EVIDENCE_PREVIEW_CHARS`. The browser API key is
+Secrets and auth headers are never written. API bodies and persisted failure
+diagnostics are recursively redacted and bounded by
+`AGENT_UI_SMOKE_EVIDENCE_PREVIEW_CHARS`. The browser API key is
 added only to requests for the configured application origin. Cleanup clears the
 active document, deletes each exact-ID generated file row and storage object
 through a loopback/Compose-only helper, then deletes chat sessions, flows, and

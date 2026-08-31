@@ -10,6 +10,7 @@ import { chromium } from 'playwright'
 import { ApiClient } from './api-client.js'
 import { applyProviderEnvironment, loadConfig } from './config.js'
 import { pollUntil } from './poll.js'
+import { redactText } from './redaction.js'
 import { recordValue, stringValue } from './sse.js'
 
 const execFileAsync = promisify(execFile)
@@ -42,11 +43,15 @@ export async function openAiModelPreflight(
   return { id }
 }
 
-async function codexModels(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
+export function appendStderrPreview(current: string, chunk: string, evidencePreviewChars: number): string {
+  return redactText(`${current}${chunk}`).slice(-evidencePreviewChars)
+}
+
+async function codexModels(timeoutMs: number, evidencePreviewChars: number): Promise<Array<Record<string, unknown>>> {
   const child = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] })
   if (!child.stdin || !child.stdout || !child.stderr) throw new Error('codex app-server stdio is unavailable')
   let stderr = ''
-  child.stderr.on('data', (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4_000) })
+  child.stderr.on('data', (chunk) => { stderr = appendStderrPreview(stderr, String(chunk), evidencePreviewChars) })
   const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity })
   const queue: RpcMessage[] = []
   const waiters: Array<(message: RpcMessage) => void> = []
@@ -130,6 +135,7 @@ export async function runPreflight(): Promise<Record<string, unknown>> {
         label: 'PDF extraction worker preflight',
         intervalMs: config.pdfPollIntervalMs,
         limit: config.pdfPollLimit,
+        evidencePreviewChars: config.evidencePreviewChars,
         signal: AbortSignal.timeout(config.pdfProcessingTimeoutMs),
       },
     )
@@ -156,7 +162,7 @@ export async function runPreflight(): Promise<Record<string, unknown>> {
     }
     const loginStatus = `${login.stdout}\n${login.stderr}`.trim()
     if (!/logged in/i.test(loginStatus)) throw new Error(`Codex login is unavailable: ${loginStatus}`)
-    const models = await codexModels(config.preflightTimeoutMs)
+    const models = await codexModels(config.preflightTimeoutMs, config.evidencePreviewChars)
     const selected = models.find((model) => stringValue(model.id ?? model.model) === config.model.name)
     if (!selected) throw new Error(`Codex app-server does not advertise model ${config.model.name}`)
     const efforts = Array.isArray(selected.supportedReasoningEfforts) ? selected.supportedReasoningEfforts : []

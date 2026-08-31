@@ -96,12 +96,13 @@ export class ApiClient {
     })
 
     if (!response.ok) {
+      const body = compactEvidence(responseBody, this.#evidencePreviewChars)
       throw new ApiError(
-        `${method} ${path} failed with ${response.status}: ${JSON.stringify(redactSecrets(responseBody))}`,
+        `${method} ${path} failed with ${response.status}: ${JSON.stringify(body)}`,
         method,
         path,
         response.status,
-        redactSecrets(responseBody),
+        body,
       )
     }
     return responseBody as T
@@ -130,7 +131,7 @@ export class ApiClient {
       response: { size_bytes: bytes.length, content_type: response.headers.get('content-type') },
     })
     if (!response.ok) {
-      const body = redactSecrets(new TextDecoder().decode(bytes).slice(0, this.#evidencePreviewChars))
+      const body = compactEvidence(new TextDecoder().decode(bytes), this.#evidencePreviewChars)
       throw new ApiError(`GET ${path} failed with ${response.status}: ${JSON.stringify(body)}`, 'GET', path, response.status, body)
     }
     return bytes
@@ -158,9 +159,10 @@ export class ApiClient {
       request: redactSecrets(evidenceRequest), response: compactEvidence(body, this.#evidencePreviewChars),
     })
     if (!response.ok) {
+      const errorBody = compactEvidence(body, this.#evidencePreviewChars)
       throw new ApiError(
-        `POST ${path} failed with ${response.status}: ${JSON.stringify(redactSecrets(body))}`,
-        'POST', path, response.status, redactSecrets(body),
+        `POST ${path} failed with ${response.status}: ${JSON.stringify(errorBody)}`,
+        'POST', path, response.status, errorBody,
       )
     }
     return body as T

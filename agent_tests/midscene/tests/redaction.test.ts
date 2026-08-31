@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { redactSecrets, redactText, sanitizeHeaders } from '../src/redaction.js'
+import { compactDiagnostic, compactEvidence, redactSecrets, redactText, sanitizeHeaders } from '../src/redaction.js'
 
 describe('secret redaction', () => {
   it('redacts secret-bearing keys recursively', () => {
@@ -27,5 +27,15 @@ describe('secret redaction', () => {
       Accept: 'application/json',
       'X-API-Key': '[REDACTED]',
     })
+  })
+
+  it('keeps compact evidence and diagnostics within a nondefault serialized bound', () => {
+    const maxChars = 120
+    const value = { detail: `Bearer do-not-leak ${'x'.repeat(1_000)}` }
+    const evidence = compactEvidence(value, maxChars)
+    const diagnostic = compactDiagnostic(value, maxChars)
+    assert.ok(JSON.stringify(evidence).length <= maxChars)
+    assert.ok(diagnostic.length <= maxChars)
+    assert.doesNotMatch(`${JSON.stringify(evidence)}${diagnostic}`, /do-not-leak/)
   })
 })
