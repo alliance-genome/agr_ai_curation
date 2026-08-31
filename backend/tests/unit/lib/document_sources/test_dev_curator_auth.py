@@ -113,13 +113,18 @@ def test_load_settings_requires_supported_mode_and_all_values(monkeypatch) -> No
     assert "DOCUMENT_SOURCE" not in str(exc_info.value)
 
 
-def test_authenticate_uses_password_flow_and_validates_id_token(monkeypatch) -> None:
+def test_authenticate_uses_password_flow_and_validates_paired_tokens(monkeypatch) -> None:
     observed = {}
 
     class FakeClient:
         def initiate_auth(self, **kwargs):
             observed["auth"] = kwargs
-            return {"AuthenticationResult": {"IdToken": "signed-id-token"}}
+            return {
+                "AuthenticationResult": {
+                    "IdToken": "signed-id-token",
+                    "AccessToken": "signed-access-token",
+                }
+            }
 
     def fake_boto_client(service, *, region_name, config):
         observed["service"] = service
@@ -134,16 +139,25 @@ def test_authenticate_uses_password_flow_and_validates_id_token(monkeypatch) -> 
             observed["jwks_timeout"] = timeout
 
         def get_signing_key_from_jwt(self, token):
-            observed["signing_token"] = token
-            return SimpleNamespace(key="public-key")
+            observed.setdefault("signing_tokens", []).append(token)
+            return SimpleNamespace(key=f"public-key-for-{token}")
 
     def fake_decode(token, key, **kwargs):
-        observed["decode"] = {"token": token, "key": key, **kwargs}
+        observed.setdefault("decodes", []).append(
+            {"token": token, "key": key, **kwargs}
+        )
+        if token == "signed-id-token":
+            return {
+                "sub": "curator-sub",
+                "exp": 4102444800,
+                "token_use": "id",
+                "cognito:groups": ["FBStaff", "FlyBaseCurator"],
+            }
         return {
             "sub": "curator-sub",
-            "exp": 4102444800,
-            "token_use": "id",
-            "cognito:groups": ["FBStaff", "FlyBaseCurator"],
+            "exp": 4102444700,
+            "token_use": "access",
+            "client_id": "client-1",
         }
 
     monkeypatch.setattr(auth.boto3, "client", fake_boto_client)
@@ -168,11 +182,19 @@ def test_authenticate_uses_password_flow_and_validates_id_token(monkeypatch) -> 
     )
     assert observed["jwks_url"].endswith("/pool-1/.well-known/jwks.json")
     assert observed["jwks_timeout"] == 8
-    assert observed["decode"]["audience"] == "client-1"
-    assert observed["decode"]["issuer"].endswith("/pool-1")
-    assert observed["decode"]["options"]["require"] == ["exp", "sub", "token_use"]
-    assert result.token == "signed-id-token"
+    assert observed["signing_tokens"] == ["signed-id-token", "signed-access-token"]
+    id_decode, access_decode = observed["decodes"]
+    assert id_decode["audience"] == "client-1"
+    assert id_decode["issuer"].endswith("/pool-1")
+    assert id_decode["options"]["require"] == ["exp", "sub", "token_use"]
+    assert access_decode["issuer"].endswith("/pool-1")
+    assert access_decode["options"] == {
+        "require": ["exp", "sub", "token_use", "client_id"],
+        "verify_aud": False,
+    }
+    assert result.token == "signed-access-token"
     assert result.claims["cognito:groups"] == ["FBStaff", "FlyBaseCurator"]
+    assert result.expires_at == 4102444700
 
 
 def test_authenticate_suppresses_aws_sdk_debug_secret_logging(monkeypatch, caplog) -> None:
@@ -188,7 +210,12 @@ def test_authenticate_suppresses_aws_sdk_debug_secret_logging(monkeypatch, caplo
             boto3_logger.debug("resource password=%s", password_marker)
             botocore_logger.debug("request password=%s", password_marker)
             botocore_logger.debug("response id_token=%s", token_marker)
-            return {"AuthenticationResult": {"IdToken": "signed-id-token"}}
+            return {
+                "AuthenticationResult": {
+                    "IdToken": "signed-id-token",
+                    "AccessToken": "signed-access-token",
+                }
+            }
 
     monkeypatch.setattr(
         auth.boto3,
@@ -208,7 +235,14 @@ def test_authenticate_suppresses_aws_sdk_debug_secret_logging(monkeypatch, caplo
         lambda *_args, **_kwargs: {
             "sub": "subject",
             "exp": 4102444800,
-            "token_use": "id",
+            "token_use": (
+                "access" if _args and _args[0] == "signed-access-token" else "id"
+            ),
+            **(
+                {"client_id": "client-1"}
+                if _args and _args[0] == "signed-access-token"
+                else {}
+            ),
         },
     )
 
@@ -228,6 +262,8 @@ def test_authenticate_suppresses_aws_sdk_debug_secret_logging(monkeypatch, caplo
         {"ChallengeName": "NEW_PASSWORD_REQUIRED"},
         {},
         {"AuthenticationResult": {}},
+        {"AuthenticationResult": {"IdToken": "id-only"}},
+        {"AuthenticationResult": {"AccessToken": "access-only"}},
     ],
 )
 def test_authenticate_rejects_challenge_and_malformed_responses(monkeypatch, response) -> None:
@@ -249,7 +285,10 @@ def test_authenticate_rejects_non_id_token(monkeypatch) -> None:
         "client",
         lambda *_args, **_kwargs: SimpleNamespace(
             initiate_auth=lambda **_auth_kwargs: {
-                "AuthenticationResult": {"IdToken": "access-token"}
+                "AuthenticationResult": {
+                    "IdToken": "wrong-id-token",
+                    "AccessToken": "access-token",
+                }
             }
         ),
     )
@@ -280,7 +319,10 @@ def test_authenticate_rejects_expired_id_token(monkeypatch) -> None:
         "client",
         lambda *_args, **_kwargs: SimpleNamespace(
             initiate_auth=lambda **_auth_kwargs: {
-                "AuthenticationResult": {"IdToken": "expired-id-token"}
+                "AuthenticationResult": {
+                    "IdToken": "expired-id-token",
+                    "AccessToken": "access-token",
+                }
             }
         ),
     )
@@ -296,6 +338,116 @@ def test_authenticate_rejects_expired_id_token(monkeypatch) -> None:
         raise auth.jwt.ExpiredSignatureError("expired")
 
     monkeypatch.setattr(auth.jwt, "decode", _expired)
+
+    with pytest.raises(auth.jwt.ExpiredSignatureError):
+        auth._authenticate_sync(_settings())
+
+
+@pytest.mark.parametrize(
+    ("access_claims", "message"),
+    [
+        (
+            {
+                "sub": "subject",
+                "exp": 4102444800,
+                "token_use": "id",
+                "client_id": "client-1",
+            },
+            "wrong bearer token type",
+        ),
+        (
+            {
+                "sub": "subject",
+                "exp": 4102444800,
+                "token_use": "access",
+                "client_id": "other-client",
+            },
+            "wrong bearer client",
+        ),
+        (
+            {
+                "sub": "other-subject",
+                "exp": 4102444800,
+                "token_use": "access",
+                "client_id": "client-1",
+            },
+            "mismatched token identities",
+        ),
+    ],
+)
+def test_authenticate_rejects_invalid_access_token_claims(
+    monkeypatch,
+    access_claims,
+    message,
+) -> None:
+    monkeypatch.setattr(
+        auth.boto3,
+        "client",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            initiate_auth=lambda **_auth_kwargs: {
+                "AuthenticationResult": {
+                    "IdToken": "id-token",
+                    "AccessToken": "access-token",
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        auth,
+        "PyJWKClient",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            get_signing_key_from_jwt=lambda _token: SimpleNamespace(key="key")
+        ),
+    )
+    monkeypatch.setattr(
+        auth.jwt,
+        "decode",
+        lambda token, *_args, **_kwargs: (
+            {
+                "sub": "subject",
+                "exp": 4102444900,
+                "token_use": "id",
+            }
+            if token == "id-token"
+            else access_claims
+        ),
+    )
+
+    with pytest.raises(auth.DevCuratorCredentialUnavailable, match=message):
+        auth._authenticate_sync(_settings())
+
+
+def test_authenticate_rejects_expired_access_token(monkeypatch) -> None:
+    monkeypatch.setattr(
+        auth.boto3,
+        "client",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            initiate_auth=lambda **_auth_kwargs: {
+                "AuthenticationResult": {
+                    "IdToken": "id-token",
+                    "AccessToken": "expired-access-token",
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        auth,
+        "PyJWKClient",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            get_signing_key_from_jwt=lambda _token: SimpleNamespace(key="key")
+        ),
+    )
+
+    def _decode(token, *_args, **_kwargs):
+        if token == "expired-access-token":
+            raise auth.jwt.ExpiredSignatureError("expired")
+        return {
+            "sub": "subject",
+            "exp": 4102444900,
+            "token_use": "id",
+        }
+
+    monkeypatch.setattr(auth.jwt, "decode", _decode)
 
     with pytest.raises(auth.jwt.ExpiredSignatureError):
         auth._authenticate_sync(_settings())

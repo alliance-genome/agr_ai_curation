@@ -47,7 +47,7 @@ class DevCuratorCredentialUnavailable(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class DevCuratorCredentials:
-    """Validated request bearer token and its non-secret authorization claims."""
+    """Validated ABC bearer and non-secret claims from the paired ID token."""
 
     token: str = field(repr=False)
     claims: Mapping[str, Any] = field(repr=False)
@@ -161,9 +161,10 @@ def _authenticate_sync(settings: _CognitoSettings) -> DevCuratorCredentials:
             "Development document-source curator authentication returned no token."
         )
     id_token = str(authentication_result.get("IdToken") or "").strip()
-    if not id_token:
+    access_token = str(authentication_result.get("AccessToken") or "").strip()
+    if not id_token or not access_token:
         raise DevCuratorCredentialUnavailable(
-            "Development document-source curator authentication returned no token."
+            "Development document-source curator authentication returned incomplete tokens."
         )
 
     issuer = (
@@ -173,23 +174,48 @@ def _authenticate_sync(settings: _CognitoSettings) -> DevCuratorCredentials:
         f"{issuer}/.well-known/jwks.json",
         timeout=max(1, math.ceil(settings.request_timeout_seconds)),
     )
-    signing_key = jwks_client.get_signing_key_from_jwt(id_token)
-    claims = jwt.decode(
+    id_signing_key = jwks_client.get_signing_key_from_jwt(id_token)
+    id_claims = jwt.decode(
         id_token,
-        signing_key.key,
+        id_signing_key.key,
         algorithms=["RS256"],
         audience=settings.client_id,
         issuer=issuer,
         options={"require": ["exp", "sub", "token_use"]},
     )
-    if claims.get("token_use") != "id":
+    if id_claims.get("token_use") != "id":
         raise DevCuratorCredentialUnavailable(
             "Development document-source curator authentication returned the wrong token type."
         )
-    expires_at = float(claims["exp"])
+
+    access_signing_key = jwks_client.get_signing_key_from_jwt(access_token)
+    access_claims = jwt.decode(
+        access_token,
+        access_signing_key.key,
+        algorithms=["RS256"],
+        issuer=issuer,
+        options={
+            "require": ["exp", "sub", "token_use", "client_id"],
+            "verify_aud": False,
+        },
+    )
+    if access_claims.get("token_use") != "access":
+        raise DevCuratorCredentialUnavailable(
+            "Development document-source curator authentication returned the wrong bearer token type."
+        )
+    if access_claims.get("client_id") != settings.client_id:
+        raise DevCuratorCredentialUnavailable(
+            "Development document-source curator authentication returned the wrong bearer client."
+        )
+    if access_claims.get("sub") != id_claims.get("sub"):
+        raise DevCuratorCredentialUnavailable(
+            "Development document-source curator authentication returned mismatched token identities."
+        )
+
+    expires_at = min(float(id_claims["exp"]), float(access_claims["exp"]))
     return DevCuratorCredentials(
-        token=id_token,
-        claims=dict(claims),
+        token=access_token,
+        claims=dict(id_claims),
         expires_at=expires_at,
     )
 

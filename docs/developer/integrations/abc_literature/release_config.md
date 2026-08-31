@@ -75,11 +75,13 @@ Login-free development uses a separate provider-only identity. Keep
 `DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE=cognito_user_password` and supply the
 dedicated Cognito region, pool, no-callback app-client ID/secret, username, and
 password through the host-private environment. The app client must allow
-`USER_PASSWORD_AUTH`. The backend validates the returned ID token and derives
-provider groups from its claims, while document ownership remains attached to
-`dev-user-123`. These settings are passed only by development Compose and are
-inactive unless effective dev mode, external import, and a non-local provider
-are all enabled.
+`USER_PASSWORD_AUTH`. The backend validates both returned tokens, derives
+provider groups from the ID-token claims, and forwards the paired access token
+only to ABC Literature. Document ownership remains attached to `dev-user-123`.
+This dev-only bearer choice avoids copying a shared production app-client
+secret or requiring an ABC audience-allow-list change. These settings are
+passed only by development Compose and are inactive unless effective dev mode,
+external import, and a non-local provider are all enabled.
 
 ## Groups And Access
 
@@ -131,9 +133,10 @@ Expected enabled external-provider behavior:
   sanitized provider-misconfigured details.
 - ABC provider unavailability makes health/readiness fail with sanitized
   provider-unavailable details.
-- Renewable dev mode obtains the cached validated ID token and performs an
-  authenticated lookup for a valid absent MD5. Cognito failures and provider
-  authorization failures make health and readiness unhealthy.
+- Renewable dev mode obtains the cached validated token pair and performs an
+  authenticated lookup for a valid absent MD5 with the access token. Cognito
+  failures and provider authorization failures make health and readiness
+  unhealthy.
 - Health checks use safe read/list/search endpoints only. They must not call
   `conversion_request`, `file_upload`, `reference/add`, or restricted
   `download_file` with a service credential.
