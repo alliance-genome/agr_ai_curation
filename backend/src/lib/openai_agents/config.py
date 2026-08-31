@@ -972,10 +972,79 @@ def get_sentry_log_event_level() -> int | None:
 
 # --- Developer benchmark harness ---
 
+_BENCHMARK_CAPABILITY_ENV_SUFFIXES = {
+    "benchmark:read": "READ",
+    "benchmark:run": "RUN",
+    "benchmark:cancel": "CANCEL",
+    "benchmark:delete": "DELETE",
+    "benchmark:source:read": "SOURCE_READ",
+}
+
 
 def get_benchmark_enabled() -> bool:
     """Whether authenticated admin benchmark routes may be used."""
     return _get_env_bool("BENCHMARK_ENABLED", False)
+
+
+def get_benchmark_oidc_issuer_url() -> str:
+    """Trusted issuer for benchmark bearer access tokens."""
+    return os.getenv("BENCHMARK_OIDC_ISSUER_URL", "").strip()
+
+
+def get_benchmark_oidc_audience() -> str:
+    """Required audience for benchmark bearer access tokens."""
+    return os.getenv("BENCHMARK_OIDC_AUDIENCE", "").strip()
+
+
+def get_benchmark_oidc_allowed_client_ids() -> tuple[str, ...]:
+    """Client identities permitted to present benchmark bearer tokens."""
+    raw = os.getenv("BENCHMARK_OIDC_ALLOWED_CLIENT_IDS", "")
+    return tuple(value.strip() for value in raw.split(",") if value.strip())
+
+
+def _benchmark_capability_suffix(capability: str) -> str:
+    try:
+        return _BENCHMARK_CAPABILITY_ENV_SUFFIXES[capability]
+    except KeyError as exc:
+        raise ValueError(f"Unknown benchmark capability: {capability}") from exc
+
+
+def get_benchmark_oidc_capability_scopes(capability: str) -> tuple[str, ...]:
+    """Deployment OAuth scopes granting one stable benchmark capability."""
+    suffix = _benchmark_capability_suffix(capability)
+    raw = os.getenv(f"BENCHMARK_OIDC_{suffix}_SCOPES", "")
+    return tuple(value.strip() for value in raw.split(",") if value.strip())
+
+
+def get_benchmark_operator_capability_groups(capability: str) -> tuple[str, ...]:
+    """Browser identity groups granting one stable benchmark capability."""
+    suffix = _benchmark_capability_suffix(capability)
+    raw = os.getenv(f"BENCHMARK_OPERATOR_{suffix}_GROUPS", "")
+    return tuple(value.strip() for value in raw.split(",") if value.strip())
+
+
+def get_benchmark_oidc_jwks_timeout_seconds() -> float:
+    """HTTP timeout for benchmark OIDC discovery and JWKS requests."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("BENCHMARK_OIDC_JWKS_TIMEOUT_SECONDS", 5.0),
+    )
+
+
+def get_benchmark_oidc_jwks_cache_ttl_seconds() -> int:
+    """Lifetime of the benchmark verifier's cached OIDC key set."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_OIDC_JWKS_CACHE_TTL_SECONDS", 300),
+    )
+
+
+def get_benchmark_oidc_clock_skew_seconds() -> float:
+    """Permitted clock skew while validating benchmark token time claims."""
+    return max(
+        0.0,
+        _get_env_float_with_fallback("BENCHMARK_OIDC_CLOCK_SKEW_SECONDS", 60.0),
+    )
 
 
 def get_benchmark_root() -> str:

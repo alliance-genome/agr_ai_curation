@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from src.lib.config import models_loader
 from src.lib.openai_agents import config
 
@@ -121,3 +123,80 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_artifact_upload_timeout_seconds() == 0.1
     assert config.get_benchmark_artifact_upload_concurrency() == 1
     assert config.get_benchmark_artifact_secret_patterns() == ("secret-a", "secret-b")
+
+
+def test_benchmark_oidc_defaults_and_overrides(monkeypatch):
+    keys = (
+        "BENCHMARK_OIDC_ISSUER_URL",
+        "BENCHMARK_OIDC_AUDIENCE",
+        "BENCHMARK_OIDC_ALLOWED_CLIENT_IDS",
+        "BENCHMARK_OIDC_READ_SCOPES",
+        "BENCHMARK_OPERATOR_READ_GROUPS",
+        "BENCHMARK_OIDC_JWKS_TIMEOUT_SECONDS",
+        "BENCHMARK_OIDC_JWKS_CACHE_TTL_SECONDS",
+        "BENCHMARK_OIDC_CLOCK_SKEW_SECONDS",
+    )
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+
+    assert config.get_benchmark_oidc_issuer_url() == ""
+    assert config.get_benchmark_oidc_audience() == ""
+    assert config.get_benchmark_oidc_allowed_client_ids() == ()
+    assert config.get_benchmark_oidc_capability_scopes("benchmark:read") == ()
+    assert config.get_benchmark_operator_capability_groups("benchmark:read") == ()
+    assert config.get_benchmark_oidc_jwks_timeout_seconds() == 5
+    assert config.get_benchmark_oidc_jwks_cache_ttl_seconds() == 300
+    assert config.get_benchmark_oidc_clock_skew_seconds() == 60
+
+    monkeypatch.setenv("BENCHMARK_OIDC_ISSUER_URL", " https://issuer.example.org/ ")
+    monkeypatch.setenv("BENCHMARK_OIDC_AUDIENCE", " benchmark-api ")
+    monkeypatch.setenv(
+        "BENCHMARK_OIDC_ALLOWED_CLIENT_IDS", " portal-client, operator-client "
+    )
+    monkeypatch.setenv("BENCHMARK_OIDC_READ_SCOPES", " portal.read, alternate.read ")
+    monkeypatch.setenv(
+        "BENCHMARK_OPERATOR_READ_GROUPS", " benchmark-readers, benchmark-admins "
+    )
+    monkeypatch.setenv("BENCHMARK_OIDC_JWKS_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_OIDC_JWKS_CACHE_TTL_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_OIDC_CLOCK_SKEW_SECONDS", "-1")
+
+    assert config.get_benchmark_oidc_issuer_url() == "https://issuer.example.org/"
+    assert config.get_benchmark_oidc_audience() == "benchmark-api"
+    assert config.get_benchmark_oidc_allowed_client_ids() == (
+        "portal-client",
+        "operator-client",
+    )
+    assert config.get_benchmark_oidc_capability_scopes("benchmark:read") == (
+        "portal.read",
+        "alternate.read",
+    )
+    assert config.get_benchmark_operator_capability_groups("benchmark:read") == (
+        "benchmark-readers",
+        "benchmark-admins",
+    )
+    assert config.get_benchmark_oidc_jwks_timeout_seconds() == 0.1
+    assert config.get_benchmark_oidc_jwks_cache_ttl_seconds() == 1
+    assert config.get_benchmark_oidc_clock_skew_seconds() == 0
+
+
+def test_every_benchmark_capability_has_independent_scope_and_group_config(monkeypatch):
+    mappings = {
+        "benchmark:read": "READ",
+        "benchmark:run": "RUN",
+        "benchmark:cancel": "CANCEL",
+        "benchmark:delete": "DELETE",
+        "benchmark:source:read": "SOURCE_READ",
+    }
+    for capability, suffix in mappings.items():
+        monkeypatch.setenv(f"BENCHMARK_OIDC_{suffix}_SCOPES", f"scope.{suffix.lower()}")
+        monkeypatch.setenv(f"BENCHMARK_OPERATOR_{suffix}_GROUPS", f"group-{suffix.lower()}")
+        assert config.get_benchmark_oidc_capability_scopes(capability) == (
+            f"scope.{suffix.lower()}",
+        )
+        assert config.get_benchmark_operator_capability_groups(capability) == (
+            f"group-{suffix.lower()}",
+        )
+
+    with pytest.raises(ValueError, match="Unknown benchmark capability"):
+        config.get_benchmark_oidc_capability_scopes("benchmark:unknown")
