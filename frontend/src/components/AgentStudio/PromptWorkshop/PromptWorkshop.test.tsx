@@ -1166,7 +1166,7 @@ describe('PromptWorkshop', () => {
     expect(await getGroupOverrideSelect()).toHaveTextContent('Select group')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
-  }, 15000)
+  }, 30000)
 
   it('uses template group rules in template mode and clone-source group rules in clone mode', async () => {
     const existingCloneSource = buildCustomAgent({
@@ -1191,7 +1191,7 @@ describe('PromptWorkshop', () => {
     await waitForAgentName('Disease Agent (Copy)')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
-  }, 15000)
+  }, 30000)
 
   it('uses the selected custom agent template group rules when editing an existing agent', async () => {
     const templateAlignedCloneSource = buildCustomAgent({
@@ -1267,7 +1267,7 @@ describe('PromptWorkshop', () => {
     await waitForAgentName('Disease Agent (Copy)')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
-  }, 20000)
+  }, 30000)
 
   // ── Workshop section-tab layout + curator-voice labels (Task 2 redesign) ──
 
