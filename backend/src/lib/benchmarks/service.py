@@ -11,6 +11,8 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from src.lib.observability.runtime import report_runtime_exception
+
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
 from .models import (
     BenchmarkCaseRun,
@@ -215,6 +217,19 @@ class BenchmarkService:
                     message="Benchmark target execution failed",
                 )
             except Exception:
+                sanitized_exception = RuntimeError(
+                    "Unexpected benchmark orchestration failure"
+                )
+                report_runtime_exception(
+                    sanitized_exception,
+                    component="benchmarks",
+                    operation="execute_case",
+                    tags={"run_kind": planned.target.kind},
+                    context={
+                        "run_id_hash": planned.run_id.removeprefix("benchmark-"),
+                        "target_kind": planned.target.kind,
+                    },
+                )
                 failure = BenchmarkFailure(
                     category="internal_error", message="Benchmark execution failed"
                 )

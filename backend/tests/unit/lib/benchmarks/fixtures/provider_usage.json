@@ -3,8 +3,14 @@
   "requested_model": "deepseek/deepseek-v4-pro-0813",
   "actual_provider": "deepseek",
   "actual_model": "deepseek/deepseek-v4-pro-0813",
+  "routing_attempt": 1,
   "input_tokens": 120,
   "output_tokens": 30,
+  "total_tokens": 150,
   "latency_ms": 450,
-  "billed_cost_usd": 0.0015
+  "billed_cost": {
+    "amount": "0.001500",
+    "unit": "credits",
+    "source": "openrouter_usage"
+  }
 }

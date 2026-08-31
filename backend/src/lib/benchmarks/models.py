@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -91,15 +92,23 @@ class DryRunPlan(StrictModel):
     runs: list[PlannedCaseRun]
 
 
+class BilledCost(StrictModel):
+    amount: Decimal = Field(ge=0, strict=False)
+    unit: str
+    source: str
+
+
 class ProviderUsage(StrictModel):
-    requested_provider: str | None = None
-    requested_model: str | None = None
+    requested_provider: str
+    requested_model: str
     actual_provider: str | None = None
     actual_model: str | None = None
+    routing_attempt: int | None = Field(default=None, ge=0)
+    latency_ms: int = Field(ge=0)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
-    latency_ms: int | None = Field(default=None, ge=0)
-    billed_cost_usd: float | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    billed_cost: BilledCost | None = None
 
 
 class BenchmarkFailure(StrictModel):

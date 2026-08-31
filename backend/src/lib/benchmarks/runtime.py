@@ -26,7 +26,7 @@ from src.lib.packages.tool_registry import resolve_default_packages_dir
 from src.models.sql.curation_flow import CurationFlow
 
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
-from .models import BenchmarkRoute, ExecutionResult, ProviderUsage
+from .models import BenchmarkRoute, ExecutionResult
 from .service import BenchmarkService
 
 
@@ -68,16 +68,6 @@ def build_default_service(root: Path | None = None) -> BenchmarkService:
     )
 
 
-def _provider_usage_from_event(event: dict[str, Any]) -> ProviderUsage | None:
-    for container_key in ("data", "details"):
-        container = event.get(container_key)
-        if isinstance(container, dict) and isinstance(
-            container.get("provider_usage"), dict
-        ):
-            return ProviderUsage.model_validate(container["provider_usage"])
-    return None
-
-
 async def execute_agent_case(
     target_id: str,
     case_input: dict[str, Any],
@@ -96,7 +86,6 @@ async def execute_agent_case(
         model_provider_override=route.provider,
     )
     output: Any = None
-    provider_usage = None
     terminal_seen = False
     async for event in run_agent_streamed(
         context_messages=messages,
@@ -109,7 +98,6 @@ async def execute_agent_case(
         chat_route_target_id=target_id,
         propagate_runtime_exceptions=True,
     ):
-        provider_usage = _provider_usage_from_event(event) or provider_usage
         if event.get("type") == "RUN_ERROR":
             raise RuntimeError("Agent benchmark target failed")
         if event.get("type") == "RUN_FINISHED":
@@ -118,7 +106,7 @@ async def execute_agent_case(
             output = data.get("structured_result", data.get("response"))
     if not terminal_seen:
         raise RuntimeError("Agent benchmark target ended without a terminal event")
-    return ExecutionResult(output=output, provider_usage=provider_usage)
+    return ExecutionResult(output=output)
 
 
 def _flow_from_recipe(target_id: str) -> CurationFlow:
@@ -156,7 +144,6 @@ async def execute_flow_case(
 ) -> ExecutionResult:
     flow = _flow_from_recipe(target_id)
     output: Any = None
-    provider_usage = None
     terminal_seen = False
     async for event in execute_flow(
         flow=flow,
@@ -173,7 +160,6 @@ async def execute_flow_case(
         model_id_override=route.model,
         model_provider_override=route.provider,
     ):
-        provider_usage = _provider_usage_from_event(event) or provider_usage
         if event.get("type") == "FLOW_ERROR":
             raise RuntimeError("Flow benchmark target failed")
         if event.get("type") == "FLOW_FINISHED":
@@ -181,4 +167,4 @@ async def execute_flow_case(
             output = event.get("data") or event.get("details")
     if not terminal_seen:
         raise RuntimeError("Flow benchmark target ended without a terminal event")
-    return ExecutionResult(output=output, provider_usage=provider_usage)
+    return ExecutionResult(output=output)

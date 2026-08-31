@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -93,6 +94,13 @@ async def test_provider_usage_slot_carries_shared_normalized_shape(benchmark_cat
     assert run.provider_usage == usage
     assert run.provider_usage is not None
     assert run.provider_usage.actual_provider == "deepseek"
+    assert run.provider_usage.routing_attempt == 1
+    assert run.provider_usage.total_tokens == 150
+    assert run.provider_usage.billed_cost is not None
+    assert run.provider_usage.billed_cost.amount == Decimal("0.001500")
+    assert run.provider_usage.billed_cost.source == "openrouter_usage"
+    serialized = run.model_dump(mode="json")["provider_usage"]
+    assert serialized["billed_cost"]["amount"] == "0.001500"
 
 
 async def test_failure_is_normalized_without_raw_exception(benchmark_catalog):
@@ -107,6 +115,43 @@ async def test_failure_is_normalized_without_raw_exception(benchmark_catalog):
     assert run.failure.category == "runtime_error"
     assert "secret" not in run.failure.message
     assert run.output is None
+
+
+async def test_unexpected_failure_reports_sanitized_exception(
+    benchmark_catalog, monkeypatch
+):
+    secret = "Authorization: Bearer super-secret"
+    reported = []
+
+    async def executor(*_args):
+        raise OSError(secret)
+
+    def capture(exc, **kwargs):
+        reported.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr("src.lib.benchmarks.service.report_runtime_exception", capture)
+
+    run = (
+        await _service(benchmark_catalog, executor).execute(BenchmarkSelection())
+    ).runs[0]
+
+    assert run.status == "failed"
+    assert run.failure is not None
+    assert run.failure.category == "internal_error"
+    assert len(reported) == 1
+    reported_exception, metadata = reported[0]
+    serialized_report = json.dumps(
+        {"exception": str(reported_exception), "metadata": metadata}, sort_keys=True
+    )
+    assert "secret" not in serialized_report
+    assert "Authorization" not in serialized_report
+    assert reported_exception.__cause__ is None
+    assert reported_exception.__context__ is None
+    assert metadata["component"] == "benchmarks"
+    assert metadata["operation"] == "execute_case"
+    assert metadata["tags"] == {"run_kind": "agent"}
+    assert metadata["context"]["run_id_hash"]
 
 
 async def test_success_output_redacts_restricted_fields_and_auth_values(
