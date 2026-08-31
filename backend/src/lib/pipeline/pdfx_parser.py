@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import aiohttp
 
 from src.lib.openai_agents.config import get_pdf_extraction_receipt_token_max_chars
+from src.lib.observability.runtime import report_runtime_exception
 
 from ..pdf_limits import MAX_PDF_FILE_SIZE_BYTES, pdf_file_size_limit_message
 from ..storage_permissions import ensure_writable_directory
@@ -58,6 +59,21 @@ PDFX_POLLING_TIMEOUT_MESSAGE = (
 PDFX_UNKNOWN_FAILURE_MESSAGE = (
     "PDF extraction could not be completed. Please try again later."
 )
+
+
+class _PDFXObservabilityCallbackError(RuntimeError):
+    """Sanitized receipt callback failure safe for operational reporting."""
+
+
+def _sanitized_observability_callback_error() -> _PDFXObservabilityCallbackError:
+    try:
+        raise _PDFXObservabilityCallbackError(
+            "PDF extraction observability callback failed"
+        ) from None
+    except _PDFXObservabilityCallbackError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
 
 
 def _safe_provider_token(value: Any) -> str | None:
@@ -417,6 +433,12 @@ class PDFXParser:
                         }
                     )
                 except Exception as exc:
+                    report_runtime_exception(
+                        _sanitized_observability_callback_error(),
+                        component="pdfx_parser",
+                        operation="external_observation_callback_failed",
+                        level="warning",
+                    )
                     logger.warning(
                         "Failed to record PDF extraction boundary observability: %s",
                         type(exc).__name__,
