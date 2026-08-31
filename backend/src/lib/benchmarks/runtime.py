@@ -19,6 +19,7 @@ from src.lib.openai_agents.config import (
     get_benchmark_result_limit,
     get_benchmark_retries,
     get_benchmark_timeout_seconds,
+    resolve_model_provider,
 )
 from src.lib.openai_agents.runner import run_agent_streamed
 from src.lib.packages.flow_recipes import load_flow_recipe_catalog
@@ -34,6 +35,16 @@ def get_default_benchmark_root() -> Path:
     return resolve_default_packages_dir() / "alliance" / "benchmarks"
 
 
+def _validate_route(model: str, provider: str) -> None:
+    catalog_provider = resolve_model_provider(model)
+    requested_provider = resolve_model_provider(model, provider_override=provider)
+    if requested_provider != catalog_provider:
+        raise ValueError(
+            f"Model '{model}' belongs to provider '{catalog_provider}', "
+            f"not '{requested_provider}'"
+        )
+
+
 def build_default_catalog(root: Path | None = None) -> BenchmarkCatalog:
     flow_catalog = load_flow_recipe_catalog()
     flow_ids = {
@@ -45,10 +56,7 @@ def build_default_catalog(root: Path | None = None) -> BenchmarkCatalog:
         root or get_default_benchmark_root(),
         agent_ids=load_agent_definitions(),
         flow_ids=flow_ids,
-        # Schema validation is side-effect free and catalog-independent. The
-        # canonical resolver performs provider/model availability validation at
-        # execution time, after the requested route has been selected.
-        route_validator=lambda _model, _provider: None,
+        route_validator=_validate_route,
     )
 
 

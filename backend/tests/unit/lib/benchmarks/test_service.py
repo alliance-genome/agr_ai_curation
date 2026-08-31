@@ -12,6 +12,11 @@ from src.lib.benchmarks.models import (
     ProviderUsage,
 )
 from src.lib.benchmarks.service import BenchmarkService
+from src.lib.openai_agents.provider_usage import (
+    BilledCost as CapturedBilledCost,
+    ProviderUsageRecord,
+    emit_provider_usage,
+)
 
 
 def _service(catalog, executor, **overrides):
@@ -86,7 +91,30 @@ async def test_provider_usage_slot_carries_shared_normalized_shape(benchmark_cat
     )
 
     async def executor(*_args):
-        return ExecutionResult(output={"ok": True}, provider_usage=usage)
+        billed_cost = usage.billed_cost
+        emit_provider_usage(
+            ProviderUsageRecord(
+                requested_provider=usage.requested_provider,
+                requested_model=usage.requested_model,
+                actual_provider=usage.actual_provider,
+                actual_model=usage.actual_model,
+                routing_attempt=usage.routing_attempt,
+                latency_ms=usage.latency_ms,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                billed_cost=(
+                    CapturedBilledCost(
+                        amount=billed_cost.amount,
+                        unit=billed_cost.unit,
+                        source=billed_cost.source,
+                    )
+                    if billed_cost is not None
+                    else None
+                ),
+            )
+        )
+        return ExecutionResult(output={"ok": True})
 
     run = (
         await _service(benchmark_catalog, executor).execute(BenchmarkSelection())
@@ -101,6 +129,34 @@ async def test_provider_usage_slot_carries_shared_normalized_shape(benchmark_cat
     assert run.provider_usage.billed_cost.source == "openrouter_usage"
     serialized = run.model_dump(mode="json")["provider_usage"]
     assert serialized["billed_cost"]["amount"] == "0.001500"
+
+
+async def test_provider_usage_slot_uses_final_request_record(benchmark_catalog):
+    async def executor(*_args):
+        for attempt in (1, 2):
+            emit_provider_usage(
+                ProviderUsageRecord(
+                    requested_provider="openrouter",
+                    requested_model="deepseek/deepseek-v4-pro-0813",
+                    actual_provider=f"provider-{attempt}",
+                    actual_model="deepseek/deepseek-v4-pro-0813",
+                    routing_attempt=attempt,
+                    latency_ms=attempt,
+                    input_tokens=attempt,
+                    output_tokens=attempt,
+                    total_tokens=attempt * 2,
+                    billed_cost=None,
+                )
+            )
+        return ExecutionResult(output={"ok": True})
+
+    run = (
+        await _service(benchmark_catalog, executor).execute(BenchmarkSelection())
+    ).runs[0]
+
+    assert run.provider_usage is not None
+    assert run.provider_usage.routing_attempt == 2
+    assert run.provider_usage.actual_provider == "provider-2"
 
 
 async def test_failure_is_normalized_without_raw_exception(benchmark_catalog):

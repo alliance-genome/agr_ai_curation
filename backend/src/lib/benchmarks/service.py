@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.lib.observability.runtime import report_runtime_exception
+from src.lib.openai_agents.provider_usage import (
+    capture_provider_usage,
+    provider_usage_metadata,
+)
 
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
 from .models import (
@@ -24,6 +28,7 @@ from .models import (
     DryRunPlan,
     ExecutionResult,
     PlannedCaseRun,
+    ProviderUsage,
 )
 
 BenchmarkExecutor = Callable[
@@ -187,19 +192,25 @@ class BenchmarkService:
         started_at = datetime.now(timezone.utc)
         started_monotonic = time.monotonic()
         result: ExecutionResult | None = None
+        provider_usage: ProviderUsage | None = None
         failure: BenchmarkFailure | None = None
         executor = self._executors[planned.target.kind]
         for attempt in range(self.retries + 1):
             try:
-                result = await asyncio.wait_for(
-                    executor(
-                        planned.target.id,
-                        case.input,
-                        planned.requested_route,
-                        planned.run_id,
-                    ),
-                    timeout=self.timeout_seconds,
-                )
+                with capture_provider_usage() as usage_records:
+                    result = await asyncio.wait_for(
+                        executor(
+                            planned.target.id,
+                            case.input,
+                            planned.requested_route,
+                            planned.run_id,
+                        ),
+                        timeout=self.timeout_seconds,
+                    )
+                if usage_records:
+                    provider_usage = ProviderUsage.model_validate(
+                        provider_usage_metadata(usage_records[-1])
+                    )
                 break
             except TimeoutError:
                 failure = BenchmarkFailure(
@@ -244,7 +255,7 @@ class BenchmarkService:
             case_id=planned.case_id,
             target=planned.target,
             requested_route=planned.requested_route,
-            provider_usage=result.provider_usage if result is not None else None,
+            provider_usage=provider_usage if result is not None else None,
             started_at=started_at,
             completed_at=completed_at,
             latency_ms=max(0, int((time.monotonic() - started_monotonic) * 1000)),

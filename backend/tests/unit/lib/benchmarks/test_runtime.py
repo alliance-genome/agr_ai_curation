@@ -1,8 +1,12 @@
+import shutil
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 import src.lib.flows.executor as flow_executor
 import src.lib.benchmarks.runtime as benchmark_runtime
+from src.lib.benchmarks.loader import BenchmarkCatalogError
 
 
 def test_default_runtime_catalog_loads_without_constructing_targets():
@@ -12,6 +16,30 @@ def test_default_runtime_catalog_loads_without_constructing_targets():
         "isolated-ontology-agent-v1",
         "flow-canary-gene-curation-v1",
     }
+
+
+def test_default_runtime_catalog_rejects_unknown_and_mismatched_routes():
+    catalog = benchmark_runtime.build_default_catalog()
+
+    with pytest.raises(BenchmarkCatalogError, match="Unknown model_id"):
+        catalog.validate_route("made-up-model", "not-real")
+    with pytest.raises(BenchmarkCatalogError, match="belongs to provider 'openai'"):
+        catalog.validate_route("gpt-5.6-sol", "openrouter")
+
+
+def test_default_runtime_catalog_rejects_invalid_checked_in_route(tmp_path):
+    benchmark_root = tmp_path / "benchmarks"
+    shutil.copytree(benchmark_runtime.get_default_benchmark_root(), benchmark_root)
+    profile = benchmark_root / "profiles" / "isolated-gene-agent-v1.yaml"
+    profile.write_text(
+        profile.read_text(encoding="utf-8").replace(
+            "model: gpt-5.6-sol", "model: made-up-model", 1
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BenchmarkCatalogError, match="Unknown model_id"):
+        benchmark_runtime.build_default_catalog(benchmark_root)
 
 
 def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch):

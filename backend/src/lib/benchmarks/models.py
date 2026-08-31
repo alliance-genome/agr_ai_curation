@@ -149,4 +149,3 @@ class BenchmarkExecutionResponse(StrictModel):
 
 class ExecutionResult(StrictModel):
     output: Any
-    provider_usage: ProviderUsage | None = None

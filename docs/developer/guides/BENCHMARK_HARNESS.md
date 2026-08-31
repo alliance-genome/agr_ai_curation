@@ -53,3 +53,8 @@ preview/inline limits are documented under `BENCHMARK_*` in `.env.example`.
 Case-run responses contain stable target/route/fixture identity, timing, normalized
 failure metadata, bounded redacted output, and the normalized provider-usage slot.
 They are not an upload manifest or durable report.
+
+The case-run provider-usage slot contains the final normalized provider request
+emitted during that case and remains null when the runtime emits no usage. Earlier
+requests in a multi-call agent or flow run remain available to request-scoped
+telemetry but are not duplicated into this single slot.
