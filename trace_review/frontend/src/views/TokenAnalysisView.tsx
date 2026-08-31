@@ -20,6 +20,10 @@ export function TokenAnalysisView({ data }: TokenAnalysisViewProps) {
 
   const formatTokens = (n: number) => n.toLocaleString();
   const formatCost = (n: number) => `$${n.toFixed(6)}`;
+  const formatRoute = (provider: string | null, model: string | null) =>
+    provider || model ? [provider, model].filter(Boolean).join(' / ') : 'Absent';
+  const formatOptionalTokens = (tokens: number | null) =>
+    tokens === null ? 'Absent' : formatTokens(tokens);
 
   return (
     <Box>
@@ -87,6 +91,48 @@ export function TokenAnalysisView({ data }: TokenAnalysisViewProps) {
           </Card>
         </Grid>
       </Grid>
+
+      {data.provider_usage.length > 0 && (
+        <Paper sx={{ p: 2, mb: 3 }}>
+          <Typography variant="h6" gutterBottom>Provider Usage</Typography>
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Requested route</TableCell>
+                  <TableCell>Actual route</TableCell>
+                  <TableCell align="right">Attempt</TableCell>
+                  <TableCell align="right">Latency</TableCell>
+                  <TableCell align="right">Tokens (in / out / total)</TableCell>
+                  <TableCell align="right">Billed cost</TableCell>
+                  <TableCell>Cost source</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {data.provider_usage.map((usage, index) => (
+                  <TableRow key={`${usage.requested_provider}-${usage.requested_model}-${index}`}>
+                    <TableCell>{formatRoute(usage.requested_provider, usage.requested_model)}</TableCell>
+                    <TableCell>{formatRoute(usage.actual_provider, usage.actual_model)}</TableCell>
+                    <TableCell align="right">{usage.routing_attempt ?? 'Absent'}</TableCell>
+                    <TableCell align="right">
+                      {usage.latency_ms === null ? 'Absent' : `${usage.latency_ms.toLocaleString()} ms`}
+                    </TableCell>
+                    <TableCell align="right">
+                      {`${formatOptionalTokens(usage.input_tokens)} / ${formatOptionalTokens(usage.output_tokens)} / ${formatOptionalTokens(usage.total_tokens)}`}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
+                      {usage.billed_cost?.amount === null || usage.billed_cost === null
+                        ? 'Absent'
+                        : `${usage.billed_cost.amount} ${usage.billed_cost.unit ?? ''}`.trim()}
+                    </TableCell>
+                    <TableCell>{usage.billed_cost?.source ?? 'Absent'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Paper>
+      )}
 
       {/* Model Breakdown */}
       <Paper sx={{ p: 2, mb: 3 }}>

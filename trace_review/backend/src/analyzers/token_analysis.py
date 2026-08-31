@@ -99,6 +99,8 @@ class TokenAnalysisAnalyzer:
                 "total_cost": 0,
                 "total_latency": 0,
                 "total_generations": 0,
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
                 "generations": [],
                 "context_growth": [],
                 "model_breakdown": {},

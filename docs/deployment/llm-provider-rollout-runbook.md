@@ -52,6 +52,7 @@ Safe rollout and rollback process for changes to:
    - Verify `errors` is empty. Required providers must show `readiness: ready`; an uncredentialed optional OpenRouter route may show degraded `missing_api_key` readiness.
 5. Run smoke checks:
    - `make smoke-llm-local` for automated health endpoint verification.
+   - For the Alliance OpenRouter catalog, set `SMOKE_OPTIONAL_PROVIDER_ID=openrouter` and `SMOKE_OPTIONAL_MODEL_ID=deepseek/deepseek-v4-pro-0813` when running the smoke so it also verifies the optional route mapping. Other deployments should use their own optional route identifiers or leave both unset.
    - Manually verify: one chat call per critical model, one tool-calling scenario, one flow execution.
 
 ## Post-Deploy Verification

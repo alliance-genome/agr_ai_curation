@@ -81,6 +81,8 @@ def test_token_analysis_decodes_bounded_provider_usage_without_generation():
 
     assert analysis["found"] is True
     assert analysis["total_generations"] == 0
+    assert analysis["total_prompt_tokens"] == 0
+    assert analysis["total_completion_tokens"] == 0
     assert analysis["provider_usage"] == [
         {
             "requested_provider": "openrouter",

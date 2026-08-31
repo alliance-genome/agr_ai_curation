@@ -31,11 +31,12 @@ This runs `scripts/testing/llm_provider_smoke_local.sh`, which:
 1. Waits for the backend to become healthy (`/health`).
 2. Checks `GET /api/admin/health/llm-providers` for structural errors.
 3. Checks `GET /api/agent-studio/models` for model list availability.
-4. Parses the provider health response to verify zero structural errors.
+4. Parses the provider health response to verify zero structural errors and consistent provider readiness/route availability.
+5. When `SMOKE_OPTIONAL_PROVIDER_ID` and `SMOKE_OPTIONAL_MODEL_ID` are both set, verifies that optional provider/model mapping without reading or exposing credential values.
 
 Evidence is written to `file_outputs/temp/llm_provider_smoke_local_<timestamp>.json`.
 
-The automated script covers test cases `BASE_HEALTH`, `A1`, `A1B`, and `A1_STRUCTURAL` below. All other test cases in this matrix are manual.
+The automated script covers test cases `BASE_HEALTH`, `A1`, `A1B`, and `A1_STRUCTURAL` below, plus `A3` when both optional-route identifiers are configured. All other test cases in this matrix are manual.
 
 ## Evidence Template
 
@@ -62,7 +63,7 @@ Record each manual test case with:
 | `A1B` | Model list endpoint | `GET /api/agent-studio/models` | HTTP 200, response contains expected models. | Yes |
 | `A1_STRUCTURAL` | Provider health body analysis | Parse `A1` response body. | `errors` array is empty (no structural contract violations). | Yes |
 | `A2` | Provider/model drift detection | Temporarily introduce an invalid model-to-provider reference in a local branch. | Startup validation or the health endpoint reports a clear error. | No |
-| `A3` | OpenRouter structural readiness | Inspect the `openrouter` provider item. | It is optional, maps `deepseek/deepseek-v4-pro-0813`, and reports consistent `route_available` state without exposing a key value. | Yes |
+| `A3` | Optional-route structural readiness | Set `SMOKE_OPTIONAL_PROVIDER_ID=openrouter` and `SMOKE_OPTIONAL_MODEL_ID=deepseek/deepseek-v4-pro-0813` for the Alliance catalog, then run the smoke. Leave both unset for catalogs without an optional route. | When configured, the provider is optional, maps the expected model, and reports consistent `route_available` state without exposing a key value. When unset, the optional-route check is not evaluated and does not fail an otherwise healthy catalog. | Yes |
 
 ### B. Runtime Path (Manual, Per Provider/Model)
 

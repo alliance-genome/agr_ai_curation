@@ -269,6 +269,12 @@ run_path_scoped_check \
   scripts/testing/abc_literature_ready_upload_smoke_docker.sh scripts/tests/test_abc_literature_ready_upload_smoke_docker.sh
 
 run_path_scoped_check \
+  "llm-provider-smoke-local-shell-regression-suite" \
+  "bash scripts/tests/test_llm_provider_smoke_local.sh" \
+  "scripts/testing/llm_provider_smoke_local.sh, scripts/tests/test_llm_provider_smoke_local.sh" \
+  scripts/testing/llm_provider_smoke_local.sh scripts/tests/test_llm_provider_smoke_local.sh
+
+run_path_scoped_check \
   "agent-lsp-diagnostics-shell-regression-suite" \
   "bash scripts/tests/test_agent_lsp_diagnostics.sh" \
   "scripts/utilities/agent_lsp.py, scripts/tests/test_agent_lsp_diagnostics.sh, scripts/tests/test_agent_lsp_typescript_prep.sh" \

@@ -118,15 +118,17 @@ A1_STRUCTURAL_STATUS="not_evaluated"
 A1_STRUCTURAL_ERRORS="[]"
 
 if [[ -n "${PROVIDER_HEALTH_BODY}" ]]; then
-  A1_ANALYSIS="$("${PY_BIN}" - "${PROVIDER_HEALTH_BODY}" <<'PY'
+  A1_ANALYSIS="$("${PY_BIN}" - "${PROVIDER_HEALTH_BODY}" "${SMOKE_OPTIONAL_PROVIDER_ID:-}" "${SMOKE_OPTIONAL_MODEL_ID:-}" <<'PY'
 import json
 import sys
 
 raw = sys.argv[1] if len(sys.argv) > 1 else ""
+optional_provider_id = sys.argv[2] if len(sys.argv) > 2 else ""
+optional_model_id = sys.argv[3] if len(sys.argv) > 3 else ""
 out = {
     "status": "not_json",
     "error_count": None,
-    "openrouter_status": "not_evaluated",
+    "optional_route_status": "not_evaluated",
 }
 
 try:
@@ -137,31 +139,59 @@ except Exception:
 
 errors = payload.get("errors", [])
 if isinstance(errors, list):
-    out["error_count"] = len(errors)
-    out["errors"] = errors
     providers = payload.get("providers", [])
-    openrouter = next(
-        (item for item in providers if isinstance(item, dict) and item.get("provider_id") == "openrouter"),
-        None,
-    )
-    if openrouter is None:
-        out["openrouter_status"] = "missing"
-    else:
-        readiness = openrouter.get("readiness")
-        route_available = openrouter.get("route_available")
-        mapped_models = openrouter.get("mapped_model_ids", [])
-        valid = (
-            openrouter.get("optional_for_runtime") is True
-            and "deepseek/deepseek-v4-pro-0813" in mapped_models
-            and readiness in {"ready", "missing_api_key"}
-            and route_available is (readiness == "ready")
+    structural_errors = list(errors)
+    if not isinstance(providers, list):
+        structural_errors.append("providers must be an array")
+        providers = []
+
+    for provider in providers:
+        if not isinstance(provider, dict):
+            structural_errors.append("provider entries must be objects")
+            continue
+        readiness = provider.get("readiness")
+        if provider.get("route_available") is not (readiness == "ready"):
+            provider_id = provider.get("provider_id", "<unknown>")
+            structural_errors.append(
+                f"provider {provider_id} has inconsistent route availability"
+            )
+
+    if bool(optional_provider_id) != bool(optional_model_id):
+        structural_errors.append(
+            "SMOKE_OPTIONAL_PROVIDER_ID and SMOKE_OPTIONAL_MODEL_ID must be set together"
         )
-        out["openrouter_status"] = "pass" if valid else "invalid"
-    out["status"] = (
-        "pass"
-        if len(errors) == 0 and out["openrouter_status"] == "pass"
-        else "fail"
-    )
+        out["optional_route_status"] = "invalid"
+    elif optional_provider_id:
+        optional_provider = next(
+            (
+                item
+                for item in providers
+                if isinstance(item, dict)
+                and item.get("provider_id") == optional_provider_id
+            ),
+            None,
+        )
+        if optional_provider is None:
+            structural_errors.append(
+                f"configured optional provider {optional_provider_id} is missing"
+            )
+            out["optional_route_status"] = "missing"
+        else:
+            mapped_models = optional_provider.get("mapped_model_ids", [])
+            valid = (
+                optional_provider.get("optional_for_runtime") is True
+                and optional_model_id in mapped_models
+                and optional_provider.get("readiness") in {"ready", "missing_api_key"}
+            )
+            if not valid:
+                structural_errors.append(
+                    f"configured optional route {optional_provider_id}/{optional_model_id} is invalid"
+                )
+            out["optional_route_status"] = "pass" if valid else "invalid"
+
+    out["error_count"] = len(structural_errors)
+    out["errors"] = structural_errors
+    out["status"] = "pass" if len(structural_errors) == 0 else "fail"
 else:
     out["status"] = "invalid_errors_field"
 print(json.dumps(out))
