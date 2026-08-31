@@ -1,6 +1,15 @@
 """SQL models module."""
 
 from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
+from .benchmark import (
+    BenchmarkCell,
+    BenchmarkCellStatus,
+    BenchmarkEvent,
+    BenchmarkInvocation,
+    BenchmarkInvocationStatus,
+    BenchmarkJob,
+    BenchmarkJobStatus,
+)
 from .agent import Agent, Project, ProjectMember
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
@@ -27,6 +36,13 @@ __all__ = [
     "BatchDocument",
     "BatchStatus",
     "BatchDocumentStatus",
+    "BenchmarkCell",
+    "BenchmarkCellStatus",
+    "BenchmarkEvent",
+    "BenchmarkInvocation",
+    "BenchmarkInvocationStatus",
+    "BenchmarkJob",
+    "BenchmarkJobStatus",
     "Agent",
     "Project",
     "ProjectMember",
