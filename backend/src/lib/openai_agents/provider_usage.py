@@ -6,7 +6,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import logging
 from typing import Any, Iterator, Mapping, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -53,11 +57,64 @@ def capture_provider_usage() -> Iterator[list[ProviderUsageRecord]]:
 
 
 def emit_provider_usage(record: ProviderUsageRecord) -> None:
-    """Append a record when a caller has opted into request-scoped capture."""
+    """Capture a record and publish its bounded fields to the active trace."""
 
     records = _provider_usage_records.get()
     if records is not None:
         records.append(record)
+    _emit_provider_usage_trace_event(record)
+
+
+def provider_usage_metadata(record: ProviderUsageRecord) -> dict[str, Any]:
+    """Serialize only the normalized, content-free provider usage contract."""
+
+    billed_cost = record.billed_cost
+    return {
+        "requested_provider": record.requested_provider,
+        "requested_model": record.requested_model,
+        "actual_provider": record.actual_provider,
+        "actual_model": record.actual_model,
+        "routing_attempt": record.routing_attempt,
+        "latency_ms": record.latency_ms,
+        "input_tokens": record.input_tokens,
+        "output_tokens": record.output_tokens,
+        "total_tokens": record.total_tokens,
+        "billed_cost": (
+            {
+                "amount": str(billed_cost.amount),
+                "unit": billed_cost.unit,
+                "source": billed_cost.source,
+            }
+            if billed_cost is not None
+            else None
+        ),
+    }
+
+
+def _emit_provider_usage_trace_event(record: ProviderUsageRecord) -> None:
+    """Attach safe provider usage to the active Langfuse trace when available."""
+
+    from src.lib.context import get_current_trace_id
+    from src.lib.openai_agents.langfuse_client import get_langfuse
+
+    trace_id = get_current_trace_id()
+    langfuse = get_langfuse()
+    if not trace_id or langfuse is None:
+        return
+
+    try:
+        langfuse.create_event(
+            name="provider_usage",
+            metadata={"provider_usage": provider_usage_metadata(record)},
+            trace_context={"trace_id": trace_id},
+        )
+    except Exception as exc:
+        # Telemetry transport must not change the model-call result. Retain only
+        # the exception type because provider errors can contain request data.
+        logger.warning(
+            "Failed to emit provider usage trace event (%s)",
+            type(exc).__name__,
+        )
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:

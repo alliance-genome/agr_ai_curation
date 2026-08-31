@@ -97,6 +97,7 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
         forbidden_request_fields: tuple[str, ...],
         omit_usage_request: bool,
         telemetry_adapter: str | None,
+        disable_model_retries: bool,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -106,6 +107,7 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
         self._forbidden_request_fields = forbidden_request_fields
         self._omit_usage_request = omit_usage_request
         self._telemetry_adapter = telemetry_adapter
+        self._disable_model_retries = disable_model_retries
 
     def _apply_provider_policy(self, settings: ModelSettings) -> ModelSettings:
         caller_body = deepcopy(dict(settings.extra_body or {}))
@@ -132,6 +134,7 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
             extra_body=caller_body or None,
             extra_headers=headers or None,
             include_usage=None if self._omit_usage_request else settings.include_usage,
+            retry=None if self._disable_model_retries else settings.retry,
         )
 
     async def _fetch_response(self, *args: Any, **kwargs: Any) -> Any:

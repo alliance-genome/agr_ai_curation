@@ -175,6 +175,17 @@ def get_groq_tool_call_retry_delay_seconds() -> float:
     return max(0.0, delay)
 
 
+def get_openai_compatible_http_max_retries() -> int:
+    """Maximum SDK HTTP retries for ordinary OpenAI-compatible providers.
+
+    Controlled OpenRouter routes always override this value to zero so one
+    application model call cannot trigger a fresh router decision.
+    """
+
+    retries = _get_env_int_with_fallback("OPENAI_COMPATIBLE_HTTP_MAX_RETRIES", 2)
+    return max(0, retries)
+
+
 def _apply_provider_tool_call_overrides(
     *,
     provider: str,
@@ -350,6 +361,11 @@ def get_model_for_agent(
             api_key=api_key,
             base_url=base_url,
             http_client=shared_http_client(),
+            max_retries=(
+                0
+                if getattr(provider, "telemetry_adapter", None) == "openrouter"
+                else get_openai_compatible_http_max_retries()
+            ),
         )
         model_provider = OpenAIProvider(
             openai_client=openai_client,
@@ -381,6 +397,9 @@ def get_model_for_agent(
                 ),
                 omit_usage_request=getattr(provider, "omit_usage_request", False),
                 telemetry_adapter=getattr(provider, "telemetry_adapter", None),
+                disable_model_retries=(
+                    getattr(provider, "telemetry_adapter", None) == "openrouter"
+                ),
             )
         else:
             model = model_provider.get_model(model_name)
@@ -678,7 +697,11 @@ def build_model_settings(
         parallel_tool_calls=effective_parallel_tool_calls,
         verbosity=effective_verbosity,
         include_usage=include_usage,
-        retry=build_default_model_retry(),
+        retry=(
+            None
+            if getattr(provider_def, "telemetry_adapter", None) == "openrouter"
+            else build_default_model_retry()
+        ),
     )
 
 

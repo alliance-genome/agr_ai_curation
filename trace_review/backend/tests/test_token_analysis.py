@@ -46,3 +46,56 @@ def test_token_analysis_reports_v2_cache_buckets_and_skips_zero_wrapper():
     assert generation["cost_source"] == "langfuse_calculated"
     assert generation["estimated_total_cost"] is None
     assert analysis["model_breakdown"]["gpt-5.6-terra"]["count"] == 1
+
+
+def test_token_analysis_decodes_bounded_provider_usage_without_generation():
+    observations = [
+        {
+            "id": "provider-usage-1",
+            "type": "EVENT",
+            "metadata": {
+                "provider_usage": {
+                    "requested_provider": "openrouter",
+                    "requested_model": "deepseek/deepseek-v4-pro-0813",
+                    "actual_provider": "DeepInfra",
+                    "actual_model": "deepseek/deepseek-v4-pro-0813",
+                    "routing_attempt": 1,
+                    "latency_ms": 1234,
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
+                    "billed_cost": {
+                        "amount": "0.0012300",
+                        "unit": "credits",
+                        "source": "openrouter_usage",
+                        "future": "ignored",
+                    },
+                    "summary": "ignored",
+                    "pipeline": [{"prompt": "ignored"}],
+                }
+            },
+        }
+    ]
+
+    analysis = TokenAnalysisAnalyzer.analyze({"id": "trace-1"}, observations)
+
+    assert analysis["found"] is True
+    assert analysis["total_generations"] == 0
+    assert analysis["provider_usage"] == [
+        {
+            "requested_provider": "openrouter",
+            "requested_model": "deepseek/deepseek-v4-pro-0813",
+            "actual_provider": "DeepInfra",
+            "actual_model": "deepseek/deepseek-v4-pro-0813",
+            "routing_attempt": 1,
+            "latency_ms": 1234,
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "billed_cost": {
+                "amount": "0.0012300",
+                "unit": "credits",
+                "source": "openrouter_usage",
+            },
+        }
+    ]

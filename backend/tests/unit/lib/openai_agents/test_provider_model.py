@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from agents import ModelSettings
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+from agents.retry import ModelRetrySettings
 
 from src.lib.openai_agents.provider_model import ProviderConfiguredChatCompletionsModel
 from src.lib.openai_agents.provider_usage import capture_provider_usage
@@ -22,6 +23,7 @@ def _model(*, telemetry_adapter=None):
         forbidden_request_fields=("models", "fallbacks"),
         omit_usage_request=True,
         telemetry_adapter=telemetry_adapter,
+        disable_model_retries=True,
     )
 
 
@@ -38,6 +40,7 @@ async def test_provider_policy_reaches_streaming_and_non_streaming_paths(
         captured["extra_body"] = settings.extra_body
         captured["extra_headers"] = settings.extra_headers
         captured["include_usage"] = settings.include_usage
+        captured["retry"] = settings.retry
         return {"ok": True}
 
     monkeypatch.setattr(OpenAIChatCompletionsModel, "_fetch_response", fake_fetch)
@@ -52,6 +55,7 @@ async def test_provider_policy_reaches_streaming_and_non_streaming_paths(
         },
         extra_headers={"X-Caller": "safe"},
         include_usage=True,
+        retry=ModelRetrySettings(max_retries=3),
     )
 
     await model._fetch_response(None, [], settings, [], None, [], None, None, stream)
@@ -70,6 +74,7 @@ async def test_provider_policy_reaches_streaming_and_non_streaming_paths(
         "X-OpenRouter-Metadata": "enabled",
     }
     assert captured["include_usage"] is None
+    assert captured["retry"] is None
 
 
 @pytest.mark.asyncio

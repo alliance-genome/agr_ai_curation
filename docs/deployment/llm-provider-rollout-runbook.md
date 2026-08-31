@@ -40,6 +40,7 @@ Safe rollout and rollback process for changes to:
 5. **OpenRouter policy review:**
    - Keep `provider.allow_fallbacks: false`, `provider.require_parameters: true`, and `X-OpenRouter-Metadata: enabled` in the provider catalog.
    - Do not add `models`, `fallbacks`, deprecated usage-inclusion flags, or a local price estimate.
+   - Keep SDK HTTP and runner-managed retries disabled for the controlled route. `OPENAI_COMPATIBLE_HTTP_MAX_RETRIES` applies only to ordinary compatible providers and cannot increase OpenRouter's effective retry count above zero.
 
 ## Deployment Steps
 
@@ -66,6 +67,7 @@ Safe rollout and rollback process for changes to:
 3. **Logs:**
    - No sustained increase in provider runtime errors.
    - No unexpected model substitution or fallback behavior.
+   - TraceReview token analysis shows the bounded `provider_usage` record with requested and authoritative actual route identifiers plus `openrouter_usage` billed-cost provenance. Prompts, completions, router summaries, and pipeline payloads must remain absent from this record.
 
 ## Rollback Triggers
 

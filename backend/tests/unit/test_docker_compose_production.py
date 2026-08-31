@@ -249,6 +249,19 @@ def test_compose_propagates_optional_openrouter_key_name_only():
     assert test_env["OPENROUTER_API_KEY"] == expected
 
 
+def test_compose_and_install_surface_compatible_http_retry_limit():
+    dev_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    standalone_env = _load_env_assignments(ENV_TEMPLATE_PATH)
+
+    expected = "${OPENAI_COMPATIBLE_HTTP_MAX_RETRIES:-2}"
+    assert dev_env["OPENAI_COMPATIBLE_HTTP_MAX_RETRIES"] == expected
+    assert production_env["OPENAI_COMPATIBLE_HTTP_MAX_RETRIES"] == expected
+    assert standalone_env["OPENAI_COMPATIBLE_HTTP_MAX_RETRIES"] == "2"
+
+
 def test_agent_studio_compose_and_env_example_default_to_opus_5():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]

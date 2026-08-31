@@ -4,7 +4,10 @@ from decimal import Decimal
 
 from openai.types.chat import ChatCompletion
 
-from src.lib.openai_agents.provider_usage import normalize_openrouter_usage
+from src.lib.openai_agents.provider_usage import (
+    emit_provider_usage,
+    normalize_openrouter_usage,
+)
 
 
 def test_normalize_openrouter_usage_uses_selected_route_and_exact_billed_cost():
@@ -132,3 +135,74 @@ def test_openai_sdk_model_preserves_additive_openrouter_fields():
     assert record.actual_provider == "Test Provider"
     assert record.billed_cost is not None
     assert record.billed_cost.amount == Decimal("0.01")
+
+
+def test_emit_provider_usage_publishes_only_bounded_trace_metadata(monkeypatch):
+    calls = []
+    fake_langfuse = type(
+        "FakeLangfuse",
+        (),
+        {"create_event": lambda _self, **kwargs: calls.append(kwargs)},
+    )()
+    monkeypatch.setattr(
+        "src.lib.openai_agents.langfuse_client.get_langfuse",
+        lambda: fake_langfuse,
+    )
+    monkeypatch.setattr("src.lib.context.get_current_trace_id", lambda: "trace-123")
+    record = normalize_openrouter_usage(
+        {
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "cost": "0.0012300",
+            },
+            "openrouter_metadata": {
+                "attempt": 1,
+                "summary": "must not reach the trace",
+                "pipeline": [{"data": {"prompt": "must not reach the trace"}}],
+                "endpoints": {
+                    "available": [
+                        {
+                            "provider": "DeepInfra",
+                            "model": "deepseek/deepseek-v4-pro-0813",
+                            "selected": True,
+                        }
+                    ]
+                },
+            },
+        },
+        requested_model="deepseek/deepseek-v4-pro-0813",
+        latency_ms=1234,
+    )
+
+    emit_provider_usage(record)
+
+    assert calls == [
+        {
+            "name": "provider_usage",
+            "metadata": {
+                "provider_usage": {
+                    "requested_provider": "openrouter",
+                    "requested_model": "deepseek/deepseek-v4-pro-0813",
+                    "actual_provider": "DeepInfra",
+                    "actual_model": "deepseek/deepseek-v4-pro-0813",
+                    "routing_attempt": 1,
+                    "latency_ms": 1234,
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
+                    "billed_cost": {
+                        "amount": "0.0012300",
+                        "unit": "credits",
+                        "source": "openrouter_usage",
+                    },
+                }
+            },
+            "trace_context": {"trace_id": "trace-123"},
+        }
+    ]
+    serialized = str(calls)
+    assert "summary" not in serialized
+    assert "pipeline" not in serialized
+    assert "prompt" not in serialized
