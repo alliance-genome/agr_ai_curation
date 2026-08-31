@@ -1,0 +1,9 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Look up the deliberately synthetic identifier SYNTH_GENE_001. Return an empty result when no authorized database record exists."
+    }
+  ],
+  "active_groups": []
+}

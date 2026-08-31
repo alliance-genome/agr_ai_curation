@@ -10,6 +10,7 @@ Note: Health endpoints are public for monitoring systems.
 """
 
 from .connections import router as connections_router
+from .benchmarks import router as benchmarks_router
 from .prompts import router as prompts_router
 
-__all__ = ["connections_router", "prompts_router"]
+__all__ = ["benchmarks_router", "connections_router", "prompts_router"]

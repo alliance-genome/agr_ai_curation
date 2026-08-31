@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import datetime, timezone
-from types import SimpleNamespace
 import uuid
 from unittest.mock import MagicMock
 
@@ -10,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 import src.api.admin.prompts as prompts_api
+import src.api.admin.auth as admin_auth
 from sqlalchemy.exc import IntegrityError
 
 
@@ -59,44 +59,44 @@ def _prompt(*, version=1, is_active=True, group_id=None):
 
 def test_parse_admin_emails_normalizes(monkeypatch):
     monkeypatch.setattr(
-        prompts_api.os,
+        admin_auth.os,
         "getenv",
         lambda key, default="": "Admin@Example.org, test@example.org , , SECOND@example.org",
     )
-    emails = prompts_api._parse_admin_emails()
+    emails = admin_auth._parse_admin_emails()
     assert emails == {"admin@example.org", "test@example.org", "second@example.org"}
 
 
 def test_require_admin_allows_in_dev_mode_when_unconfigured(monkeypatch):
-    monkeypatch.setattr(prompts_api, "get_admin_emails", lambda: set())
-    monkeypatch.setattr(prompts_api.os, "getenv", lambda key, default="": "true" if key == "DEV_MODE" else default)
+    monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: set())
+    monkeypatch.setattr(admin_auth.os, "getenv", lambda key, default="": "true" if key == "DEV_MODE" else default)
 
     user = {"email": "anyone@example.org"}
-    result = asyncio.run(prompts_api.require_admin(user))
+    result = asyncio.run(admin_auth.require_admin(user))
     assert result == user
 
 
 def test_require_admin_denies_when_unconfigured_outside_dev(monkeypatch):
-    monkeypatch.setattr(prompts_api, "get_admin_emails", lambda: set())
-    monkeypatch.setattr(prompts_api.os, "getenv", lambda key, default="": "false" if key == "DEV_MODE" else default)
+    monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: set())
+    monkeypatch.setattr(admin_auth.os, "getenv", lambda key, default="": "false" if key == "DEV_MODE" else default)
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(prompts_api.require_admin({"email": "anyone@example.org"}))
+        asyncio.run(admin_auth.require_admin({"email": "anyone@example.org"}))
     assert exc.value.status_code == 403
 
 
 def test_require_admin_denies_non_admin(monkeypatch):
-    monkeypatch.setattr(prompts_api, "get_admin_emails", lambda: {"admin@example.org"})
+    monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: {"admin@example.org"})
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(prompts_api.require_admin({"email": "user@example.org"}))
+        asyncio.run(admin_auth.require_admin({"email": "user@example.org"}))
     assert exc.value.status_code == 403
 
 
 def test_require_admin_allows_admin(monkeypatch):
-    monkeypatch.setattr(prompts_api, "get_admin_emails", lambda: {"admin@example.org"})
+    monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: {"admin@example.org"})
     user = {"email": "Admin@Example.org"}
-    result = asyncio.run(prompts_api.require_admin(user))
+    result = asyncio.run(admin_auth.require_admin(user))
     assert result == user
 
 

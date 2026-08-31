@@ -833,7 +833,14 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
     from src.lib.openai_agents import config as agent_config
 
     captured = {}
-    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(
+        agent_config,
+        "resolve_model_provider",
+        lambda model_id, provider_override=None: captured.setdefault(
+            "resolved_route", (model_id, provider_override)
+        )[1]
+        or "openai",
+    )
     monkeypatch.setattr(
         agent_config,
         "get_model_for_agent",
@@ -861,9 +868,12 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
         model_id_override="gpt-5.4-mini",
         model_temperature_override=0.0,
         model_reasoning_override="minimal",
+        model_provider_override="openrouter",
     )
 
+    assert built is not None
     assert built.model == "gpt-5.4-mini"
     assert captured["settings"]["model"] == "gpt-5.4-mini"
     assert captured["settings"]["temperature"] == 0.0
     assert captured["settings"]["reasoning_effort"] == "minimal"
+    assert captured["resolved_route"] == ("gpt-5.4-mini", "openrouter")

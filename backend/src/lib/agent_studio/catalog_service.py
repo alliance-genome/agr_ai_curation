@@ -1875,7 +1875,15 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             db_agent.agent_key,
         )
 
-    model_provider = resolve_model_provider(effective_model_id)
+    model_provider_override = str(kwargs.get("model_provider_override") or "").strip() or None
+    model_provider = (
+        resolve_model_provider(
+            effective_model_id,
+            provider_override=model_provider_override,
+        )
+        if model_provider_override is not None
+        else resolve_model_provider(effective_model_id)
+    )
 
     model_settings = build_model_settings(
         model=effective_model_id,

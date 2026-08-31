@@ -2558,6 +2558,8 @@ def get_all_agent_tools(
     active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
     include_unavailable: bool = False,
+    model_id_override: str | None = None,
+    model_provider_override: str | None = None,
 ) -> Any:
     """Get streaming-wrapped tools for agents in the flow.
 
@@ -2628,6 +2630,10 @@ def get_all_agent_tools(
     context["authenticated_groups"] = active_groups or []
     if db_user_id is not None:
         context["db_user_id"] = db_user_id
+    if model_id_override is not None:
+        context["model_id_override"] = model_id_override
+    if model_provider_override is not None:
+        context["model_provider_override"] = model_provider_override
 
     # Create one tool per node (not per unique agent_id)
     # This ensures each step gets its own agent instance with its own custom_instructions
@@ -3594,6 +3600,8 @@ def create_flow_supervisor(
     active_groups: Optional[List[str]] = None,
     doc_context: Optional[DocumentContext] = None,
     inspection_context: PreferredFlowInspectionContext | None = None,
+    model_id_override: str | None = None,
+    model_provider_override: str | None = None,
 ) -> Agent:
     """Create a supervisor agent configured for flow execution.
 
@@ -3618,12 +3626,20 @@ def create_flow_supervisor(
     """
     # Get supervisor config (model, temperature, reasoning)
     config = get_agent_config("supervisor")
-    model_provider = resolve_model_provider(config.model)
+    effective_model = str(model_id_override or config.model).strip()
+    model_provider = (
+        resolve_model_provider(
+            effective_model,
+            provider_override=model_provider_override,
+        )
+        if model_provider_override is not None
+        else resolve_model_provider(effective_model)
+    )
 
     # Build model configuration
-    model = get_model_for_agent(config.model, provider_override=model_provider)
+    model = get_model_for_agent(effective_model, provider_override=model_provider)
     model_settings = build_model_settings(
-        model=config.model,
+        model=effective_model,
         temperature=config.temperature,
         reasoning_effort=config.reasoning,
         provider_override=model_provider,
@@ -3646,6 +3662,8 @@ def create_flow_supervisor(
         active_groups=active_groups,
         doc_context=doc_context,
         include_unavailable=True,
+        model_id_override=model_id_override,
+        model_provider_override=model_provider_override,
     )
 
     # The configured flow must remain executable independently of optional
@@ -3778,7 +3796,7 @@ Preferred-flow follow-up inspection context:
 
     logger.info(
         f"[Flow Executor] Created flow supervisor for '{flow.name}': "
-        f"model={config.model}, streaming_tools={len(tools)}"
+        f"model={effective_model}, streaming_tools={len(tools)}"
     )
 
     return supervisor
@@ -4214,6 +4232,8 @@ async def execute_flow(
     chat_route_mode: Literal["automatic", "agent", "flow"] | None = None,
     chat_route_target_id: str | None = None,
     inspection_context: PreferredFlowInspectionContext | None = None,
+    model_id_override: str | None = None,
+    model_provider_override: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -4285,6 +4305,8 @@ async def execute_flow(
         active_groups=active_groups,
         doc_context=doc_context,
         inspection_context=inspection_context,
+        model_id_override=model_id_override,
+        model_provider_override=model_provider_override,
     )
 
     # Build flow prompt

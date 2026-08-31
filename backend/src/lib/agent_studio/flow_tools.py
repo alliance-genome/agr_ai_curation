@@ -679,6 +679,21 @@ def _build_simplified_flow_definition(
         raise _SimplifiedFlowValidationError([str(exc)]) from exc
 
 
+def build_flow_definition_from_recipe(
+    *,
+    steps: List[Dict[str, Any]],
+    task_instructions: str,
+) -> Any:
+    """Build the canonical persisted-flow shape from a checked-in recipe."""
+
+    return _build_simplified_flow_definition(
+        steps=steps,
+        task_instructions=task_instructions,
+        flow_agent_ids=FLOW_AGENT_IDS,
+        agent_registry=AGENT_REGISTRY,
+    )
+
+
 def _accessible_flow_agent_ids() -> set[str]:
     """Return database-backed flow agents available to the current request."""
 

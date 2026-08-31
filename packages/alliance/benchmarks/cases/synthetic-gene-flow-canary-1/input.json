@@ -1,0 +1,4 @@
+{
+  "user_query": "Run the configured Gene Curation flow against a synthetic no-match input and preserve the terminal flow status.",
+  "active_groups": []
+}

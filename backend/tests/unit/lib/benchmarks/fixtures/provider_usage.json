@@ -1,0 +1,10 @@
+{
+  "requested_provider": "openrouter",
+  "requested_model": "deepseek/deepseek-v4-pro-0813",
+  "actual_provider": "deepseek",
+  "actual_model": "deepseek/deepseek-v4-pro-0813",
+  "input_tokens": 120,
+  "output_tokens": 30,
+  "latency_ms": 450,
+  "billed_cost_usd": 0.0015
+}

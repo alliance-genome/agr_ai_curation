@@ -970,6 +970,54 @@ def get_sentry_log_event_level() -> int | None:
 # --- Document sources ---
 
 
+# --- Developer benchmark harness ---
+
+
+def get_benchmark_enabled() -> bool:
+    """Whether authenticated admin benchmark routes may be used."""
+    return _get_env_bool("BENCHMARK_ENABLED", False)
+
+
+def get_benchmark_max_concurrency() -> int:
+    """Maximum benchmark case runs executing concurrently."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CONCURRENCY", 2))
+
+
+def get_benchmark_matrix_limit() -> int:
+    """Maximum profile/case/route combinations in one request."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MATRIX_LIMIT", 20))
+
+
+def get_benchmark_case_limit() -> int:
+    """Maximum selected profile-case pairs before route expansion."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CASE_LIMIT", 20))
+
+
+def get_benchmark_result_limit() -> int:
+    """Maximum canonical case-run records returned by one request."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_RESULT_LIMIT", 20))
+
+
+def get_benchmark_timeout_seconds() -> float:
+    """Per-attempt benchmark target execution timeout."""
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_TIMEOUT_SECONDS", 300.0))
+
+
+def get_benchmark_retries() -> int:
+    """Retry count for timeout and normalized runtime failures."""
+    return max(0, _get_env_int_with_fallback("BENCHMARK_RETRIES", 0))
+
+
+def get_benchmark_preview_max_chars() -> int:
+    """Maximum preview characters for outputs too large to inline."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_PREVIEW_MAX_CHARS", 1000))
+
+
+def get_benchmark_inline_max_bytes() -> int:
+    """Maximum serialized output bytes retained inline in a case-run record."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_INLINE_MAX_BYTES", 20000))
+
+
 def get_go_annotations_request_timeout_seconds() -> float:
     """HTTP timeout for typed existing-GO annotation lookups."""
     return max(
