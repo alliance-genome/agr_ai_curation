@@ -65,6 +65,24 @@ def test_default_runtime_catalog_requires_configured_root(monkeypatch):
         benchmark_runtime.build_default_catalog()
 
 
+def test_default_service_wires_configured_adjudication_model(monkeypatch):
+    monkeypatch.setattr(
+        benchmark_runtime,
+        "build_default_catalog",
+        lambda _root=None: cast(Any, object()),
+    )
+    monkeypatch.setattr(
+        benchmark_runtime,
+        "get_benchmark_adjudication_model",
+        lambda: "deployment-adjudicator-v2",
+    )
+
+    service = benchmark_runtime.build_default_service()
+
+    assert service.adjudicator is not None
+    assert service.adjudicator.model == "deployment-adjudicator-v2"
+
+
 def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch):
     captured = {}
     flow = SimpleNamespace(name="Canary", flow_definition={"nodes": []})

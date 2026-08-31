@@ -11,6 +11,14 @@ from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
 from src.lib.config.agent_loader import load_agent_definitions
 from src.lib.flows.executor import execute_flow
 from src.lib.openai_agents.config import (
+    get_benchmark_adjudication_case_limit,
+    get_benchmark_adjudication_enabled,
+    get_benchmark_adjudication_model,
+    get_benchmark_adjudication_result_max_bytes,
+    get_benchmark_adjudication_retries,
+    get_benchmark_adjudication_timeout_seconds,
+    get_benchmark_adjudication_tool_call_limit,
+    get_benchmark_adjudication_turn_limit,
     get_benchmark_case_limit,
     get_benchmark_inline_max_bytes,
     get_benchmark_matrix_limit,
@@ -26,6 +34,7 @@ from src.lib.openai_agents.runner import run_agent_streamed
 from src.lib.packages.flow_recipes import load_flow_recipe_catalog
 from src.models.sql.curation_flow import CurationFlow
 
+from .adjudication import SupplementalAdjudicator, execute_direct_openai_adjudication
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
 from .models import BenchmarkRoute, ExecutionResult
 from .service import BenchmarkService
@@ -78,6 +87,17 @@ def build_default_service(root: Path | None = None) -> BenchmarkService:
         retries=get_benchmark_retries(),
         preview_max_chars=get_benchmark_preview_max_chars(),
         inline_max_bytes=get_benchmark_inline_max_bytes(),
+        adjudicator=SupplementalAdjudicator(
+            executor=execute_direct_openai_adjudication,
+            enabled=get_benchmark_adjudication_enabled(),
+            model=get_benchmark_adjudication_model(),
+            timeout_seconds=get_benchmark_adjudication_timeout_seconds(),
+            retries=get_benchmark_adjudication_retries(),
+            turn_limit=get_benchmark_adjudication_turn_limit(),
+            tool_call_limit=get_benchmark_adjudication_tool_call_limit(),
+            result_max_bytes=get_benchmark_adjudication_result_max_bytes(),
+        ),
+        adjudication_case_limit=get_benchmark_adjudication_case_limit(),
     )
 
 

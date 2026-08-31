@@ -1,0 +1,32 @@
+{
+  "scoring_version": 1,
+  "scorer_id": "deterministic-v1",
+  "outcome": "partial",
+  "weighted_score": "0.8333333333333333333333333333",
+  "earned_weight": "2.5",
+  "total_weight": "3",
+  "fields": [
+    {
+      "path": "/name",
+      "rule": "normalized_string",
+      "weight": "2",
+      "score": "1",
+      "outcome": "pass",
+      "mismatch_class": "none",
+      "base_mismatch_class": null,
+      "diagnostic": "values match",
+      "adjudication_eligible": false
+    },
+    {
+      "path": "/ids",
+      "rule": "unordered_collection",
+      "weight": "1",
+      "score": "0.5",
+      "outcome": "partial",
+      "mismatch_class": "collection_mismatch",
+      "base_mismatch_class": null,
+      "diagnostic": "values differ under configured rule",
+      "adjudication_eligible": false
+    }
+  ]
+}

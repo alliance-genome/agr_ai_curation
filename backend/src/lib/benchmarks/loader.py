@@ -12,6 +12,7 @@ import yaml
 from pydantic import ValidationError
 
 from .models import BenchmarkProfile, LoadedBenchmarkCase
+from .scoring import ScorerConfigurationError, validate_scorer_reference
 
 
 class BenchmarkCatalogError(ValueError):
@@ -126,6 +127,13 @@ class BenchmarkCatalog:
                 )
             for route in profile.routes:
                 self.validate_route(route.model, route.provider)
+            for scorer in profile.scorers:
+                try:
+                    validate_scorer_reference(scorer)
+                except ScorerConfigurationError as exc:
+                    raise BenchmarkCatalogError(
+                        f"Invalid scorer in {profile.profile_id}: {exc}"
+                    ) from exc
             cases: list[LoadedBenchmarkCase] = []
             for case_ref in profile.cases:
                 definition = (case_ref.fixture, case_ref.expected)
