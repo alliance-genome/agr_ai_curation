@@ -16,6 +16,7 @@ from src.lib.openai_agents.config import (
     get_benchmark_matrix_limit,
     get_benchmark_max_concurrency,
     get_benchmark_preview_max_chars,
+    get_benchmark_root,
     get_benchmark_result_limit,
     get_benchmark_retries,
     get_benchmark_timeout_seconds,
@@ -23,7 +24,6 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.openai_agents.runner import run_agent_streamed
 from src.lib.packages.flow_recipes import load_flow_recipe_catalog
-from src.lib.packages.tool_registry import resolve_default_packages_dir
 from src.models.sql.curation_flow import CurationFlow
 
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
@@ -32,7 +32,12 @@ from .service import BenchmarkService
 
 
 def get_default_benchmark_root() -> Path:
-    return resolve_default_packages_dir() / "alliance" / "benchmarks"
+    configured_root = get_benchmark_root()
+    if not configured_root:
+        raise BenchmarkCatalogError(
+            "BENCHMARK_ROOT must be configured before loading benchmark profiles"
+        )
+    return Path(configured_root).expanduser().resolve(strict=False)
 
 
 def _validate_route(model: str, provider: str) -> None:

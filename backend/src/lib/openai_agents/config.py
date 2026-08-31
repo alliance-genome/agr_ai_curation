@@ -978,6 +978,11 @@ def get_benchmark_enabled() -> bool:
     return _get_env_bool("BENCHMARK_ENABLED", False)
 
 
+def get_benchmark_root() -> str:
+    """Filesystem root holding this deployment's benchmark profiles and cases."""
+    return os.getenv("BENCHMARK_ROOT", "").strip()
+
+
 def get_benchmark_max_concurrency() -> int:
     """Maximum benchmark case runs executing concurrently."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CONCURRENCY", 2))

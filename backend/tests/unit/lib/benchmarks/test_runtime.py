@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -8,8 +9,19 @@ import src.lib.flows.executor as flow_executor
 import src.lib.benchmarks.runtime as benchmark_runtime
 from src.lib.benchmarks.loader import BenchmarkCatalogError
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
+ALLIANCE_BENCHMARK_ROOT = REPOSITORY_ROOT / "packages" / "alliance" / "benchmarks"
 
-def test_default_runtime_catalog_loads_without_constructing_targets():
+
+@pytest.fixture
+def configured_benchmark_root(monkeypatch):
+    monkeypatch.setenv("BENCHMARK_ROOT", str(ALLIANCE_BENCHMARK_ROOT))
+    return ALLIANCE_BENCHMARK_ROOT
+
+
+def test_default_runtime_catalog_loads_without_constructing_targets(
+    configured_benchmark_root,
+):
     catalog = benchmark_runtime.build_default_catalog()
     assert {loaded.profile.profile_id for loaded in catalog.profiles} == {
         "isolated-gene-agent-v1",
@@ -18,7 +30,9 @@ def test_default_runtime_catalog_loads_without_constructing_targets():
     }
 
 
-def test_default_runtime_catalog_rejects_unknown_and_mismatched_routes():
+def test_default_runtime_catalog_rejects_unknown_and_mismatched_routes(
+    configured_benchmark_root,
+):
     catalog = benchmark_runtime.build_default_catalog()
 
     with pytest.raises(BenchmarkCatalogError, match="Unknown model_id"):
@@ -27,9 +41,11 @@ def test_default_runtime_catalog_rejects_unknown_and_mismatched_routes():
         catalog.validate_route("gpt-5.6-sol", "openrouter")
 
 
-def test_default_runtime_catalog_rejects_invalid_checked_in_route(tmp_path):
+def test_default_runtime_catalog_rejects_invalid_checked_in_route(
+    tmp_path, configured_benchmark_root
+):
     benchmark_root = tmp_path / "benchmarks"
-    shutil.copytree(benchmark_runtime.get_default_benchmark_root(), benchmark_root)
+    shutil.copytree(configured_benchmark_root, benchmark_root)
     profile = benchmark_root / "profiles" / "isolated-gene-agent-v1.yaml"
     profile.write_text(
         profile.read_text(encoding="utf-8").replace(
@@ -40,6 +56,13 @@ def test_default_runtime_catalog_rejects_invalid_checked_in_route(tmp_path):
 
     with pytest.raises(BenchmarkCatalogError, match="Unknown model_id"):
         benchmark_runtime.build_default_catalog(benchmark_root)
+
+
+def test_default_runtime_catalog_requires_configured_root(monkeypatch):
+    monkeypatch.delenv("BENCHMARK_ROOT", raising=False)
+
+    with pytest.raises(BenchmarkCatalogError, match="BENCHMARK_ROOT must be configured"):
+        benchmark_runtime.build_default_catalog()
 
 
 def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch):

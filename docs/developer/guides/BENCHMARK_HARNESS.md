@@ -16,14 +16,20 @@ provider/model routes, case fixture and expected-output references, and scorer
 references. Scorer implementations and durable reports are separate concerns.
 Inputs and gold files must be synthetic, redistributable, or otherwise authorized.
 
+Set `BENCHMARK_ROOT` to the benchmark package for the active deployment. The
+Alliance Docker deployment uses `/runtime/packages/alliance/benchmarks`; when
+running the CLI from a repository checkout, use `packages/alliance/benchmarks`.
+
 ## Validate Without Model Calls
 
 Validation loads every reference and expands the bounded case/route matrix. It
 does not construct an agent, call a provider, or execute a flow.
 
 ```bash
-python scripts/run_benchmarks.py --validate
-python scripts/run_benchmarks.py --dry-run \
+BENCHMARK_ROOT=packages/alliance/benchmarks \
+  python scripts/run_benchmarks.py --validate
+BENCHMARK_ROOT=packages/alliance/benchmarks \
+  python scripts/run_benchmarks.py --dry-run \
   --profile isolated-gene-agent-v1 \
   --case synthetic-gene-lookup-1 \
   --provider openai \
@@ -37,7 +43,9 @@ intended provider credentials and dependencies. Execution uses the same service
 contract from the CLI and the admin API:
 
 ```bash
-BENCHMARK_ENABLED=true python scripts/run_benchmarks.py \
+BENCHMARK_ENABLED=true \
+  BENCHMARK_ROOT=packages/alliance/benchmarks \
+  python scripts/run_benchmarks.py \
   --profile isolated-gene-agent-v1 \
   --provider openai \
   --model gpt-5.6-sol
