@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.lib.benchmarks.models import (
+    BenchmarkAdjudicationAttempt,
     BenchmarkAdjudicationResult,
     BenchmarkCaseRun,
     BenchmarkDeterministicScore,
@@ -36,6 +37,11 @@ def _canonical_score(*, adjudicated: bool = False) -> BenchmarkScoringRecord:
     )
     adjudication = None
     if adjudicated:
+        billed_cost = BilledCost(
+            amount=Decimal("0.01"),
+            unit="USD",
+            source="provider-telemetry",
+        )
         adjudication = BenchmarkAdjudicationResult(
             status="completed",
             outcome="supports_actual",
@@ -47,11 +53,23 @@ def _canonical_score(*, adjudicated: bool = False) -> BenchmarkScoringRecord:
             latency_ms=25,
             input_tokens=8,
             output_tokens=3,
-            billed_cost=BilledCost(
-                amount=Decimal("0.01"),
-                unit="USD",
-                source="provider-telemetry",
-            ),
+            billed_cost=billed_cost,
+            attempts=[
+                BenchmarkAdjudicationAttempt(
+                    turn=1,
+                    attempt=1,
+                    retry=0,
+                    status="completed",
+                    latency_ms=25,
+                    outcome="supports_actual",
+                    reason="private attempt rationale with extracted evidence",
+                    confidence=Decimal("0.75"),
+                    uncertainty="private attempt evidence uncertainty",
+                    input_tokens=8,
+                    output_tokens=3,
+                    billed_cost=billed_cost,
+                )
+            ],
         )
     return BenchmarkScoringRecord(
         deterministic=deterministic,
@@ -223,6 +241,8 @@ def test_artifacts_are_allowlisted_redacted_and_stable():
         "Authorization",
         "private adjudication rationale",
         "private evidence uncertainty",
+        "private attempt rationale",
+        "private attempt evidence uncertainty",
         "values differ under configured rule",
     ):
         assert forbidden not in serialized
