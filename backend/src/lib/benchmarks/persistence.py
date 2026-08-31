@@ -134,17 +134,6 @@ def _page_size(limit: int | None) -> int:
     return min(requested, get_benchmark_max_page_size())
 
 
-def _canonical_json_size(value: dict[str, Any]) -> int:
-    return len(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    )
-
-
 def _job_summary(job: BenchmarkJob) -> BenchmarkJobSummary:
     return BenchmarkJobSummary(
         id=job.id,
@@ -514,7 +503,14 @@ class BenchmarkRepository:
         if status == BenchmarkCellStatus.SUCCEEDED:
             if generated_envelope is None:
                 raise ValueError("successful benchmark cell requires an envelope")
-            envelope_size = _canonical_json_size(generated_envelope)
+            envelope_size = self.session.scalar(
+                text(
+                    "SELECT octet_length("
+                    "convert_to(CAST(:payload AS jsonb)::text, 'UTF8')"
+                    ")"
+                ),
+                {"payload": json.dumps(generated_envelope, ensure_ascii=False)},
+            )
             if envelope_size > get_benchmark_max_envelope_bytes():
                 raise ValueError("generated benchmark envelope exceeds configured byte limit")
         elif generated_envelope is not None:

@@ -414,21 +414,23 @@ def test_envelope_limit_terminal_immutability_rerun_lineage_and_cascade(monkeypa
             event_type="cell.succeeded",
             payload={"cell_id": str(cell.id)},
         )
-        monkeypatch.setenv("BENCHMARK_MAX_ENVELOPE_BYTES", "8")
+        boundary_envelope = {"a": 1, "b": 2}
+        monkeypatch.setenv("BENCHMARK_MAX_ENVELOPE_BYTES", "15")
         with pytest.raises(ValueError, match="exceeds configured byte limit"):
             repository.finish_cell(
                 cell_id=cell.id,
                 status=BenchmarkCellStatus.SUCCEEDED,
                 completed_at=now,
-                generated_envelope={"too": "large"},
+                generated_envelope=boundary_envelope,
             )
-        monkeypatch.setenv("BENCHMARK_MAX_ENVELOPE_BYTES", "10485760")
-        repository.finish_cell(
+        monkeypatch.setenv("BENCHMARK_MAX_ENVELOPE_BYTES", "16")
+        finished_cell = repository.finish_cell(
             cell_id=cell.id,
             status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now,
-            generated_envelope={"ok": True},
+            generated_envelope=boundary_envelope,
         )
+        assert finished_cell.envelope_size_bytes == 16
         repository.complete_job(job_id=rerun.id, completed_at=now)
         db.commit()
 
