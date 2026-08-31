@@ -33,11 +33,23 @@ export function sanitizeHeaders(headers: Headers | Record<string, string>): Reco
 
 export function compactEvidence(value: unknown, maxChars: number): unknown {
   const redacted = redactSecrets(value)
-  const serialized = JSON.stringify(redacted)
+  const serialized = JSON.stringify(redacted) ?? String(redacted)
   if (serialized.length <= maxChars) return redacted
-  return {
+  const compacted = {
     truncated: true,
     original_chars: serialized.length,
-    preview: redactText(serialized.slice(0, maxChars)),
+    preview: '',
   }
+  const availableChars = Math.max(0, maxChars - JSON.stringify(compacted).length)
+  compacted.preview = redactText(serialized.slice(0, availableChars))
+  while (compacted.preview && JSON.stringify(compacted).length > maxChars) {
+    const overflow = JSON.stringify(compacted).length - maxChars
+    compacted.preview = compacted.preview.slice(0, Math.max(0, compacted.preview.length - overflow))
+  }
+  return compacted
+}
+
+export function compactDiagnostic(value: unknown, maxChars: number): string {
+  const compacted = compactEvidence(value, maxChars)
+  return typeof compacted === 'string' ? compacted : JSON.stringify(compacted) ?? String(compacted)
 }

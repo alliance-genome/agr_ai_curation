@@ -51,7 +51,7 @@ async function captureResponse(context: SmokeContext, state: CaseState | undefin
   const request = requestBody(response)
   const text = await response.text()
   if (pathName === '/api/chat/stream' || pathName === '/api/chat/execute-flow') {
-    const events = parseSseEvents(text)
+    const events = parseSseEvents(text, context.config.evidencePreviewChars)
     const capture: StreamCapture = {
       path: pathName,
       request: redactSecrets(request) as Record<string, unknown>,

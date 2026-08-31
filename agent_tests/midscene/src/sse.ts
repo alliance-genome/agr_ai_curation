@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { compactDiagnostic } from './redaction.js'
+
 export type SseEvent = Record<string, unknown> & { type?: string }
 
 export const groundingEvidenceRecordSchema = z.object({
@@ -78,7 +80,7 @@ export const flowEvidenceExportSchema = z.object({
 export type FileReadyEvent = z.infer<typeof fileReadyEventSchema>
 export type GroundingEvidenceRecord = z.infer<typeof groundingEvidenceRecordSchema>
 
-export function parseSseEvents(text: string): SseEvent[] {
+export function parseSseEvents(text: string, evidencePreviewChars: number): SseEvent[] {
   const events: SseEvent[] = []
   for (const line of text.split(/\r?\n/)) {
     if (!line.startsWith('data:')) continue
@@ -86,7 +88,7 @@ export function parseSseEvents(text: string): SseEvent[] {
     if (!payload || payload === '[DONE]') continue
     let parsed: unknown
     try { parsed = JSON.parse(payload) } catch (error) {
-      throw new Error(`invalid SSE JSON payload: ${payload.slice(0, 200)}`, { cause: error })
+      throw new Error(`invalid SSE JSON payload: ${compactDiagnostic(payload, evidencePreviewChars)}`, { cause: error })
     }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) events.push(parsed as SseEvent)
   }

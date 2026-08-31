@@ -22,9 +22,22 @@ const evidence = {
 
 describe('SSE evidence parsing', () => {
   it('parses data frames and ignores keepalives and DONE', () => {
-    assert.deepEqual(parseSseEvents(': ping\ndata: {"type":"RUN_STARTED","trace_id":"trace-1"}\n\ndata: [DONE]\n'), [
+    assert.deepEqual(parseSseEvents(': ping\ndata: {"type":"RUN_STARTED","trace_id":"trace-1"}\n\ndata: [DONE]\n', 120), [
       { type: 'RUN_STARTED', trace_id: 'trace-1' },
     ])
+  })
+
+  it('bounds invalid payload diagnostics with the configured evidence limit', () => {
+    const evidencePreviewChars = 120
+    assert.throws(
+      () => parseSseEvents(`data: Bearer do-not-leak ${'x'.repeat(1_000)}\n`, evidencePreviewChars),
+      (error: unknown) => {
+        const prefix = 'invalid SSE JSON payload: '
+        assert.ok((error as Error).message.length <= prefix.length + evidencePreviewChars)
+        assert.doesNotMatch((error as Error).message, /do-not-leak/)
+        return true
+      },
+    )
   })
 
   it('accepts chat grounding only for the expected document, session, trace, and entity', () => {

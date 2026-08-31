@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { summarizeModelUsage } from '../src/model-usage.js'
-import { buildRedactedVerdict } from '../src/verdict.js'
+import { buildRedactedVerdict, verdictFailure } from '../src/verdict.js'
 
 describe('smoke verdict boundary', () => {
   it('retains safe numeric usage while redacting the rest of the verdict', async () => {
@@ -21,5 +21,13 @@ describe('smoke verdict boundary', () => {
     assert.equal((verdict.model_usage as typeof modelUsage).input_tokens, 123)
     assert.equal((verdict.model_usage as typeof modelUsage).cached_input_tokens, 45)
     assert.equal((verdict.model_usage as typeof modelUsage).output_tokens, 6)
+  })
+
+  it('bounds verdict-facing failure messages with the configured evidence limit', () => {
+    const evidencePreviewChars = 120
+    const failure = verdictFailure(new Error(`Bearer do-not-leak ${'x'.repeat(1_000)}`), evidencePreviewChars)
+    assert.equal((failure as { name: string }).name, 'Error')
+    assert.ok((failure as { message: string }).message.length <= evidencePreviewChars)
+    assert.doesNotMatch(JSON.stringify(failure), /do-not-leak/)
   })
 })

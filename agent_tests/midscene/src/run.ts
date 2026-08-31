@@ -9,7 +9,7 @@ import { createFreshRunDirectory } from './run-directory.js'
 import { acceptanceCases, canonicalCaseStatuses, executedCanonicalCases, runAcceptancePassed, selectedCasesSucceeded } from './run-results.js'
 import { readRunnerProvenance } from './provenance.js'
 import { summarizeModelUsage } from './model-usage.js'
-import { buildRedactedVerdict } from './verdict.js'
+import { buildRedactedVerdict, verdictFailure } from './verdict.js'
 
 async function cleanupIsClean(config: ReturnType<typeof loadConfig>, runResult: TestProjectRunResult | undefined): Promise<boolean> {
   const executedCases = executedCanonicalCases(runResult)
@@ -136,7 +136,7 @@ const verdict = buildRedactedVerdict({
   cleanup_clean: cleanupClean,
   resources_retained: config.retainResources,
   test_runner: result ? { result_dir: result.resultDir, summary_path: result.summaryPath, report_dir: result.reportDir, summary: result.summary } : null,
-  failure: failure instanceof Error ? { name: failure.name, message: failure.message } : failure ? String(failure) : null,
+  failure: verdictFailure(failure, config.evidencePreviewChars),
 }, modelUsage) as Record<string, any>
 await writeFile(path.join(config.runDir, 'verdict.json'), `${JSON.stringify(verdict, null, 2)}\n`, { mode: 0o600 })
 await writeFile(path.join(config.runDir, 'verdict.md'), markdownVerdict(verdict), { mode: 0o600 })

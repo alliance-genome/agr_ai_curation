@@ -297,6 +297,7 @@ const awaitDocumentNode = defineNode<typeof emptyInput, unknown, SmokeContext>({
         label: `document ${state.documentId} processing`,
         intervalMs: ctx.context.config.pdfPollIntervalMs,
         limit: ctx.context.config.pdfPollLimit,
+        evidencePreviewChars: ctx.context.config.evidencePreviewChars,
         signal: abortSignal(ctx.context, ctx.signal),
       },
     )
@@ -368,6 +369,7 @@ const assertGraphNode = defineNode<typeof assertGraphInput, unknown, SmokeContex
         label: 'persisted smoke graph',
         intervalMs: context.config.persistencePollIntervalMs,
         limit: context.config.persistencePollLimit,
+        evidencePreviewChars: context.config.evidencePreviewChars,
       },
     )
     assertExactSmokeGraph(flow.flow_definition, { taskInstructions: input.instructions, formatter: input.formatter })
@@ -410,6 +412,7 @@ const assertChatNode = defineNode<typeof chatAssertInput, unknown, SmokeContext>
         label: `durable chat session ${sessionId}`,
         intervalMs: context.config.persistencePollIntervalMs,
         limit: context.config.persistencePollLimit,
+        evidencePreviewChars: context.config.evidencePreviewChars,
       },
     )
     assert.equal(detail.session.active_document_id, state.documentId)
@@ -481,6 +484,7 @@ const assertFlowRunNode = defineNode<typeof emptyInput, unknown, SmokeContext>({
         label: `flow ${state.flowId} execution count`,
         intervalMs: context.config.persistencePollIntervalMs,
         limit: context.config.persistencePollLimit,
+        evidencePreviewChars: context.config.evidencePreviewChars,
       },
     )
     assert.equal(flow.execution_count, (state.flowExecutionCount ?? 0) + 1)
@@ -497,6 +501,7 @@ const assertFlowRunNode = defineNode<typeof emptyInput, unknown, SmokeContext>({
         label: `durable flow transcript ${sessionId}`,
         intervalMs: context.config.persistencePollIntervalMs,
         limit: context.config.persistencePollLimit,
+        evidencePreviewChars: context.config.evidencePreviewChars,
       },
     )
     assert.equal(history.session.active_document_id, state.documentId)

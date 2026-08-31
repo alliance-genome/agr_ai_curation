@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { openAiModelPreflight } from '../src/preflight.js'
+import { appendStderrPreview, openAiModelPreflight } from '../src/preflight.js'
 
 describe('OpenAI model preflight', () => {
   it('performs an authenticated metadata lookup without inference', async () => {
@@ -34,5 +34,12 @@ describe('OpenAI model preflight', () => {
         return true
       },
     )
+  })
+
+  it('bounds and redacts Codex stderr with the configured evidence limit', () => {
+    const evidencePreviewChars = 120
+    const stderr = appendStderrPreview('', `${'x'.repeat(1_000)} Bearer do-not-leak`, evidencePreviewChars)
+    assert.ok(stderr.length <= evidencePreviewChars)
+    assert.doesNotMatch(stderr, /do-not-leak/)
   })
 })

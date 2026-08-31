@@ -1,5 +1,12 @@
 import type { ModelUsageSummary } from './model-usage.js'
-import { redactSecrets } from './redaction.js'
+import { compactDiagnostic, redactSecrets } from './redaction.js'
+
+export function verdictFailure(failure: unknown, evidencePreviewChars: number): unknown {
+  if (failure instanceof Error) {
+    return { name: failure.name, message: compactDiagnostic(failure.message, evidencePreviewChars) }
+  }
+  return failure ? compactDiagnostic(failure, evidencePreviewChars) : null
+}
 
 export function buildRedactedVerdict(
   value: Record<string, unknown>,
