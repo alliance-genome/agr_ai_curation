@@ -11,7 +11,7 @@ export interface ApiEvidence {
 
 export interface ApiClientOptions {
   baseUrl: string
-  authMode: 'api-key' | 'cookie'
+  authMode: 'api-key' | 'cookie' | 'dev-mode'
   secret: string
   timeoutMs: number
   evidence?: ApiEvidence[]
@@ -34,7 +34,7 @@ export class ApiError extends Error {
 
 export class ApiClient {
   readonly #baseUrl: string
-  readonly #authMode: 'api-key' | 'cookie'
+  readonly #authMode: 'api-key' | 'cookie' | 'dev-mode'
   readonly #secret: string
   readonly #timeoutMs: number
   readonly #evidence: ApiEvidence[]
@@ -59,7 +59,7 @@ export class ApiClient {
     const headers: Record<string, string> = { Accept: 'application/json', ...options.headers }
     if (options.body !== undefined && !headers['Content-Type']) headers['Content-Type'] = 'application/json'
     if (this.#authMode === 'api-key') headers['X-API-Key'] = this.#secret
-    else headers.Cookie = this.#secret
+    else if (this.#authMode === 'cookie') headers.Cookie = this.#secret
 
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(new Error(`API request timed out after ${this.#timeoutMs}ms`)), this.#timeoutMs)
@@ -115,7 +115,7 @@ export class ApiClient {
   async download(path: string): Promise<Uint8Array> {
     const headers: Record<string, string> = { Accept: 'application/octet-stream, application/json' }
     if (this.#authMode === 'api-key') headers['X-API-Key'] = this.#secret
-    else headers.Cookie = this.#secret
+    else if (this.#authMode === 'cookie') headers.Cookie = this.#secret
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(new Error(`API request timed out after ${this.#timeoutMs}ms`)), this.#timeoutMs)
     let response: Response
@@ -139,7 +139,7 @@ export class ApiClient {
   async postForm<T>(path: string, form: FormData, evidenceRequest: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (this.#authMode === 'api-key') headers['X-API-Key'] = this.#secret
-    else headers.Cookie = this.#secret
+    else if (this.#authMode === 'cookie') headers.Cookie = this.#secret
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(new Error(`API request timed out after ${this.#timeoutMs}ms`)), this.#timeoutMs)
     let response: Response
@@ -169,6 +169,8 @@ export class ApiClient {
   authHeaders(): Record<string, string> {
     return sanitizeHeaders(this.#authMode === 'api-key'
       ? { 'X-API-Key': this.#secret }
-      : { Cookie: this.#secret })
+      : this.#authMode === 'cookie'
+        ? { Cookie: this.#secret }
+        : {})
   }
 }

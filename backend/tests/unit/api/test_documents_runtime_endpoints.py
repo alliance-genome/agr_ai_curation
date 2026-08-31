@@ -1479,6 +1479,73 @@ async def test_upload_document_endpoint_sanitizes_unexpected_error(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_upload_fails_with_typed_503_before_intake_when_dev_curator_unavailable(
+    monkeypatch,
+):
+    async def _unavailable(**_kwargs):
+        raise documents.DevCuratorCredentialUnavailable("sanitized unavailable")
+
+    async def _must_not_intake(**_kwargs):
+        pytest.fail("upload intake must not begin without dev curator credentials")
+
+    monkeypatch.setattr(documents, "build_document_source_request_context", _unavailable)
+    monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _must_not_intake)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await documents.upload_document_endpoint(
+            BackgroundTasks(),
+            SimpleNamespace(cookies={}),  # type: ignore[arg-type]
+            UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            {"sub": "dev-user-123"},
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {
+        "error": "document_source_curator_token_unavailable",
+        "message": "Document-source curator authentication is unavailable.",
+        "suggestion": "Try again later or contact support if this persists.",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_kind", ["import", "resolve"])
+async def test_identifier_routes_fail_before_service_when_dev_curator_unavailable(
+    monkeypatch,
+    route_kind,
+):
+    async def _unavailable(**_kwargs):
+        raise documents.DevCuratorCredentialUnavailable("sanitized unavailable")
+
+    async def _must_not_run(**_kwargs):
+        pytest.fail("identifier service must not begin without dev curator credentials")
+
+    monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: True)
+    monkeypatch.setattr(documents, "build_document_source_request_context", _unavailable)
+    monkeypatch.setattr(documents.identifier_import_service, "import_identifiers", _must_not_run)
+    monkeypatch.setattr(documents.identifier_import_service, "resolve_identifiers", _must_not_run)
+    payload = documents.DocumentSourceIdentifierImportRequest(identifiers="PMID:1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        if route_kind == "import":
+            await documents.import_documents_by_source_identifiers(
+                payload,
+                BackgroundTasks(),
+                SimpleNamespace(cookies={}),  # type: ignore[arg-type]
+                {"sub": "dev-user-123"},
+            )
+        else:
+            await documents.resolve_documents_by_source_identifiers(
+                payload,
+                SimpleNamespace(cookies={}),  # type: ignore[arg-type]
+                {"sub": "dev-user-123"},
+            )
+
+    assert exc_info.value.status_code == 503
+    detail = cast(dict[str, Any], exc_info.value.detail)
+    assert detail["error"] == "document_source_curator_token_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_stream_document_progress_returns_not_found_event(monkeypatch):
     doc_id = str(uuid4())
     monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")

@@ -8,14 +8,13 @@ from typing import Any
 
 from fastapi import Request
 
-from src.config import is_dev_mode
 from src.lib.config.groups_loader import (
     get_group_claim_key,
     get_groups_for_provider_groups,
 )
-from src.lib.document_sources.models import DocumentSourceConfigError
-from src.lib.document_sources.registry import (
-    get_configured_document_source_dev_mode_static_curator_token,
+from src.lib.document_sources.dev_curator_auth import (
+    get_dev_curator_credentials,
+    renewable_dev_curator_auth_required,
 )
 
 
@@ -33,7 +32,7 @@ class DocumentSourceRequestContext:
         return bool(self.curator_token)
 
 
-def build_document_source_request_context(
+async def build_document_source_request_context(
     *,
     request: Request | None,
     user_claims: Mapping[str, Any],
@@ -44,9 +43,14 @@ def build_document_source_request_context(
     logged, serialized, stored, or returned to the browser.
     """
 
-    provider_groups = _extract_provider_groups(user_claims)
+    if renewable_dev_curator_auth_required():
+        credentials = await get_dev_curator_credentials()
+        provider_groups = _extract_provider_groups(credentials.claims)
+        curator_token = credentials.token
+    else:
+        provider_groups = _extract_provider_groups(user_claims)
+        curator_token = _extract_curator_token(request, user_claims)
     authorized_group_ids = tuple(get_groups_for_provider_groups(list(provider_groups)))
-    curator_token = _extract_curator_token(request, user_claims)
     return DocumentSourceRequestContext(
         provider_groups=provider_groups,
         authorized_group_ids=authorized_group_ids,
@@ -85,21 +89,7 @@ def _extract_curator_token(
         token = request.cookies.get("auth_token") or request.cookies.get("cognito_token")
         if token:
             return token
-    if is_dev_mode():
-        return _extract_dev_mode_static_curator_token()
     return None
-
-
-def _extract_dev_mode_static_curator_token() -> str | None:
-    """Allow configured dev-auth demos to use a server-side curator token."""
-
-    try:
-        token = get_configured_document_source_dev_mode_static_curator_token()
-    except DocumentSourceConfigError:
-        return None
-    if token is None:
-        return None
-    return token.strip() or None
 
 
 def _claims_allow_cookie_token(user_claims: Mapping[str, Any]) -> bool:

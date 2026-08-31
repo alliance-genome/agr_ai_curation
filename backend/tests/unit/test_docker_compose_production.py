@@ -201,6 +201,26 @@ def test_dev_compose_trace_review_defaults_to_local_langfuse_bootstrap_keys():
     )
 
 
+def test_dev_curator_credentials_are_development_compose_only():
+    dev_backend = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
+    production_backend = _load_compose()["services"]["backend"]["environment"]
+    expected = {
+        "DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE": "${DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE:-none}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_REGION": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_REGION:-us-east-1}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_USER_POOL_ID": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_USER_POOL_ID:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_ID": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_ID:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_SECRET": "${DOCUMENT_SOURCE_DEV_CURATOR_COGNITO_CLIENT_SECRET:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_USERNAME": "${DOCUMENT_SOURCE_DEV_CURATOR_USERNAME:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_PASSWORD": "${DOCUMENT_SOURCE_DEV_CURATOR_PASSWORD:-}",
+        "DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS": "${DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS:-600}",
+    }
+
+    for key, value in expected.items():
+        assert dev_backend[key] == value
+        assert key not in production_backend
+    assert production_backend["DEV_MODE"] == "false"
+
+
 def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]

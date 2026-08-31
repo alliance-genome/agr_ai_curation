@@ -8,6 +8,11 @@ from src.lib.document_sources.models import (
     DocumentSourceConfigError,
     DocumentSourceHealth,
 )
+from src.lib.document_sources.dev_curator_auth import (
+    DevCuratorCredentialUnavailable,
+    get_dev_curator_credentials,
+    renewable_dev_curator_auth_required,
+)
 from src.lib.document_sources.registry import (
     LOCAL_PDF_PROVIDER_ID,
     get_configured_document_source_provider,
@@ -24,6 +29,8 @@ _LOCAL_PDF_MESSAGE = "Using local PDF upload flow"
 _CONFIG_ERROR_MESSAGE = "Document-source provider misconfigured"
 _READY_MESSAGE = "Document-source provider ready"
 _UNAVAILABLE_MESSAGE = "Document-source provider unavailable"
+_DEV_AUTH_UNAVAILABLE_MESSAGE = "Document-source curator authentication unavailable"
+_VALID_ABSENT_MD5 = "00000000000000000000000000000000"
 
 
 async def check_configured_document_source_health() -> DocumentSourceHealth:
@@ -53,6 +60,19 @@ async def check_configured_document_source_health() -> DocumentSourceHealth:
             metadata={"enabled": True},
         )
 
+    credentials = None
+    if renewable_dev_curator_auth_required():
+        try:
+            credentials = await get_dev_curator_credentials()
+        except DevCuratorCredentialUnavailable as exc:
+            logger.warning("Document-source dev curator authentication failed: %s", exc)
+            return DocumentSourceHealth(
+                provider=provider_id,
+                ok=False,
+                message=_DEV_AUTH_UNAVAILABLE_MESSAGE,
+                metadata={"enabled": True, "reason": "authentication"},
+            )
+
     try:
         provider = get_configured_document_source_provider(provider_id)
     except DocumentSourceConfigError as exc:
@@ -64,8 +84,33 @@ async def check_configured_document_source_health() -> DocumentSourceHealth:
             metadata={"enabled": True, "reason": "configuration"},
         )
 
-    async with provider:
-        health = await provider.health()
+    if credentials is not None:
+        try:
+            async with provider:
+                await provider.find_artifacts_by_checksum(
+                    _VALID_ABSENT_MD5,
+                    request_bearer_token=credentials.token,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Authenticated document-source readiness lookup failed: %s",
+                exc,
+            )
+            return DocumentSourceHealth(
+                provider=provider_id,
+                ok=False,
+                message=_UNAVAILABLE_MESSAGE,
+                metadata={"enabled": True, "reason": "authenticated_lookup"},
+            )
+        health = DocumentSourceHealth(
+            provider=provider_id,
+            ok=True,
+            message=_READY_MESSAGE,
+            metadata={"enabled": True, "auth": "renewable_dev_curator"},
+        )
+    else:
+        async with provider:
+            health = await provider.health()
     if not health.ok:
         logger.warning(
             "Document-source provider health check failed for %s: %s",

@@ -110,6 +110,9 @@ export async function runPreflight(): Promise<Record<string, unknown>> {
   })
   const user = await api.get<Record<string, unknown>>('/api/users/me')
   if (!user.user_id && !user.id) throw new Error('/api/users/me did not return an authenticated user')
+  if (config.appAuth === 'dev-mode' && user.auth_sub !== 'dev-user-123') {
+    throw new Error(`/api/users/me did not return dev-user-123 in dev-mode: ${String(user.auth_sub)}`)
+  }
   checks.app_authentication = { ok: true, mode: config.appAuth }
 
   const storageEvidenceDir = path.join(config.runDir, 'preflight')

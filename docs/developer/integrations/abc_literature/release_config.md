@@ -66,8 +66,20 @@ Weaviate metadata.
 
 Final artifact downloads intended to represent the logged-in curator should use
 the request-local curator bearer token. The request context captures the
-validated browser `auth_token` cookie only for normal Cognito users; API-key and
-dev-mode requests do not forward arbitrary browser cookies as curator tokens.
+validated browser `auth_token` cookie only for normal Cognito users; API-key
+requests cannot donate an arbitrary browser cookie.
+
+Login-free development uses a separate provider-only identity. Keep
+`ABC_LITERATURE_AUTH_MODE=none` and do not configure
+`ABC_LITERATURE_BEARER_TOKEN`; instead set
+`DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE=cognito_user_password` and supply the
+dedicated Cognito region, pool, no-callback app-client ID/secret, username, and
+password through the host-private environment. The app client must allow
+`USER_PASSWORD_AUTH`. The backend validates the returned ID token and derives
+provider groups from its claims, while document ownership remains attached to
+`dev-user-123`. These settings are passed only by development Compose and are
+inactive unless effective dev mode, external import, and a non-local provider
+are all enabled.
 
 ## Groups And Access
 
@@ -89,13 +101,16 @@ showing, downloading, caching, ingesting, or serving restricted content.
 Document-source operational limits are env-configurable in `.env.example`:
 
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`
+- `DOCUMENT_SOURCE_DEV_CURATOR_REFRESH_SKEW_SECONDS`
 - `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`
 - `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`
 - `DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT`
 - ABC Literature live-smoke timeout/evidence knobs
 - READY upload and identifier-import smoke timeout/evidence knobs
 
-These values are passed through both development and production Compose files.
+General provider limits are passed through both Compose files. The dev curator
+settings and renewal skew are intentionally passed through development Compose
+only; production Compose continues to force `DEV_MODE=false`.
 
 ## Health And Readiness
 
@@ -116,6 +131,9 @@ Expected enabled external-provider behavior:
   sanitized provider-misconfigured details.
 - ABC provider unavailability makes health/readiness fail with sanitized
   provider-unavailable details.
+- Renewable dev mode obtains the cached validated ID token and performs an
+  authenticated lookup for a valid absent MD5. Cognito failures and provider
+  authorization failures make health and readiness unhealthy.
 - Health checks use safe read/list/search endpoints only. They must not call
   `conversion_request`, `file_upload`, `reference/add`, or restricted
   `download_file` with a service credential.
