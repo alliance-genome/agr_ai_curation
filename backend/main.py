@@ -18,6 +18,10 @@ os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
 from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, logs, flows, files, maintenance, batch, pdf_jobs, curation_workspace, observability
+from src.api.benchmark_sources import (
+    install_benchmark_input_resolvers,
+    router as benchmark_sources_router,
+)
 from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import benchmarks_router as admin_benchmarks_router
 from src.api.admin import prompts_router as admin_prompts_router
@@ -885,6 +889,7 @@ def create_app() -> FastAPI:
     )
 
     create_request_context_middleware(application)
+    install_benchmark_input_resolvers(application)
 
     application.include_router(auth.router, tags=["Authentication"])
     application.include_router(users.router, tags=["Users"])
@@ -912,6 +917,7 @@ def create_app() -> FastAPI:
     application.include_router(admin_prompts_router, tags=["Admin - Prompts"])
     application.include_router(admin_connections_router, tags=["Admin - Health"])
     application.include_router(admin_benchmarks_router, tags=["Admin - Benchmarks"])
+    application.include_router(benchmark_sources_router)
 
     ensure_writable_directory(get_pdf_storage_path())
 

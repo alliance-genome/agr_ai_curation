@@ -1,0 +1,159 @@
+"""Focused API tests for scoped benchmark source materialization."""
+
+from __future__ import annotations
+
+import hashlib
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
+
+import src.api.benchmark_sources as sources_api
+from src.api.benchmark_auth import require_benchmark_source_read
+from src.lib.benchmarks.input_resolvers import (
+    BenchmarkInputResolverCatalog,
+    BenchmarkSourceError,
+    CheckedInFixtureResolver,
+)
+
+
+def _app(tmp_path, monkeypatch) -> FastAPI:
+    monkeypatch.setattr(sources_api, "get_benchmark_enabled", lambda: True)
+    application = FastAPI()
+    application.state.benchmark_input_resolvers = BenchmarkInputResolverCatalog(
+        [CheckedInFixtureResolver(tmp_path)],
+        timeout_seconds=1,
+        max_input_bytes=1024,
+    )
+    application.dependency_overrides[require_benchmark_source_read] = lambda: {
+        "sub": "operator"
+    }
+    application.include_router(sources_api.router)
+    return application
+
+
+def test_materialize_route_requires_benchmark_source_read_capability():
+    route = next(
+        route
+        for route in sources_api.router.routes
+        if isinstance(route, APIRoute) and route.path.endswith("/materialize")
+    )
+    assert require_benchmark_source_read in [
+        dependency.call for dependency in route.dependant.dependencies
+    ]
+
+
+def test_materialize_endpoint_returns_canonical_fixture_content(tmp_path, monkeypatch):
+    payload = b'{"messages": []}\n'
+    (tmp_path / "input.json").write_bytes(payload)
+    digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+    response = TestClient(_app(tmp_path, monkeypatch)).post(
+        "/api/v1/benchmarks/sources/materialize",
+        json={
+            "resolver": "checked_in_fixture",
+            "reference": "input.json",
+            "version": "1",
+            "digest": digest,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resolver": "checked_in_fixture",
+        "reference": "input.json",
+        "version": "1",
+        "digest": digest,
+        "content": payload.decode(),
+        "metadata": {
+            "content_type": "application/json",
+            "content_bytes": len(payload),
+            "title": "input.json",
+        },
+        "provenance": {
+            "resolver": "checked_in_fixture",
+            "reference": "input.json",
+            "version": "1",
+            "digest": digest,
+        },
+    }
+
+
+def test_materialize_endpoint_normalizes_invalid_and_unknown_references(
+    tmp_path, monkeypatch
+):
+    client = TestClient(_app(tmp_path, monkeypatch))
+    invalid = client.post(
+        "/api/v1/benchmarks/sources/materialize",
+        json={
+            "url": "https://example.test/paper",
+            "resolver": "python.module:callable",
+        },
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["error"] == "invalid_reference"
+
+    unknown = client.post(
+        "/api/v1/benchmarks/sources/materialize",
+        json={
+            "resolver": "private_remote",
+            "reference": "approved-reference",
+            "version": "1",
+            "digest": "sha256:" + "0" * 64,
+        },
+    )
+    assert unknown.status_code == 422
+    assert unknown.json()["detail"]["error"] == "unknown_resolver"
+
+
+def test_source_authorization_failure_prevents_materialization(tmp_path, monkeypatch):
+    application = _app(tmp_path, monkeypatch)
+
+    def deny_source_read():
+        raise HTTPException(status_code=403, detail="Benchmark capability required")
+
+    application.dependency_overrides[require_benchmark_source_read] = deny_source_read
+    response = TestClient(application).post(
+        "/api/v1/benchmarks/sources/materialize",
+        json={
+            "resolver": "checked_in_fixture",
+            "reference": "input.json",
+            "version": "1",
+            "digest": "sha256:" + "0" * 64,
+        },
+    )
+    assert response.status_code == 403
+
+
+def test_unavailable_source_reports_only_sanitized_failure(monkeypatch):
+    captured = {}
+
+    def report_and_raise(_logger, *, status_code, detail, log_message, exc):
+        captured.update(
+            status_code=status_code,
+            detail=detail,
+            log_message=log_message,
+            exc=exc,
+        )
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    monkeypatch.setattr(
+        sources_api, "raise_sanitized_http_exception", report_and_raise
+    )
+    try:
+        raise OSError("/private/path/secret-paper.json")
+    except OSError as raw:
+        source_error = BenchmarkSourceError(
+            "source_unavailable", "Benchmark input source is unavailable"
+        )
+        source_error.__cause__ = raw
+
+    with pytest.raises(HTTPException) as exc_info:
+        sources_api._raise_source_error(source_error)
+
+    assert exc_info.value.status_code == 503
+    assert captured["detail"]["error"] == "source_unavailable"
+    assert captured["exc"].__context__ is None
+    assert captured["exc"].__cause__ is None
+    assert "secret-paper" not in str(captured["exc"])

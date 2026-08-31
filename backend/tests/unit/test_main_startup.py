@@ -41,6 +41,23 @@ def make_connection(list_all_return=None):
     return connection, client
 
 
+def test_create_app_installs_registered_benchmark_source_catalog(monkeypatch):
+    main = _main_module()
+    monkeypatch.setattr(main, "initialize_sentry_if_configured", lambda: None)
+    monkeypatch.setattr(main, "ensure_writable_directory", lambda _path: None)
+
+    application = main.create_app()
+
+    assert application.state.benchmark_input_resolvers.resolver_ids == (
+        "checked_in_fixture",
+        "local_document",
+    )
+    assert any(
+        route.path == "/api/v1/benchmarks/sources/materialize"
+        for route in application.routes
+    )
+
+
 class TestPdfExtractionTimeoutValidation:
     def test_low_timeout_recommends_canonical_default(self, monkeypatch):
         monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "299")

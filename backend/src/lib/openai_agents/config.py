@@ -1052,6 +1052,22 @@ def get_benchmark_root() -> str:
     return os.getenv("BENCHMARK_ROOT", "").strip()
 
 
+def get_benchmark_source_timeout_seconds() -> float:
+    """Maximum time allowed for one registered source materialization."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("BENCHMARK_SOURCE_TIMEOUT_SECONDS", 30.0),
+    )
+
+
+def get_benchmark_max_input_bytes() -> int:
+    """Maximum UTF-8 bytes accepted from one registered input resolver."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_MAX_INPUT_BYTES", 52_428_800),
+    )
+
+
 def get_benchmark_max_cases() -> int:
     """Maximum cases accepted by an execution-only benchmark suite."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CASES", 50))
