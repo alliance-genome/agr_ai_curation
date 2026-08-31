@@ -10,7 +10,7 @@ import { chromium } from 'playwright'
 import { ApiClient } from './api-client.js'
 import { applyProviderEnvironment, loadConfig } from './config.js'
 import { pollUntil } from './poll.js'
-import { compactDiagnostic, redactText } from './redaction.js'
+import { redactText } from './redaction.js'
 import { recordValue, stringValue } from './sse.js'
 
 const execFileAsync = promisify(execFile)
@@ -44,8 +44,7 @@ export async function openAiModelPreflight(
 }
 
 export function appendStderrPreview(current: string, chunk: string, evidencePreviewChars: number): string {
-  const redacted = redactText(`${current}${chunk}`)
-  return compactDiagnostic(redacted.slice(-evidencePreviewChars), evidencePreviewChars)
+  return redactText(`${current}${chunk}`).slice(-evidencePreviewChars)
 }
 
 async function codexModels(timeoutMs: number, evidencePreviewChars: number): Promise<Array<Record<string, unknown>>> {
