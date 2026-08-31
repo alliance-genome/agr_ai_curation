@@ -38,8 +38,13 @@ describe('OpenAI model preflight', () => {
 
   it('bounds and redacts Codex stderr with the configured evidence limit', () => {
     const evidencePreviewChars = 120
-    const stderr = appendStderrPreview('', `${'x'.repeat(1_000)} Bearer do-not-leak`, evidencePreviewChars)
+    const stderr = appendStderrPreview(
+      '',
+      `Bearer ${'x'.repeat(200)}UNIQUE_SECRET_MARKER\nuseful tail diagnostic`,
+      evidencePreviewChars,
+    )
     assert.ok(stderr.length <= evidencePreviewChars)
-    assert.doesNotMatch(stderr, /do-not-leak/)
+    assert.doesNotMatch(stderr, /UNIQUE_SECRET_MARKER/)
+    assert.match(stderr, /useful tail diagnostic/)
   })
 })
