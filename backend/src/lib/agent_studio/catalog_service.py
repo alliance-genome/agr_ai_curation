@@ -1906,6 +1906,11 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         output_type=output_schema,
         output_guardrails=output_guardrails,
     )
+    benchmark_route_slot = str(kwargs.get("benchmark_route_slot") or "").strip()
+    if benchmark_route_slot:
+        from src.lib.openai_agents.benchmark_routing import attach_benchmark_route
+
+        attach_benchmark_route(runtime_agent, benchmark_route_slot)
     runtime_agent.agent_key = str(db_agent.agent_key)
     runtime_agent.group_tool_exposure = group_tool_audit
     runtime_agent.authenticated_groups = tuple(

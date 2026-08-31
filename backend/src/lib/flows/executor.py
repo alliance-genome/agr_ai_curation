@@ -2560,6 +2560,7 @@ def get_all_agent_tools(
     include_unavailable: bool = False,
     model_id_override: str | None = None,
     model_provider_override: str | None = None,
+    benchmark_routes: Mapping[str, Any] | None = None,
 ) -> Any:
     """Get streaming-wrapped tools for agents in the flow.
 
@@ -2630,9 +2631,9 @@ def get_all_agent_tools(
     context["authenticated_groups"] = active_groups or []
     if db_user_id is not None:
         context["db_user_id"] = db_user_id
-    if model_id_override is not None:
+    if model_id_override is not None and benchmark_routes is None:
         context["model_id_override"] = model_id_override
-    if model_provider_override is not None:
+    if model_provider_override is not None and benchmark_routes is None:
         context["model_provider_override"] = model_provider_override
 
     # Create one tool per node (not per unique agent_id)
@@ -3312,6 +3313,14 @@ def get_all_agent_tools(
                     source_node_ids=output_source_by_node_id.get(node_id),
                 )
             else:
+                if benchmark_routes is not None:
+                    from src.lib.openai_agents.benchmark_routing import (
+                        benchmark_route_kwargs,
+                    )
+
+                    agent_kwargs.update(
+                        benchmark_route_kwargs(f"agent:{agent_id}")
+                    )
                 try:
                     agent = get_agent_by_id(agent_id, **agent_kwargs)
                 except Exception as e:
@@ -3602,6 +3611,7 @@ def create_flow_supervisor(
     inspection_context: PreferredFlowInspectionContext | None = None,
     model_id_override: str | None = None,
     model_provider_override: str | None = None,
+    benchmark_routes: Mapping[str, Any] | None = None,
 ) -> Agent:
     """Create a supervisor agent configured for flow execution.
 
@@ -3626,6 +3636,14 @@ def create_flow_supervisor(
     """
     # Get supervisor config (model, temperature, reasoning)
     config = get_agent_config("supervisor")
+    benchmark_reasoning_override = None
+    if benchmark_routes is not None:
+        from src.lib.openai_agents.benchmark_routing import benchmark_route_kwargs
+
+        supervisor_route = benchmark_route_kwargs("supervisor")
+        model_id_override = supervisor_route["model_id_override"]
+        model_provider_override = supervisor_route["model_provider_override"]
+        benchmark_reasoning_override = supervisor_route["model_reasoning_override"]
     effective_model = str(model_id_override or config.model).strip()
     model_provider = (
         resolve_model_provider(
@@ -3641,7 +3659,11 @@ def create_flow_supervisor(
     model_settings = build_model_settings(
         model=effective_model,
         temperature=config.temperature,
-        reasoning_effort=config.reasoning,
+        reasoning_effort=(
+            benchmark_reasoning_override
+            if benchmark_routes is not None
+            else config.reasoning
+        ),
         provider_override=model_provider,
         parallel_tool_calls=get_flow_supervisor_parallel_tool_calls_enabled(),
     )
@@ -3664,6 +3686,7 @@ def create_flow_supervisor(
         include_unavailable=True,
         model_id_override=model_id_override,
         model_provider_override=model_provider_override,
+        benchmark_routes=benchmark_routes,
     )
 
     # The configured flow must remain executable independently of optional
@@ -3799,6 +3822,10 @@ Preferred-flow follow-up inspection context:
         f"model={effective_model}, streaming_tools={len(tools)}"
     )
 
+    if benchmark_routes is not None:
+        from src.lib.openai_agents.benchmark_routing import attach_benchmark_route
+
+        attach_benchmark_route(supervisor, "supervisor")
     return supervisor
 
 
@@ -4234,6 +4261,7 @@ async def execute_flow(
     inspection_context: PreferredFlowInspectionContext | None = None,
     model_id_override: str | None = None,
     model_provider_override: str | None = None,
+    benchmark_routes: Mapping[str, Any] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -4307,6 +4335,7 @@ async def execute_flow(
         inspection_context=inspection_context,
         model_id_override=model_id_override,
         model_provider_override=model_provider_override,
+        benchmark_routes=benchmark_routes,
     )
 
     # Build flow prompt

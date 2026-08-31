@@ -183,8 +183,10 @@ def test_emit_provider_usage_publishes_only_bounded_trace_metadata(monkeypatch):
             "name": "provider_usage",
             "metadata": {
                 "provider_usage": {
+                    "route_slot": None,
                     "requested_provider": "openrouter",
                     "requested_model": "deepseek/deepseek-v4-pro-0813",
+                    "reasoning_effort": None,
                     "actual_provider": "DeepInfra",
                     "actual_model": "deepseek/deepseek-v4-pro-0813",
                     "routing_attempt": 1,
@@ -197,6 +199,9 @@ def test_emit_provider_usage_publishes_only_bounded_trace_metadata(monkeypatch):
                         "unit": "credits",
                         "source": "openrouter_usage",
                     },
+                    "sequence": None,
+                    "status": "completed",
+                    "failure_detail": None,
                 }
             },
             "trace_context": {"trace_id": "trace-123"},

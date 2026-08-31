@@ -40,6 +40,7 @@ from src.schemas.domain_validator import (
     ValidationTarget,
     ValidatorAgentRef,
 )
+from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
 
 
 class _FakeContextManager:
@@ -2553,11 +2554,19 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     binding = cast(Any, SimpleNamespace(max_tool_calls=16))
-    run_package_scoped_validator_agent(
-        request,
-        binding=binding,
-        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
-    )
+    validator_routes = {
+        f"validator:{request.validator_binding_id}": {
+            "provider": "openrouter",
+            "model": "validator-benchmark-model",
+            "reasoning_effort": "medium",
+        }
+    }
+    with benchmark_route_plan(validator_routes):
+        run_package_scoped_validator_agent(
+            request,
+            binding=binding,
+            runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+        )
 
     runtime_agent = captured["agent"]
     assert runtime_agent is not source_agent
@@ -2577,7 +2586,13 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert "evidence" not in runtime_payload
     assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
     assert captured["kwargs"]["max_turns"] == 18
-    assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
+    assert captured["agent_lookup"][1] == {
+        "authenticated_groups": ["RGD"],
+        "model_id_override": "validator-benchmark-model",
+        "model_provider_override": "openrouter",
+        "model_reasoning_override": "medium",
+        "benchmark_route_slot": f"validator:{request.validator_binding_id}",
+    }
     assert captured_preflight["provider"] == "anthropic"
     assert captured_preflight["model"] == "validator-model"
     assert ("conversation", request.request_id) in sentry_calls
