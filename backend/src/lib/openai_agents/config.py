@@ -1106,6 +1106,30 @@ def get_benchmark_max_failure_detail_chars() -> int:
     )
 
 
+def get_benchmark_max_envelope_bytes() -> int:
+    """Maximum serialized JSON bytes stored for one successful cell envelope."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_MAX_ENVELOPE_BYTES", 10_485_760),
+    )
+
+
+def get_benchmark_default_page_size() -> int:
+    """Default number of benchmark persistence records returned per page."""
+    return max(
+        1,
+        min(
+            get_benchmark_max_page_size(),
+            _get_env_int_with_fallback("BENCHMARK_DEFAULT_PAGE_SIZE", 50),
+        ),
+    )
+
+
+def get_benchmark_max_page_size() -> int:
+    """Maximum number of benchmark persistence records returned per page."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_PAGE_SIZE", 200))
+
+
 def get_benchmark_max_concurrency() -> int:
     """Maximum benchmark case runs executing concurrently."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CONCURRENCY", 2))

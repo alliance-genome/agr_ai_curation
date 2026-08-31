@@ -38,6 +38,9 @@ def test_benchmark_operational_defaults(monkeypatch):
         "BENCHMARK_MAX_CONFIGURATIONS",
         "BENCHMARK_MAX_REPETITIONS",
         "BENCHMARK_MAX_CELLS",
+        "BENCHMARK_MAX_ENVELOPE_BYTES",
+        "BENCHMARK_DEFAULT_PAGE_SIZE",
+        "BENCHMARK_MAX_PAGE_SIZE",
         "BENCHMARK_MAX_CONCURRENCY",
         "BENCHMARK_MATRIX_LIMIT",
         "BENCHMARK_CASE_LIMIT",
@@ -73,6 +76,9 @@ def test_benchmark_operational_defaults(monkeypatch):
     assert config.get_benchmark_max_configurations() == 10
     assert config.get_benchmark_max_repetitions() == 5
     assert config.get_benchmark_max_cells() == 250
+    assert config.get_benchmark_max_envelope_bytes() == 10_485_760
+    assert config.get_benchmark_default_page_size() == 50
+    assert config.get_benchmark_max_page_size() == 200
     assert config.get_benchmark_max_concurrency() == 2
     assert config.get_benchmark_matrix_limit() == 20
     assert config.get_benchmark_case_limit() == 20
@@ -108,6 +114,9 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_MAX_CONFIGURATIONS", "3")
     monkeypatch.setenv("BENCHMARK_MAX_REPETITIONS", "4")
     monkeypatch.setenv("BENCHMARK_MAX_CELLS", "200")
+    monkeypatch.setenv("BENCHMARK_MAX_ENVELOPE_BYTES", "0")
+    monkeypatch.setenv("BENCHMARK_DEFAULT_PAGE_SIZE", "500")
+    monkeypatch.setenv("BENCHMARK_MAX_PAGE_SIZE", "75")
     monkeypatch.setenv("BENCHMARK_MAX_CONCURRENCY", "0")
     monkeypatch.setenv("BENCHMARK_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_RETRIES", "-2")
@@ -132,6 +141,9 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_max_configurations() == 3
     assert config.get_benchmark_max_repetitions() == 4
     assert config.get_benchmark_max_cells() == 200
+    assert config.get_benchmark_max_envelope_bytes() == 1
+    assert config.get_benchmark_default_page_size() == 75
+    assert config.get_benchmark_max_page_size() == 75
     assert config.get_benchmark_max_concurrency() == 1
     assert config.get_benchmark_timeout_seconds() == 0.1
     assert config.get_benchmark_retries() == 0
