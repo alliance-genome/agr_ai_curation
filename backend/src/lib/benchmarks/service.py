@@ -214,8 +214,8 @@ class BenchmarkService:
                     if self.adjudicator.enabled:
                         adjudicated_cases += 1
                     scoring_record.adjudication = await self.adjudicator.adjudicate(
-                        expected=case.expected,
-                        actual=raw_output,
+                        expected=_redact_restricted(case.expected),
+                        actual=_redact_restricted(raw_output),
                         score=score,
                     )
         return BenchmarkExecutionResponse(runs=runs, aggregates=aggregate_scores(runs))

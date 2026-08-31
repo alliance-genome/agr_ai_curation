@@ -19,7 +19,6 @@ from .models import (
     StrictModel,
 )
 
-SCORING_VERSION = 1
 _MISSING = object()
 _AMBIGUOUS_BASE_CLASSES = {
     "value_mismatch",

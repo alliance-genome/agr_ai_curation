@@ -324,3 +324,69 @@ async def test_service_enforces_adjudication_case_cap(benchmark_root):
     assert first is not None and first.status == "completed"
     assert second is not None and second.failure is not None
     assert second.failure.category == "case_limit"
+
+
+async def test_service_redacts_adjudication_egress_without_altering_scoring(
+    benchmark_root,
+):
+    profile_path = benchmark_root / "profiles" / "profile.yaml"
+    profile_path.write_text(
+        profile_path.read_text(encoding="utf-8").replace(
+            "  - id: exact-json\n",
+            "  - id: deterministic-v1\n"
+            "    configuration:\n"
+            "      scoring_version: 1\n"
+            "      fields:\n"
+            "        - comparison: exact\n"
+            "          ambiguous: true\n",
+        ),
+        encoding="utf-8",
+    )
+    gold_path = benchmark_root / "cases" / "case-1" / "gold.json"
+    gold_path.write_text(
+        json.dumps({"authorization": "Bearer gold-secret"}), encoding="utf-8"
+    )
+    catalog = BenchmarkCatalog(
+        benchmark_root,
+        agent_ids={"gene"},
+        flow_ids=set(),
+        route_validator=lambda _model, _provider: None,
+    )
+    prompts = []
+
+    async def target_executor(*_args):
+        return ExecutionResult(output={"authorization": "Bearer actual-secret"})
+
+    async def adjudication_executor(_model, prompt, _result_max_bytes):
+        prompts.append(prompt)
+        return RawAdjudicationResponse(
+            decision=AdjudicationDecision(
+                outcome="uncertain",
+                reason="credential values are not scoring evidence",
+                confidence=Decimal("0.5"),
+                uncertainty="redacted values cannot be compared",
+            )
+        )
+
+    adjudicator = SupplementalAdjudicator(
+        executor=adjudication_executor,
+        enabled=True,
+        timeout_seconds=1,
+        retries=0,
+        turn_limit=1,
+        tool_call_limit=0,
+        result_max_bytes=10000,
+    )
+    response = await _service(
+        catalog,
+        target_executor,
+        adjudicator=adjudicator,
+    ).execute(BenchmarkSelection())
+
+    score = response.runs[0].scoring[0].deterministic
+    assert score.outcome == "fail"
+    assert score.fields[0].mismatch_class == "ambiguous"
+    assert len(prompts) == 1
+    assert "gold-secret" not in prompts[0]
+    assert "actual-secret" not in prompts[0]
+    assert prompts[0].count("[REDACTED]") == 2

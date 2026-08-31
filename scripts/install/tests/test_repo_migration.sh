@@ -171,6 +171,7 @@ prepare_helper_repo() {
   git -C "$helper_repo" init -q
   git -C "$helper_repo" config user.name 'Repo Migration Test'
   git -C "$helper_repo" config user.email 'repo-migration-test@example.org'
+  git -C "$helper_repo" config gc.auto 0
   git -C "$helper_repo" add scripts/install/migrate_repo_install.sh scripts/install/lib/common.sh packages/core packages/alliance
   git -C "$helper_repo" commit -qm 'baseline helper repo'
 }
