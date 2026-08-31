@@ -60,7 +60,16 @@ class BenchmarkSuiteCase(FrozenStrictModel):
     input: BenchmarkInputReference
 
 
-class BenchmarkRoute(FrozenStrictModel):
+class BenchmarkRoute(StrictModel):
+    """Provider/model route retained by the version 1 benchmark contracts."""
+
+    provider: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
+    model: str = Field(min_length=1, max_length=255, pattern=_IDENTIFIER_PATTERN)
+
+
+class BenchmarkSuiteRoute(FrozenStrictModel):
+    """Immutable per-slot route used only by suite v2 catalogs and plans."""
+
     provider: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
     model: str = Field(min_length=1, max_length=255, pattern=_IDENTIFIER_PATTERN)
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
@@ -70,13 +79,13 @@ class BenchmarkConfiguration(FrozenStrictModel):
     configuration_id: str = Field(
         min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN
     )
-    routes: Mapping[str, BenchmarkRoute] = Field(default_factory=dict)
+    routes: Mapping[str, BenchmarkSuiteRoute] = Field(default_factory=dict)
 
     @field_validator("routes")
     @classmethod
     def require_route_slot_names(
-        cls, value: Mapping[str, BenchmarkRoute]
-    ) -> Mapping[str, BenchmarkRoute]:
+        cls, value: Mapping[str, BenchmarkSuiteRoute]
+    ) -> Mapping[str, BenchmarkSuiteRoute]:
         for slot in value:
             if slot != "supervisor" and not (
                 slot.startswith("agent:") or slot.startswith("validator:")
@@ -93,8 +102,8 @@ class BenchmarkConfiguration(FrozenStrictModel):
 
     @field_serializer("routes")
     def serialize_routes(
-        self, value: Mapping[str, BenchmarkRoute]
-    ) -> dict[str, BenchmarkRoute]:
+        self, value: Mapping[str, BenchmarkSuiteRoute]
+    ) -> dict[str, BenchmarkSuiteRoute]:
         return dict(value)
 
 
@@ -135,7 +144,7 @@ class BenchmarkModelCatalogEntry(FrozenStrictModel):
 class BenchmarkRouteSlot(FrozenStrictModel):
     slot: str
     kind: Literal["supervisor", "agent", "validator"]
-    default_route: BenchmarkRoute
+    default_route: BenchmarkSuiteRoute
 
     @model_validator(mode="after")
     def require_canonical_slot(self) -> "BenchmarkRouteSlot":
@@ -225,19 +234,19 @@ class ResolvedBenchmarkCell(FrozenStrictModel):
     repetition: int = Field(ge=1)
     target: BenchmarkExecutionTarget
     input: BenchmarkInputReference
-    routes: Mapping[str, BenchmarkRoute]
+    routes: Mapping[str, BenchmarkSuiteRoute]
 
     @field_validator("routes")
     @classmethod
     def freeze_routes(
-        cls, value: Mapping[str, BenchmarkRoute]
-    ) -> Mapping[str, BenchmarkRoute]:
+        cls, value: Mapping[str, BenchmarkSuiteRoute]
+    ) -> Mapping[str, BenchmarkSuiteRoute]:
         return MappingProxyType(dict(value))
 
     @field_serializer("routes")
     def serialize_routes(
-        self, value: Mapping[str, BenchmarkRoute]
-    ) -> dict[str, BenchmarkRoute]:
+        self, value: Mapping[str, BenchmarkSuiteRoute]
+    ) -> dict[str, BenchmarkSuiteRoute]:
         return dict(value)
 
 

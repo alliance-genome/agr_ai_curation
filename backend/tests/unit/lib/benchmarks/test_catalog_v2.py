@@ -2,11 +2,13 @@ import pytest
 from pydantic import ValidationError
 
 from src.lib.benchmarks.catalog import build_route_catalog
-from src.lib.benchmarks.models import BenchmarkModelCatalogEntry, BenchmarkRoute
+from src.lib.benchmarks.models import BenchmarkModelCatalogEntry, BenchmarkSuiteRoute
 
 
-def _route(model: str = "model-a") -> BenchmarkRoute:
-    return BenchmarkRoute(provider="provider-a", model=model, reasoning_effort="high")
+def _route(model: str = "model-a") -> BenchmarkSuiteRoute:
+    return BenchmarkSuiteRoute(
+        provider="provider-a", model=model, reasoning_effort="high"
+    )
 
 
 def test_catalog_exposes_stable_model_backed_slots_only():

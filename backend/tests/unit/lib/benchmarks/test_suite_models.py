@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from typing import Any, cast
 
-from src.lib.benchmarks.models import BenchmarkSuite
+from src.lib.benchmarks.models import BenchmarkRoute, BenchmarkSuite, BenchmarkSuiteRoute
 
 
 def _suite_payload() -> dict:
@@ -40,6 +40,9 @@ def test_suite_v2_is_strict_and_immutable():
     suite = BenchmarkSuite.model_validate(_suite_payload())
 
     assert suite.repetitions == 1
+    assert isinstance(
+        suite.configurations[0].routes["agent:extractor"], BenchmarkSuiteRoute
+    )
     with pytest.raises(ValidationError, match="frozen"):
         suite.suite_id = "changed"
     with pytest.raises(ValidationError, match="frozen"):
@@ -50,6 +53,17 @@ def test_suite_v2_is_strict_and_immutable():
         )
     with pytest.raises(ValidationError, match="frozen"):
         suite.configurations[0].routes["agent:extractor"].model = "changed"
+
+
+def test_version_1_route_rejects_suite_v2_reasoning_effort():
+    with pytest.raises(ValidationError, match="reasoning_effort"):
+        BenchmarkRoute.model_validate(
+            {
+                "provider": "openai",
+                "model": "model-a",
+                "reasoning_effort": "high",
+            }
+        )
 
 
 @pytest.mark.parametrize("field", ["expected", "gold", "scorers", "adjudicator"])

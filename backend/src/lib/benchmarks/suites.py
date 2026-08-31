@@ -13,9 +13,9 @@ from pydantic import ValidationError
 from .loader import BenchmarkCatalogError
 from .models import (
     BenchmarkConfiguration,
-    BenchmarkRoute,
     BenchmarkRouteCatalog,
     BenchmarkSuite,
+    BenchmarkSuiteRoute,
     ResolvedBenchmarkCase,
     ResolvedBenchmarkCell,
     ResolvedBenchmarkPlan,
@@ -76,7 +76,7 @@ def load_checked_in_suites(root: Path) -> tuple[BenchmarkSuite, ...]:
 
 
 def _validate_route(
-    route: BenchmarkRoute,
+    route: BenchmarkSuiteRoute,
     *,
     catalog: BenchmarkRouteCatalog,
     context: str,

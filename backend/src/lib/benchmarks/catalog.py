@@ -7,9 +7,9 @@ from collections.abc import Iterable, Mapping
 from .models import (
     BenchmarkExecutionTarget,
     BenchmarkModelCatalogEntry,
-    BenchmarkRoute,
     BenchmarkRouteCatalog,
     BenchmarkRouteSlot,
+    BenchmarkSuiteRoute,
     BenchmarkTargetCatalogEntry,
 )
 
@@ -17,9 +17,9 @@ from .models import (
 def build_route_catalog(
     *,
     models: Iterable[BenchmarkModelCatalogEntry],
-    supervisor_default: BenchmarkRoute,
-    agent_defaults: Mapping[str, BenchmarkRoute],
-    model_validator_defaults: Mapping[str, BenchmarkRoute],
+    supervisor_default: BenchmarkSuiteRoute,
+    agent_defaults: Mapping[str, BenchmarkSuiteRoute],
+    model_validator_defaults: Mapping[str, BenchmarkSuiteRoute],
     agent_targets: Iterable[str],
     flow_agents: Mapping[str, Iterable[str]],
     flow_model_validators: Mapping[str, Iterable[str]],

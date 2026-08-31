@@ -10,7 +10,7 @@ from src.lib.benchmarks.catalog import build_route_catalog
 from src.lib.benchmarks.loader import BenchmarkCatalogError
 from src.lib.benchmarks.models import (
     BenchmarkModelCatalogEntry,
-    BenchmarkRoute,
+    BenchmarkSuiteRoute,
 )
 from src.lib.benchmarks.suites import (
     load_checked_in_suites,
@@ -24,8 +24,12 @@ ROOT = Path(__file__).resolve().parents[5] / "packages" / "alliance" / "benchmar
 ALLIANCE_ROOT = ROOT.parent
 
 
-def _route(model: str = "model-a", effort: str | None = "high") -> BenchmarkRoute:
-    return BenchmarkRoute(provider="provider-a", model=model, reasoning_effort=effort)
+def _route(
+    model: str = "model-a", effort: str | None = "high"
+) -> BenchmarkSuiteRoute:
+    return BenchmarkSuiteRoute(
+        provider="provider-a", model=model, reasoning_effort=effort
+    )
 
 
 def _catalog():
@@ -68,10 +72,10 @@ def _checked_in_catalog():
             "qwen/qwen3.8-27b",
         )
     )
-    sol = BenchmarkRoute(
+    sol = BenchmarkSuiteRoute(
         provider="openai", model="gpt-5.6-sol", reasoning_effort="medium"
     )
-    terra = BenchmarkRoute(
+    terra = BenchmarkSuiteRoute(
         provider="openai", model="gpt-5.6-terra", reasoning_effort="medium"
     )
     flow_recipe_path = ALLIANCE_ROOT / "config" / "flow_recipes.yaml"
