@@ -5,6 +5,15 @@ import pytest
 from src.lib.benchmarks.loader import BenchmarkCatalog, BenchmarkCatalogError
 
 
+APPROVED_RELEASE_ROUTES = [
+    ("openai", "gpt-5.6-sol"),
+    ("openai", "gpt-5.6-terra"),
+    ("openrouter", "deepseek/deepseek-v4-pro-0813"),
+    ("openrouter", "google/gemini-3.7-flash"),
+    ("openrouter", "qwen/qwen3.8-27b"),
+]
+
+
 def _load(root: Path, **kwargs) -> BenchmarkCatalog:
     return BenchmarkCatalog(
         root,
@@ -40,6 +49,10 @@ def test_checked_in_alliance_profiles_and_synthetic_cases_validate():
         "flow-canary-gene-curation-v1",
     }
     assert sum(len(loaded.cases) for loaded in catalog.profiles) == 3
+    for loaded in catalog.profiles:
+        assert [
+            (route.provider, route.model) for route in loaded.profile.routes
+        ] == APPROVED_RELEASE_ROUTES
 
 
 @pytest.mark.parametrize(

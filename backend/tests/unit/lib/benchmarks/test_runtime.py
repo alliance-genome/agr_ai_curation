@@ -11,6 +11,13 @@ from src.lib.benchmarks.loader import BenchmarkCatalogError
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_BENCHMARK_ROOT = REPOSITORY_ROOT / "packages" / "alliance" / "benchmarks"
+APPROVED_RELEASE_ROUTES = [
+    ("openai", "gpt-5.6-sol"),
+    ("openai", "gpt-5.6-terra"),
+    ("openrouter", "deepseek/deepseek-v4-pro-0813"),
+    ("openrouter", "google/gemini-3.7-flash"),
+    ("openrouter", "qwen/qwen3.8-27b"),
+]
 
 
 @pytest.fixture
@@ -28,6 +35,8 @@ def test_default_runtime_catalog_loads_without_constructing_targets(
         "isolated-ontology-agent-v1",
         "flow-canary-gene-curation-v1",
     }
+    for provider, model in APPROVED_RELEASE_ROUTES:
+        catalog.validate_route(model, provider)
 
 
 def test_default_runtime_catalog_rejects_unknown_and_mismatched_routes(
