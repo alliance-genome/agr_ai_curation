@@ -233,6 +233,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/api/test_documents_download_endpoint.py"),
     Path("backend/tests/unit/api/test_documents_runtime_endpoints.py"),
     Path("backend/tests/unit/api/test_flows_api.py"),
+    Path("backend/tests/unit/api/test_tool_catalog_parity.py"),
     Path("backend/tests/unit/lib/alerts/test_tool_failure_notifier.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_bootstrap_service.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_envelope_field_patch_service.py"),
