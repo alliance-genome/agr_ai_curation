@@ -156,15 +156,15 @@ async def test_search_tool_maps_hits_and_returns_full_content(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_tool_returns_error_summary_on_exception(monkeypatch):
+async def test_search_tool_propagates_dependency_exception(monkeypatch):
     async def _boom(**_kwargs):
         raise RuntimeError("search blew up")
 
     monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _boom)
     tool = weaviate_search.create_search_tool("doc-123", "user-1")
-    result = await tool(query="q")
-    assert "Error searching document" in result.summary
-    assert result.hits == []
+
+    with pytest.raises(RuntimeError, match="search blew up"):
+        await tool(query="q")
 
 
 @pytest.mark.asyncio
@@ -448,15 +448,15 @@ async def test_read_section_tool_retrieves_provider_figure_metadata(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_read_section_tool_returns_error_summary_on_exception(monkeypatch):
+async def test_read_section_tool_propagates_dependency_exception(monkeypatch):
     async def _boom(**_kwargs):
         raise RuntimeError("section read failed")
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _boom)
     tool = weaviate_search.create_read_section_tool("doc-123", "user-1")
-    result = await tool("Results")
-    assert "Error reading section" in result.summary
-    assert result.section is None
+
+    with pytest.raises(RuntimeError, match="section read failed"):
+        await tool("Results")
 
 
 @pytest.mark.asyncio
@@ -560,15 +560,15 @@ async def test_read_subsection_tool_retrieves_provider_figure_entry(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_read_subsection_tool_error_branch(monkeypatch):
+async def test_read_subsection_tool_propagates_dependency_exception(monkeypatch):
     async def _boom(**_kwargs):
         raise RuntimeError("subsection failed")
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _boom)
     tool = weaviate_search.create_read_subsection_tool("doc-123", "user-1")
-    result = await tool("Results", "Expression")
-    assert "Error reading subsection" in result.summary
-    assert result.subsection is None
+
+    with pytest.raises(RuntimeError, match="subsection failed"):
+        await tool("Results", "Expression")
 
 
 def _numbered_chunks(count: int, *, prefix: str = "chunk", text_for=None):

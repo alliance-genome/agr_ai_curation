@@ -262,56 +262,57 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
             search_mode,
         )
 
+        # Exact biomedical tokens need explicit lexical-heavy retrieval modes;
+        # reranking/MMR must still run on full chunk content, not previews.
         try:
-            # Exact biomedical tokens need explicit lexical-heavy retrieval modes;
-            # reranking/MMR must still run on full chunk content, not previews.
             strategy = _strategy_for_search_mode(search_mode)
-            chunks = await hybrid_search_chunks(
-                document_id=document_id,
-                query=query,
-                user_id=user_id,
-                limit=limit,
-                initial_limit=_SEARCH_INITIAL_LIMIT,
-                alpha=_SEARCH_HYBRID_ALPHA,
-                section_keywords=section_keywords,
-                apply_mmr=_SEARCH_MMR_ENABLED,
-                mmr_lambda=_SEARCH_MMR_LAMBDA,
-                strategy=strategy,
+        except ValueError as exc:
+            return ChunkSearchResult(summary=str(exc), hits=[])
+
+        # Removed legacy error-summary fallback — canonical runtime failure reporting owns Weaviate outages after ALL-825.
+        chunks = await hybrid_search_chunks(
+            document_id=document_id,
+            query=query,
+            user_id=user_id,
+            limit=limit,
+            initial_limit=_SEARCH_INITIAL_LIMIT,
+            alpha=_SEARCH_HYBRID_ALPHA,
+            section_keywords=section_keywords,
+            apply_mmr=_SEARCH_MMR_ENABLED,
+            mmr_lambda=_SEARCH_MMR_LAMBDA,
+            strategy=strategy,
+        )
+
+        if not chunks:
+            logger.info("No chunks found for query_fingerprint=%s", query_fingerprint)
+            return ChunkSearchResult(summary="No relevant content found.", hits=[])
+
+        hits: List[ChunkHit] = []
+        for chunk in chunks:
+            metadata = _best_effort_metadata(chunk)
+            section = metadata.get("section_title") or metadata.get("sectionTitle") or "Unknown Section"
+            page = metadata.get("page_number") or metadata.get("pageNumber")
+            score = chunk.get("score", 0.0)
+            content = chunk.get("text") or chunk.get("content") or ""
+
+            # Get doc_items for PDF highlighting (contains bounding boxes)
+            doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
+
+            hits.append(
+                ChunkHit(
+                    chunk_id=resolve_chunk_identifier(chunk, metadata),
+                    section_title=section,
+                    page_number=page,
+                    score=score,
+                    content=content,
+                    doc_items=doc_items if doc_items else None,
+                )
             )
 
-            if not chunks:
-                logger.info("No chunks found for query_fingerprint=%s", query_fingerprint)
-                return ChunkSearchResult(summary="No relevant content found.", hits=[])
+        summary = f"Found {len(hits)} chunks"
+        logger.debug("Returning %s structured chunks", len(hits))
+        return ChunkSearchResult(summary=summary, hits=hits)
 
-            hits: List[ChunkHit] = []
-            for chunk in chunks:
-                metadata = _best_effort_metadata(chunk)
-                section = metadata.get("section_title") or metadata.get("sectionTitle") or "Unknown Section"
-                page = metadata.get("page_number") or metadata.get("pageNumber")
-                score = chunk.get("score", 0.0)
-                content = chunk.get("text") or chunk.get("content") or ""
-
-                # Get doc_items for PDF highlighting (contains bounding boxes)
-                doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
-
-                hits.append(
-                    ChunkHit(
-                        chunk_id=resolve_chunk_identifier(chunk, metadata),
-                        section_title=section,
-                        page_number=page,
-                        score=score,
-                        content=content,
-                        doc_items=doc_items if doc_items else None,
-                    )
-                )
-
-            summary = f"Found {len(hits)} chunks"
-            logger.debug("Returning %s structured chunks", len(hits))
-            return ChunkSearchResult(summary=summary, hits=hits)
-
-        except Exception as e:
-            logger.error("Search error: %s", e, exc_info=True)
-            return ChunkSearchResult(summary=f"Error searching document: {str(e)}", hits=[])
 
     return search_document
 
@@ -570,125 +571,119 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             bool(text_contains),
         )
 
-        try:
-            # Use hierarchy-aware function that filters by parentSection
-            # This respects LLM-resolved section boundaries instead of reading forward by index
-            chunks = await get_chunks_by_parent_section(
-                document_id=document_id,
-                parent_section=section_name,
-                user_id=user_id
-            )
+        # Removed legacy error-summary fallback — canonical runtime failure reporting owns Weaviate outages after ALL-825.
+        # Use hierarchy-aware function that filters by parentSection
+        # This respects LLM-resolved section boundaries instead of reading forward by index
+        chunks = await get_chunks_by_parent_section(
+            document_id=document_id,
+            parent_section=section_name,
+            user_id=user_id
+        )
 
-            if not chunks:
-                logger.info("No content found for section: %s", section_name)
-                return SectionReadResult(
-                    summary=f"No content found for section '{section_name}'.",
-                    section=None
-                )
-
-            resolved_section_title = _chunk_section_title(
-                chunks[0], _best_effort_metadata(chunks[0]), section_name
-            )
-
-            needle = text_contains.lower() if text_contains else None
-            if needle:
-                selected = [
-                    chunk for chunk in chunks if needle in _chunk_text(chunk).lower()
-                ]
-            else:
-                selected = chunks
-
-            total_chunk_count = len(selected)
-            cap = max(1, int(max_chunks))
-            start = max(0, int(offset))
-            page = selected[start : start + cap]
-            has_more = total_chunk_count > start + len(page)
-
-            content_parts: List[str] = []
-            page_numbers = set()
-            all_doc_items: List[dict] = []
-            source_chunks: List[SectionChunkSource] = []
-
-            for index, chunk in enumerate(page, start=start):
-                text = _chunk_text(chunk)
-                metadata = _best_effort_metadata(chunk)
-                page_number = _chunk_page(chunk, metadata)
-                if page_number:
-                    page_numbers.add(page_number)
-
-                chunk_id = resolve_chunk_identifier(chunk, metadata)
-                if not (chunk_id and text):
-                    continue
-
-                snippet = _build_snippet(text, needle) if needle else None
-                # Assembled section text is the full chunk text when surveying, or the
-                # bounded excerpt when filtering, never both the joined text and a
-                # per-chunk copy of it.
-                content_parts.append(snippet if snippet is not None else text)
-
-                source_chunks.append(
-                    SectionChunkSource(
-                        chunk_id=chunk_id,
-                        chunk_index=index,
-                        page_number=page_number,
-                        section_title=_chunk_section_title(chunk, metadata, resolved_section_title),
-                        subsection=_chunk_subsection(chunk, metadata, None),
-                        char_count=len(text),
-                        snippet=snippet,
-                    )
-                )
-
-                chunk_doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
-                if chunk_doc_items:
-                    all_doc_items.extend(chunk_doc_items)
-
-            full_content = "\n\n".join(content_parts)
-            sorted_pages = sorted(page_numbers) if page_numbers else []
-            resolved_section_title = resolved_section_title or section_name
-
-            logger.info(
-                "Read %s/%s chunks from section '%s', pages %s, %s doc_items",
-                len(page),
-                total_chunk_count,
-                resolved_section_title,
-                sorted_pages,
-                len(all_doc_items),
-            )
-
-            filter_note = f" matching '{text_contains}'" if text_contains else ""
-            more_note = (
-                f" More remain; call again with offset={start + len(page)}."
-                if has_more
-                else ""
-            )
+        if not chunks:
+            logger.info("No content found for section: %s", section_name)
             return SectionReadResult(
-                summary=(
-                    f"Read {len(page)} of {total_chunk_count} chunks{filter_note} from "
-                    f"'{resolved_section_title}'.{more_note} "
-                    "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
-                    "evidence_spans[].span_id values to record_evidence."
-                ),
-                section=SectionContent(
-                    section_title=resolved_section_title,
-                    page_numbers=sorted_pages,
-                    content=full_content,
-                    chunk_count=len(page),
-                    returned_chunk_count=len(page),
-                    total_chunk_count=total_chunk_count,
-                    offset=start,
-                    next_offset=start + len(page) if has_more else None,
-                    truncated=has_more,
-                    source_chunks=source_chunks if source_chunks else None,
-                    doc_items=all_doc_items if all_doc_items else None,
-                )
-            )
-
-        except Exception as e:
-            logger.error("Read section error: %s", e, exc_info=True)
-            return SectionReadResult(
-                summary=f"Error reading section: {str(e)}",
+                summary=f"No content found for section '{section_name}'.",
                 section=None
             )
+
+        resolved_section_title = _chunk_section_title(
+            chunks[0], _best_effort_metadata(chunks[0]), section_name
+        )
+
+        needle = text_contains.lower() if text_contains else None
+        if needle:
+            selected = [
+                chunk for chunk in chunks if needle in _chunk_text(chunk).lower()
+            ]
+        else:
+            selected = chunks
+
+        total_chunk_count = len(selected)
+        cap = max(1, int(max_chunks))
+        start = max(0, int(offset))
+        page = selected[start : start + cap]
+        has_more = total_chunk_count > start + len(page)
+
+        content_parts: List[str] = []
+        page_numbers = set()
+        all_doc_items: List[dict] = []
+        source_chunks: List[SectionChunkSource] = []
+
+        for index, chunk in enumerate(page, start=start):
+            text = _chunk_text(chunk)
+            metadata = _best_effort_metadata(chunk)
+            page_number = _chunk_page(chunk, metadata)
+            if page_number:
+                page_numbers.add(page_number)
+
+            chunk_id = resolve_chunk_identifier(chunk, metadata)
+            if not (chunk_id and text):
+                continue
+
+            snippet = _build_snippet(text, needle) if needle else None
+            # Assembled section text is the full chunk text when surveying, or the
+            # bounded excerpt when filtering, never both the joined text and a
+            # per-chunk copy of it.
+            content_parts.append(snippet if snippet is not None else text)
+
+            source_chunks.append(
+                SectionChunkSource(
+                    chunk_id=chunk_id,
+                    chunk_index=index,
+                    page_number=page_number,
+                    section_title=_chunk_section_title(chunk, metadata, resolved_section_title),
+                    subsection=_chunk_subsection(chunk, metadata, None),
+                    char_count=len(text),
+                    snippet=snippet,
+                )
+            )
+
+            chunk_doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
+            if chunk_doc_items:
+                all_doc_items.extend(chunk_doc_items)
+
+        full_content = "\n\n".join(content_parts)
+        sorted_pages = sorted(page_numbers) if page_numbers else []
+        resolved_section_title = resolved_section_title or section_name
+
+        logger.info(
+            "Read %s/%s chunks from section '%s', pages %s, %s doc_items",
+            len(page),
+            total_chunk_count,
+            resolved_section_title,
+            sorted_pages,
+            len(all_doc_items),
+        )
+
+        filter_note = f" matching '{text_contains}'" if text_contains else ""
+        more_note = (
+            f" More remain; call again with offset={start + len(page)}."
+            if has_more
+            else ""
+        )
+        return SectionReadResult(
+            summary=(
+                f"Read {len(page)} of {total_chunk_count} chunks{filter_note} from "
+                f"'{resolved_section_title}'.{more_note} "
+                "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
+                "evidence_spans[].span_id values to record_evidence."
+            ),
+            section=SectionContent(
+                section_title=resolved_section_title,
+                page_numbers=sorted_pages,
+                content=full_content,
+                chunk_count=len(page),
+                returned_chunk_count=len(page),
+                total_chunk_count=total_chunk_count,
+                offset=start,
+                next_offset=start + len(page) if has_more else None,
+                truncated=has_more,
+                source_chunks=source_chunks if source_chunks else None,
+                doc_items=all_doc_items if all_doc_items else None,
+            )
+        )
+
 
     return read_section
 
@@ -777,113 +772,107 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             bool(text_contains),
         )
 
-        try:
-            chunks = await get_chunks_by_subsection(
-                document_id=document_id,
-                parent_section=parent_section,
-                subsection=subsection,
-                user_id=user_id
-            )
+        # Removed legacy error-summary fallback — canonical runtime failure reporting owns Weaviate outages after ALL-825.
+        chunks = await get_chunks_by_subsection(
+            document_id=document_id,
+            parent_section=parent_section,
+            subsection=subsection,
+            user_id=user_id
+        )
 
-            if not chunks:
-                return SubsectionReadResult(
-                    summary=f"No content found for subsection '{subsection}' in '{parent_section}'.",
-                    subsection=None
-                )
-
-            needle = text_contains.lower() if text_contains else None
-            if needle:
-                selected = [
-                    chunk for chunk in chunks if needle in _chunk_text(chunk).lower()
-                ]
-            else:
-                selected = chunks
-
-            total_chunk_count = len(selected)
-            cap = max(1, int(max_chunks))
-            start = max(0, int(offset))
-            page = selected[start : start + cap]
-            has_more = total_chunk_count > start + len(page)
-
-            content_parts: List[str] = []
-            page_numbers = set()
-            all_doc_items: List[dict] = []
-            source_chunks: List[SectionChunkSource] = []
-
-            for index, chunk in enumerate(page, start=start):
-                text = _chunk_text(chunk)
-                metadata = _best_effort_metadata(chunk)
-                page_number = _chunk_page(chunk, metadata)
-                if page_number:
-                    page_numbers.add(page_number)
-
-                chunk_id = resolve_chunk_identifier(chunk, metadata)
-                if not (chunk_id and text):
-                    continue
-
-                snippet = _build_snippet(text, needle) if needle else None
-                content_parts.append(snippet if snippet is not None else text)
-
-                source_chunks.append(
-                    SectionChunkSource(
-                        chunk_id=chunk_id,
-                        chunk_index=index,
-                        page_number=page_number,
-                        section_title=_chunk_section_title(chunk, metadata, parent_section),
-                        subsection=_chunk_subsection(chunk, metadata, subsection),
-                        char_count=len(text),
-                        snippet=snippet,
-                    )
-                )
-
-                doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
-                if doc_items:
-                    all_doc_items.extend(doc_items)
-
-            full_content = "\n\n".join(content_parts)
-            sorted_pages = sorted(page_numbers) if page_numbers else []
-
-            logger.info(
-                "Read %s/%s chunks from subsection '%s', pages %s",
-                len(page),
-                total_chunk_count,
-                subsection,
-                sorted_pages,
-            )
-
-            filter_note = f" matching '{text_contains}'" if text_contains else ""
-            more_note = (
-                f" More remain; call again with offset={start + len(page)}."
-                if has_more
-                else ""
-            )
+        if not chunks:
             return SubsectionReadResult(
-                summary=(
-                    f"Read {len(page)} of {total_chunk_count} chunks{filter_note} from "
-                    f"'{parent_section} > {subsection}'.{more_note} "
-                    "Use subsection.source_chunks[].chunk_id with read_chunk for final evidence span selection."
-                ),
-                subsection=SubsectionContent(
-                    parent_section=parent_section,
-                    subsection=subsection,
-                    page_numbers=sorted_pages,
-                    content=full_content,
-                    chunk_count=len(page),
-                    returned_chunk_count=len(page),
-                    total_chunk_count=total_chunk_count,
-                    offset=start,
-                    next_offset=start + len(page) if has_more else None,
-                    truncated=has_more,
-                    source_chunks=source_chunks if source_chunks else None,
-                    doc_items=all_doc_items if all_doc_items else None,
-                )
-            )
-
-        except Exception as e:
-            logger.error("Read subsection error: %s", e, exc_info=True)
-            return SubsectionReadResult(
-                summary=f"Error reading subsection: {str(e)}",
+                summary=f"No content found for subsection '{subsection}' in '{parent_section}'.",
                 subsection=None
             )
+
+        needle = text_contains.lower() if text_contains else None
+        if needle:
+            selected = [
+                chunk for chunk in chunks if needle in _chunk_text(chunk).lower()
+            ]
+        else:
+            selected = chunks
+
+        total_chunk_count = len(selected)
+        cap = max(1, int(max_chunks))
+        start = max(0, int(offset))
+        page = selected[start : start + cap]
+        has_more = total_chunk_count > start + len(page)
+
+        content_parts: List[str] = []
+        page_numbers = set()
+        all_doc_items: List[dict] = []
+        source_chunks: List[SectionChunkSource] = []
+
+        for index, chunk in enumerate(page, start=start):
+            text = _chunk_text(chunk)
+            metadata = _best_effort_metadata(chunk)
+            page_number = _chunk_page(chunk, metadata)
+            if page_number:
+                page_numbers.add(page_number)
+
+            chunk_id = resolve_chunk_identifier(chunk, metadata)
+            if not (chunk_id and text):
+                continue
+
+            snippet = _build_snippet(text, needle) if needle else None
+            content_parts.append(snippet if snippet is not None else text)
+
+            source_chunks.append(
+                SectionChunkSource(
+                    chunk_id=chunk_id,
+                    chunk_index=index,
+                    page_number=page_number,
+                    section_title=_chunk_section_title(chunk, metadata, parent_section),
+                    subsection=_chunk_subsection(chunk, metadata, subsection),
+                    char_count=len(text),
+                    snippet=snippet,
+                )
+            )
+
+            doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
+            if doc_items:
+                all_doc_items.extend(doc_items)
+
+        full_content = "\n\n".join(content_parts)
+        sorted_pages = sorted(page_numbers) if page_numbers else []
+
+        logger.info(
+            "Read %s/%s chunks from subsection '%s', pages %s",
+            len(page),
+            total_chunk_count,
+            subsection,
+            sorted_pages,
+        )
+
+        filter_note = f" matching '{text_contains}'" if text_contains else ""
+        more_note = (
+            f" More remain; call again with offset={start + len(page)}."
+            if has_more
+            else ""
+        )
+        return SubsectionReadResult(
+            summary=(
+                f"Read {len(page)} of {total_chunk_count} chunks{filter_note} from "
+                f"'{parent_section} > {subsection}'.{more_note} "
+                "Use subsection.source_chunks[].chunk_id with read_chunk for final evidence span selection."
+            ),
+            subsection=SubsectionContent(
+                parent_section=parent_section,
+                subsection=subsection,
+                page_numbers=sorted_pages,
+                content=full_content,
+                chunk_count=len(page),
+                returned_chunk_count=len(page),
+                total_chunk_count=total_chunk_count,
+                offset=start,
+                next_offset=start + len(page) if has_more else None,
+                truncated=has_more,
+                source_chunks=source_chunks if source_chunks else None,
+                doc_items=all_doc_items if all_doc_items else None,
+            )
+        )
+
 
     return read_subsection

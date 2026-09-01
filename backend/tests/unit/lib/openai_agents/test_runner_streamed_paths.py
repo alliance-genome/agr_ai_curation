@@ -837,6 +837,71 @@ async def test_flow_owned_specialist_output_error_keeps_notification_and_termina
 
 
 @pytest.mark.asyncio
+async def test_flow_owned_dependency_outage_reaches_single_runtime_capture(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "flush_agent_configs", lambda _span: 0)
+
+    class _RootSpan:
+        trace_id = "trace-weaviate-outage"
+        id = "span-weaviate-outage"
+
+        def update(self, **_kwargs):
+            return None
+
+    class _Langfuse:
+        def start_as_current_observation(self, **_kwargs):
+            return _FakeContextManager(_RootSpan())
+
+    monkeypatch.setattr(runner, "get_langfuse", lambda: _Langfuse())
+    monkeypatch.setattr(
+        runner,
+        "propagate_attributes",
+        lambda **_kwargs: _FakeContextManager(),
+    )
+    notifications = []
+
+    async def _notify_tool_failure(**kwargs):
+        notifications.append(kwargs)
+
+    outage = RuntimeError("Weaviate unavailable")
+
+    async def _raising_stream(**_kwargs):
+        if False:
+            yield {}
+        raise outage
+
+    monkeypatch.setattr(runner, "notify_tool_failure", _notify_tool_failure)
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _raising_stream)
+    runtime_captures = []
+
+    async def _runtime_sentry_boundary():
+        try:
+            await _collect_events(
+                runner.run_agent_streamed(
+                    context_messages=[{"role": "user", "content": "hello"}],
+                    user_id="user-flow",
+                    agent=SimpleNamespace(
+                        name="Flow Supervisor",
+                        model="gpt-5",
+                        tools=[],
+                    ),
+                    propagate_runtime_exceptions=True,
+                )
+            )
+        except Exception as exc:
+            runtime_captures.append(exc)
+            raise
+
+    with pytest.raises(RuntimeError, match="Weaviate unavailable") as exc_info:
+        await _runtime_sentry_boundary()
+
+    assert exc_info.value is outage
+    assert runtime_captures == [outage]
+    assert notifications == []
+
+
+@pytest.mark.asyncio
 async def test_provided_agent_keeps_runtime_error_events_by_default(monkeypatch, caplog):
     """Agent Studio-style callers must retain RUN_ERROR and Sentry notification."""
     captured = {}
