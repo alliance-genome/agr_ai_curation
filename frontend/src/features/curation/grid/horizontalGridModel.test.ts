@@ -402,7 +402,7 @@ describe('buildHorizontalGridModel', () => {
     expect(model.rows[0]!.cells[0]!.fieldPath).toBe('arbitrary')
   })
 
-  it('associates evidence by exact canonical field path and leaves object evidence on context', () => {
+  it('associates exact field evidence and keeps otherwise unreachable evidence on context', () => {
     const rowCandidate = candidate({
       id: 'candidate-a',
       objectId: 'object-a',
@@ -434,7 +434,10 @@ describe('buildHorizontalGridModel', () => {
       }),
     ])
 
-    expect(model.rows[0]!.contextCell.evidence.map((item) => item.anchor_id)).toEqual(['object'])
+    expect(model.rows[0]!.contextCell.evidence.map((item) => item.anchor_id)).toEqual([
+      'object',
+      'unrepresented',
+    ])
     expect(model.rows[0]!.cells.map((cell) => [
       cell.fieldPath,
       cell.evidence.map((item) => item.anchor_id),
@@ -515,6 +518,10 @@ describe('buildHorizontalGridModel', () => {
       },
     })
     expect(row.unmappedEvidence.map((item) => item.anchor_id)).toEqual(['unmapped'])
+    expect(row.contextCell.evidence.map((item) => item.anchor_id)).toEqual([
+      'missing-field',
+      'unmapped',
+    ])
     expect(row.unmappedValidation).toMatchObject({
       statuses: ['unresolved'],
       summaryCount: 1,

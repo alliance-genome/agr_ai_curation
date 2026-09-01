@@ -332,12 +332,20 @@ function projectRow(
     fieldColumns.flatMap((column) => column.fieldPath === null ? [] : [column.fieldPath]),
   )
   const context = contextForRow(row)
-  const objectEvidence = evidence.filter((projection) =>
-    isObjectLevelProjection(projection.field_path),
-  )
   const objectValidation = validationSummaries.filter((projection) =>
     isObjectLevelProjection(projection.field_path),
   )
+  // Keep evidence reachable without pretending that it supports a different field.
+  // Object-level projections and projections without an actionable field cell belong
+  // on the row context control, while exact field matches stay on their field cells.
+  const contextEvidence = evidence.filter((projection) => (
+    isObjectLevelProjection(projection.field_path)
+    || !fieldColumns.some((column) => (
+      column.fieldPath !== null
+      && fieldsByPath.has(column.fieldPath)
+      && fieldPathMatches(projection.field_path, column.fieldPath)
+    ))
+  ))
 
   const cells = fieldColumns.map((column): HorizontalGridFieldCell => {
     const fieldPath = column.fieldPath
@@ -374,7 +382,7 @@ function projectRow(
     contextCell: {
       columnKey: HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
       value: context,
-      evidence: objectEvidence,
+      evidence: contextEvidence,
       validation: validationProjection(objectValidation),
     },
     cells,
