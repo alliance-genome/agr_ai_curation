@@ -698,7 +698,7 @@ def build_flow_definition_from_recipe(
 
 
 def _accessible_flow_agent_catalog() -> Dict[str, Dict[str, Any]]:
-    """Return request-visible palette agents keyed by their runtime ID."""
+    """Return request-visible palette agents sorted by normalized runtime ID."""
 
     from src.lib.agent_studio.catalog_service import list_available_agents
 
@@ -721,7 +721,7 @@ def _accessible_flow_agent_catalog() -> Dict[str, Dict[str, Any]]:
             "category": metadata.get("category") or "Unknown",
             "requires_document": bool(metadata.get("requires_document", False)),
         }
-    return available
+    return dict(sorted(available.items()))
 
 
 def _build_output_suggestion(

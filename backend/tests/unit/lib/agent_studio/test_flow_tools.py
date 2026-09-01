@@ -1312,6 +1312,59 @@ def test_custom_agent_discovery_applies_visibility_group_and_palette_policy(monk
     )["valid"] is True
 
 
+def test_custom_agent_pagination_reconstructs_stable_order(monkeypatch):
+    catalog = {
+        agent_id: {
+            "agent_id": agent_id,
+            "display_name": agent_id.upper(),
+            "description": f"Description for {agent_id}",
+            "category": "Extraction",
+            "frontend": {"show_in_palette": True},
+        }
+        for agent_id in ("ca_z", "ca_a", "ca_m")
+    }
+    source_orders = [
+        [catalog["ca_z"], catalog["ca_a"], catalog["ca_m"]],
+        [catalog["ca_m"], catalog["ca_z"], catalog["ca_a"]],
+    ]
+
+    def page_ids(result):
+        if "available_agents" in result:
+            return [agent["agent_id"] for agent in result["available_agents"]]
+        return [
+            agent["agent_id"]
+            for agents in result["categories"].values()
+            for agent in agents
+        ]
+
+    for handler_factory in (
+        flow_tools._get_available_agents_handler,
+        flow_tools._get_flow_templates_handler,
+    ):
+        request_count = 0
+
+        def _reordered_catalog(**_kwargs):
+            nonlocal request_count
+            result = source_orders[request_count % len(source_orders)]
+            request_count += 1
+            return result
+
+        monkeypatch.setattr(
+            catalog_service,
+            "list_available_agents",
+            _reordered_catalog,
+        )
+        handler = handler_factory()
+
+        first = handler(limit=2)
+        second = handler(limit=2, cursor=first["next_cursor"])
+
+        assert page_ids(first) == ["ca_a", "ca_m"]
+        assert page_ids(second) == ["ca_z"]
+        assert first["next_cursor"] == "2"
+        assert second["next_cursor"] is None
+
+
 def test_create_flow_accepts_visible_custom_agent_metadata(monkeypatch):
     custom_id = "ca_44444444-4444-4444-4444-444444444444"
     monkeypatch.setattr(
@@ -2221,13 +2274,13 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
         agent["agent_id"]
         for agents in page["categories"].values()
         for agent in agents
-    ] == ["first_agent"]
-    assert page["next_call"]["arguments"]["cursor"] == "1"
+    ] == []
+    assert page["next_call"]["arguments"]["detail_index"] == 0
 
     chunks = []
     expected_hash = None
     previous_end = 0
-    returned_agent_ids = ["first_agent"]
+    returned_agent_ids = []
     next_call = page["next_call"]
     saw_detail = False
     while next_call is not None:
@@ -2245,7 +2298,7 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
 
         if result.get("detail_mode") == "agent_record":
             saw_detail = True
-            assert result["detail_index"] == 1
+            assert result["detail_index"] == 0
             assert result["range"]["start"] == previous_end
             assert result["range"]["end"] > previous_end
             previous_end = result["range"]["end"]
@@ -2386,7 +2439,7 @@ def test_get_flow_templates_top_level_continuation_reconstructs_both_collections
         assert response["next_call"] is not None
         response = handler(**response["next_call"]["arguments"])
 
-    assert returned_agent_ids == agent_ids
+    assert returned_agent_ids == sorted(agent_ids)
     assert returned_template_names == [template["name"] for template in templates]
 
 
