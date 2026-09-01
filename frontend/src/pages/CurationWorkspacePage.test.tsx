@@ -654,7 +654,7 @@ describe('CurationWorkspacePage', () => {
     })
 
     expect(screen.getAllByText('TMEM67').length).toBeGreaterThan(0)
-    expect(screen.getByRole('img', { name: 'Needs curator review' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: /Needs curator review/ })).toBeInTheDocument()
     expect(screen.getByText(
       /Required envelope validation was unavailable\. All objects from this envelope are affected\./,
     )).toBeInTheDocument()
@@ -662,7 +662,7 @@ describe('CurationWorkspacePage', () => {
       name: /Select Gene symbol for gene\.symbol/,
     })).toBeInTheDocument()
     expect(screen.getByRole('button', {
-      name: /^Show evidence 1 for Gene symbol:/,
+      name: /^Show evidence and validation details for Gene symbol:/,
     })).toBeInTheDocument()
 
     act(() => {
