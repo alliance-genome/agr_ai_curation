@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 import re
 from typing import Any
 
@@ -31,6 +34,30 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)(bearer|basic)\s+[^\s,;]+"),
 )
 
+_ACTIVE_SECRET_VALUES: ContextVar[tuple[str, ...]] = ContextVar(
+    "active_secret_values", default=()
+)
+
+
+@contextmanager
+def active_secret_redaction(secret: str) -> Iterator[None]:
+    """Mechanically scrub an opaque secret for the active request boundary."""
+
+    if not secret:
+        raise ValueError("active redaction secret is required")
+    token = _ACTIVE_SECRET_VALUES.set((*_ACTIVE_SECRET_VALUES.get(), secret))
+    try:
+        yield
+    finally:
+        _ACTIVE_SECRET_VALUES.reset(token)
+
+
+def _redact_active_secrets(value: str) -> str:
+    redacted = value
+    for secret in sorted(set(_ACTIVE_SECRET_VALUES.get()), key=len, reverse=True):
+        redacted = redacted.replace(secret, REDACTED)
+    return redacted
+
 
 def is_sensitive_key(key: object) -> bool:
     """Return whether a field/header name identifies secret-bearing data."""
@@ -45,7 +72,7 @@ def redact_secrets(value: Any, *, depth: int = 0, max_depth: int = 8) -> Any:
     if depth > max_depth:
         return REDACTED
     if isinstance(value, str):
-        redacted = value
+        redacted = _redact_active_secrets(value)
         for pattern in SECRET_PATTERNS:
             redacted = pattern.sub(REDACTED, redacted)
         return redacted
@@ -68,6 +95,7 @@ __all__ = [
     "REDACTED",
     "SECRET_PATTERNS",
     "SENSITIVE_KEY_MARKERS",
+    "active_secret_redaction",
     "is_sensitive_key",
     "redact_secrets",
 ]

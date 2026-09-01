@@ -4,7 +4,11 @@ import json
 import logging
 
 from src.lib.logging_config import JsonFormatter
-from src.lib.security.redaction import REDACTED, redact_secrets
+from src.lib.security.redaction import (
+    REDACTED,
+    active_secret_redaction,
+    redact_secrets,
+)
 
 
 def test_delegated_header_and_bearer_are_redacted_in_nested_values():
@@ -53,3 +57,22 @@ def test_json_logging_redacts_exception_detail():
     rendered = JsonFormatter().format(record)
     assert token not in rendered
     assert REDACTED in rendered
+
+
+def test_request_local_bare_secret_is_redacted_from_messages_and_exceptions():
+    token = "distinctive-opaque-delegated-token"
+    with active_secret_redaction(token):
+        try:
+            raise RuntimeError(f"upstream echoed {token} without a scheme")
+        except RuntimeError:
+            import sys
+
+            exc_info = sys.exc_info()
+        record = logging.LogRecord(
+            "test", logging.ERROR, __file__, 1, f"bare value: {token}", (), exc_info
+        )
+        rendered = JsonFormatter().format(record)
+        assert token not in rendered
+        assert REDACTED in rendered
+
+    assert redact_secrets(f"after boundary: {token}") == f"after boundary: {token}"

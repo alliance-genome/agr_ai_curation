@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
@@ -13,6 +14,8 @@ import re
 from typing import Annotated, Protocol, runtime_checkable
 
 from pydantic import Field, RootModel, ValidationError
+
+from src.lib.security.redaction import active_secret_redaction
 
 from .models import BenchmarkInputReference, FrozenStrictModel, ResolvedBenchmarkPlan
 
@@ -41,6 +44,11 @@ class DelegatedSourceAuthorization:
         """Reveal only at the selected resolver's outbound request boundary."""
 
         return self.__bearer
+
+    def redaction_scope(self) -> AbstractContextManager[None]:
+        """Scrub the bearer mechanically while the selected resolver may use it."""
+
+        return active_secret_redaction(self.__bearer)
 
     def __repr__(self) -> str:
         return "DelegatedSourceAuthorization('[Filtered]')"
@@ -269,53 +277,63 @@ class BenchmarkInputResolverCatalog:
 
         result: MaterializedBenchmarkInput | None = None
         failure: BenchmarkSourceError | None = None
-        try:
-            result = await asyncio.wait_for(
-                resolver.materialize(
-                    reference,
-                    validated_reference,
-                    max_bytes=self._max_input_bytes,
-                    request_context=(
-                        request_context.without_delegated_authorization()
-                        if resolver.delegated_authorization
-                        is DelegatedAuthorizationCapability.UNSUPPORTED
-                        else request_context
+        credential = (
+            request_context.delegated_authorization
+            if resolver.delegated_authorization
+            is not DelegatedAuthorizationCapability.UNSUPPORTED
+            else None
+        )
+        redaction_scope = (
+            credential.redaction_scope() if credential is not None else nullcontext()
+        )
+        with redaction_scope:
+            try:
+                result = await asyncio.wait_for(
+                    resolver.materialize(
+                        reference,
+                        validated_reference,
+                        max_bytes=self._max_input_bytes,
+                        request_context=(
+                            request_context.without_delegated_authorization()
+                            if resolver.delegated_authorization
+                            is DelegatedAuthorizationCapability.UNSUPPORTED
+                            else request_context
+                        ),
                     ),
-                ),
-                timeout=self._timeout_seconds,
-            )
-        except BenchmarkSourceError as exc:
-            if (
-                resolver.delegated_authorization
-                is DelegatedAuthorizationCapability.UNSUPPORTED
-            ):
-                raise
-            safe_code = (
-                exc.code
-                if exc.code
-                in {
-                    "forbidden_source",
-                    "missing_source",
-                    "oversize_payload",
-                    "source_unavailable",
-                }
-                else "source_unavailable"
-            )
-            safe_message = {
-                "forbidden_source": "The selected benchmark source denied access",
-                "missing_source": "The selected benchmark source was not found",
-                "oversize_payload": "Benchmark input exceeds the materialization limit",
-                "source_unavailable": "Benchmark input source is unavailable",
-            }[safe_code]
-            raise BenchmarkSourceError(safe_code, safe_message) from None
-        except TimeoutError:
-            failure = BenchmarkSourceError(
-                "source_unavailable", "Benchmark input source timed out"
-            )
-        except Exception:
-            failure = BenchmarkSourceError(
-                "source_unavailable", "Benchmark input source is unavailable"
-            )
+                    timeout=self._timeout_seconds,
+                )
+            except BenchmarkSourceError as exc:
+                if (
+                    resolver.delegated_authorization
+                    is DelegatedAuthorizationCapability.UNSUPPORTED
+                ):
+                    raise
+                safe_code = (
+                    exc.code
+                    if exc.code
+                    in {
+                        "forbidden_source",
+                        "missing_source",
+                        "oversize_payload",
+                        "source_unavailable",
+                    }
+                    else "source_unavailable"
+                )
+                safe_message = {
+                    "forbidden_source": "The selected benchmark source denied access",
+                    "missing_source": "The selected benchmark source was not found",
+                    "oversize_payload": "Benchmark input exceeds the materialization limit",
+                    "source_unavailable": "Benchmark input source is unavailable",
+                }[safe_code]
+                raise BenchmarkSourceError(safe_code, safe_message) from None
+            except TimeoutError:
+                failure = BenchmarkSourceError(
+                    "source_unavailable", "Benchmark input source timed out"
+                )
+            except Exception:
+                failure = BenchmarkSourceError(
+                    "source_unavailable", "Benchmark input source is unavailable"
+                )
         if failure is not None:
             raise failure
         if result is None:

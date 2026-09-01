@@ -31,6 +31,7 @@ from src.lib.benchmarks.input_resolvers import (
 from src.lib.benchmarks.models import BenchmarkInputReference, ResolvedBenchmarkPlan
 from src.lib.benchmarks.suites import load_checked_in_suites
 from src.lib.benchmarks.snapshots import materialize_and_freeze_plan_inputs
+from src.lib.security.redaction import REDACTED, redact_secrets
 from src.services.benchmark_document_source import (
     LocalDocumentResolver,
     LocalDocumentSourceRecord,
@@ -313,9 +314,13 @@ def test_delegated_authorization_reaches_only_selected_capable_resolver():
 
         def __init__(self):
             self.observed_bearer = None
+            self.redacted_during_materialization = None
 
         async def materialize(self, *args, request_context, **kwargs):
             self.observed_bearer = request_context.delegated_authorization.reveal()
+            self.redacted_during_materialization = redact_secrets(
+                f"bare upstream value: {self.observed_bearer}"
+            )
             return await super().materialize(
                 *args, request_context=request_context, **kwargs
             )
@@ -340,6 +345,8 @@ def test_delegated_authorization_reaches_only_selected_capable_resolver():
     )
     asyncio.run(catalog.materialize(reference, request_context=context))
     assert resolver.observed_bearer == "opaque-curator-token"
+    assert resolver.redacted_during_materialization == f"bare upstream value: {REDACTED}"
+    assert redact_secrets("opaque-curator-token") == "opaque-curator-token"
     assert "opaque-curator-token" not in repr(context)
 
 

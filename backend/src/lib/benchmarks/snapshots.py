@@ -159,16 +159,109 @@ class S3BenchmarkSnapshotStore:
         if _digest(content) != digest:
             raise BenchmarkSnapshotError("Snapshot content digest does not match")
         key = "/".join(part for part in (self.prefix, "sha256", digest_hex) if part)
-        response = self.client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=content,
-            ContentType="application/octet-stream",
-            Metadata={"sha256": digest_hex},
+        self._require_versioning_enabled()
+        existing = self._existing_reference(
+            key=key,
+            digest=digest,
+            digest_hex=digest_hex,
+            content_bytes=len(content),
         )
+        if existing is not None:
+            return existing
+        try:
+            response = self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=content,
+                ContentType="application/octet-stream",
+                Metadata={"sha256": digest_hex},
+                IfNoneMatch="*",
+            )
+        except Exception as exc:
+            if self._error_code(exc) != "PreconditionFailed":
+                raise BenchmarkSnapshotError(
+                    "Snapshot content could not be stored"
+                ) from None
+            existing = self._existing_reference(
+                key=key,
+                digest=digest,
+                digest_hex=digest_hex,
+                content_bytes=len(content),
+            )
+            if existing is None:
+                raise BenchmarkSnapshotError(
+                    "Snapshot content could not be stored"
+                ) from None
+            return existing
+        version_id = self._version_id(response)
+        return self._reference(key, version_id)
+
+    def _require_versioning_enabled(self) -> None:
+        try:
+            response = self.client.get_bucket_versioning(Bucket=self.bucket)
+        except Exception:
+            raise BenchmarkSnapshotError(
+                "Snapshot object store versioning could not be verified"
+            ) from None
+        if response.get("Status") != "Enabled":
+            raise BenchmarkSnapshotError(
+                "Snapshot object store versioning must be enabled"
+            )
+
+    def _existing_reference(
+        self,
+        *,
+        key: str,
+        digest: str,
+        digest_hex: str,
+        content_bytes: int,
+    ) -> str | None:
+        try:
+            response = self.client.head_object(Bucket=self.bucket, Key=key)
+        except Exception as exc:
+            if self._error_code(exc) in {"404", "NoSuchKey", "NotFound"}:
+                return None
+            raise BenchmarkSnapshotError(
+                "Snapshot content could not be inspected"
+            ) from None
+        version_id = self._version_id(response)
+        metadata = response.get("Metadata")
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("sha256") != digest_hex
+            or response.get("ContentLength") != content_bytes
+        ):
+            raise BenchmarkSnapshotError(
+                "Stored snapshot failed metadata verification"
+            )
+        reference = self._reference(key, version_id)
+        if _digest(self.read(blob_reference=reference)) != digest:
+            raise BenchmarkSnapshotError("Stored snapshot failed digest verification")
+        return reference
+
+    @staticmethod
+    def _error_code(exc: Exception) -> str:
+        response = getattr(exc, "response", None)
+        if not isinstance(response, Mapping):
+            return ""
+        error = response.get("Error")
+        if isinstance(error, Mapping) and error.get("Code") is not None:
+            return str(error["Code"])
+        metadata = response.get("ResponseMetadata")
+        if isinstance(metadata, Mapping) and metadata.get("HTTPStatusCode") is not None:
+            return str(metadata["HTTPStatusCode"])
+        return ""
+
+    @staticmethod
+    def _version_id(response: Mapping[str, Any]) -> str:
         version_id = response.get("VersionId")
-        if not version_id:
-            raise BenchmarkSnapshotError("Snapshot object store must return a version ID")
+        if not isinstance(version_id, str) or not version_id or version_id == "null":
+            raise BenchmarkSnapshotError(
+                "Snapshot object store must return an immutable version ID"
+            )
+        return version_id
+
+    def _reference(self, key: str, version_id: str) -> str:
         return f"s3://{self.bucket}/{key}?versionId={version_id}"
 
     def read(self, *, blob_reference: str) -> bytes:
@@ -177,6 +270,7 @@ class S3BenchmarkSnapshotStore:
             raise BenchmarkSnapshotError("Snapshot blob reference is invalid")
         key_and_version = blob_reference[len(prefix) :]
         key, version_id = key_and_version.rsplit("?versionId=", 1)
+        version_id = self._version_id({"VersionId": version_id})
         response = self.client.get_object(
             Bucket=self.bucket, Key=key, VersionId=version_id
         )

@@ -20,6 +20,7 @@ from src.lib.security.redaction import (
     REDACTED as _REDACTED,
     SECRET_PATTERNS as _SECRET_PATTERNS,
     SENSITIVE_KEY_MARKERS as _SENSITIVE_KEY_MARKERS,
+    redact_secrets as _redact_secrets,
 )
 
 logger = logging.getLogger(__name__)
@@ -314,7 +315,7 @@ def _key_matches(markers: tuple[str, ...], key: str) -> bool:
 
 
 def _scrub_string(value: str) -> str:
-    scrubbed = value
+    scrubbed = _redact_secrets(value)
     for pattern in _SECRET_PATTERNS:
         scrubbed = pattern.sub(_REDACTED, scrubbed)
     return scrubbed

@@ -69,17 +69,35 @@ def test_durable_benchmark_models_have_no_delegated_secret_fields():
 def test_s3_store_requires_and_reuses_exact_private_object_version():
     content = b"canonical"
 
+    class S3Error(Exception):
+        def __init__(self, code):
+            self.response = {"Error": {"Code": code}}
+
     class Body:
         def read(self):
             return content
 
     class Client:
-        put_request = None
+        put_requests = []
         get_request = None
+        version_id = None
+
+        def get_bucket_versioning(self, **kwargs):
+            return {"Status": "Enabled"}
+
+        def head_object(self, **kwargs):
+            if self.version_id is None:
+                raise S3Error("NotFound")
+            return {
+                "VersionId": self.version_id,
+                "Metadata": {"sha256": _digest(content).removeprefix("sha256:")},
+                "ContentLength": len(content),
+            }
 
         def put_object(self, **kwargs):
-            self.put_request = kwargs
-            return {"VersionId": "private-version-1"}
+            self.put_requests.append(kwargs)
+            self.version_id = "private-version-1"
+            return {"VersionId": self.version_id}
 
         def get_object(self, **kwargs):
             self.get_request = kwargs
@@ -89,9 +107,48 @@ def test_s3_store_requires_and_reuses_exact_private_object_version():
     store = S3BenchmarkSnapshotStore(
         client, bucket="private-bucket", prefix="benchmark-inputs"
     )
-    reference = store.put(digest=_digest(content), content=content)
+    first = store.put(digest=_digest(content), content=content)
+    second = store.put(digest=_digest(content), content=content)
 
-    assert reference.endswith("?versionId=private-version-1")
-    assert client.put_request["Bucket"] == "private-bucket"
-    assert store.read(blob_reference=reference) == content
+    assert first == second
+    assert first.endswith("?versionId=private-version-1")
+    assert len(client.put_requests) == 1
+    assert client.put_requests[0]["Bucket"] == "private-bucket"
+    assert client.put_requests[0]["IfNoneMatch"] == "*"
+    assert store.read(blob_reference=first) == content
+    assert client.get_request is not None
     assert client.get_request["VersionId"] == "private-version-1"
+
+
+@pytest.mark.parametrize(
+    ("versioning_status", "version_id", "message"),
+    [
+        (None, "private-version-1", "versioning must be enabled"),
+        ("Suspended", "null", "versioning must be enabled"),
+        ("Enabled", None, "immutable version ID"),
+        ("Enabled", "null", "immutable version ID"),
+    ],
+)
+def test_s3_store_fails_closed_without_real_enabled_versioning(
+    versioning_status, version_id, message
+):
+    content = b"canonical"
+
+    class S3Error(Exception):
+        response = {"Error": {"Code": "NotFound"}}
+
+    class Client:
+        def get_bucket_versioning(self, **kwargs):
+            return {"Status": versioning_status} if versioning_status else {}
+
+        def head_object(self, **kwargs):
+            raise S3Error
+
+        def put_object(self, **kwargs):
+            return {} if version_id is None else {"VersionId": version_id}
+
+    store = S3BenchmarkSnapshotStore(
+        Client(), bucket="private-bucket", prefix="benchmark-inputs"
+    )
+    with pytest.raises(BenchmarkSnapshotError, match=message):
+        store.put(digest=_digest(content), content=content)
