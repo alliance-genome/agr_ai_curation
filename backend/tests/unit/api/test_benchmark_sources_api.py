@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Annotated
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -18,8 +21,61 @@ from src.lib.benchmarks.input_resolvers import (
     BenchmarkResolverRegistrationError,
     BenchmarkSourceError,
     CheckedInFixtureResolver,
+    DelegatedAuthorizationCapability,
 )
 from src.lib.benchmarks.loader import BenchmarkCatalogError
+from src.models.sql.database import get_db
+
+
+class _DummyDb:
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+
+class _SnapshotRepository:
+    def __init__(self, _db, _store):
+        pass
+
+    def freeze_input(self, source, *, owner_subject, service_principal):
+        return SimpleNamespace(
+            id=UUID("00000000-0000-4000-8000-000000000001"),
+            digest=source.digest,
+            source_version=source.version,
+            content_type=source.metadata.content_type,
+            content_bytes=source.metadata.content_bytes,
+            resolver_id=source.resolver,
+            source_reference=source.reference,
+            sanitized_provenance=source.provenance.model_dump(mode="json"),
+            owner_subject=owner_subject,
+            service_principal=service_principal,
+            blob_reference="sha256/00/canonical",
+            created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+
+    def receipt(self, snapshot):
+        return {
+            "snapshot_id": snapshot.id,
+            "digest": snapshot.digest,
+            "source_version": snapshot.source_version,
+            "content_type": snapshot.content_type,
+            "content_bytes": snapshot.content_bytes,
+            "resolver_id": snapshot.resolver_id,
+            "source_reference": snapshot.source_reference,
+            "sanitized_provenance": snapshot.sanitized_provenance,
+            "owner_subject": snapshot.owner_subject,
+            "service_principal": snapshot.service_principal,
+            "blob_reference": snapshot.blob_reference,
+            "created_at": snapshot.created_at,
+        }
+
+
+def _stub_snapshots(application, monkeypatch):
+    monkeypatch.setattr(sources_api, "BenchmarkSnapshotRepository", _SnapshotRepository)
+    monkeypatch.setattr(sources_api, "configured_benchmark_snapshot_store", object)
+    application.dependency_overrides[get_db] = lambda: _DummyDb()
 
 
 def _app(tmp_path, monkeypatch) -> FastAPI:
@@ -33,6 +89,7 @@ def _app(tmp_path, monkeypatch) -> FastAPI:
     application.dependency_overrides[require_benchmark_source_read] = lambda: {
         "sub": "operator"
     }
+    _stub_snapshots(application, monkeypatch)
     application.include_router(sources_api.router)
     return application
 
@@ -68,6 +125,7 @@ def test_install_rejects_duplicate_extension_id():
     class DuplicateLocalDocumentResolver:
         resolver_id = "local_document"
         reference_schema = RootModel[str]
+        delegated_authorization = DelegatedAuthorizationCapability.UNSUPPORTED
 
         async def materialize(self, *args, **kwargs):
             raise AssertionError("duplicate registration must fail before use")
@@ -80,7 +138,7 @@ def test_install_rejects_duplicate_extension_id():
     assert exc_info.value.code == "duplicate_resolver"
 
 
-def test_materialize_endpoint_returns_canonical_fixture_content(tmp_path, monkeypatch):
+def test_materialize_endpoint_returns_token_free_snapshot_receipt(tmp_path, monkeypatch):
     payload = b'{"messages": []}\n'
     (tmp_path / "input.json").write_bytes(payload)
     digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
@@ -97,22 +155,23 @@ def test_materialize_endpoint_returns_canonical_fixture_content(tmp_path, monkey
 
     assert response.status_code == 200
     assert response.json() == {
-        "resolver": "checked_in_fixture",
-        "reference": "input.json",
-        "version": "1",
+        "snapshot_id": "00000000-0000-4000-8000-000000000001",
         "digest": digest,
-        "content": payload.decode(),
-        "metadata": {
-            "content_type": "application/json",
-            "content_bytes": len(payload),
-            "title": "input.json",
-        },
-        "provenance": {
+        "source_version": "1",
+        "content_type": "application/json",
+        "content_bytes": len(payload),
+        "resolver_id": "checked_in_fixture",
+        "source_reference": "input.json",
+        "sanitized_provenance": {
             "resolver": "checked_in_fixture",
             "reference": "input.json",
             "version": "1",
             "digest": digest,
         },
+        "owner_subject": "operator",
+        "service_principal": "operator",
+        "blob_reference": "sha256/00/canonical",
+        "created_at": "2026-09-01T00:00:00Z",
     }
 
 
@@ -139,6 +198,7 @@ def test_materialize_endpoint_builds_and_memoizes_catalog_lazily(
     application.dependency_overrides[require_benchmark_source_read] = lambda: {
         "sub": "operator"
     }
+    _stub_snapshots(application, monkeypatch)
     application.include_router(sources_api.router)
     client = TestClient(application)
     request = {
@@ -229,6 +289,61 @@ def test_materialize_endpoint_normalizes_invalid_and_unknown_references(
     assert unknown.json()["detail"]["error"] == "unknown_resolver"
 
 
+@pytest.mark.parametrize(
+    "header",
+    ["", "opaque-token", "Basic opaque-token", "Bearer ", "bearer opaque-token"],
+)
+def test_materialize_endpoint_rejects_malformed_delegated_header(
+    tmp_path, monkeypatch, header
+):
+    client = TestClient(_app(tmp_path, monkeypatch))
+    response = client.post(
+        "/api/v1/benchmarks/sources/materialize",
+        headers={"X-Benchmark-Delegated-Source-Authorization": header},
+        json={
+            "resolver": "checked_in_fixture",
+            "reference": "input.json",
+            "version": "1",
+            "digest": "sha256:" + "0" * 64,
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_delegated_authorization"
+
+
+def test_materialize_endpoint_rejects_oversized_or_unexpected_delegated_header(
+    tmp_path, monkeypatch
+):
+    client = TestClient(_app(tmp_path, monkeypatch))
+    monkeypatch.setattr(
+        sources_api, "get_benchmark_delegated_source_auth_max_bytes", lambda: 12
+    )
+    payload = {
+        "resolver": "checked_in_fixture",
+        "reference": "input.json",
+        "version": "1",
+        "digest": "sha256:" + "0" * 64,
+    }
+    oversized = client.post(
+        "/api/v1/benchmarks/sources/materialize",
+        headers={"X-Benchmark-Delegated-Source-Authorization": "Bearer too-long-token"},
+        json=payload,
+    )
+    assert oversized.status_code == 400
+    assert oversized.json()["detail"]["error"] == "invalid_delegated_authorization"
+
+    monkeypatch.setattr(
+        sources_api, "get_benchmark_delegated_source_auth_max_bytes", lambda: 8192
+    )
+    unexpected = client.post(
+        "/api/v1/benchmarks/sources/materialize",
+        headers={"X-Benchmark-Delegated-Source-Authorization": "Bearer opaque-token"},
+        json=payload,
+    )
+    assert unexpected.status_code == 400
+    assert unexpected.json()["detail"]["error"] == "unexpected_delegated_authorization"
+
+
 def test_source_authorization_failure_prevents_materialization(tmp_path, monkeypatch):
     application = _app(tmp_path, monkeypatch)
 
@@ -306,6 +421,7 @@ def test_unexpected_private_resolver_failure_returns_sanitized_source_error(
     class FailingPrivateResolver:
         resolver_id = "private_source"
         reference_schema = PrivateReference
+        delegated_authorization = DelegatedAuthorizationCapability.OPTIONAL
 
         async def materialize(self, *args, **kwargs):
             raise RuntimeError("token=private-resolver-secret")

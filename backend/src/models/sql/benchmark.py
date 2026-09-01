@@ -62,6 +62,57 @@ def _status_enum(enum_type: type[enum.Enum], name: str) -> Enum:
     )
 
 
+class BenchmarkInputSnapshot(Base):
+    """Immutable owner-scoped receipt for one content-addressed canonical input."""
+
+    __tablename__ = "benchmark_input_snapshots"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    source_version: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    resolver_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_reference: Mapped[str] = mapped_column(String(1024), nullable=False)
+    sanitized_provenance: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    owner_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    service_principal: Mapped[str] = mapped_column(String(255), nullable=False)
+    blob_reference: Mapped[str] = mapped_column(String(2048), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_subject",
+            "resolver_id",
+            "source_reference",
+            "source_version",
+            "digest",
+            name="uq_benchmark_snapshot_owner_source_version_digest",
+        ),
+        CheckConstraint(
+            "digest ~ '^sha256:[0-9a-f]{64}$'", name="ck_benchmark_snapshot_digest"
+        ),
+        CheckConstraint(
+            "content_bytes > 0", name="ck_benchmark_snapshot_content_bytes"
+        ),
+        CheckConstraint(
+            "char_length(owner_subject) > 0", name="ck_benchmark_snapshot_owner"
+        ),
+        CheckConstraint(
+            "char_length(service_principal) > 0", name="ck_benchmark_snapshot_service"
+        ),
+        CheckConstraint(
+            "jsonb_typeof(sanitized_provenance) = 'object'",
+            name="ck_benchmark_snapshot_provenance_object",
+        ),
+        Index("ix_benchmark_snapshots_digest", "digest"),
+    )
+
+
 class BenchmarkJob(Base):
     """One immutable-on-completion benchmark plan and its execution counters."""
 
@@ -161,6 +212,26 @@ class BenchmarkJob(Base):
     )
 
 
+class BenchmarkJobInputSnapshot(Base):
+    """Explicit case-to-snapshot reference for a durable job."""
+
+    __tablename__ = "benchmark_job_input_snapshots"
+
+    job_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("benchmark_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    case_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    snapshot_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("benchmark_input_snapshots.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    __table_args__ = (Index("ix_benchmark_job_input_snapshot_id", "snapshot_id"),)
+
+
 class BenchmarkCell(Base):
     """A relational projection of one frozen plan cell and its result."""
 
@@ -186,6 +257,11 @@ class BenchmarkCell(Base):
     input_reference: Mapped[str] = mapped_column(String(1024), nullable=False)
     input_version: Mapped[str] = mapped_column(String(255), nullable=False)
     input_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    input_snapshot_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("benchmark_input_snapshots.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     status: Mapped[BenchmarkCellStatus] = mapped_column(
         _status_enum(BenchmarkCellStatus, "ck_benchmark_cells_status_values"),
         nullable=False,

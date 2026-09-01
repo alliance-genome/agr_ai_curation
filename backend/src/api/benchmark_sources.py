@@ -10,27 +10,38 @@ from typing import Any, NoReturn
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
+from sqlalchemy.orm import Session
 
 from src.api.benchmark_auth import require_benchmark_source_read
 from src.config import get_pdf_storage_path
 from src.lib.benchmarks.input_resolvers import (
     BenchmarkInputResolver,
     BenchmarkInputResolverCatalog,
+    BenchmarkSourceRequestContext,
     BenchmarkSourceError,
     CheckedInFixtureResolver,
-    MaterializedBenchmarkInput,
+    DelegatedSourceAuthorization,
 )
 from src.lib.benchmarks.loader import BenchmarkCatalogError
 from src.lib.benchmarks.models import BenchmarkInputReference
 from src.lib.benchmarks.suites import load_checked_in_suites
+from src.lib.benchmarks.snapshots import (
+    BenchmarkSnapshotError,
+    BenchmarkSnapshotRepository,
+    FrozenBenchmarkInputSnapshot,
+    FrozenBenchmarkSnapshotResolver,
+    configured_benchmark_snapshot_store,
+)
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import (
     get_benchmark_enabled,
+    get_benchmark_delegated_source_auth_max_bytes,
     get_benchmark_max_input_bytes,
     get_benchmark_root,
     get_benchmark_source_timeout_seconds,
 )
 from src.services.benchmark_document_source import LocalDocumentResolver
+from src.models.sql.database import get_db
 
 
 class BenchmarkSourceRoute(APIRoute):
@@ -70,7 +81,44 @@ _ERROR_STATUS = {
     "oversize_payload": 413,
     "missing_source": 404,
     "source_unavailable": 503,
+    "invalid_delegated_authorization": 400,
+    "unexpected_delegated_authorization": 400,
+    "missing_delegated_authorization": 401,
+    "oversize_submission": 413,
 }
+
+_DELEGATED_HEADER = "x-benchmark-delegated-source-authorization"
+
+
+def delegated_source_request_context(
+    request: Request, *, principal_subject: str
+) -> BenchmarkSourceRequestContext:
+    """Parse the dedicated bearer without copying it into validation models."""
+
+    raw = request.headers.get(_DELEGATED_HEADER)
+    if raw is None:
+        return BenchmarkSourceRequestContext(principal_subject=principal_subject)
+    if len(raw.encode("utf-8")) > get_benchmark_delegated_source_auth_max_bytes():
+        raise BenchmarkSourceError(
+            "invalid_delegated_authorization",
+            "Delegated source authorization header is invalid",
+        )
+    scheme, separator, bearer = raw.partition(" ")
+    if (
+        separator != " "
+        or scheme != "Bearer"
+        or not bearer
+        or bearer.strip() != bearer
+        or any(character.isspace() for character in bearer)
+    ):
+        raise BenchmarkSourceError(
+            "invalid_delegated_authorization",
+            "Delegated source authorization header is invalid",
+        )
+    return BenchmarkSourceRequestContext(
+        principal_subject=principal_subject,
+        delegated_authorization=DelegatedSourceAuthorization(bearer),
+    )
 
 
 def build_default_input_resolver_catalog(
@@ -91,6 +139,7 @@ def build_default_input_resolver_catalog(
             benchmark_root, allowed_references=fixture_references
         ),
         LocalDocumentResolver(storage_root_provider=get_pdf_storage_path),
+        FrozenBenchmarkSnapshotResolver(),
         *tuple(extra_resolvers),
     )
     return BenchmarkInputResolverCatalog(
@@ -112,6 +161,7 @@ def install_benchmark_input_resolvers(
         (
             CheckedInFixtureResolver(Path("."), allowed_references=()),
             LocalDocumentResolver(storage_root_provider=get_pdf_storage_path),
+            FrozenBenchmarkSnapshotResolver(),
             *extensions,
         )
     )
@@ -157,27 +207,52 @@ def _raise_source_error(exc: BenchmarkSourceError) -> NoReturn:
     raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
-@router.post("/materialize", response_model=MaterializedBenchmarkInput)
+@router.post("/materialize", response_model=FrozenBenchmarkInputSnapshot)
 async def materialize_benchmark_source(
     request: Request,
     payload: BenchmarkInputReference,
     principal: dict[str, Any] = Depends(require_benchmark_source_read),
-) -> MaterializedBenchmarkInput:
-    """Materialize an allowlisted source as immutable digest-verified UTF-8 content."""
+    db: Session = Depends(get_db),
+) -> FrozenBenchmarkInputSnapshot:
+    """Synchronously materialize and durably freeze an allowlisted source."""
 
     if not get_benchmark_enabled():
         raise HTTPException(status_code=404, detail="Benchmark API is disabled")
     try:
-        return await _catalog(request).materialize(
-            payload,
-            principal_subject=str(principal.get("sub") or ""),
+        context = delegated_source_request_context(
+            request, principal_subject=str(principal.get("sub") or "")
         )
+        materialized = await _catalog(request).materialize(
+            payload,
+            request_context=context,
+        )
+        snapshots = BenchmarkSnapshotRepository(
+            db, configured_benchmark_snapshot_store()
+        )
+        snapshot = snapshots.freeze_input(
+            materialized,
+            owner_subject=context.principal_subject,
+            service_principal=str(
+                principal.get("client_id") or principal.get("sub") or ""
+            ),
+        )
+        db.commit()
+        return snapshots.receipt(snapshot)
     except BenchmarkSourceError as exc:
+        db.rollback()
         _raise_source_error(exc)
+    except BenchmarkSnapshotError:
+        db.rollback()
+        _raise_source_error(
+            BenchmarkSourceError(
+                "source_unavailable", "Benchmark input snapshot could not be committed"
+            )
+        )
 
 
 __all__ = [
     "build_default_input_resolver_catalog",
+    "delegated_source_request_context",
     "install_benchmark_input_resolvers",
     "materialize_benchmark_source",
     "router",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import Enum
 import hashlib
 import json
 from pathlib import Path
@@ -15,6 +17,47 @@ from pydantic import Field, RootModel, ValidationError
 from .models import BenchmarkInputReference, FrozenStrictModel, ResolvedBenchmarkPlan
 
 _RESOLVER_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+class DelegatedAuthorizationCapability(str, Enum):
+    """Whether a resolver may consume request-local delegated authorization."""
+
+    REQUIRED = "required"
+    OPTIONAL = "optional"
+    UNSUPPORTED = "unsupported"
+
+
+class DelegatedSourceAuthorization:
+    """Opaque request-local bearer whose display and serialization are redacted."""
+
+    __slots__ = ("__bearer",)
+
+    def __init__(self, bearer: str) -> None:
+        if not bearer:
+            raise ValueError("delegated source bearer is required")
+        self.__bearer = bearer
+
+    def reveal(self) -> str:
+        """Reveal only at the selected resolver's outbound request boundary."""
+
+        return self.__bearer
+
+    def __repr__(self) -> str:
+        return "DelegatedSourceAuthorization('[Filtered]')"
+
+    def __str__(self) -> str:
+        return "[Filtered]"
+
+
+@dataclass(frozen=True)
+class BenchmarkSourceRequestContext:
+    """Non-durable identities available during synchronous materialization."""
+
+    principal_subject: str
+    delegated_authorization: DelegatedSourceAuthorization | None = None
+
+    def without_delegated_authorization(self) -> BenchmarkSourceRequestContext:
+        return BenchmarkSourceRequestContext(principal_subject=self.principal_subject)
 
 
 class BenchmarkSourceError(RuntimeError):
@@ -94,6 +137,7 @@ class BenchmarkInputResolver(Protocol):
 
     resolver_id: str
     reference_schema: type[RootModel[str]]
+    delegated_authorization: DelegatedAuthorizationCapability
 
     async def materialize(
         self,
@@ -101,7 +145,7 @@ class BenchmarkInputResolver(Protocol):
         validated_reference: str,
         *,
         max_bytes: int,
-        principal_subject: str,
+        request_context: BenchmarkSourceRequestContext,
     ) -> MaterializedBenchmarkInput: ...
 
 
@@ -139,6 +183,14 @@ class BenchmarkInputResolverCatalog:
                     "duplicate_resolver",
                     f"Duplicate benchmark input resolver registration: {resolver_id}",
                 )
+            if not isinstance(
+                getattr(resolver, "delegated_authorization", None),
+                DelegatedAuthorizationCapability,
+            ):
+                raise BenchmarkResolverRegistrationError(
+                    "invalid_resolver_registration",
+                    f"Resolver {resolver_id} must declare delegated authorization support",
+                )
             registered[resolver_id] = resolver
         return registered
 
@@ -154,17 +206,57 @@ class BenchmarkInputResolverCatalog:
     def resolver_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._resolvers))
 
+    def validate_delegated_selection(
+        self,
+        references: Iterable[BenchmarkInputReference],
+        request_context: BenchmarkSourceRequestContext,
+    ) -> None:
+        """Fail before I/O unless one credential maps to exactly one resolver identity."""
+
+        selected = {
+            reference.resolver: self._resolvers.get(reference.resolver)
+            for reference in references
+        }
+        capable = {
+            resolver_id: resolver
+            for resolver_id, resolver in selected.items()
+            if resolver is not None
+            and resolver.delegated_authorization
+            is not DelegatedAuthorizationCapability.UNSUPPORTED
+        }
+        if len(capable) > 1:
+            raise BenchmarkSourceError(
+                "invalid_delegated_authorization",
+                "A delegated source credential may select only one resolver identity",
+            )
+        credential = request_context.delegated_authorization
+        if credential is not None and not capable:
+            raise BenchmarkSourceError(
+                "unexpected_delegated_authorization",
+                "Delegated source authorization is not accepted for the selected source",
+            )
+        if credential is None and any(
+            resolver.delegated_authorization
+            is DelegatedAuthorizationCapability.REQUIRED
+            for resolver in capable.values()
+        ):
+            raise BenchmarkSourceError(
+                "missing_delegated_authorization",
+                "Delegated source authorization is required for the selected source",
+            )
+
     async def materialize(
         self,
         reference: BenchmarkInputReference,
         *,
-        principal_subject: str,
+        request_context: BenchmarkSourceRequestContext,
     ) -> MaterializedBenchmarkInput:
         resolver = self._resolvers.get(reference.resolver)
         if resolver is None:
             raise BenchmarkSourceError(
                 "unknown_resolver", "Benchmark input resolver is not registered"
             )
+        self.validate_delegated_selection((reference,), request_context)
         try:
             validated = resolver.reference_schema.model_validate(reference.reference)
             validated_reference = validated.root
@@ -183,12 +275,39 @@ class BenchmarkInputResolverCatalog:
                     reference,
                     validated_reference,
                     max_bytes=self._max_input_bytes,
-                    principal_subject=principal_subject,
+                    request_context=(
+                        request_context.without_delegated_authorization()
+                        if resolver.delegated_authorization
+                        is DelegatedAuthorizationCapability.UNSUPPORTED
+                        else request_context
+                    ),
                 ),
                 timeout=self._timeout_seconds,
             )
-        except BenchmarkSourceError:
-            raise
+        except BenchmarkSourceError as exc:
+            if (
+                resolver.delegated_authorization
+                is DelegatedAuthorizationCapability.UNSUPPORTED
+            ):
+                raise
+            safe_code = (
+                exc.code
+                if exc.code
+                in {
+                    "forbidden_source",
+                    "missing_source",
+                    "oversize_payload",
+                    "source_unavailable",
+                }
+                else "source_unavailable"
+            )
+            safe_message = {
+                "forbidden_source": "The selected benchmark source denied access",
+                "missing_source": "The selected benchmark source was not found",
+                "oversize_payload": "Benchmark input exceeds the materialization limit",
+                "source_unavailable": "Benchmark input source is unavailable",
+            }[safe_code]
+            raise BenchmarkSourceError(safe_code, safe_message) from None
         except TimeoutError:
             failure = BenchmarkSourceError(
                 "source_unavailable", "Benchmark input source timed out"
@@ -264,15 +383,26 @@ async def materialize_plan_inputs(
     plan: ResolvedBenchmarkPlan,
     catalog: BenchmarkInputResolverCatalog,
     *,
-    principal_subject: str,
+    request_context: BenchmarkSourceRequestContext,
+    max_submission_bytes: int,
 ) -> MaterializedBenchmarkPlanInputs:
     """Resolve every case completely before returning a queueable input bundle."""
 
     cases: list[MaterializedBenchmarkCaseInput] = []
+    catalog.validate_delegated_selection(
+        (case.input for case in plan.cases), request_context
+    )
+    total_bytes = 0
     for case in plan.cases:
         source = await catalog.materialize(
-            case.input, principal_subject=principal_subject
+            case.input, request_context=request_context
         )
+        total_bytes += source.metadata.content_bytes
+        if total_bytes > max_submission_bytes:
+            raise BenchmarkSourceError(
+                "oversize_submission",
+                "Materialized benchmark submission exceeds the aggregate limit",
+            )
         cases.append(MaterializedBenchmarkCaseInput(case_id=case.case_id, source=source))
     return MaterializedBenchmarkPlanInputs(
         plan_digest=plan.plan_digest, cases=tuple(cases)
@@ -284,6 +414,7 @@ class CheckedInFixtureResolver:
 
     resolver_id = "checked_in_fixture"
     reference_schema = CheckedInFixtureReference
+    delegated_authorization = DelegatedAuthorizationCapability.UNSUPPORTED
 
     def __init__(self, root: Path, *, allowed_references: Iterable[str]) -> None:
         self._root = root.expanduser().resolve(strict=False)
@@ -295,14 +426,14 @@ class CheckedInFixtureResolver:
         validated_reference: str,
         *,
         max_bytes: int,
-        principal_subject: str,
+        request_context: BenchmarkSourceRequestContext,
     ) -> MaterializedBenchmarkInput:
         return await asyncio.to_thread(
             self._materialize_sync,
             reference,
             validated_reference,
             max_bytes=max_bytes,
-            principal_subject=principal_subject,
+            principal_subject=request_context.principal_subject,
         )
 
     def _materialize_sync(
@@ -374,10 +505,13 @@ class CheckedInFixtureResolver:
 __all__ = [
     "BenchmarkInputResolver",
     "BenchmarkInputResolverCatalog",
+    "BenchmarkSourceRequestContext",
     "BenchmarkResolverRegistrationError",
     "BenchmarkSourceError",
     "BenchmarkSourceMetadata",
     "BenchmarkSourceProvenance",
+    "DelegatedAuthorizationCapability",
+    "DelegatedSourceAuthorization",
     "CheckedInFixtureReference",
     "CheckedInFixtureResolver",
     "MaterializedBenchmarkInput",

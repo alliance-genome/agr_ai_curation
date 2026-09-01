@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from alembic import command  # pyright: ignore[reportAttributeAccessIssue]
 from alembic.config import Config  # pyright: ignore[reportMissingImports]
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from src.lib.benchmarks.models import (
@@ -26,6 +26,7 @@ from src.models.sql.benchmark import (
     BenchmarkCell,
     BenchmarkCellStatus,
     BenchmarkEvent,
+    BenchmarkInputSnapshot,
     BenchmarkInvocation,
     BenchmarkInvocationStatus,
     BenchmarkJob,
@@ -101,6 +102,39 @@ def _suite_and_plan(cell_count: int = 3) -> tuple[BenchmarkSuite, ResolvedBenchm
 
 def _create_job(db, *, owner: str = "owner-a", cells: int = 3, rerun_of: UUID | None = None):
     suite, plan = _suite_and_plan(cells)
+    snapshot_ids_by_case = {}
+    for case in plan.cases:
+        snapshot = db.scalar(
+            select(BenchmarkInputSnapshot).where(
+                BenchmarkInputSnapshot.owner_subject == owner,
+                BenchmarkInputSnapshot.resolver_id == case.input.resolver,
+                BenchmarkInputSnapshot.source_reference == case.input.reference,
+                BenchmarkInputSnapshot.source_version == case.input.version,
+                BenchmarkInputSnapshot.digest == case.input.digest,
+            )
+        )
+        if snapshot is None:
+            snapshot = BenchmarkInputSnapshot(
+                id=uuid4(),
+                digest=case.input.digest,
+                source_version=case.input.version,
+                content_type="application/json",
+                content_bytes=2,
+                resolver_id=case.input.resolver,
+                source_reference=case.input.reference,
+                sanitized_provenance={
+                    "resolver": case.input.resolver,
+                    "reference": case.input.reference,
+                    "version": case.input.version,
+                    "digest": case.input.digest,
+                },
+                owner_subject=owner,
+                service_principal=owner,
+                blob_reference=f"sha256/aa/{case.case_id}",
+            )
+            db.add(snapshot)
+        snapshot_ids_by_case[case.case_id] = snapshot.id
+    db.flush()
     return BenchmarkRepository(db).create_job(
         owner_subject=owner,
         suite=suite,
@@ -108,6 +142,7 @@ def _create_job(db, *, owner: str = "owner-a", cells: int = 3, rerun_of: UUID | 
         config_digest=_digest("e"),
         code_digest=_digest("f"),
         inputs_digest=_digest("0"),
+        snapshot_ids_by_case=snapshot_ids_by_case,
         rerun_of_job_id=rerun_of,
     )
 
@@ -227,6 +262,69 @@ def test_repository_persists_plan_pages_without_envelopes_and_replays_events():
                     job_id=job_id, owner_subject="owner-a"
                 )
                 db.commit()
+        db.close()
+
+
+def test_job_cells_share_frozen_snapshot_and_snapshot_deletion_is_restricted():
+    db = SessionLocal()
+    job_id = None
+    snapshot_id = None
+    try:
+        suite, plan = _suite_and_plan(1)
+        # Expand repeated/configuration cells while retaining one case input.
+        repeated_plan = plan.model_copy(
+            update={"cells": (plan.cells[0], plan.cells[0].model_copy(update={"cell_id": "case-0:configuration-a:2", "repetition": 2}))}
+        )
+        snapshot = BenchmarkInputSnapshot(
+            id=uuid4(),
+            digest=plan.cases[0].input.digest,
+            source_version="v1",
+            content_type="application/json",
+            content_bytes=2,
+            resolver_id="fixture",
+            source_reference="record-0",
+            sanitized_provenance={"digest": plan.cases[0].input.digest},
+            owner_subject="snapshot-owner",
+            service_principal="portal",
+            blob_reference="sha256/aa/shared",
+        )
+        db.add(snapshot)
+        snapshot_id = snapshot.id
+        db.flush()
+        job = BenchmarkRepository(db).create_job(
+            owner_subject="snapshot-owner",
+            suite=suite,
+            plan=repeated_plan,
+            config_digest=_digest("e"),
+            code_digest=_digest("f"),
+            inputs_digest=_digest("0"),
+            snapshot_ids_by_case={"case-0": snapshot.id},
+        )
+        job_id = job.id
+        db.commit()
+
+        cells = list(
+            db.scalars(select(BenchmarkCell).where(BenchmarkCell.job_id == job.id))
+        )
+        assert len(cells) == 2
+        assert {cell.input_snapshot_id for cell in cells} == {snapshot.id}
+        db.delete(snapshot)
+        with pytest.raises(IntegrityError):
+            db.flush()
+    finally:
+        db.rollback()
+        if job_id is not None:
+            _run_to_terminal(db, job_id)
+            BenchmarkRepository(db).delete_terminal_job(
+                job_id=job_id, owner_subject="snapshot-owner"
+            )
+        if snapshot_id is not None:
+            db.execute(
+                delete(BenchmarkInputSnapshot).where(
+                    BenchmarkInputSnapshot.id == snapshot_id
+                )
+            )
+            db.commit()
         db.close()
 
 

@@ -15,9 +15,11 @@ from fastapi import HTTPException
 from pydantic import Field, RootModel
 
 from src.lib.benchmarks.input_resolvers import (
+    BenchmarkSourceRequestContext,
     BenchmarkSourceError,
     BenchmarkSourceMetadata,
     BenchmarkSourceProvenance,
+    DelegatedAuthorizationCapability,
     MaterializedBenchmarkInput,
 )
 from src.lib.benchmarks.models import BenchmarkInputReference
@@ -95,6 +97,7 @@ class LocalDocumentResolver:
 
     resolver_id = "local_document"
     reference_schema = LocalDocumentReference
+    delegated_authorization = DelegatedAuthorizationCapability.UNSUPPORTED
 
     def __init__(
         self,
@@ -111,14 +114,14 @@ class LocalDocumentResolver:
         validated_reference: str,
         *,
         max_bytes: int,
-        principal_subject: str,
+        request_context: BenchmarkSourceRequestContext,
     ) -> MaterializedBenchmarkInput:
         return await asyncio.to_thread(
             self._materialize_sync,
             reference,
             validated_reference,
             max_bytes=max_bytes,
-            principal_subject=principal_subject,
+            principal_subject=request_context.principal_subject,
         )
 
     def _materialize_sync(

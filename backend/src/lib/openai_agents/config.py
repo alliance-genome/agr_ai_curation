@@ -1078,6 +1078,48 @@ def get_benchmark_max_input_bytes() -> int:
     )
 
 
+def get_benchmark_delegated_source_auth_max_bytes() -> int:
+    """Maximum UTF-8 bytes accepted in the delegated source auth header."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "BENCHMARK_DELEGATED_SOURCE_AUTH_MAX_BYTES", 8_192
+        ),
+    )
+
+
+def get_benchmark_max_materialized_submission_bytes() -> int:
+    """Maximum aggregate canonical bytes materialized for one submission."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "BENCHMARK_MAX_MATERIALIZED_SUBMISSION_BYTES", 262_144_000
+        ),
+    )
+
+
+def get_benchmark_snapshot_store_backend() -> str:
+    """Configured private frozen-input blob backend."""
+    return os.getenv("BENCHMARK_SNAPSHOT_STORE_BACKEND", "filesystem").strip().lower()
+
+
+def get_benchmark_snapshot_store_path() -> str:
+    """Durable filesystem root for local frozen-input blobs."""
+    return os.getenv(
+        "BENCHMARK_SNAPSHOT_STORE_PATH", "/var/lib/agr-ai-curation/benchmark-snapshots"
+    ).strip()
+
+
+def get_benchmark_snapshot_s3_bucket() -> str:
+    """Private bucket used by the S3 frozen-input backend."""
+    return os.getenv("BENCHMARK_SNAPSHOT_S3_BUCKET", "").strip()
+
+
+def get_benchmark_snapshot_s3_prefix() -> str:
+    """Key prefix used by the S3 frozen-input backend."""
+    return os.getenv("BENCHMARK_SNAPSHOT_S3_PREFIX", "benchmark-snapshots").strip("/")
+
+
 def get_benchmark_max_cases() -> int:
     """Maximum cases accepted by an execution-only benchmark suite."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CASES", 50))

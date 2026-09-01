@@ -5,9 +5,11 @@ from .benchmark import (
     BenchmarkCell,
     BenchmarkCellStatus,
     BenchmarkEvent,
+    BenchmarkInputSnapshot,
     BenchmarkInvocation,
     BenchmarkInvocationStatus,
     BenchmarkJob,
+    BenchmarkJobInputSnapshot,
     BenchmarkJobStatus,
 )
 from .agent import Agent, Project, ProjectMember
@@ -39,9 +41,11 @@ __all__ = [
     "BenchmarkCell",
     "BenchmarkCellStatus",
     "BenchmarkEvent",
+    "BenchmarkInputSnapshot",
     "BenchmarkInvocation",
     "BenchmarkInvocationStatus",
     "BenchmarkJob",
+    "BenchmarkJobInputSnapshot",
     "BenchmarkJobStatus",
     "Agent",
     "Project",

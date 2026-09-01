@@ -34,6 +34,12 @@ def test_benchmark_operational_defaults(monkeypatch):
         "BENCHMARK_ROOT",
         "BENCHMARK_SOURCE_TIMEOUT_SECONDS",
         "BENCHMARK_MAX_INPUT_BYTES",
+        "BENCHMARK_DELEGATED_SOURCE_AUTH_MAX_BYTES",
+        "BENCHMARK_MAX_MATERIALIZED_SUBMISSION_BYTES",
+        "BENCHMARK_SNAPSHOT_STORE_BACKEND",
+        "BENCHMARK_SNAPSHOT_STORE_PATH",
+        "BENCHMARK_SNAPSHOT_S3_BUCKET",
+        "BENCHMARK_SNAPSHOT_S3_PREFIX",
         "BENCHMARK_MAX_CASES",
         "BENCHMARK_MAX_CONFIGURATIONS",
         "BENCHMARK_MAX_REPETITIONS",
@@ -72,6 +78,12 @@ def test_benchmark_operational_defaults(monkeypatch):
     assert config.get_benchmark_root() == ""
     assert config.get_benchmark_source_timeout_seconds() == 30
     assert config.get_benchmark_max_input_bytes() == 52_428_800
+    assert config.get_benchmark_delegated_source_auth_max_bytes() == 8_192
+    assert config.get_benchmark_max_materialized_submission_bytes() == 262_144_000
+    assert config.get_benchmark_snapshot_store_backend() == "filesystem"
+    assert config.get_benchmark_snapshot_store_path().endswith("benchmark-snapshots")
+    assert config.get_benchmark_snapshot_s3_bucket() == ""
+    assert config.get_benchmark_snapshot_s3_prefix() == "benchmark-snapshots"
     assert config.get_benchmark_max_cases() == 50
     assert config.get_benchmark_max_configurations() == 10
     assert config.get_benchmark_max_repetitions() == 5
@@ -110,6 +122,12 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_ROOT", "  /tmp/custom-benchmarks  ")
     monkeypatch.setenv("BENCHMARK_SOURCE_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_MAX_INPUT_BYTES", "0")
+    monkeypatch.setenv("BENCHMARK_DELEGATED_SOURCE_AUTH_MAX_BYTES", "0")
+    monkeypatch.setenv("BENCHMARK_MAX_MATERIALIZED_SUBMISSION_BYTES", "0")
+    monkeypatch.setenv("BENCHMARK_SNAPSHOT_STORE_BACKEND", "  S3 ")
+    monkeypatch.setenv("BENCHMARK_SNAPSHOT_STORE_PATH", " /tmp/snapshots ")
+    monkeypatch.setenv("BENCHMARK_SNAPSHOT_S3_BUCKET", " private-bucket ")
+    monkeypatch.setenv("BENCHMARK_SNAPSHOT_S3_PREFIX", "/private/prefix/")
     monkeypatch.setenv("BENCHMARK_MAX_CASES", "0")
     monkeypatch.setenv("BENCHMARK_MAX_CONFIGURATIONS", "3")
     monkeypatch.setenv("BENCHMARK_MAX_REPETITIONS", "4")
@@ -137,6 +155,12 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_root() == "/tmp/custom-benchmarks"
     assert config.get_benchmark_source_timeout_seconds() == 0.1
     assert config.get_benchmark_max_input_bytes() == 1
+    assert config.get_benchmark_delegated_source_auth_max_bytes() == 1
+    assert config.get_benchmark_max_materialized_submission_bytes() == 1
+    assert config.get_benchmark_snapshot_store_backend() == "s3"
+    assert config.get_benchmark_snapshot_store_path() == "/tmp/snapshots"
+    assert config.get_benchmark_snapshot_s3_bucket() == "private-bucket"
+    assert config.get_benchmark_snapshot_s3_prefix() == "private/prefix"
     assert config.get_benchmark_max_cases() == 1
     assert config.get_benchmark_max_configurations() == 3
     assert config.get_benchmark_max_repetitions() == 4

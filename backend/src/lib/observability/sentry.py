@@ -16,28 +16,16 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from src.lib.openai_agents.config import get_sentry_log_event_level
+from src.lib.security.redaction import (
+    REDACTED as _REDACTED,
+    SECRET_PATTERNS as _SECRET_PATTERNS,
+    SENSITIVE_KEY_MARKERS as _SENSITIVE_KEY_MARKERS,
+)
 
 logger = logging.getLogger(__name__)
 
 _INITIALIZED = False
-_REDACTED = "[Filtered]"
 _MAX_REDACTION_DEPTH = 8
-
-_SENSITIVE_KEY_MARKERS = (
-    "authorization",
-    "cookie",
-    "csrf",
-    "password",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "access_key",
-    "private_key",
-    "session",
-    "credential",
-    "dsn",
-)
 
 _CONTENT_KEY_MARKERS = (
     "abstract",
@@ -168,14 +156,6 @@ def terminal_failure_capture_owned() -> bool:
 
 
 _RUNTIME_TEXT_LIST_CONTEXT_KEYS = {"stages_completed"}
-
-_SECRET_PATTERNS = (
-    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
-    re.compile(r"pk-[A-Za-z0-9_-]{16,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"(?i)(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"),
-)
-
 
 @dataclass(frozen=True)
 class SentrySettings:

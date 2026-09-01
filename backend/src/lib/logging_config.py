@@ -27,6 +27,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from src.lib.security.redaction import redact_secrets
+
 
 # request_id is set per HTTP request by middleware.
 # trace_id, session_id, user_id are set by existing code in src/lib/context.py.
@@ -99,7 +101,7 @@ class JsonFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": redact_secrets(record.getMessage()),
             "request_id": getattr(record, "request_id", None),
             "trace_id": getattr(record, "trace_id", None),
             "session_id": getattr(record, "session_id", None),
@@ -107,16 +109,18 @@ class JsonFormatter(logging.Formatter):
         }
 
         if record.exc_info and record.exc_info[1] is not None:
-            log_entry["exc_info"] = "".join(traceback.format_exception(*record.exc_info))
+            log_entry["exc_info"] = redact_secrets(
+                "".join(traceback.format_exception(*record.exc_info))
+            )
 
         for key, value in record.__dict__.items():
             if key in self._SKIP_FIELDS or key in log_entry:
                 continue
             try:
                 json.dumps(value)
-                log_entry[key] = value
+                log_entry[key] = redact_secrets({key: value})[key]
             except (TypeError, ValueError):
-                log_entry[key] = str(value)
+                log_entry[key] = redact_secrets({key: str(value)})[key]
 
         return json.dumps(log_entry, default=str)
 
@@ -134,10 +138,15 @@ class SimpleFormatter(logging.Formatter):
         ctx_suffix = f" [{', '.join(ctx_parts)}]" if ctx_parts else ""
 
         timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        base = f"{timestamp} {record.levelname:<8} {record.name} - {record.getMessage()}{ctx_suffix}"
+        base = (
+            f"{timestamp} {record.levelname:<8} {record.name} - "
+            f"{redact_secrets(record.getMessage())}{ctx_suffix}"
+        )
 
         if record.exc_info and record.exc_info[1] is not None:
-            base += "\n" + "".join(traceback.format_exception(*record.exc_info))
+            base += "\n" + redact_secrets(
+                "".join(traceback.format_exception(*record.exc_info))
+            )
 
         return base
 
