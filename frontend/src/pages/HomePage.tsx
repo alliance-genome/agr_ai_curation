@@ -835,14 +835,20 @@ function HomePage() {
   if (isBootstrappingSession || !user?.uid) {
     return (
       <Root>
-        <Stack spacing={2} alignItems="center" justifyContent="center" sx={{ flex: 1 }}>
+        <Stack
+          spacing={2}
+          sx={{
+            alignItems: "center",
+            justifyContent: "center",
+            flex: 1
+          }}>
           <CircularProgress />
           <Typography variant="h6">
             {requestedSessionId ? 'Restoring chat session...' : 'Preparing chat session...'}
           </Typography>
         </Stack>
       </Root>
-    )
+    );
   }
 
   if (missingSessionId || sessionBootstrapError) {
@@ -850,10 +856,15 @@ function HomePage() {
       <Root>
         <Stack
           spacing={2}
-          alignItems="center"
-          justifyContent="center"
-          sx={{ flex: 1, px: 3, py: 4, maxWidth: 720, mx: 'auto' }}
-        >
+          sx={{
+            alignItems: "center",
+            justifyContent: "center",
+            flex: 1,
+            px: 3,
+            py: 4,
+            maxWidth: 720,
+            mx: 'auto'
+          }}>
           <Alert severity={missingSessionId ? 'warning' : 'error'} sx={{ width: '100%' }}>
             {missingSessionId
               ? 'This chat session is unavailable. It may have been deleted.'
@@ -868,7 +879,7 @@ function HomePage() {
           </Button>
         </Stack>
       </Root>
-    )
+    );
   }
 
   return (
@@ -931,7 +942,12 @@ function HomePage() {
         }}
         open={loadingDocument}
       >
-        <Stack spacing={2} alignItems="center" sx={{ maxWidth: 400 }}>
+        <Stack
+          spacing={2}
+          sx={{
+            alignItems: "center",
+            maxWidth: 400
+          }}>
           {loadingError ? (
             <>
               <Alert
@@ -963,7 +979,7 @@ function HomePage() {
         </Stack>
       </Backdrop>
     </Root>
-  )
+  );
 }
 
 export default HomePage

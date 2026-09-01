@@ -56,35 +56,39 @@ export default function HistorySearchBar({
         p: 2.5,
       }}
     >
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{
+        alignItems: { md: 'center' }
+      }}>
         <TextField
           fullWidth
           label="Search chat history"
           placeholder="Search by conversation title"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          inputProps={{ 'aria-label': 'Search chat history' }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon color="action" fontSize="small" />
-              </InputAdornment>
-            ),
-            endAdornment: value ? (
-              <InputAdornment position="end">
-                <Button
-                  aria-label="Clear history search"
-                  color="inherit"
-                  onClick={() => onChange('')}
-                  size="small"
-                  startIcon={<ClearIcon fontSize="small" />}
-                >
-                  Clear
-                </Button>
-              </InputAdornment>
-            ) : undefined,
-          }}
-        />
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon color="action" fontSize="small" />
+                </InputAdornment>
+              ),
+              endAdornment: value ? (
+                <InputAdornment position="end">
+                  <Button
+                    aria-label="Clear history search"
+                    color="inherit"
+                    onClick={() => onChange('')}
+                    size="small"
+                    startIcon={<ClearIcon fontSize="small" />}
+                  >
+                    Clear
+                  </Button>
+                </InputAdornment>
+              ) : undefined,
+            },
+
+            htmlInput: { 'aria-label': 'Search chat history' }
+          }} />
 
         <Button
           color="error"
@@ -100,9 +104,10 @@ export default function HistorySearchBar({
       <Stack
         direction={{ xs: 'column', md: 'row' }}
         spacing={1}
-        justifyContent="space-between"
-        sx={{ mt: 2 }}
-      >
+        sx={{
+          justifyContent: "space-between",
+          mt: 2
+        }}>
         <FormControlLabel
           control={
             <Checkbox
@@ -123,13 +128,19 @@ export default function HistorySearchBar({
             justifyContent: { xs: 'flex-start', md: 'flex-end' },
           }}
         >
-          <Typography color="text.secondary" variant="body2">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Showing {visibleCount} of {totalSessions} {pluralize(totalSessions, 'conversation')}
           </Typography>
-          <Typography color="text.secondary" variant="body2">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             {selectedCount} {pluralize(selectedCount, 'conversation')} selected
           </Typography>
-          <Typography color="text.secondary" variant="body2">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Searching within {searchScopeLabel}
           </Typography>
           {isFiltering ? (
@@ -140,5 +151,5 @@ export default function HistorySearchBar({
         </Box>
       </Stack>
     </Paper>
-  )
+  );
 }

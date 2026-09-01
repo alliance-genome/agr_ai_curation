@@ -58,18 +58,6 @@ export default function HorizontalGridFieldEditorDialog({
       maxWidth={false}
       onClose={onClose}
       open={open && field !== null}
-      PaperProps={{
-        sx: (theme) => ({
-          width: 'min(460px, calc(100vw - 32px))',
-          m: 2,
-          border: `1px solid ${theme.palette.mode === 'light' ? theme.palette.grey[400] : alpha(theme.palette.common.white, 0.28)}`,
-          borderRadius: '8px',
-          backgroundImage: 'none',
-          boxShadow: theme.palette.mode === 'light'
-            ? '0 20px 70px rgba(5, 31, 57, 0.30)'
-            : '0 20px 70px rgba(0, 0, 0, 0.62)',
-        }),
-      }}
       slotProps={{
         backdrop: {
           sx: (theme) => ({
@@ -78,16 +66,39 @@ export default function HorizontalGridFieldEditorDialog({
               : alpha(theme.palette.common.black, 0.68),
           }),
         },
-      }}
-    >
+
+        paper: {
+          sx: (theme) => ({
+            width: 'min(460px, calc(100vw - 32px))',
+            m: 2,
+            border: `1px solid ${theme.palette.mode === 'light' ? theme.palette.grey[400] : alpha(theme.palette.common.white, 0.28)}`,
+            borderRadius: '8px',
+            backgroundImage: 'none',
+            boxShadow: theme.palette.mode === 'light'
+              ? '0 20px 70px rgba(5, 31, 57, 0.30)'
+              : '0 20px 70px rgba(0, 0, 0, 0.62)',
+          }),
+        }
+      }}>
       <Box sx={{ p: '20px 20px 0' }}>
-        <Stack alignItems="flex-start" direction="row" justifyContent="space-between" spacing="12px">
+        <Stack
+          direction="row"
+          spacing="12px"
+          sx={{
+            alignItems: "flex-start",
+            justifyContent: "space-between"
+          }}>
           <Box>
             <Typography
-              color="text.secondary"
-              display="block"
-              sx={{ fontSize: 9, fontWeight: 770, letterSpacing: '0.08em', mb: '3px', textTransform: 'uppercase' }}
-            >
+              sx={{
+                color: "text.secondary",
+                display: "block",
+                fontSize: 9,
+                fontWeight: 770,
+                letterSpacing: '0.08em',
+                mb: '3px',
+                textTransform: 'uppercase'
+              }}>
               Edit curation value
             </Typography>
             <Typography id={titleId} sx={{ fontSize: 15, fontWeight: 700, lineHeight: 1.25 }}>
@@ -128,7 +139,13 @@ export default function HorizontalGridFieldEditorDialog({
               renderInput={editorPack?.renderFieldInput}
               value={draftValue}
             />
-            <Typography color="text.secondary" sx={{ fontSize: 10, lineHeight: 1.4, m: '7px 0 20px' }}>
+            <Typography
+              sx={{
+                color: "text.secondary",
+                fontSize: 10,
+                lineHeight: 1.4,
+                m: '7px 0 20px'
+              }}>
               Save value applies this edit to the curation draft.
               {field.dirty ? ' You can also restore the extracted value before saving.' : ''}
             </Typography>
@@ -186,5 +203,5 @@ export default function HorizontalGridFieldEditorDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }

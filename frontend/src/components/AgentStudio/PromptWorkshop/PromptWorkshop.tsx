@@ -39,7 +39,7 @@ import {
 import { styled, alpha } from '@mui/material/styles'
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import SearchIcon from '@mui/icons-material/Search'
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import DeleteIcon from '@mui/icons-material/Delete'
@@ -231,7 +231,7 @@ const StyledMenuItem = styled(MenuItem)(({ theme }) => ({
 }))
 
 function toolIdeaStatusLabel(status: ToolIdeaRequest['status']): string {
-  return status.replace(/_/g, ' ')
+  return status.replace(/_/g, ' ');
 }
 
 function toolIdeaStatusColor(
@@ -1533,7 +1533,9 @@ function PromptWorkshop({
         )}
 
         <ToolbarStatus>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             {selectedCustomAgent ? `Editing: ${selectedCustomAgent.name}` : 'Editing: New draft'}
           </Typography>
           {(loading || saving) && <CircularProgress size={16} />}
@@ -1614,7 +1616,13 @@ function PromptWorkshop({
             <Stack spacing={2}>
               {/* Getting Started mode selector */}
               <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ mb: 0.75, display: 'block' }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    mb: 0.75,
+                    display: 'block'
+                  }}>
                   Starting point
                 </Typography>
                 <StyledToggleButtonGroup
@@ -1742,8 +1750,12 @@ function PromptWorkshop({
               </Typography>
 
               {/* Model & Visibility */}
-              <Stack direction="row" alignItems="center" spacing={0.5}>
-                <Typography variant="caption" color="text.secondary">
+              <Stack direction="row" spacing={0.5} sx={{
+                alignItems: "center"
+              }}>
+                <Typography variant="caption" sx={{
+                  color: "text.secondary"
+                }}>
                   Model guidance
                 </Typography>
                 <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{buildModelHelpText(modelOptions)}</span>} placement="top">
@@ -1833,12 +1845,20 @@ function PromptWorkshop({
                     backgroundColor: (theme) => alpha(theme.palette.background.default, 0.35),
                   }}
                 >
-                  <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1.5}>
+                  <Stack
+                    direction="row"
+                    spacing={1.5}
+                    sx={{
+                      alignItems: "flex-start",
+                      justifyContent: "space-between"
+                    }}>
                     <Box>
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         {selectedModelOption.name}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography variant="caption" sx={{
+                        color: "text.secondary"
+                      }}>
                         {selectedModelOption.provider.toUpperCase()} · {selectedModelOption.model_id}
                       </Typography>
                     </Box>
@@ -1850,25 +1870,43 @@ function PromptWorkshop({
                   </Stack>
 
                   {selectedModelOption.description && (
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: "text.secondary",
+                        mt: 1
+                      }}>
                       {selectedModelOption.description}
                     </Typography>
                   )}
 
                   {selectedModelOption.guidance && selectedModelOption.guidance !== selectedModelOption.description && (
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: "text.secondary",
+                        mt: 0.75
+                      }}>
                       {selectedModelOption.guidance}
                     </Typography>
                   )}
 
                   {(selectedModelOption.recommended_for.length > 0 || selectedModelOption.avoid_for.length > 0) && (
                     <Box sx={{ mt: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: "text.secondary",
+                          display: 'block',
+                          mb: 0.5
+                        }}>
                         Model fit
                       </Typography>
                       {selectedModelOption.recommended_for.length > 0 && (
                         <>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" sx={{
+                            color: "text.secondary"
+                          }}>
                             Recommended for
                           </Typography>
                           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
@@ -1880,7 +1918,13 @@ function PromptWorkshop({
                       )}
                       {selectedModelOption.avoid_for.length > 0 && (
                         <>
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.25 }}>
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: "text.secondary",
+                              display: 'block',
+                              mt: 1.25
+                            }}>
                             Avoid for
                           </Typography>
                           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
@@ -1896,8 +1940,16 @@ function PromptWorkshop({
                   {selectedModelOption.supports_reasoning && selectedModelOption.reasoning_options.length > 0 && (
                     <Box sx={{ mt: 1.5 }}>
                       <Divider sx={{ mb: 1.25, opacity: 0.6 }} />
-                      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">
+                      <Stack
+                        direction="row"
+                        spacing={0.5}
+                        sx={{
+                          alignItems: "center",
+                          mb: 0.5
+                        }}>
+                        <Typography variant="caption" sx={{
+                          color: "text.secondary"
+                        }}>
                           Reasoning level
                         </Typography>
                         <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{REASONING_HELP_TEXT}</span>} placement="top">
@@ -1935,7 +1987,14 @@ function PromptWorkshop({
           {/* ── Section (prompt): Prompt ── */}
           {workshopSection === 'prompt' && (
           <SectionCard elevation={0}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1.5} sx={{ mb: 2 }}>
+            <Stack
+              direction="row"
+              spacing={1.5}
+              sx={{
+                alignItems: "center",
+                justifyContent: "space-between",
+                mb: 2
+              }}>
               <SectionHeader sx={{ mb: 0 }}>Prompt</SectionHeader>
               {onVerifyRequest && (
                 <Button size="small" variant="outlined" onClick={handleDiscussPromptChangesWithClaude}>
@@ -1979,7 +2038,9 @@ function PromptWorkshop({
 
               <StyledAccordion defaultExpanded={true}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{
+                    alignItems: "center"
+                  }}>
                     <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Group-specific instructions</Typography>
                     {hasAnyGroupOverrides && (
                       <Chip size="small" label={`${Object.keys(groupPromptOverrides).length} override${Object.keys(groupPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
@@ -1992,7 +2053,9 @@ function PromptWorkshop({
                       Logged in as {loggedInAsLabel}. Group membership: {loggedInGroupsLabel}.
                       {selectedGroupId ? ` Editing ${selectedGroupId} instructions.` : ' Select a group to edit its instructions.'}
                     </Alert>
-                    <Stack direction="row" spacing={0.5} alignItems="center">
+                    <Stack direction="row" spacing={0.5} sx={{
+                      alignItems: "center"
+                    }}>
                       <FormControlLabel
                         sx={{ ml: 0, mr: 0 }}
                         control={
@@ -2003,7 +2066,9 @@ function PromptWorkshop({
                           />
                         }
                         label={
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography variant="body2" sx={{
+                            color: "text.secondary"
+                          }}>
                             Add group prompts at runtime
                           </Typography>
                         }
@@ -2019,12 +2084,16 @@ function PromptWorkshop({
                     </Stack>
 
                     {availableGroupIds.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" sx={{
+                        color: "text.secondary"
+                      }}>
                         This template has no group-specific prompts to override.
                       </Typography>
                     ) : (
                       <Stack spacing={1.5}>
-                        <Stack direction="row" spacing={1} alignItems="center">
+                        <Stack direction="row" spacing={1} sx={{
+                          alignItems: "center"
+                        }}>
                           <Select
                             size="small"
                             value={groupId}
@@ -2070,7 +2139,9 @@ function PromptWorkshop({
                             },
                           }}
                         />
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography variant="caption" sx={{
+                          color: "text.secondary"
+                        }}>
                           {selectedGroupId
                             ? hasSelectedGroupOverride
                               ? `Custom override active for ${selectedGroupId}.`
@@ -2099,14 +2170,18 @@ function PromptWorkshop({
                 backgroundColor: (theme) => alpha(theme.palette.info.main, 0.08),
               }}
             >
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 These are the built-in instruction layers that make up this agent. They&apos;re read-only here — shown so you can see what your own instructions (on the Prompt tab) build on. You don&apos;t need to change anything on this tab.
               </Typography>
             </Box>
             <Stack spacing={1}>
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{
+                    alignItems: "center"
+                  }}>
                     <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Built-in instructions</Typography>
                     <Chip size="small" icon={<LockOutlinedIcon />} label="Locked" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                   </Stack>
@@ -2120,7 +2195,9 @@ function PromptWorkshop({
 
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{
+                    alignItems: "center"
+                  }}>
                     <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Output structure</Typography>
                     <Chip size="small" icon={<LockOutlinedIcon />} label="Automatic" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                   </Stack>
@@ -2134,7 +2211,9 @@ function PromptWorkshop({
 
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{
+                    alignItems: "center"
+                  }}>
                     <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Template instructions</Typography>
                     <Chip size="small" label="From template" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                   </Stack>
@@ -2158,7 +2237,9 @@ function PromptWorkshop({
             {/* Tools accordion */}
             <StyledAccordion defaultExpanded={selectedToolIds.length > 0}>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} sx={{
+                  alignItems: "center"
+                }}>
                   <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Tools</Typography>
                   {selectedToolIds.length > 0 && (
                     <Chip size="small" label={`${selectedToolIds.length} attached`} color="primary" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
@@ -2168,7 +2249,9 @@ function PromptWorkshop({
               <AccordionDetails>
                 <Stack spacing={1.5}>
                   {selectedToolIds.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
                       No tools selected.
                     </Typography>
                   ) : (
@@ -2186,7 +2269,9 @@ function PromptWorkshop({
                       })}
                     </Box>
                   )}
-                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Stack direction="row" spacing={1} sx={{
+                    flexWrap: "wrap"
+                  }}>
                     <Button size="small" variant="outlined" onClick={handleOpenToolLibrary}>
                       Manage Tools
                     </Button>
@@ -2206,7 +2291,9 @@ function PromptWorkshop({
             {/* Tool Requests accordion */}
             <StyledAccordion>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} sx={{
+                  alignItems: "center"
+                }}>
                   <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Tool Requests</Typography>
                   {toolIdeaRequests.length > 0 && (
                     <Chip size="small" label={toolIdeaRequests.length} variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
@@ -2216,7 +2303,9 @@ function PromptWorkshop({
               </AccordionSummary>
               <AccordionDetails>
                 {toolIdeaRequests.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" sx={{
+                    color: "text.secondary"
+                  }}>
                     No tool requests submitted yet.
                   </Typography>
                 ) : (
@@ -2225,15 +2314,18 @@ function PromptWorkshop({
                       <Stack
                         key={request.id}
                         direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
                         spacing={1}
-                      >
+                        sx={{
+                          justifyContent: "space-between",
+                          alignItems: "center"
+                        }}>
                         <Box sx={{ minWidth: 0 }}>
                           <Typography variant="body2" noWrap>
                             {request.title}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" sx={{
+                            color: "text.secondary"
+                          }}>
                             {new Date(request.created_at).toLocaleDateString()}
                           </Typography>
                         </Box>
@@ -2267,7 +2359,9 @@ function PromptWorkshop({
 
               <StyledAccordion defaultExpanded={versions.length > 0 && versions.length <= 5}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{
+                    alignItems: "center"
+                  }}>
                     <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Version History</Typography>
                     {versions.length > 0 && (
                       <Chip size="small" label={`${versions.length} version${versions.length !== 1 ? 's' : ''}`} variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
@@ -2276,7 +2370,9 @@ function PromptWorkshop({
                 </AccordionSummary>
                 <AccordionDetails>
                   {versions.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
                       No versions yet
                     </Typography>
                   ) : (
@@ -2286,17 +2382,17 @@ function PromptWorkshop({
                           key={version.id}
                           direction="row"
                           spacing={1}
-                          alignItems="center"
-                          justifyContent="space-between"
                           sx={{
+                            alignItems: "center",
+                            justifyContent: "space-between",
                             py: 0.5,
                             px: 1,
                             borderRadius: 1,
+
                             '&:hover': {
                               backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.5),
-                            },
-                          }}
-                        >
+                            }
+                          }}>
                           <Typography variant="body2">
                             v{version.version} {version.notes ? `- ${version.notes}` : ''}
                           </Typography>
@@ -2322,7 +2418,9 @@ function PromptWorkshop({
           onClose={handleOpenDialogClose}
           maxWidth="sm"
           fullWidth
-          PaperProps={{ sx: { borderRadius: 2, maxHeight: '70vh' } }}
+          slotProps={{
+            paper: { sx: { borderRadius: 2, maxHeight: '70vh' } }
+          }}
         >
           <DialogTitle sx={{ pb: 1 }}>
             <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
@@ -2336,14 +2434,16 @@ function PromptWorkshop({
               placeholder="Search agents..."
               value={openSearchTerm}
               onChange={(event) => setOpenSearchTerm(event.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-                  </InputAdornment>
-                ),
-              }}
               sx={{ mb: 2 }}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                    </InputAdornment>
+                  ),
+                }
+              }}
             />
             <Box sx={{ minHeight: 200, maxHeight: 320, overflow: 'auto' }}>
               {loading ? (
@@ -2379,9 +2479,10 @@ function PromptWorkshop({
                           <ListItemText
                             primary={agent.name}
                             secondary={agent.description || 'Custom agent'}
-                            primaryTypographyProps={{ fontSize: '0.85rem' }}
-                            secondaryTypographyProps={{ fontSize: '0.75rem' }}
-                          />
+                            slotProps={{
+                              primary: { sx: { fontSize: '0.85rem' } },
+                              secondary: { sx: { fontSize: '0.75rem' } }
+                            }} />
                       </ListItemButton>
                     </ListItem>
                   ))}
@@ -2401,13 +2502,20 @@ function PromptWorkshop({
           onClose={handleManageDialogClose}
           maxWidth="sm"
           fullWidth
-          PaperProps={{ sx: { borderRadius: 2, maxHeight: '70vh' } }}
+          slotProps={{
+            paper: { sx: { borderRadius: 2, maxHeight: '70vh' } }
+          }}
         >
           <DialogTitle sx={{ pb: 1 }}>
             <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
               Manage Agents
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mt: 0.5
+              }}>
               Open or delete your saved agents
             </Typography>
           </DialogTitle>
@@ -2451,7 +2559,9 @@ function PromptWorkshop({
                           >
                             {agent.name}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" sx={{
+                            color: "text.secondary"
+                          }}>
                             {agent.description || 'Custom agent'}
                             {agent.id === selectedCustomAgentId && ' • Currently open'}
                           </Typography>
@@ -2495,7 +2605,9 @@ function PromptWorkshop({
           onClose={handleSaveAsClose}
           maxWidth="xs"
           fullWidth
-          PaperProps={{ sx: { borderRadius: 2 } }}
+          slotProps={{
+            paper: { sx: { borderRadius: 2 } }
+          }}
         >
           <DialogTitle sx={{ pb: 1 }}>
             <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
@@ -2503,7 +2615,12 @@ function PromptWorkshop({
             </Typography>
           </DialogTitle>
           <DialogContent>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mb: 2
+              }}>
               Enter a name for the new copy
             </Typography>
             <TextField
@@ -2540,7 +2657,9 @@ function PromptWorkshop({
           onClose={handleCloseToolLibrary}
           maxWidth="sm"
           fullWidth
-          PaperProps={{ sx: { borderRadius: 2, maxHeight: '75vh' } }}
+          slotProps={{
+            paper: { sx: { borderRadius: 2, maxHeight: '75vh' } }
+          }}
         >
           <DialogTitle sx={{ pb: 1 }}>
             <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
@@ -2554,14 +2673,16 @@ function PromptWorkshop({
               placeholder="Search tools..."
               value={toolLibrarySearch}
               onChange={(event) => setToolLibrarySearch(event.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-                  </InputAdornment>
-                ),
-              }}
               sx={{ mb: 2 }}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                    </InputAdornment>
+                  ),
+                }
+              }}
             />
             <FormControl size="small" fullWidth sx={{ mb: 2 }}>
               <InputLabel>Category</InputLabel>
@@ -2622,12 +2743,13 @@ function PromptWorkshop({
                                 ? `${tool.category} • ${tool.description}`
                                 : `${tool.category} • ${tool.description} • Not attachable by policy`
                             }
-                            primaryTypographyProps={{ fontSize: '0.85rem' }}
-                            secondaryTypographyProps={{ fontSize: '0.75rem' }}
-                          />
+                            slotProps={{
+                              primary: { sx: { fontSize: '0.85rem' } },
+                              secondary: { sx: { fontSize: '0.75rem' } }
+                            }} />
                         </ListItemButton>
                       </ListItem>
-                    )
+                    );
                   })}
                 </List>
               )}
@@ -2645,7 +2767,9 @@ function PromptWorkshop({
           onClose={handleCloseToolIdeaDialog}
           maxWidth="sm"
           fullWidth
-          PaperProps={{ sx: { borderRadius: 2 } }}
+          slotProps={{
+            paper: { sx: { borderRadius: 2 } }
+          }}
         >
           <DialogTitle sx={{ pb: 1 }}>
             <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
@@ -2654,7 +2778,9 @@ function PromptWorkshop({
           </DialogTitle>
           <DialogContent sx={{ pt: 1 }}>
             <Stack spacing={1.5}>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 Share a concise request for the developers. You can draft it with Claude first.
               </Typography>
               <TextField
@@ -2725,11 +2851,15 @@ function PromptWorkshop({
         <Dialog
           open={deleteConfirmOpen}
           onClose={handleDeleteCancel}
-          PaperProps={{ sx: { minWidth: 320, borderRadius: 2 } }}
+          slotProps={{
+            paper: { sx: { minWidth: 320, borderRadius: 2 } }
+          }}
         >
           <DialogTitle sx={{ fontSize: '1rem' }}>Delete Agent?</DialogTitle>
           <DialogContent>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               Are you sure you want to delete &ldquo;{pendingDeleteAgent?.name}&rdquo;? This action cannot be undone.
             </Typography>
           </DialogContent>
@@ -2751,7 +2881,7 @@ function PromptWorkshop({
         </Stack>
       </Box>
     </Box>
-  )
+  );
 }
 
 export default PromptWorkshop

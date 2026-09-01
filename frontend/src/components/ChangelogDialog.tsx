@@ -27,7 +27,9 @@ const ChangelogDialog: React.FC<ChangelogDialogProps> = ({ open, entry, onClose,
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle>
         What&apos;s New: v{entry.version}
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           {entry.date}
         </Typography>
       </DialogTitle>
@@ -49,7 +51,12 @@ const ChangelogDialog: React.FC<ChangelogDialogProps> = ({ open, entry, onClose,
               {section.heading}
             </Typography>
             {section.text && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: "text.secondary",
+                  mt: 0.5
+                }}>
                 {section.text}
               </Typography>
             )}

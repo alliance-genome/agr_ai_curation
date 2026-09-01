@@ -64,8 +64,16 @@ export default function WorkPaneToolbar({
         width: '100%',
       }}
     >
-      <Stack spacing={0.5} minWidth={0}>
-        <Stack direction="row" spacing={1} alignItems="center" minWidth={0}>
+      <Stack spacing={0.5} sx={{
+        minWidth: 0
+      }}>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: "center",
+            minWidth: 0
+          }}>
           <Typography
             sx={{
               color: theme.palette.text.primary,
@@ -90,23 +98,47 @@ export default function WorkPaneToolbar({
         <Stack
           aria-label="Authoritative validation summary"
           direction="row"
-          flexWrap="wrap"
           spacing={1.25}
           useFlexGap
+          sx={{
+            flexWrap: "wrap"
+          }}
         >
-          <Typography color="text.secondary" variant="caption">
-            <Box aria-hidden color="success.main" component="span">●</Box> {validationCounts.validated} validated
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
+            <Box aria-hidden component="span" sx={{
+              color: "success.main"
+            }}>●</Box> {validationCounts.validated} validated
           </Typography>
-          <Typography color="text.secondary" variant="caption">
-            <Box aria-hidden color="warning.main" component="span">●</Box> {validationCounts.blocking} need review
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
+            <Box aria-hidden component="span" sx={{
+              color: "warning.main"
+            }}>●</Box> {validationCounts.blocking} need review
           </Typography>
-          <Typography color="text.secondary" variant="caption">
-            <Box aria-hidden color="error.main" component="span">●</Box> {validationCounts.stale} stale
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
+            <Box aria-hidden component="span" sx={{
+              color: "error.main"
+            }}>●</Box> {validationCounts.stale} stale
           </Typography>
-          <Typography color="text.secondary" variant="caption">{validationCounts.openFindings} open findings</Typography>
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>{validationCounts.openFindings} open findings</Typography>
         </Stack>
       </Stack>
-      <Stack direction="row" spacing={0.75} alignItems="center" flexShrink={0} flexWrap="wrap" useFlexGap>
+      <Stack
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        sx={{
+          alignItems: "center",
+          flexShrink: 0,
+          flexWrap: "wrap"
+        }}>
         {selectedDecision?.status === 'pending' ? (
           <Stack
             aria-label={`Decision for ${selectedDecision.label}`}
@@ -183,5 +215,5 @@ export default function WorkPaneToolbar({
         </Button>
       </Stack>
     </Box>
-  )
+  );
 }

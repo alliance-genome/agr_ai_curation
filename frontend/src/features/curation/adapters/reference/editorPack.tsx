@@ -152,15 +152,17 @@ function renderAuthorListInput({
       fullWidth
       helperText={resolveHelperText(field) ?? 'One author per line.'}
       id={inputId}
-      inputProps={{ 'aria-label': ariaLabel }}
       minRows={3}
       multiline
       onChange={(event) => onChange(parseAuthorList(event.target.value))}
       placeholder={resolvePlaceholder(field)}
       size="small"
       value={stringifyAuthorList(value)}
+      slotProps={{
+        htmlInput: { 'aria-label': ariaLabel }
+      }}
     />
-  )
+  );
 }
 
 function renderDefaultReferenceInput({
@@ -184,7 +186,6 @@ function renderDefaultReferenceInput({
         disabled={disabled}
         fullWidth
         id={inputId}
-        inputProps={{ 'aria-label': ariaLabel }}
         onChange={(event) => {
           const nextOption = options.find((option) => option.key === event.target.value)
           onChange(nextOption?.value ?? null)
@@ -192,6 +193,9 @@ function renderDefaultReferenceInput({
         select
         size="small"
         value={selectedKey}
+        slotProps={{
+          htmlInput: { 'aria-label': ariaLabel }
+        }}
       >
         {options.map((option) => (
           <MenuItem key={option.key} value={option.key}>
@@ -199,7 +203,7 @@ function renderDefaultReferenceInput({
           </MenuItem>
         ))}
       </TextField>
-    )
+    );
   }
 
   if (field.field_type === 'json') {
@@ -209,7 +213,6 @@ function renderDefaultReferenceInput({
         disabled={disabled}
         fullWidth
         id={inputId}
-        inputProps={{ 'aria-label': ariaLabel }}
         minRows={3}
         multiline
         onChange={(event) => {
@@ -229,8 +232,11 @@ function renderDefaultReferenceInput({
         placeholder={placeholder}
         size="small"
         value={normalizeFieldTextValue(value)}
+        slotProps={{
+          htmlInput: { 'aria-label': ariaLabel }
+        }}
       />
-    )
+    );
   }
 
   if (field.field_type === 'number') {
@@ -240,11 +246,6 @@ function renderDefaultReferenceInput({
         disabled={disabled}
         fullWidth
         id={inputId}
-        inputProps={{
-          'aria-label': ariaLabel,
-          inputMode: 'decimal',
-          step: 'any',
-        }}
         onChange={(event) => {
           const nextValue = event.target.value
 
@@ -260,8 +261,15 @@ function renderDefaultReferenceInput({
         size="small"
         type="number"
         value={normalizeFieldTextValue(value)}
+        slotProps={{
+          htmlInput: {
+            'aria-label': ariaLabel,
+            inputMode: 'decimal',
+            step: 'any',
+          }
+        }}
       />
-    )
+    );
   }
 
   return (
@@ -270,16 +278,18 @@ function renderDefaultReferenceInput({
       disabled={disabled}
       fullWidth
       id={inputId}
-      inputProps={{
-        'aria-label': ariaLabel,
-        readOnly: field.read_only,
-      }}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
       size="small"
       value={normalizeFieldTextValue(value)}
+      slotProps={{
+        htmlInput: {
+          'aria-label': ariaLabel,
+          readOnly: field.read_only,
+        }
+      }}
     />
-  )
+  );
 }
 
 export function renderReferenceFieldInput(props: FieldRowInputProps): ReactNode {

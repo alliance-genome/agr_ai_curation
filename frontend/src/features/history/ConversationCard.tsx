@@ -1,4 +1,4 @@
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
@@ -85,31 +85,42 @@ export default function ConversationCard({
       }}
     >
       <CardContent sx={{ p: 0 }}>
-        <Stack direction="row" spacing={2} alignItems="flex-start" sx={{ px: 2.5, py: 2.5 }}>
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{
+            alignItems: "flex-start",
+            px: 2.5,
+            py: 2.5
+          }}>
           <Checkbox
             checked={isSelected}
-            inputProps={{
-              'aria-label': `Select conversation ${formatConversationTitle(session)}`,
-            }}
             onChange={(event) => onSelectChange(event.target.checked)}
             sx={{ mt: 0.25 }}
+            slotProps={{
+              input: {
+                'aria-label': `Select conversation ${formatConversationTitle(session)}`,
+              }
+            }}
           />
 
           <Stack spacing={1.25} sx={{ flex: 1, minWidth: 0 }}>
             <Stack
               direction={{ xs: 'column', md: 'row' }}
               spacing={1}
-              justifyContent="space-between"
-              alignItems={{ md: 'flex-start' }}
-            >
+              sx={{
+                justifyContent: "space-between",
+                alignItems: { md: 'flex-start' }
+              }}>
               <Box sx={{ minWidth: 0 }}>
                 <Stack
                   direction="row"
                   spacing={1}
-                  alignItems="center"
-                  flexWrap="wrap"
                   useFlexGap
-                >
+                  sx={{
+                    alignItems: "center",
+                    flexWrap: "wrap"
+                  }}>
                   <Typography variant="h6" sx={{ wordBreak: 'break-word' }}>
                     {formatConversationTitle(session)}
                   </Typography>
@@ -133,12 +144,19 @@ export default function ConversationCard({
                     })}
                   />
                 </Stack>
-                <Typography color="text.secondary" variant="body2" sx={{ mt: 0.5 }}>
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: "text.secondary",
+                    mt: 0.5
+                  }}>
                   Updated {formatDateTime(session.recent_activity_at)}
                 </Typography>
               </Box>
 
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={1} useFlexGap sx={{
+                flexWrap: "wrap"
+              }}>
                 {session.active_document_id ? (
                   <Chip
                     icon={<LinkIcon />}
@@ -162,7 +180,9 @@ export default function ConversationCard({
               </Stack>
             </Stack>
 
-            <Typography color="text.secondary" variant="caption">
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               Session ID: {session.session_id}
             </Typography>
 
@@ -200,5 +220,5 @@ export default function ConversationCard({
         ) : null}
       </CardContent>
     </Card>
-  )
+  );
 }

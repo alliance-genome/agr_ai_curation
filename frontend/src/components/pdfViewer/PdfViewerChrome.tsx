@@ -165,9 +165,7 @@ export function PdfViewerChrome({
             <Stack
               direction="row"
               spacing={1}
-              alignItems="baseline"
-              justifyContent="space-between"
-              sx={{ minWidth: 0 }}
+              sx={{ alignItems: 'baseline', justifyContent: 'space-between', minWidth: 0 }}
             >
               <Typography
                 variant={isCurationVariant ? 'subtitle2' : 'subtitle1'}
@@ -202,7 +200,7 @@ export function PdfViewerChrome({
             </Stack>
             {navigationResult && (
               <>
-                <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
                   <Chip
                     size="small"
                     color={getNavigationBadgeColor(navigationResult)}
@@ -281,7 +279,7 @@ export function PdfViewerChrome({
                   : undefined,
               }}
             >
-              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flex: '0 0 auto', minWidth: 0 }}>
+              <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', flex: '0 0 auto', minWidth: 0 }}>
                 <Tooltip title="Previous page">
                   <span>
                     <IconButton
@@ -323,7 +321,7 @@ export function PdfViewerChrome({
                 </Tooltip>
               </Stack>
               <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
-              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flex: '0 0 auto', minWidth: 0 }}>
+              <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', flex: '0 0 auto', minWidth: 0 }}>
                 <Tooltip title="Zoom out">
                   <span>
                     <IconButton
@@ -383,7 +381,6 @@ export function PdfViewerChrome({
                 onKeyDown={handleSearchKeyDown}
                 disabled={controlsDisabled}
                 placeholder="Find in PDF"
-                inputProps={{ 'aria-label': 'Find in PDF' }}
                 sx={{
                   flex: '1 1 12rem',
                   minWidth: 0,
@@ -414,26 +411,29 @@ export function PdfViewerChrome({
                     },
                   }),
                 }}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon fontSize="small" color="action" />
-                    </InputAdornment>
-                  ),
-                  endAdornment: searchMatchLabel ? (
-                    <InputAdornment position="end">
-                      <Typography
-                        variant="caption"
-                        color={searchNotFound ? 'error.main' : 'text.secondary'}
-                        sx={{ whiteSpace: 'nowrap' }}
-                      >
-                        {searchMatchLabel}
-                      </Typography>
-                    </InputAdornment>
-                  ) : undefined,
-                }}
-              />
-              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flex: '0 0 auto', minWidth: 0 }}>
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon fontSize="small" color="action" />
+                      </InputAdornment>
+                    ),
+                    endAdornment: searchMatchLabel ? (
+                      <InputAdornment position="end">
+                        <Typography
+                          variant="caption"
+                          color={searchNotFound ? 'error.main' : 'text.secondary'}
+                          sx={{ whiteSpace: 'nowrap' }}
+                        >
+                          {searchMatchLabel}
+                        </Typography>
+                      </InputAdornment>
+                    ) : undefined,
+                  },
+
+                  htmlInput: { 'aria-label': 'Find in PDF' }
+                }} />
+              <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', flex: '0 0 auto', minWidth: 0 }}>
                 <Tooltip title="Previous match">
                   <span>
                     <IconButton
@@ -519,7 +519,7 @@ export function PdfViewerChrome({
               {dragActive ? 'Drop PDF to upload and load for chat' : 'Drag and drop a PDF here to upload'}
             </Typography>
             {uploadInFlight && (
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 2 }}>
                 <CircularProgress size={16} />
                 <Typography variant="body2" color="text.secondary">
                   Upload in progress...
@@ -563,7 +563,7 @@ export function PdfViewerChrome({
               zIndex: 1,
             }}
           >
-            <Stack spacing={2} alignItems="center">
+            <Stack spacing={2} sx={{ alignItems: 'center' }}>
               <CircularProgress color="inherit" size={48} />
               <Typography variant="body2" color="inherit">
                 Loading PDF...
@@ -627,5 +627,5 @@ export function PdfViewerChrome({
         onClose={onCloseUploadDialog}
       />
     </Paper>
-  )
+  );
 }

@@ -281,19 +281,21 @@ function AgentBrowser({
               placeholder="Search agents..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" color="action" />
-                  </InputAdornment>
-                ),
-                endAdornment: searchQuery && (
-                  <InputAdornment position="end">
-                    <IconButton size="small" onClick={handleClearSearch} edge="end">
-                      <ClearIcon fontSize="small" />
-                    </IconButton>
-                  </InputAdornment>
-                ),
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon fontSize="small" color="action" />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchQuery && (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={handleClearSearch} edge="end">
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }
               }}
             />
           </SearchBox>
@@ -347,7 +349,9 @@ function AgentBrowser({
                       >
                         <ListItemText
                           primary={(
-                            <Stack direction="row" spacing={0.75} alignItems="center">
+                            <Stack direction="row" spacing={0.75} sx={{
+                              alignItems: "center"
+                            }}>
                               <span>{agent.agent_name}</span>
                               {(agentMetadata[agent.agent_id]?.allowed_group_ids?.length || 0) > 0 && (
                                 <Chip
@@ -362,9 +366,10 @@ function AgentBrowser({
                             </Stack>
                           )}
                           secondary={agent.has_group_rules ? 'Has group rules' : undefined}
-                          primaryTypographyProps={{ variant: 'body2' }}
-                          secondaryTypographyProps={{ variant: 'caption' }}
-                        />
+                          slotProps={{
+                            primary: { variant: 'body2' },
+                            secondary: { variant: 'caption' }
+                          }} />
                       </ListItemButton>
                     ))}
                   </List>
@@ -373,7 +378,9 @@ function AgentBrowser({
             ))}
             {searchQuery && filteredAgents.length === 0 && (
               <Box sx={{ p: 2, textAlign: 'center' }}>
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" sx={{
+                  color: "text.secondary"
+                }}>
                   No agents match: {searchQuery}
                 </Typography>
               </Box>
@@ -393,7 +400,7 @@ function AgentBrowser({
         </DetailsContainer>
       </ContentArea>
     </BrowserContainer>
-  )
+  );
 }
 
 export default AgentBrowser

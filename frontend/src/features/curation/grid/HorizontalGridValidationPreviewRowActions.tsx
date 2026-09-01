@@ -22,7 +22,11 @@ export default function HorizontalGridValidationPreviewRowActions({
   const color = teal
 
   return (
-    <Stack alignItems="center" sx={{ gap: '1px' }}>
+    <Stack
+      sx={{
+        alignItems: "center",
+        gap: '1px'
+      }}>
       <Button
         aria-label={allValidated
           ? `All fields validated for ${label}`
@@ -74,11 +78,14 @@ export default function HorizontalGridValidationPreviewRowActions({
       </Button>
       <Typography
         aria-label={`${validatedCount} of ${totalCount} fields curator validated for ${label}`}
-        color="text.secondary"
-        sx={{ fontSize: '7.5px', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}
-      >
+        sx={{
+          color: "text.secondary",
+          fontSize: '7.5px',
+          fontVariantNumeric: 'tabular-nums',
+          lineHeight: 1
+        }}>
         {validatedCount}/{totalCount}
       </Typography>
     </Stack>
-  )
+  );
 }

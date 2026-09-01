@@ -27,7 +27,7 @@ interface PrepScopeConfirmationDialogProps {
 function humanizeScopeValue(value: string) {
   return value
     .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function displayScopeValues(values: string[]) {
@@ -102,11 +102,13 @@ function PrepScopeConfirmationDialog({
       onClose={submitting ? undefined : onClose}
       maxWidth="sm"
       fullWidth
-      PaperProps={{
-        sx: {
-          backgroundColor: 'background.paper',
-          color: 'text.primary',
-        },
+      slotProps={{
+        paper: {
+          sx: {
+            backgroundColor: 'background.paper',
+            color: 'text.primary',
+          },
+        }
       }}
     >
       <DialogTitle>Prepare for Curation</DialogTitle>
@@ -239,7 +241,7 @@ function PrepScopeConfirmationDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }
 
 export default PrepScopeConfirmationDialog

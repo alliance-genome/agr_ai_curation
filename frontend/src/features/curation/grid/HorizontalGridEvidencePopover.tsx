@@ -164,7 +164,7 @@ export default function HorizontalGridEvidencePopover({
       modifiers={popperModifiers}
       open={target !== null}
       placement="bottom"
-      strategy="fixed"
+      popperOptions={{ strategy: 'fixed' }}
       sx={(theme) => ({ zIndex: theme.zIndex.modal })}
     >
       {({ placement }) => target ? (
@@ -244,7 +244,13 @@ export default function HorizontalGridEvidencePopover({
                 scrollbarGutter: 'stable',
               }}
             >
-              <Stack alignItems="flex-start" direction="row" spacing="10px" sx={{ pr: '20px' }}>
+              <Stack
+                direction="row"
+                spacing="10px"
+                sx={{
+                  alignItems: "flex-start",
+                  pr: '20px'
+                }}>
               <Box
                 aria-hidden="true"
                 sx={{
@@ -262,12 +268,19 @@ export default function HorizontalGridEvidencePopover({
               >
                 {presentation.icon}
               </Box>
-              <Box minWidth={0}>
+              <Box sx={{
+                minWidth: 0
+              }}>
                 <Typography
-                  color="text.secondary"
-                  display="block"
-                  sx={{ fontSize: 9, fontWeight: 770, letterSpacing: '0.08em', mb: '3px', textTransform: 'uppercase' }}
-                >
+                  sx={{
+                    color: "text.secondary",
+                    display: "block",
+                    fontSize: 9,
+                    fontWeight: 770,
+                    letterSpacing: '0.08em',
+                    mb: '3px',
+                    textTransform: 'uppercase'
+                  }}>
                   Evidence &amp; validation details
                 </Typography>
                 <Typography id={titleId} sx={{ fontSize: 15, fontWeight: 700, lineHeight: 1.25 }}>
@@ -277,10 +290,15 @@ export default function HorizontalGridEvidencePopover({
               </Stack>
 
               <Typography
-              color="text.secondary"
-              display="block"
-              sx={{ fontSize: 9, fontWeight: 760, letterSpacing: '0.06em', mt: '14px', textTransform: 'uppercase' }}
-              >
+                sx={{
+                  color: "text.secondary",
+                  display: "block",
+                  fontSize: 9,
+                  fontWeight: 760,
+                  letterSpacing: '0.06em',
+                  mt: '14px',
+                  textTransform: 'uppercase'
+                }}>
               {target.projections.length > 0
                 ? 'Highlighted passage from the paper'
                 : 'Field-specific evidence'}
@@ -305,7 +323,14 @@ export default function HorizontalGridEvidencePopover({
                     })}
                   >
                     {evidenceQuote(projection)}
-                    <Typography color="text.secondary" component="footer" sx={{ fontFamily: 'inherit', fontSize: 9, mt: '5px' }}>
+                    <Typography
+                      component="footer"
+                      sx={{
+                        color: "text.secondary",
+                        fontFamily: 'inherit',
+                        fontSize: 9,
+                        mt: '5px'
+                      }}>
                       {evidenceLocation(projection)}
                     </Typography>
                     {buildNavigationCommandFromEnvelopeEvidenceProjection(projection) ? (
@@ -334,7 +359,11 @@ export default function HorizontalGridEvidencePopover({
                     : alpha(theme.palette.common.white, 0.04),
                 })}
               >
-                <Typography color="text.secondary" sx={{ fontSize: 12 }}>
+                <Typography
+                  sx={{
+                    color: "text.secondary",
+                    fontSize: 12
+                  }}>
                   No field-specific evidence was recorded for this field.
                 </Typography>
               </Box>
@@ -378,7 +407,9 @@ export default function HorizontalGridEvidencePopover({
                       }
                     }}
                   >
-                    <Stack alignItems="flex-start" direction="row" spacing="7px">
+                    <Stack direction="row" spacing="7px" sx={{
+                      alignItems: "flex-start"
+                    }}>
                       {comparison.tone === 'warning' ? (
                         <PriorityHighRoundedIcon
                           sx={(theme) => ({
@@ -401,20 +432,35 @@ export default function HorizontalGridEvidencePopover({
                     <Stack spacing="5px" sx={{ mt: '9px' }}>
                       {target.sourceMention ? (
                         <Box>
-                          <Typography color="text.secondary" sx={{ fontSize: 9.5, fontWeight: 700 }}>
+                          <Typography
+                            sx={{
+                              color: "text.secondary",
+                              fontSize: 9.5,
+                              fontWeight: 700
+                            }}>
                             Source context
                           </Typography>
                           <Typography sx={{ fontSize: 12 }}>{target.sourceMention}</Typography>
                         </Box>
                       ) : null}
                       <Box>
-                        <Typography color="text.secondary" sx={{ fontSize: 9.5, fontWeight: 700 }}>
+                        <Typography
+                          sx={{
+                            color: "text.secondary",
+                            fontSize: 9.5,
+                            fontWeight: 700
+                          }}>
                           Extractor result
                         </Typography>
                         <Typography sx={{ fontSize: 12 }}>{extractorValue}</Typography>
                       </Box>
                       <Box>
-                        <Typography color="text.secondary" sx={{ fontSize: 9.5, fontWeight: 700 }}>
+                        <Typography
+                          sx={{
+                            color: "text.secondary",
+                            fontSize: 9.5,
+                            fontWeight: 700
+                          }}>
                           {target.extractorComparison.outcome === 'overridden'
                             ? 'Curator override'
                             : 'Validator result'}
@@ -422,14 +468,19 @@ export default function HorizontalGridEvidencePopover({
                         <Typography sx={{ fontSize: 12, fontWeight: 700 }}>{validatorValue}</Typography>
                       </Box>
                       <Box>
-                        <Typography color="text.secondary" sx={{ fontSize: 9.5, fontWeight: 700 }}>
+                        <Typography
+                          sx={{
+                            color: "text.secondary",
+                            fontSize: 9.5,
+                            fontWeight: 700
+                          }}>
                           Outcome
                         </Typography>
                         <Typography sx={{ fontSize: 12, lineHeight: 1.45 }}>{comparison.outcome}</Typography>
                       </Box>
                     </Stack>
                   </Box>
-                )
+                );
               })() : null}
 
               <Box
@@ -443,14 +494,13 @@ export default function HorizontalGridEvidencePopover({
               })}
             >
               <Typography
-                color="text.secondary"
                 sx={{
+                  color: "text.secondary",
                   fontSize: 9,
                   fontWeight: 760,
                   letterSpacing: '0.06em',
-                  textTransform: 'uppercase',
-                }}
-              >
+                  textTransform: 'uppercase'
+                }}>
                 Resolution
               </Typography>
               {target.canonicalFieldValue && target.validatorResolved ? (
@@ -462,9 +512,12 @@ export default function HorizontalGridEvidencePopover({
               {target.validationMessages.length > 0 ? (
                 <Box sx={{ mt: target.canonicalFieldValue ? '9px' : '4px' }}>
                   <Typography
-                    color="text.secondary"
-                    sx={{ fontSize: 10, fontWeight: 700, mb: '3px' }}
-                  >
+                    sx={{
+                      color: "text.secondary",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      mb: '3px'
+                    }}>
                     Validator context
                   </Typography>
                   <Stack component="ul" spacing="4px" sx={{ m: 0, pl: '17px' }}>
@@ -494,7 +547,12 @@ export default function HorizontalGridEvidencePopover({
                   pt: target.validationMessages.length > 0 || target.canonicalFieldValue ? '8px' : 0,
                 }}
               >
-                <Typography color="text.secondary" sx={{ fontSize: 10, fontWeight: 650 }}>
+                <Typography
+                  sx={{
+                    color: "text.secondary",
+                    fontSize: 10,
+                    fontWeight: 650
+                  }}>
                   Current status
                 </Typography>
                 <Typography
@@ -516,5 +574,5 @@ export default function HorizontalGridEvidencePopover({
         </ClickAwayListener>
       ) : null}
     </Popper>
-  )
+  );
 }

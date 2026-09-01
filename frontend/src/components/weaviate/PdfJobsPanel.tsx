@@ -168,9 +168,17 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
         flexDirection: 'column',
       }}
     >
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
+      <Stack
+        direction="row"
+        sx={{
+          alignItems: "center",
+          justifyContent: "space-between",
+          mb: 1
+        }}>
         <Typography variant="h6">PDF Jobs</Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} sx={{
+          alignItems: "center"
+        }}>
           <Chip size="small" color={activeCount > 0 ? 'primary' : 'default'} label={`${activeCount} active`} />
           {hiddenCount > 0 && (
             <Button
@@ -193,16 +201,27 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
       </Stack>
 
       {!expanded && (
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{
+          color: "text.secondary"
+        }}>
           Panel collapsed
         </Typography>
       )}
 
       <Collapse in={expanded} timeout="auto" unmountOnExit>
         {loading && (
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 1, minHeight: 24 }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: "center",
+              py: 1,
+              minHeight: 24
+            }}>
             <CircularProgress size={16} />
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               Loading jobs...
             </Typography>
           </Stack>
@@ -233,16 +252,28 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
 
             return (
               <Box key={job.job_id} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
-                <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{
+                    alignItems: "center",
+                    justifyContent: "space-between"
+                  }}>
                   <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={600} noWrap>
+                    <Typography variant="body2" noWrap sx={{
+                      fontWeight: 600
+                    }}>
                       {job.filename || job.document_id}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap>
+                    <Typography variant="caption" noWrap sx={{
+                      color: "text.secondary"
+                    }}>
                       Job {job.job_id}
                     </Typography>
                   </Box>
-                  <Stack direction="row" alignItems="center" spacing={1}>
+                  <Stack direction="row" spacing={1} sx={{
+                    alignItems: "center"
+                  }}>
                     <Chip label={labelForStatus(job.status)} size="small" color={statusColor(job.status)} />
                     {onCancelJob && (
                       <Tooltip title={canCancel(job) ? 'Cancel job' : 'Cancellation unavailable'}>
@@ -289,15 +320,29 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
                   value={progress}
                   sx={{ mt: 1, height: 6, borderRadius: 3 }}
                 />
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    display: 'block',
+                    mt: 0.5
+                  }}>
                   {progress}% • {message}
                 </Typography>
                 {providerConversionSummary && (
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: "text.secondary",
+                      display: 'block',
+                      mt: 0.25
+                    }}>
                     {providerConversionSummary}
                   </Typography>
                 )}
-                <Typography variant="caption" color="text.secondary" noWrap>
+                <Typography variant="caption" noWrap sx={{
+                  color: "text.secondary"
+                }}>
                   Updated: {updatedLabel}
                 </Typography>
               </Box>
@@ -308,16 +353,22 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={1.5}
-          alignItems={{ xs: 'stretch', sm: 'center' }}
-          justifyContent="space-between"
-          sx={{ mt: 2, minHeight: 44 }}
-        >
-          <Typography variant="caption" color="text.secondary">
+          sx={{
+            alignItems: { xs: 'stretch', sm: 'center' },
+            justifyContent: "space-between",
+            mt: 2,
+            minHeight: 44
+          }}>
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             {hasJobs
               ? `Showing ${pageStart + 1}-${Math.min(pageEnd, visibleJobs.length)} of ${visibleJobs.length}`
               : 'No jobs to display'}
           </Typography>
-          <Stack direction="row" spacing={1.5} alignItems="center">
+          <Stack direction="row" spacing={1.5} sx={{
+            alignItems: "center"
+          }}>
             <FormControl size="small" sx={{ minWidth: 110 }} disabled={!hasJobs}>
               <InputLabel id="pdf-jobs-rows-per-page-label">Rows</InputLabel>
               <Select<number>

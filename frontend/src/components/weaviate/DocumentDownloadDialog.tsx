@@ -185,7 +185,12 @@ const DocumentDownloadDialog: React.FC<DocumentDownloadDialogProps> = ({
           </Alert>
         ) : (
           <>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mb: 2
+              }}>
               Select files to download. These represent different stages of document processing.
             </Typography>
             <List>
@@ -203,7 +208,9 @@ const DocumentDownloadDialog: React.FC<DocumentDownloadDialogProps> = ({
                           {file.size && (
                             <Typography
                               variant="caption"
-                              color="text.secondary"
+                              sx={{
+                                color: "text.secondary"
+                              }}
                             >
                               ({formatFileSize(file.size)})
                             </Typography>

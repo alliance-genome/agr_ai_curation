@@ -67,26 +67,36 @@ export interface HorizontalCurationGridProps {
 
 function DefaultContextCell({ cell }: HorizontalGridContextRenderArgs) {
   return (
-    <Stack spacing={0.25} minWidth={0}>
-      <Typography fontWeight={750} noWrap variant="body2">
+    <Stack spacing={0.25} sx={{
+      minWidth: 0
+    }}>
+      <Typography noWrap variant="body2" sx={{
+        fontWeight: 750
+      }}>
         {cell.value.identityLabel}
       </Typography>
       {cell.value.secondaryLabel ? (
-        <Typography color="text.secondary" noWrap variant="caption">
+        <Typography noWrap variant="caption" sx={{
+          color: "text.secondary"
+        }}>
           {cell.value.secondaryLabel}
         </Typography>
       ) : null}
     </Stack>
-  )
+  );
 }
 
 function DefaultFieldCell({ cell }: HorizontalGridFieldRenderArgs) {
   if (!cell.hasField) {
     return (
-      <Typography color="text.disabled" fontStyle="italic" variant="body2">
-        Not available
-      </Typography>
-    )
+      <Typography
+        variant="body2"
+        sx={{
+          color: "text.disabled",
+          fontStyle: "italic"
+        }}>Not available
+              </Typography>
+    );
   }
 
   const value = formatHorizontalGridValue(cell.value)
@@ -354,33 +364,39 @@ export default function HorizontalCurationGrid({
       }}
     >
       <Stack
-        alignItems="center"
         direction="row"
-        flexWrap="wrap"
-        gap={2}
-        justifyContent="space-between"
         sx={{
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 2,
+          justifyContent: "space-between",
           minHeight: 66,
           px: '18px',
           py: '10px',
           borderBottom: `1px solid ${theme.palette.divider}`,
-          backgroundColor: theme.palette.mode === 'dark' ? headerColor : '#fcfcfb',
-        }}
-      >
+          backgroundColor: theme.palette.mode === 'dark' ? headerColor : '#fcfcfb'
+        }}>
         <Stack
           aria-label="Validation legend"
           direction="row"
-          flexWrap="wrap"
-          gap="18px"
           role="group"
           useFlexGap
-        >
+          sx={{
+            flexWrap: "wrap",
+            gap: "18px"
+          }}>
           {([
             ['✓', 'Curator validated', theme.palette.mode === 'dark' ? theme.palette.success.dark : '#0b7d72'],
             ['!', 'Needs review', theme.palette.mode === 'dark' ? theme.palette.warning.dark : '#c8882d'],
             ['×', 'Not validated', theme.palette.mode === 'dark' ? theme.palette.error.dark : '#d25b48'],
           ] as const).map(([symbol, label, color]) => (
-            <Stack alignItems="center" direction="row" gap="6px" key={label}>
+            <Stack
+              direction="row"
+              key={label}
+              sx={{
+                alignItems: "center",
+                gap: "6px"
+              }}>
               <Box
                 aria-hidden="true"
                 component="span"
@@ -404,7 +420,14 @@ export default function HorizontalCurationGrid({
           ))}
         </Stack>
 
-        <Stack alignItems="center" direction="row" flexWrap="wrap" gap="8px" useFlexGap>
+        <Stack
+          direction="row"
+          useFlexGap
+          sx={{
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "8px"
+          }}>
           <Button
             aria-label={
               activePinnedColumnKeys.length === 0
@@ -432,14 +455,26 @@ export default function HorizontalCurationGrid({
           </Button>
 
         <Stack
-          alignItems="center"
           aria-label="Row density"
           direction="row"
           role="group"
           spacing={0.25}
-          sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: '5px', height: 34, p: '2px' }}
-        >
-          <Typography color="text.secondary" sx={{ fontSize: 9, fontWeight: 760, letterSpacing: '0.07em', px: '7px', textTransform: 'uppercase' }}>
+          sx={{
+            alignItems: "center",
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: '5px',
+            height: 34,
+            p: '2px'
+          }}>
+          <Typography
+            sx={{
+              color: "text.secondary",
+              fontSize: 9,
+              fontWeight: 760,
+              letterSpacing: '0.07em',
+              px: '7px',
+              textTransform: 'uppercase'
+            }}>
             Rows
           </Typography>
           {(['compact', 'comfortable'] as const).map((option) => (
@@ -504,9 +539,9 @@ export default function HorizontalCurationGrid({
           </Button>
 
           <Typography
-            color="text.secondary"
             id={descriptionId}
             sx={{
+              color: "text.secondary",
               position: 'absolute',
               width: 1,
               height: 1,
@@ -514,9 +549,8 @@ export default function HorizontalCurationGrid({
               m: -1,
               overflow: 'hidden',
               clip: 'rect(0, 0, 0, 0)',
-              whiteSpace: 'nowrap',
-            }}
-          >
+              whiteSpace: 'nowrap'
+            }}>
             Use Left and Right arrows, or Shift + wheel, to move across fields.
           </Typography>
         </Stack>
@@ -598,12 +632,27 @@ export default function HorizontalCurationGrid({
                   borderBottom: `1px solid ${theme.palette.divider}`,
                 }}
               >
-                <Stack alignItems="center" direction="row" justifyContent="space-between" spacing={1}>
-                  <Box minWidth={0}>
-                    <Typography fontWeight={800} noWrap variant="caption">
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{
+                    alignItems: "center",
+                    justifyContent: "space-between"
+                  }}>
+                  <Box sx={{
+                    minWidth: 0
+                  }}>
+                    <Typography noWrap variant="caption" sx={{
+                      fontWeight: 800
+                    }}>
                       {contextColumn.label}
                     </Typography>
-                    <Typography color="text.secondary" display="block" variant="caption">
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: "text.secondary",
+                        display: "block"
+                      }}>
                       Identity / context
                     </Typography>
                   </Box>
@@ -667,13 +716,29 @@ export default function HorizontalCurationGrid({
                       borderBottom: `1px solid ${theme.palette.divider}`,
                     }}
                   >
-                    <Stack alignItems="center" direction="row" justifyContent="space-between" spacing={0.5}>
-                      <Box minWidth={0}>
-                        <Typography fontWeight={800} noWrap variant="caption">
+                    <Stack
+                      direction="row"
+                      spacing={0.5}
+                      sx={{
+                        alignItems: "center",
+                        justifyContent: "space-between"
+                      }}>
+                      <Box sx={{
+                        minWidth: 0
+                      }}>
+                        <Typography noWrap variant="caption" sx={{
+                          fontWeight: 800
+                        }}>
                           {column.label}
                         </Typography>
                         {column.groupLabel ? (
-                          <Typography color="text.secondary" display="block" noWrap variant="caption">
+                          <Typography
+                            noWrap
+                            variant="caption"
+                            sx={{
+                              color: "text.secondary",
+                              display: "block"
+                            }}>
                             {column.groupLabel}
                           </Typography>
                         ) : null}
@@ -720,7 +785,7 @@ export default function HorizontalCurationGrid({
                       </IconButton>
                     </Stack>
                   </TableCell>
-                )
+                );
               })}
 
               <TableCell
@@ -737,7 +802,9 @@ export default function HorizontalCurationGrid({
                   borderBottom: `1px solid ${theme.palette.divider}`,
                 }}
               >
-                <Typography fontWeight={800} variant="caption">
+                <Typography variant="caption" sx={{
+                  fontWeight: 800
+                }}>
                   {rowActionsLabel}
                 </Typography>
               </TableCell>
@@ -901,41 +968,67 @@ export default function HorizontalCurationGrid({
       </TableContainer>
 
       <Stack
-        alignItems={{ xs: 'flex-start', sm: 'center' }}
         direction={{ xs: 'column', sm: 'row' }}
-        justifyContent="space-between"
         spacing={0.75}
         sx={{
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          justifyContent: "space-between",
           borderTop: `1px solid ${theme.palette.divider}`,
           backgroundColor: headerColor,
           minHeight: 38,
           px: 1.25,
-          py: 0.65,
-        }}
-      >
-        <Typography color="text.secondary" data-testid="horizontal-grid-selected-record" variant="caption">
+          py: 0.65
+        }}>
+        <Typography data-testid="horizontal-grid-selected-record" variant="caption" sx={{
+          color: "text.secondary"
+        }}>
           {selectedRow ? (
             <><strong>{selectedRow.contextCell.value.identityLabel}</strong> selected</>
           ) : 'Select a record to inspect its evidence'}
         </Typography>
-        <Stack alignItems="center" direction="row" flexWrap="wrap" spacing={1.25} useFlexGap>
-          <Stack alignItems="center" direction="row" spacing={0.4}>
+        <Stack
+          direction="row"
+          spacing={1.25}
+          useFlexGap
+          sx={{
+            alignItems: "center",
+            flexWrap: "wrap"
+          }}>
+          <Stack direction="row" spacing={0.4} sx={{
+            alignItems: "center"
+          }}>
             <PushPinOutlinedIcon color="action" sx={{ fontSize: 15 }} />
-            <Typography color="text.secondary" variant="caption">Pin headers</Typography>
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>Pin headers</Typography>
           </Stack>
-          <Stack alignItems="center" direction="row" spacing={0.4}>
+          <Stack direction="row" spacing={0.4} sx={{
+            alignItems: "center"
+          }}>
             <FindInPageOutlinedIcon color="action" sx={{ fontSize: 15 }} />
-            <Typography color="text.secondary" variant="caption">Evidence</Typography>
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>Evidence</Typography>
           </Stack>
-          <Stack alignItems="center" direction="row" spacing={0.4}>
+          <Stack direction="row" spacing={0.4} sx={{
+            alignItems: "center"
+          }}>
             <CheckOutlinedIcon color="action" sx={{ fontSize: 15 }} />
-            <Typography color="text.secondary" variant="caption">Validate</Typography>
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>Validate</Typography>
           </Stack>
-          <Stack alignItems="center" direction="row" spacing={0.4}>
+          <Stack direction="row" spacing={0.4} sx={{
+            alignItems: "center"
+          }}>
             <EditOutlinedIcon color="action" sx={{ fontSize: 15 }} />
-            <Typography color="text.secondary" variant="caption">Edit</Typography>
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>Edit</Typography>
           </Stack>
-          <Typography color="text.secondary" variant="caption">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             <Box component="kbd" sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 0.5, px: 0.5, py: 0.15 }}>Shift</Box>
             {' + scroll across fields'}
           </Typography>
@@ -974,16 +1067,15 @@ export default function HorizontalCurationGrid({
       >
         <Box>
           <Typography
-            color="text.secondary"
             sx={{
+              color: "text.secondary",
               display: 'block',
               mb: '3px',
               fontSize: 9,
               fontWeight: 770,
               letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
+              textTransform: 'uppercase'
+            }}>
             Validation summary
           </Typography>
           <Typography
@@ -1051,11 +1143,22 @@ export default function HorizontalCurationGrid({
             </Box>
           ))}
         </Box>
-        <Typography color="text.secondary" sx={{ fontSize: 12, lineHeight: 1.5 }}>
+        <Typography
+          sx={{
+            color: "text.secondary",
+            fontSize: 12,
+            lineHeight: 1.5
+          }}>
           Resolve blocking curated fields before final submission. Identity/context and unavailable
           fields do not participate in this summary.
         </Typography>
-        <Typography color="text.secondary" sx={{ fontSize: 12, lineHeight: 1.5, mt: 1.5 }}>
+        <Typography
+          sx={{
+            color: "text.secondary",
+            fontSize: 12,
+            lineHeight: 1.5,
+            mt: 1.5
+          }}>
           Preview only: checkmarks update this view but do not run or save validation.
         </Typography>
       </Box>
@@ -1080,5 +1183,5 @@ export default function HorizontalCurationGrid({
         {announcement}
       </Box>
     </Box>
-  )
+  );
 }

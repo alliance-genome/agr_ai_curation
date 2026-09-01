@@ -37,7 +37,7 @@ import { styled, alpha } from '@mui/material/styles'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ChatIcon from '@mui/icons-material/Chat'
 import ScienceIcon from '@mui/icons-material/Science'
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined'
 import StorageIcon from '@mui/icons-material/Storage'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined'
@@ -251,12 +251,14 @@ function AgentDetailsPanel({
           <Typography variant="h6" sx={{ mb: 1 }}>
             Browse your agents
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Pick an agent on the left to see what it does, the tools it uses, and the validation that applies.
           </Typography>
         </Box>
       </EmptyState>
-    )
+    );
   }
 
   const { documentation } = agent
@@ -303,7 +305,13 @@ function AgentDetailsPanel({
 
     return (
       <Box>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            alignItems: "center",
+            mb: 1
+          }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
             {title}
           </Typography>
@@ -320,12 +328,14 @@ function AgentDetailsPanel({
           {content || options.emptyText || 'No content for this layer.'}
         </PromptContent>
         {source && (
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             Source: {source}
           </Typography>
         )}
       </Box>
-    )
+    );
   }
 
   return (
@@ -337,7 +347,9 @@ function AgentDetailsPanel({
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
               {agent.agent_name}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               {documentation?.summary || agent.description}
             </Typography>
             {allowedGroupIds.length > 0 && (
@@ -380,7 +392,13 @@ function AgentDetailsPanel({
         {/* Tools chips - clickable for details */}
         {agent.tools.length > 0 && (
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 1.5 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5, alignSelf: 'center' }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                mr: 0.5,
+                alignSelf: 'center'
+              }}>
               Tools:
             </Typography>
             {agent.tools.map((tool) => (
@@ -434,14 +452,21 @@ function AgentDetailsPanel({
                       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                         {cap.name}
                       </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: "text.secondary",
+                          mt: 0.5
+                        }}>
                         {cap.description}
                       </Typography>
                       {(cap.example_query || cap.example_result) && (
                         <ExampleBox>
                           {cap.example_query && (
                             <Box>
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography variant="caption" sx={{
+                                color: "text.secondary"
+                              }}>
                                 Example query:
                               </Typography>
                               <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -451,7 +476,9 @@ function AgentDetailsPanel({
                           )}
                           {cap.example_result && (
                             <Box sx={{ mt: 0.5 }}>
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography variant="caption" sx={{
+                                color: "text.secondary"
+                              }}>
                                 Result:
                               </Typography>
                               <Typography variant="body2" sx={{ color: 'success.main' }}>
@@ -480,12 +507,22 @@ function AgentDetailsPanel({
                       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                         {source.name}
                       </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: "text.secondary",
+                          mt: 0.5
+                        }}>
                         {source.description}
                       </Typography>
                       {source.species_supported && source.species_supported.length > 0 && (
                         <Box sx={{ mt: 1, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                          <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: "text.secondary",
+                              mr: 0.5
+                            }}>
                             Species:
                           </Typography>
                           {source.species_supported.map((sp) => (
@@ -495,7 +532,12 @@ function AgentDetailsPanel({
                       )}
                       {source.data_types && source.data_types.length > 0 && (
                         <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                          <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: "text.secondary",
+                              mr: 0.5
+                            }}>
                             Data types:
                           </Typography>
                           {source.data_types.map((dt) => (
@@ -542,7 +584,9 @@ function AgentDetailsPanel({
                       </ListItemIcon>
                       <ListItemText
                         primary={limitation}
-                        primaryTypographyProps={{ variant: 'body2' }}
+                        slotProps={{
+                          primary: { variant: 'body2' }
+                        }}
                       />
                     </LimitationItem>
                   ))}
@@ -647,7 +691,13 @@ function AgentDetailsPanel({
               emptyText: 'No main prompt override is applied.',
             })}
             <Box>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: "center",
+                  mb: 1
+                }}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                   Effective Prompt Preview
                 </Typography>
@@ -677,7 +727,7 @@ function AgentDetailsPanel({
         agentName={agent.agent_name}
       />
     </PanelContainer>
-  )
+  );
 }
 
 export default AgentDetailsPanel

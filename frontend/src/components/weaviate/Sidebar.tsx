@@ -125,9 +125,11 @@ const Sidebar: React.FC<SidebarProps> = ({
               {!collapsed && (
                 <ListItemText
                   primary={item.label}
-                  primaryTypographyProps={{
-                    fontSize: '0.95rem',
-                    fontWeight: isActive ? 600 : 400,
+                  slotProps={{
+                    primary: { sx: {
+                      fontSize: '0.95rem',
+                      fontWeight: isActive ? 600 : 400,
+                    } }
                   }}
                 />
               )}
@@ -176,7 +178,9 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       <Box sx={{ p: 2 }}>
         {!collapsed && (
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             © 2025 AI Curation System
           </Typography>
         )}

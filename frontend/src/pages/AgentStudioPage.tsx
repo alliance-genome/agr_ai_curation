@@ -345,12 +345,12 @@ function AgentStudioPage() {
             output_filename_template: node.output_filename_template,
             projection_plan: node.projection_plan,
             output_key: node.output_key,
-            validation_attachments: node.validation_attachments?.map((attachment) => ({
-              ...attachment,
-            }) as Record<string, unknown>),
-            validation_groups: node.validation_groups?.map((group) => ({
-              ...group,
-            }) as Record<string, unknown>),
+            validation_attachments: node.validation_attachments?.map((attachment) => (({
+              ...attachment
+            }) as Record<string, unknown>)),
+            validation_groups: node.validation_groups?.map((group) => (({
+              ...group
+            }) as Record<string, unknown>)),
           })),
           edges: flowState.edges.map((edge) => ({
             id: edge.id,
@@ -510,7 +510,9 @@ Agent ID: ${agentId}`
         }}
         open={loading || durableTranscriptLoading}
       >
-        <Stack spacing={2} alignItems="center">
+        <Stack spacing={2} sx={{
+          alignItems: "center"
+        }}>
           <CircularProgress color="inherit" size={60} />
           <Typography variant="h6" color="inherit">
             {durableTranscriptLoading ? 'Hydrating durable chat...' : 'Initializing...'}
@@ -611,7 +613,7 @@ Agent ID: ${agentId}`
         </Panel>
       </PanelGroup>
     </Root>
-  )
+  );
 }
 
 export default AgentStudioPage

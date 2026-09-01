@@ -404,7 +404,14 @@ function NodeEditor({
                 <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
                   Domain Envelope
                 </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25, lineHeight: 1.35 }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    display: 'block',
+                    mt: 0.25,
+                    lineHeight: 1.35
+                  }}>
                   {domainEnvelopeMetadata.display_name}
                 </Typography>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
@@ -483,7 +490,9 @@ function NodeEditor({
         {/* Custom Instructions */}
         <Box>
           <FieldLabel>
-            <Typography variant="caption" fontWeight={600}>
+            <Typography variant="caption" sx={{
+              fontWeight: 600
+            }}>
               {customInstructionsLabel}
             </Typography>
             <Tooltip title={customInstructionsTooltip}>
@@ -507,7 +516,9 @@ function NodeEditor({
           <>
             <Box>
               <FieldLabel>
-                <Typography variant="caption" fontWeight={600}>
+                <Typography variant="caption" sx={{
+                  fontWeight: 600
+                }}>
                   Validation Attachments
                 </Typography>
                 <Tooltip title="Checked active validators run automatically. Under-development and metadata-only validators are shown below as read-only domain-pack context.">
@@ -601,49 +612,65 @@ function NodeEditor({
                           </Box>
                           <Typography
                             variant="caption"
-                            color="text.secondary"
                             sx={{
+                              color: "text.secondary",
                               display: 'block',
                               fontSize: '0.65rem',
                               lineHeight: 1.3,
                               overflowWrap: 'anywhere',
-                              wordBreak: 'break-word',
-                            }}
-                          >
+                              wordBreak: 'break-word'
+                            }}>
                             {validationTargetText(attachment)}
                           </Typography>
                           <Typography
                             variant="caption"
-                            color="text.secondary"
                             sx={{
+                              color: "text.secondary",
                               display: 'block',
                               fontSize: '0.62rem',
                               lineHeight: 1.3,
                               overflowWrap: 'anywhere',
-                              wordBreak: 'break-word',
-                            }}
-                          >
+                              wordBreak: 'break-word'
+                            }}>
                             {validationOwnerText(attachment)}
                           </Typography>
                           {group?.state === 'replaced' && (
-                            <Typography variant="caption" color="success.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: "success.main",
+                                display: 'block',
+                                fontSize: '0.65rem'
+                              }}>
                               Replaced by a custom validator edge
                             </Typography>
                           )}
                           {attachment.state === 'active' && !attachment.allow_opt_out && (
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: "text.secondary",
+                                display: 'block',
+                                fontSize: '0.65rem'
+                              }}>
                               Locked by policy
                             </Typography>
                           )}
                           {!hasBinding && (
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: "text.secondary",
+                                display: 'block',
+                                fontSize: '0.65rem'
+                              }}>
                               Metadata only
                             </Typography>
                           )}
                         </Box>
                       </Box>
                     </Box>
-                  )
+                  );
                 })}
                 </Box>
               )}
@@ -652,9 +679,13 @@ function NodeEditor({
                 <Box sx={{ mt: actionableValidationAttachments.length > 0 ? 1.25 : 0 }}>
                   <Typography
                     variant="caption"
-                    color="text.secondary"
-                    sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}
-                  >
+                    sx={{
+                      color: "text.secondary",
+                      display: 'block',
+                      mb: 0.5,
+                      fontSize: '0.65rem',
+                      lineHeight: 1.35
+                    }}>
                     Supplemental validators are custom validation edges that add checks outside the declared automatic bindings.
                   </Typography>
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
@@ -691,30 +722,28 @@ function NodeEditor({
                             </Typography>
                             <Typography
                               variant="caption"
-                              color="text.secondary"
                               sx={{
+                                color: "text.secondary",
                                 display: 'block',
                                 mt: 0.2,
                                 fontSize: '0.63rem',
                                 lineHeight: 1.3,
                                 overflowWrap: 'anywhere',
-                                wordBreak: 'break-word',
-                              }}
-                            >
+                                wordBreak: 'break-word'
+                              }}>
                               {supplementalGroupTargetText(group)}
                             </Typography>
                             <Typography
                               variant="caption"
-                              color="text.secondary"
                               sx={{
+                                color: "text.secondary",
                                 display: 'block',
                                 mt: 0.15,
                                 fontSize: '0.61rem',
                                 lineHeight: 1.3,
                                 overflowWrap: 'anywhere',
-                                wordBreak: 'break-word',
-                              }}
-                            >
+                                wordBreak: 'break-word'
+                              }}>
                               {supplementalGroupOwnerText(group)}
                             </Typography>
                           </Box>
@@ -729,9 +758,13 @@ function NodeEditor({
                 <Box sx={{ mt: actionableValidationAttachments.length > 0 || supplementalValidationGroups.length > 0 ? 1.25 : 0 }}>
                   <Typography
                     variant="caption"
-                    color="text.secondary"
-                    sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}
-                  >
+                    sx={{
+                      color: "text.secondary",
+                      display: 'block',
+                      mb: 0.5,
+                      fontSize: '0.65rem',
+                      lineHeight: 1.35
+                    }}>
                     Under-development and metadata-only validators are not scheduled by this checkbox list.
                   </Typography>
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
@@ -772,41 +805,46 @@ function NodeEditor({
                               </Typography>
                               <Typography
                                 variant="caption"
-                                color="text.secondary"
                                 sx={{
+                                  color: "text.secondary",
                                   display: 'block',
                                   mt: 0.2,
                                   fontSize: '0.63rem',
                                   lineHeight: 1.3,
                                   overflowWrap: 'anywhere',
-                                  wordBreak: 'break-word',
-                                }}
-                              >
+                                  wordBreak: 'break-word'
+                                }}>
                                 {validationTargetText(attachment)}
                               </Typography>
                               <Typography
                                 variant="caption"
-                                color="text.secondary"
                                 sx={{
+                                  color: "text.secondary",
                                   display: 'block',
                                   mt: 0.15,
                                   fontSize: '0.61rem',
                                   lineHeight: 1.3,
                                   overflowWrap: 'anywhere',
-                                  wordBreak: 'break-word',
-                                }}
-                              >
+                                  wordBreak: 'break-word'
+                                }}>
                                 {validationOwnerText(attachment)}
                               </Typography>
                               {attachment.state === 'under_development' && (
-                                <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.63rem' }}>
+                                <Typography
+                                  variant="caption"
+                                  sx={{
+                                    color: "warning.main",
+                                    display: 'block',
+                                    mt: 0.2,
+                                    fontSize: '0.63rem'
+                                  }}>
                                   {validationStateHelpText(attachment)}
                                 </Typography>
                               )}
                             </Box>
                           </Box>
                         </Box>
-                      )
+                      );
                     })}
                   </Box>
                 </Box>
@@ -848,7 +886,9 @@ function NodeEditor({
 
             <Box>
               <FieldLabel>
-                <Typography variant="caption" fontWeight={600}>
+                <Typography variant="caption" sx={{
+                  fontWeight: 600
+                }}>
                   Output Options
                 </Typography>
                 <Tooltip title="When enabled, this formatter should carry supporting evidence from earlier steps into the final output whenever that evidence is available.">
@@ -866,10 +906,17 @@ function NodeEditor({
                 )}
                 label={(
                   <Box>
-                    <Typography variant="body2" fontSize="0.75rem">
+                    <Typography variant="body2" sx={{
+                      fontSize: "0.75rem"
+                    }}>
                       Include evidence in output
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: "text.secondary",
+                        fontSize: '0.65rem'
+                      }}>
                       Surface upstream evidence alongside the final chat or exported result.
                     </Typography>
                   </Box>
@@ -880,7 +927,9 @@ function NodeEditor({
             {supportsFileOutputNaming && (
               <Box>
                 <FieldLabel>
-                  <Typography id="file-naming-label" variant="caption" fontWeight={600}>
+                  <Typography id="file-naming-label" variant="caption" sx={{
+                    fontWeight: 600
+                  }}>
                     File Naming
                   </Typography>
                   <Tooltip title="Choose the readable prefix. The runtime adds node, hash, and trace identifiers so every export remains unique.">
@@ -911,7 +960,12 @@ function NodeEditor({
 
                 {outputFilenameMode === 'custom' && (
                   <Box sx={{ mt: 1 }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: "text.secondary",
+                        fontSize: '0.65rem'
+                      }}>
                       Built-in variables:
                     </Typography>
                     <Box sx={{ mt: 0.5, mb: 0.5 }}>
@@ -941,7 +995,12 @@ function NodeEditor({
                 )}
 
                 <Box sx={{ mt: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
-                  <Typography variant="caption" color="text.secondary" display="block">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: "text.secondary",
+                      display: "block"
+                    }}>
                     Example filename
                   </Typography>
                   <Typography
@@ -963,7 +1022,9 @@ function NodeEditor({
         {/* Output Variable */}
         <Box>
           <FieldLabel>
-            <Typography variant="caption" fontWeight={600}>
+            <Typography variant="caption" sx={{
+              fontWeight: 600
+            }}>
               Output Variable Name
             </Typography>
             <Tooltip title="Variable name to store this step's output for use in later steps">
@@ -1015,7 +1076,7 @@ function NodeEditor({
         )}
       </EditorFooter>
     </EditorContainer>
-  )
+  );
 }
 
 export default NodeEditor

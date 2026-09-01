@@ -600,7 +600,7 @@ const isEditableShortcutTarget = (target: EventTarget | null): boolean => {
 
 const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
   if (typeof navigator === 'undefined') return 'Ctrl'
-  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? 'Cmd' : 'Ctrl'
+  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? 'Cmd' : 'Ctrl';
 }
 
 function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }: FlowBuilderProps) {
@@ -2000,7 +2000,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
               />
 
               <Paper sx={{ p: 1.5, flexShrink: 0 }} elevation={1}>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    display: 'block'
+                  }}>
                   Tip: Drag agents from palette to canvas, then connect them.
                 </Typography>
               </Paper>
@@ -2105,7 +2110,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
             Choose Validator Binding
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: "text.secondary",
+              display: 'block',
+              mt: 0.35
+            }}>
             This custom validator must name the domain-pack binding it satisfies.
           </Typography>
         </DialogTitle>
@@ -2131,9 +2142,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                       binding.blocking ? 'blocking' : null,
                       binding.required ? 'required' : null,
                     ].filter(Boolean).join(' / ')}
-                    primaryTypographyProps={{ fontSize: '0.82rem', fontWeight: 650 }}
-                    secondaryTypographyProps={{ fontSize: '0.7rem' }}
-                  />
+                    slotProps={{
+                      primary: { sx: { fontSize: '0.82rem', fontWeight: 650 } },
+                      secondary: { sx: { fontSize: '0.7rem' } }
+                    }} />
                 </ListItemButton>
               </ListItem>
             ))}
@@ -2150,11 +2162,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         onClose={handleOpenDialogClose}
         maxWidth="sm"
         fullWidth
-        PaperProps={{
-          sx: {
-            borderRadius: 2,
-            maxHeight: '70vh',
-          },
+        slotProps={{
+          paper: {
+            sx: {
+              borderRadius: 2,
+              maxHeight: '70vh',
+            },
+          }
         }}
       >
         <DialogTitle sx={{ pb: 1 }}>
@@ -2169,14 +2183,16 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             placeholder="Search flows..."
             value={flowSearchTerm}
             onChange={(e) => setFlowSearchTerm(e.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-                </InputAdornment>
-              ),
-            }}
             sx={{ mb: 2 }}
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                  </InputAdornment>
+                ),
+              }
+            }}
           />
           <Box sx={{ minHeight: 200, maxHeight: 300, overflow: 'auto' }}>
             {loadingFlows ? (
@@ -2208,9 +2224,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                       <ListItemText
                         primary={flow.name}
                         secondary={`${flow.step_count} step${flow.step_count !== 1 ? 's' : ''}`}
-                        primaryTypographyProps={{ fontSize: '0.85rem' }}
-                        secondaryTypographyProps={{ fontSize: '0.7rem' }}
-                      />
+                        slotProps={{
+                          primary: { sx: { fontSize: '0.85rem' } },
+                          secondary: { sx: { fontSize: '0.7rem' } }
+                        }} />
                     </ListItemButton>
                   </ListItem>
                 ))}
@@ -2231,7 +2248,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         onClose={handleSaveDialogClose}
         maxWidth="xs"
         fullWidth
-        PaperProps={{ sx: { borderRadius: 2 } }}
+        slotProps={{
+          paper: { sx: { borderRadius: 2 } }
+        }}
       >
         <DialogTitle sx={{ pb: 1 }}>
           <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
@@ -2239,7 +2258,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           </Typography>
         </DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: "text.secondary",
+              mb: 2
+            }}>
             {saveDialogMode === 'save_as'
               ? 'Enter a name for the new copy of this flow'
               : 'Enter a name for your flow'}
@@ -2279,11 +2303,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       <Dialog
         open={deleteConfirmOpen}
         onClose={handleDeleteFlowCancel}
-        PaperProps={{ sx: { minWidth: 320, borderRadius: 2 } }}
+        slotProps={{
+          paper: { sx: { minWidth: 320, borderRadius: 2 } }
+        }}
       >
         <DialogTitle sx={{ fontSize: '1rem' }}>Delete Flow?</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Are you sure you want to delete &ldquo;{flowName}&rdquo;? This action cannot be undone.
           </Typography>
         </DialogContent>
@@ -2309,18 +2337,25 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         onClose={handleManageDialogClose}
         maxWidth="sm"
         fullWidth
-        PaperProps={{
-          sx: {
-            borderRadius: 2,
-            maxHeight: '70vh',
-          },
+        slotProps={{
+          paper: {
+            sx: {
+              borderRadius: 2,
+              maxHeight: '70vh',
+            },
+          }
         }}
       >
         <DialogTitle sx={{ pb: 1 }}>
           <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
             Manage Flows
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: "text.secondary",
+              mt: 0.5
+            }}>
             Rename or delete your saved flows
           </Typography>
         </DialogTitle>
@@ -2400,7 +2435,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                           >
                             {flow.name}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" sx={{
+                            color: "text.secondary"
+                          }}>
                             {flow.step_count} step{flow.step_count !== 1 ? 's' : ''}
                             {flow.id === currentFlowId && ' • Currently open'}
                           </Typography>
@@ -2442,11 +2479,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       <Dialog
         open={deleteManageConfirmOpen}
         onClose={handleDeleteFromManageCancel}
-        PaperProps={{ sx: { minWidth: 320, borderRadius: 2 } }}
+        slotProps={{
+          paper: { sx: { minWidth: 320, borderRadius: 2 } }
+        }}
       >
         <DialogTitle sx={{ fontSize: '1rem' }}>Delete Flow?</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Are you sure you want to delete &ldquo;{flowToDeleteFromManage?.name}&rdquo;? This action cannot be undone.
           </Typography>
         </DialogContent>
@@ -2480,7 +2521,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         </Snackbar>
       )}
     </BuilderContainer>
-  )
+  );
 }
 
 // Wrap with ReactFlowProvider

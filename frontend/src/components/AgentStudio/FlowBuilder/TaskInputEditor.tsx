@@ -191,7 +191,9 @@ function TaskInputEditor({
         {/* Task Instructions (Required) */}
         <Box>
           <FieldLabel>
-            <Typography variant="caption" fontWeight={600}>
+            <Typography variant="caption" sx={{
+              fontWeight: 600
+            }}>
               Task Instructions *
             </Typography>
             <Tooltip title="Describe the curation task. This will be passed to the first agent in the flow.">
@@ -217,7 +219,13 @@ function TaskInputEditor({
               },
             }}
           />
-          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: "text.secondary",
+              mt: 0.5,
+              display: 'block'
+            }}>
             Be specific about what data to extract and how to format the output.
           </Typography>
         </Box>
@@ -227,7 +235,9 @@ function TaskInputEditor({
         {/* Output Variable */}
         <Box>
           <FieldLabel>
-            <Typography variant="caption" fontWeight={600}>
+            <Typography variant="caption" sx={{
+              fontWeight: 600
+            }}>
               Output Variable Name
             </Typography>
             <Tooltip title="Variable name to reference this task's instructions in downstream steps">
@@ -273,7 +283,7 @@ function TaskInputEditor({
         )}
       </EditorFooter>
     </EditorContainer>
-  )
+  );
 }
 
 export default TaskInputEditor

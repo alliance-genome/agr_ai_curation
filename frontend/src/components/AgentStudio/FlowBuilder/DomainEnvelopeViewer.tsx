@@ -110,9 +110,11 @@ function DomainEnvelopeViewer({
                   </Typography>
                   <Typography
                     variant="caption"
-                    color="text.secondary"
-                    sx={{ display: 'block', overflowWrap: 'anywhere' }}
-                  >
+                    sx={{
+                      color: "text.secondary",
+                      display: 'block',
+                      overflowWrap: 'anywhere'
+                    }}>
                     {agentName}
                   </Typography>
                 </Box>
@@ -136,7 +138,7 @@ function DomainEnvelopeViewer({
         </PanelGroup>
       </ViewerShell>
     </Slide>
-  )
+  );
 }
 
 export default DomainEnvelopeViewer

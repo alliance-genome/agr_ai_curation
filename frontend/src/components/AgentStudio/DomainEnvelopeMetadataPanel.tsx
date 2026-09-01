@@ -72,7 +72,7 @@ const compactChipSx = {
 
 function humanizeState(value: string): string {
   if (value === 'under_development') return 'under development'
-  return value.replace(/_/g, ' ')
+  return value.replace(/_/g, ' ');
 }
 
 function chipColorForState(
@@ -118,7 +118,7 @@ function formatProviderRef(providerKey: string, value: unknown): string {
 }
 
 function stripTrailingPeriod(value: string): string {
-  return value.trim().replace(/\.$/, '')
+  return value.trim().replace(/\.$/, '');
 }
 
 function splitSourceTruthNotes(notes: string[]): SourceTruthNotes {
@@ -147,7 +147,7 @@ function splitSourceTruthNotes(notes: string[]): SourceTruthNotes {
       return groups
     },
     { objectNotes: [], fieldNotes: [], otherNotes: [] }
-  )
+  );
 }
 
 function validationStateCounts(attachments: ValidationAttachmentView[]) {
@@ -207,13 +207,16 @@ function GuidanceCard({
       <Typography
         component="div"
         variant="body2"
-        color="text.secondary"
-        sx={{ fontSize: '0.75rem', lineHeight: 1.45, textWrap: 'pretty' }}
-      >
+        sx={{
+          color: "text.secondary",
+          fontSize: '0.75rem',
+          lineHeight: 1.45,
+          textWrap: 'pretty'
+        }}>
         {children}
       </Typography>
     </Box>
-  )
+  );
 }
 
 function FieldSourceMap({ notes }: { notes: SourceTruthFieldNote[] }) {
@@ -261,9 +264,13 @@ function FieldSourceMap({ notes }: { notes: SourceTruthFieldNote[] }) {
               </Typography>
               <Typography
                 variant="caption"
-                color="text.secondary"
-                sx={{ ...monoTextSx, display: 'block', mt: 0.15, fontSize: '0.64rem' }}
-              >
+                sx={{
+                  color: "text.secondary",
+                  ...monoTextSx,
+                  display: 'block',
+                  mt: 0.15,
+                  fontSize: '0.64rem'
+                }}>
                 {note.objectLabel}
               </Typography>
             </Box>
@@ -274,7 +281,7 @@ function FieldSourceMap({ notes }: { notes: SourceTruthFieldNote[] }) {
         ))}
       </Box>
     </Box>
-  )
+  );
 }
 
 function ValidationChips({ attachments }: { attachments: ValidationAttachmentView[] }) {
@@ -282,7 +289,9 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
 
   const counts = validationStateCounts(attachments)
   return (
-    <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+    <Stack direction="row" spacing={0.5} useFlexGap sx={{
+      flexWrap: "wrap"
+    }}>
       {counts.enabled > 0 && (
         <Chip size="small" color="success" variant="outlined" label={`${counts.enabled} active`} sx={compactChipSx} />
       )}
@@ -296,7 +305,7 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
         <Chip size="small" color="warning" variant="outlined" label={`${counts.under_development} under development`} sx={compactChipSx} />
       )}
     </Stack>
-  )
+  );
 }
 
 function validationAttachmentStateLabel(attachment: ValidationAttachmentView): string {
@@ -353,7 +362,14 @@ function ValidatorCapabilityGroups({ attachments }: { attachments: ValidationAtt
           }}
         >
           <Box sx={{ minWidth: 0 }}>
-            <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack
+              direction="row"
+              spacing={0.5}
+              useFlexGap
+              sx={{
+                alignItems: "center",
+                flexWrap: "wrap"
+              }}>
               <Typography variant="body2" sx={{ fontSize: '0.74rem', fontWeight: 700, lineHeight: 1.3 }}>
                 {attachment.label}
               </Typography>
@@ -368,21 +384,53 @@ function ValidatorCapabilityGroups({ attachments }: { attachments: ValidationAtt
                 <Chip size="small" color="warning" variant="outlined" label="opt-out allowed" sx={compactChipSx} />
               )}
             </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.2, fontSize: '0.65rem', lineHeight: 1.35 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                display: 'block',
+                mt: 0.2,
+                fontSize: '0.65rem',
+                lineHeight: 1.35
+              }}>
               {validationAttachmentTargetLabel(attachment)}
             </Typography>
             {attachment.state === 'under_development' && (
-              <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.64rem', lineHeight: 1.35 }}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "warning.main",
+                  display: 'block',
+                  mt: 0.2,
+                  fontSize: '0.64rem',
+                  lineHeight: 1.35
+                }}>
                 {underDevelopmentStateExplanation(attachment)}
               </Typography>
             )}
           </Box>
           <Box sx={{ minWidth: 0 }}>
             <FieldMetaLabel>Owner</FieldMetaLabel>
-            <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.25, fontSize: '0.63rem' }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                ...monoTextSx,
+                display: 'block',
+                mt: 0.25,
+                fontSize: '0.63rem'
+              }}>
               {attachment.domain_pack_id}{attachment.domain_pack_version ? ` v${attachment.domain_pack_version}` : ''}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.15, fontSize: '0.63rem' }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                ...monoTextSx,
+                display: 'block',
+                mt: 0.15,
+                fontSize: '0.63rem'
+              }}>
               {validationAttachmentOwnerLabel(attachment)}
             </Typography>
           </Box>
@@ -407,7 +455,16 @@ function ValidatorCapabilityGroups({ attachments }: { attachments: ValidationAtt
         {underDevelopment.length > 0 && (
           <Box>
             <FieldMetaLabel>Under development</FieldMetaLabel>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25, mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                display: 'block',
+                mt: 0.25,
+                mb: 0.5,
+                fontSize: '0.65rem',
+                lineHeight: 1.35
+              }}>
               Visible for planning only. These rows are not runnable and do not create replacement obligations.
             </Typography>
             {renderRows(underDevelopment, 'under development')}
@@ -415,7 +472,7 @@ function ValidatorCapabilityGroups({ attachments }: { attachments: ValidationAtt
         )}
       </Stack>
     </SectionAccordion>
-  )
+  );
 }
 
 function ValidationAttachmentRows({ attachments }: { attachments: ValidationAttachmentView[] }) {
@@ -458,26 +515,41 @@ function ValidationAttachmentRows({ attachments }: { attachments: ValidationAtta
             </Typography>
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', mt: 0.2, fontSize: '0.65rem', lineHeight: 1.3, textWrap: 'pretty' }}
-            >
+              sx={{
+                color: "text.secondary",
+                display: 'block',
+                mt: 0.2,
+                fontSize: '0.65rem',
+                lineHeight: 1.3,
+                textWrap: 'pretty'
+              }}>
               {validationAttachmentTargetLabel(attachment)}
             </Typography>
             {attachment.description && (
               <Typography
                 variant="caption"
-                color="text.secondary"
-                sx={{ display: 'block', mt: 0.25, fontSize: '0.64rem', lineHeight: 1.35, textWrap: 'pretty' }}
-              >
+                sx={{
+                  color: "text.secondary",
+                  display: 'block',
+                  mt: 0.25,
+                  fontSize: '0.64rem',
+                  lineHeight: 1.35,
+                  textWrap: 'pretty'
+                }}>
                 {attachment.description}
               </Typography>
             )}
             {attachment.state === 'under_development' && (
               <Typography
                 variant="caption"
-                color="warning.main"
-                sx={{ display: 'block', mt: 0.25, fontSize: '0.64rem', lineHeight: 1.35, textWrap: 'pretty' }}
-              >
+                sx={{
+                  color: "warning.main",
+                  display: 'block',
+                  mt: 0.25,
+                  fontSize: '0.64rem',
+                  lineHeight: 1.35,
+                  textWrap: 'pretty'
+                }}>
                 {underDevelopmentStateExplanation(attachment)}
               </Typography>
             )}
@@ -485,7 +557,7 @@ function ValidationAttachmentRows({ attachments }: { attachments: ValidationAtta
         </Box>
       ))}
     </Box>
-  )
+  );
 }
 
 function ProviderRefs({ refs }: { refs: Record<string, unknown> }) {
@@ -493,14 +565,16 @@ function ProviderRefs({ refs }: { refs: Record<string, unknown> }) {
   if (entries.length === 0) return null
 
   return (
-    <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+    <Stack direction="row" spacing={0.5} useFlexGap sx={{
+      flexWrap: "wrap"
+    }}>
       {entries.map(([providerKey, value]) => (
         <Tooltip key={providerKey} title={formatProviderRef(providerKey, value)}>
           <Chip size="small" variant="outlined" label={providerKey} sx={compactChipSx} />
         </Tooltip>
       ))}
     </Stack>
-  )
+  );
 }
 
 function SummaryMetric({
@@ -522,9 +596,13 @@ function SummaryMetric({
     >
       <Typography
         variant="caption"
-        color="text.secondary"
-        sx={{ display: 'block', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: 0 }}
-      >
+        sx={{
+          color: "text.secondary",
+          display: 'block',
+          fontSize: '0.62rem',
+          textTransform: 'uppercase',
+          letterSpacing: 0
+        }}>
         {label}
       </Typography>
       <Typography
@@ -539,7 +617,7 @@ function SummaryMetric({
         {value}
       </Typography>
     </Box>
-  )
+  );
 }
 
 function SectionAccordion({
@@ -576,9 +654,12 @@ function SectionAccordion({
           {summary && (
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', fontSize: '0.68rem', lineHeight: 1.25 }}
-            >
+              sx={{
+                color: "text.secondary",
+                display: 'block',
+                fontSize: '0.68rem',
+                lineHeight: 1.25
+              }}>
               {summary}
             </Typography>
           )}
@@ -588,19 +669,24 @@ function SectionAccordion({
         {children}
       </AccordionDetails>
     </Accordion>
-  )
+  );
 }
 
 function FieldMetaLabel({ children }: { children: ReactNode }) {
   return (
     <Typography
       variant="caption"
-      color="text.secondary"
-      sx={{ display: 'block', fontSize: '0.58rem', lineHeight: 1.2, textTransform: 'uppercase', letterSpacing: 0 }}
-    >
+      sx={{
+        color: "text.secondary",
+        display: 'block',
+        fontSize: '0.58rem',
+        lineHeight: 1.2,
+        textTransform: 'uppercase',
+        letterSpacing: 0
+      }}>
       {children}
     </Typography>
-  )
+  );
 }
 
 function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetadata; compact?: boolean }) {
@@ -629,11 +715,25 @@ function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetada
           <Typography variant="body2" sx={{ fontSize: '0.76rem', fontWeight: 700, lineHeight: 1.25 }}>
             {label}
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.2 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: "text.secondary",
+              ...monoTextSx,
+              display: 'block',
+              mt: 0.2
+            }}>
             {field.field_path}
           </Typography>
           {field.description && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35, lineHeight: 1.35 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                display: 'block',
+                mt: 0.35,
+                lineHeight: 1.35
+              }}>
               {field.description}
             </Typography>
           )}
@@ -641,14 +741,28 @@ function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetada
 
         <Box sx={{ minWidth: 0 }}>
           <FieldMetaLabel>Type</FieldMetaLabel>
-          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.35 }}>
+          <Stack
+            direction="row"
+            spacing={0.5}
+            useFlexGap
+            sx={{
+              flexWrap: "wrap",
+              mt: 0.35
+            }}>
             <Chip size="small" variant="outlined" label={field.field_type} sx={compactChipSx} />
             {field.required && (
               <Chip size="small" color="primary" variant="outlined" label="required" sx={compactChipSx} />
             )}
           </Stack>
           {schemaDetails && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35, lineHeight: 1.35 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                display: 'block',
+                mt: 0.35,
+                lineHeight: 1.35
+              }}>
               {schemaDetails}
             </Typography>
           )}
@@ -656,7 +770,14 @@ function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetada
 
         <Box sx={{ minWidth: 0 }}>
           <FieldMetaLabel>Source</FieldMetaLabel>
-          <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.35 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: "text.secondary",
+              ...monoTextSx,
+              display: 'block',
+              mt: 0.35
+            }}>
             {field.source_of_truth || 'metadata'}
           </Typography>
           <Box sx={{ mt: 0.45 }}>
@@ -666,7 +787,14 @@ function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetada
 
         <Box sx={{ minWidth: 0 }}>
           <FieldMetaLabel>Validation</FieldMetaLabel>
-          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.35 }}>
+          <Stack
+            direction="row"
+            spacing={0.5}
+            useFlexGap
+            sx={{
+              flexWrap: "wrap",
+              mt: 0.35
+            }}>
             {field.definition_state !== 'stable' && (
               <Chip
                 size="small"
@@ -680,7 +808,7 @@ function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetada
           </Stack>
         </Box>
       </Box>
-    )
+    );
   }
 
   return (
@@ -695,15 +823,28 @@ function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetada
     >
       <Stack
         direction={{ xs: 'column', sm: compact ? 'row' : 'row' }}
-        alignItems="flex-start"
         spacing={1}
+        sx={{
+          alignItems: "flex-start"
+        }}
       >
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Stack
+            direction="row"
+            spacing={0.75}
+            useFlexGap
+            sx={{
+              alignItems: "center",
+              flexWrap: "wrap"
+            }}>
             <Typography variant="body2" sx={{ fontSize: '0.75rem', fontWeight: 600 }}>
               {label}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={monoTextSx}>
+            <Typography
+              variant="caption"
+              sx={[{
+                color: "text.secondary"
+              }, ...(Array.isArray(monoTextSx) ? monoTextSx : [monoTextSx])]}>
               {field.field_path}
             </Typography>
             <Chip size="small" variant="outlined" label={field.field_type} sx={compactChipSx} />
@@ -724,12 +865,24 @@ function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetada
             )}
           </Stack>
           {field.description && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                display: 'block',
+                mt: 0.25
+              }}>
               {field.description}
             </Typography>
           )}
           {schemaDetails && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                display: 'block',
+                mt: 0.25
+              }}>
               {schemaDetails}
             </Typography>
           )}
@@ -740,7 +893,7 @@ function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetada
         <ValidationChips attachments={field.validation_attachments} />
       </Stack>
     </Box>
-  )
+  );
 }
 
 function ObjectPanel({
@@ -791,11 +944,25 @@ function ObjectPanel({
             <Typography variant="body2" sx={{ fontWeight: 700, fontSize: compact ? '0.82rem' : '0.8rem', lineHeight: 1.25 }}>
               {object.display_name}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.2 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                ...monoTextSx,
+                display: 'block',
+                mt: 0.2
+              }}>
               {object.object_type}
             </Typography>
           </Box>
-          <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Stack
+            direction="row"
+            spacing={0.5}
+            useFlexGap
+            sx={{
+              alignItems: "center",
+              flexWrap: "wrap"
+            }}>
             <Chip size="small" variant="outlined" label={`${object.fields.length} fields`} sx={compactChipSx} />
             {object.object_role && (
               <Chip size="small" variant="outlined" label={object.object_role} sx={compactChipSx} />
@@ -815,7 +982,12 @@ function ObjectPanel({
       <AccordionDetails sx={{ px: compact ? 1.25 : 2, pt: 0, pb: compact ? 1.25 : 2 }}>
         <Stack spacing={compact ? 1.25 : 1}>
           {object.description && (
-            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                lineHeight: 1.45
+              }}>
               {object.description}
             </Typography>
           )}
@@ -829,7 +1001,13 @@ function ObjectPanel({
               }}
             >
               <FieldMetaLabel>Schema</FieldMetaLabel>
-              <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, lineHeight: 1.4 }}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "text.secondary",
+                  ...monoTextSx,
+                  lineHeight: 1.4
+                }}>
                 {schemaLabel}
               </Typography>
             </Box>
@@ -837,7 +1015,15 @@ function ObjectPanel({
           <ProviderRefs refs={object.provider_refs} />
           {object.validation_attachments.length > 0 && (
             <Box>
-              <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 0.55 }}>
+              <Stack
+                direction="row"
+                spacing={0.75}
+                useFlexGap
+                sx={{
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  mb: 0.55
+                }}>
                 <FieldMetaLabel>Object validation</FieldMetaLabel>
                 <ValidationChips attachments={object.validation_attachments} />
               </Stack>
@@ -867,7 +1053,7 @@ function ObjectPanel({
         </Stack>
       </AccordionDetails>
     </Accordion>
-  )
+  );
 }
 
 function DomainEnvelopeMetadataPanel({
@@ -966,7 +1152,14 @@ function DomainEnvelopeMetadataPanel({
             {(metadata.validation_summary.blocking > 0
               || metadata.validation_summary.opt_out_allowed > 0
               || attachmentView.length > 0) && (
-              <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+              <Stack
+                direction="row"
+                spacing={0.5}
+                useFlexGap
+                sx={{
+                  flexWrap: "wrap",
+                  mt: 1
+                }}>
                 {metadata.validation_summary.blocking > 0 && (
                   <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.blocking} blocking`} sx={compactChipSx} />
                 )}
@@ -980,7 +1173,14 @@ function DomainEnvelopeMetadataPanel({
         ) : (
           <>
             <Box>
-              <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" useFlexGap>
+              <Stack
+                direction="row"
+                spacing={0.75}
+                useFlexGap
+                sx={{
+                  alignItems: "center",
+                  flexWrap: "wrap"
+                }}>
                 <Typography variant="subtitle2" sx={{ fontSize: compact ? '0.8rem' : '0.9rem', fontWeight: 700 }}>
                   {title}
                 </Typography>
@@ -998,13 +1198,21 @@ function DomainEnvelopeMetadataPanel({
                 {metadata.display_name}
               </Typography>
               {metadata.description && !compact && (
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    display: 'block',
+                    mt: 0.25
+                  }}>
                   {metadata.description}
                 </Typography>
               )}
             </Box>
 
-            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={0.75} useFlexGap sx={{
+              flexWrap: "wrap"
+            }}>
               <Chip size="small" label={`${metadata.object_definitions.length} object type${metadata.object_definitions.length === 1 ? '' : 's'}`} />
               <Chip size="small" label={`${metadata.validation_summary.default_enabled} default validator${metadata.validation_summary.default_enabled === 1 ? '' : 's'}`} />
               {metadata.validation_summary.blocking > 0 && (
@@ -1044,7 +1252,15 @@ function DomainEnvelopeMetadataPanel({
                   <GuidanceCard label="Object shape">
                     <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 2 }}>
                       {sourceTruthNotes.objectNotes.map((note) => (
-                        <Typography key={note} component="li" variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem', lineHeight: 1.45 }}>
+                        <Typography
+                          key={note}
+                          component="li"
+                          variant="body2"
+                          sx={{
+                            color: "text.secondary",
+                            fontSize: '0.75rem',
+                            lineHeight: 1.45
+                          }}>
                           {note}
                         </Typography>
                       ))}
@@ -1056,7 +1272,14 @@ function DomainEnvelopeMetadataPanel({
                   <GuidanceCard label="Notes">
                     <Stack spacing={0.5}>
                       {sourceTruthNotes.otherNotes.map((note) => (
-                        <Typography key={note} variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem', lineHeight: 1.45 }}>
+                        <Typography
+                          key={note}
+                          variant="body2"
+                          sx={{
+                            color: "text.secondary",
+                            fontSize: '0.75rem',
+                            lineHeight: 1.45
+                          }}>
                         {note}
                       </Typography>
                     ))}
@@ -1082,7 +1305,9 @@ function DomainEnvelopeMetadataPanel({
             >
               <Stack spacing={1}>
                 {metadata.schema_refs.length > 0 && (
-                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  <Stack direction="row" spacing={0.5} useFlexGap sx={{
+                    flexWrap: "wrap"
+                  }}>
                     {metadata.schema_refs.map((schemaRef) => (
                       <Tooltip key={schemaRef.schema_id} title={schemaRef.uri || formatSchemaRef(schemaRef)}>
                         <Chip size="small" variant="outlined" label={formatSchemaRef(schemaRef)} />
@@ -1120,10 +1345,18 @@ function DomainEnvelopeMetadataPanel({
 
             {metadata.schema_refs.length > 0 && (
               <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    display: 'block',
+                    mb: 0.5
+                  }}>
                   Schema references
                 </Typography>
-                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={0.5} useFlexGap sx={{
+                  flexWrap: "wrap"
+                }}>
                   {metadata.schema_refs.map((schemaRef) => (
                     <Tooltip key={schemaRef.schema_id} title={schemaRef.uri || formatSchemaRef(schemaRef)}>
                       <Chip size="small" variant="outlined" label={formatSchemaRef(schemaRef)} />
@@ -1137,12 +1370,20 @@ function DomainEnvelopeMetadataPanel({
 
             {metadata.source_of_truth_notes.length > 1 && (
               <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: "text.secondary",
+                    display: 'block',
+                    mb: 0.5
+                  }}>
                   Source-of-truth notes
                 </Typography>
                 <Stack spacing={0.25}>
                   {metadata.source_of_truth_notes.slice(1, compact ? 3 : 6).map((note) => (
-                    <Typography key={note} variant="caption" color="text.secondary">
+                    <Typography key={note} variant="caption" sx={{
+                      color: "text.secondary"
+                    }}>
                       {note}
                     </Typography>
                   ))}
@@ -1161,7 +1402,7 @@ function DomainEnvelopeMetadataPanel({
         )}
       </Stack>
     </Box>
-  )
+  );
 }
 
 export default DomainEnvelopeMetadataPanel

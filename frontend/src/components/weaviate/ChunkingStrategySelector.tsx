@@ -145,7 +145,7 @@ const ChunkingStrategySelector: React.FC<ChunkingStrategySelectorProps> = ({
         <Divider sx={{ my: 1 }} />
 
         <Grid container spacing={2}>
-          <Grid item xs={12}>
+          <Grid size={12}>
             <FormControl fullWidth size="small">
               <InputLabel>Chunking Method</InputLabel>
               <Select
@@ -167,7 +167,7 @@ const ChunkingStrategySelector: React.FC<ChunkingStrategySelectorProps> = ({
             </FormControl>
           </Grid>
 
-          <Grid item xs={12}>
+          <Grid size={12}>
             <Typography variant="body2" gutterBottom>
               Maximum Characters: {strategy.maxCharacters}
             </Typography>
@@ -190,7 +190,7 @@ const ChunkingStrategySelector: React.FC<ChunkingStrategySelectorProps> = ({
             </FormHelperText>
           </Grid>
 
-          <Grid item xs={12}>
+          <Grid size={12}>
             <Typography variant="body2" gutterBottom>
               Overlap Characters: {strategy.overlapCharacters}
             </Typography>
@@ -215,8 +215,10 @@ const ChunkingStrategySelector: React.FC<ChunkingStrategySelectorProps> = ({
             </FormHelperText>
           </Grid>
 
-          <Grid item xs={12}>
-            <Typography variant="body2" color="text.secondary">
+          <Grid size={12}>
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               Excluded Elements: {strategy.excludeElementTypes.join(', ')}
             </Typography>
           </Grid>

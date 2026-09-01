@@ -97,7 +97,9 @@ const ChunkPreview: React.FC<ChunkPreviewProps> = ({
   if (chunks.length === 0) {
     return (
       <Box sx={{ textAlign: 'center', py: 4 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           No chunks available for preview
         </Typography>
       </Box>
@@ -114,25 +116,33 @@ const ChunkPreview: React.FC<ChunkPreviewProps> = ({
           <Card key={chunk.id} variant="outlined">
             <CardContent>
               <Box sx={{ mb: 2 }}>
-                <Grid container alignItems="center" spacing={1}>
-                  <Grid item xs>
-                    <Stack direction="row" spacing={1} alignItems="center">
+                <Grid container spacing={1} sx={{
+                  alignItems: "center"
+                }}>
+                  <Grid size="grow">
+                    <Stack direction="row" spacing={1} sx={{
+                      alignItems: "center"
+                    }}>
                       <Typography variant="subtitle2" component="span">
                         Chunk #{chunk.chunkIndex}
                       </Typography>
                       {chunk.sectionTitle && (
                         <Typography
                           variant="body2"
-                          color="text.secondary"
                           component="span"
+                          sx={{
+                            color: "text.secondary"
+                          }}
                         >
                           • {chunk.sectionTitle}
                         </Typography>
                       )}
                     </Stack>
                   </Grid>
-                  <Grid item>
-                    <Stack direction="row" spacing={1} alignItems="center">
+                  <Grid>
+                    <Stack direction="row" spacing={1} sx={{
+                      alignItems: "center"
+                    }}>
                       <Chip
                         icon={getElementIcon(chunk.elementType)}
                         label={chunk.elementType}
@@ -176,18 +186,22 @@ const ChunkPreview: React.FC<ChunkPreviewProps> = ({
                 <>
                   <Divider sx={{ my: 1 }} />
                   <Grid container spacing={2}>
-                    <Grid item>
-                      <Typography variant="caption" color="text.secondary">
+                    <Grid>
+                      <Typography variant="caption" sx={{
+                        color: "text.secondary"
+                      }}>
                         Characters: {chunk.metadata.characterCount.toLocaleString()}
                       </Typography>
                     </Grid>
-                    <Grid item>
-                      <Typography variant="caption" color="text.secondary">
+                    <Grid>
+                      <Typography variant="caption" sx={{
+                        color: "text.secondary"
+                      }}>
                         Words: {chunk.metadata.wordCount.toLocaleString()}
                       </Typography>
                     </Grid>
                     {chunk.metadata.hasTable && (
-                      <Grid item>
+                      <Grid>
                         <Tooltip title="Contains table">
                           <Chip
                             icon={<TableChart />}
@@ -200,7 +214,7 @@ const ChunkPreview: React.FC<ChunkPreviewProps> = ({
                       </Grid>
                     )}
                     {chunk.metadata.hasImage && (
-                      <Grid item>
+                      <Grid>
                         <Tooltip title="Contains image">
                           <Chip
                             icon={<Image />}
