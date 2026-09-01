@@ -4,7 +4,6 @@ import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
 import {
   dispatchEvidenceNavigationCommand,
 } from '@/features/curation/evidence'
-import { fieldState } from '@/features/curation/editor/fieldState'
 import type {
   CurationCandidate,
   CurationDraftField,
@@ -137,7 +136,7 @@ export default function InteractiveHorizontalCurationGrid({
         cell={args.cell}
         field={field}
         onSelect={() => selectCandidate(args.row.candidateId)}
-        state={field ? fieldState(field, args.cell.validation.summaries) : null}
+        state={args.cell.state}
       />
     )
   }, [activeCandidateId, candidates, selectCandidate])
@@ -164,7 +163,7 @@ export default function InteractiveHorizontalCurationGrid({
             fieldLabel: field?.label ?? args.column.label,
             fieldValue: field ? formatHorizontalGridValue(field.value) ?? '—' : '—',
             projection,
-            state: field ? fieldState(field, args.cell.validation.summaries) : null,
+            state: args.cell.state,
             validationMessages: args.cell.validation.summaries.flatMap((summary) => summary.messages),
           })
           dispatchEvidenceNavigationCommand(
@@ -228,15 +227,21 @@ export default function InteractiveHorizontalCurationGrid({
         autosaveWarning={autosave.warning}
         editorPack={selectedEditor?.editorPack ?? null}
         field={selectedEditor?.field ?? null}
-        onChange={(value) => {
+        isSaving={autosave.isSaving}
+        onSave={async (value) => {
           if (!selectedEditor || selectedEditor.field.read_only) {
             throw new Error('Horizontal grid editor change requires an editable field')
           }
           const { field } = selectedEditor
           autosave.queueFieldChange({ field_key: field.field_key, value })
+          const saved = await autosave.flush()
+          if (saved) {
+            setEditingTarget(null)
+          }
+          return saved
         }}
         onClose={() => setEditingTarget(null)}
-        onRevert={() => {
+        onRevert={async () => {
           if (!selectedEditor || selectedEditor.field.read_only) {
             throw new Error('Horizontal grid editor revert requires an editable field')
           }
@@ -245,6 +250,11 @@ export default function InteractiveHorizontalCurationGrid({
             field_key: field.field_key,
             revert_to_seed: true,
           })
+          const saved = await autosave.flush()
+          if (saved) {
+            setEditingTarget(null)
+          }
+          return saved
         }}
         open={editingTarget !== null}
       />

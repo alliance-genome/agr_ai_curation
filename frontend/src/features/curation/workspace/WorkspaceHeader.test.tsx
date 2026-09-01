@@ -84,6 +84,14 @@ describe('WorkspaceHeader', () => {
     expect(screen.queryByTestId('workspace-header-navigation-slot')).not.toBeInTheDocument()
   })
 
+  it('uses the pane itself as the responsive boundary and allows metadata to wrap', () => {
+    renderHeader()
+
+    const header = screen.getByTestId('workspace-header')
+    expect(header).toHaveStyle({ containerType: 'inline-size' })
+    expect(header.firstElementChild).toHaveStyle({ flexWrap: 'wrap' })
+  })
+
   it.each(['light', 'dark'] as const)('keeps header navigation legible in %s mode', (mode) => {
     renderHeader(undefined, mode)
 

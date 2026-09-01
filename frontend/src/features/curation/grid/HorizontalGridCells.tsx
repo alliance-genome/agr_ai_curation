@@ -1,7 +1,6 @@
 import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
-import { Box, ButtonBase, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/material'
+import { Box, ButtonBase, IconButton, Stack, Tooltip, Typography } from '@mui/material'
 
-import { FieldStateIndicator } from '@/features/curation/editor'
 import {
   buildNavigationCommandFromEnvelopeEvidenceProjection,
   type EvidenceNavigationCommand,
@@ -33,7 +32,10 @@ export function HorizontalGridContextCellContent({
   onSelect: () => void
 }) {
   return (
-    <Stack spacing={0.25}>
+    <Stack
+      spacing={0.25}
+      sx={{ height: '100%', minWidth: 0, p: '6px 8px 30px 9px', position: 'relative' }}
+    >
       <ButtonBase
         aria-label={`Select ${cell.value.identityLabel}`}
         aria-pressed={active}
@@ -65,7 +67,9 @@ export function HorizontalGridContextCellContent({
           direction="row"
           spacing={0.25}
           sx={(theme) => ({
-            alignSelf: 'flex-start',
+            bottom: 4,
+            left: 7,
+            position: 'absolute',
             p: '2px',
             border: `1px solid ${theme.palette.divider}`,
             borderRadius: '6px',
@@ -142,6 +146,11 @@ export function HorizontalGridFieldCellContent({
 
   const value = formatHorizontalGridValue(field.value)
   const validationMessages = cell.validation.summaries.flatMap((summary) => summary.messages)
+  const stateLabel = state === 'resolved'
+    ? 'Curator validated'
+    : state === 'needs-review'
+      ? 'Needs review'
+      : 'Not validated'
 
   return (
     <Stack
@@ -150,7 +159,7 @@ export function HorizontalGridFieldCellContent({
       width="100%"
     >
       <ButtonBase
-        aria-label={`Select ${field.label} for ${cell.fieldPath}`}
+        aria-label={`Select ${field.label} for ${cell.fieldPath}. ${stateLabel}.`}
         aria-pressed={active}
         data-field-key={field.field_key}
         data-testid={`horizontal-grid-field-${field.field_key}`}
@@ -165,20 +174,22 @@ export function HorizontalGridFieldCellContent({
           width: '100%',
         }}
       >
-        <Stack direction="row" minWidth={0} spacing={0.75} width="100%">
-          {state ? <FieldStateIndicator fieldKey={field.field_key} state={state} /> : null}
+        <Stack direction="row" minWidth={0} width="100%">
           <Typography
             aria-label={value === null ? 'Empty value' : undefined}
+            data-slot="field-value"
             title={value ?? undefined}
             sx={{
               display: '-webkit-box',
               overflow: 'hidden',
               overflowWrap: 'anywhere',
               WebkitBoxOrient: 'vertical',
-              WebkitLineClamp: 2,
+              WebkitLineClamp: 1,
+              fontSize: 12,
+              fontWeight: 670,
+              lineHeight: 1.22,
               whiteSpace: 'pre-wrap',
             }}
-            variant="body2"
           >
             {value ?? '—'}
           </Typography>
@@ -196,22 +207,15 @@ export function HorizontalGridFieldCellContent({
           )}
         >
           <Box
-            aria-label={`${validationMessages.length} validation ${validationMessages.length === 1 ? 'detail' : 'details'} for ${field.label}`}
+            aria-label={validationMessages.join(' ')}
             component="span"
-            sx={{ alignSelf: 'flex-start', borderRadius: 1, display: 'inline-flex' }}
+            data-slot="field-message"
+            role="img"
+            sx={{ alignSelf: 'flex-start', display: 'inline-flex' }}
             tabIndex={0}
           >
-            <Chip
-              label={`${validationMessages.length} ${validationMessages.length === 1 ? 'finding' : 'findings'}`}
-              size="small"
-              sx={{
-                borderColor: state === 'needs-review' ? 'warning.main' : 'divider',
-                color: 'text.primary',
-                height: 20,
-                '& .MuiChip-label': { fontSize: '0.64rem', px: 0.75 },
-              }}
-              variant="outlined"
-            />
+            <Box aria-hidden="true" component="span" data-slot="field-message-icon">!</Box>
+            <Box component="span" data-slot="field-message-text">{validationMessages.join(' ')}</Box>
           </Box>
         </Tooltip>
       ) : null}

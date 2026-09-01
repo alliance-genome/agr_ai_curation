@@ -189,6 +189,20 @@ export default function HorizontalCurationGrid({
   const rightSurfaceColor = theme.palette.mode === 'dark'
     ? lighten(surfaceColor, 0.045)
     : '#f7f9f8'
+  const fieldSurfaceColors = {
+    resolved: {
+      base: surfaceColor,
+      hover: hoverSurfaceColor,
+    },
+    'needs-review': {
+      base: theme.palette.mode === 'dark' ? alpha(theme.palette.warning.main, 0.13) : '#fffaf0',
+      hover: theme.palette.mode === 'dark' ? alpha(theme.palette.warning.main, 0.2) : '#fff1d6',
+    },
+    'ai-unconfirmed': {
+      base: theme.palette.mode === 'dark' ? alpha(theme.palette.error.main, 0.14) : '#fbe5e0',
+      hover: theme.palette.mode === 'dark' ? alpha(theme.palette.error.main, 0.22) : '#f8d9d2',
+    },
+  } as const
   const selectedRow = model.rows.find((row) => row.candidateId === selectedCandidateId) ?? null
 
   const togglePin = (column: HorizontalGridColumn) => {
@@ -254,6 +268,38 @@ export default function HorizontalCurationGrid({
         border: `1px solid ${theme.palette.divider}`,
         borderRadius: 1,
         backgroundColor: surfaceColor,
+        '& [data-slot="field-message"]': {
+          position: 'absolute',
+          right: 5,
+          top: 5,
+          alignItems: 'center',
+          backgroundColor: theme.palette.mode === 'dark' ? theme.palette.error.dark : '#d25b48',
+          borderRadius: '50%',
+          color: theme.palette.common.white,
+          display: 'inline-flex',
+          fontSize: 10,
+          fontWeight: 850,
+          height: 16,
+          justifyContent: 'center',
+          lineHeight: 1,
+          width: 16,
+        },
+        '& [data-slot="field-message-text"]': { display: 'none' },
+        '&[data-density="comfortable"] [data-slot="field-message"]': {
+          position: 'static',
+          width: 'auto',
+          height: 'auto',
+          borderRadius: 0,
+          backgroundColor: 'transparent',
+          color: theme.palette.mode === 'dark' ? theme.palette.error.light : '#ad3f31',
+          display: 'block',
+          fontSize: 9,
+          fontWeight: 720,
+          lineHeight: 1.2,
+        },
+        '&[data-density="comfortable"] [data-slot="field-message-icon"]': { display: 'none' },
+        '&[data-density="comfortable"] [data-slot="field-message-text"]': { display: 'block' },
+        '&[data-density="comfortable"] [data-slot="field-value"]': { WebkitLineClamp: 2 },
         '@media (prefers-reduced-motion: reduce)': {
           '&, & *': {
             scrollBehavior: 'auto !important',
@@ -267,49 +313,89 @@ export default function HorizontalCurationGrid({
         alignItems="center"
         direction="row"
         flexWrap="wrap"
-        gap={1}
+        gap={2}
+        justifyContent="space-between"
         sx={{
-          minHeight: 52,
-          px: 1.25,
-          py: 0.75,
+          minHeight: 66,
+          px: '18px',
+          py: '10px',
           borderBottom: `1px solid ${theme.palette.divider}`,
-          backgroundColor: headerColor,
+          backgroundColor: theme.palette.mode === 'dark' ? headerColor : '#fcfcfb',
         }}
       >
-        <Button
-          aria-label={
-            activePinnedColumnKeys.length === 0
-              ? 'No optional pinned columns to clear'
-              : `Clear ${activePinnedColumnKeys.length} optional pinned ${
-                  activePinnedColumnKeys.length === 1 ? 'column' : 'columns'
-                }`
-          }
-          disabled={activePinnedColumnKeys.length === 0}
-          onClick={() => {
-            const clearedCount = activePinnedColumnKeys.length
-            setPinnedColumnKeys([])
-            setAnnouncement(
-              `${clearedCount} optional pinned ${
-                clearedCount === 1 ? 'column' : 'columns'
-              } cleared; ${contextColumn.label} remains pinned`,
-            )
-          }}
-          size="small"
-          startIcon={<ClearAllRoundedIcon />}
-          sx={{ textTransform: 'none' }}
-          variant="outlined"
+        <Stack
+          aria-label="Validation legend"
+          direction="row"
+          flexWrap="wrap"
+          gap="18px"
+          role="group"
+          useFlexGap
         >
-          Clear pins
-        </Button>
+          {([
+            ['✓', 'Curator validated', theme.palette.mode === 'dark' ? theme.palette.success.dark : '#0b7d72'],
+            ['!', 'Needs review', theme.palette.mode === 'dark' ? theme.palette.warning.dark : '#c8882d'],
+            ['×', 'Not validated', theme.palette.mode === 'dark' ? theme.palette.error.dark : '#d25b48'],
+          ] as const).map(([symbol, label, color]) => (
+            <Stack alignItems="center" direction="row" gap="6px" key={label}>
+              <Box
+                aria-hidden="true"
+                component="span"
+                sx={{
+                  alignItems: 'center',
+                  backgroundColor: color,
+                  borderRadius: '50%',
+                  color: theme.palette.common.white,
+                  display: 'inline-flex',
+                  fontSize: 10,
+                  fontWeight: 900,
+                  height: 17,
+                  justifyContent: 'center',
+                  width: 17,
+                }}
+              >
+                {symbol}
+              </Box>
+              <Typography sx={{ fontSize: 11 }}>{label}</Typography>
+            </Stack>
+          ))}
+        </Stack>
+
+        <Stack alignItems="center" direction="row" flexWrap="wrap" gap="8px" useFlexGap>
+          <Button
+            aria-label={
+              activePinnedColumnKeys.length === 0
+                ? 'No optional pinned columns to clear'
+                : `Clear ${activePinnedColumnKeys.length} optional pinned ${
+                    activePinnedColumnKeys.length === 1 ? 'column' : 'columns'
+                  }`
+            }
+            disabled={activePinnedColumnKeys.length === 0}
+            onClick={() => {
+              const clearedCount = activePinnedColumnKeys.length
+              setPinnedColumnKeys([])
+              setAnnouncement(
+                `${clearedCount} optional pinned ${
+                  clearedCount === 1 ? 'column' : 'columns'
+                } cleared; ${contextColumn.label} remains pinned`,
+              )
+            }}
+            size="small"
+            startIcon={<ClearAllRoundedIcon sx={{ fontSize: 14 }} />}
+            sx={{ borderRadius: '5px', fontSize: 10, fontWeight: 700, height: 34, textTransform: 'none' }}
+            variant="outlined"
+          >
+            Clear pins
+          </Button>
 
         <Stack
           alignItems="center"
           aria-label="Row density"
           direction="row"
           role="group"
-          spacing={0.5}
+          spacing={0.25}
+          sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: '5px', height: 34, p: '2px' }}
         >
-          <Typography color="text.secondary" fontWeight={700} variant="caption">
+          <Typography color="text.secondary" sx={{ fontSize: 9, fontWeight: 760, letterSpacing: '0.07em', px: '7px', textTransform: 'uppercase' }}>
             Rows
           </Typography>
           {(['compact', 'comfortable'] as const).map((option) => (
@@ -321,7 +407,7 @@ export default function HorizontalCurationGrid({
                 setAnnouncement(`${option === 'compact' ? 'Compact' : 'Comfortable'} row density enabled`)
               }}
               size="small"
-              sx={{ minWidth: 0, textTransform: 'none' }}
+              sx={{ borderRadius: '3px', fontSize: 10, fontWeight: 700, height: 28, minWidth: 0, px: '8px', textTransform: 'none' }}
               variant={density === option ? 'contained' : 'text'}
             >
               {option === 'compact' ? 'Compact' : 'Comfortable'}
@@ -329,14 +415,23 @@ export default function HorizontalCurationGrid({
           ))}
         </Stack>
 
-        <Typography
-          color="text.secondary"
-          id={descriptionId}
-          sx={{ ml: { sm: 'auto' }, width: { xs: '100%', sm: 'auto' } }}
-          variant="caption"
-        >
-          Use Left and Right arrows, or Shift + wheel, to move across fields.
-        </Typography>
+          <Typography
+            color="text.secondary"
+            id={descriptionId}
+            sx={{
+              position: 'absolute',
+              width: 1,
+              height: 1,
+              p: 0,
+              m: -1,
+              overflow: 'hidden',
+              clip: 'rect(0, 0, 0, 0)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Use Left and Right arrows, or Shift + wheel, to move across fields.
+          </Typography>
+        </Stack>
       </Stack>
 
       <TableContainer
@@ -407,7 +502,10 @@ export default function HorizontalCurationGrid({
                 sx={{
                   ...stickyCellSx('left', 0, true, activePinnedColumnKeys.length === 0),
                   top: 0,
+                  height: 44,
                   minWidth: CONTEXT_COLUMN_WIDTH,
+                  px: '9px',
+                  py: '8px',
                   borderRight: `1px solid ${theme.palette.divider}`,
                   borderBottom: `1px solid ${theme.palette.divider}`,
                 }}
@@ -454,7 +552,10 @@ export default function HorizontalCurationGrid({
                             zIndex: 3,
                           }),
                       top: 0,
+                      height: 44,
                       minWidth: FIELD_COLUMN_WIDTH,
+                      px: '9px',
+                      py: '8px',
                       borderRight: `1px solid ${theme.palette.divider}`,
                       borderBottom: `1px solid ${theme.palette.divider}`,
                     }}
@@ -502,7 +603,10 @@ export default function HorizontalCurationGrid({
                 sx={{
                   ...stickyCellSx('right', 0, true),
                   top: 0,
+                  height: 44,
                   minWidth: ACTION_COLUMN_WIDTH,
+                  px: '9px',
+                  py: '8px',
                   borderBottom: `1px solid ${theme.palette.divider}`,
                 }}
               >
@@ -551,12 +655,10 @@ export default function HorizontalCurationGrid({
                           rowSurfaceColor,
                         ),
                         minWidth: CONTEXT_COLUMN_WIDTH,
-                        px: 1.25,
-                        py: density === 'compact' ? 1 : 2,
+                        p: 0,
                         borderRight: `1px solid ${theme.palette.divider}`,
                         borderBottom: `1px solid ${theme.palette.divider}`,
                         verticalAlign: 'top',
-                        '&:hover': { backgroundColor: hoverSurfaceColor },
                       }}
                     >
                       {renderContextCell({ cell: row.contextCell, row })}
@@ -573,6 +675,16 @@ export default function HorizontalCurationGrid({
                       const isLastPinned =
                         isPinned && pinnedIndex === activePinnedColumnKeys.length - 1
                       const renderArgs = { cell, column, row }
+                      const fieldColors = cell.state
+                        ? fieldSurfaceColors[cell.state]
+                        : {
+                            base: theme.palette.mode === 'dark'
+                              ? lighten(surfaceColor, 0.035)
+                              : '#f7f8f6',
+                            hover: theme.palette.mode === 'dark'
+                              ? lighten(surfaceColor, 0.075)
+                              : '#eef2f0',
+                          }
 
                       return (
                         <TableCell
@@ -591,8 +703,7 @@ export default function HorizontalCurationGrid({
                                 )
                               : { backgroundColor: rowSurfaceColor }),
                             minWidth: FIELD_COLUMN_WIDTH,
-                            px: 1.25,
-                            py: density === 'compact' ? 1 : 2,
+                            p: 0,
                             borderRight: `1px solid ${theme.palette.divider}`,
                             borderBottom: `1px solid ${theme.palette.divider}`,
                             verticalAlign: 'top',
@@ -605,15 +716,36 @@ export default function HorizontalCurationGrid({
                               outline: `2px solid ${theme.palette.primary.main}`,
                               outlineOffset: -2,
                             },
-                            '&:hover': { backgroundColor: hoverSurfaceColor },
                           }}
                         >
-                          <Stack height="100%" justifyContent="space-between" spacing={1}>
+                          <Box
+                            data-field-state={cell.state ?? 'neutral'}
+                            sx={{
+                              backgroundColor: fieldColors.base,
+                              color: cell.state === null ? 'text.secondary' : 'text.primary',
+                              height: '100%',
+                              minHeight: rowHeight,
+                              p: '6px 8px 30px 9px',
+                              position: 'relative',
+                              textAlign: 'left',
+                              transition: reducedMotion
+                                ? 'none'
+                                : theme.transitions.create('background-color', {
+                                    duration: theme.transitions.duration.shortest,
+                                  }),
+                              '&:hover': { backgroundColor: fieldColors.hover },
+                            }}
+                          >
                             {renderFieldCell(renderArgs)}
                             {renderCellActions ? (
-                              <Box data-slot="cell-actions">{renderCellActions(renderArgs)}</Box>
+                              <Box
+                                data-slot="cell-actions"
+                                sx={{ bottom: 4, left: 7, position: 'absolute', zIndex: 2 }}
+                              >
+                                {renderCellActions(renderArgs)}
+                              </Box>
                             ) : null}
-                          </Stack>
+                          </Box>
                         </TableCell>
                       )
                     })}
@@ -625,8 +757,8 @@ export default function HorizontalCurationGrid({
                       sx={{
                         ...stickyCellSx('right', 0, false),
                         minWidth: ACTION_COLUMN_WIDTH,
-                        px: 0.75,
-                        py: density === 'compact' ? 1 : 2,
+                        px: '3px',
+                        py: '2px',
                         borderBottom: `1px solid ${theme.palette.divider}`,
                         verticalAlign: 'middle',
                       }}

@@ -4,7 +4,8 @@ import { ThemeProvider } from '@mui/material/styles'
 import type { ComponentProps } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import theme from '@/theme'
+import theme, { createAppTheme } from '@/theme'
+import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import HorizontalCurationGrid from './HorizontalCurationGrid'
 import {
   HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
@@ -77,6 +78,7 @@ function fieldCell(
   fieldPath: string,
   value: unknown,
   hasField = true,
+  state: FieldStateKind = 'ai-unconfirmed',
 ): HorizontalGridFieldCell {
   return {
     columnKey,
@@ -87,6 +89,7 @@ function fieldCell(
     required: hasField ? false : null,
     readOnly: hasField ? false : null,
     staleValidation: hasField ? false : null,
+    state: hasField ? state : null,
     fieldValidation: null,
     evidence: [],
     validation: emptyValidation,
@@ -157,6 +160,43 @@ afterEach(() => {
 })
 
 describe('HorizontalCurationGrid', () => {
+  it('ports the prototype compact state surfaces and anchored action layout in light mode', () => {
+    const lightModel = model([{
+      ...row(),
+      cells: [
+        fieldCell('field:alpha', 'alpha', 'Alpha value', true, 'needs-review'),
+        fieldCell('field:beta', 'beta', 'Beta value', true, 'ai-unconfirmed'),
+        fieldCell('field:gamma', 'gamma', 'Gamma value', true, 'resolved'),
+      ],
+    }])
+
+    render(
+      <ThemeProvider theme={createAppTheme('light')}>
+        <HorizontalCurationGrid
+          model={lightModel}
+          renderCellActions={() => <button type="button">Cell action</button>}
+        />
+      </ThemeProvider>,
+    )
+
+    expect(document.querySelector('[data-field-state="needs-review"]')).toHaveStyle({
+      backgroundColor: '#fffaf0',
+      minHeight: '68px',
+      padding: '6px 8px 30px 9px',
+    })
+    expect(document.querySelector('[data-field-state="ai-unconfirmed"]')).toHaveStyle({
+      backgroundColor: '#fbe5e0',
+    })
+    expect(document.querySelector('[data-field-state="resolved"]')).toHaveStyle({
+      backgroundColor: '#ffffff',
+    })
+    expect(document.querySelector('[data-slot="cell-actions"]')).toHaveStyle({
+      bottom: '4px',
+      left: '7px',
+      position: 'absolute',
+    })
+  })
+
   it('renders native table semantics, sticky edge columns, overflow access, and action slots', () => {
     renderGrid(model(), {
       renderCellActions: ({ column }) => <button type="button">Inspect {column.label}</button>,

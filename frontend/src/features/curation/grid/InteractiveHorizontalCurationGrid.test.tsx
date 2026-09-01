@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -344,6 +344,10 @@ function buildModel({
             required: true,
             readOnly: false,
             staleValidation: false,
+            state: authorsValidation.statuses.length > 0
+              && authorsValidation.statuses.every((status) => status === 'resolved' || status === 'waived')
+              ? 'resolved'
+              : 'ai-unconfirmed',
             fieldValidation: null,
             evidence: authorsEvidence,
             validation: authorsValidation,
@@ -357,6 +361,7 @@ function buildModel({
             required: false,
             readOnly: true,
             staleValidation: false,
+            state: 'ai-unconfirmed',
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
@@ -370,6 +375,7 @@ function buildModel({
             required: null,
             readOnly: null,
             staleValidation: null,
+            state: null,
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
@@ -469,7 +475,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const { setActiveCandidate } = renderGrid()
 
     await user.click(screen.getByRole('button', {
-      name: 'Select Authors for citation.authors',
+      name: /Select Authors for citation\.authors/,
     }))
     expect(setActiveCandidate).toHaveBeenCalledWith('candidate-1')
 
@@ -514,9 +520,19 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(within(details).getByText(/Current status:/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
     expect(navigateEvidence).toHaveBeenCalledTimes(1)
+    expect(within(details).getByRole('button', { name: 'Close evidence details' })).toHaveFocus()
 
-    await user.click(within(details).getByRole('button', { name: 'Close evidence details' }))
-    expect(screen.queryByRole('dialog', { name: /Authors:/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', {
+      name: 'Show object evidence 1 for Reference one',
+    }))
+    expect(screen.getByRole('dialog', { name: /Object evidence:/ })).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: 'Show object evidence 1 for Reference one',
+    })).toHaveFocus()
+
     unsubscribe()
   })
 
@@ -547,7 +563,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     unsubscribe()
   })
 
-  it('uses the adapter FieldRow renderer and delegates edits and reverts to autosave', async () => {
+  it('uses the adapter FieldRow renderer and saves or restores only after confirmation', async () => {
     const user = userEvent.setup()
     const autosave = createAutosave({ warning: 'Draft version conflict; edits remain local.' })
     renderGrid({ autosave })
@@ -556,22 +572,28 @@ describe('InteractiveHorizontalCurationGrid', () => {
 
     expect(screen.getByRole('dialog', { name: 'Edit Authors' })).toBeInTheDocument()
     expect(screen.getByText('Draft version conflict; edits remain local.')).toBeInTheDocument()
-    expect(screen.getByText('Required')).toBeInTheDocument()
-    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
     const authors = screen.getByLabelText('Authors')
     expect(authors).toHaveValue('Ada Lovelace\nGrace Hopper')
 
     fireEvent.change(authors, { target: { value: 'Ada Lovelace\n\nKatherine Johnson' } })
+    expect(autosave.queueFieldChange).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Save value' }))
     expect(autosave.queueFieldChange).toHaveBeenCalledWith({
       field_key: 'authors',
       value: ['Ada Lovelace', '', 'Katherine Johnson'],
     })
+    expect(autosave.flush).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: 'Revert' }))
+    await user.click(screen.getByRole('button', { name: 'Edit Authors' }))
+    await user.click(screen.getByRole('button', { name: 'Restore extracted value' }))
+    await user.click(screen.getByRole('button', { name: 'Save value' }))
     expect(autosave.queueFieldChange).toHaveBeenLastCalledWith({
       field_key: 'authors',
       revert_to_seed: true,
     })
+    expect(autosave.flush).toHaveBeenCalledTimes(2)
   })
 
   it('does not expose edit or validation actions for read-only or unavailable cells', () => {
@@ -605,9 +627,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
     renderGrid({ model: buildModel({ authorsValidation: validationProjection([summary]) }) })
 
     const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
-    expect(within(authorsCell).getByRole('img', { name: 'Resolved' })).toBeInTheDocument()
-    expect(screen.getByText('2 findings')).toBeInTheDocument()
-    expect(within(authorsCell).queryByText('Authors were validated by the server.')).not.toBeInTheDocument()
+    expect(authorsCell).toHaveAccessibleName(/Curator validated/)
+    expect(screen.getByRole('img', { name: /Authors were validated by the server/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
     expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
   })

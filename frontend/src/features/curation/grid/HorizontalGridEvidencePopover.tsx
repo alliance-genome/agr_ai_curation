@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
@@ -82,10 +82,16 @@ export default function HorizontalGridEvidencePopover({
 }: HorizontalGridEvidencePopoverProps) {
   const titleId = useId()
   const [arrowElement, setArrowElement] = useState<HTMLSpanElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
   const popperModifiers = useMemo(() => [
     ...POPPER_MODIFIERS,
     { name: 'arrow', options: { element: arrowElement, padding: 18 } },
   ], [arrowElement])
+  const handleClose = useCallback(() => {
+    const trigger = target?.anchorEl ?? null
+    onClose()
+    trigger?.focus()
+  }, [onClose, target])
 
   useEffect(() => {
     if (!target) {
@@ -94,12 +100,21 @@ export default function HorizontalGridEvidencePopover({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose()
+        handleClose()
       }
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, target])
+  }, [handleClose, target])
+
+  useEffect(() => {
+    if (!target) {
+      return undefined
+    }
+
+    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [target])
 
   const presentation = statePresentation(target?.state ?? null)
 
@@ -112,7 +127,7 @@ export default function HorizontalGridEvidencePopover({
       sx={(theme) => ({ zIndex: theme.zIndex.modal })}
     >
       {({ placement }) => target ? (
-        <ClickAwayListener onClickAway={onClose}>
+        <ClickAwayListener mouseEvent="onMouseDown" onClickAway={handleClose}>
           <Paper
             aria-labelledby={titleId}
             aria-modal="false"
@@ -160,7 +175,8 @@ export default function HorizontalGridEvidencePopover({
             <Box aria-hidden="true" className="evidence-popover-arrow" ref={setArrowElement} />
             <IconButton
               aria-label="Close evidence details"
-              onClick={onClose}
+              onClick={handleClose}
+              ref={closeButtonRef}
               size="small"
               sx={{ position: 'absolute', right: 8, top: 8, width: 28, height: 28 }}
             >
@@ -224,13 +240,11 @@ export default function HorizontalGridEvidencePopover({
 
             <Box sx={{ borderTop: 1, borderColor: 'divider', pt: '8px' }}>
               <Typography color="text.secondary" sx={{ fontSize: 9 }}>
+                {target.validationMessages.length > 0
+                  ? `${target.validationMessages.join(' · ')} · `
+                  : null}
                 {evidenceLocation(target.projection)} · Current status: {presentation.label}
               </Typography>
-              {target.validationMessages.map((message, index) => (
-                <Typography color="text.secondary" key={`${index}-${message}`} sx={{ fontSize: 9, mt: 0.5 }}>
-                  {message}
-                </Typography>
-              ))}
             </Box>
           </Paper>
         </ClickAwayListener>

@@ -42,29 +42,35 @@ export default function HorizontalGridCellActions({
   }
 
   const mutationDisabled = field.read_only || isSaving
+  const hasActions = cell.evidence.length > 0 || !field.read_only
+
+  if (!hasActions) {
+    return null
+  }
 
   return (
-    <Stack spacing={0.35}>
-      <Stack
-        direction="row"
-        spacing={0.25}
-        sx={(theme) => ({
-          alignSelf: 'flex-start',
-          p: '2px',
-          border: `1px solid ${theme.palette.divider}`,
-          borderRadius: '6px',
-          backgroundColor: theme.palette.mode === 'light' ? 'rgba(247, 249, 248, 0.94)' : theme.palette.grey[800],
-          '& .MuiIconButton-root': {
-            color: theme.palette.mode === 'light' ? '#60757a' : theme.palette.text.secondary,
-            transition: 'background 140ms ease, box-shadow 140ms ease, color 140ms ease',
-          },
-          '& .MuiIconButton-root:hover, & .MuiIconButton-root:focus-visible': {
-            backgroundColor: theme.palette.background.paper,
-            boxShadow: '0 1px 3px rgba(30, 51, 59, 0.13)',
-            color: theme.palette.mode === 'light' ? '#176c66' : theme.palette.primary.light,
-          },
-        })}
-      >
+    <Stack
+      aria-label={`Actions for ${field.label}`}
+      direction="row"
+      role="group"
+      spacing={0.25}
+      sx={(theme) => ({
+        alignSelf: 'flex-start',
+        p: '2px',
+        border: `1px solid ${theme.palette.mode === 'light' ? '#dce5e3' : theme.palette.divider}`,
+        borderRadius: '6px',
+        backgroundColor: theme.palette.mode === 'light' ? 'rgba(247, 249, 248, 0.94)' : theme.palette.grey[800],
+        '& .MuiIconButton-root': {
+          color: theme.palette.mode === 'light' ? '#60757a' : theme.palette.text.secondary,
+          transition: 'background 140ms ease, box-shadow 140ms ease, color 140ms ease',
+        },
+        '& .MuiIconButton-root:hover, & .MuiIconButton-root:focus-visible': {
+          backgroundColor: theme.palette.background.paper,
+          boxShadow: '0 1px 3px rgba(30, 51, 59, 0.13)',
+          color: theme.palette.mode === 'light' ? '#176c66' : theme.palette.primary.light,
+        },
+      })}
+    >
         {cell.evidence.map((projection, index) => {
           const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
           const evidenceNumber = index + 1
@@ -117,7 +123,6 @@ export default function HorizontalGridCellActions({
             </Tooltip>
           </>
         ) : null}
-      </Stack>
     </Stack>
   )
 }

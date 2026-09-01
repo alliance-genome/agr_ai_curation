@@ -64,6 +64,7 @@ export default function WorkspaceHeader({
       data-testid="workspace-header"
       sx={(theme) => ({
         display: 'flex',
+        containerType: 'inline-size',
         // The workspace lives beside the PDF pane, so viewport breakpoints do
         // not describe its available width. Keep navigation on a second row to
         // prevent the title and status metadata from colliding in split view.
@@ -81,6 +82,7 @@ export default function WorkspaceHeader({
       <Stack
         direction="row"
         alignItems="center"
+        flexWrap="wrap"
         spacing={1.25}
         sx={{ flex: '1 1 auto', minWidth: 0 }}
       >
@@ -141,7 +143,19 @@ export default function WorkspaceHeader({
 
         <Box sx={{ flexGrow: 1 }} />
 
-        <Stack direction="row" flexShrink={0} spacing={0.75} useFlexGap>
+        <Stack
+          direction="row"
+          flexShrink={0}
+          flexWrap="wrap"
+          spacing={0.75}
+          useFlexGap
+          sx={{
+            '@container (max-width: 700px)': {
+              flexBasis: '100%',
+              pl: '44px',
+            },
+          }}
+        >
           <Chip
             color={adapterChipColor}
             label={getAdapterLabel(session.adapter)}
@@ -166,7 +180,11 @@ export default function WorkspaceHeader({
         </Stack>
         <Typography
           color="text.secondary"
-          sx={{ display: { xs: 'none', xl: 'block' }, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+          sx={{
+            display: 'block',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            '@container (max-width: 900px)': { display: 'none' },
+          }}
           title={session.session_id}
           variant="caption"
         >

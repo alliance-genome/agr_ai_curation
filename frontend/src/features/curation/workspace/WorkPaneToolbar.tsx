@@ -39,17 +39,14 @@ export default function WorkPaneToolbar({
       data-theme-mode={theme.palette.mode}
       sx={{
         alignItems: 'center',
-        borderBottom: `1px solid ${theme.palette.divider}`,
-        backgroundColor: theme.palette.mode === 'dark'
-          ? theme.palette.grey[900]
-          : theme.palette.grey[50],
+        backgroundColor: 'transparent',
         display: 'flex',
         flexWrap: 'wrap',
         gap: 1,
         justifyContent: 'space-between',
-        minHeight: 48,
-        px: 1.25,
-        py: 0.75,
+        minHeight: 0,
+        py: 0.25,
+        width: '100%',
       }}
     >
       <Stack spacing={0.5} minWidth={0}>

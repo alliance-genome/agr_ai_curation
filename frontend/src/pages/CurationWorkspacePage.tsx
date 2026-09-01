@@ -590,34 +590,48 @@ function CurationWorkspacePageContent({
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                <WorkspaceSessionNavigation
-                  currentSessionId={workspace.session.session_id}
-                  queueContext={queueNavigationState?.queueContext}
-                  queueRequest={queueNavigationState?.queueRequest}
+              <Stack spacing={1} width="100%">
+                <WorkPaneToolbar
+                  isPdfVisible={isPdfVisible}
+                  totalCount={candidates.length}
+                  pendingCount={pendingCandidateCount}
+                  validationCounts={validationCounts}
+                  validatedPendingCount={validatedPendingCount}
+                  onAcceptAllValidated={() => {
+                    void handleAcceptAllValidated(validatedPendingCandidateIds)
+                  }}
+                  onAddObject={() => setManualObjectDialogOpen(true)}
+                  onTogglePdf={isPdfVisible ? focusGrid : showPdf}
                 />
-                <Button
-                  onClick={() => {
-                    if (SUBMISSION_PREVIEW_ENABLED) {
-                      setSubmissionDialogOpen(true)
-                      return
-                    }
-                    setSubmissionWipDialogOpen(true)
-                  }}
-                  size="small"
-                  variant="contained"
-                  sx={{
-                    borderRadius: 1,
-                    fontSize: '0.75rem',
-                    fontWeight: 500,
-                    letterSpacing: 0,
-                    minHeight: 32,
-                    py: 0.5,
-                    textTransform: 'none',
-                  }}
-                >
-                  Preview submission
-                </Button>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end" useFlexGap>
+                  <WorkspaceSessionNavigation
+                    currentSessionId={workspace.session.session_id}
+                    queueContext={queueNavigationState?.queueContext}
+                    queueRequest={queueNavigationState?.queueRequest}
+                  />
+                  <Button
+                    onClick={() => {
+                      if (SUBMISSION_PREVIEW_ENABLED) {
+                        setSubmissionDialogOpen(true)
+                        return
+                      }
+                      setSubmissionWipDialogOpen(true)
+                    }}
+                    size="small"
+                    variant="contained"
+                    sx={{
+                      borderRadius: 1,
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      letterSpacing: 0,
+                      minHeight: 32,
+                      py: 0.5,
+                      textTransform: 'none',
+                    }}
+                  >
+                    Preview submission
+                  </Button>
+                </Stack>
               </Stack>
             )}
             session={workspace.session}
@@ -625,18 +639,6 @@ function CurationWorkspacePageContent({
         )}
         workPaneSlot={(
           <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
-            <WorkPaneToolbar
-              isPdfVisible={isPdfVisible}
-              totalCount={candidates.length}
-              pendingCount={pendingCandidateCount}
-              validationCounts={validationCounts}
-              validatedPendingCount={validatedPendingCount}
-              onAcceptAllValidated={() => {
-                void handleAcceptAllValidated(validatedPendingCandidateIds)
-              }}
-              onAddObject={() => setManualObjectDialogOpen(true)}
-              onTogglePdf={isPdfVisible ? focusGrid : showPdf}
-            />
             {activeEnvelopeValidationSummaries
               .filter((summary) => summary.findings.some(envelopeFindingRequiresAttention))
               .map((summary) => (

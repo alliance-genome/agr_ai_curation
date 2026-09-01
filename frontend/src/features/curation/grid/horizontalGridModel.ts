@@ -2,6 +2,7 @@ import {
   getCurationAdapterEditorPack,
   type CurationAdapterFieldLayoutEntry,
 } from '@/features/curation/adapters'
+import { fieldState, type FieldStateKind } from '@/features/curation/editor/fieldState'
 import type {
   CurationCandidate,
   CurationCandidateSource,
@@ -73,6 +74,7 @@ export interface HorizontalGridFieldCell {
   required: boolean | null
   readOnly: boolean | null
   staleValidation: boolean | null
+  state: FieldStateKind | null
   fieldValidation: FieldValidationResult | null
   evidence: DomainEnvelopeEvidenceAnchorProjection[]
   validation: HorizontalGridValidationProjection
@@ -360,6 +362,7 @@ function projectRow(
       required: field?.required ?? null,
       readOnly: field?.read_only ?? null,
       staleValidation: field?.stale_validation ?? null,
+      state: field ? fieldState(field, cellValidation) : null,
       fieldValidation: field?.validation_result ?? null,
       evidence: cellEvidence,
       validation: validationProjection(cellValidation),

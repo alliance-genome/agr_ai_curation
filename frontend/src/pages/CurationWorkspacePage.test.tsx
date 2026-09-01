@@ -595,6 +595,10 @@ describe('CurationWorkspacePage', () => {
     expect(screen.queryByRole('region', { name: /envelope object table panel/i })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Horizontally scrollable curation grid' })).toBeInTheDocument()
     expect(screen.getByTestId('workspace-shell-work-pane-content')).toBeInTheDocument()
+    expect(within(screen.getByTestId('workspace-shell-header'))
+      .getByTestId('work-pane-toolbar')).toBeInTheDocument()
+    expect(within(screen.getByTestId('workspace-shell-work-pane-content'))
+      .queryByTestId('work-pane-toolbar')).not.toBeInTheDocument()
     expect(screen.queryByTestId('object-selector-strip')).not.toBeInTheDocument()
     expect(screen.queryByTestId('candidate-field-editor')).not.toBeInTheDocument()
     expect(screen.getByText('Review objects')).toBeInTheDocument()
@@ -647,12 +651,12 @@ describe('CurationWorkspacePage', () => {
     })
 
     expect(screen.getAllByText('TMEM67').length).toBeGreaterThan(0)
-    expect(screen.getByText('1 finding')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Needs curator review' })).toBeInTheDocument()
     expect(screen.getByText(
       /Required envelope validation was unavailable\. All objects from this envelope are affected\./,
     )).toBeInTheDocument()
     expect(screen.getByRole('button', {
-      name: 'Select Gene symbol for gene.symbol',
+      name: /Select Gene symbol for gene\.symbol/,
     })).toBeInTheDocument()
     expect(screen.getByRole('button', {
       name: 'Show evidence 1 for Gene symbol',
@@ -667,7 +671,7 @@ describe('CurationWorkspacePage', () => {
     })
     await waitFor(() => {
       expect(screen.getByRole('button', {
-        name: 'Select Gene symbol for gene.symbol',
+        name: /Select Gene symbol for gene\.symbol/,
       })).toHaveFocus()
       expect(screen.getByTestId('horizontal-grid-field-gene.symbol')).toHaveClass(
         PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
@@ -1205,27 +1209,24 @@ describe('CurationWorkspacePage', () => {
     fireEvent.click(within(activeRow).getByRole('button', { name: 'Edit Gene symbol' }))
     expect(await screen.findByRole('dialog', { name: 'Edit Gene symbol' })).toBeInTheDocument()
 
-    vi.useFakeTimers()
     fireEvent.change(screen.getByLabelText('Gene symbol'), {
       target: { value: 'BRCA2' },
     })
+    fireEvent.click(screen.getByRole('button', { name: 'Save value' }))
 
-    await act(async () => {
-      vi.advanceTimersByTime(2600)
-      await Promise.resolve()
-    })
-
-    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith({
-      session_id: 'session-1',
-      envelope_id: 'envelope-1',
-      expected_revision: 5,
-      object_id: 'object-1',
-      field_path: 'gene.symbol',
-      operation: 'replace',
-      before: 'BRCA1',
-      value: 'BRCA2',
-    }, {
-      keepalive: undefined,
+    await waitFor(() => {
+      expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        envelope_id: 'envelope-1',
+        expected_revision: 5,
+        object_id: 'object-1',
+        field_path: 'gene.symbol',
+        operation: 'replace',
+        before: 'BRCA1',
+        value: 'BRCA2',
+      }, {
+        keepalive: undefined,
+      })
     })
     expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
   })
@@ -1322,7 +1323,7 @@ describe('CurationWorkspacePage', () => {
     fireEvent.change(await screen.findByLabelText('Gene symbol'), {
       target: { value: 'APOE2' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save value' }))
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: /Edit/ })).not.toBeInTheDocument()
     })

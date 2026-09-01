@@ -1,11 +1,10 @@
-import { useId } from 'react'
+import { useEffect, useId, useState } from 'react'
 
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import {
   Alert,
   Box,
   Button,
-  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -23,9 +22,10 @@ export interface HorizontalGridFieldEditorDialogProps {
   autosaveWarning: string | null
   editorPack: CurationAdapterEditorPack | null
   field: CurationDraftField | null
-  onChange: (value: unknown) => void
+  isSaving: boolean
   onClose: () => void
-  onRevert: () => void
+  onRevert: () => Promise<boolean>
+  onSave: (value: unknown) => Promise<boolean>
   open: boolean
 }
 
@@ -33,12 +33,23 @@ export default function HorizontalGridFieldEditorDialog({
   autosaveWarning,
   editorPack,
   field,
-  onChange,
+  isSaving,
   onClose,
   onRevert,
+  onSave,
   open,
 }: HorizontalGridFieldEditorDialogProps) {
   const titleId = useId()
+  const [draftValue, setDraftValue] = useState<unknown>(field?.value ?? null)
+  const [revertToSeed, setRevertToSeed] = useState(false)
+
+  useEffect(() => {
+    if (!open || !field) {
+      return
+    }
+    setDraftValue(field.value)
+    setRevertToSeed(false)
+  }, [field, open])
 
   return (
     <Dialog
@@ -107,27 +118,49 @@ export default function HorizontalGridFieldEditorDialog({
           </Alert>
         ) : null}
         {field ? (
-          <Stack spacing={1.25}>
-            <Stack direction="row" spacing={0.5}>
-              {field.required ? <Chip label="Required" size="small" /> : null}
-              {field.dirty ? <Chip color="warning" label="Unsaved changes" size="small" /> : null}
-            </Stack>
+          <Stack spacing={0}>
             <FieldRow
               field={field}
-              onChange={onChange}
+              onChange={(value) => {
+                setDraftValue(value)
+                setRevertToSeed(false)
+              }}
               renderInput={editorPack?.renderFieldInput}
-              revertSlot={field.dirty ? (
-                <Button onClick={onRevert} size="small" type="button" variant="text">
-                  Revert
-                </Button>
-              ) : null}
-              value={field.value}
+              value={draftValue}
             />
+            <Typography color="text.secondary" sx={{ fontSize: 10, lineHeight: 1.4, m: '7px 0 20px' }}>
+              Save value applies this edit to the curation draft.
+              {field.dirty ? ' You can also restore the extracted value before saving.' : ''}
+            </Typography>
+            {field.dirty ? (
+              <Button
+                disabled={isSaving}
+                onClick={() => {
+                  setDraftValue(field.seed_value)
+                  setRevertToSeed(true)
+                }}
+                size="small"
+                sx={{ alignSelf: 'flex-start', mb: 1, textTransform: 'none' }}
+                type="button"
+                variant="text"
+              >
+                Restore extracted value
+              </Button>
+            ) : null}
           </Stack>
         ) : null}
       </DialogContent>
-      <DialogActions sx={{ gap: '8px', p: '20px' }}>
-        <Button onClick={onClose} variant="contained">Close</Button>
+      <DialogActions sx={{ gap: '8px', p: '0 20px 20px' }}>
+        <Button disabled={isSaving} onClick={onClose} variant="outlined">Cancel</Button>
+        <Button
+          disabled={isSaving || !field}
+          onClick={() => {
+            void (revertToSeed ? onRevert() : onSave(draftValue))
+          }}
+          variant="contained"
+        >
+          Save value
+        </Button>
       </DialogActions>
     </Dialog>
   )
