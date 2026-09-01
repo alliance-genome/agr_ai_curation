@@ -161,14 +161,24 @@ afterEach(() => {
 
 describe('HorizontalCurationGrid', () => {
   it('ports the prototype compact state surfaces and anchored action layout in light mode', () => {
-    const lightModel = model([{
-      ...row(),
-      cells: [
-        fieldCell('field:alpha', 'alpha', 'Alpha value', true, 'needs-review'),
-        fieldCell('field:beta', 'beta', 'Beta value', true, 'ai-unconfirmed'),
-        fieldCell('field:gamma', 'gamma', 'Gamma value', true, 'resolved'),
-      ],
-    }])
+    const lightModel = model([
+      {
+        ...row(),
+        cells: [
+          fieldCell('field:alpha', 'alpha', 'Alpha value', true, 'needs-review'),
+          fieldCell('field:beta', 'beta', 'Beta value', true, 'ai-unconfirmed'),
+          fieldCell('field:gamma', 'gamma', 'Gamma value', true, 'resolved'),
+        ],
+      },
+      {
+        ...row('candidate-2'),
+        cells: [
+          fieldCell('field:alpha', 'alpha', 'Alpha value two', true, 'resolved'),
+          fieldCell('field:beta', 'beta', 'Beta value two', true, 'resolved'),
+          fieldCell('field:gamma', 'gamma', 'Gamma value two', true, 'resolved'),
+        ],
+      },
+    ])
 
     render(
       <ThemeProvider theme={createAppTheme('light')}>
@@ -187,14 +197,42 @@ describe('HorizontalCurationGrid', () => {
     expect(document.querySelector('[data-field-state="ai-unconfirmed"]')).toHaveStyle({
       backgroundColor: '#fbe5e0',
     })
-    expect(document.querySelector('[data-field-state="resolved"]')).toHaveStyle({
-      backgroundColor: '#ffffff',
-    })
+    const resolvedCells = document.querySelectorAll('[data-field-state="resolved"]')
+    expect(getComputedStyle(resolvedCells[0]!).backgroundColor).toBe('rgba(0, 0, 0, 0)')
+    expect(resolvedCells[0]?.closest('td')).toHaveStyle({ backgroundColor: '#ffffff' })
+    expect(resolvedCells[1]?.closest('td')).toHaveStyle({ backgroundColor: '#fdfdfc' })
     expect(document.querySelector('[data-slot="cell-actions"]')).toHaveStyle({
       bottom: '4px',
       left: '7px',
       position: 'absolute',
     })
+    expect(screen.getByRole('button', { name: 'Compact' })).toHaveStyle({
+      backgroundColor: '#0b2f55',
+      color: '#ffffff',
+    })
+    expect(screen.getByRole('button', { name: 'Object is always pinned' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+  })
+
+  it('preserves alternating row depth beneath resolved cells in dark mode', () => {
+    const resolvedModel = model([
+      { ...row(), cells: row().cells.map((cell) => ({ ...cell, state: 'resolved' })) },
+      {
+        ...row('candidate-2'),
+        cells: row('candidate-2').cells.map((cell) => ({
+          ...cell,
+          state: cell.hasField ? 'resolved' : null,
+        })),
+      },
+    ])
+
+    renderGrid(resolvedModel)
+    const resolvedCells = document.querySelectorAll('[data-field-state="resolved"]')
+    const firstRowSurface = getComputedStyle(resolvedCells[0]!.closest('td')!).backgroundColor
+    const secondRowSurface = getComputedStyle(resolvedCells[3]!.closest('td')!).backgroundColor
+    expect(firstRowSurface).not.toBe(secondRowSurface)
   })
 
   it('renders native table semantics, sticky edge columns, overflow access, and action slots', () => {

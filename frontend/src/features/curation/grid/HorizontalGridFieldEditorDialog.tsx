@@ -151,12 +151,35 @@ export default function HorizontalGridFieldEditorDialog({
         ) : null}
       </DialogContent>
       <DialogActions sx={{ gap: '8px', p: '0 20px 20px' }}>
-        <Button disabled={isSaving} onClick={onClose} variant="outlined">Cancel</Button>
+        <Button
+          disabled={isSaving}
+          onClick={onClose}
+          sx={(theme) => ({
+            borderColor: theme.palette.mode === 'dark' ? theme.palette.divider : '#bec8cb',
+            color: 'text.primary',
+            '&:hover': {
+              borderColor: theme.palette.mode === 'dark' ? theme.palette.text.secondary : '#7f8d96',
+              backgroundColor: theme.palette.mode === 'dark' ? theme.palette.action.hover : '#f8f8f6',
+            },
+          })}
+          variant="outlined"
+        >
+          Cancel
+        </Button>
         <Button
           disabled={isSaving || !field}
           onClick={() => {
             void (revertToSeed ? onRevert() : onSave(draftValue))
           }}
+          sx={(theme) => ({
+            border: `1px solid ${theme.palette.mode === 'dark' ? '#0b7d72' : '#076b65'}`,
+            backgroundColor: theme.palette.mode === 'dark' ? '#0b7d72' : '#076b65',
+            color: theme.palette.common.white,
+            '&:hover': {
+              borderColor: '#045a55',
+              backgroundColor: '#045f59',
+            },
+          })}
           variant="contained"
         >
           Save value

@@ -191,7 +191,7 @@ export default function HorizontalCurationGrid({
     : '#f7f9f8'
   const fieldSurfaceColors = {
     resolved: {
-      base: surfaceColor,
+      base: 'transparent',
       hover: hoverSurfaceColor,
     },
     'needs-review': {
@@ -407,8 +407,26 @@ export default function HorizontalCurationGrid({
                 setAnnouncement(`${option === 'compact' ? 'Compact' : 'Comfortable'} row density enabled`)
               }}
               size="small"
-              sx={{ borderRadius: '3px', fontSize: 10, fontWeight: 700, height: 28, minWidth: 0, px: '8px', textTransform: 'none' }}
-              variant={density === option ? 'contained' : 'text'}
+              sx={{
+                borderRadius: '3px',
+                backgroundColor: density === option
+                  ? (theme.palette.mode === 'dark' ? '#17486f' : '#0b2f55')
+                  : 'transparent',
+                color: density === option ? theme.palette.common.white : 'text.secondary',
+                fontSize: 10,
+                fontWeight: 700,
+                height: 28,
+                minWidth: 0,
+                px: '8px',
+                textTransform: 'none',
+                '&:hover': {
+                  backgroundColor: density === option
+                    ? (theme.palette.mode === 'dark' ? '#17486f' : '#0b2f55')
+                    : (theme.palette.mode === 'dark' ? theme.palette.action.hover : '#edf3f2'),
+                  color: density === option ? theme.palette.common.white : 'text.primary',
+                },
+              }}
+              variant="text"
             >
               {option === 'compact' ? 'Compact' : 'Comfortable'}
             </Button>
@@ -519,11 +537,30 @@ export default function HorizontalCurationGrid({
                       Identity / context
                     </Typography>
                   </Box>
-                  <PushPinRoundedIcon
+                  <IconButton
                     aria-label={`${contextColumn.label} is always pinned`}
-                    color="primary"
-                    fontSize="small"
-                  />
+                    aria-pressed="true"
+                    onClick={() => setAnnouncement(
+                      `${contextColumn.label} stays pinned so source context remains visible`,
+                    )}
+                    size="small"
+                    title={`${contextColumn.label} stays pinned so source context remains visible`}
+                    sx={{
+                      border: `1px solid ${theme.palette.mode === 'dark' ? theme.palette.divider : '#b4d5d0'}`,
+                      borderRadius: '4px',
+                      backgroundColor: theme.palette.mode === 'dark'
+                        ? alpha(theme.palette.success.main, 0.16)
+                        : '#e3f2ef',
+                      color: theme.palette.mode === 'dark' ? theme.palette.success.light : '#176c66',
+                      cursor: 'help',
+                      height: 20,
+                      p: 0,
+                      width: 20,
+                      '& svg': { fontSize: 13 },
+                    }}
+                  >
+                    <PushPinRoundedIcon />
+                  </IconButton>
                 </Stack>
               </TableCell>
 
@@ -574,13 +611,33 @@ export default function HorizontalCurationGrid({
                       <IconButton
                         aria-label={`${isPinned ? 'Unpin' : 'Pin'} ${column.label} column`}
                         aria-pressed={isPinned}
-                        color={isPinned ? 'primary' : 'default'}
                         onClick={() => togglePin(column)}
                         size="small"
                         sx={{
+                          border: `1px solid ${isPinned && theme.palette.mode === 'light' ? '#b4d5d0' : 'transparent'}`,
+                          borderRadius: '4px',
+                          backgroundColor: isPinned
+                            ? (theme.palette.mode === 'dark'
+                                ? alpha(theme.palette.success.main, 0.16)
+                                : '#e3f2ef')
+                            : 'transparent',
+                          color: isPinned
+                            ? (theme.palette.mode === 'dark' ? theme.palette.success.light : '#176c66')
+                            : (theme.palette.mode === 'dark' ? theme.palette.text.secondary : '#809094'),
                           flexShrink: 0,
+                          height: 20,
+                          p: 0,
+                          width: 20,
+                          '& svg': { fontSize: 13 },
+                          '&:hover': {
+                            borderColor: theme.palette.mode === 'dark' ? theme.palette.divider : '#bad1ce',
+                            backgroundColor: theme.palette.mode === 'dark'
+                              ? theme.palette.action.hover
+                              : '#f1f7f5',
+                            color: theme.palette.mode === 'dark' ? theme.palette.success.light : '#076b65',
+                          },
                           '&:focus-visible': {
-                            outline: `2px solid ${theme.palette.primary.main}`,
+                            outline: `2px solid ${theme.palette.mode === 'dark' ? theme.palette.primary.light : '#17486f'}`,
                             outlineOffset: 1,
                           },
                         }}

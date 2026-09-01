@@ -89,7 +89,7 @@ describe('WorkspaceHeader', () => {
 
     const header = screen.getByTestId('workspace-header')
     expect(header).toHaveStyle({ containerType: 'inline-size' })
-    expect(header.firstElementChild).toHaveStyle({ flexWrap: 'wrap' })
+    expect(header.firstElementChild).toHaveStyle({ flexWrap: 'wrap', gap: '10px' })
   })
 
   it.each(['light', 'dark'] as const)('keeps header navigation legible in %s mode', (mode) => {

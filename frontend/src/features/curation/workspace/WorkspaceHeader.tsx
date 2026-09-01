@@ -84,6 +84,7 @@ export default function WorkspaceHeader({
         alignItems="center"
         flexWrap="wrap"
         spacing={1.25}
+        useFlexGap
         sx={{ flex: '1 1 auto', minWidth: 0 }}
       >
         <Button
