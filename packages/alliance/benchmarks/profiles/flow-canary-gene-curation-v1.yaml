@@ -19,4 +19,9 @@ cases:
     fixture: cases/synthetic-gene-flow-canary-1/input.json
     expected: cases/synthetic-gene-flow-canary-1/gold.json
 scorers:
-  - id: exact-json
+  - id: deterministic-v1
+    configuration:
+      scoring_version: 1
+      fields:
+        - path: /status
+          comparison: exact

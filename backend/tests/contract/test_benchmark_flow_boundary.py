@@ -1,7 +1,9 @@
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import src.lib.benchmarks.runtime as benchmark_runtime
+from src.lib.benchmarks.loader import BenchmarkCatalog
 from src.lib.benchmarks.models import (
     BenchmarkExecutionTarget,
     BenchmarkInputReference,
@@ -9,6 +11,7 @@ from src.lib.benchmarks.models import (
     BenchmarkSuiteRoute,
     ResolvedBenchmarkCell,
 )
+from src.lib.benchmarks.scoring import score_case
 from src.lib.openai_agents.provider_usage import ProviderUsageRecord, emit_provider_usage
 
 
@@ -41,6 +44,25 @@ async def test_canary_invokes_execute_flow_and_consumes_terminal_result(monkeypa
     assert captured["model_id_override"] == "gpt-5.6-sol"
     assert captured["model_provider_override"] == "openai"
     assert result.output["status"] == "completed"
+
+    benchmark_root = (
+        Path(__file__).resolve().parents[3] / "packages" / "alliance" / "benchmarks"
+    )
+    profile = BenchmarkCatalog(
+        benchmark_root,
+        agent_ids={"gene_validation", "ontology_term_validation"},
+        flow_ids={"Gene Curation"},
+        route_validator=lambda _model, _provider: None,
+    ).get_profile("flow-canary-gene-curation-v1")
+    score = score_case(
+        scorer=profile.profile.scorers[0],
+        expected=profile.cases[0].expected,
+        actual=result.output,
+    )
+
+    assert score.scorer_id == "deterministic-v1"
+    assert score.outcome == "pass"
+    assert score.fields[0].path == "/status"
 
 
 async def test_resolved_cell_passes_independent_routes_and_returns_every_invocation(
