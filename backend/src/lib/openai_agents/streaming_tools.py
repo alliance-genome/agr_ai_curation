@@ -1614,26 +1614,24 @@ def _classify_structured_tool_result(
     """Classify a structured result without retaining its raw message or response."""
 
     status = str(payload.get("status") or "").strip().lower()
-    status_code = payload.get("status_code")
+    raw_status_code = payload.get("status_code")
+    status_code = (
+        raw_status_code
+        if isinstance(raw_status_code, int) and not isinstance(raw_status_code, bool)
+        else None
+    )
     is_http_success = (
-        isinstance(status_code, int)
-        and not isinstance(status_code, bool)
-        and 200 <= status_code < 300
+        status_code is not None and 200 <= status_code < 300
     )
-    is_http_failure = (
-        isinstance(status_code, int)
-        and not isinstance(status_code, bool)
-        and status_code >= 400
-    )
+    is_http_failure = status_code is not None and status_code >= 400
+    is_http_server_failure = status_code is not None and status_code >= 500
     lookup_succeeded = status in {"ok", "success", "not_found"} or is_http_success
     failed = status in {"error", "upstream_error"} or is_http_failure
 
     reportable_error_type: Optional[str] = None
-    if status == "error":
-        reportable_error_type = "StructuredToolError"
-    elif status == "upstream_error":
+    if status == "upstream_error":
         reportable_error_type = "StructuredToolUpstreamError"
-    elif is_http_failure and status not in {"invalid_input", "not_found", "ambiguous"}:
+    elif is_http_server_failure:
         reportable_error_type = "StructuredToolHTTPError"
 
     return _StructuredToolResultClassification(
@@ -5239,14 +5237,16 @@ async def run_specialist_with_events(
                             tool_calls[tool_index].duration_ms = duration_ms
 
                         if result_classification.reportable_error_type is not None:
-                            await notify_tool_failure(
-                                error_type=result_classification.reportable_error_type,
-                                error_message="Structured tool returned an unexpected failure result",
-                                source="infrastructure",
-                                specialist_name=current_tool_name,
-                                trace_id=get_current_trace_id() or builder_workspace.run_id,
-                                session_id=get_current_session_id(),
-                                curator_id=None,
+                            asyncio.create_task(
+                                notify_tool_failure(
+                                    error_type=result_classification.reportable_error_type,
+                                    error_message="Structured tool returned an unexpected failure result",
+                                    source="infrastructure",
+                                    specialist_name=current_tool_name,
+                                    trace_id=get_current_trace_id() or builder_workspace.run_id,
+                                    session_id=get_current_session_id(),
+                                    curator_id=None,
+                                )
                             )
 
                         evidence_record = build_record_evidence_summary_record(

@@ -1,5 +1,6 @@
 """Focused helper tests for streaming_tools core runtime behavior."""
 
+import asyncio
 import json
 import os
 import uuid
@@ -647,7 +648,6 @@ def _structured_tool_stream_events(payload: dict) -> list[SimpleNamespace]:
 @pytest.mark.parametrize(
     ("payload", "expected_error_type", "notifier_result"),
     [
-        ({"status": "error"}, "StructuredToolError", True),
         ({"status": "upstream_error"}, "StructuredToolUpstreamError", True),
         ({"status": "upstream_error"}, "StructuredToolUpstreamError", False),
         ({"status_code": 503}, "StructuredToolHTTPError", True),
@@ -698,6 +698,7 @@ async def test_structured_failure_stream_event_is_failed_and_reported_once(
         max_turns=3,
         tool_name=None,
     )
+    await asyncio.sleep(0)
 
     complete_event = next(
         event
@@ -725,10 +726,20 @@ async def test_structured_failure_stream_event_is_failed_and_reported_once(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["invalid_input", "not_found", "ambiguous"])
-async def test_routine_structured_tool_outcomes_stream_as_nonfailures_without_reporting(
+@pytest.mark.parametrize(
+    ("payload", "expected_success"),
+    [
+        ({"status": "invalid_input"}, True),
+        ({"status": "not_found"}, True),
+        ({"status": "ambiguous"}, True),
+        ({"status": "error", "message": "get_allele_by_id requires allele_id"}, False),
+        ({"status": "error", "status_code": 404}, False),
+    ],
+)
+async def test_routine_structured_tool_outcomes_stream_without_reporting(
     monkeypatch,
-    status,
+    payload,
+    expected_success,
 ):
     notifier_calls = []
 
@@ -741,7 +752,7 @@ async def test_routine_structured_tool_outcomes_stream_as_nonfailures_without_re
         streaming_tools.Runner,
         "run_streamed",
         lambda *_args, **_kwargs: _FakeRunResult(
-            events=_structured_tool_stream_events({"status": status}),
+            events=_structured_tool_stream_events(payload),
             final_output="specialist output",
         ),
     )
@@ -768,7 +779,7 @@ async def test_routine_structured_tool_outcomes_stream_as_nonfailures_without_re
         for event in streaming_tools.get_collected_events()
         if event["type"] == "TOOL_COMPLETE"
     )
-    assert complete_event["details"]["success"] is True
+    assert complete_event["details"]["success"] is expected_success
     assert notifier_calls == []
 
 
