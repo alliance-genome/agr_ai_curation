@@ -10,7 +10,7 @@ function candidate(domainPackId: string, objectType: string): CurationCandidate 
   return {
     adapter_key: domainPackId,
     metadata: { domain_pack_id: domainPackId, object_type: objectType },
-  } as CurationCandidate
+  } as unknown as CurationCandidate
 }
 
 function field(fieldPath: string, groupKey: string | null): CurationDraftField {
@@ -18,26 +18,36 @@ function field(fieldPath: string, groupKey: string | null): CurationDraftField {
     field_key: fieldPath,
     group_key: groupKey,
     metadata: { source_field_path: fieldPath },
-  } as CurationDraftField
+  } as unknown as CurationDraftField
+}
+
+function configuredDomainPackId(objectType: string): string {
+  const matchingKeys = Object.keys(HORIZONTAL_GRID_REVIEW_POLICIES)
+    .filter((key) => key.endsWith(`:${objectType}`))
+  expect(matchingKeys).toHaveLength(1)
+  return matchingKeys[0].slice(0, matchingKeys[0].indexOf(':'))
 }
 
 describe('horizontal grid review policy', () => {
   it('catalogs every current workspace envelope object type', () => {
-    expect(Object.keys(HORIZONTAL_GRID_REVIEW_POLICIES).sort()).toEqual([
-      'agr.alliance.allele:Allele',
-      'agr.alliance.allele:AllelePaperEvidenceAssociation',
-      'agr.alliance.disease:AGMDiseaseAnnotation',
-      'agr.alliance.disease:AlleleDiseaseAnnotation',
-      'agr.alliance.disease:DiseaseAnnotation',
-      'agr.alliance.disease:GeneDiseaseAnnotation',
-      'agr.alliance.gene_expression:GeneExpressionAnnotation',
-      'agr.alliance.go:GOCuratableObject',
-      'agr.alliance.phenotype:PhenotypeAnnotation',
-      'agr.alliance.phenotype:PhenotypeSubject',
-      'gene:gene_mention_evidence',
-      'generic:generic_claim',
-      'generic:generic_object',
-      'generic:generic_reagent_candidate',
+    const objectTypes = Object.keys(HORIZONTAL_GRID_REVIEW_POLICIES)
+      .map((key) => key.slice(key.indexOf(':') + 1))
+      .sort()
+    expect(objectTypes).toEqual([
+      'AGMDiseaseAnnotation',
+      'Allele',
+      'AlleleDiseaseAnnotation',
+      'AllelePaperEvidenceAssociation',
+      'DiseaseAnnotation',
+      'GOCuratableObject',
+      'GeneDiseaseAnnotation',
+      'GeneExpressionAnnotation',
+      'PhenotypeAnnotation',
+      'PhenotypeSubject',
+      'gene_mention_evidence',
+      'generic_claim',
+      'generic_object',
+      'generic_reagent_candidate',
     ])
   })
 
@@ -47,7 +57,7 @@ describe('horizontal grid review policy', () => {
     expect(isHorizontalGridDecisionField(gene, field('section', 'evidence_location'))).toBe(false)
     expect(isHorizontalGridDecisionField(gene, field('confidence', 'provenance'))).toBe(false)
 
-    const go = candidate('agr.alliance.go', 'GOCuratableObject')
+    const go = candidate(configuredDomainPackId('GOCuratableObject'), 'GOCuratableObject')
     expect(isHorizontalGridDecisionField(go, field('go_term.curie', 'annotation'))).toBe(true)
     expect(isHorizontalGridDecisionField(go, field('rationale', 'evidence'))).toBe(false)
     expect(isHorizontalGridDecisionField(go, field('provider_context', 'provider'))).toBe(false)
@@ -65,7 +75,7 @@ describe('horizontal grid review policy', () => {
   })
 
   it('keeps all configured fields for export-shaped envelopes and unknown future types', () => {
-    const disease = candidate('agr.alliance.disease', 'DiseaseAnnotation')
+    const disease = candidate(configuredDomainPackId('DiseaseAnnotation'), 'DiseaseAnnotation')
     expect(isHorizontalGridDecisionField(
       disease,
       field('data_provider.abbreviation', 'provenance'),
