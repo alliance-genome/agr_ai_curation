@@ -24,6 +24,8 @@ import HorizontalGridCellActions from './HorizontalGridCellActions'
 import {
   HorizontalGridContextCellContent,
   HorizontalGridFieldCellContent,
+  contextEvidenceFieldPath,
+  contextEvidenceLabel,
 } from './HorizontalGridCells'
 import HorizontalGridEvidencePopover, {
   type HorizontalGridEvidencePopoverTarget,
@@ -187,9 +189,10 @@ export default function InteractiveHorizontalCurationGrid({
       active={activeCandidateId === row.candidateId}
       cell={cell}
       onEvidence={(projection, command, anchorEl) => {
+        const fieldPath = contextEvidenceFieldPath(projection)
         setEvidenceTarget({
           anchorEl,
-          fieldLabel: 'Object evidence',
+          fieldLabel: contextEvidenceLabel(projection),
           fieldValue: cell.value.identityLabel,
           projection,
           state: null,
@@ -201,7 +204,7 @@ export default function InteractiveHorizontalCurationGrid({
             source: 'horizontal-curation-grid-context',
             candidateId: row.candidateId,
             objectId: projection.object_id,
-            fieldPath: null,
+            fieldPath,
           },
         )
       }}

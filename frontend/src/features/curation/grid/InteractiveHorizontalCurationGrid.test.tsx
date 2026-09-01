@@ -464,6 +464,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  delete window.__pdfViewerEvidenceDebug
+  vi.restoreAllMocks()
   vi.clearAllMocks()
 })
 
@@ -532,6 +534,41 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(screen.getByRole('button', {
       name: 'Show object evidence 1 for Reference one',
     })).toHaveFocus()
+
+    unsubscribe()
+  })
+
+  it('preserves unmatched field provenance on the context evidence trigger and popup', async () => {
+    const user = userEvent.setup()
+    const navigateEvidence = vi.fn()
+    const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    window.__pdfViewerEvidenceDebug = {
+      enabled: true,
+      storageKey: 'test-evidence-debug',
+      setEnabled: vi.fn((enabled: boolean) => enabled),
+      getEntries: vi.fn(() => []),
+      clearEntries: vi.fn(),
+      getLastResult: vi.fn(() => null),
+    }
+    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
+    renderGrid({
+      model: buildModel({
+        objectEvidence: [evidenceProjection('mention-evidence', 'mention')],
+      }),
+    })
+
+    await user.click(screen.getByRole('button', {
+      name: 'Show field evidence (mention) 1 for Reference one',
+    }))
+
+    expect(screen.getByRole('dialog', {
+      name: 'Field evidence (mention): Reference one',
+    })).toBeInTheDocument()
+    expect(consoleInfo).toHaveBeenCalledWith(
+      '[PDF EVIDENCE DEBUG] Dispatching shared evidence navigation',
+      expect.objectContaining({ fieldPath: 'mention' }),
+    )
+    expect(navigateEvidence).toHaveBeenCalledTimes(1)
 
     unsubscribe()
   })

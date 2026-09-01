@@ -16,6 +16,20 @@ import type {
 } from './horizontalGridModel'
 import { formatHorizontalGridValue } from './horizontalGridFormatting'
 
+export function contextEvidenceFieldPath(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+): string | null {
+  const fieldPath = projection.field_path?.trim()
+  return fieldPath ? fieldPath : null
+}
+
+export function contextEvidenceLabel(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+): string {
+  const fieldPath = contextEvidenceFieldPath(projection)
+  return fieldPath ? `Field evidence (${fieldPath})` : 'Object evidence'
+}
+
 export function HorizontalGridContextCellContent({
   active,
   cell,
@@ -88,19 +102,20 @@ export function HorizontalGridContextCellContent({
           {cell.evidence.map((projection, index) => {
             const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
             const evidenceNumber = index + 1
+            const evidenceLabel = contextEvidenceLabel(projection)
 
             return (
               <Tooltip
                 key={projection.anchor_id}
                 title={command
-                  ? `Show object evidence ${evidenceNumber}`
+                  ? `Show ${evidenceLabel.toLowerCase()} ${evidenceNumber}`
                   : 'PDF navigation unavailable'}
               >
                 <span>
                   <IconButton
                     aria-label={command
-                      ? `Show object evidence ${evidenceNumber} for ${cell.value.identityLabel}`
-                      : `Object evidence ${evidenceNumber} for ${cell.value.identityLabel} has no navigable PDF location`}
+                      ? `Show ${evidenceLabel.toLowerCase()} ${evidenceNumber} for ${cell.value.identityLabel}`
+                      : `${evidenceLabel} ${evidenceNumber} for ${cell.value.identityLabel} has no navigable PDF location`}
                     disabled={!command}
                     onClick={command
                       ? (event) => {
