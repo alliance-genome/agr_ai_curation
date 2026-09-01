@@ -103,18 +103,22 @@ export function HorizontalGridContextCellContent({
             const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
             const evidenceNumber = index + 1
             const evidenceLabel = contextEvidenceLabel(projection)
+            const fieldPath = contextEvidenceFieldPath(projection)
+            const evidenceActionLabel = fieldPath
+              ? `field evidence (${fieldPath})`
+              : 'object evidence'
 
             return (
               <Tooltip
                 key={projection.anchor_id}
                 title={command
-                  ? `Show ${evidenceLabel.toLowerCase()} ${evidenceNumber}`
+                  ? `Show ${evidenceActionLabel} ${evidenceNumber}`
                   : 'PDF navigation unavailable'}
               >
                 <span>
                   <IconButton
                     aria-label={command
-                      ? `Show ${evidenceLabel.toLowerCase()} ${evidenceNumber} for ${cell.value.identityLabel}`
+                      ? `Show ${evidenceActionLabel} ${evidenceNumber} for ${cell.value.identityLabel}`
                       : `${evidenceLabel} ${evidenceNumber} for ${cell.value.identityLabel} has no navigable PDF location`}
                     disabled={!command}
                     onClick={command

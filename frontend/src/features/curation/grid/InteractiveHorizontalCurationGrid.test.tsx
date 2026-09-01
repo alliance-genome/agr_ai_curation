@@ -553,20 +553,20 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
     renderGrid({
       model: buildModel({
-        objectEvidence: [evidenceProjection('mention-evidence', 'mention')],
+        objectEvidence: [evidenceProjection('mention-evidence', 'Gene.Symbol')],
       }),
     })
 
     await user.click(screen.getByRole('button', {
-      name: 'Show field evidence (mention) 1 for Reference one',
+      name: 'Show field evidence (Gene.Symbol) 1 for Reference one',
     }))
 
     expect(screen.getByRole('dialog', {
-      name: 'Field evidence (mention): Reference one',
+      name: 'Field evidence (Gene.Symbol): Reference one',
     })).toBeInTheDocument()
     expect(consoleInfo).toHaveBeenCalledWith(
       '[PDF EVIDENCE DEBUG] Dispatching shared evidence navigation',
-      expect.objectContaining({ fieldPath: 'mention' }),
+      expect.objectContaining({ fieldPath: 'Gene.Symbol' }),
     )
     expect(navigateEvidence).toHaveBeenCalledTimes(1)
 
