@@ -671,7 +671,10 @@ def _build_simplified_flow_definition(
                 "entry_node_id": "task_input_0",
             }
         )
-        return apply_flow_validation_attachment_defaults(flow_definition)
+        return apply_flow_validation_attachment_defaults(
+            flow_definition,
+            agent_registry=agent_registry,
+        )
     except ValidationError as exc:
         validation_errors = [
             str(error.get("msg") or "Flow validation failed")
@@ -1036,12 +1039,16 @@ def _create_flow_handler():
 
         available_agents = _accessible_flow_agent_catalog()
         accessible_agent_ids = set(available_agents)
+        validation_attachment_registry = {
+            **AGENT_REGISTRY,
+            **available_agents,
+        }
         try:
             validated_flow_def = _build_simplified_flow_definition(
                 steps=steps,
                 task_instructions=description,
                 flow_agent_ids=sorted(accessible_agent_ids),
-                agent_registry=available_agents,
+                agent_registry=validation_attachment_registry,
             )
         except _SimplifiedFlowValidationError as exc:
             return {
@@ -1124,6 +1131,10 @@ def _validate_flow_handler():
         suggestions: List[str] = []
         available_agents = _accessible_flow_agent_catalog()
         available_agent_ids = set(available_agents)
+        validation_attachment_registry = {
+            **AGENT_REGISTRY,
+            **available_agents,
+        }
         recipe_catalog = load_flow_recipe_catalog()
         equivalences = _agent_id_equivalences(recipe_catalog)
 
@@ -1132,7 +1143,7 @@ def _validate_flow_handler():
                 steps=steps,
                 task_instructions="Agent Studio validation preflight",
                 flow_agent_ids=sorted(available_agent_ids),
-                agent_registry=available_agents,
+                agent_registry=validation_attachment_registry,
             )
         except _SimplifiedFlowValidationError as exc:
             errors.extend(exc.errors)
