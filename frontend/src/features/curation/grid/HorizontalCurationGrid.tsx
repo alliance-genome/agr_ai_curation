@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import ClearAllRoundedIcon from '@mui/icons-material/ClearAllRounded'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
+import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined'
 import PushPinRoundedIcon from '@mui/icons-material/PushPinRounded'
 import {
@@ -54,6 +56,7 @@ export interface HorizontalCurationGridProps {
   renderFieldCell?: (args: HorizontalGridFieldRenderArgs) => ReactNode
   renderCellActions?: (args: HorizontalGridFieldRenderArgs) => ReactNode
   renderRowActions?: (row: HorizontalGridRow) => ReactNode
+  selectedCandidateId?: string | null
 }
 
 function DefaultContextCell({ cell }: HorizontalGridContextRenderArgs) {
@@ -116,6 +119,7 @@ export default function HorizontalCurationGrid({
   renderFieldCell = (args) => <DefaultFieldCell {...args} />,
   renderCellActions,
   renderRowActions,
+  selectedCandidateId = null,
 }: HorizontalCurationGridProps) {
   const theme = useTheme()
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -168,14 +172,14 @@ export default function HorizontalCurationGrid({
     CONTEXT_COLUMN_WIDTH + displayColumns.length * FIELD_COLUMN_WIDTH + ACTION_COLUMN_WIDTH
   const rowHeight = density === 'compact' ? 68 : 104
   const surfaceColor = theme.palette.background.paper
-  const headerColor =
-    theme.palette.mode === 'dark'
-      ? alpha(theme.palette.common.white, 0.055)
-      : alpha(theme.palette.primary.main, 0.045)
-  const pinnedColor =
-    theme.palette.mode === 'dark'
-      ? alpha(theme.palette.primary.main, 0.13)
-      : alpha(theme.palette.primary.main, 0.07)
+  // Sticky cells must be opaque or scrolled text remains visible beneath them.
+  const headerColor = theme.palette.mode === 'dark'
+    ? theme.palette.grey[900]
+    : theme.palette.grey[50]
+  const pinnedColor = theme.palette.mode === 'dark'
+    ? theme.palette.grey[800]
+    : theme.palette.grey[100]
+  const selectedRow = model.rows.find((row) => row.candidateId === selectedCandidateId) ?? null
 
   const togglePin = (column: HorizontalGridColumn) => {
     const isPinned = pinnedColumnKeys.includes(column.key)
@@ -224,6 +228,7 @@ export default function HorizontalCurationGrid({
     <Box
       data-density={density}
       data-reduced-motion={reducedMotion ? 'true' : 'false'}
+      data-theme-mode={theme.palette.mode}
       data-testid="horizontal-curation-grid"
       sx={{
         position: 'relative',
@@ -249,7 +254,7 @@ export default function HorizontalCurationGrid({
         flexWrap="wrap"
         gap={1}
         sx={{
-          minHeight: 50,
+          minHeight: 52,
           px: 1.25,
           py: 0.75,
           borderBottom: `1px solid ${theme.palette.divider}`,
@@ -509,7 +514,17 @@ export default function HorizontalCurationGrid({
                 const cellsByColumnKey = new Map(row.cells.map((cell) => [cell.columnKey, cell]))
 
                 return (
-                  <TableRow data-candidate-id={row.candidateId} key={row.candidateId} sx={{ height: rowHeight }}>
+                    <TableRow
+                      data-candidate-id={row.candidateId}
+                      data-selected={row.candidateId === selectedCandidateId ? 'true' : 'false'}
+                      key={row.candidateId}
+                      sx={{
+                        height: rowHeight,
+                        '& > *': row.candidateId === selectedCandidateId
+                          ? { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: -2 }
+                          : undefined,
+                      }}
+                    >
                     <TableCell
                       component="th"
                       data-column-key={contextColumn.key}
@@ -604,6 +619,44 @@ export default function HorizontalCurationGrid({
           </TableBody>
         </Table>
       </TableContainer>
+
+      <Stack
+        alignItems={{ xs: 'flex-start', sm: 'center' }}
+        direction={{ xs: 'column', sm: 'row' }}
+        justifyContent="space-between"
+        spacing={0.75}
+        sx={{
+          borderTop: `1px solid ${theme.palette.divider}`,
+          backgroundColor: headerColor,
+          minHeight: 38,
+          px: 1.25,
+          py: 0.65,
+        }}
+      >
+        <Typography color="text.secondary" data-testid="horizontal-grid-selected-record" variant="caption">
+          {selectedRow ? (
+            <><strong>{selectedRow.contextCell.value.identityLabel}</strong> selected</>
+          ) : 'Select a record to inspect its evidence'}
+        </Typography>
+        <Stack alignItems="center" direction="row" flexWrap="wrap" spacing={1.25} useFlexGap>
+          <Stack alignItems="center" direction="row" spacing={0.4}>
+            <PushPinOutlinedIcon color="action" sx={{ fontSize: 15 }} />
+            <Typography color="text.secondary" variant="caption">Pin headers</Typography>
+          </Stack>
+          <Stack alignItems="center" direction="row" spacing={0.4}>
+            <FindInPageOutlinedIcon color="action" sx={{ fontSize: 15 }} />
+            <Typography color="text.secondary" variant="caption">Evidence</Typography>
+          </Stack>
+          <Stack alignItems="center" direction="row" spacing={0.4}>
+            <EditOutlinedIcon color="action" sx={{ fontSize: 15 }} />
+            <Typography color="text.secondary" variant="caption">Edit</Typography>
+          </Stack>
+          <Typography color="text.secondary" variant="caption">
+            <Box component="kbd" sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 0.5, px: 0.5, py: 0.15 }}>Shift</Box>
+            {' + scroll across fields'}
+          </Typography>
+        </Stack>
+      </Stack>
 
       <Box
         aria-atomic="true"

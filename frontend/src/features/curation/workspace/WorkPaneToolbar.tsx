@@ -1,10 +1,9 @@
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import DoneAllRoundedIcon from '@mui/icons-material/DoneAllRounded'
 import PictureInPictureAltRoundedIcon from '@mui/icons-material/PictureInPictureAltRounded'
-import RuleRoundedIcon from '@mui/icons-material/RuleRounded'
 import ViewStreamRoundedIcon from '@mui/icons-material/ViewStreamRounded'
-import { Box, Button, Chip, CircularProgress, Stack, Typography } from '@mui/material'
-import { alpha, useTheme } from '@mui/material/styles'
+import { Box, Button, Chip, Stack, Typography } from '@mui/material'
+import { useTheme } from '@mui/material/styles'
 
 export interface WorkPaneToolbarProps {
   totalCount: number
@@ -17,11 +16,9 @@ export interface WorkPaneToolbarProps {
     validated: number
   }
   isPdfVisible: boolean
-  isValidatingAll: boolean
   onAcceptAllValidated: () => void
   onAddObject: () => void
   onTogglePdf: () => void
-  onValidateAll: () => void
 }
 
 export default function WorkPaneToolbar({
@@ -30,20 +27,22 @@ export default function WorkPaneToolbar({
   validatedPendingCount,
   validationCounts,
   isPdfVisible,
-  isValidatingAll,
   onAcceptAllValidated,
   onAddObject,
   onTogglePdf,
-  onValidateAll,
 }: WorkPaneToolbarProps) {
   const theme = useTheme()
 
   return (
     <Box
       data-testid="work-pane-toolbar"
+      data-theme-mode={theme.palette.mode}
       sx={{
         alignItems: 'center',
-        borderBottom: `1px solid ${alpha(theme.palette.common.white, 0.08)}`,
+        borderBottom: `1px solid ${theme.palette.divider}`,
+        backgroundColor: theme.palette.mode === 'dark'
+          ? theme.palette.grey[900]
+          : theme.palette.grey[50],
         display: 'flex',
         flexWrap: 'wrap',
         gap: 1,
@@ -57,7 +56,7 @@ export default function WorkPaneToolbar({
         <Stack direction="row" spacing={1} alignItems="center" minWidth={0}>
           <Typography
             sx={{
-              color: alpha(theme.palette.common.white, 0.94),
+              color: theme.palette.text.primary,
               fontWeight: 700,
             }}
             variant="subtitle2"
@@ -76,13 +75,24 @@ export default function WorkPaneToolbar({
             variant="outlined"
           />
         </Stack>
-        <Typography
+        <Stack
           aria-label="Authoritative validation summary"
-          color="text.secondary"
-          variant="caption"
+          direction="row"
+          flexWrap="wrap"
+          spacing={1.25}
+          useFlexGap
         >
-          {`${validationCounts.validated} validated · ${validationCounts.blocking} blocking · ${validationCounts.stale} stale · ${validationCounts.openFindings} open findings`}
-        </Typography>
+          <Typography color="text.secondary" variant="caption">
+            <Box aria-hidden color="success.main" component="span">●</Box> {validationCounts.validated} validated
+          </Typography>
+          <Typography color="text.secondary" variant="caption">
+            <Box aria-hidden color="warning.main" component="span">●</Box> {validationCounts.blocking} need review
+          </Typography>
+          <Typography color="text.secondary" variant="caption">
+            <Box aria-hidden color="error.main" component="span">●</Box> {validationCounts.stale} stale
+          </Typography>
+          <Typography color="text.secondary" variant="caption">{validationCounts.openFindings} open findings</Typography>
+        </Stack>
       </Stack>
       <Stack direction="row" spacing={0.75} alignItems="center" flexShrink={0} flexWrap="wrap" useFlexGap>
         <Button
@@ -96,18 +106,8 @@ export default function WorkPaneToolbar({
         >
           {isPdfVisible ? 'Focus grid' : 'Show PDF'}
         </Button>
-        <Button
-          disabled={isValidatingAll || pendingCount === 0}
-          onClick={onValidateAll}
-          size="small"
-          startIcon={isValidatingAll
-            ? <CircularProgress color="inherit" size={16} />
-            : <RuleRoundedIcon fontSize="small" />}
-          sx={{ borderRadius: 1, fontSize: '0.72rem', textTransform: 'none' }}
-          variant="outlined"
-        >
-          {isValidatingAll ? 'Validating all…' : 'Validate all'}
-        </Button>
+        {/* Validation results remain visible, but execution controls are deliberately
+            not mounted during this curator UI preview. */}
         <Button
           color="success"
           disabled={validatedPendingCount === 0}

@@ -161,6 +161,7 @@ describe('HorizontalCurationGrid', () => {
     renderGrid(model(), {
       renderCellActions: ({ column }) => <button type="button">Inspect {column.label}</button>,
       renderRowActions: (gridRow) => <button type="button">Review {gridRow.candidateId}</button>,
+      selectedCandidateId: 'candidate-1',
     })
 
     expect(screen.getByRole('table', { name: 'Curation records arranged by field' })).toBeInTheDocument()
@@ -180,8 +181,14 @@ describe('HorizontalCurationGrid', () => {
     })
     expect(screen.getByRole('button', { name: 'Inspect Alpha' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Review candidate-1' })).toBeInTheDocument()
+    expect(screen.getByTestId('horizontal-grid-selected-record')).toHaveTextContent('Object one selected')
+    expect(screen.getByText('Pin headers')).toBeInTheDocument()
+    expect(screen.getByText('Evidence')).toBeInTheDocument()
+    expect(screen.getByText('Edit')).toBeInTheDocument()
 
-    const dataRow = within(screen.getAllByRole('row')[1])
+    const dataRowElement = screen.getAllByRole('row')[1]
+    const dataRow = within(dataRowElement)
+    expect(dataRowElement).toHaveAttribute('data-selected', 'true')
     const dataCells = dataRow.getAllByRole('cell')
     expect(dataRow.getByRole('rowheader')).toHaveAttribute('data-sticky', 'left')
     expect(dataCells.at(-1)).toHaveAttribute('data-sticky', 'right')

@@ -22,11 +22,11 @@ const PanelSurface = styled(Box)(({ theme }) => ({
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-  borderRadius: theme.shape.borderRadius,
-  border: `1px solid ${alpha(theme.palette.primary.light, 0.18)}`,
-  background:
-    `linear-gradient(180deg, ${alpha(theme.palette.common.white, 0.035)}, ${alpha(theme.palette.common.white, 0.01)}), #071524`,
-  boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.05)}, 0 18px 42px ${alpha(theme.palette.common.black, 0.24)}`,
+  borderRadius: `0 0 ${theme.shape.borderRadius}px ${theme.shape.borderRadius}px`,
+  border: `1px solid ${theme.palette.divider}`,
+  borderTop: 0,
+  backgroundColor: theme.palette.background.paper,
+  boxShadow: `0 8px 24px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.24 : 0.08)}`,
 }))
 
 const SlotFrame = styled(Box)(() => ({
@@ -37,12 +37,12 @@ const SlotFrame = styled(Box)(() => ({
   overflow: 'hidden',
 }))
 
-const WorkPaneStack = styled(Stack)(({ theme }) => ({
+const WorkPaneStack = styled(Stack)(() => ({
   flex: 1,
   minHeight: 0,
   height: '100%',
   overflow: 'hidden',
-  paddingTop: theme.spacing(1),
+  paddingTop: 0,
 }))
 
 function WorkspacePane({

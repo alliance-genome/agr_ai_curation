@@ -1,12 +1,9 @@
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
-import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined'
 import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
 import {
-  CircularProgress,
   IconButton,
   Stack,
   Tooltip,
-  Typography,
 } from '@mui/material'
 
 import {
@@ -21,35 +18,29 @@ import type { HorizontalGridFieldCell } from './horizontalGridModel'
 
 export interface HorizontalGridCellActionsProps {
   cell: HorizontalGridFieldCell
-  error: string | null
   field: CurationDraftField | null
   isSaving: boolean
-  isValidating: boolean
   onEdit: (field: CurationDraftField) => void
   onEvidence: (
     projection: DomainEnvelopeEvidenceAnchorProjection,
     command: EvidenceNavigationCommand,
   ) => void
   onSelect: () => void
-  onValidate: (field: CurationDraftField) => void
 }
 
 export default function HorizontalGridCellActions({
   cell,
-  error,
   field,
   isSaving,
-  isValidating,
   onEdit,
   onEvidence,
   onSelect,
-  onValidate,
 }: HorizontalGridCellActionsProps) {
   if (!field || !cell.hasField) {
     return null
   }
 
-  const mutationDisabled = field.read_only || isSaving || isValidating
+  const mutationDisabled = field.read_only || isSaving
 
   return (
     <Stack spacing={0.35}>
@@ -85,25 +76,8 @@ export default function HorizontalGridCellActions({
         })}
         {!field.read_only ? (
           <>
-            <Tooltip title="Validate field">
-              <span>
-                <IconButton
-                  aria-label={`Validate ${field.label}`}
-                  disabled={mutationDisabled}
-                  onClick={() => {
-                    onSelect()
-                    onValidate(field)
-                  }}
-                  size="small"
-                >
-                  {isValidating ? (
-                    <CircularProgress aria-label={`Validating ${field.label}`} size={18} />
-                  ) : (
-                    <FactCheckOutlinedIcon fontSize="small" />
-                  )}
-                </IconButton>
-              </span>
-            </Tooltip>
+            {/* Validation is intentionally read-only in this curator preview. Re-enabling
+                execution requires a separately reviewed product ticket. */}
             <Tooltip title="Edit field">
               <span>
                 <IconButton
@@ -122,11 +96,6 @@ export default function HorizontalGridCellActions({
           </>
         ) : null}
       </Stack>
-      {error ? (
-        <Typography color="error.main" role="alert" variant="caption">
-          {error}
-        </Typography>
-      ) : null}
     </Stack>
   )
 }

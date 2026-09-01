@@ -1,15 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 
 import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
 import {
   dispatchEvidenceNavigationCommand,
 } from '@/features/curation/evidence'
 import { fieldState } from '@/features/curation/editor/fieldState'
-import {
-  fetchCurationWorkspace,
-  validateCurationCandidate,
-} from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
   CurationDraftField,
@@ -18,7 +13,6 @@ import {
   useCurationWorkspaceAutosave,
   useCurationWorkspaceContext,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
-import { refreshCurationWorkspaceEnvelopeReviewRows } from '@/features/curation/workspace/envelopeReviewRowsQuery'
 import {
   resolveEnvelopeFieldPath,
 } from '@/features/curation/workspace/workspaceState'
@@ -40,19 +34,10 @@ interface EditingTarget {
   fieldPath: string
 }
 
-interface ValidationRequestState {
-  error: string | null
-  isLoading: boolean
-}
-
 export type InteractiveHorizontalCurationGridProps = Omit<
   HorizontalCurationGridProps,
   'renderCellActions' | 'renderContextCell' | 'renderFieldCell'
 >
-
-function validationStateKey(candidateId: string, fieldKey: string): string {
-  return `${candidateId}:${fieldKey}`
-}
 
 function candidateForRow(
   candidates: readonly CurationCandidate[],
@@ -99,17 +84,13 @@ export default function InteractiveHorizontalCurationGrid({
   model,
   ...gridProps
 }: InteractiveHorizontalCurationGridProps) {
-  const queryClient = useQueryClient()
   const {
     activeCandidateId,
     candidates,
     setActiveCandidate,
-    setWorkspace,
-    workspace,
   } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
   const [editingTarget, setEditingTarget] = useState<EditingTarget | null>(null)
-  const [validationStates, setValidationStates] = useState<Record<string, ValidationRequestState>>({})
 
   const selectCandidate = useCallback((candidateId: string) => {
     if (activeCandidateId !== candidateId) {
@@ -143,61 +124,6 @@ export default function InteractiveHorizontalCurationGrid({
     }
   }, [candidates, editingTarget])
 
-  const setValidationState = useCallback((
-    key: string,
-    state: ValidationRequestState,
-  ) => {
-    setValidationStates((current) => ({ ...current, [key]: state }))
-  }, [])
-
-  const clearValidationState = useCallback((candidateId: string, fieldKey: string) => {
-    const key = validationStateKey(candidateId, fieldKey)
-    setValidationStates((current) => {
-      if (!(key in current)) {
-        return current
-      }
-      const next = { ...current }
-      delete next[key]
-      return next
-    })
-  }, [])
-
-  const validateField = useCallback(async (
-    candidate: CurationCandidate,
-    field: CurationDraftField,
-  ) => {
-    const key = validationStateKey(candidate.candidate_id, field.field_key)
-    setValidationState(key, { error: null, isLoading: true })
-
-    try {
-      const pendingSaved = await autosave.flush()
-      if (!pendingSaved) {
-        throw new Error('Unable to save pending field changes before validation.')
-      }
-
-      const response = await validateCurationCandidate({
-        session_id: workspace.session.session_id,
-        candidate_id: candidate.candidate_id,
-        field_keys: [field.field_key],
-      })
-      const refreshedWorkspace = await fetchCurationWorkspace(workspace.session.session_id)
-      setWorkspace(refreshedWorkspace)
-      await refreshCurationWorkspaceEnvelopeReviewRows(queryClient, refreshedWorkspace)
-      if (response.validation_snapshot.state === 'failed') {
-        throw new Error(
-          response.validation_snapshot.warnings[0]
-            ?? 'The server could not validate this field.',
-        )
-      }
-      setValidationState(key, { error: null, isLoading: false })
-    } catch (error) {
-      setValidationState(key, {
-        error: error instanceof Error ? error.message : 'Unable to validate this field.',
-        isLoading: false,
-      })
-    }
-  }, [autosave, queryClient, setValidationState, setWorkspace, workspace.session.session_id])
-
   const renderFieldCell = useCallback((args: HorizontalGridFieldRenderArgs) => {
     const { field } = canonicalFieldForCell(candidates, args)
     return (
@@ -213,17 +139,12 @@ export default function InteractiveHorizontalCurationGrid({
 
   const renderCellActions = useCallback((args: HorizontalGridFieldRenderArgs) => {
     const { candidate, field } = canonicalFieldForCell(candidates, args)
-    const requestState = field
-      ? validationStates[validationStateKey(candidate.candidate_id, field.field_key)]
-      : undefined
 
     return (
       <HorizontalGridCellActions
         cell={args.cell}
-        error={requestState?.error ?? null}
         field={field}
         isSaving={autosave.isSaving}
-        isValidating={requestState?.isLoading ?? false}
         onEdit={(editableField) => {
           setEditingTarget({
             candidateId: candidate.candidate_id,
@@ -244,12 +165,9 @@ export default function InteractiveHorizontalCurationGrid({
           )
         }}
         onSelect={() => selectCandidate(candidate.candidate_id)}
-        onValidate={(editableField) => {
-          void validateField(candidate, editableField)
-        }}
       />
     )
-  }, [autosave.isSaving, candidates, selectCandidate, validateField, validationStates])
+  }, [autosave.isSaving, candidates, selectCandidate])
 
   const renderContextCell = useCallback(({ cell, row }: HorizontalGridContextRenderArgs) => (
     <HorizontalGridContextCellContent
@@ -275,6 +193,7 @@ export default function InteractiveHorizontalCurationGrid({
       <HorizontalCurationGrid
         {...gridProps}
         model={model}
+        selectedCandidateId={activeCandidateId}
         renderCellActions={renderCellActions}
         renderContextCell={renderContextCell}
         renderFieldCell={renderFieldCell}
@@ -287,8 +206,7 @@ export default function InteractiveHorizontalCurationGrid({
           if (!selectedEditor || selectedEditor.field.read_only) {
             throw new Error('Horizontal grid editor change requires an editable field')
           }
-          const { candidate, field } = selectedEditor
-          clearValidationState(candidate.candidate_id, field.field_key)
+          const { field } = selectedEditor
           autosave.queueFieldChange({ field_key: field.field_key, value })
         }}
         onClose={() => setEditingTarget(null)}
@@ -296,8 +214,7 @@ export default function InteractiveHorizontalCurationGrid({
           if (!selectedEditor || selectedEditor.field.read_only) {
             throw new Error('Horizontal grid editor revert requires an editable field')
           }
-          const { candidate, field } = selectedEditor
-          clearValidationState(candidate.candidate_id, field.field_key)
+          const { field } = selectedEditor
           autosave.queueFieldChange({
             field_key: field.field_key,
             revert_to_seed: true,

@@ -1,5 +1,5 @@
 import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
-import { ButtonBase, IconButton, Stack, Tooltip, Typography } from '@mui/material'
+import { Box, ButtonBase, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/material'
 
 import { FieldStateIndicator } from '@/features/curation/editor'
 import {
@@ -123,39 +123,77 @@ export function HorizontalGridFieldCellContent({
   const validationMessages = cell.validation.summaries.flatMap((summary) => summary.messages)
 
   return (
-    <ButtonBase
-      aria-label={`Select ${field.label} for ${cell.fieldPath}`}
-      aria-pressed={active}
-      data-field-key={field.field_key}
-      data-testid={`horizontal-grid-field-${field.field_key}`}
-      onClick={onSelect}
-      sx={{
-        alignItems: 'flex-start',
-        borderRadius: 1,
-        display: 'flex',
-        justifyContent: 'flex-start',
-        minWidth: 0,
-        textAlign: 'left',
-        width: '100%',
-      }}
+    <Stack
+      minWidth={0}
+      spacing={0.35}
+      width="100%"
     >
-      <Stack direction="row" minWidth={0} spacing={0.75} width="100%">
-        {state ? <FieldStateIndicator fieldKey={field.field_key} state={state} /> : null}
-        <Stack minWidth={0} spacing={0.2} sx={{ pt: 0.35 }}>
+      <ButtonBase
+        aria-label={`Select ${field.label} for ${cell.fieldPath}`}
+        aria-pressed={active}
+        data-field-key={field.field_key}
+        data-testid={`horizontal-grid-field-${field.field_key}`}
+        onClick={onSelect}
+        sx={{
+          alignItems: 'flex-start',
+          borderRadius: 1,
+          display: 'flex',
+          justifyContent: 'flex-start',
+          minWidth: 0,
+          textAlign: 'left',
+          width: '100%',
+        }}
+      >
+        <Stack direction="row" minWidth={0} spacing={0.75} width="100%">
+          {state ? <FieldStateIndicator fieldKey={field.field_key} state={state} /> : null}
           <Typography
             aria-label={value === null ? 'Empty value' : undefined}
-            sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}
+            title={value ?? undefined}
+            sx={{
+              display: '-webkit-box',
+              overflow: 'hidden',
+              overflowWrap: 'anywhere',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
+              whiteSpace: 'pre-wrap',
+            }}
             variant="body2"
           >
             {value ?? '—'}
           </Typography>
-          {validationMessages.map((message, index) => (
-            <Typography color="warning.main" key={`${index}:${message}`} variant="caption">
-              {message}
-            </Typography>
-          ))}
         </Stack>
-      </Stack>
-    </ButtonBase>
+      </ButtonBase>
+      {validationMessages.length > 0 ? (
+        <Tooltip
+          arrow
+          title={(
+            <Stack spacing={0.5}>
+              {validationMessages.map((message, index) => (
+                <Typography key={`${index}:${message}`} variant="caption">{message}</Typography>
+              ))}
+            </Stack>
+          )}
+        >
+          <Box
+            aria-label={`${validationMessages.length} validation ${validationMessages.length === 1 ? 'detail' : 'details'} for ${field.label}`}
+            component="span"
+            sx={{ alignSelf: 'flex-start', borderRadius: 1, display: 'inline-flex' }}
+            tabIndex={0}
+          >
+            <Chip
+              label={`${validationMessages.length} ${validationMessages.length === 1 ? 'finding' : 'findings'}`}
+              size="small"
+              sx={{
+                borderColor: state === 'needs-review' ? 'warning.main' : 'divider',
+                color: 'text.primary',
+                height: 20,
+                '& .MuiChip-label': { fontSize: '0.64rem', px: 0.75 },
+              }}
+              variant="outlined"
+            />
+          </Box>
+        </Tooltip>
+      ) : null}
+    </Stack>
   )
 }

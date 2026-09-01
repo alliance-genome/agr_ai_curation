@@ -6,7 +6,7 @@ import { ThemeProvider } from '@mui/material/styles'
 import { describe, expect, it } from 'vitest'
 
 import type { CurationReviewSession } from '@/features/curation/types'
-import theme from '@/theme'
+import theme, { createAppTheme, type ThemeMode } from '@/theme'
 import WorkspaceHeader from './WorkspaceHeader'
 
 function buildSession(): CurationReviewSession {
@@ -44,9 +44,12 @@ function buildSession(): CurationReviewSession {
   }
 }
 
-function renderHeader(props?: Partial<ComponentProps<typeof WorkspaceHeader>>) {
+function renderHeader(
+  props?: Partial<ComponentProps<typeof WorkspaceHeader>>,
+  mode?: ThemeMode,
+) {
   return render(
-    <ThemeProvider theme={theme}>
+    <ThemeProvider theme={mode ? createAppTheme(mode) : theme}>
       <MemoryRouter>
         <WorkspaceHeader session={buildSession()} {...props} />
       </MemoryRouter>
@@ -63,9 +66,12 @@ describe('WorkspaceHeader', () => {
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
-    expect(screen.getByText('Annotation-ready paper')).toBeInTheDocument()
-    expect(screen.getByText('PMID 123456 • DOI 10.1000/example')).toBeInTheDocument()
-    expect(screen.getByText('Gene')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Gene review' })).toBeInTheDocument()
+    expect(screen.getByText('5 records')).toBeInTheDocument()
+    expect(screen.getByText(/Annotation-ready paper · PMID 123456/)).toHaveTextContent(
+      'Annotation-ready paper · PMID 123456 • DOI 10.1000/example',
+    )
+    expect(screen.getAllByText('Gene')).toHaveLength(1)
     expect(screen.getByText('3/5')).toBeInTheDocument()
     expect(screen.getByText('In Progress')).toBeInTheDocument()
     expect(screen.getByTestId('workspace-header-navigation-slot')).toBeInTheDocument()
@@ -76,5 +82,14 @@ describe('WorkspaceHeader', () => {
     renderHeader()
 
     expect(screen.queryByTestId('workspace-header-navigation-slot')).not.toBeInTheDocument()
+  })
+
+  it.each(['light', 'dark'] as const)('keeps header navigation legible in %s mode', (mode) => {
+    renderHeader(undefined, mode)
+
+    const modeTheme = createAppTheme(mode)
+    expect(screen.getByRole('link', { name: /back to inventory/i })).toHaveStyle({
+      color: mode === 'dark' ? modeTheme.palette.primary.light : modeTheme.palette.primary.main,
+    })
   })
 })

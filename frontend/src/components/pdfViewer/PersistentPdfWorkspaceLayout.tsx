@@ -104,8 +104,7 @@ export default function PersistentPdfWorkspaceLayout() {
     : HOME_PDF_VIEWER_OWNER
   const rootWorkbenchSx = isCurationLayout
     ? {
-        background:
-          'radial-gradient(circle at 18% 0%, rgba(10, 124, 171, 0.16), transparent 34%), #05111f',
+        backgroundColor: theme.palette.background.default,
         gap: 1,
         padding: { xs: 1, md: 1.25 },
         paddingTop: { xs: 1, md: 0.75 },
@@ -136,6 +135,7 @@ export default function PersistentPdfWorkspaceLayout() {
         <Root
           data-layout-kind={layoutKind}
           data-pdf-visible={isPdfVisible ? 'true' : 'false'}
+          data-theme-mode={theme.palette.mode}
           data-testid="persistent-pdf-workspace-layout"
           sx={rootWorkbenchSx}
         >
@@ -189,6 +189,7 @@ export default function PersistentPdfWorkspaceLayout() {
       <Root
         data-layout-kind={layoutKind}
         data-pdf-visible={isPdfVisible ? 'true' : 'false'}
+        data-theme-mode={theme.palette.mode}
         data-testid="persistent-pdf-workspace-layout"
         sx={rootWorkbenchSx}
       >

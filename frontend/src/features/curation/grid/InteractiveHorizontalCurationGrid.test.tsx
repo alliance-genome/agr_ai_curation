@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,10 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
 import type {
   CurationCandidate,
-  CurationCandidateValidationResponse,
   CurationWorkspace,
   DomainEnvelopeEvidenceAnchorProjection,
-  DomainEnvelopeReviewRowsResponse,
   DomainEnvelopeValidationSummaryProjection,
 } from '@/features/curation/types'
 import {
@@ -386,36 +384,6 @@ function buildModel({
   }
 }
 
-function validationResponse(candidate: CurationCandidate): CurationCandidateValidationResponse {
-  return {
-    candidate,
-    validation_snapshot: {
-      snapshot_id: 'snapshot-1',
-      scope: 'candidate',
-      session_id: 'session-1',
-      candidate_id: candidate.candidate_id,
-      adapter_key: candidate.adapter_key,
-      state: 'completed',
-      field_results: {},
-      summary: {
-        state: 'completed',
-        counts: {
-          validated: 1,
-          ambiguous: 0,
-          not_found: 0,
-          invalid_format: 0,
-          conflict: 0,
-          skipped: 0,
-          overridden: 0,
-        },
-        stale_field_keys: [],
-        warnings: [],
-      },
-      warnings: [],
-    },
-  }
-}
-
 function createAutosave(overrides: Partial<UseAutosaveReturn> = {}): UseAutosaveReturn {
   return {
     debounceMs: 10,
@@ -482,16 +450,6 @@ function renderGrid({
   )
 
   return { autosave, queryClient, setActiveCandidate }
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (reason?: unknown) => void
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, reject, resolve }
 }
 
 beforeEach(() => {
@@ -605,188 +563,17 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(screen.queryByRole('button', { name: 'Validate Missing field' })).not.toBeInTheDocument()
   })
 
-  it('disables field mutations while autosave is in progress', () => {
-    renderGrid({ autosave: createAutosave({ isSaving: true }) })
+  it('keeps editing and evidence available while validation execution stays unmounted', () => {
+    const autosave = createAutosave({ isSaving: true })
+    renderGrid({ autosave })
 
     expect(screen.getByRole('button', { name: 'Edit Authors' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Show evidence 1 for Authors' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
+    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
   })
 
-  it('installs the authoritative workspace while review rows continue refreshing', async () => {
-    const user = userEvent.setup()
-    const navigateEvidence = vi.fn()
-    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
-    const deferred = createDeferred<CurationCandidateValidationResponse>()
-    const reviewRowsDeferred = createDeferred<DomainEnvelopeReviewRowsResponse[]>()
-    serviceMocks.validateCurationCandidate.mockReturnValue(deferred.promise)
-    const serverEvidence = evidenceProjection(
-      'server-field-evidence',
-      'citation.authors',
-      4,
-    )
-    const serverSummary = resolvedSummary(4)
-    const serverCandidate = buildCandidate({
-      projection_ref: {
-        envelope_id: 'envelope-1',
-        object_id: 'object-1',
-        envelope_revision: 4,
-      },
-      evidence_anchor_projections: [serverEvidence],
-      validation_summary_projections: [serverSummary],
-    })
-    serverCandidate.draft = {
-      ...serverCandidate.draft,
-      fields: serverCandidate.draft.fields.map((field) =>
-        field.field_key === 'authors'
-          ? { ...field, value: ['Server Author'], dirty: false, stale_validation: false }
-          : field,
-      ),
-    }
-    const serverWorkspace = {
-      ...buildWorkspace(serverCandidate),
-      evidence_anchor_projections: [serverEvidence],
-      validation_summary_projections: [serverSummary],
-    }
-    const serverReviewRows: DomainEnvelopeReviewRowsResponse[] = [{
-      envelope_id: 'envelope-1',
-      envelope_revision: 4,
-      row_count: 0,
-      rows: [],
-    }]
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(serverWorkspace)
-    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReturnValue(
-      reviewRowsDeferred.promise,
-    )
-    const { autosave, queryClient } = renderGrid({
-      model: (workspace) => buildModel({
-        authorsEvidence: (workspace.evidence_anchor_projections ?? []).filter(
-          (projection) => projection.field_path === 'citation.authors',
-        ),
-        authorsValidation: validationProjection(
-          workspace.validation_summary_projections ?? [],
-        ),
-        objectEvidence: (workspace.evidence_anchor_projections ?? []).filter(
-          (projection) => projection.field_path === null,
-        ),
-      }),
-    })
-    const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
-    expect(within(authorsCell).getByRole('img', { name: 'AI unconfirmed' })).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    await waitFor(() => {
-      expect(autosave.flush).toHaveBeenCalledTimes(1)
-      expect(serviceMocks.validateCurationCandidate).toHaveBeenCalledWith({
-        session_id: 'session-1',
-        candidate_id: 'candidate-1',
-        field_keys: ['authors'],
-      })
-    })
-    expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeDisabled()
-    expect(screen.getByLabelText('Validating Authors')).toBeInTheDocument()
-    expect(within(authorsCell).getByRole('img', { name: 'AI unconfirmed' })).toBeInTheDocument()
-
-    await act(async () => {
-      deferred.resolve(validationResponse(serverCandidate))
-      await deferred.promise
-    })
-
-    await waitFor(() => {
-      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledWith('session-1')
-      expect(serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows).toHaveBeenCalledWith(
-        serverWorkspace,
-      )
-    })
-    expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeDisabled()
-    expect(screen.getByLabelText('Validating Authors')).toBeInTheDocument()
-    expect(screen.getByText('Server Author')).toBeInTheDocument()
-    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
-      'img',
-      { name: 'Resolved' },
-    )).toBeInTheDocument()
-
-    await act(async () => {
-      reviewRowsDeferred.resolve(serverReviewRows)
-      await reviewRowsDeferred.promise
-    })
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeEnabled()
-    })
-    expect(screen.getByText('Authors were validated by the server.')).toBeInTheDocument()
-    expect(queryClient.getQueryData([
-      'curation-workspace-envelope-review-rows',
-      'session-1',
-      [{ envelope_id: 'envelope-1', envelope_revision: 4 }],
-    ])).toEqual(serverReviewRows)
-
-    await user.click(screen.getByRole('button', { name: 'Show evidence 1 for Authors' }))
-    expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
-      detail: {
-        command: expect.objectContaining({
-          anchorId: 'server-field-evidence',
-          searchText: 'Evidence for citation.authors',
-        }),
-      },
-    }))
-    unsubscribe()
-  })
-
-  it('keeps successful field validation when the review-row refresh fails', async () => {
-    const user = userEvent.setup()
-    const serverCandidate = buildCandidate({
-      projection_ref: {
-        envelope_id: 'envelope-1',
-        object_id: 'object-1',
-        envelope_revision: 4,
-      },
-      validation_summary_projections: [resolvedSummary(4)],
-    })
-    serverCandidate.draft = {
-      ...serverCandidate.draft,
-      fields: serverCandidate.draft.fields.map((field) =>
-        field.field_key === 'authors'
-          ? { ...field, value: ['Server Author'], dirty: false, stale_validation: false }
-          : field,
-      ),
-    }
-    const serverWorkspace = {
-      ...buildWorkspace(serverCandidate),
-      validation_summary_projections: [resolvedSummary(4)],
-    }
-    const projectionError = new Error('review row refresh failed')
-    serviceMocks.validateCurationCandidate.mockResolvedValue(validationResponse(serverCandidate))
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(serverWorkspace)
-    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockRejectedValue(projectionError)
-    const { queryClient } = renderGrid({
-      model: (workspace) => buildModel({
-        authorsValidation: validationProjection(
-          workspace.validation_summary_projections ?? [],
-        ),
-      }),
-    })
-
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    expect(await screen.findByText('Server Author')).toBeInTheDocument()
-    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
-      'img',
-      { name: 'Resolved' },
-    )).toBeInTheDocument()
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(queryClient.getQueryState([
-      'curation-workspace-envelope-review-rows',
-      'session-1',
-      [{ envelope_id: 'envelope-1', envelope_revision: 4 }],
-    ])).toMatchObject({
-      error: projectionError,
-      status: 'error',
-    })
-  })
-
-  it('derives resolved status and validation messages only from authoritative projections', () => {
+  it('shows authoritative validation details compactly without mounting an action', () => {
     const summary = {
       ...resolvedSummary(),
       messages: [
@@ -798,96 +585,9 @@ describe('InteractiveHorizontalCurationGrid', () => {
 
     const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
     expect(within(authorsCell).getByRole('img', { name: 'Resolved' })).toBeInTheDocument()
-    expect(within(authorsCell).getByText('Authors were validated by the server.')).toBeInTheDocument()
-    expect(within(authorsCell).getByText(
-      'A second authoritative validation detail.',
-    )).toBeInTheDocument()
-  })
-
-  it('surfaces a failed pre-validation save and does not call validation early', async () => {
-    const user = userEvent.setup()
-    const autosave = createAutosave({ flush: vi.fn().mockResolvedValue(false) })
-    renderGrid({ autosave })
-
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Unable to save pending field changes before validation.',
-    )
+    expect(screen.getByText('2 findings')).toBeInTheDocument()
+    expect(within(authorsCell).queryByText('Authors were validated by the server.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
     expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
-  })
-
-  it('surfaces version conflicts returned while pending edits are flushed', async () => {
-    const user = userEvent.setup()
-    const autosave = createAutosave({
-      flush: vi.fn().mockRejectedValue(new Error('Draft version conflict. Refresh and retry.')),
-    })
-    renderGrid({ autosave })
-
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Draft version conflict. Refresh and retry.',
-    )
-    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
-  })
-
-  it('surfaces server validation errors without changing the projected field status', async () => {
-    const user = userEvent.setup()
-    const autosave = createAutosave()
-    serviceMocks.validateCurationCandidate.mockRejectedValue(
-      new Error('Server validation failed for Authors.'),
-    )
-    renderGrid({ autosave })
-
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Server validation failed for Authors.',
-    )
-    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
-      'img',
-      { name: 'AI unconfirmed' },
-    )).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Edit Authors' }))
-    fireEvent.change(screen.getByLabelText('Authors'), {
-      target: { value: 'Ada Lovelace\nKatherine Johnson' },
-    })
-
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(autosave.queueFieldChange).toHaveBeenCalledWith({
-      field_key: 'authors',
-      value: ['Ada Lovelace', 'Katherine Johnson'],
-    })
-  })
-
-  it('surfaces a failed authoritative validation snapshot after merging the candidate', async () => {
-    const user = userEvent.setup()
-    const serverCandidate = buildCandidate()
-    serverCandidate.draft = {
-      ...serverCandidate.draft,
-      fields: serverCandidate.draft.fields.map((field) =>
-        field.field_key === 'authors'
-          ? { ...field, value: ['Author from failed validation'] }
-          : field,
-      ),
-    }
-    const response = validationResponse(serverCandidate)
-    response.validation_snapshot = {
-      ...response.validation_snapshot,
-      state: 'failed',
-      warnings: ['The configured Authors validator is unavailable.'],
-    }
-    serviceMocks.validateCurationCandidate.mockResolvedValue(response)
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace(serverCandidate))
-    renderGrid()
-
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'The configured Authors validator is unavailable.',
-    )
-    expect(screen.getByText('Author from failed validation')).toBeInTheDocument()
   })
 })
