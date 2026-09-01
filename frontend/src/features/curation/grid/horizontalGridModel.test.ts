@@ -293,6 +293,11 @@ describe('buildHorizontalGridModel', () => {
         }),
       ],
     })
+    geneCandidate.metadata = {
+      ...geneCandidate.metadata,
+      domain_pack_id: 'gene',
+      object_type: 'gene_mention_evidence',
+    }
 
     const model = modelForRows([workspaceRow({ candidate: geneCandidate })])
 

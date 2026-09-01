@@ -21,6 +21,7 @@ import type { WorkspaceEnvelopeObjectReviewRow } from '@/features/curation/works
 import { objectSelectorLabel } from '@/features/curation/workspace/objectSelector'
 import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
 import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import { isHorizontalGridDecisionField } from './horizontalGridReviewPolicy'
 
 export const HORIZONTAL_GRID_CONTEXT_COLUMN_KEY = 'context'
 
@@ -191,22 +192,6 @@ function isProjectedAsCanonicalComparison(
   )
 }
 
-function isCuratorDecisionField(
-  candidate: CurationCandidate,
-  field: CurationDraftField,
-): boolean {
-  if (candidate.adapter_key !== 'gene') {
-    return true
-  }
-
-  // The gene envelope deliberately separates the curator's export/sign-off
-  // surface (Gene identity) from evidence locators, provider hints, resolution
-  // notes, and confidence. Those supporting values remain in the envelope and
-  // evidence projections; they are not peer decisions and must not acquire a
-  // validation checkbox merely because the draft transports them to the UI.
-  return field.group_key === 'identity'
-}
-
 function fieldColumnKey(fieldPath: string): string {
   return `field:${encodeURIComponent(fieldPath)}`
 }
@@ -278,7 +263,7 @@ function buildFieldColumns(
       if (isProjectedAsCanonicalComparison(row.candidate, field)) {
         continue
       }
-      if (!isCuratorDecisionField(row.candidate, field)) {
+      if (!isHorizontalGridDecisionField(row.candidate, field)) {
         continue
       }
       const occurrence = fieldOccurrence(row.candidate, field)
@@ -428,7 +413,7 @@ function projectRow(
   const projectedFieldsByPath = new Map(
     [...fieldsByPath.entries()].filter(([, field]) => (
       !isProjectedAsCanonicalComparison(row.candidate, field)
-      && isCuratorDecisionField(row.candidate, field)
+      && isHorizontalGridDecisionField(row.candidate, field)
     )),
   )
   const evidence = [...row.evidenceAnchors].sort(compareEvidence)
