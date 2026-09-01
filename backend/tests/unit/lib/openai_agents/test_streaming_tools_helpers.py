@@ -1,5 +1,6 @@
 """Focused helper tests for streaming_tools core runtime behavior."""
 
+import asyncio
 import json
 import os
 import uuid
@@ -35,6 +36,12 @@ REPO_PACKAGES_DIR = REPO_ROOT / "packages"
 
 class _Envelope(BaseModel):
     value: str
+
+
+class _StructuredToolResult(BaseModel):
+    status: str | None = None
+    status_code: int | None = None
+    message: str
 
 
 class _FakeRunResult:
@@ -620,6 +627,175 @@ def _search_document_stream_events() -> list[SimpleNamespace]:
             ),
         ),
     ]
+
+
+def _structured_tool_stream_events(
+    payload: object,
+    *,
+    serialize: bool = True,
+) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(
+            type="run_item_stream_event",
+            item=SimpleNamespace(
+                type="tool_call_item",
+                name="go_api_call",
+                raw_item=SimpleNamespace(arguments='{"gene_id":"WB:WBGene00000898"}'),
+            ),
+        ),
+        SimpleNamespace(
+            type="run_item_stream_event",
+            item=SimpleNamespace(
+                type="tool_call_output_item",
+                output=json.dumps(payload) if serialize else payload,
+                raw_item=SimpleNamespace(),
+            ),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected_error_type", "notifier_result", "as_model"),
+    [
+        ({"status": "upstream_error"}, "StructuredToolUpstreamError", True, False),
+        ({"status": "upstream_error"}, "StructuredToolUpstreamError", False, False),
+        ({"status_code": 503}, "StructuredToolHTTPError", True, False),
+        ({"status": "upstream_error"}, "StructuredToolUpstreamError", True, True),
+    ],
+)
+async def test_structured_failure_stream_event_is_failed_and_reported_once(
+    monkeypatch,
+    payload,
+    expected_error_type,
+    notifier_result,
+    as_model,
+):
+    notifier_calls = []
+    output_payload = {
+        **payload,
+        "message": "raw provider response must not be reported",
+    }
+    output = _StructuredToolResult(**output_payload) if as_model else output_payload
+
+    async def _notify_tool_failure(**kwargs):
+        notifier_calls.append(kwargs)
+        return notifier_result
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *_args, **_kwargs: _FakeRunResult(
+            events=_structured_tool_stream_events(
+                output,
+                serialize=not as_model,
+            ),
+            final_output="specialist output",
+        ),
+    )
+    monkeypatch.setattr(streaming_tools, "notify_tool_failure", _notify_tool_failure)
+    monkeypatch.setattr(streaming_tools, "get_current_trace_id", lambda: "trace-1")
+    monkeypatch.setattr(streaming_tools, "get_current_session_id", lambda: "session-1")
+
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="look up annotations",
+        specialist_name="Plain Text Specialist",
+        max_turns=3,
+        tool_name=None,
+    )
+    await asyncio.sleep(0)
+
+    complete_event = next(
+        event
+        for event in streaming_tools.get_collected_events()
+        if event["type"] == "TOOL_COMPLETE"
+    )
+    assert result == "specialist output"
+    assert complete_event["details"]["success"] is False
+    if as_model:
+        assert complete_event["internal"]["tool_output"] is output
+    else:
+        assert json.loads(complete_event["internal"]["tool_output"]) == output_payload
+    assert notifier_calls == [
+        {
+            "error_type": expected_error_type,
+            "error_message": "Structured tool returned an unexpected failure result",
+            "source": "infrastructure",
+            "specialist_name": "go_api_call",
+            "trace_id": "trace-1",
+            "session_id": "session-1",
+            "curator_id": None,
+        }
+    ]
+    assert "raw provider response" not in repr(notifier_calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected_success"),
+    [
+        ({"status": "invalid_input"}, True),
+        ({"status": "not_found"}, True),
+        ({"status": "ambiguous"}, True),
+        ({"status": "error", "message": "get_allele_by_id requires allele_id"}, False),
+        ({"status": "error", "status_code": 404}, False),
+    ],
+)
+async def test_routine_structured_tool_outcomes_stream_without_reporting(
+    monkeypatch,
+    payload,
+    expected_success,
+):
+    notifier_calls = []
+
+    async def _notify_tool_failure(**kwargs):
+        notifier_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *_args, **_kwargs: _FakeRunResult(
+            events=_structured_tool_stream_events(payload),
+            final_output="specialist output",
+        ),
+    )
+    monkeypatch.setattr(streaming_tools, "notify_tool_failure", _notify_tool_failure)
+
+    agent = SimpleNamespace(
+        name="Plain Text Specialist",
+        tools=[],
+        output_type=None,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="look up annotations",
+        specialist_name="Plain Text Specialist",
+        max_turns=3,
+        tool_name=None,
+    )
+
+    complete_event = next(
+        event
+        for event in streaming_tools.get_collected_events()
+        if event["type"] == "TOOL_COMPLETE"
+    )
+    assert complete_event["details"]["success"] is expected_success
+    assert notifier_calls == []
 
 
 def test_pdf_extraction_no_longer_uses_structured_finalization_config():

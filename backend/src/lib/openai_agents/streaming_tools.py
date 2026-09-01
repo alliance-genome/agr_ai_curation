@@ -103,6 +103,7 @@ from src.lib.prompts.context import (
     append_pending_prompt_runtime_context,
     commit_pending_prompts,
 )
+from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 from src.lib.context import (
     get_current_session_id,
     get_current_trace_id,
@@ -259,6 +260,24 @@ def _tool_output_summary(tool_name: str, output: Any) -> Optional[Dict[str, Any]
     return summary
 
 
+def _coerce_structured_tool_output(output: Any) -> Optional[Dict[str, Any]]:
+    """Coerce JSON-like or model-backed tool output to a structured payload."""
+
+    payload = coerce_tool_event_dict(output)
+    if payload is not None:
+        return payload
+
+    model_dump = getattr(output, "model_dump", None)
+    if not callable(model_dump):
+        return None
+
+    try:
+        dumped = model_dump(mode="json")
+    except TypeError:
+        dumped = model_dump()
+    return dumped if isinstance(dumped, dict) else None
+
+
 def _tool_output_payload_for_finalization(
     tool_name: str,
     output: Any,
@@ -269,16 +288,7 @@ def _tool_output_payload_for_finalization(
     if lookup_config is None:
         return None
 
-    payload = coerce_tool_event_dict(output)
-    if payload is None:
-        model_dump = getattr(output, "model_dump", None)
-        if callable(model_dump):
-            try:
-                dumped = model_dump(mode="json")
-            except TypeError:
-                dumped = model_dump()
-            if isinstance(dumped, dict):
-                payload = dumped
+    payload = _coerce_structured_tool_output(output)
     if not isinstance(payload, dict):
         return None
 
@@ -1598,29 +1608,56 @@ def _lookup_tool_calls(
     return [call for call in tool_calls if call.tool_name == tool_name]
 
 
-def _lookup_tool_call_succeeded(call: "SpecialistToolCall") -> bool:
-    payload = call.output_payload or {}
+@dataclass(frozen=True)
+class _StructuredToolResultClassification:
+    """Shared completion semantics for structured tool results."""
+
+    lookup_succeeded: bool
+    failed: bool
+    reportable_error_type: Optional[str] = None
+
+
+def _classify_structured_tool_result(
+    payload: Mapping[str, Any],
+) -> _StructuredToolResultClassification:
+    """Classify a structured result without retaining its raw message or response."""
+
     status = str(payload.get("status") or "").strip().lower()
-    status_code = payload.get("status_code")
-    if status in {"ok", "success", "not_found"}:
-        return True
-    if isinstance(status_code, int) and 200 <= status_code < 300:
-        return True
-    return False
+    raw_status_code = payload.get("status_code")
+    status_code = (
+        raw_status_code
+        if isinstance(raw_status_code, int) and not isinstance(raw_status_code, bool)
+        else None
+    )
+    is_http_success = (
+        status_code is not None and 200 <= status_code < 300
+    )
+    is_http_failure = status_code is not None and status_code >= 400
+    is_http_server_failure = status_code is not None and status_code >= 500
+    lookup_succeeded = status in {"ok", "success", "not_found"} or is_http_success
+    failed = status in {"error", "upstream_error"} or is_http_failure
+
+    reportable_error_type: Optional[str] = None
+    if status == "upstream_error":
+        reportable_error_type = "StructuredToolUpstreamError"
+    elif is_http_server_failure:
+        reportable_error_type = "StructuredToolHTTPError"
+
+    return _StructuredToolResultClassification(
+        lookup_succeeded=lookup_succeeded,
+        failed=failed,
+        reportable_error_type=reportable_error_type,
+    )
+
+
+def _lookup_tool_call_succeeded(call: "SpecialistToolCall") -> bool:
+    classification = _classify_structured_tool_result(call.output_payload or {})
+    return classification.lookup_succeeded
 
 
 def _lookup_tool_call_failed(call: "SpecialistToolCall") -> bool:
-    payload = call.output_payload or {}
-    status = str(payload.get("status") or "").strip().lower()
-    status_code = payload.get("status_code")
-    if status in {
-        "error",
-        "upstream_error",
-    }:
-        return True
-    if isinstance(status_code, int) and status_code >= 400:
-        return True
-    return False
+    classification = _classify_structured_tool_result(call.output_payload or {})
+    return classification.failed
 
 
 def _lookup_attempts_from_payload(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -5198,11 +5235,28 @@ async def run_specialist_with_events(
                             current_tool_name,
                             output,
                         )
+                        structured_output = _coerce_structured_tool_output(output)
+                        result_classification = _classify_structured_tool_result(
+                            structured_output or {}
+                        )
                         if isinstance(tool_index, int) and 0 <= tool_index < len(tool_calls):
                             tool_calls[tool_index].output_preview = output_preview
                             tool_calls[tool_index].output_summary = output_summary
                             tool_calls[tool_index].output_payload = output_payload
                             tool_calls[tool_index].duration_ms = duration_ms
+
+                        if result_classification.reportable_error_type is not None:
+                            asyncio.create_task(
+                                notify_tool_failure(
+                                    error_type=result_classification.reportable_error_type,
+                                    error_message="Structured tool returned an unexpected failure result",
+                                    source="infrastructure",
+                                    specialist_name=current_tool_name,
+                                    trace_id=get_current_trace_id() or builder_workspace.run_id,
+                                    session_id=get_current_session_id(),
+                                    curator_id=None,
+                                )
+                            )
 
                         evidence_record = build_record_evidence_summary_record(
                             tool_name=current_tool_name,
@@ -5235,7 +5289,7 @@ async def run_specialist_with_events(
                                     current_tool_name,
                                     complete=True,
                                 ),
-                                "success": True,
+                                "success": not result_classification.failed,
                                 "durationMs": duration_ms,
                                 "toolCallId": completed_tool_id,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool
