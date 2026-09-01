@@ -43,8 +43,25 @@ def _isolate_flow_tool_state(monkeypatch):
     def _available_agents(*, db_user_id=None, authenticated_groups=None):
         assert db_user_id is not None
         return [
-            {"agent_id": agent_id}
+            {
+                **entry,
+                "agent_id": agent_id,
+                "display_name": entry.get("name", agent_id),
+                "description": entry.get("description", ""),
+                "category": entry.get("category", "Unknown"),
+                "requires_document": entry.get("requires_document", False),
+                "supervisor": {
+                    **entry.get("supervisor", {}),
+                    "enabled": (
+                        True
+                        if entry.get("category") == "Validation"
+                        else bool(entry.get("supervisor", {}).get("enabled"))
+                    ),
+                },
+                "frontend": entry.get("frontend", {"show_in_palette": True}),
+            }
             for agent_id, entry in flow_tools.AGENT_REGISTRY.items()
+            if agent_id in flow_tools.FLOW_AGENT_IDS
             if is_resource_access_allowed(
                 visibility_allowed=True,
                 allowed_group_ids=list(entry.get("allowed_group_ids") or []),
@@ -964,11 +981,11 @@ def test_rgd_recipe_discovery_instantiates_saved_flow_and_denies_non_rgd_creatio
         description=combined["description"],
         steps=combined["steps"],
     )
-    assert rejected == {
-        "success": False,
-        "error": "Flow references unavailable agents",
-        "help": "Re-select agents from get_available_agents before saving.",
-    }
+    assert rejected["success"] is False
+    assert "unknown agent_id 'rgd_go_paper_curator'" in rejected["error"]
+    assert rejected["help"] == (
+        "Call get_available_agents and select a currently available agent ID"
+    )
 
 
 def test_advertised_alliance_recipes_pass_the_public_validation_contract():
@@ -1223,6 +1240,135 @@ def test_get_available_agents_filters_restricted_agents_by_authenticated_groups(
     flow_tools._current_active_group_ids.set(("WB", "RGD"))
     allowed = flow_tools._get_available_agents_handler()()
     assert set(allowed["extraction_agents"]) == {"open", "rgd_only"}
+
+
+def test_custom_agent_discovery_applies_visibility_group_and_palette_policy(monkeypatch):
+    allowed_id = "ca_11111111-1111-1111-1111-111111111111"
+    restricted_id = "ca_22222222-2222-2222-2222-222222222222"
+    hidden_id = "ca_33333333-3333-3333-3333-333333333333"
+
+    def _custom_catalog(*, db_user_id, authenticated_groups):
+        assert db_user_id == 42
+        agents = [
+            {
+                "agent_id": allowed_id,
+                "display_name": "My Extractor",
+                "description": "Visible custom extraction agent",
+                "category": "Extraction",
+                "frontend": {"show_in_palette": True},
+            },
+            {
+                "agent_id": hidden_id,
+                "display_name": "Hidden Extractor",
+                "description": "Hidden from the FlowBuilder palette",
+                "category": "Extraction",
+                "frontend": {"show_in_palette": False},
+            },
+        ]
+        if "RGD" in authenticated_groups:
+            agents.append(
+                {
+                    "agent_id": restricted_id,
+                    "display_name": "RGD Extractor",
+                    "description": "Restricted custom extraction agent",
+                    "category": "Extraction",
+                    "frontend": {"show_in_palette": True},
+                }
+            )
+        return agents
+
+    monkeypatch.setattr(catalog_service, "list_available_agents", _custom_catalog)
+
+    flow_tools.set_workflow_user_context(42, active_group_ids=["MGI"])
+    denied = flow_tools._get_available_agents_handler()()
+    assert denied["extraction_agents"] == [allowed_id]
+    assert hidden_id not in denied["extraction_agents"]
+    denied_validation = flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": restricted_id}]
+    )
+    hidden_validation = flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": hidden_id}]
+    )
+    assert denied_validation["valid"] is False
+    assert hidden_validation["valid"] is False
+    denied_creation = flow_tools._create_flow_handler()(
+        name="Restricted custom flow",
+        description="Must not create with a restricted custom agent",
+        steps=[{"agent_id": restricted_id}],
+    )
+    hidden_creation = flow_tools._create_flow_handler()(
+        name="Hidden custom flow",
+        description="Must not create with a hidden custom agent",
+        steps=[{"agent_id": hidden_id}],
+    )
+    assert denied_creation["success"] is False
+    assert hidden_creation["success"] is False
+
+    flow_tools.set_workflow_user_context(42, active_group_ids=["RGD"])
+    allowed = flow_tools._get_available_agents_handler()()
+    assert allowed["extraction_agents"] == [allowed_id, restricted_id]
+    assert flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": restricted_id}]
+    )["valid"] is True
+
+
+def test_create_flow_accepts_visible_custom_agent_metadata(monkeypatch):
+    custom_id = "ca_44444444-4444-4444-4444-444444444444"
+    monkeypatch.setattr(
+        catalog_service,
+        "list_available_agents",
+        lambda **_kwargs: [
+            {
+                "agent_id": custom_id,
+                "display_name": "Curator Custom Extractor",
+                "description": "Custom extraction instructions",
+                "category": "Extraction",
+                "frontend": {"show_in_palette": True},
+            }
+        ],
+    )
+
+    class _FakeFlow:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _FakeDB:
+        def __init__(self):
+            self.added = None
+
+        def add(self, flow):
+            self.added = flow
+
+        def commit(self):
+            return None
+
+        def refresh(self, _flow):
+            return None
+
+        def close(self):
+            return None
+
+    db = _FakeDB()
+
+    def _get_db():
+        yield db
+
+    import src.models.sql as sql_module
+
+    monkeypatch.setattr(sql_module, "get_db", _get_db)
+    monkeypatch.setattr(sql_module, "CurationFlow", _FakeFlow)
+
+    result = flow_tools._create_flow_handler()(
+        name="Custom agent flow",
+        description="Run the visible custom extractor",
+        steps=[{"agent_id": custom_id}],
+    )
+
+    assert result["success"] is True
+    assert db.added is not None
+    node_data = db.added.flow_definition["nodes"][1]["data"]
+    assert node_data["agent_id"] == custom_id
+    assert node_data["agent_display_name"] == "Curator Custom Extractor"
 
 
 def test_get_available_agents_handler_reports_core_only_install(monkeypatch):
@@ -1739,7 +1885,9 @@ def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
     unknown_agent = create("Flow A", "desc", [{"agent_id": "nope"}])
     assert unknown_agent["success"] is False
     assert "unknown agent_id" in unknown_agent["error"]
-    assert unknown_agent["help"].startswith("Valid agent IDs:")
+    assert unknown_agent["help"] == (
+        "Call get_available_agents and select a currently available agent ID"
+    )
 
     monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "4")
     long_name = create(
@@ -2363,6 +2511,7 @@ def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeyp
     step_properties = create_steps_schema["items"][
         "properties"
     ]
+    assert "enum" not in step_properties["agent_id"]
     assert "source_steps" in step_properties
     assert "source_step" not in step_properties
     assert step_properties["source_steps"]["minItems"] == 1
