@@ -1,9 +1,11 @@
-"""Fail-fast environment helpers for model / LLM configuration.
+"""Fail-fast environment helpers for environment-backed model settings.
 
-`.env` is the single source of truth for all model/LLM configuration. There are
-intentionally NO hardcoded model/LLM fallbacks in code: when a required value is
-missing the helpers raise :class:`ConfigError` so the misconfiguration surfaces
-immediately and gets fixed, instead of silently running on the wrong model.
+Environment variables are the source of truth for model settings exposed by
+these helpers. There are intentionally NO hardcoded model fallbacks in code:
+when a required value is missing the helpers raise :class:`ConfigError` so the
+misconfiguration surfaces immediately and gets fixed, instead of silently
+running on the wrong model. Provider routing is catalog-driven through the
+single ``default_for_runner`` entry, not environment-driven.
 
 The only place a model literal default may live is a package ``agent.yaml``
 (``model_config``), which is the per-package configuration contract.

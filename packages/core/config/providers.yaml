@@ -5,7 +5,8 @@
 # Each provider maps to a driver (openai_native or openai_compatible) and references
 # environment variables for API keys and base URLs.
 #
-# Exactly one provider must set default_for_runner: true.
+# Provider routing is catalog-driven: exactly one provider across this file and
+# installed package provider drop-ins must set default_for_runner: true.
 # API key values are NEVER stored here — only env var names.
 #
 # Used by: providers_loader.py, config.py (agent model resolution)

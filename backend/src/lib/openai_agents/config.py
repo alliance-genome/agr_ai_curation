@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 # =============================================================================
 
 def get_llm_provider() -> str:
-    """Get the configured default runner provider from provider catalog."""
+    """Get the catalog-selected default runner provider."""
     from src.lib.config.providers_loader import get_default_runner_provider
 
     return get_default_runner_provider().provider_id
