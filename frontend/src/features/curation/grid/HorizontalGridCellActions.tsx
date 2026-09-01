@@ -7,15 +7,8 @@ import {
   Tooltip,
 } from '@mui/material'
 
-import {
-  buildNavigationCommandFromEnvelopeEvidenceProjection,
-  type EvidenceNavigationCommand,
-} from '@/features/curation/evidence'
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
-import type {
-  CurationDraftField,
-  DomainEnvelopeEvidenceAnchorProjection,
-} from '@/features/curation/types'
+import type { CurationDraftField } from '@/features/curation/types'
 import { formatHorizontalGridValue } from './horizontalGridFormatting'
 import type { HorizontalGridFieldCell } from './horizontalGridModel'
 
@@ -24,11 +17,7 @@ export interface HorizontalGridCellActionsProps {
   field: CurationDraftField | null
   isSaving: boolean
   onEdit: (field: CurationDraftField) => void
-  onEvidence: (
-    projection: DomainEnvelopeEvidenceAnchorProjection,
-    command: EvidenceNavigationCommand,
-    anchorEl: HTMLElement,
-  ) => void
+  onDetails: (anchorEl: HTMLElement) => void
   onSelect: () => void
   onToggleValidationPreview: (field: CurationDraftField) => void
   previewState: FieldStateKind | null
@@ -40,7 +29,7 @@ export default function HorizontalGridCellActions({
   field,
   isSaving,
   onEdit,
-  onEvidence,
+  onDetails,
   onSelect,
   onToggleValidationPreview,
   previewState,
@@ -51,13 +40,8 @@ export default function HorizontalGridCellActions({
   }
 
   const mutationDisabled = field.read_only || isSaving
-  const hasActions = cell.evidence.length > 0 || previewState !== null || !field.read_only
   const fieldValue = formatHorizontalGridValue(field.value) ?? 'Not available'
   const actionContext = `${field.label}: ${fieldValue} in ${recordLabel}`
-
-  if (!hasActions) {
-    return null
-  }
 
   return (
     <Stack
@@ -82,36 +66,19 @@ export default function HorizontalGridCellActions({
         },
       })}
     >
-        {cell.evidence.map((projection, index) => {
-          const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
-          const evidenceNumber = index + 1
-
-          return (
-            <Tooltip
-              key={projection.anchor_id}
-              title={command ? `Show evidence ${evidenceNumber}` : 'PDF navigation unavailable'}
-            >
-              <span>
-                <IconButton
-                  aria-label={command
-                    ? `Show evidence ${evidenceNumber} for ${actionContext}`
-                    : `Evidence ${evidenceNumber} for ${actionContext} has no navigable PDF location`}
-                  disabled={!command}
-                  onClick={command
-                    ? (event) => {
-                        onSelect()
-                        onEvidence(projection, command, event.currentTarget)
-                      }
-                    : undefined}
-                  size="small"
-                  sx={{ borderRadius: '4px', height: 23, width: 23 }}
-                >
-                  <FindInPageOutlinedIcon sx={{ fontSize: 14 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )
-        })}
+        <Tooltip title="Evidence & validation details">
+          <IconButton
+            aria-label={`Show evidence and validation details for ${actionContext}`}
+            onClick={(event) => {
+              onSelect()
+              onDetails(event.currentTarget)
+            }}
+            size="small"
+            sx={{ borderRadius: '4px', height: 23, width: 23 }}
+          >
+            <FindInPageOutlinedIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Tooltip>
         {previewState !== null ? (
           <Tooltip
             title={previewState === 'resolved'

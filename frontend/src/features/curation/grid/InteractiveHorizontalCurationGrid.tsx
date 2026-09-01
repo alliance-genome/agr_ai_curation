@@ -2,12 +2,14 @@ import { useCallback, useMemo, useState } from 'react'
 
 import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
 import {
+  buildNavigationCommandFromEnvelopeEvidenceProjection,
   dispatchEvidenceNavigationCommand,
 } from '@/features/curation/evidence'
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import type {
   CurationCandidate,
   CurationDraftField,
+  DomainEnvelopeEvidenceAnchorProjection,
 } from '@/features/curation/types'
 import {
   useCurationWorkspaceAutosave,
@@ -191,25 +193,40 @@ export default function InteractiveHorizontalCurationGrid({
             fieldPath: args.cell.fieldPath,
           })
         }}
-        onEvidence={(projection, command, anchorEl) => {
+        onDetails={(anchorEl) => {
+          const navigateEvidence = (
+            projection: DomainEnvelopeEvidenceAnchorProjection,
+          ) => {
+            const command = buildNavigationCommandFromEnvelopeEvidenceProjection(projection)
+            if (!command) {
+              return
+            }
+            dispatchEvidenceNavigationCommand(
+              command,
+              {
+                source: 'horizontal-curation-grid',
+                candidateId: candidate.candidate_id,
+                objectId: projection.object_id,
+                fieldKey: field?.field_key ?? null,
+                fieldPath: args.cell.fieldPath,
+              },
+            )
+          }
           setEvidenceTarget({
             anchorEl,
             fieldLabel: field?.label ?? args.column.label,
             fieldValue: field ? formatHorizontalGridValue(field.value) ?? '—' : '—',
-            projection,
+            onEvidence: navigateEvidence,
+            projections: args.cell.evidence,
             state: args.cell.state,
             validationMessages: args.cell.validation.summaries.flatMap((summary) => summary.messages),
           })
-          dispatchEvidenceNavigationCommand(
-            command,
-            {
-              source: 'horizontal-curation-grid',
-              candidateId: candidate.candidate_id,
-              objectId: projection.object_id,
-              fieldKey: field?.field_key ?? null,
-              fieldPath: args.cell.fieldPath,
-            },
+          const projection = args.cell.evidence.find(
+            (item) => buildNavigationCommandFromEnvelopeEvidenceProjection(item) !== null,
           )
+          if (projection) {
+            navigateEvidence(projection)
+          }
         }}
         onSelect={() => selectCandidate(candidate.candidate_id)}
         onToggleValidationPreview={(previewField) => {
@@ -248,24 +265,35 @@ export default function InteractiveHorizontalCurationGrid({
       active={activeCandidateId === row.candidateId}
       cell={cell}
       onEvidence={(projection, command, anchorEl) => {
-        const fieldPath = contextEvidenceFieldPath(projection)
+        const navigateEvidence = (
+          selectedProjection: DomainEnvelopeEvidenceAnchorProjection,
+        ) => {
+          const selectedCommand = selectedProjection.anchor_id === projection.anchor_id
+            ? command
+            : buildNavigationCommandFromEnvelopeEvidenceProjection(selectedProjection)
+          if (!selectedCommand) {
+            return
+          }
+          dispatchEvidenceNavigationCommand(
+            selectedCommand,
+            {
+              source: 'horizontal-curation-grid-context',
+              candidateId: row.candidateId,
+              objectId: selectedProjection.object_id,
+              fieldPath: contextEvidenceFieldPath(selectedProjection),
+            },
+          )
+        }
         setEvidenceTarget({
           anchorEl,
           fieldLabel: contextEvidenceLabel(projection),
           fieldValue: cell.value.identityLabel,
-          projection,
+          onEvidence: navigateEvidence,
+          projections: [projection],
           state: null,
           validationMessages: [],
         })
-        dispatchEvidenceNavigationCommand(
-          command,
-          {
-            source: 'horizontal-curation-grid-context',
-            candidateId: row.candidateId,
-            objectId: projection.object_id,
-            fieldPath,
-          },
-        )
+        navigateEvidence(projection)
       }}
       onSelect={() => selectCandidate(row.candidateId)}
     />

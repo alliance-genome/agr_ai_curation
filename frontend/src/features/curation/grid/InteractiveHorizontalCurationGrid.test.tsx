@@ -490,7 +490,9 @@ describe('InteractiveHorizontalCurationGrid', () => {
     await user.click(screen.getByRole('button', { name: 'Select Reference one' }))
     expect(setActiveCandidate).toHaveBeenCalledWith('candidate-1')
 
-    await user.click(screen.getByRole('button', { name: /^Show evidence 1 for Authors:/ }))
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
     expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
       detail: {
         command: expect.objectContaining({
@@ -519,7 +521,9 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
     renderGrid()
 
-    await user.click(screen.getByRole('button', { name: /^Show evidence 1 for Authors:/ }))
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
 
     const details = screen.getByRole('dialog', { name: /Authors:/ })
     expect(within(details).getByText('Evidence & validation details')).toBeInTheDocument()
@@ -541,6 +545,35 @@ describe('InteractiveHorizontalCurationGrid', () => {
       name: 'Show object evidence 1 for Reference one',
     })).toHaveFocus()
 
+    unsubscribe()
+  })
+
+  it('keeps every field evidence anchor independently focusable from one details popup', async () => {
+    const user = userEvent.setup()
+    const navigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
+    renderGrid({
+      model: buildModel({
+        authorsEvidence: [
+          evidenceProjection('field-evidence-1', 'citation.authors'),
+          evidenceProjection('field-evidence-2', 'citation.authors'),
+        ],
+      }),
+    })
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
+    expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+      detail: { command: expect.objectContaining({ anchorId: 'field-evidence-1' }) },
+    }))
+
+    await user.click(screen.getByRole('button', {
+      name: 'Focus evidence 2 for Authors in paper',
+    }))
+    expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+      detail: { command: expect.objectContaining({ anchorId: 'field-evidence-2' }) },
+    }))
     unsubscribe()
   })
 
@@ -579,7 +612,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
     unsubscribe()
   })
 
-  it('disables unresolved field and context evidence without dispatching navigation', () => {
+  it('opens unresolved field details without dispatching PDF navigation', async () => {
+    const user = userEvent.setup()
     const navigateEvidence = vi.fn()
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
     const { setActiveCandidate } = renderGrid({
@@ -589,20 +623,22 @@ describe('InteractiveHorizontalCurationGrid', () => {
       }),
     })
 
-    const fieldEvidence = screen.getByRole('button', {
-      name: /^Evidence 1 for Authors:.*has no navigable PDF location$/,
+    const fieldDetails = screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
     })
     const objectEvidence = screen.getByRole('button', {
       name: 'Object evidence 1 for Reference one has no navigable PDF location',
     })
-    expect(fieldEvidence).toBeDisabled()
     expect(objectEvidence).toBeDisabled()
 
-    fireEvent.click(fieldEvidence)
+    await user.click(fieldDetails)
     fireEvent.click(objectEvidence)
 
+    expect(screen.getByRole('dialog', { name: /Authors:/ })).toHaveTextContent(
+      'No quoted passage is available for this evidence anchor.',
+    )
     expect(navigateEvidence).not.toHaveBeenCalled()
-    expect(setActiveCandidate).not.toHaveBeenCalled()
+    expect(setActiveCandidate).toHaveBeenCalledWith('candidate-1')
     unsubscribe()
   })
 
@@ -643,6 +679,9 @@ describe('InteractiveHorizontalCurationGrid', () => {
     renderGrid()
 
     expect(screen.queryByRole('button', { name: /^Edit Locked identifier:/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Locked identifier:/,
+    })).toBeEnabled()
     expect(screen.getByRole('button', { name: /^Validate Locked identifier:/ })).toBeEnabled()
     expect(screen.getByText('Not available')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Edit Missing field:/ })).not.toBeInTheDocument()
@@ -655,7 +694,9 @@ describe('InteractiveHorizontalCurationGrid', () => {
     renderGrid({ autosave })
 
     expect(screen.getByRole('button', { name: /^Edit Authors:/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /^Show evidence 1 for Authors:/ })).toBeEnabled()
+    expect(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    })).toBeEnabled()
     const validateAuthors = screen.getByRole('button', { name: /^Validate Authors:/ })
     expect(validateAuthors).toHaveAttribute('aria-pressed', 'false')
 
@@ -725,7 +766,8 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(autosave.flush).not.toHaveBeenCalled()
   })
 
-  it('shows authoritative validation details and seeds the local check state', () => {
+  it('keeps resolved messages in details without showing a false error marker', async () => {
+    const user = userEvent.setup()
     const summary = {
       ...resolvedSummary(),
       messages: [
@@ -737,12 +779,40 @@ describe('InteractiveHorizontalCurationGrid', () => {
 
     const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
     expect(authorsCell).toHaveAccessibleName(/Curator validated/)
-    expect(screen.getByRole('img', { name: /Authors were validated by the server/ })).toBeInTheDocument()
+    expect(screen.queryByRole('img', {
+      name: /Authors were validated by the server/,
+    })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Mark as not validated Authors:/ })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
+    const details = screen.getByRole('dialog', { name: /Authors:/ })
+    expect(details).toHaveTextContent('Authors were validated by the server.')
+    expect(details).toHaveTextContent('A second authoritative validation detail.')
     expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
+  })
+
+  it('shows validation-only details and reserves warning/error symbols for field state', async () => {
+    const user = userEvent.setup()
+    const model = buildModel({ authorsEvidence: [] })
+    model.rows[0].cells[0].state = 'needs-review'
+    renderGrid({ model })
+
+    expect(screen.getByRole('img', { name: 'Needs review' })).toHaveTextContent('!')
+    expect(screen.getByRole('img', { name: 'Not validated' })).toHaveTextContent('×')
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
+    const details = screen.getByRole('dialog', { name: /Authors:/ })
+    expect(within(details).getByText('Field-specific evidence')).toBeInTheDocument()
+    expect(within(details).getByText(
+      'No field-specific evidence was recorded for this field.',
+    )).toBeInTheDocument()
+    expect(within(details).getByText(/Current status: Needs review/)).toBeInTheDocument()
   })
 
   it('summarizes displayed preview states and restores focus when the drawer closes', async () => {

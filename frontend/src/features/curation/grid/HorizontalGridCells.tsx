@@ -214,27 +214,34 @@ export function HorizontalGridFieldCellContent({
           </Typography>
         </Stack>
       </ButtonBase>
-      {validationMessages.length > 0 ? (
+      {state === 'needs-review' || state === 'ai-unconfirmed' ? (
         <Tooltip
           arrow
           title={(
             <Stack spacing={0.5}>
-              {validationMessages.map((message, index) => (
-                <Typography key={`${index}:${message}`} variant="caption">{message}</Typography>
-              ))}
+              {validationMessages.length > 0
+                ? validationMessages.map((message, index) => (
+                    <Typography key={`${index}:${message}`} variant="caption">{message}</Typography>
+                  ))
+                : <Typography variant="caption">{stateLabel}</Typography>}
             </Stack>
           )}
         >
           <Box
-            aria-label={validationMessages.join(' ')}
+            aria-label={`${stateLabel}${validationMessages.length > 0 ? `: ${validationMessages.join(' ')}` : ''}`}
             component="span"
-            data-slot="field-message"
+            data-severity={state === 'needs-review' ? 'warning' : 'error'}
+            data-slot="field-state-marker"
             role="img"
             sx={{ alignSelf: 'flex-start', display: 'inline-flex' }}
             tabIndex={0}
           >
-            <Box aria-hidden="true" component="span" data-slot="field-message-icon">!</Box>
-            <Box component="span" data-slot="field-message-text">{validationMessages.join(' ')}</Box>
+            <Box aria-hidden="true" component="span" data-slot="field-state-marker-icon">
+              {state === 'needs-review' ? '!' : '×'}
+            </Box>
+            <Box component="span" data-slot="field-state-marker-text">
+              {validationMessages.join(' ') || stateLabel}
+            </Box>
           </Box>
         </Tooltip>
       ) : null}

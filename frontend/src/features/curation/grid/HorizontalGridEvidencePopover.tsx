@@ -7,6 +7,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import PriorityHighRoundedIcon from '@mui/icons-material/PriorityHighRounded'
 import {
   Box,
+  Button,
   ClickAwayListener,
   IconButton,
   Paper,
@@ -16,6 +17,7 @@ import {
 } from '@mui/material'
 import { alpha } from '@mui/material/styles'
 
+import { buildNavigationCommandFromEnvelopeEvidenceProjection } from '@/features/curation/evidence'
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import type { DomainEnvelopeEvidenceAnchorProjection } from '@/features/curation/types'
 
@@ -23,7 +25,8 @@ export interface HorizontalGridEvidencePopoverTarget {
   anchorEl: HTMLElement
   fieldLabel: string
   fieldValue: string
-  projection: DomainEnvelopeEvidenceAnchorProjection
+  onEvidence: (projection: DomainEnvelopeEvidenceAnchorProjection) => void
+  projections: readonly DomainEnvelopeEvidenceAnchorProjection[]
   state: FieldStateKind | null
   validationMessages: readonly string[]
 }
@@ -218,32 +221,71 @@ export default function HorizontalGridEvidencePopover({
               display="block"
               sx={{ fontSize: 9, fontWeight: 760, letterSpacing: '0.06em', mt: '14px', textTransform: 'uppercase' }}
             >
-              Highlighted passage from the paper
+              {target.projections.length > 0
+                ? 'Highlighted passage from the paper'
+                : 'Field-specific evidence'}
             </Typography>
-            <Box
-              component="blockquote"
-              sx={(theme) => ({
-                m: '6px 0 12px',
-                p: '11px 12px',
-                borderLeft: `3px solid ${theme.palette.warning.main}`,
-                backgroundColor: theme.palette.mode === 'light'
-                  ? '#fff7d9'
-                  : alpha(theme.palette.warning.main, 0.13),
-                color: 'text.primary',
-                fontFamily: 'Georgia, "Times New Roman", serif',
-                fontSize: 12,
-                lineHeight: 1.52,
-              })}
-            >
-              {evidenceQuote(target.projection)}
-            </Box>
+            {target.projections.length > 0 ? (
+              <Stack spacing="7px" sx={{ m: '6px 0 12px' }}>
+                {target.projections.map((projection, index) => (
+                  <Box
+                    component="blockquote"
+                    key={projection.anchor_id}
+                    sx={(theme) => ({
+                      m: 0,
+                      p: '11px 12px',
+                      borderLeft: `3px solid ${theme.palette.warning.main}`,
+                      backgroundColor: theme.palette.mode === 'light'
+                        ? '#fff7d9'
+                        : alpha(theme.palette.warning.main, 0.13),
+                      color: 'text.primary',
+                      fontFamily: 'Georgia, "Times New Roman", serif',
+                      fontSize: 12,
+                      lineHeight: 1.52,
+                    })}
+                  >
+                    {evidenceQuote(projection)}
+                    <Typography color="text.secondary" component="footer" sx={{ fontFamily: 'inherit', fontSize: 9, mt: '5px' }}>
+                      {evidenceLocation(projection)}
+                    </Typography>
+                    {buildNavigationCommandFromEnvelopeEvidenceProjection(projection) ? (
+                      <Button
+                        aria-label={`Focus evidence ${index + 1} for ${target.fieldLabel} in paper`}
+                        onClick={() => target.onEvidence(projection)}
+                        size="small"
+                        sx={{ fontSize: 9, minHeight: 22, mt: '5px', px: '7px' }}
+                        variant="text"
+                      >
+                        Focus in paper
+                      </Button>
+                    ) : null}
+                  </Box>
+                ))}
+              </Stack>
+            ) : (
+              <Box
+                sx={(theme) => ({
+                  m: '6px 0 12px',
+                  p: '11px 12px',
+                  border: `1px solid ${theme.palette.divider}`,
+                  borderRadius: '4px',
+                  backgroundColor: theme.palette.mode === 'light'
+                    ? '#f7f9f8'
+                    : alpha(theme.palette.common.white, 0.04),
+                })}
+              >
+                <Typography color="text.secondary" sx={{ fontSize: 12 }}>
+                  No field-specific evidence was recorded for this field.
+                </Typography>
+              </Box>
+            )}
 
             <Box sx={{ borderTop: 1, borderColor: 'divider', pt: '8px' }}>
               <Typography color="text.secondary" sx={{ fontSize: 9 }}>
                 {target.validationMessages.length > 0
                   ? `${target.validationMessages.join(' · ')} · `
                   : null}
-                {evidenceLocation(target.projection)} · Current status: {presentation.label}
+                Current status: {presentation.label}
               </Typography>
             </Box>
           </Paper>
