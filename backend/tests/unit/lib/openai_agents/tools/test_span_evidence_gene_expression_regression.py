@@ -27,9 +27,14 @@ _WEAK_MARKER_CHUNK_ID = "33333333-3333-4333-8333-333333333333"
 
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
-    monkeypatch.setattr(weaviate_search, "function_tool", lambda fn: fn)
-    monkeypatch.setattr(record_evidence, "function_tool", lambda fn: fn)
-    monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn: fn)
+    def _identity_function_tool(fn=None, **_kwargs):
+        if fn is not None:
+            return fn
+        return lambda wrapped: wrapped
+
+    monkeypatch.setattr(weaviate_search, "function_tool", _identity_function_tool)
+    monkeypatch.setattr(record_evidence, "function_tool", _identity_function_tool)
+    monkeypatch.setattr(evidence_workspace, "function_tool", _identity_function_tool)
 
 
 @pytest.fixture

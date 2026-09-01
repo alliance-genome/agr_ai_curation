@@ -16,8 +16,10 @@ STALE_TOOL_DESCRIPTION_PHRASES = [
 ]
 
 
-def _identity_tool(fn):
-    return fn
+def _identity_tool(fn=None, **_kwargs):
+    if fn is not None:
+        return fn
+    return lambda wrapped: wrapped
 
 
 def _tool_doc(tool) -> str:
