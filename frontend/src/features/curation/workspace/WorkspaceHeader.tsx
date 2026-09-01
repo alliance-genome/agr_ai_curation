@@ -64,9 +64,12 @@ export default function WorkspaceHeader({
       data-testid="workspace-header"
       sx={(theme) => ({
         display: 'flex',
-        flexDirection: { xs: 'column', xl: 'row' },
-        alignItems: { xs: 'stretch', xl: 'center' },
-        gap: { xs: 1, xl: 1.5 },
+        // The workspace lives beside the PDF pane, so viewport breakpoints do
+        // not describe its available width. Keep navigation on a second row to
+        // prevent the title and status metadata from colliding in split view.
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 1,
         px: { xs: 1.5, md: 2 },
         py: { xs: 1.25, md: 1.5 },
         borderRadius: `${theme.shape.borderRadius}px ${theme.shape.borderRadius}px 0 0`,
@@ -110,7 +113,7 @@ export default function WorkspaceHeader({
           sx={{ color: 'text.secondary', display: { xs: 'none', sm: 'block' }, fontSize: 24 }}
         />
 
-        <Stack minWidth={0} spacing={0.25}>
+        <Stack minWidth={0} spacing={0.25} sx={{ flex: '1 1 18rem' }}>
           <Typography
             color="text.secondary"
             sx={{ fontSize: '0.66rem', fontWeight: 750, letterSpacing: '0.09em', textTransform: 'uppercase' }}
@@ -174,7 +177,7 @@ export default function WorkspaceHeader({
       {navigationSlot ? (
         <Stack
           direction="row"
-          justifyContent={{ xs: 'flex-start', xl: 'flex-end' }}
+          justifyContent="flex-end"
           data-testid="workspace-header-navigation-slot"
           sx={{ flex: '0 0 auto' }}
         >
