@@ -27,6 +27,22 @@ def identity_function_tool(monkeypatch):
     monkeypatch.setattr(record_evidence, "function_tool", lambda fn: fn)
 
 
+@pytest.fixture
+def runtime_exception_reports(monkeypatch):
+    reports = []
+
+    def _fake_report_runtime_exception(exc, **kwargs):
+        reports.append((exc, kwargs))
+        return True
+
+    monkeypatch.setattr(
+        record_evidence,
+        "report_runtime_exception",
+        _fake_report_runtime_exception,
+    )
+    return reports
+
+
 def _chunk(
     *,
     chunk_id: str,
@@ -267,6 +283,7 @@ async def test_record_evidence_rejects_target_identity_without_field_path(monkey
 async def test_record_evidence_rejects_malformed_span_without_lookup_or_error_log(
     monkeypatch,
     caplog,
+    runtime_exception_reports,
 ):
     async def _unexpected_get_chunk_by_id(**_kwargs):
         raise AssertionError("malformed span IDs must not reach chunk lookup")
@@ -284,6 +301,7 @@ async def test_record_evidence_rejects_malformed_span_without_lookup_or_error_lo
         record.name == record_evidence.__name__ and record.levelno >= logging.ERROR
         for record in caplog.records
     )
+    assert runtime_exception_reports == []
 
 
 @pytest.mark.asyncio
@@ -315,6 +333,7 @@ async def test_record_evidence_rejects_non_uuid_chunk_without_lookup_or_error_lo
 async def test_record_evidence_rejects_unknown_span_chunk_without_record(
     monkeypatch,
     caplog,
+    runtime_exception_reports,
 ):
     chunk_id = _chunk_uuid("chunk-missing")
     span_id = _span_ids(chunk_id, "The selected sentence exists.")[0]
@@ -341,18 +360,20 @@ async def test_record_evidence_rejects_unknown_span_chunk_without_record(
         record.name == record_evidence.__name__ and record.levelno >= logging.ERROR
         for record in caplog.records
     )
+    assert runtime_exception_reports == []
 
 
 @pytest.mark.asyncio
 async def test_record_evidence_reports_lookup_runtime_failure_at_error_level(
     monkeypatch,
     caplog,
+    runtime_exception_reports,
 ):
     chunk_id = _chunk_uuid("chunk-runtime-failure")
     span_id = _span_ids(chunk_id, "Exact sentence.")[0]
 
     async def _failing_get_chunk_by_id(**_kwargs):
-        raise RuntimeError("simulated Weaviate transport failure")
+        raise RuntimeError("sensitive chunk text from Weaviate")
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _failing_get_chunk_by_id)
     tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
@@ -362,10 +383,24 @@ async def test_record_evidence_reports_lookup_runtime_failure_at_error_level(
 
     assert result["status"] == "not_found"
     assert result["resolution_failure"] == "chunk_load_error"
+    assert "retry_instructions" not in result
     assert any(
         record.name == record_evidence.__name__ and record.levelno == logging.ERROR
         for record in caplog.records
     )
+    assert len(runtime_exception_reports) == 1
+    reported_exc, report_kwargs = runtime_exception_reports[0]
+    assert isinstance(reported_exc, record_evidence._ChunkLookupRuntimeError)
+    assert str(reported_exc) == "Evidence chunk lookup failed (RuntimeError)"
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__context__ is None
+    assert reported_exc.__cause__ is None
+    assert report_kwargs == {
+        "component": "record_evidence",
+        "operation": "evidence_chunk_lookup_failed",
+        "context": {"document_id": "doc-123"},
+    }
+    assert "sensitive chunk text" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -691,7 +726,10 @@ async def test_record_evidence_scoped_validator_tool_updates_allowed_record(monk
 
 
 @pytest.mark.asyncio
-async def test_record_evidence_rejects_stale_hash_mismatched_span_without_fallback(monkeypatch):
+async def test_record_evidence_rejects_stale_hash_mismatched_span_without_fallback(
+    monkeypatch,
+    runtime_exception_reports,
+):
     chunk_id = _chunk_uuid("chunk-stale")
     original_text = "The selected sentence exists. Another exact sentence."
     stale_span_id = _span_ids(chunk_id, original_text)[0]
@@ -714,6 +752,7 @@ async def test_record_evidence_rejects_stale_hash_mismatched_span_without_fallba
     assert "hash" in result["failed_span_error"]
     assert "Call read_chunk again" in result["failed_span_error"]
     assert "evidence_record_id" not in result
+    assert runtime_exception_reports == []
     assert "verified_quote" not in result
 
 
