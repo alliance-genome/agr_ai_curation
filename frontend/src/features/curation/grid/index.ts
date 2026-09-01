@@ -23,5 +23,3 @@ export { default as InteractiveHorizontalCurationGrid } from './InteractiveHoriz
 export type {
   InteractiveHorizontalCurationGridProps,
 } from './InteractiveHorizontalCurationGrid'
-export { default as HorizontalGridRowActions } from './HorizontalGridRowActions'
-export type { HorizontalGridRowActionsProps } from './HorizontalGridRowActions'

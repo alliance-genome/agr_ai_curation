@@ -2,6 +2,8 @@ import {
   getCurationAdapterEditorPack,
   type CurationAdapterFieldLayoutEntry,
 } from '@/features/curation/adapters'
+import { fieldState, type FieldStateKind } from '@/features/curation/editor/fieldState'
+import { resolveRenderAs } from '@/features/curation/editor/fieldRenderers'
 import type {
   CurationCandidate,
   CurationCandidateSource,
@@ -18,6 +20,8 @@ import type {
 import type { WorkspaceEnvelopeObjectReviewRow } from '@/features/curation/workspace/envelopeObjectReviewRows'
 import { objectSelectorLabel } from '@/features/curation/workspace/objectSelector'
 import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
+import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import { isHorizontalGridDecisionField } from './horizontalGridReviewPolicy'
 
 export const HORIZONTAL_GRID_CONTEXT_COLUMN_KEY = 'context'
 
@@ -73,9 +77,20 @@ export interface HorizontalGridFieldCell {
   required: boolean | null
   readOnly: boolean | null
   staleValidation: boolean | null
+  state: FieldStateKind | null
   fieldValidation: FieldValidationResult | null
   evidence: DomainEnvelopeEvidenceAnchorProjection[]
   validation: HorizontalGridValidationProjection
+  extractorComparison: HorizontalGridExtractorComparison | null
+  valueSource: 'canonical' | 'extractor'
+}
+
+export interface HorizontalGridExtractorComparison {
+  fieldKey: string
+  fieldPath: string
+  label: string
+  value: unknown
+  outcome: 'confirmed' | 'different' | 'overridden' | 'unresolved'
 }
 
 export interface HorizontalGridRow {
@@ -114,6 +129,67 @@ interface FieldOccurrence {
   order: number
   groupKey: string | null
   groupLabel: string | null
+}
+
+function divergenceTargetPath(field: CurationDraftField): string | null {
+  if (resolveRenderAs(field) !== 'divergence') {
+    return null
+  }
+
+  const fieldPath = resolveEnvelopeFieldPath(field)
+  const segments = fieldPath.split('.')
+  const fieldName = segments.at(-1)
+  if (!fieldName?.startsWith('proposed_')) {
+    return null
+  }
+
+  segments[segments.length - 1] = fieldName.slice('proposed_'.length)
+  return segments.join('.')
+}
+
+function divergenceFieldForCanonicalPath(
+  candidate: CurationCandidate,
+  canonicalPath: string,
+): CurationDraftField | null {
+  return candidate.draft.fields.find(
+    (field) => divergenceTargetPath(field) === canonicalPath,
+  ) ?? null
+}
+
+function extractorComparison(
+  candidate: CurationCandidate,
+  canonicalField: CurationDraftField,
+  canonicalPath: string,
+): HorizontalGridExtractorComparison | null {
+  const extractorField = divergenceFieldForCanonicalPath(candidate, canonicalPath)
+  const extractorValue = extractorField?.value
+  const formattedExtractorValue = formatHorizontalGridValue(extractorValue)
+  if (!extractorField || formattedExtractorValue === null) {
+    return null
+  }
+
+  const formattedCanonicalValue = formatHorizontalGridValue(canonicalField.value)
+  return {
+    fieldKey: extractorField.field_key,
+    fieldPath: resolveEnvelopeFieldPath(extractorField),
+    label: extractorField.label,
+    value: extractorValue,
+    outcome: formattedCanonicalValue === null
+      ? 'unresolved'
+      : formattedCanonicalValue === formattedExtractorValue
+        ? 'confirmed'
+        : 'different',
+  }
+}
+
+function isProjectedAsCanonicalComparison(
+  candidate: CurationCandidate,
+  field: CurationDraftField,
+): boolean {
+  const canonicalPath = divergenceTargetPath(field)
+  return canonicalPath !== null && candidate.draft.fields.some(
+    (candidateField) => resolveEnvelopeFieldPath(candidateField) === canonicalPath,
+  )
 }
 
 function fieldColumnKey(fieldPath: string): string {
@@ -180,6 +256,16 @@ function buildFieldColumns(
 
   for (const row of rows) {
     for (const field of row.candidate.draft.fields) {
+      // Divergence fields preserve what the extractor proposed before validation.
+      // When the candidate also has the canonical target, the proposal belongs in
+      // that target's Details comparison—not in a peer grid column that could be
+      // mistaken for a second authoritative or curator-editable value.
+      if (isProjectedAsCanonicalComparison(row.candidate, field)) {
+        continue
+      }
+      if (!isHorizontalGridDecisionField(row.candidate, field)) {
+        continue
+      }
       const occurrence = fieldOccurrence(row.candidate, field)
       const occurrences = occurrencesByPath.get(occurrence.fieldPath) ?? []
       occurrences.push(occurrence)
@@ -324,18 +410,32 @@ function projectRow(
   fieldColumns: readonly HorizontalGridColumn[],
 ): HorizontalGridRow {
   const fieldsByPath = fieldsByCanonicalPath(row.candidate)
+  const projectedFieldsByPath = new Map(
+    [...fieldsByPath.entries()].filter(([, field]) => (
+      !isProjectedAsCanonicalComparison(row.candidate, field)
+      && isHorizontalGridDecisionField(row.candidate, field)
+    )),
+  )
   const evidence = [...row.evidenceAnchors].sort(compareEvidence)
   const validationSummaries = [...row.validationSummaries].sort(compareValidationSummaries)
   const columnFieldPaths = new Set(
     fieldColumns.flatMap((column) => column.fieldPath === null ? [] : [column.fieldPath]),
   )
   const context = contextForRow(row)
-  const objectEvidence = evidence.filter((projection) =>
-    isObjectLevelProjection(projection.field_path),
-  )
   const objectValidation = validationSummaries.filter((projection) =>
     isObjectLevelProjection(projection.field_path),
   )
+  // Keep evidence reachable without pretending that it supports a different field.
+  // Object-level projections and projections without an actionable field cell belong
+  // on the row context control, while exact field matches stay on their field cells.
+  const contextEvidence = evidence.filter((projection) => (
+    isObjectLevelProjection(projection.field_path)
+    || !fieldColumns.some((column) => (
+      column.fieldPath !== null
+      && projectedFieldsByPath.has(column.fieldPath)
+      && fieldPathMatches(projection.field_path, column.fieldPath)
+    ))
+  ))
 
   const cells = fieldColumns.map((column): HorizontalGridFieldCell => {
     const fieldPath = column.fieldPath
@@ -343,7 +443,7 @@ function projectRow(
       throw new Error(`Horizontal grid field column '${column.key}' has no canonical path`)
     }
 
-    const field = fieldsByPath.get(fieldPath) ?? null
+    const field = projectedFieldsByPath.get(fieldPath) ?? null
     const cellEvidence = evidence.filter((projection) =>
       fieldPathMatches(projection.field_path, fieldPath),
     )
@@ -351,18 +451,49 @@ function projectRow(
       fieldPathMatches(projection.field_path, fieldPath),
     )
 
+    const baseState = field ? fieldState(field, cellValidation) : null
+    const projectedComparison = field ? extractorComparison(row.candidate, field, fieldPath) : null
+    const validatorResolved = !field?.stale_validation
+      && cellValidation.some((summary) => summary.status === 'resolved')
+      && cellValidation.every((summary) => (
+        summary.status === 'resolved' || summary.status === 'waived'
+      ))
+    // A populated canonical-shaped field is not proof that validation ran. Only a
+    // resolved validation projection may describe the second stage as a validator
+    // result; otherwise the extractor value remains explicitly unvalidated.
+    const comparison = projectedComparison
+      ? projectedComparison.outcome === 'unresolved'
+        ? projectedComparison
+        : validatorResolved
+          ? projectedComparison
+          : baseState === 'resolved'
+            ? { ...projectedComparison, outcome: 'overridden' as const }
+            : { ...projectedComparison, outcome: 'unresolved' as const }
+      : null
+    const valueSource = comparison?.outcome === 'unresolved' ? 'extractor' : 'canonical'
+    const projectedState = field
+      ? comparison?.outcome === 'different'
+        ? 'needs-review'
+        : comparison?.outcome === 'unresolved'
+          ? baseState === 'needs-review' ? 'needs-review' : 'ai-unconfirmed'
+          : baseState
+      : null
+
     return {
       columnKey: column.key,
       fieldKey: field?.field_key ?? null,
       fieldPath,
       hasField: field !== null,
-      value: field?.value ?? null,
+      value: valueSource === 'extractor' ? comparison?.value ?? null : field?.value ?? null,
       required: field?.required ?? null,
       readOnly: field?.read_only ?? null,
       staleValidation: field?.stale_validation ?? null,
+      state: projectedState,
       fieldValidation: field?.validation_result ?? null,
       evidence: cellEvidence,
       validation: validationProjection(cellValidation),
+      extractorComparison: comparison,
+      valueSource,
     }
   })
 
@@ -371,7 +502,7 @@ function projectRow(
     contextCell: {
       columnKey: HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
       value: context,
-      evidence: objectEvidence,
+      evidence: contextEvidence,
       validation: validationProjection(objectValidation),
     },
     cells,

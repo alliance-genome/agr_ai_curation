@@ -595,12 +595,19 @@ describe('CurationWorkspacePage', () => {
     expect(screen.queryByRole('region', { name: /envelope object table panel/i })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Horizontally scrollable curation grid' })).toBeInTheDocument()
     expect(screen.getByTestId('workspace-shell-work-pane-content')).toBeInTheDocument()
+    expect(within(screen.getByTestId('workspace-shell-header'))
+      .getByTestId('work-pane-toolbar')).toBeInTheDocument()
+    expect(within(screen.getByTestId('workspace-shell-work-pane-content'))
+      .queryByTestId('work-pane-toolbar')).not.toBeInTheDocument()
     expect(screen.queryByTestId('object-selector-strip')).not.toBeInTheDocument()
     expect(screen.queryByTestId('candidate-field-editor')).not.toBeInTheDocument()
     expect(screen.getByText('Review objects')).toBeInTheDocument()
-    expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent(
-      '1 validated · 1 blocking · 0 stale · 0 open findings',
-    )
+    expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent('1 validated')
+    expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent('1 need review')
+    expect(screen.getByRole('button', { name: /Validation summary/ })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', {
+      name: /^(Validate|Mark as not validated) /,
+    }).length).toBeGreaterThan(0)
 
     expect(screen.getAllByText('Accepted candidate').length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: 'Focus grid' }))
@@ -608,7 +615,6 @@ describe('CurationWorkspacePage', () => {
   })
 
   it('uses persisted review-row projections in the horizontal grid', async () => {
-    const user = userEvent.setup()
     const workspace = buildEnvelopeWorkspace()
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
@@ -648,15 +654,15 @@ describe('CurationWorkspacePage', () => {
     })
 
     expect(screen.getAllByText('TMEM67').length).toBeGreaterThan(0)
-    expect(screen.getByText('Needs curator review')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: /Needs curator review/ })).toBeInTheDocument()
     expect(screen.getByText(
       /Required envelope validation was unavailable\. All objects from this envelope are affected\./,
     )).toBeInTheDocument()
     expect(screen.getByRole('button', {
-      name: 'Select Gene symbol for gene.symbol',
+      name: /Select Gene symbol for gene\.symbol/,
     })).toBeInTheDocument()
     expect(screen.getByRole('button', {
-      name: 'Show evidence 1 for Gene symbol',
+      name: /^Show evidence and validation details for Gene symbol:/,
     })).toBeInTheDocument()
 
     act(() => {
@@ -668,7 +674,7 @@ describe('CurationWorkspacePage', () => {
     })
     await waitFor(() => {
       expect(screen.getByRole('button', {
-        name: 'Select Gene symbol for gene.symbol',
+        name: /Select Gene symbol for gene\.symbol/,
       })).toHaveFocus()
       expect(screen.getByTestId('horizontal-grid-field-gene.symbol')).toHaveClass(
         PDF_TO_FORM_HIGHLIGHT_CLASSNAME,
@@ -678,13 +684,9 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByRole('button', { name: 'Accept Legacy candidate label' })).toBeDisabled()
     expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
 
-    await user.click(screen.getByRole('button', { name: 'Waive finding' }))
-    expect(serviceMocks.waiveCurationValidationFinding).toHaveBeenCalledWith({
-      session_id: 'session-1',
-      envelope_id: 'tmem67-envelope',
-      expected_revision: 4,
-      finding_id: 'finding-envelope',
-    })
+    expect(screen.getByText('Validation details are read-only in this preview.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Waive finding' })).not.toBeInTheDocument()
+    expect(serviceMocks.waiveCurationValidationFinding).not.toHaveBeenCalled()
   })
 
   it('shows a waived envelope blocker when its override policy does not allow waiver', async () => {
@@ -719,7 +721,7 @@ describe('CurationWorkspacePage', () => {
       /Required envelope validation was unavailable\. All objects from this envelope are affected\./,
     )).toBeInTheDocument()
     expect(screen.getByText(
-      'Rerun validation or correct the underlying problem.',
+      'Validation details are read-only in this preview.',
     )).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Waive finding' })).not.toBeInTheDocument()
   })
@@ -935,10 +937,10 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1')
 
     await waitFor(() => {
-      expect(screen.getByText('Workspace Document')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Entity review' })).toBeInTheDocument()
     })
 
-    expect(screen.getByText('PMID 123456')).toBeInTheDocument()
+    expect(screen.getByText(/Workspace Document · PMID 123456/)).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
@@ -957,6 +959,8 @@ describe('CurationWorkspacePage', () => {
 
     expect(screen.getByRole('dialog', { name: 'Submission preview is in progress' })).toBeInTheDocument()
     expect(screen.getByText(/Submission preview and submission actions are a work in progress/)).toBeInTheDocument()
+    expect(screen.getByText(/continue reviewing and editing objects here/)).toBeInTheDocument()
+    expect(screen.queryByText(/continue reviewing and validating objects here/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Submit mode' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Refresh preview' })).not.toBeInTheDocument()
     expect(serviceMocks.fetchSubmissionPreview).not.toHaveBeenCalled()
@@ -1205,35 +1209,32 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-accepted')
 
     const activeRow = await screen.findByRole('row', { name: /Accepted candidate/i })
-    fireEvent.click(within(activeRow).getByRole('button', { name: 'Edit Gene symbol' }))
+    fireEvent.click(within(activeRow).getByRole('button', { name: /^Edit Gene symbol:/ }))
     expect(await screen.findByRole('dialog', { name: 'Edit Gene symbol' })).toBeInTheDocument()
 
-    vi.useFakeTimers()
     fireEvent.change(screen.getByLabelText('Gene symbol'), {
       target: { value: 'BRCA2' },
     })
+    fireEvent.click(screen.getByRole('button', { name: 'Save value' }))
 
-    await act(async () => {
-      vi.advanceTimersByTime(2600)
-      await Promise.resolve()
-    })
-
-    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith({
-      session_id: 'session-1',
-      envelope_id: 'envelope-1',
-      expected_revision: 5,
-      object_id: 'object-1',
-      field_path: 'gene.symbol',
-      operation: 'replace',
-      before: 'BRCA1',
-      value: 'BRCA2',
-    }, {
-      keepalive: undefined,
+    await waitFor(() => {
+      expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        envelope_id: 'envelope-1',
+        expected_revision: 5,
+        object_id: 'object-1',
+        field_path: 'gene.symbol',
+        operation: 'replace',
+        before: 'BRCA1',
+        value: 'BRCA2',
+      }, {
+        keepalive: undefined,
+      })
     })
     expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
   })
 
-  it('submits the row Accept action through the workspace decision service', async () => {
+  it('submits the selected-candidate toolbar Accept action through the workspace decision service', async () => {
     const workspace = buildWorkspace()
     workspace.candidates[1] = {
       ...workspace.candidates[1],
@@ -1321,11 +1322,11 @@ describe('CurationWorkspacePage', () => {
     })
 
     const pendingRow = screen.getByRole('row', { name: /Pending candidate/i })
-    fireEvent.click(within(pendingRow).getByRole('button', { name: 'Edit Gene symbol' }))
+    fireEvent.click(within(pendingRow).getByRole('button', { name: /^Edit Gene symbol:/ }))
     fireEvent.change(await screen.findByLabelText('Gene symbol'), {
       target: { value: 'APOE2' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save value' }))
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: /Edit/ })).not.toBeInTheDocument()
     })
@@ -1348,145 +1349,37 @@ describe('CurationWorkspacePage', () => {
     )
   })
 
-  it('keeps row Accept disabled until authoritative validation refreshes the grid', async () => {
+  it('keeps validation informational and never calls execution services', async () => {
     const workspace = buildWorkspace()
-    const refreshedWorkspace: CurationWorkspace = {
-      ...workspace,
-      candidates: workspace.candidates.map((candidate) => candidate.candidate_id === 'candidate-pending'
-        ? {
-            ...candidate,
-            validation: {
-              state: 'completed' as const,
-              counts: {
-                validated: 1,
-                ambiguous: 0,
-                not_found: 0,
-                invalid_format: 0,
-                conflict: 0,
-                skipped: 0,
-                overridden: 0,
-              },
-              stale_field_keys: [],
-              warnings: [],
-            },
-          }
-        : candidate),
-    }
-    serviceMocks.fetchCurationWorkspace
-      .mockResolvedValueOnce(workspace)
-      .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.updateCurationSession.mockResolvedValue({
-      session: {
-        ...workspace.session,
-        current_candidate_id: 'candidate-pending',
-      },
+      session: { ...workspace.session, current_candidate_id: 'candidate-pending' },
       action_log_entry: null,
-    })
-    serviceMocks.validateCurationCandidate.mockResolvedValue({
-      candidate: refreshedWorkspace.candidates[1],
-      validation_snapshot: {
-        snapshot_id: 'snapshot-row-1',
-        scope: 'candidate',
-        session_id: 'session-1',
-        candidate_id: 'candidate-pending',
-        state: 'completed',
-        field_results: {},
-        summary: refreshedWorkspace.candidates[1].validation,
-        warnings: [],
-      },
     })
 
     renderPage('/curation/session-1/candidate-pending')
 
     const acceptButton = await screen.findByRole('button', { name: 'Accept Pending candidate' })
     expect(acceptButton).toBeDisabled()
-    fireEvent.click(acceptButton)
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 0))
-    })
-    expect(serviceMocks.submitCurationCandidateDecision).not.toHaveBeenCalled()
-
-    const validateButton = await screen.findByRole('button', { name: 'Validate Pending candidate' })
-    fireEvent.click(validateButton)
-
-    await waitFor(() => {
-      expect(serviceMocks.validateCurationCandidate).toHaveBeenCalledWith({
-        session_id: 'session-1',
-        candidate_id: 'candidate-pending',
-      })
-    })
-    expect(serviceMocks.fetchCurationWorkspace.mock.invocationCallOrder[1]).toBeGreaterThan(
-      serviceMocks.validateCurationCandidate.mock.invocationCallOrder[0],
-    )
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Accept Pending candidate' })).toBeEnabled()
-    })
+    expect(screen.getByLabelText('Authoritative validation summary')).toBeInTheDocument()
+    const previewValidation = screen.getAllByRole('button', { name: /^Validate / })[0]
+    expect(previewValidation).toBeDefined()
+    fireEvent.click(previewValidation!)
+    expect(screen.getAllByRole('button', { name: /^Mark as not validated / }).length)
+      .toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Validate all fields for Pending candidate',
+    }))
+    expect(acceptButton).toBeDisabled()
+    expect(screen.getByLabelText(
+      /fields curator validated for Pending candidate/,
+    )).toHaveTextContent(/\d+\/\d+/)
+    expect(screen.queryByRole('button', { name: /Validating/ })).not.toBeInTheDocument()
+    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
+    expect(serviceMocks.validateAllCurationSessionCandidates).not.toHaveBeenCalled()
   })
 
-  it('shows session validation progress and refreshes authoritative aggregate counts', async () => {
-    const workspace = buildWorkspace()
-    const refreshedWorkspace: CurationWorkspace = {
-      ...workspace,
-      candidates: workspace.candidates.map((candidate) => ({
-        ...candidate,
-        validation: {
-          state: 'completed',
-          counts: {
-            validated: 1,
-            ambiguous: 0,
-            not_found: 0,
-            invalid_format: 0,
-            conflict: 0,
-            skipped: 0,
-            overridden: 0,
-          },
-          stale_field_keys: [],
-          warnings: [],
-        },
-      })),
-    }
-    const validationDeferred = createDeferredPromise<unknown>()
-    serviceMocks.fetchCurationWorkspace
-      .mockResolvedValueOnce(workspace)
-      .mockResolvedValueOnce(refreshedWorkspace)
-    serviceMocks.validateAllCurationSessionCandidates.mockReturnValue(validationDeferred.promise)
-    serviceMocks.updateCurationSession.mockResolvedValue({
-      session: workspace.session,
-      action_log_entry: null,
-    })
-
-    renderPage('/curation/session-1')
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Validate all' }))
-    expect(screen.getByRole('button', { name: 'Validating all…' })).toBeDisabled()
-    await waitFor(() => {
-      expect(serviceMocks.validateAllCurationSessionCandidates).toHaveBeenCalledWith({
-        session_id: 'session-1',
-      })
-    })
-
-    validationDeferred.resolve({
-      session: refreshedWorkspace.session,
-      session_validation: {
-        snapshot_id: 'snapshot-session-1',
-        scope: 'session',
-        session_id: 'session-1',
-        state: 'completed',
-        field_results: {},
-        summary: refreshedWorkspace.candidates[0].validation,
-        warnings: [],
-      },
-      candidate_validations: [],
-    })
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent(
-        '2 validated · 0 blocking · 0 stale · 0 open findings',
-      )
-    })
-  })
-
-  it('submits row rejection through the existing decision owner', async () => {
+  it('submits selected-candidate rejection through the toolbar decision owner', async () => {
     const workspace = buildWorkspace()
     const refreshedWorkspace: CurationWorkspace = {
       ...workspace,

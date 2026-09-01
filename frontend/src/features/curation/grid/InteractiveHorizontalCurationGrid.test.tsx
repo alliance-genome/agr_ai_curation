@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,10 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
 import type {
   CurationCandidate,
-  CurationCandidateValidationResponse,
   CurationWorkspace,
   DomainEnvelopeEvidenceAnchorProjection,
-  DomainEnvelopeReviewRowsResponse,
   DomainEnvelopeValidationSummaryProjection,
 } from '@/features/curation/types'
 import {
@@ -19,7 +17,7 @@ import {
   type CurationWorkspaceContextValue,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import type { UseAutosaveReturn } from '@/features/curation/workspace/useAutosave'
-import theme from '@/theme'
+import theme, { createAppTheme, type ThemeMode } from '@/theme'
 import InteractiveHorizontalCurationGrid from './InteractiveHorizontalCurationGrid'
 import {
   HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
@@ -346,9 +344,15 @@ function buildModel({
             required: true,
             readOnly: false,
             staleValidation: false,
+            state: authorsValidation.statuses.length > 0
+              && authorsValidation.statuses.every((status) => status === 'resolved' || status === 'waived')
+              ? 'resolved'
+              : 'ai-unconfirmed',
             fieldValidation: null,
             evidence: authorsEvidence,
             validation: authorsValidation,
+            extractorComparison: null,
+            valueSource: 'canonical',
           },
           {
             columnKey: 'field:locked',
@@ -359,9 +363,12 @@ function buildModel({
             required: false,
             readOnly: true,
             staleValidation: false,
+            state: 'ai-unconfirmed',
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
+            extractorComparison: null,
+            valueSource: 'canonical',
           },
           {
             columnKey: 'field:missing',
@@ -372,9 +379,12 @@ function buildModel({
             required: null,
             readOnly: null,
             staleValidation: null,
+            state: null,
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
+            extractorComparison: null,
+            valueSource: 'canonical',
           },
         ],
         evidence: [...objectEvidence, ...authorsEvidence],
@@ -383,36 +393,6 @@ function buildModel({
         unmappedValidation: emptyValidation,
       },
     ],
-  }
-}
-
-function validationResponse(candidate: CurationCandidate): CurationCandidateValidationResponse {
-  return {
-    candidate,
-    validation_snapshot: {
-      snapshot_id: 'snapshot-1',
-      scope: 'candidate',
-      session_id: 'session-1',
-      candidate_id: candidate.candidate_id,
-      adapter_key: candidate.adapter_key,
-      state: 'completed',
-      field_results: {},
-      summary: {
-        state: 'completed',
-        counts: {
-          validated: 1,
-          ambiguous: 0,
-          not_found: 0,
-          invalid_format: 0,
-          conflict: 0,
-          skipped: 0,
-          overridden: 0,
-        },
-        stale_field_keys: [],
-        warnings: [],
-      },
-      warnings: [],
-    },
   }
 }
 
@@ -434,10 +414,12 @@ function createAutosave(overrides: Partial<UseAutosaveReturn> = {}): UseAutosave
 function renderGrid({
   autosave = createAutosave(),
   model = buildModel(),
+  mode,
   workspace: initialWorkspace = buildWorkspace(),
 }: {
   autosave?: UseAutosaveReturn
   model?: HorizontalGridModel | ((workspace: CurationWorkspace) => HorizontalGridModel)
+  mode?: ThemeMode
   workspace?: CurationWorkspace
 } = {}) {
   const setActiveCandidate = vi.fn()
@@ -475,7 +457,7 @@ function renderGrid({
 
   render(
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={theme}>
+      <ThemeProvider theme={mode ? createAppTheme(mode) : theme}>
         <Harness />
       </ThemeProvider>
     </QueryClientProvider>,
@@ -484,22 +466,14 @@ function renderGrid({
   return { autosave, queryClient, setActiveCandidate }
 }
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (reason?: unknown) => void
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, reject, resolve }
-}
-
 beforeEach(() => {
   serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
   serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([])
 })
 
 afterEach(() => {
+  delete window.__pdfViewerEvidenceDebug
+  vi.restoreAllMocks()
   vi.clearAllMocks()
 })
 
@@ -510,15 +484,21 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
     const { setActiveCandidate } = renderGrid()
 
+    expect(screen.getByRole('group', {
+      name: 'Actions for Authors: Ada Lovelace, Grace Hopper in Reference one',
+    })).toBeInTheDocument()
+
     await user.click(screen.getByRole('button', {
-      name: 'Select Authors for citation.authors',
+      name: /Select Authors for citation\.authors/,
     }))
     expect(setActiveCandidate).toHaveBeenCalledWith('candidate-1')
 
     await user.click(screen.getByRole('button', { name: 'Select Reference one' }))
     expect(setActiveCandidate).toHaveBeenCalledWith('candidate-1')
 
-    await user.click(screen.getByRole('button', { name: 'Show evidence 1 for Authors' }))
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
     expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
       detail: {
         command: expect.objectContaining({
@@ -541,7 +521,117 @@ describe('InteractiveHorizontalCurationGrid', () => {
     unsubscribe()
   })
 
-  it('disables unresolved field and context evidence without dispatching navigation', () => {
+  it('opens prototype-fidelity read-only evidence details while focusing the PDF', async () => {
+    const user = userEvent.setup()
+    const navigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
+    renderGrid()
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
+
+    const details = screen.getByRole('dialog', { name: /Authors:/ })
+    expect(details).toHaveStyle({
+      display: 'flex',
+      maxHeight: 'calc(100dvh - 24px)',
+      overflow: 'hidden',
+    })
+    expect(within(details).getByTestId('horizontal-grid-evidence-scroll-region')).toHaveStyle({
+      minHeight: '0',
+      overflowY: 'auto',
+      overscrollBehavior: 'contain',
+      scrollbarGutter: 'stable',
+    })
+    expect(within(details).getByText('Evidence & validation details')).toBeInTheDocument()
+    expect(within(details).getByText('Highlighted passage from the paper')).toBeInTheDocument()
+    expect(within(details).getByText('Evidence for citation.authors')).toBeInTheDocument()
+    expect(within(details).getByLabelText('Current status: Not validated')).toBeInTheDocument()
+    expect(within(details).queryByText(/^Authors resolved to /)).not.toBeInTheDocument()
+    expect(within(details).queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
+    expect(navigateEvidence).toHaveBeenCalledTimes(1)
+    expect(within(details).getByRole('button', { name: 'Close evidence details' })).toHaveFocus()
+
+    await user.click(screen.getByRole('button', {
+      name: 'Show object evidence 1 for Reference one',
+    }))
+    expect(screen.getByRole('dialog', { name: /Object evidence:/ })).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: 'Show object evidence 1 for Reference one',
+    })).toHaveFocus()
+
+    unsubscribe()
+  })
+
+  it('keeps every field evidence anchor independently focusable from one details popup', async () => {
+    const user = userEvent.setup()
+    const navigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
+    renderGrid({
+      model: buildModel({
+        authorsEvidence: [
+          evidenceProjection('field-evidence-1', 'citation.authors'),
+          evidenceProjection('field-evidence-2', 'citation.authors'),
+        ],
+      }),
+    })
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
+    expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+      detail: { command: expect.objectContaining({ anchorId: 'field-evidence-1' }) },
+    }))
+
+    await user.click(screen.getByRole('button', {
+      name: 'Focus evidence 2 for Authors in paper',
+    }))
+    expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+      detail: { command: expect.objectContaining({ anchorId: 'field-evidence-2' }) },
+    }))
+    unsubscribe()
+  })
+
+  it('preserves unmatched field provenance on the context evidence trigger and popup', async () => {
+    const user = userEvent.setup()
+    const navigateEvidence = vi.fn()
+    const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    window.__pdfViewerEvidenceDebug = {
+      enabled: true,
+      storageKey: 'test-evidence-debug',
+      setEnabled: vi.fn((enabled: boolean) => enabled),
+      getEntries: vi.fn(() => []),
+      clearEntries: vi.fn(),
+      getLastResult: vi.fn(() => null),
+    }
+    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
+    renderGrid({
+      model: buildModel({
+        objectEvidence: [evidenceProjection('mention-evidence', 'Gene.Symbol')],
+      }),
+    })
+
+    await user.click(screen.getByRole('button', {
+      name: 'Show field evidence (Gene.Symbol) 1 for Reference one',
+    }))
+
+    expect(screen.getByRole('dialog', {
+      name: 'Field evidence (Gene.Symbol): Reference one',
+    })).toBeInTheDocument()
+    expect(consoleInfo).toHaveBeenCalledWith(
+      '[PDF EVIDENCE DEBUG] Dispatching shared evidence navigation',
+      expect.objectContaining({ fieldPath: 'Gene.Symbol' }),
+    )
+    expect(navigateEvidence).toHaveBeenCalledTimes(1)
+
+    unsubscribe()
+  })
+
+  it('opens unresolved field details without dispatching PDF navigation', async () => {
+    const user = userEvent.setup()
     const navigateEvidence = vi.fn()
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
     const { setActiveCandidate } = renderGrid({
@@ -551,242 +641,153 @@ describe('InteractiveHorizontalCurationGrid', () => {
       }),
     })
 
-    const fieldEvidence = screen.getByRole('button', {
-      name: 'Evidence 1 for Authors has no navigable PDF location',
+    const fieldDetails = screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
     })
     const objectEvidence = screen.getByRole('button', {
       name: 'Object evidence 1 for Reference one has no navigable PDF location',
     })
-    expect(fieldEvidence).toBeDisabled()
     expect(objectEvidence).toBeDisabled()
 
-    fireEvent.click(fieldEvidence)
+    await user.click(fieldDetails)
     fireEvent.click(objectEvidence)
 
+    expect(screen.getByRole('dialog', { name: /Authors:/ })).toHaveTextContent(
+      'No quoted passage is available for this evidence anchor.',
+    )
     expect(navigateEvidence).not.toHaveBeenCalled()
-    expect(setActiveCandidate).not.toHaveBeenCalled()
+    expect(setActiveCandidate).toHaveBeenCalledWith('candidate-1')
     unsubscribe()
   })
 
-  it('uses the adapter FieldRow renderer and delegates edits and reverts to autosave', async () => {
+  it('uses the adapter FieldRow renderer and saves or restores only after confirmation', async () => {
     const user = userEvent.setup()
     const autosave = createAutosave({ warning: 'Draft version conflict; edits remain local.' })
     renderGrid({ autosave })
 
-    await user.click(screen.getByRole('button', { name: 'Edit Authors' }))
+    await user.click(screen.getByRole('button', { name: /^Edit Authors:/ }))
 
     expect(screen.getByRole('dialog', { name: 'Edit Authors' })).toBeInTheDocument()
     expect(screen.getByText('Draft version conflict; edits remain local.')).toBeInTheDocument()
-    expect(screen.getByText('Required')).toBeInTheDocument()
-    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
     const authors = screen.getByLabelText('Authors')
     expect(authors).toHaveValue('Ada Lovelace\nGrace Hopper')
 
     fireEvent.change(authors, { target: { value: 'Ada Lovelace\n\nKatherine Johnson' } })
+    expect(autosave.queueFieldChange).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Save value' }))
     expect(autosave.queueFieldChange).toHaveBeenCalledWith({
       field_key: 'authors',
       value: ['Ada Lovelace', '', 'Katherine Johnson'],
     })
+    expect(autosave.flush).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: 'Revert' }))
+    await user.click(screen.getByRole('button', { name: /^Edit Authors:/ }))
+    await user.click(screen.getByRole('button', { name: 'Restore extracted value' }))
+    await user.click(screen.getByRole('button', { name: 'Save value' }))
     expect(autosave.queueFieldChange).toHaveBeenLastCalledWith({
       field_key: 'authors',
       revert_to_seed: true,
     })
+    expect(autosave.flush).toHaveBeenCalledTimes(2)
   })
 
-  it('does not expose edit or validation actions for read-only or unavailable cells', () => {
+  it('keeps preview validation available for read-only fields but not unavailable cells', () => {
     renderGrid()
 
-    expect(screen.queryByRole('button', { name: 'Edit Locked identifier' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Validate Locked identifier' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: /^Edit unavailable for Locked identifier:/,
+    })).toBeDisabled()
+    expect(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Locked identifier:/,
+    })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /^Validate Locked identifier:/ })).toBeEnabled()
     expect(screen.getByText('Not available')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Edit Missing field' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Validate Missing field' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Edit Missing field:/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Validate Missing field:/ })).not.toBeInTheDocument()
   })
 
-  it('disables field mutations while autosave is in progress', () => {
-    renderGrid({ autosave: createAutosave({ isSaving: true }) })
-
-    expect(screen.getByRole('button', { name: 'Edit Authors' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Show evidence 1 for Authors' })).toBeEnabled()
-  })
-
-  it('installs the authoritative workspace while review rows continue refreshing', async () => {
+  it('toggles preview validation locally while execution stays unmounted', async () => {
     const user = userEvent.setup()
-    const navigateEvidence = vi.fn()
-    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
-    const deferred = createDeferred<CurationCandidateValidationResponse>()
-    const reviewRowsDeferred = createDeferred<DomainEnvelopeReviewRowsResponse[]>()
-    serviceMocks.validateCurationCandidate.mockReturnValue(deferred.promise)
-    const serverEvidence = evidenceProjection(
-      'server-field-evidence',
-      'citation.authors',
-      4,
+    const autosave = createAutosave({ isSaving: true })
+    renderGrid({ autosave })
+
+    expect(screen.getByRole('button', { name: /^Edit Authors:/ })).toBeDisabled()
+    expect(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    })).toBeEnabled()
+    const validateAuthors = screen.getByRole('button', { name: /^Validate Authors:/ })
+    expect(validateAuthors).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(validateAuthors)
+
+    expect(screen.getByRole('button', { name: /^Mark as not validated Authors:/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
     )
-    const serverSummary = resolvedSummary(4)
-    const serverCandidate = buildCandidate({
-      projection_ref: {
-        envelope_id: 'envelope-1',
-        object_id: 'object-1',
-        envelope_revision: 4,
-      },
-      evidence_anchor_projections: [serverEvidence],
-      validation_summary_projections: [serverSummary],
-    })
-    serverCandidate.draft = {
-      ...serverCandidate.draft,
-      fields: serverCandidate.draft.fields.map((field) =>
-        field.field_key === 'authors'
-          ? { ...field, value: ['Server Author'], dirty: false, stale_validation: false }
-          : field,
-      ),
-    }
-    const serverWorkspace = {
-      ...buildWorkspace(serverCandidate),
-      evidence_anchor_projections: [serverEvidence],
-      validation_summary_projections: [serverSummary],
-    }
-    const serverReviewRows: DomainEnvelopeReviewRowsResponse[] = [{
-      envelope_id: 'envelope-1',
-      envelope_revision: 4,
-      row_count: 0,
-      rows: [],
-    }]
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(serverWorkspace)
-    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReturnValue(
-      reviewRowsDeferred.promise,
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Authors marked curator validated for this preview only. No validation was run or saved.',
     )
-    const { autosave, queryClient } = renderGrid({
-      model: (workspace) => buildModel({
-        authorsEvidence: (workspace.evidence_anchor_projections ?? []).filter(
-          (projection) => projection.field_path === 'citation.authors',
-        ),
-        authorsValidation: validationProjection(
-          workspace.validation_summary_projections ?? [],
-        ),
-        objectEvidence: (workspace.evidence_anchor_projections ?? []).filter(
-          (projection) => projection.field_path === null,
-        ),
-      }),
-    })
-    const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
-    expect(within(authorsCell).getByRole('img', { name: 'AI unconfirmed' })).toBeInTheDocument()
+    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
+    expect(autosave.queueFieldChange).not.toHaveBeenCalled()
+    expect(autosave.flush).not.toHaveBeenCalled()
 
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    await waitFor(() => {
-      expect(autosave.flush).toHaveBeenCalledTimes(1)
-      expect(serviceMocks.validateCurationCandidate).toHaveBeenCalledWith({
-        session_id: 'session-1',
-        candidate_id: 'candidate-1',
-        field_keys: ['authors'],
-      })
-    })
-    expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeDisabled()
-    expect(screen.getByLabelText('Validating Authors')).toBeInTheDocument()
-    expect(within(authorsCell).getByRole('img', { name: 'AI unconfirmed' })).toBeInTheDocument()
-
-    await act(async () => {
-      deferred.resolve(validationResponse(serverCandidate))
-      await deferred.promise
-    })
-
-    await waitFor(() => {
-      expect(serviceMocks.fetchCurationWorkspace).toHaveBeenCalledWith('session-1')
-      expect(serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows).toHaveBeenCalledWith(
-        serverWorkspace,
-      )
-    })
-    expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeDisabled()
-    expect(screen.getByLabelText('Validating Authors')).toBeInTheDocument()
-    expect(screen.getByText('Server Author')).toBeInTheDocument()
-    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
-      'img',
-      { name: 'Resolved' },
-    )).toBeInTheDocument()
-
-    await act(async () => {
-      reviewRowsDeferred.resolve(serverReviewRows)
-      await reviewRowsDeferred.promise
-    })
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Validate Authors' })).toBeEnabled()
-    })
-    expect(screen.getByText('Authors were validated by the server.')).toBeInTheDocument()
-    expect(queryClient.getQueryData([
-      'curation-workspace-envelope-review-rows',
-      'session-1',
-      [{ envelope_id: 'envelope-1', envelope_revision: 4 }],
-    ])).toEqual(serverReviewRows)
-
-    await user.click(screen.getByRole('button', { name: 'Show evidence 1 for Authors' }))
-    expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
-      detail: {
-        command: expect.objectContaining({
-          anchorId: 'server-field-evidence',
-          searchText: 'Evidence for citation.authors',
-        }),
-      },
-    }))
-    unsubscribe()
+    await user.click(screen.getByRole('button', { name: 'Comfortable' }))
+    expect(screen.getByRole('status')).toHaveTextContent('Comfortable row density enabled')
   })
 
-  it('keeps successful field validation when the review-row refresh fails', async () => {
+  it('mirrors the prototype row Validate control and keeps its progress local', async () => {
     const user = userEvent.setup()
-    const serverCandidate = buildCandidate({
-      projection_ref: {
-        envelope_id: 'envelope-1',
-        object_id: 'object-1',
-        envelope_revision: 4,
-      },
-      validation_summary_projections: [resolvedSummary(4)],
-    })
-    serverCandidate.draft = {
-      ...serverCandidate.draft,
-      fields: serverCandidate.draft.fields.map((field) =>
-        field.field_key === 'authors'
-          ? { ...field, value: ['Server Author'], dirty: false, stale_validation: false }
-          : field,
-      ),
-    }
-    const serverWorkspace = {
-      ...buildWorkspace(serverCandidate),
-      validation_summary_projections: [resolvedSummary(4)],
-    }
-    const projectionError = new Error('review row refresh failed')
-    serviceMocks.validateCurationCandidate.mockResolvedValue(validationResponse(serverCandidate))
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(serverWorkspace)
-    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockRejectedValue(projectionError)
-    const { queryClient } = renderGrid({
-      model: (workspace) => buildModel({
-        authorsValidation: validationProjection(
-          workspace.validation_summary_projections ?? [],
-        ),
-      }),
-    })
+    const autosave = createAutosave()
+    renderGrid({ autosave, mode: 'light' })
 
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    expect(await screen.findByText('Server Author')).toBeInTheDocument()
-    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
-      'img',
-      { name: 'Resolved' },
-    )).toBeInTheDocument()
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(queryClient.getQueryState([
-      'curation-workspace-envelope-review-rows',
-      'session-1',
-      [{ envelope_id: 'envelope-1', envelope_revision: 4 }],
-    ])).toMatchObject({
-      error: projectionError,
-      status: 'error',
+    const validateRow = screen.getByRole('button', {
+      name: 'Validate all fields for Reference one',
     })
+    expect(screen.getByRole('columnheader', { name: 'Validate' })).toHaveAttribute(
+      'data-sticky',
+      'right',
+    )
+    expect(validateRow).toBeEnabled()
+    expect(validateRow).toHaveStyle({
+      borderRadius: '4px',
+      color: '#076b65',
+      fontSize: '9px',
+      height: '22px',
+      width: '58px',
+    })
+    expect(screen.getByLabelText(
+      '0 of 2 fields curator validated for Reference one',
+    )).toHaveTextContent('0/2')
+
+    await user.click(validateRow)
+
+    expect(screen.getByRole('button', {
+      name: 'All fields validated for Reference one',
+    })).toBeDisabled()
+    expect(screen.getByLabelText(
+      '2 of 2 fields curator validated for Reference one',
+    )).toHaveTextContent('2/2')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Reference one marked curator validated for this preview only. No validation was run or saved.',
+    )
+
+    await user.click(screen.getByRole('button', { name: /^Mark as not validated Authors:/ }))
+
+    expect(screen.getByRole('button', {
+      name: 'Validate all fields for Reference one',
+    })).toBeEnabled()
+    expect(screen.getByLabelText(
+      '1 of 2 fields curator validated for Reference one',
+    )).toHaveTextContent('1/2')
+    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
+    expect(autosave.queueFieldChange).not.toHaveBeenCalled()
+    expect(autosave.flush).not.toHaveBeenCalled()
   })
 
-  it('derives resolved status and validation messages only from authoritative projections', () => {
+  it('keeps resolved messages in details without showing a false error marker', async () => {
+    const user = userEvent.setup()
     const summary = {
       ...resolvedSummary(),
       messages: [
@@ -797,97 +798,298 @@ describe('InteractiveHorizontalCurationGrid', () => {
     renderGrid({ model: buildModel({ authorsValidation: validationProjection([summary]) }) })
 
     const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
-    expect(within(authorsCell).getByRole('img', { name: 'Resolved' })).toBeInTheDocument()
-    expect(within(authorsCell).getByText('Authors were validated by the server.')).toBeInTheDocument()
-    expect(within(authorsCell).getByText(
-      'A second authoritative validation detail.',
-    )).toBeInTheDocument()
-  })
-
-  it('surfaces a failed pre-validation save and does not call validation early', async () => {
-    const user = userEvent.setup()
-    const autosave = createAutosave({ flush: vi.fn().mockResolvedValue(false) })
-    renderGrid({ autosave })
-
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Unable to save pending field changes before validation.',
+    expect(authorsCell).toHaveAccessibleName(/Curator validated/)
+    expect(screen.queryByRole('img', {
+      name: /Authors were validated by the server/,
+    })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Mark as not validated Authors:/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
     )
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
+    const details = screen.getByRole('dialog', { name: /Authors:/ })
+    expect(details).toHaveTextContent('Authors were validated by the server.')
+    expect(details).toHaveTextContent('A second authoritative validation detail.')
+    expect(within(details).getByText('Resolution')).toBeInTheDocument()
+    expect(within(details).getByText(/^Authors resolved to /)).toBeInTheDocument()
+    expect(within(details).getByText('Validator context')).toBeInTheDocument()
+    expect(within(details).getByText('Current status')).toBeInTheDocument()
+    expect(within(details).getByText('Curator validated')).toBeInTheDocument()
     expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
   })
 
-  it('surfaces version conflicts returned while pending edits are flushed', async () => {
+  it('distinguishes a field-specific taxon result from shared gene-validator context', async () => {
     const user = userEvent.setup()
-    const autosave = createAutosave({
-      flush: vi.fn().mockRejectedValue(new Error('Draft version conflict. Refresh and retry.')),
+    const candidate = buildCandidate()
+    const taxonField = candidate.draft.fields[0]
+    taxonField.label = 'Taxon'
+    taxonField.value = 'NCBITaxon:7227'
+    taxonField.metadata = { source_field_path: 'taxon' }
+
+    const summary = {
+      ...resolvedSummary(),
+      field_path: 'taxon',
+      messages: [
+        'Resolved Example organism sample (sym) as ExampleDB gene MOD:GENE-123.',
+      ],
+    }
+    const model = buildModel({
+      authorsEvidence: [],
+      authorsValidation: validationProjection([summary]),
     })
-    renderGrid({ autosave })
+    const taxonColumn = model.columns[1]
+    taxonColumn.fieldPath = 'taxon'
+    taxonColumn.label = 'Taxon'
+    const taxonCell = model.rows[0].cells[0]
+    taxonCell.fieldPath = 'taxon'
+    taxonCell.value = 'NCBITaxon:7227'
+    taxonCell.extractorComparison = {
+      fieldKey: 'proposed_taxon',
+      fieldPath: 'proposed_taxon',
+      label: 'Proposed taxon',
+      value: 'NCBITaxon:7227',
+      outcome: 'confirmed',
+    }
 
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Taxon:/,
+    }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Draft version conflict. Refresh and retry.',
-    )
-    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
-  })
-
-  it('surfaces server validation errors without changing the projected field status', async () => {
-    const user = userEvent.setup()
-    const autosave = createAutosave()
-    serviceMocks.validateCurationCandidate.mockRejectedValue(
-      new Error('Server validation failed for Authors.'),
-    )
-    renderGrid({ autosave })
-
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Server validation failed for Authors.',
-    )
-    expect(within(screen.getByTestId('horizontal-grid-field-authors')).getByRole(
-      'img',
-      { name: 'AI unconfirmed' },
+    const details = screen.getByRole('dialog', { name: /Taxon:/ })
+    expect(within(details).getByText(
+      'Taxon resolved to NCBITaxon:7227.',
     )).toBeInTheDocument()
+    expect(within(details).getByText('Validator context')).toBeInTheDocument()
+    expect(within(details).getByLabelText('Extractor result confirmed')).toBeInTheDocument()
+    expect(within(details).getByText('Extractor result')).toBeInTheDocument()
+    expect(within(details).getByText('Validator result')).toBeInTheDocument()
+    expect(within(details).getByText('The validator confirmed the extractor result.')).toBeInTheDocument()
+    expect(within(details).getByText(
+      'Resolved Example organism sample (sym) as ExampleDB gene MOD:GENE-123.',
+    )).toBeInTheDocument()
+  })
 
-    await user.click(screen.getByRole('button', { name: 'Edit Authors' }))
-    fireEvent.change(screen.getByLabelText('Authors'), {
-      target: { value: 'Ada Lovelace\nKatherine Johnson' },
+  it('flags extractor and validator disagreement for curator review without a proposal column', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'abc'
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'abc'
+    symbolCell.state = 'needs-review'
+    symbolCell.extractorComparison = {
+      fieldKey: 'proposed_symbol',
+      fieldPath: 'proposed_symbol',
+      label: 'Proposed symbol',
+      value: 'abcd',
+      outcome: 'different',
+    }
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    expect(model.columns.map((column) => column.fieldPath)).not.toContain('proposed_symbol')
+    expect(screen.getByRole('img', {
+      name: /Extractor proposed abcd; validator resolved abc\. Curator review is needed/,
+    })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol:/,
+    }))
+
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    const comparison = within(details).getByTestId('horizontal-grid-extractor-comparison')
+    expect(within(comparison).getByText(
+      'Extractor and validator differ — curator review needed',
+    )).toBeInTheDocument()
+    expect(within(comparison).getByText('abcd')).toBeInTheDocument()
+    expect(within(comparison).getByText('abc')).toBeInTheDocument()
+    expect(within(details).getByLabelText('Current status: Needs review')).toBeInTheDocument()
+  })
+
+  it('labels an extractor fallback without attributing an unvalidated draft value to the validator', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'draft-seed'
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'extracted-symbol'
+    symbolCell.valueSource = 'extractor'
+    symbolCell.state = 'needs-review'
+    symbolCell.extractorComparison = {
+      fieldKey: 'proposed_symbol',
+      fieldPath: 'proposed_symbol',
+      label: 'Proposed symbol',
+      value: 'extracted-symbol',
+      outcome: 'unresolved',
+    }
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    expect(screen.getByText('extracted-symbol · Extractor value')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol:/,
+    }))
+
+    const comparison = screen.getByTestId('horizontal-grid-extractor-comparison')
+    expect(within(comparison).getByText('Not resolved')).toBeInTheDocument()
+    expect(within(comparison).queryByText('draft-seed')).not.toBeInTheDocument()
+  })
+
+  it('attributes a waived comparison to curator override rather than validator resolution', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'curator-symbol'
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const waivedSummary = {
+      ...resolvedSummary(),
+      field_path: 'symbol',
+      status: 'waived' as const,
+      messages: ['Accepted by curator override.'],
+    }
+    const model = buildModel({
+      authorsEvidence: [],
+      authorsValidation: validationProjection([waivedSummary]),
     })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'curator-symbol'
+    symbolCell.state = 'resolved'
+    symbolCell.extractorComparison = {
+      fieldKey: 'proposed_symbol',
+      fieldPath: 'proposed_symbol',
+      label: 'Proposed symbol',
+      value: 'extracted-symbol',
+      outcome: 'overridden',
+    }
 
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(autosave.queueFieldChange).toHaveBeenCalledWith({
-      field_key: 'authors',
-      value: ['Ada Lovelace', 'Katherine Johnson'],
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol:/,
+    }))
+
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    const comparison = within(details).getByTestId('horizontal-grid-extractor-comparison')
+    expect(within(comparison).getAllByText('Curator override')).toHaveLength(2)
+    expect(within(comparison).getByText('extracted-symbol')).toBeInTheDocument()
+    expect(within(comparison).getByText('curator-symbol')).toBeInTheDocument()
+    expect(within(comparison).getByText(
+      'The canonical value was accepted by curator override; it was not resolved by the validator.',
+    )).toBeInTheDocument()
+    expect(within(details).queryByText('Symbol resolved to curator-symbol.')).not.toBeInTheDocument()
+  })
+
+  it('does not attribute a stale resolved projection to the validator', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'edited-symbol'
+    symbolField.stale_validation = true
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const resolved = {
+      ...resolvedSummary(),
+      field_path: 'symbol',
+    }
+    const model = buildModel({
+      authorsEvidence: [],
+      authorsValidation: validationProjection([resolved]),
+    })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'extracted-symbol'
+    symbolCell.valueSource = 'extractor'
+    symbolCell.staleValidation = true
+    symbolCell.state = 'ai-unconfirmed'
+    symbolCell.extractorComparison = {
+      fieldKey: 'proposed_symbol',
+      fieldPath: 'proposed_symbol',
+      label: 'Proposed symbol',
+      value: 'extracted-symbol',
+      outcome: 'unresolved',
+    }
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol:/,
+    }))
+
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    expect(within(details).getByLabelText('Canonical value not resolved')).toBeInTheDocument()
+    expect(within(details).queryByText('Symbol resolved to edited-symbol.')).not.toBeInTheDocument()
+    expect(within(details).getByText('Not resolved')).toBeInTheDocument()
+  })
+
+  it('shows validation-only details and reserves warning/error symbols for field state', async () => {
+    const user = userEvent.setup()
+    const model = buildModel({ authorsEvidence: [] })
+    model.rows[0].cells[0].state = 'needs-review'
+    renderGrid({ mode: 'light', model })
+
+    expect(screen.getByRole('img', { name: 'Needs review' })).toHaveTextContent('!')
+    expect(screen.getByRole('img', { name: 'Not validated' })).toHaveTextContent('×')
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Authors:/,
+    }))
+    const details = screen.getByRole('dialog', { name: /Authors:/ })
+    expect(within(details).getByText('Field-specific evidence')).toBeInTheDocument()
+    expect(within(details).getByText(
+      'No field-specific evidence was recorded for this field.',
+    )).toBeInTheDocument()
+    expect(within(details).getByLabelText('Current status: Needs review')).toBeInTheDocument()
+    expect(within(details).getByTestId('horizontal-grid-current-status')).toHaveStyle({
+      color: '#8a5b0d',
     })
   })
 
-  it('surfaces a failed authoritative validation snapshot after merging the candidate', async () => {
+  it('summarizes displayed preview states and restores focus when the drawer closes', async () => {
     const user = userEvent.setup()
-    const serverCandidate = buildCandidate()
-    serverCandidate.draft = {
-      ...serverCandidate.draft,
-      fields: serverCandidate.draft.fields.map((field) =>
-        field.field_key === 'authors'
-          ? { ...field, value: ['Author from failed validation'] }
-          : field,
-      ),
-    }
-    const response = validationResponse(serverCandidate)
-    response.validation_snapshot = {
-      ...response.validation_snapshot,
-      state: 'failed',
-      warnings: ['The configured Authors validator is unavailable.'],
-    }
-    serviceMocks.validateCurationCandidate.mockResolvedValue(response)
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace(serverCandidate))
-    renderGrid()
+    renderGrid({
+      model: buildModel({
+        authorsValidation: validationProjection([resolvedSummary()]),
+      }),
+    })
 
-    await user.click(screen.getByRole('button', { name: 'Validate Authors' }))
+    const summaryTrigger = screen.getByRole('button', { name: /Validation summary/ })
+    await user.click(summaryTrigger)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'The configured Authors validator is unavailable.',
-    )
-    expect(screen.getByText('Author from failed validation')).toBeInTheDocument()
+    const summary = screen.getByRole('dialog', { name: /1 record · 2 curated fields/ })
+    expect(within(summary).getByText('Curator validated').nextSibling).toHaveTextContent('1')
+    expect(within(summary).getByText('Needs review').nextSibling).toHaveTextContent('0')
+    expect(within(summary).getByText('Not validated').nextSibling).toHaveTextContent('1')
+    expect(within(summary).getByText(/Preview only/)).toBeInTheDocument()
+    expect(within(summary).getByRole('button', { name: 'Close validation summary' })).toHaveFocus()
+
+    await user.click(screen.getByRole('button', { name: /^Validate Locked identifier:/ }))
+    expect(within(summary).getByText('Curator validated').nextSibling).toHaveTextContent('2')
+    expect(within(summary).getByText('Not validated').nextSibling).toHaveTextContent('0')
+
+    await user.keyboard('{Escape}')
+    expect(summary).toHaveAttribute('aria-hidden', 'true')
+    expect(summaryTrigger).toHaveFocus()
+    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
   })
 })

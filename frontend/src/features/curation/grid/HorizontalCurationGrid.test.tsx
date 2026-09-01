@@ -4,7 +4,8 @@ import { ThemeProvider } from '@mui/material/styles'
 import type { ComponentProps } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import theme from '@/theme'
+import theme, { createAppTheme } from '@/theme'
+import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import HorizontalCurationGrid from './HorizontalCurationGrid'
 import {
   HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
@@ -77,6 +78,7 @@ function fieldCell(
   fieldPath: string,
   value: unknown,
   hasField = true,
+  state: FieldStateKind = 'ai-unconfirmed',
 ): HorizontalGridFieldCell {
   return {
     columnKey,
@@ -87,9 +89,12 @@ function fieldCell(
     required: hasField ? false : null,
     readOnly: hasField ? false : null,
     staleValidation: hasField ? false : null,
+    state: hasField ? state : null,
     fieldValidation: null,
     evidence: [],
     validation: emptyValidation,
+    extractorComparison: null,
+    valueSource: 'canonical',
   }
 }
 
@@ -157,10 +162,86 @@ afterEach(() => {
 })
 
 describe('HorizontalCurationGrid', () => {
+  it('ports the prototype compact state surfaces and anchored action layout in light mode', () => {
+    const lightModel = model([
+      {
+        ...row(),
+        cells: [
+          fieldCell('field:alpha', 'alpha', 'Alpha value', true, 'needs-review'),
+          fieldCell('field:beta', 'beta', 'Beta value', true, 'ai-unconfirmed'),
+          fieldCell('field:gamma', 'gamma', 'Gamma value', true, 'resolved'),
+        ],
+      },
+      {
+        ...row('candidate-2'),
+        cells: [
+          fieldCell('field:alpha', 'alpha', 'Alpha value two', true, 'resolved'),
+          fieldCell('field:beta', 'beta', 'Beta value two', true, 'resolved'),
+          fieldCell('field:gamma', 'gamma', 'Gamma value two', true, 'resolved'),
+        ],
+      },
+    ])
+
+    render(
+      <ThemeProvider theme={createAppTheme('light')}>
+        <HorizontalCurationGrid
+          model={lightModel}
+          renderCellActions={() => <button type="button">Cell action</button>}
+        />
+      </ThemeProvider>,
+    )
+
+    expect(document.querySelector('[data-field-state="needs-review"]')).toHaveStyle({
+      backgroundColor: '#fffaf0',
+      minHeight: '68px',
+      padding: '6px 8px 30px 9px',
+    })
+    expect(document.querySelector('[data-field-state="ai-unconfirmed"]')).toHaveStyle({
+      backgroundColor: '#fbe5e0',
+    })
+    const resolvedCells = document.querySelectorAll('[data-field-state="resolved"]')
+    expect(getComputedStyle(resolvedCells[0]!).backgroundColor).toBe('rgba(0, 0, 0, 0)')
+    expect(resolvedCells[0]?.closest('td')).toHaveStyle({ backgroundColor: '#ffffff' })
+    expect(resolvedCells[1]?.closest('td')).toHaveStyle({ backgroundColor: '#fdfdfc' })
+    expect(document.querySelector('[data-slot="cell-actions"]')).toHaveStyle({
+      bottom: '4px',
+      left: '7px',
+      position: 'absolute',
+    })
+    expect(screen.getByRole('button', { name: 'Compact' })).toHaveStyle({
+      backgroundColor: '#0b2f55',
+      color: '#ffffff',
+    })
+    expect(screen.getByRole('button', { name: 'Object is always pinned' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+  })
+
+  it('preserves alternating row depth beneath resolved cells in dark mode', () => {
+    const resolvedModel = model([
+      { ...row(), cells: row().cells.map((cell) => ({ ...cell, state: 'resolved' })) },
+      {
+        ...row('candidate-2'),
+        cells: row('candidate-2').cells.map((cell) => ({
+          ...cell,
+          state: cell.hasField ? 'resolved' : null,
+        })),
+      },
+    ])
+
+    renderGrid(resolvedModel)
+    const resolvedCells = document.querySelectorAll('[data-field-state="resolved"]')
+    const firstRowSurface = getComputedStyle(resolvedCells[0]!.closest('td')!).backgroundColor
+    const secondRowSurface = getComputedStyle(resolvedCells[3]!.closest('td')!).backgroundColor
+    expect(firstRowSurface).not.toBe(secondRowSurface)
+  })
+
   it('renders native table semantics, sticky edge columns, overflow access, and action slots', () => {
     renderGrid(model(), {
       renderCellActions: ({ column }) => <button type="button">Inspect {column.label}</button>,
       renderRowActions: (gridRow) => <button type="button">Review {gridRow.candidateId}</button>,
+      selectedCandidateId: 'candidate-1',
     })
 
     expect(screen.getByRole('table', { name: 'Curation records arranged by field' })).toBeInTheDocument()
@@ -180,8 +261,16 @@ describe('HorizontalCurationGrid', () => {
     })
     expect(screen.getByRole('button', { name: 'Inspect Alpha' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Review candidate-1' })).toBeInTheDocument()
+    expect(screen.getByTestId('horizontal-grid-selected-record')).toHaveTextContent('Object one selected')
+    expect(screen.getByText('Pin headers')).toBeInTheDocument()
+    expect(screen.getByText('Evidence')).toBeInTheDocument()
+    expect(screen.getByText('Validate')).toBeInTheDocument()
+    expect(screen.getByText('Edit')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Validation summary/ })).toBeInTheDocument()
 
-    const dataRow = within(screen.getAllByRole('row')[1])
+    const dataRowElement = screen.getAllByRole('row')[1]
+    const dataRow = within(dataRowElement)
+    expect(dataRowElement).toHaveAttribute('data-selected', 'true')
     const dataCells = dataRow.getAllByRole('cell')
     expect(dataRow.getByRole('rowheader')).toHaveAttribute('data-sticky', 'left')
     expect(dataCells.at(-1)).toHaveAttribute('data-sticky', 'right')

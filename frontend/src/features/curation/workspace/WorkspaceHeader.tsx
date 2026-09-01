@@ -61,24 +61,30 @@ export default function WorkspaceHeader({
 
   return (
     <Box
+      data-testid="workspace-header"
       sx={(theme) => ({
         display: 'flex',
-        flexDirection: { xs: 'column', xl: 'row' },
-        alignItems: { xs: 'stretch', xl: 'center' },
-        gap: { xs: 1, xl: 1.5 },
-        px: { xs: 1.25, md: 1.5 },
-        py: 1,
-        borderRadius: theme.shape.borderRadius,
-        border: `1px solid ${alpha(theme.palette.primary.light, 0.18)}`,
-        background:
-          `linear-gradient(180deg, ${alpha(theme.palette.common.white, 0.035)}, ${alpha(theme.palette.common.white, 0.01)}), #071524`,
-        boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.05)}, 0 18px 42px ${alpha(theme.palette.common.black, 0.22)}`,
+        containerType: 'inline-size',
+        // The workspace lives beside the PDF pane, so viewport breakpoints do
+        // not describe its available width. Keep navigation on a second row to
+        // prevent the title and status metadata from colliding in split view.
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 1,
+        px: { xs: 1.5, md: 2 },
+        py: { xs: 1.25, md: 1.5 },
+        borderRadius: `${theme.shape.borderRadius}px ${theme.shape.borderRadius}px 0 0`,
+        border: `1px solid ${theme.palette.divider}`,
+        backgroundColor: theme.palette.background.paper,
+        boxShadow: `0 1px 2px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.26 : 0.08)}`,
       })}
     >
       <Stack
         direction="row"
         alignItems="center"
+        flexWrap="wrap"
         spacing={1.25}
+        useFlexGap
         sx={{ flex: '1 1 auto', minWidth: 0 }}
       >
         <Button
@@ -87,7 +93,9 @@ export default function WorkspaceHeader({
           size="small"
           startIcon={<ArrowBackRoundedIcon sx={{ fontSize: '1rem' }} />}
           sx={(theme) => ({
-            color: theme.palette.primary.light,
+            color: theme.palette.mode === 'dark'
+              ? theme.palette.primary.light
+              : theme.palette.primary.main,
             flexShrink: 0,
             fontSize: '0.78rem',
             fontWeight: 500,
@@ -104,71 +112,51 @@ export default function WorkspaceHeader({
           Back
         </Button>
 
-        <Box
-          sx={(theme) => ({
-            alignItems: 'center',
-            borderLeft: `1px solid ${alpha(theme.palette.common.white, 0.1)}`,
-            display: { xs: 'none', sm: 'flex' },
-            flexShrink: 0,
-            height: 28,
-            pl: 1.25,
-          })}
-        >
-          <DescriptionOutlinedIcon sx={{ color: 'text.secondary', fontSize: 22 }} />
-        </Box>
+        <DescriptionOutlinedIcon
+          sx={{ color: 'text.secondary', display: { xs: 'none', sm: 'block' }, fontSize: 24 }}
+        />
 
-        <Typography
-          variant="subtitle2"
-          sx={{
-            flexShrink: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontWeight: 600,
-            letterSpacing: -0.1,
-          }}
-          title={getDocumentMetaLabel(session)}
-        >
-          {session.document.title}
-        </Typography>
-
-        <Typography
-          color="text.secondary"
-          variant="caption"
-          sx={{
-            flexShrink: 0,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            display: { xs: 'none', lg: 'block' },
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-            maxWidth: 210,
-          }}
-          title={session.session_id}
-        >
-          {compactSessionId(session.session_id)}
-        </Typography>
-
-        <Typography
-          color="text.secondary"
-          variant="caption"
-          sx={{
-            flexShrink: 2,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            display: { xs: 'none', lg: 'block' },
-          }}
-        >
-          {getDocumentMetaLabel(session)}
-        </Typography>
+        <Stack minWidth={0} spacing={0.25} sx={{ flex: '1 1 18rem' }}>
+          <Typography
+            color="text.secondary"
+            sx={{ fontSize: '0.66rem', fontWeight: 750, letterSpacing: '0.09em', textTransform: 'uppercase' }}
+          >
+            Curation workspace / {getAdapterLabel(session.adapter)}
+          </Typography>
+          <Stack alignItems="center" direction="row" spacing={1}>
+            <Typography
+              component="h1"
+              sx={{ fontSize: { xs: '1rem', md: '1.25rem' }, fontWeight: 700, letterSpacing: '-0.02em' }}
+              variant="h6"
+            >
+              {getAdapterLabel(session.adapter)} review
+            </Typography>
+            <Chip
+              label={`${session.progress.total_candidates} ${session.progress.total_candidates === 1 ? 'record' : 'records'}`}
+              size="small"
+              sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { px: 0.8, fontSize: '0.66rem', fontWeight: 700 } }}
+            />
+          </Stack>
+          <Typography color="text.secondary" noWrap title={session.document.title} variant="caption">
+            {session.document.title} · {getDocumentMetaLabel(session)}
+          </Typography>
+        </Stack>
 
         <Box sx={{ flexGrow: 1 }} />
 
-        <Stack direction="row" flexShrink={0} spacing={0.75} useFlexGap>
+        <Stack
+          direction="row"
+          flexShrink={0}
+          flexWrap="wrap"
+          spacing={0.75}
+          useFlexGap
+          sx={{
+            '@container (max-width: 700px)': {
+              flexBasis: '100%',
+              pl: '44px',
+            },
+          }}
+        >
           <Chip
             color={adapterChipColor}
             label={getAdapterLabel(session.adapter)}
@@ -191,12 +179,24 @@ export default function WorkspaceHeader({
             sx={{ borderRadius: 1, height: 26, '& .MuiChip-label': { px: 0.9, fontSize: '0.72rem', fontWeight: 600 } }}
           />
         </Stack>
+        <Typography
+          color="text.secondary"
+          sx={{
+            display: 'block',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            '@container (max-width: 900px)': { display: 'none' },
+          }}
+          title={session.session_id}
+          variant="caption"
+        >
+          {compactSessionId(session.session_id)}
+        </Typography>
       </Stack>
 
       {navigationSlot ? (
         <Stack
           direction="row"
-          justifyContent={{ xs: 'flex-start', xl: 'flex-end' }}
+          justifyContent="flex-end"
           data-testid="workspace-header-navigation-slot"
           sx={{ flex: '0 0 auto' }}
         >

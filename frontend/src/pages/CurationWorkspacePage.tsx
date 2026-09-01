@@ -22,9 +22,7 @@ import { usePersistentPdfWorkspaceLayout } from '@/components/pdfViewer/Persiste
 import { buildManualCandidateDraft } from '@/features/curation/entityTags/workspaceEntityTags'
 import {
   buildHorizontalGridModel,
-  HorizontalGridRowActions,
   InteractiveHorizontalCurationGrid,
-  type HorizontalGridRow,
 } from '@/features/curation/grid'
 import {
   readCurationQueueNavigationState,
@@ -35,9 +33,6 @@ import {
   executeCurationSubmission,
   fetchCurationWorkspace,
   submitCurationCandidateDecision,
-  validateAllCurationSessionCandidates,
-  validateCurationCandidate,
-  waiveCurationValidationFinding,
 } from '@/features/curation/services/curationWorkspaceService'
 import AddManualObjectDialog, {
   type ManualObjectDraft,
@@ -217,10 +212,7 @@ function CurationWorkspacePageContent({
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
   const [submissionWipDialogOpen, setSubmissionWipDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
-  const [validatingAll, setValidatingAll] = useState(false)
-  const [validatingCandidateIds, setValidatingCandidateIds] = useState<Set<string>>(new Set())
   const [decidingCandidateIds, setDecidingCandidateIds] = useState<Set<string>>(new Set())
-  const [waivingFindingId, setWaivingFindingId] = useState<string | null>(null)
   const envelopeRowsQueryOptions = useMemo(
     () => curationWorkspaceEnvelopeReviewRowsQueryOptions(workspace),
     [workspace],
@@ -303,6 +295,10 @@ function CurationWorkspacePageContent({
       validated: 0,
     },
   ), [candidates, horizontalGridModel.rows])
+  const selectedCandidate = useMemo(
+    () => findCandidate(candidates, activeCandidateId),
+    [activeCandidateId, candidates],
+  )
   const envelopeReviewRowsError = queryErrorMessage(envelopeRowsQuery.error)
 
   const handleSubmitPreview = useCallback(async (
@@ -376,7 +372,7 @@ function CurationWorkspacePageContent({
   }, [queryClient, setWorkspace, workspace.session.session_id])
 
   const setCandidateBusy = useCallback((
-    setter: typeof setValidatingCandidateIds,
+    setter: typeof setDecidingCandidateIds,
     candidateId: string,
     busy: boolean,
   ) => {
@@ -390,86 +386,6 @@ function CurationWorkspacePageContent({
       return next
     })
   }, [])
-
-  const handleValidateTag = useCallback(async (tagId: string) => {
-    setTableError(null)
-    setCandidateBusy(setValidatingCandidateIds, tagId, true)
-
-    try {
-      const draftSaved = await autosave.flush()
-      if (!draftSaved) {
-        throw new Error('Unable to save the current draft before validating this entity.')
-      }
-
-      const response = await validateCurationCandidate({
-        session_id: workspace.session.session_id,
-        candidate_id: tagId,
-      })
-      await refreshWorkspace(activeCandidateId)
-      if (response.validation_snapshot.state === 'failed') {
-        throw new Error(
-          response.validation_snapshot.warnings[0] ?? 'The server could not validate this entity.',
-        )
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to validate this entity.'
-      setTableError(message)
-    } finally {
-      setCandidateBusy(setValidatingCandidateIds, tagId, false)
-    }
-  }, [activeCandidateId, autosave, refreshWorkspace, setCandidateBusy, workspace.session.session_id])
-
-  const handleValidateAll = useCallback(async () => {
-    setTableError(null)
-    setValidatingAll(true)
-
-    try {
-      const draftSaved = await autosave.flush()
-      if (!draftSaved) {
-        throw new Error('Unable to save the current draft before validating all entities.')
-      }
-
-      const response = await validateAllCurationSessionCandidates({
-        session_id: workspace.session.session_id,
-      })
-      await refreshWorkspace(activeCandidateId)
-      if (response.session_validation.state === 'failed') {
-        throw new Error(
-          response.session_validation.warnings[0]
-            ?? 'The server could not validate all entities.',
-        )
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to validate all entities.'
-      setTableError(message)
-    } finally {
-      setValidatingAll(false)
-    }
-  }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
-
-  const handleWaiveEnvelopeFinding = useCallback(async (
-    envelopeId: string,
-    envelopeRevision: number,
-    findingId: string,
-  ) => {
-    setTableError(null)
-    setWaivingFindingId(findingId)
-    try {
-      await waiveCurationValidationFinding({
-        session_id: workspace.session.session_id,
-        envelope_id: envelopeId,
-        expected_revision: envelopeRevision,
-        finding_id: findingId,
-      })
-      await refreshWorkspace(activeCandidateId)
-    } catch (error) {
-      setTableError(
-        error instanceof Error ? error.message : 'Unable to waive this validation finding.',
-      )
-    } finally {
-      setWaivingFindingId(null)
-    }
-  }, [activeCandidateId, refreshWorkspace, workspace.session.session_id])
 
   const handleAcceptTag = useCallback(async (tagId: string) => {
     setTableError(null)
@@ -622,31 +538,6 @@ function CurationWorkspacePageContent({
     }
   }, [handleCreateManualTag])
 
-  const renderRowActions = useCallback((row: HorizontalGridRow) => {
-    const candidate = candidates.find((item) => item.candidate_id === row.candidateId)
-    if (!candidate) {
-      throw new Error(`Horizontal grid row references missing candidate '${row.candidateId}'`)
-    }
-
-    return (
-      <HorizontalGridRowActions
-        candidate={candidate}
-        isDeciding={decidingCandidateIds.has(candidate.candidate_id)}
-        isValidating={validatingCandidateIds.has(candidate.candidate_id)}
-        onAccept={() => void handleAcceptTag(candidate.candidate_id)}
-        onReject={() => void handleRejectTag(candidate.candidate_id)}
-        onValidate={() => void handleValidateTag(candidate.candidate_id)}
-      />
-    )
-  }, [
-    candidates,
-    decidingCandidateIds,
-    handleAcceptTag,
-    handleRejectTag,
-    handleValidateTag,
-    validatingCandidateIds,
-  ])
-
   return (
     <Box
       sx={{
@@ -680,34 +571,56 @@ function CurationWorkspacePageContent({
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                <WorkspaceSessionNavigation
-                  currentSessionId={workspace.session.session_id}
-                  queueContext={queueNavigationState?.queueContext}
-                  queueRequest={queueNavigationState?.queueRequest}
+              <Stack spacing={1} width="100%">
+                <WorkPaneToolbar
+                  isPdfVisible={isPdfVisible}
+                  selectedDecision={selectedCandidate ? {
+                    label: selectedCandidate.display_label ?? selectedCandidate.candidate_id,
+                    status: selectedCandidate.status,
+                    canAccept: isValidatedPendingCandidate(selectedCandidate),
+                    isBusy: decidingCandidateIds.has(selectedCandidate.candidate_id),
+                    onAccept: () => void handleAcceptTag(selectedCandidate.candidate_id),
+                    onReject: () => void handleRejectTag(selectedCandidate.candidate_id),
+                  } : null}
+                  totalCount={candidates.length}
+                  pendingCount={pendingCandidateCount}
+                  validationCounts={validationCounts}
+                  validatedPendingCount={validatedPendingCount}
+                  onAcceptAllValidated={() => {
+                    void handleAcceptAllValidated(validatedPendingCandidateIds)
+                  }}
+                  onAddObject={() => setManualObjectDialogOpen(true)}
+                  onTogglePdf={isPdfVisible ? focusGrid : showPdf}
                 />
-                <Button
-                  onClick={() => {
-                    if (SUBMISSION_PREVIEW_ENABLED) {
-                      setSubmissionDialogOpen(true)
-                      return
-                    }
-                    setSubmissionWipDialogOpen(true)
-                  }}
-                  size="small"
-                  variant="contained"
-                  sx={{
-                    borderRadius: 1,
-                    fontSize: '0.75rem',
-                    fontWeight: 500,
-                    letterSpacing: 0,
-                    minHeight: 32,
-                    py: 0.5,
-                    textTransform: 'none',
-                  }}
-                >
-                  Preview submission
-                </Button>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end" useFlexGap>
+                  <WorkspaceSessionNavigation
+                    currentSessionId={workspace.session.session_id}
+                    queueContext={queueNavigationState?.queueContext}
+                    queueRequest={queueNavigationState?.queueRequest}
+                  />
+                  <Button
+                    onClick={() => {
+                      if (SUBMISSION_PREVIEW_ENABLED) {
+                        setSubmissionDialogOpen(true)
+                        return
+                      }
+                      setSubmissionWipDialogOpen(true)
+                    }}
+                    size="small"
+                    variant="contained"
+                    sx={{
+                      borderRadius: 1,
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      letterSpacing: 0,
+                      minHeight: 32,
+                      py: 0.5,
+                      textTransform: 'none',
+                    }}
+                  >
+                    Preview submission
+                  </Button>
+                </Stack>
               </Stack>
             )}
             session={workspace.session}
@@ -715,20 +628,6 @@ function CurationWorkspacePageContent({
         )}
         workPaneSlot={(
           <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
-            <WorkPaneToolbar
-              isPdfVisible={isPdfVisible}
-              isValidatingAll={validatingAll}
-              totalCount={candidates.length}
-              pendingCount={pendingCandidateCount}
-              validationCounts={validationCounts}
-              validatedPendingCount={validatedPendingCount}
-              onAcceptAllValidated={() => {
-                void handleAcceptAllValidated(validatedPendingCandidateIds)
-              }}
-              onAddObject={() => setManualObjectDialogOpen(true)}
-              onTogglePdf={isPdfVisible ? focusGrid : showPdf}
-              onValidateAll={() => void handleValidateAll()}
-            />
             {activeEnvelopeValidationSummaries
               .filter((summary) => summary.findings.some(envelopeFindingRequiresAttention))
               .map((summary) => (
@@ -739,39 +638,12 @@ function CurationWorkspacePageContent({
                 >
                   <strong>Envelope-level validation:</strong>{' '}
                   {summary.messages.join(' ')} All objects from this envelope are affected.
-                  <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-                    {summary.findings
-                      .filter(envelopeFindingRequiresAttention)
-                      .map((finding) => (
-                        findingAllowsCuratorOverride(finding) ? (
-                          <Button
-                            disabled={waivingFindingId !== null}
-                            key={finding.finding_id}
-                            onClick={() => void handleWaiveEnvelopeFinding(
-                              summary.envelope_id,
-                              summary.envelope_revision,
-                              finding.finding_id,
-                            )}
-                            size="small"
-                            variant="outlined"
-                          >
-                            {waivingFindingId === finding.finding_id
-                              ? 'Waiving…'
-                              : 'Waive finding'}
-                          </Button>
-                        ) : (
-                          <Typography key={finding.finding_id} variant="caption">
-                            Rerun validation or correct the underlying problem.
-                          </Typography>
-                        )
-                      ))}
-                  </Stack>
+                  <Typography display="block" sx={{ mt: 0.75 }} variant="caption">
+                    Validation details are read-only in this preview.
+                  </Typography>
                 </Alert>
               ))}
-            <InteractiveHorizontalCurationGrid
-              model={horizontalGridModel}
-              renderRowActions={renderRowActions}
-            />
+            <InteractiveHorizontalCurationGrid model={horizontalGridModel} />
           </Box>
         )}
       />
@@ -798,7 +670,7 @@ function CurationWorkspacePageContent({
         <DialogContent dividers>
           <Typography color="text.secondary" variant="body2">
             Submission preview and submission actions are a work in progress and are disabled
-            at the moment. Curators can continue reviewing and validating objects here; the
+            at the moment. Curators can continue reviewing and editing objects here; the
             submission workflow will be re-enabled when it is ready.
           </Typography>
         </DialogContent>

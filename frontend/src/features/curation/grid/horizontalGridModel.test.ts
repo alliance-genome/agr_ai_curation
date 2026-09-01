@@ -22,6 +22,9 @@ function draftField({
   value = null,
   required = false,
   readOnly = false,
+  renderAs,
+  groupKey = 'details',
+  groupLabel = 'Details',
 }: {
   fieldKey: string
   fieldPath?: string
@@ -30,6 +33,9 @@ function draftField({
   value?: unknown
   required?: boolean
   readOnly?: boolean
+  renderAs?: string
+  groupKey?: string
+  groupLabel?: string
 }): CurationDraftField {
   return {
     field_key: fieldKey,
@@ -37,8 +43,8 @@ function draftField({
     value,
     seed_value: value,
     field_type: 'string',
-    group_key: 'details',
-    group_label: 'Details',
+    group_key: groupKey,
+    group_label: groupLabel,
     order,
     required,
     read_only: readOnly,
@@ -46,7 +52,10 @@ function draftField({
     stale_validation: false,
     evidence_anchor_ids: [],
     validation_result: null,
-    metadata: { source_field_path: fieldPath },
+    metadata: {
+      source_field_path: fieldPath,
+      ...(renderAs ? { field_metadata: { render_as: renderAs } } : {}),
+    },
   }
 }
 
@@ -228,6 +237,318 @@ function validationProjection({
 }
 
 describe('buildHorizontalGridModel', () => {
+  it('keeps gene supporting envelope context out of the curator decision grid', () => {
+    const geneCandidate = candidate({
+      id: 'candidate-gene',
+      objectId: 'object-gene',
+      order: 0,
+      adapterKey: 'gene',
+      fields: [
+        draftField({
+          fieldKey: 'gene-symbol',
+          fieldPath: 'gene_symbol',
+          label: 'Gene symbol',
+          order: 0,
+          value: 'abc',
+          groupKey: 'identity',
+          groupLabel: 'Gene identity',
+        }),
+        draftField({
+          fieldKey: 'species',
+          label: 'Species',
+          order: 1,
+          value: 'Example organism',
+          readOnly: true,
+          groupKey: 'identity',
+          groupLabel: 'Gene identity',
+        }),
+        draftField({
+          fieldKey: 'proposed-symbol',
+          fieldPath: 'proposed_gene_symbol',
+          label: 'Proposed gene symbol',
+          order: 2,
+          value: 'abc',
+          readOnly: true,
+          renderAs: 'divergence',
+          groupKey: 'ai_proposal',
+          groupLabel: 'AI proposal',
+        }),
+        draftField({
+          fieldKey: 'section',
+          label: 'Section',
+          order: 3,
+          value: 'Results',
+          readOnly: true,
+          groupKey: 'evidence_location',
+          groupLabel: 'Evidence location',
+        }),
+        draftField({
+          fieldKey: 'confidence',
+          label: 'Confidence',
+          order: 4,
+          value: 'high',
+          readOnly: true,
+          groupKey: 'provenance',
+          groupLabel: 'Provenance & notes',
+        }),
+      ],
+    })
+    geneCandidate.metadata = {
+      ...geneCandidate.metadata,
+      domain_pack_id: 'gene',
+      object_type: 'gene_mention_evidence',
+    }
+
+    const model = modelForRows([workspaceRow({ candidate: geneCandidate })])
+
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([
+      null,
+      'gene_symbol',
+      'species',
+    ])
+    expect(model.rows[0]!.cells[0]).toMatchObject({
+      extractorComparison: { outcome: 'unresolved', value: 'abc' },
+      value: 'abc',
+      valueSource: 'extractor',
+    })
+  })
+
+  it('projects extractor proposals into their canonical field instead of peer columns', () => {
+    const confirmedCandidate = candidate({
+      id: 'candidate-confirmed',
+      objectId: 'object-confirmed',
+      order: 0,
+      fields: [
+        draftField({
+          fieldKey: 'canonical-symbol',
+          fieldPath: 'symbol',
+          label: 'Symbol',
+          order: 0,
+          value: 'abc',
+        }),
+        draftField({
+          fieldKey: 'extractor-symbol',
+          fieldPath: 'proposed_symbol',
+          label: 'Proposed symbol',
+          order: 1,
+          value: 'abc',
+          readOnly: true,
+          renderAs: 'divergence',
+        }),
+      ],
+    })
+    const differentCandidate = candidate({
+      id: 'candidate-different',
+      objectId: 'object-different',
+      order: 1,
+      fields: [
+        draftField({
+          fieldKey: 'canonical-symbol',
+          fieldPath: 'symbol',
+          label: 'Symbol',
+          order: 0,
+          value: 'abc',
+        }),
+        draftField({
+          fieldKey: 'extractor-symbol',
+          fieldPath: 'proposed_symbol',
+          label: 'Proposed symbol',
+          order: 1,
+          value: 'abcd',
+          readOnly: true,
+          renderAs: 'divergence',
+        }),
+      ],
+    })
+    const unresolvedCandidate = candidate({
+      id: 'candidate-unresolved',
+      objectId: 'object-unresolved',
+      order: 2,
+      fields: [
+        draftField({
+          fieldKey: 'canonical-symbol',
+          fieldPath: 'symbol',
+          label: 'Symbol',
+          order: 0,
+          value: null,
+        }),
+        draftField({
+          fieldKey: 'extractor-symbol',
+          fieldPath: 'proposed_symbol',
+          label: 'Proposed symbol',
+          order: 1,
+          value: 'abcd',
+          readOnly: true,
+          renderAs: 'divergence',
+        }),
+      ],
+    })
+    const overriddenCandidate = candidate({
+      id: 'candidate-overridden',
+      objectId: 'object-overridden',
+      order: 3,
+      fields: [
+        draftField({
+          fieldKey: 'canonical-symbol',
+          fieldPath: 'symbol',
+          label: 'Symbol',
+          order: 0,
+          value: 'curator-symbol',
+        }),
+        draftField({
+          fieldKey: 'extractor-symbol',
+          fieldPath: 'proposed_symbol',
+          label: 'Proposed symbol',
+          order: 1,
+          value: 'extracted-symbol',
+          readOnly: true,
+          renderAs: 'divergence',
+        }),
+      ],
+    })
+    const emptyOverrideCandidate = candidate({
+      id: 'candidate-empty-override',
+      objectId: 'object-empty-override',
+      order: 4,
+      fields: [
+        draftField({
+          fieldKey: 'canonical-symbol',
+          fieldPath: 'symbol',
+          label: 'Symbol',
+          order: 0,
+          value: null,
+        }),
+        draftField({
+          fieldKey: 'extractor-symbol',
+          fieldPath: 'proposed_symbol',
+          label: 'Proposed symbol',
+          order: 1,
+          value: 'extracted-symbol',
+          readOnly: true,
+          renderAs: 'divergence',
+        }),
+      ],
+    })
+    const staleCandidate = candidate({
+      id: 'candidate-stale',
+      objectId: 'object-stale',
+      order: 5,
+      fields: [
+        {
+          ...draftField({
+            fieldKey: 'canonical-symbol',
+            fieldPath: 'symbol',
+            label: 'Symbol',
+            order: 0,
+            value: 'edited-symbol',
+          }),
+          stale_validation: true,
+        },
+        draftField({
+          fieldKey: 'extractor-symbol',
+          fieldPath: 'proposed_symbol',
+          label: 'Proposed symbol',
+          order: 1,
+          value: 'extracted-symbol',
+          readOnly: true,
+          renderAs: 'divergence',
+        }),
+      ],
+    })
+
+    const model = modelForRows([
+      workspaceRow({
+        candidate: confirmedCandidate,
+        validation: [validationProjection({
+          id: 'confirmed-symbol',
+          fieldPath: 'symbol',
+          status: 'resolved',
+          findings: 0,
+          openFindings: 0,
+        })],
+      }),
+      workspaceRow({
+        candidate: differentCandidate,
+        validation: [validationProjection({
+          id: 'different-symbol',
+          fieldPath: 'symbol',
+          status: 'resolved',
+          findings: 0,
+          openFindings: 0,
+        })],
+      }),
+      workspaceRow({ candidate: unresolvedCandidate }),
+      workspaceRow({
+        candidate: overriddenCandidate,
+        validation: [validationProjection({
+          id: 'overridden-symbol',
+          fieldPath: 'symbol',
+          status: 'waived',
+          findings: 1,
+          openFindings: 0,
+        })],
+      }),
+      workspaceRow({
+        candidate: emptyOverrideCandidate,
+        validation: [validationProjection({
+          id: 'empty-overridden-symbol',
+          fieldPath: 'symbol',
+          status: 'waived',
+          findings: 1,
+          openFindings: 0,
+        })],
+      }),
+      workspaceRow({
+        candidate: staleCandidate,
+        validation: [validationProjection({
+          id: 'stale-symbol',
+          fieldPath: 'symbol',
+          status: 'resolved',
+          findings: 0,
+          openFindings: 0,
+        })],
+      }),
+    ])
+
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'symbol'])
+    expect(model.rows[0]!.cells[0]).toMatchObject({
+      value: 'abc',
+      valueSource: 'canonical',
+      extractorComparison: { outcome: 'confirmed', value: 'abc' },
+    })
+    expect(model.rows[1]!.cells[0]).toMatchObject({
+      state: 'needs-review',
+      value: 'abc',
+      valueSource: 'canonical',
+      extractorComparison: { outcome: 'different', value: 'abcd' },
+    })
+    expect(model.rows[2]!.cells[0]).toMatchObject({
+      state: 'ai-unconfirmed',
+      value: 'abcd',
+      valueSource: 'extractor',
+      extractorComparison: { outcome: 'unresolved', value: 'abcd' },
+    })
+    expect(model.rows[3]!.cells[0]).toMatchObject({
+      state: 'resolved',
+      value: 'curator-symbol',
+      valueSource: 'canonical',
+      extractorComparison: { outcome: 'overridden', value: 'extracted-symbol' },
+    })
+    expect(model.rows[4]!.cells[0]).toMatchObject({
+      state: 'ai-unconfirmed',
+      value: 'extracted-symbol',
+      valueSource: 'extractor',
+      extractorComparison: { outcome: 'unresolved', value: 'extracted-symbol' },
+    })
+    expect(model.rows[5]!.cells[0]).toMatchObject({
+      state: 'needs-review',
+      value: 'extracted-symbol',
+      valueSource: 'extractor',
+      staleValidation: true,
+      extractorComparison: { outcome: 'unresolved', value: 'extracted-symbol' },
+    })
+  })
+
   it('orders canonical-path columns and heterogeneous rows deterministically', () => {
     const firstCandidate = candidate({
       id: 'candidate-a',
@@ -402,7 +723,7 @@ describe('buildHorizontalGridModel', () => {
     expect(model.rows[0]!.cells[0]!.fieldPath).toBe('arbitrary')
   })
 
-  it('associates evidence by exact canonical field path and leaves object evidence on context', () => {
+  it('associates exact field evidence and keeps otherwise unreachable evidence on context', () => {
     const rowCandidate = candidate({
       id: 'candidate-a',
       objectId: 'object-a',
@@ -434,7 +755,10 @@ describe('buildHorizontalGridModel', () => {
       }),
     ])
 
-    expect(model.rows[0]!.contextCell.evidence.map((item) => item.anchor_id)).toEqual(['object'])
+    expect(model.rows[0]!.contextCell.evidence.map((item) => item.anchor_id)).toEqual([
+      'object',
+      'unrepresented',
+    ])
     expect(model.rows[0]!.cells.map((cell) => [
       cell.fieldPath,
       cell.evidence.map((item) => item.anchor_id),
@@ -515,6 +839,10 @@ describe('buildHorizontalGridModel', () => {
       },
     })
     expect(row.unmappedEvidence.map((item) => item.anchor_id)).toEqual(['unmapped'])
+    expect(row.contextCell.evidence.map((item) => item.anchor_id)).toEqual([
+      'missing-field',
+      'unmapped',
+    ])
     expect(row.unmappedValidation).toMatchObject({
       statuses: ['unresolved'],
       summaryCount: 1,

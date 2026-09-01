@@ -1,13 +1,18 @@
+import { useEffect, useId, useState } from 'react'
+
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import {
   Alert,
+  Box,
   Button,
-  Chip,
   Dialog,
   DialogActions,
   DialogContent,
-  DialogTitle,
+  IconButton,
   Stack,
+  Typography,
 } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 
 import { FieldRow } from '@/features/curation/editor'
 import type { CurationAdapterEditorPack } from '@/features/curation/adapters'
@@ -17,9 +22,10 @@ export interface HorizontalGridFieldEditorDialogProps {
   autosaveWarning: string | null
   editorPack: CurationAdapterEditorPack | null
   field: CurationDraftField | null
-  onChange: (value: unknown) => void
+  isSaving: boolean
   onClose: () => void
-  onRevert: () => void
+  onRevert: () => Promise<boolean>
+  onSave: (value: unknown) => Promise<boolean>
   open: boolean
 }
 
@@ -27,42 +33,157 @@ export default function HorizontalGridFieldEditorDialog({
   autosaveWarning,
   editorPack,
   field,
-  onChange,
+  isSaving,
   onClose,
   onRevert,
+  onSave,
   open,
 }: HorizontalGridFieldEditorDialogProps) {
+  const titleId = useId()
+  const [draftValue, setDraftValue] = useState<unknown>(field?.value ?? null)
+  const [revertToSeed, setRevertToSeed] = useState(false)
+
+  useEffect(() => {
+    if (!open || !field) {
+      return
+    }
+    setDraftValue(field.value)
+    setRevertToSeed(false)
+  }, [field, open])
+
   return (
-    <Dialog fullWidth maxWidth="md" onClose={onClose} open={open && field !== null}>
-      <DialogTitle>{field ? `Edit ${field.label}` : 'Edit field'}</DialogTitle>
-      <DialogContent dividers>
+    <Dialog
+      aria-labelledby={titleId}
+      fullWidth
+      maxWidth={false}
+      onClose={onClose}
+      open={open && field !== null}
+      PaperProps={{
+        sx: (theme) => ({
+          width: 'min(460px, calc(100vw - 32px))',
+          m: 2,
+          border: `1px solid ${theme.palette.mode === 'light' ? theme.palette.grey[400] : alpha(theme.palette.common.white, 0.28)}`,
+          borderRadius: '8px',
+          backgroundImage: 'none',
+          boxShadow: theme.palette.mode === 'light'
+            ? '0 20px 70px rgba(5, 31, 57, 0.30)'
+            : '0 20px 70px rgba(0, 0, 0, 0.62)',
+        }),
+      }}
+      slotProps={{
+        backdrop: {
+          sx: (theme) => ({
+            backgroundColor: theme.palette.mode === 'light'
+              ? 'rgba(6, 31, 57, 0.42)'
+              : alpha(theme.palette.common.black, 0.68),
+          }),
+        },
+      }}
+    >
+      <Box sx={{ p: '20px 20px 0' }}>
+        <Stack alignItems="flex-start" direction="row" justifyContent="space-between" spacing="12px">
+          <Box>
+            <Typography
+              color="text.secondary"
+              display="block"
+              sx={{ fontSize: 9, fontWeight: 770, letterSpacing: '0.08em', mb: '3px', textTransform: 'uppercase' }}
+            >
+              Edit curation value
+            </Typography>
+            <Typography id={titleId} sx={{ fontSize: 15, fontWeight: 700, lineHeight: 1.25 }}>
+              {field ? `Edit ${field.label}` : 'Edit field'}
+            </Typography>
+          </Box>
+          <IconButton aria-label="Close edit dialog" onClick={onClose} size="small" sx={{ height: 28, width: 28 }}>
+            <CloseRoundedIcon sx={{ fontSize: 19 }} />
+          </IconButton>
+        </Stack>
+      </Box>
+      <DialogContent
+        sx={{
+          p: '20px 20px 0 !important',
+          '& [data-testid^="field-row-"]': {
+            gridTemplateColumns: '1fr',
+            rowGap: '6px',
+          },
+          '& .MuiInputBase-root': {
+            minHeight: 42,
+            borderRadius: '5px',
+          },
+        }}
+      >
         {autosaveWarning ? (
-          <Alert severity="warning" sx={{ mb: 1.5 }}>
+          <Alert severity="warning" sx={{ mb: 2 }}>
             {autosaveWarning}
           </Alert>
         ) : null}
         {field ? (
-          <Stack spacing={1}>
-            <Stack direction="row" spacing={0.5}>
-              {field.required ? <Chip label="Required" size="small" /> : null}
-              {field.dirty ? <Chip color="warning" label="Unsaved changes" size="small" /> : null}
-            </Stack>
+          <Stack spacing={0}>
             <FieldRow
               field={field}
-              onChange={onChange}
+              onChange={(value) => {
+                setDraftValue(value)
+                setRevertToSeed(false)
+              }}
               renderInput={editorPack?.renderFieldInput}
-              revertSlot={field.dirty ? (
-                <Button onClick={onRevert} size="small" type="button" variant="text">
-                  Revert
-                </Button>
-              ) : null}
-              value={field.value}
+              value={draftValue}
             />
+            <Typography color="text.secondary" sx={{ fontSize: 10, lineHeight: 1.4, m: '7px 0 20px' }}>
+              Save value applies this edit to the curation draft.
+              {field.dirty ? ' You can also restore the extracted value before saving.' : ''}
+            </Typography>
+            {field.dirty ? (
+              <Button
+                disabled={isSaving}
+                onClick={() => {
+                  setDraftValue(field.seed_value)
+                  setRevertToSeed(true)
+                }}
+                size="small"
+                sx={{ alignSelf: 'flex-start', mb: 1, textTransform: 'none' }}
+                type="button"
+                variant="text"
+              >
+                Restore extracted value
+              </Button>
+            ) : null}
           </Stack>
         ) : null}
       </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+      <DialogActions sx={{ gap: '8px', p: '0 20px 20px' }}>
+        <Button
+          disabled={isSaving}
+          onClick={onClose}
+          sx={(theme) => ({
+            borderColor: theme.palette.mode === 'dark' ? theme.palette.divider : '#bec8cb',
+            color: 'text.primary',
+            '&:hover': {
+              borderColor: theme.palette.mode === 'dark' ? theme.palette.text.secondary : '#7f8d96',
+              backgroundColor: theme.palette.mode === 'dark' ? theme.palette.action.hover : '#f8f8f6',
+            },
+          })}
+          variant="outlined"
+        >
+          Cancel
+        </Button>
+        <Button
+          disabled={isSaving || !field}
+          onClick={() => {
+            void (revertToSeed ? onRevert() : onSave(draftValue))
+          }}
+          sx={(theme) => ({
+            border: `1px solid ${theme.palette.mode === 'dark' ? '#0b7d72' : '#076b65'}`,
+            backgroundColor: theme.palette.mode === 'dark' ? '#0b7d72' : '#076b65',
+            color: theme.palette.common.white,
+            '&:hover': {
+              borderColor: '#045a55',
+              backgroundColor: '#045f59',
+            },
+          })}
+          variant="contained"
+        >
+          Save value
+        </Button>
       </DialogActions>
     </Dialog>
   )
