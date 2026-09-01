@@ -9,6 +9,7 @@ import pytest
 
 from src.lib.openai_agents import runner
 from src.lib.openai_agents import langfuse_client
+from src.lib.observability import runtime as runtime_observability
 from src.lib.prompts.context import (
     bind_prompt_run,
     clear_prompt_context,
@@ -838,6 +839,10 @@ async def test_flow_owned_specialist_output_error_keeps_notification_and_termina
 
 @pytest.mark.asyncio
 async def test_flow_owned_dependency_outage_reaches_single_runtime_capture(monkeypatch):
+    import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search  # pyright: ignore[reportMissingImports]
+
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+
     captured = {}
     _patch_common_runtime(monkeypatch, captured)
     monkeypatch.setattr(runner, "flush_agent_configs", lambda _span: 0)
@@ -866,14 +871,29 @@ async def test_flow_owned_dependency_outage_reaches_single_runtime_capture(monke
 
     outage = RuntimeError("Weaviate unavailable")
 
+    async def _weaviate_outage(**_kwargs):
+        raise outage
+
+    monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _weaviate_outage)
+    weaviate_tool = weaviate_search.create_search_tool("doc-12345678", "user-flow")
+    tool_payload = {"query": "gene expression"}
+
     async def _raising_stream(**_kwargs):
         if False:
             yield {}
-        raise outage
+        await weaviate_tool.on_invoke_tool(
+            _build_tool_context(weaviate_tool.name, tool_payload),
+            '{"query": "gene expression"}',
+        )
 
     monkeypatch.setattr(runner, "notify_tool_failure", _notify_tool_failure)
     monkeypatch.setattr(runner, "_run_agent_with_tracing", _raising_stream)
     runtime_captures = []
+    monkeypatch.setattr(
+        runtime_observability,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_captures.append((exc, kwargs)) or True,
+    )
 
     async def _runtime_sentry_boundary():
         try:
@@ -890,14 +910,26 @@ async def test_flow_owned_dependency_outage_reaches_single_runtime_capture(monke
                 )
             )
         except Exception as exc:
-            runtime_captures.append(exc)
+            runtime_observability.report_runtime_exception(
+                exc,
+                component="execute_flow_stream",
+                operation="event_generator_failed",
+            )
             raise
 
     with pytest.raises(RuntimeError, match="Weaviate unavailable") as exc_info:
         await _runtime_sentry_boundary()
 
     assert exc_info.value is outage
-    assert runtime_captures == [outage]
+    assert runtime_captures == [
+        (
+            outage,
+            {
+                "component": "execute_flow_stream",
+                "operation": "event_generator_failed",
+            },
+        )
+    ]
     assert notifications == []
 
 

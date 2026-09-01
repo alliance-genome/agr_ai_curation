@@ -1,5 +1,7 @@
 """Unit tests for the Alliance package's canonical Weaviate search tools."""
 
+import json
+
 import pytest
 
 import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search  # pyright: ignore[reportMissingImports]
@@ -7,6 +9,7 @@ from src.lib.document_sources.figure_metadata import (
     PROVIDER_FIGURE_METADATA_SECTION,
     PROVIDER_FIGURE_SUBSECTION_PREFIX,
 )
+from src.lib.packages.package_runner_entrypoint import _build_tool_context
 
 
 class _Tracker:
@@ -19,11 +22,16 @@ class _Tracker:
 
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
-    monkeypatch.setattr(weaviate_search, "function_tool", lambda fn: fn)
+    def _identity_function_tool(fn=None, **_kwargs):
+        if fn is not None:
+            return fn
+        return lambda wrapped: wrapped
+
+    monkeypatch.setattr(weaviate_search, "function_tool", _identity_function_tool)
 
 
 def test_search_tool_schema_exposes_search_mode_enum(monkeypatch):
-    from agents import function_tool
+    from agents import function_tool  # pyright: ignore[reportMissingImports]
 
     monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
 
@@ -157,14 +165,20 @@ async def test_search_tool_maps_hits_and_returns_full_content(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_search_tool_propagates_dependency_exception(monkeypatch):
+    from agents import function_tool  # pyright: ignore[reportMissingImports]
+
     async def _boom(**_kwargs):
         raise RuntimeError("search blew up")
 
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
     monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _boom)
-    tool = weaviate_search.create_search_tool("doc-123", "user-1")
+    tool = weaviate_search.create_search_tool("doc-12345678", "user-1")
+    payload = {"query": "q"}
 
     with pytest.raises(RuntimeError, match="search blew up"):
-        await tool(query="q")
+        await tool.on_invoke_tool(
+            _build_tool_context(tool.name, payload), json.dumps(payload)
+        )
 
 
 @pytest.mark.asyncio
@@ -449,14 +463,20 @@ async def test_read_section_tool_retrieves_provider_figure_metadata(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_read_section_tool_propagates_dependency_exception(monkeypatch):
+    from agents import function_tool  # pyright: ignore[reportMissingImports]
+
     async def _boom(**_kwargs):
         raise RuntimeError("section read failed")
 
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _boom)
-    tool = weaviate_search.create_read_section_tool("doc-123", "user-1")
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+    payload = {"section_name": "Results"}
 
     with pytest.raises(RuntimeError, match="section read failed"):
-        await tool("Results")
+        await tool.on_invoke_tool(
+            _build_tool_context(tool.name, payload), json.dumps(payload)
+        )
 
 
 @pytest.mark.asyncio
@@ -561,14 +581,20 @@ async def test_read_subsection_tool_retrieves_provider_figure_entry(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_read_subsection_tool_propagates_dependency_exception(monkeypatch):
+    from agents import function_tool  # pyright: ignore[reportMissingImports]
+
     async def _boom(**_kwargs):
         raise RuntimeError("subsection failed")
 
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
     monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _boom)
-    tool = weaviate_search.create_read_subsection_tool("doc-123", "user-1")
+    tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
+    payload = {"parent_section": "Results", "subsection": "Expression"}
 
     with pytest.raises(RuntimeError, match="subsection failed"):
-        await tool("Results", "Expression")
+        await tool.on_invoke_tool(
+            _build_tool_context(tool.name, payload), json.dumps(payload)
+        )
 
 
 def _numbered_chunks(count: int, *, prefix: str = "chunk", text_for=None):

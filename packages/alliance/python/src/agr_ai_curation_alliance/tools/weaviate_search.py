@@ -217,7 +217,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
     Returns a function_tool that emits structured ChunkSearchResult objects.
     """
 
-    @function_tool
+    @function_tool(failure_error_function=None)
     async def search_document(
         query: str,
         limit: int = 5,
@@ -519,7 +519,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
     Returns a function_tool that retrieves ALL content from a specific section.
     """
 
-    @function_tool
+    @function_tool(failure_error_function=None)
     async def read_section(
         section_name: str,
         max_chunks: int = _DEFAULT_SECTION_MAX_CHUNKS,
@@ -719,7 +719,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
     Uses LLM-resolved hierarchy for accurate subsection boundaries.
     """
 
-    @function_tool
+    @function_tool(failure_error_function=None)
     async def read_subsection(
         parent_section: str,
         subsection: str,
