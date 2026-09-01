@@ -220,9 +220,11 @@ async def materialize_benchmark_source(
         raise HTTPException(status_code=404, detail="Benchmark API is disabled")
     try:
         context = delegated_source_request_context(
-            request, principal_subject=str(principal.get("sub") or "")
+            request, principal_subject=str(principal["sub"])
         )
-        materialized = await _catalog(request).materialize(
+        catalog = _catalog(request)
+        catalog.validate_delegated_selection((payload,), context)
+        materialized = await catalog.materialize(
             payload,
             request_context=context,
         )
@@ -232,9 +234,7 @@ async def materialize_benchmark_source(
         snapshot = snapshots.freeze_input(
             materialized,
             owner_subject=context.principal_subject,
-            service_principal=str(
-                principal.get("client_id") or principal.get("sub") or ""
-            ),
+            service_principal=str(principal["client_id"]),
         )
         db.commit()
         return snapshots.receipt(snapshot)

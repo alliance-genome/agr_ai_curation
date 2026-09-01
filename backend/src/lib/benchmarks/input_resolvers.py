@@ -264,7 +264,15 @@ class BenchmarkInputResolverCatalog:
             raise BenchmarkSourceError(
                 "unknown_resolver", "Benchmark input resolver is not registered"
             )
-        self.validate_delegated_selection((reference,), request_context)
+        if (
+            resolver.delegated_authorization
+            is DelegatedAuthorizationCapability.REQUIRED
+            and request_context.delegated_authorization is None
+        ):
+            raise BenchmarkSourceError(
+                "missing_delegated_authorization",
+                "Delegated source authorization is required for the selected source",
+            )
         try:
             validated = resolver.reference_schema.model_validate(reference.reference)
             validated_reference = validated.root

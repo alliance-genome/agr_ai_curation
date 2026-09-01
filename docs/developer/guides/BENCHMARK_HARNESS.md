@@ -116,11 +116,16 @@ tokens cannot enter this profile.
 
 `POST /api/v1/benchmarks/sources/materialize` accepts only the strict
 `resolver`, `reference`, `version`, and `sha256` digest contract used by suite
-v2. It returns UTF-8 canonical extracted content plus fixed-shape metadata and
-an immutable provenance receipt. The route requires `benchmark:source:read`;
-the ordinary read/run capabilities do not grant source access.
+v2. It synchronously materializes and verifies the source, freezes its canonical
+bytes in the configured private snapshot store, and returns a token-free
+`FrozenBenchmarkInputSnapshot` receipt. The response contains the immutable
+snapshot ID, digest, source version, content type and size, sanitized provenance,
+owner and service-principal identities, creation time, and internal blob
+reference; it does not return source content. The route requires
+`benchmark:source:read`; the ordinary read/run capabilities do not grant source
+access.
 
-The public application registers two resolvers at startup:
+The public application registers three resolvers at startup:
 
 - `checked_in_fixture` reads only the input references declared by suites
   loaded from `BENCHMARK_ROOT`. Other files beneath that root, including gold
@@ -128,8 +133,11 @@ The public application registers two resolvers at startup:
 - `local_document` reads the completed processed-JSON artifact of a persisted
   AI Curation document only when the authenticated principal owns that
   document. Its authoritative version is the processing-completion timestamp.
+- `frozen_snapshot` reuses canonical bytes from an existing owner-accessible
+  immutable snapshot. It requires the matching digest and source version and
+  performs no remote source contact.
 
-Both resolvers read at most `BENCHMARK_MAX_INPUT_BYTES`, recompute the digest
+All three resolvers read at most `BENCHMARK_MAX_INPUT_BYTES`, recompute the digest
 from the exact returned bytes, and fail when the requested identity is stale.
 `BENCHMARK_SOURCE_TIMEOUT_SECONDS` bounds the complete resolver call. URLs,
 absolute/traversing fixture paths, request-supplied Python import paths,
@@ -137,22 +145,49 @@ unregistered resolver IDs, unversioned documents, and cross-owner documents
 are rejected before any benchmark work is queued. Unexpected resolver or
 storage failures are normalized to the sanitized `source_unavailable` error.
 
-Queue/worker implementations must call `materialize_plan_inputs(...)` and use
-the returned frozen bundle. The function resolves every case and returns
-nothing if any source fails, so unresolved or partially verified case
-references cannot be handed to a queue.
+Remote source materialization may carry
+`X-Benchmark-Delegated-Source-Authorization: Bearer <opaque-token>` separately
+from the ordinary `Authorization` header that authenticates the Benchmark API
+caller. The delegated header is accepted only when exactly one selected resolver
+identity declares delegated authorization support. It is limited by
+`BENCHMARK_DELEGATED_SOURCE_AUTH_MAX_BYTES`; blank, malformed, oversized,
+unexpected, missing-required, or multi-resolver delegated authorization fails
+before source I/O with the sanitized `invalid_delegated_authorization`,
+`unexpected_delegated_authorization`, or `missing_delegated_authorization`
+contract. Credential-free resolvers never receive the opaque bearer, and the
+credential is discarded after synchronous materialization rather than persisted
+or sent to a worker.
+
+Submission implementations must call
+`materialize_and_freeze_plan_inputs(...)` before creating queueable jobs or
+cells. The function validates delegated resolver selection, resolves and verifies
+every case, enforces the per-input limit plus
+`BENCHMARK_MAX_MATERIALIZED_SUBMISSION_BYTES`, and freezes every canonical input
+before returning snapshot IDs. It returns nothing if any source fails, so
+unresolved, partially verified, or token-dependent references cannot be handed
+to a queue. Repeated configurations and cells reference the same immutable
+snapshot instead of duplicating source content.
+
+`BENCHMARK_SNAPSHOT_STORE_BACKEND=filesystem` is the fresh-clone Compose default;
+`BENCHMARK_SNAPSHOT_STORE_PATH` points at its durable private named volume.
+Deployments may select `s3` with `BENCHMARK_SNAPSHOT_S3_BUCKET` and
+`BENCHMARK_SNAPSHOT_S3_PREFIX`; that bucket must be private and have versioning
+enabled. Both stores use verified SHA-256 content addressing and deduplicate
+canonical bytes.
 
 Private deployments may package an approved resolver in their private
 application and pass its instance to
 `install_benchmark_input_resolvers(app, extra_resolvers=(resolver,))` during
 application construction. The resolver must implement `BenchmarkInputResolver`
-and provide a strict Pydantic `reference_schema`; registration IDs are simple
-lowercase identifiers. Registration is code/configuration owned: request data
-must never select an import path or network destination. Duplicate IDs fail
-application construction instead of overriding another resolver. Keep remote
-credentials and destination configuration in the private deployment's secret
-store; do not add them to this repository, fixture metadata, provenance, or
-logs.
+and provide a strict Pydantic `reference_schema`. It must also declare
+`delegated_authorization` as `required`, `optional`, or `unsupported` using the
+public resolver capability enum; registration fails when the declaration is
+absent. Registration IDs are simple lowercase identifiers. Registration is
+code/configuration owned: request data must never select an import path or
+network destination. Duplicate IDs fail application construction instead of
+overriding another resolver. Keep remote credentials and destination
+configuration in the private deployment's secret store; do not add them to this
+repository, fixture metadata, provenance, snapshots, or logs.
 
 Registration validates resolver IDs during application construction, but the
 checked-in suite catalog is loaded and memoized only when an enabled source

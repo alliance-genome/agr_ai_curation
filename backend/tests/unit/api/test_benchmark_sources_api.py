@@ -87,7 +87,8 @@ def _app(tmp_path, monkeypatch) -> FastAPI:
         max_input_bytes=1024,
     )
     application.dependency_overrides[require_benchmark_source_read] = lambda: {
-        "sub": "operator"
+        "sub": "operator",
+        "client_id": "portal-client",
     }
     _stub_snapshots(application, monkeypatch)
     application.include_router(sources_api.router)
@@ -169,7 +170,7 @@ def test_materialize_endpoint_returns_token_free_snapshot_receipt(tmp_path, monk
             "digest": digest,
         },
         "owner_subject": "operator",
-        "service_principal": "operator",
+        "service_principal": "portal-client",
         "blob_reference": "sha256/00/canonical",
         "created_at": "2026-09-01T00:00:00Z",
     }
@@ -196,7 +197,8 @@ def test_materialize_endpoint_builds_and_memoizes_catalog_lazily(
     application = FastAPI()
     sources_api.install_benchmark_input_resolvers(application)
     application.dependency_overrides[require_benchmark_source_read] = lambda: {
-        "sub": "operator"
+        "sub": "operator",
+        "client_id": "portal-client",
     }
     _stub_snapshots(application, monkeypatch)
     application.include_router(sources_api.router)
@@ -241,7 +243,8 @@ def test_invalid_lazy_catalog_returns_sanitized_unavailable_error(monkeypatch):
     application = FastAPI()
     sources_api.install_benchmark_input_resolvers(application)
     application.dependency_overrides[require_benchmark_source_read] = lambda: {
-        "sub": "operator"
+        "sub": "operator",
+        "client_id": "portal-client",
     }
     application.include_router(sources_api.router)
 

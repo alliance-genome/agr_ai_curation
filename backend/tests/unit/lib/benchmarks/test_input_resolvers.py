@@ -403,6 +403,69 @@ def test_delegated_authorization_rejects_unsupported_and_multiple_identities(tmp
     assert multiple.value.code == "invalid_delegated_authorization"
 
 
+def test_delegated_authorization_allows_mixed_plan_with_one_capable_resolver(tmp_path):
+    fixture = b'{"messages": []}\n'
+    (tmp_path / "input.json").write_bytes(fixture)
+
+    class RequiredResolver(_VersionedResolver):
+        delegated_authorization = DelegatedAuthorizationCapability.REQUIRED
+
+        async def materialize(self, *args, request_context, **kwargs):
+            assert request_context.delegated_authorization is not None
+            return await super().materialize(
+                *args, request_context=request_context, **kwargs
+            )
+
+    catalog = BenchmarkInputResolverCatalog(
+        [
+            RequiredResolver(),
+            CheckedInFixtureResolver(
+                tmp_path, allowed_references={"input.json"}
+            ),
+        ],
+        timeout_seconds=1,
+        max_input_bytes=1024,
+    )
+    plan = SimpleNamespace(
+        plan_digest=_digest(b"plan"),
+        cases=(
+            SimpleNamespace(
+                case_id="delegated",
+                input=_reference(
+                    resolver="private_source",
+                    reference="approved-id",
+                    version="authoritative-v2",
+                    digest=_digest(b"{}"),
+                ),
+            ),
+            SimpleNamespace(
+                case_id="fixture",
+                input=_reference(
+                    resolver="checked_in_fixture",
+                    reference="input.json",
+                    version="1",
+                    digest=_digest(fixture),
+                ),
+            ),
+        ),
+    )
+    context = BenchmarkSourceRequestContext(
+        principal_subject="portal",
+        delegated_authorization=DelegatedSourceAuthorization("opaque-token"),
+    )
+
+    resolved = asyncio.run(
+        materialize_plan_inputs(
+            cast(ResolvedBenchmarkPlan, plan),
+            catalog,
+            request_context=context,
+            max_submission_bytes=1024,
+        )
+    )
+
+    assert [case.case_id for case in resolved.cases] == ["delegated", "fixture"]
+
+
 def test_materialized_plan_enforces_aggregate_byte_limit(tmp_path):
     payload = b"{}"
     (tmp_path / "input.json").write_bytes(payload)
