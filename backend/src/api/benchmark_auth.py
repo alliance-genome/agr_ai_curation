@@ -173,12 +173,16 @@ def _authorized_cognito_m2m_client_id(claims: dict[str, Any]) -> str:
     if not isinstance(client_id, str) or not client_id:
         raise _InvalidBenchmarkTokenError("Missing Cognito M2M client identity")
 
-    asserted = {
-        value
-        for claim in ("client_id", "azp")
-        if isinstance((value := claims.get(claim)), str) and value
-    }
-    if len(asserted) != 1 or client_id != get_benchmark_oidc_cognito_m2m_client_id():
+    if "azp" in claims:
+        authorized_party = claims["azp"]
+        if (
+            not isinstance(authorized_party, str)
+            or not authorized_party
+            or authorized_party != client_id
+        ):
+            raise _InvalidBenchmarkTokenError("Ambiguous Cognito M2M client identity")
+
+    if client_id != get_benchmark_oidc_cognito_m2m_client_id():
         raise _InvalidBenchmarkTokenError("Unapproved Cognito M2M client")
     return client_id
 

@@ -284,8 +284,17 @@ def _configure_cognito_m2m(monkeypatch, claims):
 
 
 @pytest.mark.parametrize("audience", [pytest.param(None, id="no-aud"), "benchmark-resource"])
+@pytest.mark.parametrize(
+    "identity_claims",
+    [
+        pytest.param({}, id="no-azp"),
+        pytest.param({"azp": "machine-client"}, id="matching-azp"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_cognito_m2m_without_subject_uses_machine_principal(monkeypatch, audience):
+async def test_cognito_m2m_without_subject_uses_machine_principal(
+    monkeypatch, audience, identity_claims
+):
     claims = {
         "iss": "https://cognito-idp.us-east-1.amazonaws.com/example-pool",
         "client_id": "machine-client",
@@ -293,6 +302,7 @@ async def test_cognito_m2m_without_subject_uses_machine_principal(monkeypatch, a
         "scope": "benchmark-resource/read benchmark-resource/run",
         "iat": 1_700_000_000,
         "exp": 1_700_003_600,
+        **identity_claims,
     }
     if audience is not None:
         claims["aud"] = audience
@@ -319,6 +329,11 @@ async def test_cognito_m2m_without_subject_uses_machine_principal(monkeypatch, a
         pytest.param({"client_id": "unknown-client"}, id="unknown-client"),
         pytest.param({"client_id": None}, id="missing-client"),
         pytest.param({"azp": "conflicting-client"}, id="conflicting-client"),
+        pytest.param({"azp": ""}, id="empty-authorized-party"),
+        pytest.param({"azp": None}, id="null-authorized-party"),
+        pytest.param({"azp": 7}, id="numeric-authorized-party"),
+        pytest.param({"azp": []}, id="list-authorized-party"),
+        pytest.param({"azp": {}}, id="object-authorized-party"),
         pytest.param({"aud": "wrong-resource"}, id="wrong-optional-audience"),
         pytest.param({"aud": ["benchmark-resource"]}, id="malformed-audience"),
         pytest.param({"scope": ["benchmark-resource/read"]}, id="malformed-scope"),
