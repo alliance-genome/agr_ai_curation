@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+from collections.abc import Mapping
 from typing import Any, Generic, TypeVar
 from uuid import UUID, uuid4
 
@@ -21,9 +22,11 @@ from src.models.sql.benchmark import (
     BenchmarkCell,
     BenchmarkCellStatus,
     BenchmarkEvent,
+    BenchmarkInputSnapshot,
     BenchmarkInvocation,
     BenchmarkInvocationStatus,
     BenchmarkJob,
+    BenchmarkJobInputSnapshot,
     BenchmarkJobStatus,
 )
 
@@ -187,6 +190,7 @@ class BenchmarkRepository:
         config_digest: str,
         code_digest: str,
         inputs_digest: str,
+        snapshot_ids_by_case: Mapping[str, UUID],
         rerun_of_job_id: UUID | None = None,
     ) -> BenchmarkJob:
         """Persist a frozen plan and all cells in one caller-owned transaction."""
@@ -196,6 +200,31 @@ class BenchmarkRepository:
             raise ValueError("benchmark plan must contain at least one cell")
         if suite.suite_id != plan.suite_id:
             raise ValueError("suite and resolved plan IDs differ")
+        case_ids = {case.case_id for case in plan.cases}
+        if set(snapshot_ids_by_case) != case_ids:
+            raise ValueError("every plan case must reference exactly one frozen snapshot")
+        snapshots = {
+            snapshot.id: snapshot
+            for snapshot in self.session.scalars(
+                select(BenchmarkInputSnapshot).where(
+                    BenchmarkInputSnapshot.id.in_(snapshot_ids_by_case.values()),
+                    BenchmarkInputSnapshot.owner_subject == owner_subject,
+                )
+            )
+        }
+        if len(snapshots) != len(set(snapshot_ids_by_case.values())):
+            raise ValueError("frozen input snapshots do not exist for this owner")
+        inputs_by_case = {case.case_id: case.input for case in plan.cases}
+        for case_id, snapshot_id in snapshot_ids_by_case.items():
+            planned_input = inputs_by_case[case_id]
+            snapshot = snapshots[snapshot_id]
+            if (
+                snapshot.resolver_id != planned_input.resolver
+                or snapshot.source_reference != planned_input.reference
+                or snapshot.source_version != planned_input.version
+                or snapshot.digest != planned_input.digest
+            ):
+                raise ValueError("frozen snapshot does not match the resolved plan")
 
         source_cells: dict[str, BenchmarkCell] = {}
         if rerun_of_job_id is not None:
@@ -242,6 +271,12 @@ class BenchmarkRepository:
         )
         self.session.add(job)
         self.session.flush()
+        self.session.add_all(
+            BenchmarkJobInputSnapshot(
+                job_id=job.id, case_id=case_id, snapshot_id=snapshot_id
+            )
+            for case_id, snapshot_id in snapshot_ids_by_case.items()
+        )
         for position, planned in enumerate(plan.cells):
             source = source_cells.get(planned.cell_id)
             self.session.add(
@@ -263,6 +298,7 @@ class BenchmarkRepository:
                     input_reference=planned.input.reference,
                     input_version=planned.input.version,
                     input_digest=planned.input.digest,
+                    input_snapshot_id=snapshot_ids_by_case[planned.case_id],
                     status=BenchmarkCellStatus.QUEUED,
                     attempt_count=0,
                     source_cell_id=source.id if source else None,

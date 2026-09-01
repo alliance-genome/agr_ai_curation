@@ -19,7 +19,7 @@ def test_benchmark_source_materialization_openapi_contract():
     response_schema = operation["responses"]["200"]["content"]["application/json"][
         "schema"
     ]
-    assert response_schema["$ref"].endswith("/MaterializedBenchmarkInput")
+    assert response_schema["$ref"].endswith("/FrozenBenchmarkInputSnapshot")
 
     components = schema["components"]["schemas"]
     request = components["BenchmarkInputReference"]
@@ -27,14 +27,19 @@ def test_benchmark_source_materialization_openapi_contract():
     assert request["additionalProperties"] is False
     assert request["properties"]["digest"]["pattern"].startswith("^sha256:")
 
-    response = components["MaterializedBenchmarkInput"]
+    response = components["FrozenBenchmarkInputSnapshot"]
     assert {
-        "resolver",
-        "reference",
-        "version",
+        "snapshot_id",
         "digest",
-        "content",
-        "metadata",
-        "provenance",
+        "source_version",
+        "content_type",
+        "content_bytes",
+        "resolver_id",
+        "source_reference",
+        "sanitized_provenance",
+        "owner_subject",
+        "service_principal",
+        "blob_reference",
+        "created_at",
     }.issubset(response["required"])
-    assert response["properties"]["content"]["type"] == "string"
+    assert "content" not in response["properties"]

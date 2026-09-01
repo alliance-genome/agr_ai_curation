@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.lib.observability import sentry
+from src.lib.security.redaction import active_secret_redaction
 
 
 @pytest.fixture(autouse=True)
@@ -172,6 +174,18 @@ def test_before_send_redacts_sensitive_and_document_content():
     assert scrubbed["exception"]["values"][0]["value"] == "[Filtered]"
     assert "vars" not in scrubbed["exception"]["values"][0]["stacktrace"]["frames"][0]
     assert "vars" not in scrubbed["threads"]["values"][0]["stacktrace"]["frames"][0]
+
+
+def test_before_send_scrubs_active_bare_delegated_secret():
+    token = "distinctive-opaque-delegated-token"
+    event = {"tags": {"upstream_failure": f"rejected {token}"}}
+
+    with active_secret_redaction(token):
+        scrubbed = sentry.before_send(event)
+
+    assert scrubbed is not None
+    assert token not in json.dumps(scrubbed)
+    assert scrubbed["tags"]["upstream_failure"] == f"rejected {sentry._REDACTED}"
 
 
 def test_before_send_promoted_log_uses_safe_code_metadata_not_message_content():

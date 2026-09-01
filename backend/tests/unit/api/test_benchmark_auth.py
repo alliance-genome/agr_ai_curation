@@ -94,6 +94,10 @@ async def test_cookie_operator_group_grants_only_explicit_capability(monkeypatch
     )
 
     principal = await benchmark_auth.require_benchmark_read(_request())
+    assert (
+        principal["client_id"]
+        == benchmark_auth.BENCHMARK_BROWSER_SESSION_CLIENT_ID
+    )
     assert principal["benchmark_capabilities"] == [benchmark_auth.BENCHMARK_READ]
 
     with pytest.raises(HTTPException) as exc_info:

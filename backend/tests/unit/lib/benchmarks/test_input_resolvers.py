@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import time
 from types import SimpleNamespace
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
 import pytest
 from fastapi import HTTPException
@@ -17,16 +17,21 @@ from pydantic import Field, RootModel, ValidationError
 import src.services.benchmark_document_source as document_source
 from src.lib.benchmarks.input_resolvers import (
     BenchmarkInputResolverCatalog,
+    BenchmarkSourceRequestContext,
     BenchmarkResolverRegistrationError,
     BenchmarkSourceError,
     BenchmarkSourceMetadata,
     BenchmarkSourceProvenance,
     CheckedInFixtureResolver,
+    DelegatedAuthorizationCapability,
+    DelegatedSourceAuthorization,
     MaterializedBenchmarkInput,
     materialize_plan_inputs,
 )
 from src.lib.benchmarks.models import BenchmarkInputReference, ResolvedBenchmarkPlan
 from src.lib.benchmarks.suites import load_checked_in_suites
+from src.lib.benchmarks.snapshots import materialize_and_freeze_plan_inputs
+from src.lib.security.redaction import REDACTED, redact_secrets
 from src.services.benchmark_document_source import (
     LocalDocumentResolver,
     LocalDocumentSourceRecord,
@@ -39,6 +44,10 @@ def _digest(payload: bytes) -> str:
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
+
+
+def _context(subject: str) -> BenchmarkSourceRequestContext:
+    return BenchmarkSourceRequestContext(principal_subject=subject)
 
 
 def _reference(
@@ -79,7 +88,7 @@ def test_checked_in_fixture_materializes_digest_verified_immutable_content(tmp_p
                 version="1",
                 digest=_digest(payload),
             ),
-            principal_subject="operator",
+            request_context=_context("operator"),
         )
     )
 
@@ -110,7 +119,7 @@ def test_shipped_suite_fixture_references_materialize_with_checked_in_receipts()
     for suite in load_checked_in_suites(benchmark_root):
         for case in suite.cases:
             materialized = asyncio.run(
-                catalog.materialize(case.input, principal_subject="operator")
+                catalog.materialize(case.input, request_context=_context("operator"))
             )
             assert materialized.reference == case.input.reference
             assert materialized.version == case.input.version
@@ -141,7 +150,7 @@ def test_checked_in_fixture_rejects_non_allowlisted_reference_shapes(
                     version="1",
                     digest="sha256:" + "0" * 64,
                 ),
-                principal_subject="operator",
+                request_context=_context("operator"),
             )
         )
     assert exc_info.value.code == code
@@ -183,7 +192,7 @@ def test_checked_in_fixture_rejects_gold_fixture_even_beneath_root(tmp_path):
                     version="1",
                     digest=_digest(gold_payload),
                 ),
-                principal_subject="operator",
+                request_context=_context("operator"),
             )
         )
 
@@ -210,7 +219,7 @@ def test_catalog_rejects_unknown_and_duplicate_resolvers(tmp_path):
                     version="1",
                     digest="sha256:" + "0" * 64,
                 ),
-                principal_subject="operator",
+                request_context=_context("operator"),
             )
         )
     assert exc_info.value.code == "unknown_resolver"
@@ -232,7 +241,7 @@ def test_checked_in_fixture_rejects_stale_digest_and_oversize(tmp_path):
         max_input_bytes=1024,
     )
     with pytest.raises(BenchmarkSourceError) as exc_info:
-        asyncio.run(catalog.materialize(reference, principal_subject="operator"))
+        asyncio.run(catalog.materialize(reference, request_context=_context("operator")))
     assert exc_info.value.code == "digest_conflict"
 
     bounded = BenchmarkInputResolverCatalog(
@@ -241,7 +250,7 @@ def test_checked_in_fixture_rejects_stale_digest_and_oversize(tmp_path):
         max_input_bytes=len(payload) - 1,
     )
     with pytest.raises(BenchmarkSourceError) as exc_info:
-        asyncio.run(bounded.materialize(reference, principal_subject="operator"))
+        asyncio.run(bounded.materialize(reference, request_context=_context("operator")))
     assert exc_info.value.code == "oversize_payload"
 
 
@@ -252,11 +261,12 @@ class _StringReference(RootModel[str]):
 class _VersionedResolver:
     resolver_id = "private_source"
     reference_schema = _StringReference
+    delegated_authorization = DelegatedAuthorizationCapability.UNSUPPORTED
 
     async def materialize(
-        self, reference, validated_reference, *, max_bytes, principal_subject
+        self, reference, validated_reference, *, max_bytes, request_context
     ):
-        del validated_reference, max_bytes, principal_subject
+        del validated_reference, max_bytes, request_context
         payload = b"{}"
         digest = _digest(payload)
         provenance = BenchmarkSourceProvenance(
@@ -292,10 +302,202 @@ def test_catalog_rejects_stale_authoritative_version():
                     version="stale-v1",
                     digest=_digest(payload),
                 ),
-                principal_subject="operator",
+                request_context=_context("operator"),
             )
         )
     assert exc_info.value.code == "version_conflict"
+
+
+def test_delegated_authorization_reaches_only_selected_capable_resolver():
+    class RequiredResolver(_VersionedResolver):
+        delegated_authorization = DelegatedAuthorizationCapability.REQUIRED
+
+        def __init__(self):
+            self.observed_bearer = None
+            self.redacted_during_materialization = None
+
+        async def materialize(self, *args, request_context, **kwargs):
+            self.observed_bearer = request_context.delegated_authorization.reveal()
+            self.redacted_during_materialization = redact_secrets(
+                f"bare upstream value: {self.observed_bearer}"
+            )
+            return await super().materialize(
+                *args, request_context=request_context, **kwargs
+            )
+
+    resolver = RequiredResolver()
+    catalog = BenchmarkInputResolverCatalog(
+        [resolver], timeout_seconds=1, max_input_bytes=10
+    )
+    reference = _reference(
+        resolver="private_source",
+        reference="approved-id",
+        version="authoritative-v2",
+        digest=_digest(b"{}"),
+    )
+    with pytest.raises(BenchmarkSourceError) as missing:
+        asyncio.run(catalog.materialize(reference, request_context=_context("portal")))
+    assert missing.value.code == "missing_delegated_authorization"
+
+    context = BenchmarkSourceRequestContext(
+        principal_subject="portal",
+        delegated_authorization=DelegatedSourceAuthorization("opaque-curator-token"),
+    )
+    asyncio.run(catalog.materialize(reference, request_context=context))
+    assert resolver.observed_bearer == "opaque-curator-token"
+    assert resolver.redacted_during_materialization == f"bare upstream value: {REDACTED}"
+    assert redact_secrets("opaque-curator-token") == "opaque-curator-token"
+    assert "opaque-curator-token" not in repr(context)
+
+
+def test_delegated_authorization_rejects_unsupported_and_multiple_identities(tmp_path):
+    credential = BenchmarkSourceRequestContext(
+        principal_subject="portal",
+        delegated_authorization=DelegatedSourceAuthorization("opaque-token"),
+    )
+    fixture_catalog = BenchmarkInputResolverCatalog(
+        [CheckedInFixtureResolver(tmp_path, allowed_references=set())],
+        timeout_seconds=1,
+        max_input_bytes=10,
+    )
+    with pytest.raises(BenchmarkSourceError) as unexpected:
+        fixture_catalog.validate_delegated_selection(
+            (
+                _reference(
+                    resolver="checked_in_fixture",
+                    reference="input.json",
+                    version="1",
+                    digest=_digest(b"{}"),
+                ),
+            ),
+            credential,
+        )
+    assert unexpected.value.code == "unexpected_delegated_authorization"
+
+    class SecondResolver(_VersionedResolver):
+        resolver_id = "second_private"
+        delegated_authorization = DelegatedAuthorizationCapability.OPTIONAL
+
+    class FirstResolver(_VersionedResolver):
+        delegated_authorization = DelegatedAuthorizationCapability.REQUIRED
+
+    catalog = BenchmarkInputResolverCatalog(
+        [FirstResolver(), SecondResolver()], timeout_seconds=1, max_input_bytes=10
+    )
+    references = (
+        _reference(
+            resolver="private_source",
+            reference="one",
+            version="authoritative-v2",
+            digest=_digest(b"{}"),
+        ),
+        _reference(
+            resolver="second_private",
+            reference="two",
+            version="authoritative-v2",
+            digest=_digest(b"{}"),
+        ),
+    )
+    with pytest.raises(BenchmarkSourceError) as multiple:
+        catalog.validate_delegated_selection(references, credential)
+    assert multiple.value.code == "invalid_delegated_authorization"
+
+
+def test_delegated_authorization_allows_mixed_plan_with_one_capable_resolver(tmp_path):
+    fixture = b'{"messages": []}\n'
+    (tmp_path / "input.json").write_bytes(fixture)
+
+    class RequiredResolver(_VersionedResolver):
+        delegated_authorization = DelegatedAuthorizationCapability.REQUIRED
+
+        async def materialize(self, *args, request_context, **kwargs):
+            assert request_context.delegated_authorization is not None
+            return await super().materialize(
+                *args, request_context=request_context, **kwargs
+            )
+
+    catalog = BenchmarkInputResolverCatalog(
+        [
+            RequiredResolver(),
+            CheckedInFixtureResolver(
+                tmp_path, allowed_references={"input.json"}
+            ),
+        ],
+        timeout_seconds=1,
+        max_input_bytes=1024,
+    )
+    plan = SimpleNamespace(
+        plan_digest=_digest(b"plan"),
+        cases=(
+            SimpleNamespace(
+                case_id="delegated",
+                input=_reference(
+                    resolver="private_source",
+                    reference="approved-id",
+                    version="authoritative-v2",
+                    digest=_digest(b"{}"),
+                ),
+            ),
+            SimpleNamespace(
+                case_id="fixture",
+                input=_reference(
+                    resolver="checked_in_fixture",
+                    reference="input.json",
+                    version="1",
+                    digest=_digest(fixture),
+                ),
+            ),
+        ),
+    )
+    context = BenchmarkSourceRequestContext(
+        principal_subject="portal",
+        delegated_authorization=DelegatedSourceAuthorization("opaque-token"),
+    )
+
+    resolved = asyncio.run(
+        materialize_plan_inputs(
+            cast(ResolvedBenchmarkPlan, plan),
+            catalog,
+            request_context=context,
+            max_submission_bytes=1024,
+        )
+    )
+
+    assert [case.case_id for case in resolved.cases] == ["delegated", "fixture"]
+
+
+def test_materialized_plan_enforces_aggregate_byte_limit(tmp_path):
+    payload = b"{}"
+    (tmp_path / "input.json").write_bytes(payload)
+    catalog = BenchmarkInputResolverCatalog(
+        [CheckedInFixtureResolver(tmp_path, allowed_references={"input.json"})],
+        timeout_seconds=1,
+        max_input_bytes=10,
+    )
+    plan = SimpleNamespace(
+        plan_digest=_digest(b"plan"),
+        cases=(
+            SimpleNamespace(
+                case_id="one",
+                input=_reference(
+                    resolver="checked_in_fixture",
+                    reference="input.json",
+                    version="1",
+                    digest=_digest(payload),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(BenchmarkSourceError) as oversize:
+        asyncio.run(
+            materialize_plan_inputs(
+                cast(ResolvedBenchmarkPlan, plan),
+                catalog,
+                request_context=_context("operator"),
+                max_submission_bytes=1,
+            )
+        )
+    assert oversize.value.code == "oversize_submission"
 
 
 def test_catalog_bounds_registered_resolver_timeout():
@@ -316,7 +518,7 @@ def test_catalog_bounds_registered_resolver_timeout():
                     version="authoritative-v2",
                     digest=_digest(b"{}"),
                 ),
-                principal_subject="operator",
+                request_context=_context("operator"),
             )
         )
     assert exc_info.value.code == "source_unavailable"
@@ -351,7 +553,7 @@ def test_catalog_bounds_blocking_local_document_resolver_timeout(tmp_path):
                     version="v1",
                     digest=_digest(b"[]"),
                 ),
-                principal_subject="owner",
+                request_context=_context("owner"),
             )
         )
     assert exc_info.value.code == "source_unavailable"
@@ -382,7 +584,7 @@ def test_catalog_normalizes_unexpected_local_document_storage_failure(tmp_path):
                     version="v1",
                     digest=_digest(b"[]"),
                 ),
-                principal_subject="owner",
+                request_context=_context("owner"),
             )
         )
     assert exc_info.value.code == "source_unavailable"
@@ -409,7 +611,7 @@ def test_catalog_verifies_registered_resolver_content_receipt():
                     version="authoritative-v2",
                     digest=_digest(b"{}"),
                 ),
-                principal_subject="operator",
+                request_context=_context("operator"),
             )
         )
     assert exc_info.value.code == "source_unavailable"
@@ -457,7 +659,8 @@ def test_materialize_plan_inputs_resolves_every_case_before_handoff(tmp_path):
         materialize_plan_inputs(
             cast(ResolvedBenchmarkPlan, plan),
             catalog,
-            principal_subject="operator",
+            request_context=_context("operator"),
+            max_submission_bytes=1024,
         )
     )
     assert [case.case_id for case in resolved.cases] == ["first", "second"]
@@ -465,6 +668,52 @@ def test_materialize_plan_inputs_resolves_every_case_before_handoff(tmp_path):
         first.decode(),
         second.decode(),
     ]
+
+
+def test_failed_plan_never_reaches_durable_snapshot_boundary(tmp_path):
+    payload = b"{}"
+    (tmp_path / "input.json").write_bytes(payload)
+    catalog = BenchmarkInputResolverCatalog(
+        [CheckedInFixtureResolver(tmp_path, allowed_references={"input.json"})],
+        timeout_seconds=1,
+        max_input_bytes=10,
+    )
+    valid = _reference(
+        resolver="checked_in_fixture",
+        reference="input.json",
+        version="1",
+        digest=_digest(payload),
+    )
+    invalid = valid.model_copy(update={"digest": "sha256:" + "0" * 64})
+    plan = SimpleNamespace(
+        plan_digest=_digest(b"plan"),
+        cases=(
+            SimpleNamespace(case_id="first", input=valid),
+            SimpleNamespace(case_id="second", input=invalid),
+        ),
+    )
+
+    class SnapshotBoundary:
+        called = False
+
+        def freeze_plan(self, *args, **kwargs):
+            self.called = True
+            raise AssertionError("partial materialization must not cross durability boundary")
+
+    snapshots = SnapshotBoundary()
+    with pytest.raises(BenchmarkSourceError) as failure:
+        asyncio.run(
+            materialize_and_freeze_plan_inputs(
+                cast(ResolvedBenchmarkPlan, plan),
+                catalog,
+                cast(Any, snapshots),
+                request_context=_context("operator"),
+                service_principal="portal",
+                max_submission_bytes=100,
+            )
+        )
+    assert failure.value.code == "digest_conflict"
+    assert snapshots.called is False
 
 
 def test_local_document_resolver_enforces_owner_version_and_digest(tmp_path):
@@ -504,18 +753,18 @@ def test_local_document_resolver_enforces_owner_version_and_digest(tmp_path):
     )
 
     result = asyncio.run(
-        catalog.materialize(reference, principal_subject="owner-sub")
+        catalog.materialize(reference, request_context=_context("owner-sub"))
     )
     assert result.content == payload.decode()
     assert result.metadata.title == "Example paper"
 
     with pytest.raises(BenchmarkSourceError) as exc_info:
-        asyncio.run(catalog.materialize(reference, principal_subject="other-sub"))
+        asyncio.run(catalog.materialize(reference, request_context=_context("other-sub")))
     assert exc_info.value.code == "forbidden_source"
 
     stale = reference.model_copy(update={"version": "stale"})
     with pytest.raises(BenchmarkSourceError) as exc_info:
-        asyncio.run(catalog.materialize(stale, principal_subject="owner-sub"))
+        asyncio.run(catalog.materialize(stale, request_context=_context("owner-sub")))
     assert exc_info.value.code == "version_conflict"
 
 
@@ -544,7 +793,7 @@ def test_local_document_resolver_requires_uuid_reference(tmp_path):
                     version="1",
                     digest="sha256:" + "0" * 64,
                 ),
-                principal_subject="owner-sub",
+                request_context=_context("owner-sub"),
             )
         )
     assert exc_info.value.code == "invalid_reference"

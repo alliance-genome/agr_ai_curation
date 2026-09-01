@@ -16,6 +16,8 @@ TABLES = {
     "benchmark_cells",
     "benchmark_invocations",
     "benchmark_events",
+    "benchmark_input_snapshots",
+    "benchmark_job_input_snapshots",
 }
 
 
@@ -37,6 +39,8 @@ def test_benchmark_migration_upgrade_indexes_and_downgrade():
         },
         "benchmark_invocations": {"ix_benchmark_invocations_cell_order"},
         "benchmark_events": {"ix_benchmark_events_replay"},
+        "benchmark_input_snapshots": {"ix_benchmark_snapshots_digest"},
+        "benchmark_job_input_snapshots": {"ix_benchmark_job_input_snapshot_id"},
     }
     for table, names in expected_indexes.items():
         assert names <= {item["name"] for item in inspector.get_indexes(table)}
