@@ -7,6 +7,7 @@ import pytest
 from src.lib.benchmarks.snapshots import (
     BenchmarkSnapshotError,
     FileSystemBenchmarkSnapshotStore,
+    S3BenchmarkSnapshotStore,
 )
 from src.models.sql.benchmark import (
     BenchmarkCell,
@@ -63,3 +64,34 @@ def test_durable_benchmark_models_have_no_delegated_secret_fields():
         for column_name in column_names
         for marker in ("authorization", "bearer", "credential", "token")
     )
+
+
+def test_s3_store_requires_and_reuses_exact_private_object_version():
+    content = b"canonical"
+
+    class Body:
+        def read(self):
+            return content
+
+    class Client:
+        put_request = None
+        get_request = None
+
+        def put_object(self, **kwargs):
+            self.put_request = kwargs
+            return {"VersionId": "private-version-1"}
+
+        def get_object(self, **kwargs):
+            self.get_request = kwargs
+            return {"Body": Body()}
+
+    client = Client()
+    store = S3BenchmarkSnapshotStore(
+        client, bucket="private-bucket", prefix="benchmark-inputs"
+    )
+    reference = store.put(digest=_digest(content), content=content)
+
+    assert reference.endswith("?versionId=private-version-1")
+    assert client.put_request["Bucket"] == "private-bucket"
+    assert store.read(blob_reference=reference) == content
+    assert client.get_request["VersionId"] == "private-version-1"
