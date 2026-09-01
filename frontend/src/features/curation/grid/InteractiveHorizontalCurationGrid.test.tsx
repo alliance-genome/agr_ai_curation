@@ -526,10 +526,15 @@ describe('InteractiveHorizontalCurationGrid', () => {
     }))
 
     const details = screen.getByRole('dialog', { name: /Authors:/ })
+    expect(within(details).getByTestId('horizontal-grid-evidence-scroll-region')).toHaveStyle({
+      maxHeight: 'min(620px, calc(100dvh - 32px))',
+      overflowY: 'auto',
+      overscrollBehavior: 'contain',
+    })
     expect(within(details).getByText('Evidence & validation details')).toBeInTheDocument()
     expect(within(details).getByText('Highlighted passage from the paper')).toBeInTheDocument()
     expect(within(details).getByText('Evidence for citation.authors')).toBeInTheDocument()
-    expect(within(details).getByText(/Current status:/)).toBeInTheDocument()
+    expect(within(details).getByLabelText('Current status: Not validated')).toBeInTheDocument()
     expect(within(details).queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
     expect(navigateEvidence).toHaveBeenCalledTimes(1)
     expect(within(details).getByRole('button', { name: 'Close evidence details' })).toHaveFocus()
@@ -792,14 +797,60 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const details = screen.getByRole('dialog', { name: /Authors:/ })
     expect(details).toHaveTextContent('Authors were validated by the server.')
     expect(details).toHaveTextContent('A second authoritative validation detail.')
+    expect(within(details).getByText('Resolution')).toBeInTheDocument()
+    expect(within(details).getByText(/^Authors resolved to /)).toBeInTheDocument()
+    expect(within(details).getByText('Validator context')).toBeInTheDocument()
+    expect(within(details).getByText('Current status')).toBeInTheDocument()
+    expect(within(details).getByText('Curator validated')).toBeInTheDocument()
     expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
+  })
+
+  it('distinguishes a field-specific taxon result from shared gene-validator context', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const taxonField = candidate.draft.fields[0]
+    taxonField.label = 'Taxon'
+    taxonField.value = 'NCBITaxon:7227'
+    taxonField.metadata = { source_field_path: 'taxon' }
+
+    const summary = {
+      ...resolvedSummary(),
+      field_path: 'taxon',
+      messages: [
+        'Resolved Example organism sample (sym) as ExampleDB gene MOD:GENE-123.',
+      ],
+    }
+    const model = buildModel({
+      authorsEvidence: [],
+      authorsValidation: validationProjection([summary]),
+    })
+    const taxonColumn = model.columns[1]
+    taxonColumn.fieldPath = 'taxon'
+    taxonColumn.label = 'Taxon'
+    const taxonCell = model.rows[0].cells[0]
+    taxonCell.fieldPath = 'taxon'
+    taxonCell.value = 'NCBITaxon:7227'
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Taxon:/,
+    }))
+
+    const details = screen.getByRole('dialog', { name: /Taxon:/ })
+    expect(within(details).getByText(
+      'Taxon resolved to NCBITaxon:7227.',
+    )).toBeInTheDocument()
+    expect(within(details).getByText('Validator context')).toBeInTheDocument()
+    expect(within(details).getByText(
+      'Resolved Example organism sample (sym) as ExampleDB gene MOD:GENE-123.',
+    )).toBeInTheDocument()
   })
 
   it('shows validation-only details and reserves warning/error symbols for field state', async () => {
     const user = userEvent.setup()
     const model = buildModel({ authorsEvidence: [] })
     model.rows[0].cells[0].state = 'needs-review'
-    renderGrid({ model })
+    renderGrid({ mode: 'light', model })
 
     expect(screen.getByRole('img', { name: 'Needs review' })).toHaveTextContent('!')
     expect(screen.getByRole('img', { name: 'Not validated' })).toHaveTextContent('×')
@@ -812,7 +863,10 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(within(details).getByText(
       'No field-specific evidence was recorded for this field.',
     )).toBeInTheDocument()
-    expect(within(details).getByText(/Current status: Needs review/)).toBeInTheDocument()
+    expect(within(details).getByLabelText('Current status: Needs review')).toBeInTheDocument()
+    expect(within(details).getByTestId('horizontal-grid-current-status')).toHaveStyle({
+      color: '#8a5b0d',
+    })
   })
 
   it('summarizes displayed preview states and restores focus when the drawer closes', async () => {

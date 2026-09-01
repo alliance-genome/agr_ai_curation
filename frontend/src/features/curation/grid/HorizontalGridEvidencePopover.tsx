@@ -145,7 +145,6 @@ export default function HorizontalGridEvidencePopover({
               return {
                 position: 'relative',
                 width: 'min(390px, calc(100vw - 24px))',
-                p: '17px',
                 overflow: 'visible',
                 border: `1px solid ${borderColor}`,
                 borderRadius: '7px',
@@ -181,17 +180,36 @@ export default function HorizontalGridEvidencePopover({
               onClick={handleClose}
               ref={closeButtonRef}
               size="small"
-              sx={{ position: 'absolute', right: 8, top: 8, width: 28, height: 28 }}
+              sx={{
+                backgroundColor: 'background.paper',
+                position: 'absolute',
+                right: 8,
+                top: 8,
+                width: 28,
+                height: 28,
+                zIndex: 1,
+              }}
             >
               <CloseRoundedIcon sx={{ fontSize: 19 }} />
             </IconButton>
 
-            <Stack alignItems="flex-start" direction="row" spacing="10px" sx={{ pr: '20px' }}>
+            <Box
+              data-testid="horizontal-grid-evidence-scroll-region"
+              sx={{
+                maxHeight: 'min(620px, calc(100dvh - 32px))',
+                overflowY: 'auto',
+                overscrollBehavior: 'contain',
+                p: '17px',
+              }}
+            >
+              <Stack alignItems="flex-start" direction="row" spacing="10px" sx={{ pr: '20px' }}>
               <Box
                 aria-hidden="true"
                 sx={{
                   alignItems: 'center',
-                  color: presentation.color,
+                  color: (theme) => target.state === 'needs-review'
+                    ? (theme.palette.mode === 'dark' ? theme.palette.warning.light : '#8a5b0d')
+                    : presentation.color,
                   display: 'flex',
                   height: 18,
                   justifyContent: 'center',
@@ -214,18 +232,18 @@ export default function HorizontalGridEvidencePopover({
                   {target.fieldLabel}: {target.fieldValue}
                 </Typography>
               </Box>
-            </Stack>
+              </Stack>
 
-            <Typography
+              <Typography
               color="text.secondary"
               display="block"
               sx={{ fontSize: 9, fontWeight: 760, letterSpacing: '0.06em', mt: '14px', textTransform: 'uppercase' }}
-            >
+              >
               {target.projections.length > 0
                 ? 'Highlighted passage from the paper'
                 : 'Field-specific evidence'}
-            </Typography>
-            {target.projections.length > 0 ? (
+              </Typography>
+              {target.projections.length > 0 ? (
               <Stack spacing="7px" sx={{ m: '6px 0 12px' }}>
                 {target.projections.map((projection, index) => (
                   <Box
@@ -262,7 +280,7 @@ export default function HorizontalGridEvidencePopover({
                   </Box>
                 ))}
               </Stack>
-            ) : (
+              ) : (
               <Box
                 sx={(theme) => ({
                   m: '6px 0 12px',
@@ -278,15 +296,87 @@ export default function HorizontalGridEvidencePopover({
                   No field-specific evidence was recorded for this field.
                 </Typography>
               </Box>
-            )}
+              )}
 
-            <Box sx={{ borderTop: 1, borderColor: 'divider', pt: '8px' }}>
-              <Typography color="text.secondary" sx={{ fontSize: 9 }}>
-                {target.validationMessages.length > 0
-                  ? `${target.validationMessages.join(' · ')} · `
-                  : null}
-                Current status: {presentation.label}
+              <Box
+              sx={(theme) => ({
+                border: `1px solid ${theme.palette.divider}`,
+                borderRadius: '5px',
+                backgroundColor: theme.palette.mode === 'light'
+                  ? '#f7f9f8'
+                  : alpha(theme.palette.common.white, 0.04),
+                p: '11px 12px',
+              })}
+            >
+              <Typography
+                color="text.secondary"
+                sx={{
+                  fontSize: 9,
+                  fontWeight: 760,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                }}
+              >
+                Resolution
               </Typography>
+              {target.state === 'resolved' ? (
+                <Typography sx={{ fontSize: 12.5, fontWeight: 700, lineHeight: 1.45, mt: '4px' }}>
+                  {target.fieldLabel} resolved to {target.fieldValue}.
+                </Typography>
+              ) : null}
+
+              {target.validationMessages.length > 0 ? (
+                <Box sx={{ mt: target.state === 'resolved' ? '9px' : '4px' }}>
+                  <Typography
+                    color="text.secondary"
+                    sx={{ fontSize: 10, fontWeight: 700, mb: '3px' }}
+                  >
+                    Validator context
+                  </Typography>
+                  <Stack component="ul" spacing="4px" sx={{ m: 0, pl: '17px' }}>
+                    {target.validationMessages.map((message, index) => (
+                      <Typography
+                        component="li"
+                        key={`${index}:${message}`}
+                        sx={{ fontSize: 12, lineHeight: 1.48, pl: '1px' }}
+                      >
+                        {message}
+                      </Typography>
+                    ))}
+                  </Stack>
+                </Box>
+              ) : null}
+
+              <Box
+                aria-label={`Current status: ${presentation.label}`}
+                sx={{
+                  alignItems: 'baseline',
+                  borderTop: 1,
+                  borderColor: 'divider',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '3px 6px',
+                  mt: target.validationMessages.length > 0 || target.state === 'resolved' ? '10px' : 0,
+                  pt: target.validationMessages.length > 0 || target.state === 'resolved' ? '8px' : 0,
+                }}
+              >
+                <Typography color="text.secondary" sx={{ fontSize: 10, fontWeight: 650 }}>
+                  Current status
+                </Typography>
+                <Typography
+                  data-testid="horizontal-grid-current-status"
+                  sx={(theme) => ({
+                    color: target.state === 'needs-review'
+                      ? (theme.palette.mode === 'dark' ? theme.palette.warning.light : '#8a5b0d')
+                      : presentation.color,
+                    fontSize: 12,
+                    fontWeight: 750,
+                  })}
+                >
+                  {presentation.label}
+                </Typography>
+              </Box>
+              </Box>
             </Box>
           </Paper>
         </ClickAwayListener>
