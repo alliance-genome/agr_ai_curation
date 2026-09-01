@@ -6,6 +6,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { alpha, type SxProps, type Theme } from '@mui/material/styles'
 
 import type { CurationDraftField } from '../types'
 import {
@@ -21,23 +22,25 @@ import {
   SubTableFieldValue,
 } from './fieldRenderers'
 
-const fieldInputSx = {
+const fieldInputSx: SxProps<Theme> = (theme) => ({
   '& .MuiOutlinedInput-root': {
-    backgroundColor: 'rgba(2, 9, 21, 0.5)',
+    backgroundColor: theme.palette.mode === 'dark'
+      ? alpha(theme.palette.common.black, 0.28)
+      : theme.palette.background.paper,
     borderRadius: 1,
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: theme.palette.text.primary,
     transition: 'background-color 160ms ease, border-color 160ms ease',
     '& fieldset': {
-      borderColor: 'rgba(255, 255, 255, 0.12)',
+      borderColor: theme.palette.divider,
     },
     '&:hover fieldset': {
-      borderColor: 'rgba(100, 181, 246, 0.38)',
+      borderColor: alpha(theme.palette.primary.main, 0.5),
     },
     '&.Mui-focused fieldset': {
-      borderColor: '#2196f3',
+      borderColor: theme.palette.primary.main,
     },
     '&.Mui-disabled': {
-      backgroundColor: 'rgba(255, 255, 255, 0.035)',
+      backgroundColor: theme.palette.action.disabledBackground,
     },
   },
   '& .MuiOutlinedInput-input': {
@@ -48,9 +51,9 @@ const fieldInputSx = {
     fontSize: '0.84rem',
   },
   '& .MuiInputBase-input.Mui-disabled': {
-    WebkitTextFillColor: 'rgba(255, 255, 255, 0.58)',
+    WebkitTextFillColor: theme.palette.action.disabled,
   },
-}
+})
 
 interface ResolvedFieldOption {
   key: string

@@ -499,6 +499,27 @@ describe('InteractiveHorizontalCurationGrid', () => {
     unsubscribe()
   })
 
+  it('opens prototype-fidelity read-only evidence details while focusing the PDF', async () => {
+    const user = userEvent.setup()
+    const navigateEvidence = vi.fn()
+    const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
+    renderGrid()
+
+    await user.click(screen.getByRole('button', { name: 'Show evidence 1 for Authors' }))
+
+    const details = screen.getByRole('dialog', { name: /Authors:/ })
+    expect(within(details).getByText('Evidence & validation details')).toBeInTheDocument()
+    expect(within(details).getByText('Highlighted passage from the paper')).toBeInTheDocument()
+    expect(within(details).getByText('Evidence for citation.authors')).toBeInTheDocument()
+    expect(within(details).getByText(/Current status:/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
+    expect(navigateEvidence).toHaveBeenCalledTimes(1)
+
+    await user.click(within(details).getByRole('button', { name: 'Close evidence details' }))
+    expect(screen.queryByRole('dialog', { name: /Authors:/ })).not.toBeInTheDocument()
+    unsubscribe()
+  })
+
   it('disables unresolved field and context evidence without dispatching navigation', () => {
     const navigateEvidence = vi.fn()
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)

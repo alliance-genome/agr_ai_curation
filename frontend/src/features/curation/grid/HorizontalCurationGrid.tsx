@@ -19,6 +19,7 @@ import {
   Typography,
 } from '@mui/material'
 import { alpha, useMediaQuery, useTheme } from '@mui/material'
+import { lighten } from '@mui/material/styles'
 
 import {
   HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
@@ -175,10 +176,19 @@ export default function HorizontalCurationGrid({
   // Sticky cells must be opaque or scrolled text remains visible beneath them.
   const headerColor = theme.palette.mode === 'dark'
     ? theme.palette.grey[900]
-    : theme.palette.grey[50]
+    : '#fafaf8'
   const pinnedColor = theme.palette.mode === 'dark'
-    ? theme.palette.grey[800]
-    : theme.palette.grey[100]
+    ? lighten(surfaceColor, 0.06)
+    : '#f3f8f6'
+  const alternateSurfaceColor = theme.palette.mode === 'dark'
+    ? lighten(surfaceColor, 0.025)
+    : '#fdfdfc'
+  const hoverSurfaceColor = theme.palette.mode === 'dark'
+    ? lighten(surfaceColor, 0.08)
+    : '#eff8f6'
+  const rightSurfaceColor = theme.palette.mode === 'dark'
+    ? lighten(surfaceColor, 0.045)
+    : '#f7f9f8'
   const selectedRow = model.rows.find((row) => row.candidateId === selectedCandidateId) ?? null
 
   const togglePin = (column: HorizontalGridColumn) => {
@@ -212,15 +222,20 @@ export default function HorizontalCurationGrid({
     offset: number,
     isHeader: boolean,
     isLastPinned = false,
+    bodyColor = surfaceColor,
   ) => ({
     [side]: offset,
     position: 'sticky' as const,
     zIndex: isHeader ? 6 : 4,
-    backgroundColor: isHeader ? (side === 'left' ? pinnedColor : headerColor) : surfaceColor,
-    boxShadow: isLastPinned
-      ? `5px 0 10px ${alpha(theme.palette.common.black, 0.18)}`
+    backgroundColor: isHeader
+      ? (side === 'left' ? pinnedColor : headerColor)
       : side === 'right'
-        ? `-5px 0 10px ${alpha(theme.palette.common.black, 0.18)}`
+        ? rightSurfaceColor
+        : bodyColor,
+    boxShadow: isLastPinned
+      ? `5px 0 9px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.28 : 0.1)}`
+      : side === 'right'
+        ? `-5px 0 10px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.28 : 0.09)}`
         : undefined,
   })
 
@@ -510,20 +525,17 @@ export default function HorizontalCurationGrid({
                 </TableCell>
               </TableRow>
             ) : (
-              model.rows.map((row) => {
+              model.rows.map((row, rowIndex) => {
                 const cellsByColumnKey = new Map(row.cells.map((cell) => [cell.columnKey, cell]))
+                const rowSurfaceColor = rowIndex % 2 === 0 ? surfaceColor : alternateSurfaceColor
 
                 return (
                     <TableRow
+                      aria-selected={row.candidateId === selectedCandidateId}
                       data-candidate-id={row.candidateId}
                       data-selected={row.candidateId === selectedCandidateId ? 'true' : 'false'}
                       key={row.candidateId}
-                      sx={{
-                        height: rowHeight,
-                        '& > *': row.candidateId === selectedCandidateId
-                          ? { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: -2 }
-                          : undefined,
-                      }}
+                      sx={{ height: rowHeight }}
                     >
                     <TableCell
                       component="th"
@@ -531,13 +543,20 @@ export default function HorizontalCurationGrid({
                       data-sticky="left"
                       scope="row"
                       sx={{
-                        ...stickyCellSx('left', 0, false, activePinnedColumnKeys.length === 0),
+                        ...stickyCellSx(
+                          'left',
+                          0,
+                          false,
+                          activePinnedColumnKeys.length === 0,
+                          rowSurfaceColor,
+                        ),
                         minWidth: CONTEXT_COLUMN_WIDTH,
                         px: 1.25,
                         py: density === 'compact' ? 1 : 2,
                         borderRight: `1px solid ${theme.palette.divider}`,
                         borderBottom: `1px solid ${theme.palette.divider}`,
                         verticalAlign: 'top',
+                        '&:hover': { backgroundColor: hoverSurfaceColor },
                       }}
                     >
                       {renderContextCell({ cell: row.contextCell, row })}
@@ -568,8 +587,9 @@ export default function HorizontalCurationGrid({
                                   CONTEXT_COLUMN_WIDTH + pinnedIndex * FIELD_COLUMN_WIDTH,
                                   false,
                                   isLastPinned,
+                                  rowSurfaceColor,
                                 )
-                              : { backgroundColor: surfaceColor }),
+                              : { backgroundColor: rowSurfaceColor }),
                             minWidth: FIELD_COLUMN_WIDTH,
                             px: 1.25,
                             py: density === 'compact' ? 1 : 2,
@@ -585,6 +605,7 @@ export default function HorizontalCurationGrid({
                               outline: `2px solid ${theme.palette.primary.main}`,
                               outlineOffset: -2,
                             },
+                            '&:hover': { backgroundColor: hoverSurfaceColor },
                           }}
                         >
                           <Stack height="100%" justifyContent="space-between" spacing={1}>

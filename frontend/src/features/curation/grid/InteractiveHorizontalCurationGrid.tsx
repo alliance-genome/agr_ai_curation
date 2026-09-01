@@ -26,7 +26,11 @@ import {
   HorizontalGridContextCellContent,
   HorizontalGridFieldCellContent,
 } from './HorizontalGridCells'
+import HorizontalGridEvidencePopover, {
+  type HorizontalGridEvidencePopoverTarget,
+} from './HorizontalGridEvidencePopover'
 import HorizontalGridFieldEditorDialog from './HorizontalGridFieldEditorDialog'
+import { formatHorizontalGridValue } from './horizontalGridFormatting'
 
 interface EditingTarget {
   candidateId: string
@@ -91,6 +95,7 @@ export default function InteractiveHorizontalCurationGrid({
   } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
   const [editingTarget, setEditingTarget] = useState<EditingTarget | null>(null)
+  const [evidenceTarget, setEvidenceTarget] = useState<HorizontalGridEvidencePopoverTarget | null>(null)
 
   const selectCandidate = useCallback((candidateId: string) => {
     if (activeCandidateId !== candidateId) {
@@ -146,13 +151,22 @@ export default function InteractiveHorizontalCurationGrid({
         field={field}
         isSaving={autosave.isSaving}
         onEdit={(editableField) => {
+          setEvidenceTarget(null)
           setEditingTarget({
             candidateId: candidate.candidate_id,
             fieldKey: editableField.field_key,
             fieldPath: args.cell.fieldPath,
           })
         }}
-        onEvidence={(projection, command) => {
+        onEvidence={(projection, command, anchorEl) => {
+          setEvidenceTarget({
+            anchorEl,
+            fieldLabel: field?.label ?? args.column.label,
+            fieldValue: field ? formatHorizontalGridValue(field.value) ?? '—' : '—',
+            projection,
+            state: field ? fieldState(field, args.cell.validation.summaries) : null,
+            validationMessages: args.cell.validation.summaries.flatMap((summary) => summary.messages),
+          })
           dispatchEvidenceNavigationCommand(
             command,
             {
@@ -173,7 +187,15 @@ export default function InteractiveHorizontalCurationGrid({
     <HorizontalGridContextCellContent
       active={activeCandidateId === row.candidateId}
       cell={cell}
-      onEvidence={(projection, command) => {
+      onEvidence={(projection, command, anchorEl) => {
+        setEvidenceTarget({
+          anchorEl,
+          fieldLabel: 'Object evidence',
+          fieldValue: cell.value.identityLabel,
+          projection,
+          state: null,
+          validationMessages: [],
+        })
         dispatchEvidenceNavigationCommand(
           command,
           {
@@ -197,6 +219,10 @@ export default function InteractiveHorizontalCurationGrid({
         renderCellActions={renderCellActions}
         renderContextCell={renderContextCell}
         renderFieldCell={renderFieldCell}
+      />
+      <HorizontalGridEvidencePopover
+        onClose={() => setEvidenceTarget(null)}
+        target={evidenceTarget}
       />
       <HorizontalGridFieldEditorDialog
         autosaveWarning={autosave.warning}
