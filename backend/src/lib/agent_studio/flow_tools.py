@@ -66,6 +66,7 @@ from .diagnostic_tools import get_diagnostic_tools_registry
 from .flow_agent_policy import (
     agent_allows_ordinary_flow_step,
     attachment_only_validator_reason,
+    flow_palette_show_in_palette,
 )
 
 logger = logging.getLogger(__name__)
@@ -235,7 +236,7 @@ def _simplified_flow_recovery_help(errors: List[str]) -> str:
             "and {{timestamp}}"
         )
     if "agent_id" in first_error:
-        return f"Valid agent IDs: {', '.join(FLOW_AGENT_IDS)}"
+        return "Call get_available_agents and select a currently available agent ID"
     if "source_steps" in first_error:
         return (
             "Bind formatter source_steps to one or more earlier Extraction or "
@@ -262,8 +263,10 @@ def _simplified_flow_steps_schema() -> Dict[str, Any]:
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "enum": FLOW_AGENT_IDS,
-                    "description": "Agent to use for this step",
+                    "description": (
+                        "Agent to use for this step. Select a current ID from "
+                        "get_available_agents."
+                    ),
                 },
                 "step_goal": {
                     "type": "string",
@@ -668,7 +671,10 @@ def _build_simplified_flow_definition(
                 "entry_node_id": "task_input_0",
             }
         )
-        return apply_flow_validation_attachment_defaults(flow_definition)
+        return apply_flow_validation_attachment_defaults(
+            flow_definition,
+            agent_registry=agent_registry,
+        )
     except ValidationError as exc:
         validation_errors = [
             str(error.get("msg") or "Flow validation failed")
@@ -694,22 +700,31 @@ def build_flow_definition_from_recipe(
     )
 
 
-def _accessible_flow_agent_ids() -> set[str]:
-    """Return database-backed flow agents available to the current request."""
+def _accessible_flow_agent_catalog() -> Dict[str, Dict[str, Any]]:
+    """Return request-visible palette agents sorted by normalized runtime ID."""
 
     from src.lib.agent_studio.catalog_service import list_available_agents
 
     user_id = get_current_user_id()
     if user_id is None:
-        return set()
-    return {
-        str(agent["agent_id"])
-        for agent in list_available_agents(
-            db_user_id=user_id,
-            authenticated_groups=get_current_active_group_ids(),
-        )
-        if str(agent.get("agent_id") or "") in FLOW_AGENT_IDS
-    }
+        return {}
+
+    available: Dict[str, Dict[str, Any]] = {}
+    for metadata in list_available_agents(
+        db_user_id=user_id,
+        authenticated_groups=get_current_active_group_ids(),
+    ):
+        agent_id = str(metadata.get("agent_id") or "").strip()
+        if not agent_id or not flow_palette_show_in_palette(agent_id, metadata):
+            continue
+        available[agent_id] = {
+            **metadata,
+            "name": metadata.get("display_name") or agent_id,
+            "description": metadata.get("description") or "",
+            "category": metadata.get("category") or "Unknown",
+            "requires_document": bool(metadata.get("requires_document", False)),
+        }
+    return dict(sorted(available.items()))
 
 
 def _build_output_suggestion(
@@ -1022,30 +1037,24 @@ def _create_flow_handler():
                 "help": recovery_help,
             }
 
+        available_agents = _accessible_flow_agent_catalog()
+        accessible_agent_ids = set(available_agents)
+        validation_attachment_registry = {
+            **AGENT_REGISTRY,
+            **available_agents,
+        }
         try:
             validated_flow_def = _build_simplified_flow_definition(
                 steps=steps,
                 task_instructions=description,
+                flow_agent_ids=sorted(accessible_agent_ids),
+                agent_registry=validation_attachment_registry,
             )
         except _SimplifiedFlowValidationError as exc:
             return {
                 "success": False,
                 "error": exc.errors[0],
                 "help": _simplified_flow_recovery_help(exc.errors),
-            }
-
-        accessible_agent_ids = _accessible_flow_agent_ids()
-        if any(
-            isinstance(step, dict)
-            and str(step.get("agent_id") or "").strip() in FLOW_AGENT_IDS
-            and str(step.get("agent_id") or "").strip()
-            not in accessible_agent_ids
-            for step in steps
-        ):
-            return {
-                "success": False,
-                "error": "Flow references unavailable agents",
-                "help": "Re-select agents from get_available_agents before saving.",
             }
 
         flow_definition = validated_flow_def.model_dump()
@@ -1120,7 +1129,12 @@ def _validate_flow_handler():
         errors = _simplified_flow_metadata_errors(name=name)
         warnings: List[str] = []
         suggestions: List[str] = []
-        available_agent_ids = _accessible_flow_agent_ids()
+        available_agents = _accessible_flow_agent_catalog()
+        available_agent_ids = set(available_agents)
+        validation_attachment_registry = {
+            **AGENT_REGISTRY,
+            **available_agents,
+        }
         recipe_catalog = load_flow_recipe_catalog()
         equivalences = _agent_id_equivalences(recipe_catalog)
 
@@ -1128,19 +1142,13 @@ def _validate_flow_handler():
             _build_simplified_flow_definition(
                 steps=steps,
                 task_instructions="Agent Studio validation preflight",
+                flow_agent_ids=sorted(available_agent_ids),
+                agent_registry=validation_attachment_registry,
             )
         except _SimplifiedFlowValidationError as exc:
             errors.extend(exc.errors)
 
         validated_steps = steps if isinstance(steps, list) else []
-        if any(
-            isinstance(step, dict)
-            and str(step.get("agent_id") or "").strip() in FLOW_AGENT_IDS
-            and str(step.get("agent_id") or "").strip()
-            not in available_agent_ids
-            for step in validated_steps
-        ):
-            errors.append("Flow references unavailable agents")
         seen_agents: set[str] = set()
         for i, step in enumerate(validated_steps):
             if not isinstance(step, dict):
@@ -1238,17 +1246,16 @@ def _get_flow_templates_handler():
             raise ValueError("detail_kind must be 'template' or 'agent'")
         normalized_category = str(category).strip() if category else None
 
-        accessible_agent_ids = _accessible_flow_agent_ids()
+        accessible_agents = _accessible_flow_agent_catalog()
         all_agents = [
             {
                 "agent_id": agent_id,
-                "display_name": AGENT_REGISTRY.get(agent_id, {}).get("name", agent_id),
-                "description": AGENT_REGISTRY.get(agent_id, {}).get("description", ""),
-                "category": AGENT_REGISTRY.get(agent_id, {}).get("category", "Unknown"),
-                "requires_document": AGENT_REGISTRY.get(agent_id, {}).get("requires_document", False),
+                "display_name": metadata["name"],
+                "description": metadata["description"],
+                "category": metadata["category"],
+                "requires_document": metadata["requires_document"],
             }
-            for agent_id in FLOW_AGENT_IDS
-            if agent_id in accessible_agent_ids
+            for agent_id, metadata in accessible_agents.items()
         ]
 
         matched_agents = [
@@ -1263,7 +1270,11 @@ def _get_flow_templates_handler():
             )
         ]
 
-        installed_agent_ids = {agent["agent_id"] for agent in all_agents}
+        installed_agent_ids = {
+            agent["agent_id"]
+            for agent in all_agents
+            if agent["agent_id"] in FLOW_AGENT_IDS
+        }
         compatible_templates = _filter_flow_templates(
             installed_agent_ids,
             active_group_ids=get_current_active_group_ids(),
@@ -1616,12 +1627,7 @@ def _get_available_agents_handler():
         normalized_category = str(category).strip() if category else None
 
         matched: List[Dict[str, Any]] = []
-        accessible_agent_ids = _accessible_flow_agent_ids()
-        for agent_id, config in AGENT_REGISTRY.items():
-            if agent_id not in accessible_agent_ids:
-                continue
-            if not agent_allows_ordinary_flow_step(agent_id, config):
-                continue
+        for agent_id, config in _accessible_flow_agent_catalog().items():
 
             agent_category = config.get("category", "Unknown")
             if normalized_category and agent_category != normalized_category:

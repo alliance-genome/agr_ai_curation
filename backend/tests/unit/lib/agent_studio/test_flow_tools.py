@@ -43,8 +43,18 @@ def _isolate_flow_tool_state(monkeypatch):
     def _available_agents(*, db_user_id=None, authenticated_groups=None):
         assert db_user_id is not None
         return [
-            {"agent_id": agent_id}
+            {
+                **entry,
+                "agent_id": agent_id,
+                "display_name": entry.get("name", agent_id),
+                "description": entry.get("description", ""),
+                "category": entry.get("category", "Unknown"),
+                "requires_document": entry.get("requires_document", False),
+                "supervisor": entry.get("supervisor", {}),
+                "frontend": entry.get("frontend", {"show_in_palette": True}),
+            }
             for agent_id, entry in flow_tools.AGENT_REGISTRY.items()
+            if agent_id in flow_tools.FLOW_AGENT_IDS
             if is_resource_access_allowed(
                 visibility_allowed=True,
                 allowed_group_ids=list(entry.get("allowed_group_ids") or []),
@@ -159,6 +169,11 @@ def test_validate_flow_handler_reports_errors_warnings_and_suggestions(monkeypat
         "FLOW_AGENT_IDS",
         ["pdf_extraction", "gene_expression", "chat_output", "gene_validation"],
     )
+    monkeypatch.setitem(
+        flow_tools.AGENT_REGISTRY["gene_validation"],
+        "supervisor",
+        {"enabled": True},
+    )
     validate = flow_tools._validate_flow_handler()
 
     result = validate(
@@ -187,6 +202,12 @@ def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
         "FLOW_AGENT_IDS",
         ["gene_validation", "disease_validation", "pdf_extraction", "chat_output"],
     )
+    for agent_id in ("gene_validation", "disease_validation"):
+        monkeypatch.setitem(
+            flow_tools.AGENT_REGISTRY[agent_id],
+            "supervisor",
+            {"enabled": True},
+        )
     validate = flow_tools._validate_flow_handler()
     result = validate(
         steps=[{"agent_id": "gene_validation"}, {"agent_id": "disease_validation"}],
@@ -212,6 +233,11 @@ def test_validate_flow_handler_only_mentions_installed_agent_ids(monkeypatch):
         "FLOW_AGENT_IDS",
         ["gene_expression_extraction", "gene_validation"],
     )
+    monkeypatch.setitem(
+        flow_tools.AGENT_REGISTRY["gene_validation"],
+        "supervisor",
+        {"enabled": True},
+    )
     validate = flow_tools._validate_flow_handler()
 
     result = validate(
@@ -232,6 +258,11 @@ def test_validate_flow_handler_accepts_gene_expression_alias_pair(monkeypatch):
         flow_tools,
         "FLOW_AGENT_IDS",
         ["gene_expression", "gene_expression_extraction", "gene_validation"],
+    )
+    monkeypatch.setitem(
+        flow_tools.AGENT_REGISTRY["gene_validation"],
+        "supervisor",
+        {"enabled": True},
     )
     validate = flow_tools._validate_flow_handler()
 
@@ -274,6 +305,7 @@ def test_validate_flow_handler_accepts_ordered_extraction_and_typed_validator_so
             "gene_validation": {
                 "category": "Validation",
                 "output_schema_key": "GeneResultEnvelope",
+                "supervisor": {"enabled": True},
             },
             "chat_output": {"category": "Output"},
         },
@@ -334,7 +366,10 @@ def test_validate_flow_handler_checks_every_grouped_source_with_shared_policy(
         "AGENT_REGISTRY",
         {
             "pdf_extraction": {"category": "Extraction"},
-            "untyped_validator": {"category": "Validation"},
+            "untyped_validator": {
+                "category": "Validation",
+                "supervisor": {"enabled": True},
+            },
             "chat_output": {"category": "Output"},
         },
     )
@@ -643,6 +678,7 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
                 "description": "Validate genes",
                 "category": "Validation",
                 "requires_document": False,
+                "supervisor": {"enabled": True},
             },
         },
     )
@@ -717,12 +753,14 @@ def test_get_flow_templates_handler_filters_missing_steps_and_resolves_installed
                 "description": "Validate genes",
                 "category": "Validation",
                 "requires_document": False,
+                "supervisor": {"enabled": True},
             },
             "gene_ontology_lookup": {
                 "name": "GO Specialist",
                 "description": "Validate GO terms",
                 "category": "Validation",
                 "requires_document": False,
+                "supervisor": {"enabled": True},
             },
         },
     )
@@ -761,18 +799,22 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
             "gene_validation": {
                 "category": "Validation",
                 "output_schema_key": "GeneResultEnvelope",
+                "supervisor": {"enabled": True},
             },
             "disease_validation": {
                 "category": "Validation",
                 "output_schema_key": "DiseaseValidationResult",
+                "supervisor": {"enabled": True},
             },
             "allele_validation": {
                 "category": "Validation",
                 "output_schema_key": "AlleleResultEnvelope",
+                "supervisor": {"enabled": True},
             },
             "gene_ontology_lookup": {
                 "category": "Validation",
                 "output_schema_key": "GOTermResultEnvelope",
+                "supervisor": {"enabled": True},
             },
             "chat_output": {"category": "Output"},
         },
@@ -964,11 +1006,11 @@ def test_rgd_recipe_discovery_instantiates_saved_flow_and_denies_non_rgd_creatio
         description=combined["description"],
         steps=combined["steps"],
     )
-    assert rejected == {
-        "success": False,
-        "error": "Flow references unavailable agents",
-        "help": "Re-select agents from get_available_agents before saving.",
-    }
+    assert rejected["success"] is False
+    assert "unknown agent_id 'rgd_go_paper_curator'" in rejected["error"]
+    assert rejected["help"] == (
+        "Call get_available_agents and select a currently available agent ID"
+    )
 
 
 def test_advertised_alliance_recipes_pass_the_public_validation_contract():
@@ -1223,6 +1265,213 @@ def test_get_available_agents_filters_restricted_agents_by_authenticated_groups(
     flow_tools._current_active_group_ids.set(("WB", "RGD"))
     allowed = flow_tools._get_available_agents_handler()()
     assert set(allowed["extraction_agents"]) == {"open", "rgd_only"}
+
+
+def test_custom_agent_discovery_applies_visibility_group_and_palette_policy(monkeypatch):
+    allowed_id = "ca_11111111-1111-1111-1111-111111111111"
+    restricted_id = "ca_22222222-2222-2222-2222-222222222222"
+    hidden_id = "ca_33333333-3333-3333-3333-333333333333"
+    attachment_only_id = "ca_55555555-5555-5555-5555-555555555555"
+
+    def _custom_catalog(*, db_user_id, authenticated_groups):
+        assert db_user_id == 42
+        agents = [
+            {
+                "agent_id": allowed_id,
+                "display_name": "My Extractor",
+                "description": "Visible custom extraction agent",
+                "category": "Extraction",
+                "frontend": {"show_in_palette": True},
+            },
+            {
+                "agent_id": hidden_id,
+                "display_name": "Hidden Extractor",
+                "description": "Hidden from the FlowBuilder palette",
+                "category": "Extraction",
+                "frontend": {"show_in_palette": False},
+            },
+            {
+                "agent_id": attachment_only_id,
+                "display_name": "Attachment-only Validator",
+                "description": "Runs only as an extraction validation attachment",
+                "category": "Validation",
+                "supervisor": {"enabled": False},
+                "frontend": {"show_in_palette": True},
+            },
+        ]
+        if "RGD" in authenticated_groups:
+            agents.append(
+                {
+                    "agent_id": restricted_id,
+                    "display_name": "RGD Extractor",
+                    "description": "Restricted custom extraction agent",
+                    "category": "Extraction",
+                    "frontend": {"show_in_palette": True},
+                }
+            )
+        return agents
+
+    monkeypatch.setattr(catalog_service, "list_available_agents", _custom_catalog)
+
+    flow_tools.set_workflow_user_context(42, active_group_ids=["MGI"])
+    denied = flow_tools._get_available_agents_handler()()
+    assert denied["extraction_agents"] == [allowed_id]
+    assert hidden_id not in denied["extraction_agents"]
+    denied_validation = flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": restricted_id}]
+    )
+    hidden_validation = flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": hidden_id}]
+    )
+    attachment_only_validation = flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": attachment_only_id}]
+    )
+    assert denied_validation["valid"] is False
+    assert hidden_validation["valid"] is False
+    assert attachment_only_validation["valid"] is False
+    denied_creation = flow_tools._create_flow_handler()(
+        name="Restricted custom flow",
+        description="Must not create with a restricted custom agent",
+        steps=[{"agent_id": restricted_id}],
+    )
+    hidden_creation = flow_tools._create_flow_handler()(
+        name="Hidden custom flow",
+        description="Must not create with a hidden custom agent",
+        steps=[{"agent_id": hidden_id}],
+    )
+    attachment_only_creation = flow_tools._create_flow_handler()(
+        name="Attachment-only validator flow",
+        description="Must not create with an attachment-only validator",
+        steps=[{"agent_id": attachment_only_id}],
+    )
+    assert denied_creation["success"] is False
+    assert hidden_creation["success"] is False
+    assert attachment_only_creation["success"] is False
+
+    flow_tools.set_workflow_user_context(42, active_group_ids=["RGD"])
+    allowed = flow_tools._get_available_agents_handler()()
+    assert allowed["extraction_agents"] == [allowed_id, restricted_id]
+    assert attachment_only_id not in allowed["validation_agents"]
+    assert flow_tools._validate_flow_handler()(
+        steps=[{"agent_id": restricted_id}]
+    )["valid"] is True
+
+
+def test_custom_agent_pagination_reconstructs_stable_order(monkeypatch):
+    catalog = {
+        agent_id: {
+            "agent_id": agent_id,
+            "display_name": agent_id.upper(),
+            "description": f"Description for {agent_id}",
+            "category": "Extraction",
+            "frontend": {"show_in_palette": True},
+        }
+        for agent_id in ("ca_z", "ca_a", "ca_m")
+    }
+    source_orders = [
+        [catalog["ca_z"], catalog["ca_a"], catalog["ca_m"]],
+        [catalog["ca_m"], catalog["ca_z"], catalog["ca_a"]],
+    ]
+
+    def page_ids(result):
+        if "available_agents" in result:
+            return [agent["agent_id"] for agent in result["available_agents"]]
+        return [
+            agent["agent_id"]
+            for agents in result["categories"].values()
+            for agent in agents
+        ]
+
+    for handler_factory in (
+        flow_tools._get_available_agents_handler,
+        flow_tools._get_flow_templates_handler,
+    ):
+        request_count = 0
+
+        def _reordered_catalog(**_kwargs):
+            nonlocal request_count
+            result = source_orders[request_count % len(source_orders)]
+            request_count += 1
+            return result
+
+        monkeypatch.setattr(
+            catalog_service,
+            "list_available_agents",
+            _reordered_catalog,
+        )
+        handler = handler_factory()
+
+        first = handler(limit=2)
+        second = handler(limit=2, cursor=first["next_cursor"])
+
+        assert page_ids(first) == ["ca_a", "ca_m"]
+        assert page_ids(second) == ["ca_z"]
+        assert first["next_cursor"] == "2"
+        assert second["next_cursor"] is None
+
+
+def test_create_flow_accepts_visible_custom_agent_metadata(monkeypatch):
+    custom_id = "ca_44444444-4444-4444-4444-444444444444"
+    monkeypatch.setattr(
+        catalog_service,
+        "list_available_agents",
+        lambda **_kwargs: [
+            {
+                "agent_id": custom_id,
+                "display_name": "Curator Custom Extractor",
+                "description": "Custom extraction instructions",
+                "category": "Extraction",
+                "curation": {"domain_pack_id": "agr.alliance.disease"},
+                "frontend": {"show_in_palette": True},
+            }
+        ],
+    )
+
+    class _FakeFlow:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _FakeDB:
+        def __init__(self):
+            self.added = None
+
+        def add(self, flow):
+            self.added = flow
+
+        def commit(self):
+            return None
+
+        def refresh(self, _flow):
+            return None
+
+        def close(self):
+            return None
+
+    db = _FakeDB()
+
+    def _get_db():
+        yield db
+
+    import src.models.sql as sql_module
+
+    monkeypatch.setattr(sql_module, "get_db", _get_db)
+    monkeypatch.setattr(sql_module, "CurationFlow", _FakeFlow)
+
+    result = flow_tools._create_flow_handler()(
+        name="Custom agent flow",
+        description="Run the visible custom extractor",
+        steps=[{"agent_id": custom_id}],
+    )
+
+    assert result["success"] is True
+    assert db.added is not None
+    node_data = db.added.flow_definition["nodes"][1]["data"]
+    assert node_data["agent_id"] == custom_id
+    assert node_data["agent_display_name"] == "Curator Custom Extractor"
+    assert any(
+        attachment["enabled"]
+        for attachment in node_data["validation_attachments"]
+    )
 
 
 def test_get_available_agents_handler_reports_core_only_install(monkeypatch):
@@ -1739,7 +1988,9 @@ def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
     unknown_agent = create("Flow A", "desc", [{"agent_id": "nope"}])
     assert unknown_agent["success"] is False
     assert "unknown agent_id" in unknown_agent["error"]
-    assert unknown_agent["help"].startswith("Valid agent IDs:")
+    assert unknown_agent["help"] == (
+        "Call get_available_agents and select a currently available agent ID"
+    )
 
     monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "4")
     long_name = create(
@@ -1803,6 +2054,7 @@ def test_create_flow_handler_success_and_db_errors(monkeypatch):
                 "name": "Gene Specialist",
                 "category": "Validation",
                 "output_schema_key": "GeneResultEnvelope",
+                "supervisor": {"enabled": True},
             },
             "csv_formatter": {
                 "name": "CSV Formatter",
@@ -2073,13 +2325,13 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
         agent["agent_id"]
         for agents in page["categories"].values()
         for agent in agents
-    ] == ["first_agent"]
-    assert page["next_call"]["arguments"]["cursor"] == "1"
+    ] == []
+    assert page["next_call"]["arguments"]["detail_index"] == 0
 
     chunks = []
     expected_hash = None
     previous_end = 0
-    returned_agent_ids = ["first_agent"]
+    returned_agent_ids = []
     next_call = page["next_call"]
     saw_detail = False
     while next_call is not None:
@@ -2097,7 +2349,7 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
 
         if result.get("detail_mode") == "agent_record":
             saw_detail = True
-            assert result["detail_index"] == 1
+            assert result["detail_index"] == 0
             assert result["range"]["start"] == previous_end
             assert result["range"]["end"] > previous_end
             previous_end = result["range"]["end"]
@@ -2238,7 +2490,7 @@ def test_get_flow_templates_top_level_continuation_reconstructs_both_collections
         assert response["next_call"] is not None
         response = handler(**response["next_call"]["arguments"])
 
-    assert returned_agent_ids == agent_ids
+    assert returned_agent_ids == sorted(agent_ids)
     assert returned_template_names == [template["name"] for template in templates]
 
 
@@ -2363,6 +2615,7 @@ def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeyp
     step_properties = create_steps_schema["items"][
         "properties"
     ]
+    assert "enum" not in step_properties["agent_id"]
     assert "source_steps" in step_properties
     assert "source_step" not in step_properties
     assert step_properties["source_steps"]["minItems"] == 1
