@@ -1,9 +1,22 @@
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded'
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import DoneAllRoundedIcon from '@mui/icons-material/DoneAllRounded'
 import PictureInPictureAltRoundedIcon from '@mui/icons-material/PictureInPictureAltRounded'
 import ViewStreamRoundedIcon from '@mui/icons-material/ViewStreamRounded'
 import { Box, Button, Chip, Stack, Typography } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
+
+import type { CurationCandidateStatus } from '@/features/curation/types'
+
+export interface SelectedCandidateDecisionControl {
+  label: string
+  status: CurationCandidateStatus
+  canAccept: boolean
+  isBusy: boolean
+  onAccept: () => void
+  onReject: () => void
+}
 
 export interface WorkPaneToolbarProps {
   totalCount: number
@@ -16,6 +29,7 @@ export interface WorkPaneToolbarProps {
     validated: number
   }
   isPdfVisible: boolean
+  selectedDecision: SelectedCandidateDecisionControl | null
   onAcceptAllValidated: () => void
   onAddObject: () => void
   onTogglePdf: () => void
@@ -27,6 +41,7 @@ export default function WorkPaneToolbar({
   validatedPendingCount,
   validationCounts,
   isPdfVisible,
+  selectedDecision,
   onAcceptAllValidated,
   onAddObject,
   onTogglePdf,
@@ -92,6 +107,47 @@ export default function WorkPaneToolbar({
         </Stack>
       </Stack>
       <Stack direction="row" spacing={0.75} alignItems="center" flexShrink={0} flexWrap="wrap" useFlexGap>
+        {selectedDecision?.status === 'pending' ? (
+          <Stack
+            aria-label={`Decision for ${selectedDecision.label}`}
+            direction="row"
+            spacing={0.5}
+          >
+            <Button
+              aria-label={`Accept ${selectedDecision.label}`}
+              color="success"
+              disabled={selectedDecision.isBusy || !selectedDecision.canAccept}
+              onClick={selectedDecision.onAccept}
+              size="small"
+              startIcon={<CheckRoundedIcon fontSize="small" />}
+              sx={{ borderRadius: 1, fontSize: '0.72rem', textTransform: 'none' }}
+              variant="outlined"
+            >
+              Accept
+            </Button>
+            <Button
+              aria-label={`Reject ${selectedDecision.label}`}
+              color="error"
+              disabled={selectedDecision.isBusy}
+              onClick={selectedDecision.onReject}
+              size="small"
+              startIcon={<CloseRoundedIcon fontSize="small" />}
+              sx={{ borderRadius: 1, fontSize: '0.72rem', textTransform: 'none' }}
+              variant="text"
+            >
+              Reject
+            </Button>
+          </Stack>
+        ) : selectedDecision ? (
+          <Chip
+            aria-label={`${selectedDecision.label} is ${selectedDecision.status}`}
+            color={selectedDecision.status === 'accepted' ? 'success' : 'default'}
+            label={selectedDecision.status}
+            size="small"
+            sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'capitalize' }}
+            variant="outlined"
+          />
+        ) : null}
         <Button
           onClick={onTogglePdf}
           size="small"

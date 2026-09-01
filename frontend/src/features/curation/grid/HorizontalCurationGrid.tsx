@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import ClearAllRoundedIcon from '@mui/icons-material/ClearAllRounded'
+import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined'
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import FindInPageOutlinedIcon from '@mui/icons-material/FindInPageOutlined'
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined'
@@ -9,6 +11,7 @@ import {
   Box,
   Button,
   IconButton,
+  Portal,
   Stack,
   Table,
   TableBody,
@@ -30,6 +33,7 @@ import {
   type HorizontalGridRow,
 } from './horizontalGridModel'
 import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import { horizontalGridValidationPreviewCounts } from './horizontalGridValidationPreview'
 
 const CONTEXT_COLUMN_WIDTH = 220
 const FIELD_COLUMN_WIDTH = 184
@@ -58,6 +62,7 @@ export interface HorizontalCurationGridProps {
   renderCellActions?: (args: HorizontalGridFieldRenderArgs) => ReactNode
   renderRowActions?: (row: HorizontalGridRow) => ReactNode
   selectedCandidateId?: string | null
+  validationPreviewNotice?: string
 }
 
 function DefaultContextCell({ cell }: HorizontalGridContextRenderArgs) {
@@ -121,6 +126,7 @@ export default function HorizontalCurationGrid({
   renderCellActions,
   renderRowActions,
   selectedCandidateId = null,
+  validationPreviewNotice = '',
 }: HorizontalCurationGridProps) {
   const theme = useTheme()
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -129,6 +135,9 @@ export default function HorizontalCurationGrid({
   const [density, setDensity] = useState<HorizontalGridDensity>('compact')
   const [pinnedColumnKeys, setPinnedColumnKeys] = useState<string[]>([])
   const [announcement, setAnnouncement] = useState('')
+  const [validationSummaryOpen, setValidationSummaryOpen] = useState(false)
+  const validationSummaryTriggerRef = useRef<HTMLButtonElement>(null)
+  const validationSummaryCloseRef = useRef<HTMLButtonElement>(null)
   const contextColumn = model.columns.find(
     (column) => column.key === HORIZONTAL_GRID_CONTEXT_COLUMN_KEY && column.kind === 'context',
   )
@@ -144,6 +153,10 @@ export default function HorizontalCurationGrid({
   const displayColumns = useMemo(
     () => orderedFieldColumns(model.columns, activePinnedColumnKeys),
     [activePinnedColumnKeys, model.columns],
+  )
+  const validationPreviewCounts = useMemo(
+    () => horizontalGridValidationPreviewCounts(model),
+    [model],
   )
 
   useEffect(() => {
@@ -164,6 +177,31 @@ export default function HorizontalCurationGrid({
     scrollRegion.addEventListener('wheel', handleWheel, { passive: false })
     return () => scrollRegion.removeEventListener('wheel', handleWheel)
   }, [])
+
+  useEffect(() => {
+    if (!validationSummaryOpen) {
+      return
+    }
+
+    validationSummaryCloseRef.current?.focus()
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return
+      }
+
+      event.preventDefault()
+      setValidationSummaryOpen(false)
+      validationSummaryTriggerRef.current?.focus()
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => document.removeEventListener('keydown', handleEscape)
+  }, [validationSummaryOpen])
+
+  useEffect(() => {
+    if (validationPreviewNotice) {
+      setAnnouncement(validationPreviewNotice)
+    }
+  }, [validationPreviewNotice])
 
   if (!contextColumn) {
     throw new Error('Horizontal grid model requires its canonical context column')
@@ -432,6 +470,32 @@ export default function HorizontalCurationGrid({
             </Button>
           ))}
         </Stack>
+
+          <Button
+            aria-controls="horizontal-grid-validation-summary"
+            aria-expanded={validationSummaryOpen}
+            onClick={() => setValidationSummaryOpen(true)}
+            ref={validationSummaryTriggerRef}
+            size="small"
+            sx={{
+              borderRadius: '5px',
+              color: 'text.primary',
+              fontSize: 11,
+              fontWeight: 650,
+              minWidth: 0,
+              px: '9px',
+              py: '8px',
+              textTransform: 'none',
+              '&:hover': {
+                backgroundColor: theme.palette.mode === 'dark'
+                  ? theme.palette.action.hover
+                  : '#edf1f1',
+              },
+            }}
+            variant="text"
+          >
+            Validation summary&nbsp;<span aria-hidden="true">⌄</span>
+          </Button>
 
           <Typography
             color="text.secondary"
@@ -858,6 +922,10 @@ export default function HorizontalCurationGrid({
             <Typography color="text.secondary" variant="caption">Evidence</Typography>
           </Stack>
           <Stack alignItems="center" direction="row" spacing={0.4}>
+            <CheckOutlinedIcon color="action" sx={{ fontSize: 15 }} />
+            <Typography color="text.secondary" variant="caption">Validate</Typography>
+          </Stack>
+          <Stack alignItems="center" direction="row" spacing={0.4}>
             <EditOutlinedIcon color="action" sx={{ fontSize: 15 }} />
             <Typography color="text.secondary" variant="caption">Edit</Typography>
           </Stack>
@@ -867,6 +935,125 @@ export default function HorizontalCurationGrid({
           </Typography>
         </Stack>
       </Stack>
+
+      <Portal>
+      <Box
+        aria-hidden={!validationSummaryOpen}
+        aria-labelledby="horizontal-grid-validation-summary-title"
+        aria-modal="false"
+        data-testid="horizontal-grid-validation-summary"
+        id="horizontal-grid-validation-summary"
+        role="dialog"
+        sx={{
+          position: 'fixed',
+          zIndex: theme.zIndex.modal,
+          top: '64px',
+          right: 0,
+          width: 'min(360px, 92vw)',
+          height: 'calc(100dvh - 64px)',
+          p: '22px',
+          borderLeft: `1px solid ${theme.palette.divider}`,
+          backgroundColor: theme.palette.background.paper,
+          boxShadow: theme.palette.mode === 'dark'
+            ? `-14px 0 34px ${alpha(theme.palette.common.black, 0.42)}`
+            : '-14px 0 34px rgba(22, 45, 54, 0.18)',
+          pointerEvents: validationSummaryOpen ? 'auto' : 'none',
+          transform: validationSummaryOpen ? 'translateX(0)' : 'translateX(105%)',
+          transitionDuration: reducedMotion ? '0ms' : '220ms, 0ms',
+          transitionDelay: validationSummaryOpen || reducedMotion ? '0ms' : '0ms, 220ms',
+          transitionProperty: 'transform, visibility',
+          transitionTimingFunction: 'ease, linear',
+          visibility: validationSummaryOpen ? 'visible' : 'hidden',
+        }}
+      >
+        <Box>
+          <Typography
+            color="text.secondary"
+            sx={{
+              display: 'block',
+              mb: '3px',
+              fontSize: 9,
+              fontWeight: 770,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}
+          >
+            Validation summary
+          </Typography>
+          <Typography
+            component="h2"
+            id="horizontal-grid-validation-summary-title"
+            sx={{ fontSize: 15, fontWeight: 750, lineHeight: 1.25, m: 0, pr: 4 }}
+          >
+            {model.rows.length} {model.rows.length === 1 ? 'record' : 'records'} ·{' '}
+            {validationPreviewCounts.total} curated fields
+          </Typography>
+        </Box>
+        <IconButton
+          aria-label="Close validation summary"
+          onClick={() => {
+            setValidationSummaryOpen(false)
+            validationSummaryTriggerRef.current?.focus()
+          }}
+          ref={validationSummaryCloseRef}
+          size="small"
+          sx={{ position: 'absolute', right: 14, top: 16, height: 34, width: 34 }}
+        >
+          <CloseRoundedIcon fontSize="small" />
+        </IconButton>
+        <Box component="dl" sx={{ mt: '24px', mb: '24px', borderTop: `1px solid ${theme.palette.divider}` }}>
+          {([
+            ['✓', 'Curator validated', validationPreviewCounts.resolved, theme.palette.mode === 'dark' ? theme.palette.success.dark : '#0b7d72'],
+            ['!', 'Needs review', validationPreviewCounts.needsReview, theme.palette.mode === 'dark' ? theme.palette.warning.dark : '#c8882d'],
+            ['×', 'Not validated', validationPreviewCounts.notValidated, theme.palette.mode === 'dark' ? theme.palette.error.dark : '#d25b48'],
+          ] as const).map(([symbol, label, count, color]) => (
+            <Box
+              component="div"
+              key={label}
+              sx={{
+                alignItems: 'center',
+                borderBottom: `1px solid ${theme.palette.divider}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                py: '13px',
+              }}
+            >
+              <Box component="dt" sx={{ alignItems: 'center', display: 'flex', gap: '8px', fontSize: 12 }}>
+                <Box
+                  aria-hidden="true"
+                  component="span"
+                  sx={{
+                    alignItems: 'center',
+                    backgroundColor: color,
+                    borderRadius: '50%',
+                    color: theme.palette.common.white,
+                    display: 'inline-flex',
+                    fontSize: 10,
+                    fontWeight: 900,
+                    height: 17,
+                    justifyContent: 'center',
+                    width: 17,
+                  }}
+                >
+                  {symbol}
+                </Box>
+                {label}
+              </Box>
+              <Box component="dd" sx={{ fontSize: 17, fontWeight: 750, m: 0 }}>
+                {count}
+              </Box>
+            </Box>
+          ))}
+        </Box>
+        <Typography color="text.secondary" sx={{ fontSize: 12, lineHeight: 1.5 }}>
+          Resolve blocking curated fields before final submission. Identity/context and unavailable
+          fields do not participate in this summary.
+        </Typography>
+        <Typography color="text.secondary" sx={{ fontSize: 12, lineHeight: 1.5, mt: 1.5 }}>
+          Preview only: checkmarks update this view but do not run or save validation.
+        </Typography>
+      </Box>
+      </Portal>
 
       <Box
         aria-atomic="true"

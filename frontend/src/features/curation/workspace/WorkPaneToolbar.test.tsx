@@ -21,6 +21,7 @@ function renderToolbar(
       validated: 7,
     },
     isPdfVisible: true,
+    selectedDecision: null,
     onAcceptAllValidated: vi.fn(),
     onAddObject: vi.fn(),
     onTogglePdf: vi.fn(),
@@ -75,6 +76,60 @@ describe('WorkPaneToolbar', () => {
     expect(onAddObject).toHaveBeenCalledTimes(1)
     expect(onTogglePdf).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button', { name: /validate all/i })).not.toBeInTheDocument()
+  })
+
+  it('owns authoritative decisions for the selected pending candidate', async () => {
+    const user = userEvent.setup()
+    const onAccept = vi.fn()
+    const onReject = vi.fn()
+    renderToolbar({
+      selectedDecision: {
+        label: 'Reference one',
+        status: 'pending',
+        canAccept: true,
+        isBusy: false,
+        onAccept,
+        onReject,
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Accept Reference one' }))
+    await user.click(screen.getByRole('button', { name: 'Reject Reference one' }))
+
+    expect(onAccept).toHaveBeenCalledTimes(1)
+    expect(onReject).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps selected-candidate Accept gated by authoritative validation', () => {
+    renderToolbar({
+      selectedDecision: {
+        label: 'Reference one',
+        status: 'pending',
+        canAccept: false,
+        isBusy: false,
+        onAccept: vi.fn(),
+        onReject: vi.fn(),
+      },
+    })
+
+    expect(screen.getByRole('button', { name: 'Accept Reference one' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Reject Reference one' })).toBeEnabled()
+  })
+
+  it('shows the selected candidate decision without mounting controls after review', () => {
+    renderToolbar({
+      selectedDecision: {
+        label: 'Reference one',
+        status: 'accepted',
+        canAccept: false,
+        isBusy: false,
+        onAccept: vi.fn(),
+        onReject: vi.fn(),
+      },
+    })
+
+    expect(screen.getByLabelText('Reference one is accepted')).toHaveTextContent('accepted')
+    expect(screen.queryByRole('button', { name: 'Accept Reference one' })).not.toBeInTheDocument()
   })
 
   it('shows PDF restore without mounting validation execution controls', () => {

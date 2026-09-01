@@ -4,6 +4,7 @@ import { getCurationAdapterEditorPack } from '@/features/curation/adapters'
 import {
   dispatchEvidenceNavigationCommand,
 } from '@/features/curation/evidence'
+import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import type {
   CurationCandidate,
   CurationDraftField,
@@ -31,7 +32,14 @@ import HorizontalGridEvidencePopover, {
   type HorizontalGridEvidencePopoverTarget,
 } from './HorizontalGridEvidencePopover'
 import HorizontalGridFieldEditorDialog from './HorizontalGridFieldEditorDialog'
+import HorizontalGridValidationPreviewRowActions from './HorizontalGridValidationPreviewRowActions'
 import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import type { HorizontalGridModel } from './horizontalGridModel'
+import {
+  applyHorizontalGridValidationPreview,
+  horizontalGridValidationPreviewKey,
+  toggledHorizontalGridValidationPreviewState,
+} from './horizontalGridValidationPreview'
 
 interface EditingTarget {
   candidateId: string
@@ -39,9 +47,17 @@ interface EditingTarget {
   fieldPath: string
 }
 
+interface ValidationPreviewState {
+  model: HorizontalGridModel
+  notice: string
+  overrides: ReadonlyMap<string, FieldStateKind>
+}
+
+const EMPTY_VALIDATION_PREVIEW_OVERRIDES = new Map<string, FieldStateKind>()
+
 export type InteractiveHorizontalCurationGridProps = Omit<
   HorizontalCurationGridProps,
-  'renderCellActions' | 'renderContextCell' | 'renderFieldCell'
+  'renderCellActions' | 'renderContextCell' | 'renderFieldCell' | 'renderRowActions'
 >
 
 function candidateForRow(
@@ -97,6 +113,21 @@ export default function InteractiveHorizontalCurationGrid({
   const autosave = useCurationWorkspaceAutosave()
   const [editingTarget, setEditingTarget] = useState<EditingTarget | null>(null)
   const [evidenceTarget, setEvidenceTarget] = useState<HorizontalGridEvidencePopoverTarget | null>(null)
+  const [validationPreview, setValidationPreview] = useState<ValidationPreviewState>(() => ({
+    model,
+    notice: '',
+    overrides: EMPTY_VALIDATION_PREVIEW_OVERRIDES,
+  }))
+  const activeValidationPreviewOverrides = validationPreview.model === model
+    ? validationPreview.overrides
+    : EMPTY_VALIDATION_PREVIEW_OVERRIDES
+  const validationPreviewNotice = validationPreview.model === model
+    ? validationPreview.notice
+    : ''
+  const displayedModel = useMemo(
+    () => applyHorizontalGridValidationPreview(model, activeValidationPreviewOverrides),
+    [activeValidationPreviewOverrides, model],
+  )
 
   const selectCandidate = useCallback((candidateId: string) => {
     if (activeCandidateId !== candidateId) {
@@ -151,6 +182,7 @@ export default function InteractiveHorizontalCurationGrid({
         cell={args.cell}
         field={field}
         isSaving={autosave.isSaving}
+        recordLabel={args.row.contextCell.value.identityLabel}
         onEdit={(editableField) => {
           setEvidenceTarget(null)
           setEditingTarget({
@@ -180,9 +212,36 @@ export default function InteractiveHorizontalCurationGrid({
           )
         }}
         onSelect={() => selectCandidate(candidate.candidate_id)}
+        onToggleValidationPreview={(previewField) => {
+          const currentState = args.cell.state
+          if (currentState === null) {
+            return
+          }
+
+          const nextState = toggledHorizontalGridValidationPreviewState(currentState)
+          setValidationPreview((current) => {
+            const overrides = new Map(
+              current.model === model
+                ? current.overrides
+                : EMPTY_VALIDATION_PREVIEW_OVERRIDES,
+            )
+            overrides.set(
+              horizontalGridValidationPreviewKey(candidate.candidate_id, args.cell.fieldPath),
+              nextState,
+            )
+            return {
+              model,
+              notice: `${previewField.label} marked ${
+                nextState === 'resolved' ? 'curator validated' : 'as needing review'
+              } for this preview only. No validation was run or saved.`,
+              overrides,
+            }
+          })
+        }}
+        previewState={args.cell.state}
       />
     )
-  }, [autosave.isSaving, candidates, selectCandidate])
+  }, [autosave.isSaving, candidates, model, selectCandidate])
 
   const renderContextCell = useCallback(({ cell, row }: HorizontalGridContextRenderArgs) => (
     <HorizontalGridContextCellContent
@@ -212,15 +271,47 @@ export default function InteractiveHorizontalCurationGrid({
     />
   ), [activeCandidateId, selectCandidate])
 
+  const renderRowActions = useCallback((row: HorizontalGridModel['rows'][number]) => (
+    <HorizontalGridValidationPreviewRowActions
+      onValidate={() => {
+        selectCandidate(row.candidateId)
+        setValidationPreview((current) => {
+          const overrides = new Map(
+            current.model === model
+              ? current.overrides
+              : EMPTY_VALIDATION_PREVIEW_OVERRIDES,
+          )
+          for (const cell of row.cells) {
+            if (cell.hasField && cell.state !== null) {
+              overrides.set(
+                horizontalGridValidationPreviewKey(row.candidateId, cell.fieldPath),
+                'resolved',
+              )
+            }
+          }
+          return {
+            model,
+            notice: `${row.contextCell.value.identityLabel} marked curator validated for this preview only. No validation was run or saved.`,
+            overrides,
+          }
+        })
+      }}
+      row={row}
+    />
+  ), [model, selectCandidate])
+
   return (
     <>
       <HorizontalCurationGrid
         {...gridProps}
-        model={model}
+        model={displayedModel}
         selectedCandidateId={activeCandidateId}
         renderCellActions={renderCellActions}
         renderContextCell={renderContextCell}
         renderFieldCell={renderFieldCell}
+        renderRowActions={renderRowActions}
+        rowActionsLabel="Validate"
+        validationPreviewNotice={validationPreviewNotice}
       />
       <HorizontalGridEvidencePopover
         onClose={() => setEvidenceTarget(null)}

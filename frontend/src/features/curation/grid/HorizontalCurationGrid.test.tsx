@@ -262,7 +262,9 @@ describe('HorizontalCurationGrid', () => {
     expect(screen.getByTestId('horizontal-grid-selected-record')).toHaveTextContent('Object one selected')
     expect(screen.getByText('Pin headers')).toBeInTheDocument()
     expect(screen.getByText('Evidence')).toBeInTheDocument()
+    expect(screen.getByText('Validate')).toBeInTheDocument()
     expect(screen.getByText('Edit')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Validation summary/ })).toBeInTheDocument()
 
     const dataRowElement = screen.getAllByRole('row')[1]
     const dataRow = within(dataRowElement)

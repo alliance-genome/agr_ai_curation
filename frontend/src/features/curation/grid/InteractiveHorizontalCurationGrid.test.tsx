@@ -17,7 +17,7 @@ import {
   type CurationWorkspaceContextValue,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import type { UseAutosaveReturn } from '@/features/curation/workspace/useAutosave'
-import theme from '@/theme'
+import theme, { createAppTheme, type ThemeMode } from '@/theme'
 import InteractiveHorizontalCurationGrid from './InteractiveHorizontalCurationGrid'
 import {
   HORIZONTAL_GRID_CONTEXT_COLUMN_KEY,
@@ -408,10 +408,12 @@ function createAutosave(overrides: Partial<UseAutosaveReturn> = {}): UseAutosave
 function renderGrid({
   autosave = createAutosave(),
   model = buildModel(),
+  mode,
   workspace: initialWorkspace = buildWorkspace(),
 }: {
   autosave?: UseAutosaveReturn
   model?: HorizontalGridModel | ((workspace: CurationWorkspace) => HorizontalGridModel)
+  mode?: ThemeMode
   workspace?: CurationWorkspace
 } = {}) {
   const setActiveCandidate = vi.fn()
@@ -449,7 +451,7 @@ function renderGrid({
 
   render(
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={theme}>
+      <ThemeProvider theme={mode ? createAppTheme(mode) : theme}>
         <Harness />
       </ThemeProvider>
     </QueryClientProvider>,
@@ -476,6 +478,10 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
     const { setActiveCandidate } = renderGrid()
 
+    expect(screen.getByRole('group', {
+      name: 'Actions for Authors: Ada Lovelace, Grace Hopper in Reference one',
+    })).toBeInTheDocument()
+
     await user.click(screen.getByRole('button', {
       name: /Select Authors for citation\.authors/,
     }))
@@ -484,7 +490,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     await user.click(screen.getByRole('button', { name: 'Select Reference one' }))
     expect(setActiveCandidate).toHaveBeenCalledWith('candidate-1')
 
-    await user.click(screen.getByRole('button', { name: 'Show evidence 1 for Authors' }))
+    await user.click(screen.getByRole('button', { name: /^Show evidence 1 for Authors:/ }))
     expect(navigateEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
       detail: {
         command: expect.objectContaining({
@@ -513,14 +519,14 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const unsubscribe = onPDFViewerNavigateEvidence(navigateEvidence)
     renderGrid()
 
-    await user.click(screen.getByRole('button', { name: 'Show evidence 1 for Authors' }))
+    await user.click(screen.getByRole('button', { name: /^Show evidence 1 for Authors:/ }))
 
     const details = screen.getByRole('dialog', { name: /Authors:/ })
     expect(within(details).getByText('Evidence & validation details')).toBeInTheDocument()
     expect(within(details).getByText('Highlighted passage from the paper')).toBeInTheDocument()
     expect(within(details).getByText('Evidence for citation.authors')).toBeInTheDocument()
     expect(within(details).getByText(/Current status:/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
+    expect(within(details).queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
     expect(navigateEvidence).toHaveBeenCalledTimes(1)
     expect(within(details).getByRole('button', { name: 'Close evidence details' })).toHaveFocus()
 
@@ -584,7 +590,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     })
 
     const fieldEvidence = screen.getByRole('button', {
-      name: 'Evidence 1 for Authors has no navigable PDF location',
+      name: /^Evidence 1 for Authors:.*has no navigable PDF location$/,
     })
     const objectEvidence = screen.getByRole('button', {
       name: 'Object evidence 1 for Reference one has no navigable PDF location',
@@ -605,7 +611,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const autosave = createAutosave({ warning: 'Draft version conflict; edits remain local.' })
     renderGrid({ autosave })
 
-    await user.click(screen.getByRole('button', { name: 'Edit Authors' }))
+    await user.click(screen.getByRole('button', { name: /^Edit Authors:/ }))
 
     expect(screen.getByRole('dialog', { name: 'Edit Authors' })).toBeInTheDocument()
     expect(screen.getByText('Draft version conflict; edits remain local.')).toBeInTheDocument()
@@ -623,7 +629,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(autosave.flush).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: 'Edit Authors' }))
+    await user.click(screen.getByRole('button', { name: /^Edit Authors:/ }))
     await user.click(screen.getByRole('button', { name: 'Restore extracted value' }))
     await user.click(screen.getByRole('button', { name: 'Save value' }))
     expect(autosave.queueFieldChange).toHaveBeenLastCalledWith({
@@ -633,27 +639,93 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(autosave.flush).toHaveBeenCalledTimes(2)
   })
 
-  it('does not expose edit or validation actions for read-only or unavailable cells', () => {
+  it('keeps preview validation available for read-only fields but not unavailable cells', () => {
     renderGrid()
 
-    expect(screen.queryByRole('button', { name: 'Edit Locked identifier' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Validate Locked identifier' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Edit Locked identifier:/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Validate Locked identifier:/ })).toBeEnabled()
     expect(screen.getByText('Not available')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Edit Missing field' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Validate Missing field' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Edit Missing field:/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Validate Missing field:/ })).not.toBeInTheDocument()
   })
 
-  it('keeps editing and evidence available while validation execution stays unmounted', () => {
+  it('toggles preview validation locally while execution stays unmounted', async () => {
+    const user = userEvent.setup()
     const autosave = createAutosave({ isSaving: true })
     renderGrid({ autosave })
 
-    expect(screen.getByRole('button', { name: 'Edit Authors' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Show evidence 1 for Authors' })).toBeEnabled()
-    expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Edit Authors:/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Show evidence 1 for Authors:/ })).toBeEnabled()
+    const validateAuthors = screen.getByRole('button', { name: /^Validate Authors:/ })
+    expect(validateAuthors).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(validateAuthors)
+
+    expect(screen.getByRole('button', { name: /^Mark as not validated Authors:/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Authors marked curator validated for this preview only. No validation was run or saved.',
+    )
     expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
+    expect(autosave.queueFieldChange).not.toHaveBeenCalled()
+    expect(autosave.flush).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Comfortable' }))
+    expect(screen.getByRole('status')).toHaveTextContent('Comfortable row density enabled')
   })
 
-  it('shows authoritative validation details compactly without mounting an action', () => {
+  it('mirrors the prototype row Validate control and keeps its progress local', async () => {
+    const user = userEvent.setup()
+    const autosave = createAutosave()
+    renderGrid({ autosave, mode: 'light' })
+
+    const validateRow = screen.getByRole('button', {
+      name: 'Validate all fields for Reference one',
+    })
+    expect(screen.getByRole('columnheader', { name: 'Validate' })).toHaveAttribute(
+      'data-sticky',
+      'right',
+    )
+    expect(validateRow).toBeEnabled()
+    expect(validateRow).toHaveStyle({
+      borderRadius: '4px',
+      color: '#076b65',
+      fontSize: '9px',
+      height: '22px',
+      width: '58px',
+    })
+    expect(screen.getByLabelText(
+      '0 of 2 fields curator validated for Reference one',
+    )).toHaveTextContent('0/2')
+
+    await user.click(validateRow)
+
+    expect(screen.getByRole('button', {
+      name: 'All fields validated for Reference one',
+    })).toBeDisabled()
+    expect(screen.getByLabelText(
+      '2 of 2 fields curator validated for Reference one',
+    )).toHaveTextContent('2/2')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Reference one marked curator validated for this preview only. No validation was run or saved.',
+    )
+
+    await user.click(screen.getByRole('button', { name: /^Mark as not validated Authors:/ }))
+
+    expect(screen.getByRole('button', {
+      name: 'Validate all fields for Reference one',
+    })).toBeEnabled()
+    expect(screen.getByLabelText(
+      '1 of 2 fields curator validated for Reference one',
+    )).toHaveTextContent('1/2')
+    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
+    expect(autosave.queueFieldChange).not.toHaveBeenCalled()
+    expect(autosave.flush).not.toHaveBeenCalled()
+  })
+
+  it('shows authoritative validation details and seeds the local check state', () => {
     const summary = {
       ...resolvedSummary(),
       messages: [
@@ -666,7 +738,38 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const authorsCell = screen.getByTestId('horizontal-grid-field-authors')
     expect(authorsCell).toHaveAccessibleName(/Curator validated/)
     expect(screen.getByRole('img', { name: /Authors were validated by the server/ })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Mark as not validated Authors:/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
+  })
+
+  it('summarizes displayed preview states and restores focus when the drawer closes', async () => {
+    const user = userEvent.setup()
+    renderGrid({
+      model: buildModel({
+        authorsValidation: validationProjection([resolvedSummary()]),
+      }),
+    })
+
+    const summaryTrigger = screen.getByRole('button', { name: /Validation summary/ })
+    await user.click(summaryTrigger)
+
+    const summary = screen.getByRole('dialog', { name: /1 record · 2 curated fields/ })
+    expect(within(summary).getByText('Curator validated').nextSibling).toHaveTextContent('1')
+    expect(within(summary).getByText('Needs review').nextSibling).toHaveTextContent('0')
+    expect(within(summary).getByText('Not validated').nextSibling).toHaveTextContent('1')
+    expect(within(summary).getByText(/Preview only/)).toBeInTheDocument()
+    expect(within(summary).getByRole('button', { name: 'Close validation summary' })).toHaveFocus()
+
+    await user.click(screen.getByRole('button', { name: /^Validate Locked identifier:/ }))
+    expect(within(summary).getByText('Curator validated').nextSibling).toHaveTextContent('2')
+    expect(within(summary).getByText('Not validated').nextSibling).toHaveTextContent('0')
+
+    await user.keyboard('{Escape}')
+    expect(summary).toHaveAttribute('aria-hidden', 'true')
+    expect(summaryTrigger).toHaveFocus()
     expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
   })
 })

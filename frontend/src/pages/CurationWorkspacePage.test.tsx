@@ -604,7 +604,10 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByText('Review objects')).toBeInTheDocument()
     expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent('1 validated')
     expect(screen.getByLabelText('Authoritative validation summary')).toHaveTextContent('1 need review')
-    expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Validation summary/ })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', {
+      name: /^(Validate|Mark as not validated) /,
+    }).length).toBeGreaterThan(0)
 
     expect(screen.getAllByText('Accepted candidate').length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: 'Focus grid' }))
@@ -659,7 +662,7 @@ describe('CurationWorkspacePage', () => {
       name: /Select Gene symbol for gene\.symbol/,
     })).toBeInTheDocument()
     expect(screen.getByRole('button', {
-      name: 'Show evidence 1 for Gene symbol',
+      name: /^Show evidence 1 for Gene symbol:/,
     })).toBeInTheDocument()
 
     act(() => {
@@ -1206,7 +1209,7 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1/candidate-accepted')
 
     const activeRow = await screen.findByRole('row', { name: /Accepted candidate/i })
-    fireEvent.click(within(activeRow).getByRole('button', { name: 'Edit Gene symbol' }))
+    fireEvent.click(within(activeRow).getByRole('button', { name: /^Edit Gene symbol:/ }))
     expect(await screen.findByRole('dialog', { name: 'Edit Gene symbol' })).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Gene symbol'), {
@@ -1231,7 +1234,7 @@ describe('CurationWorkspacePage', () => {
     expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
   })
 
-  it('submits the row Accept action through the workspace decision service', async () => {
+  it('submits the selected-candidate toolbar Accept action through the workspace decision service', async () => {
     const workspace = buildWorkspace()
     workspace.candidates[1] = {
       ...workspace.candidates[1],
@@ -1319,7 +1322,7 @@ describe('CurationWorkspacePage', () => {
     })
 
     const pendingRow = screen.getByRole('row', { name: /Pending candidate/i })
-    fireEvent.click(within(pendingRow).getByRole('button', { name: 'Edit Gene symbol' }))
+    fireEvent.click(within(pendingRow).getByRole('button', { name: /^Edit Gene symbol:/ }))
     fireEvent.change(await screen.findByLabelText('Gene symbol'), {
       target: { value: 'APOE2' },
     })
@@ -1359,13 +1362,24 @@ describe('CurationWorkspacePage', () => {
     const acceptButton = await screen.findByRole('button', { name: 'Accept Pending candidate' })
     expect(acceptButton).toBeDisabled()
     expect(screen.getByLabelText('Authoritative validation summary')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
+    const previewValidation = screen.getAllByRole('button', { name: /^Validate / })[0]
+    expect(previewValidation).toBeDefined()
+    fireEvent.click(previewValidation!)
+    expect(screen.getAllByRole('button', { name: /^Mark as not validated / }).length)
+      .toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Validate all fields for Pending candidate',
+    }))
+    expect(acceptButton).toBeDisabled()
+    expect(screen.getByLabelText(
+      /fields curator validated for Pending candidate/,
+    )).toHaveTextContent(/\d+\/\d+/)
     expect(screen.queryByRole('button', { name: /Validating/ })).not.toBeInTheDocument()
     expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
     expect(serviceMocks.validateAllCurationSessionCandidates).not.toHaveBeenCalled()
   })
 
-  it('submits row rejection through the existing decision owner', async () => {
+  it('submits selected-candidate rejection through the toolbar decision owner', async () => {
     const workspace = buildWorkspace()
     const refreshedWorkspace: CurationWorkspace = {
       ...workspace,

@@ -22,9 +22,7 @@ import { usePersistentPdfWorkspaceLayout } from '@/components/pdfViewer/Persiste
 import { buildManualCandidateDraft } from '@/features/curation/entityTags/workspaceEntityTags'
 import {
   buildHorizontalGridModel,
-  HorizontalGridRowActions,
   InteractiveHorizontalCurationGrid,
-  type HorizontalGridRow,
 } from '@/features/curation/grid'
 import {
   readCurationQueueNavigationState,
@@ -297,6 +295,10 @@ function CurationWorkspacePageContent({
       validated: 0,
     },
   ), [candidates, horizontalGridModel.rows])
+  const selectedCandidate = useMemo(
+    () => findCandidate(candidates, activeCandidateId),
+    [activeCandidateId, candidates],
+  )
   const envelopeReviewRowsError = queryErrorMessage(envelopeRowsQuery.error)
 
   const handleSubmitPreview = useCallback(async (
@@ -536,27 +538,6 @@ function CurationWorkspacePageContent({
     }
   }, [handleCreateManualTag])
 
-  const renderRowActions = useCallback((row: HorizontalGridRow) => {
-    const candidate = candidates.find((item) => item.candidate_id === row.candidateId)
-    if (!candidate) {
-      throw new Error(`Horizontal grid row references missing candidate '${row.candidateId}'`)
-    }
-
-    return (
-      <HorizontalGridRowActions
-        candidate={candidate}
-        isDeciding={decidingCandidateIds.has(candidate.candidate_id)}
-        onAccept={() => void handleAcceptTag(candidate.candidate_id)}
-        onReject={() => void handleRejectTag(candidate.candidate_id)}
-      />
-    )
-  }, [
-    candidates,
-    decidingCandidateIds,
-    handleAcceptTag,
-    handleRejectTag,
-  ])
-
   return (
     <Box
       sx={{
@@ -593,6 +574,14 @@ function CurationWorkspacePageContent({
               <Stack spacing={1} width="100%">
                 <WorkPaneToolbar
                   isPdfVisible={isPdfVisible}
+                  selectedDecision={selectedCandidate ? {
+                    label: selectedCandidate.display_label ?? selectedCandidate.candidate_id,
+                    status: selectedCandidate.status,
+                    canAccept: isValidatedPendingCandidate(selectedCandidate),
+                    isBusy: decidingCandidateIds.has(selectedCandidate.candidate_id),
+                    onAccept: () => void handleAcceptTag(selectedCandidate.candidate_id),
+                    onReject: () => void handleRejectTag(selectedCandidate.candidate_id),
+                  } : null}
                   totalCount={candidates.length}
                   pendingCount={pendingCandidateCount}
                   validationCounts={validationCounts}
@@ -654,10 +643,7 @@ function CurationWorkspacePageContent({
                   </Typography>
                 </Alert>
               ))}
-            <InteractiveHorizontalCurationGrid
-              model={horizontalGridModel}
-              renderRowActions={renderRowActions}
-            />
+            <InteractiveHorizontalCurationGrid model={horizontalGridModel} />
           </Box>
         )}
       />
