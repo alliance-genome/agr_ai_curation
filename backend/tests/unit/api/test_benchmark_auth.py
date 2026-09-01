@@ -207,6 +207,30 @@ async def test_wrong_client_identity_is_401(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_conflicting_allowlisted_client_identities_are_401(monkeypatch):
+    class Provider:
+        async def validate_token(self, _token):
+            return {
+                "sub": "portal-service",
+                "client_id": "portal-client",
+                "azp": "operator-client",
+                "scope": "portal.read",
+            }
+
+    monkeypatch.setattr(benchmark_auth, "_get_benchmark_provider", Provider)
+    monkeypatch.setattr(
+        benchmark_auth,
+        "get_benchmark_oidc_allowed_client_ids",
+        lambda: ("portal-client", "operator-client"),
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await benchmark_auth.require_benchmark_read(
+            _request(authorization="Bearer signed-token")
+        )
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_valid_bearer_without_required_scope_is_403(monkeypatch):
     class Provider:
         async def validate_token(self, _token):
