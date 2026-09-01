@@ -118,9 +118,9 @@ class JsonFormatter(logging.Formatter):
                 continue
             try:
                 json.dumps(value)
-                log_entry[key] = redact_secrets({key: value})[key]
+                log_entry[key] = redact_secrets(value)
             except (TypeError, ValueError):
-                log_entry[key] = redact_secrets({key: str(value)})[key]
+                log_entry[key] = redact_secrets(str(value))
 
         return json.dumps(log_entry, default=str)
 

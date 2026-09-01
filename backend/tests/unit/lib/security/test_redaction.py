@@ -37,10 +37,12 @@ def test_json_logging_redacts_message_and_secret_extra():
         (),
         None,
     )
-    record.delegated_source_authorization = token
+    record.delegated_source_authorization = f"Bearer {token}"
+    record.estimated_tokens = 1234
     rendered = JsonFormatter().format(record)
     assert token not in rendered
     assert REDACTED in rendered
+    assert json.loads(rendered)["estimated_tokens"] == 1234
 
 
 def test_json_logging_redacts_exception_detail():

@@ -241,12 +241,17 @@ async def materialize_benchmark_source(
     except BenchmarkSourceError as exc:
         db.rollback()
         _raise_source_error(exc)
-    except BenchmarkSnapshotError:
+    except BenchmarkSnapshotError as exc:
         db.rollback()
-        _raise_source_error(
-            BenchmarkSourceError(
-                "source_unavailable", "Benchmark input snapshot could not be committed"
-            )
+        raise_sanitized_http_exception(
+            logger,
+            status_code=503,
+            detail={
+                "error": "source_unavailable",
+                "message": "Benchmark input snapshot could not be committed",
+            },
+            log_message="Benchmark input snapshot could not be committed",
+            exc=exc,
         )
 
 

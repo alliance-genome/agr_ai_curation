@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from pydantic import Field, RootModel
 
 import src.api.benchmark_sources as sources_api
+from src.api import benchmark_auth
 from src.api.benchmark_auth import require_benchmark_source_read
 from src.lib.benchmarks.input_resolvers import (
     BenchmarkInputResolverCatalog,
@@ -174,6 +175,52 @@ def test_materialize_endpoint_returns_token_free_snapshot_receipt(tmp_path, monk
         "blob_reference": "sha256/00/canonical",
         "created_at": "2026-09-01T00:00:00Z",
     }
+
+
+def test_materialize_endpoint_supports_browser_session_principal(
+    tmp_path, monkeypatch
+):
+    payload = b'{"messages": []}\n'
+    (tmp_path / "input.json").write_bytes(payload)
+    digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    application = _app(tmp_path, monkeypatch)
+    application.dependency_overrides.pop(require_benchmark_source_read)
+
+    async def browser_user(_request, _scopes):
+        return {
+            "sub": "human-operator",
+            "uid": "operator-uid",
+            "email": "operator@example.test",
+            "groups": ["benchmark-source-readers"],
+        }
+
+    monkeypatch.setattr(
+        benchmark_auth.browser_auth, "_get_user_from_cookie_impl", browser_user
+    )
+    monkeypatch.setattr(
+        benchmark_auth,
+        "get_benchmark_operator_capability_groups",
+        lambda capability: ("benchmark-source-readers",)
+        if capability == benchmark_auth.BENCHMARK_SOURCE_READ
+        else (),
+    )
+
+    response = TestClient(application).post(
+        "/api/v1/benchmarks/sources/materialize",
+        json={
+            "resolver": "checked_in_fixture",
+            "reference": "input.json",
+            "version": "1",
+            "digest": digest,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["owner_subject"] == "human-operator"
+    assert (
+        response.json()["service_principal"]
+        == benchmark_auth.BENCHMARK_BROWSER_SESSION_CLIENT_ID
+    )
 
 
 def test_materialize_endpoint_builds_and_memoizes_catalog_lazily(
@@ -397,6 +444,63 @@ def test_unavailable_source_reports_only_sanitized_failure(monkeypatch):
     assert captured["exc"].__context__ is None
     assert captured["exc"].__cause__ is None
     assert "secret-paper" not in str(captured["exc"])
+
+
+def test_snapshot_failure_preserves_internal_signal_and_sanitizes_response(
+    tmp_path, monkeypatch
+):
+    payload = b'{"messages": []}\n'
+    (tmp_path / "input.json").write_bytes(payload)
+    digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    captured = {}
+
+    class FailingSnapshotRepository:
+        def __init__(self, _db, _store):
+            pass
+
+        def freeze_input(self, *_args, **_kwargs):
+            raise sources_api.BenchmarkSnapshotError(
+                "Snapshot object store versioning must be enabled"
+            )
+
+    def report_and_raise(_logger, *, status_code, detail, log_message, exc):
+        captured.update(
+            status_code=status_code,
+            detail=detail,
+            log_message=log_message,
+            exc=exc,
+        )
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    application = _app(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        sources_api, "BenchmarkSnapshotRepository", FailingSnapshotRepository
+    )
+    monkeypatch.setattr(
+        sources_api, "raise_sanitized_http_exception", report_and_raise
+    )
+
+    response = TestClient(application).post(
+        "/api/v1/benchmarks/sources/materialize",
+        json={
+            "resolver": "checked_in_fixture",
+            "reference": "input.json",
+            "version": "1",
+            "digest": digest,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "error": "source_unavailable",
+        "message": "Benchmark input snapshot could not be committed",
+    }
+    assert captured["status_code"] == 503
+    assert (
+        captured["log_message"]
+        == "Benchmark input snapshot could not be committed"
+    )
+    assert str(captured["exc"]) == "Snapshot object store versioning must be enabled"
 
 
 def test_missing_source_returns_404_without_server_failure_reporting(monkeypatch):

@@ -37,6 +37,7 @@ BENCHMARK_RUN: Final = "benchmark:run"
 BENCHMARK_CANCEL: Final = "benchmark:cancel"
 BENCHMARK_DELETE: Final = "benchmark:delete"
 BENCHMARK_SOURCE_READ: Final = "benchmark:source:read"
+BENCHMARK_BROWSER_SESSION_CLIENT_ID: Final = "benchmark_browser_session"
 
 BENCHMARK_CAPABILITIES: Final = frozenset(
     {
@@ -287,6 +288,7 @@ async def _authorize(capability: str, request: Request) -> dict[str, Any]:
     if not configured_groups or user_groups.isdisjoint(configured_groups):
         raise HTTPException(status_code=403, detail="Benchmark capability required")
     principal = dict(user)
+    principal["client_id"] = BENCHMARK_BROWSER_SESSION_CLIENT_ID
     principal["benchmark_capabilities"] = [capability]
     return principal
 
