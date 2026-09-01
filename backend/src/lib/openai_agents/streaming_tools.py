@@ -260,6 +260,24 @@ def _tool_output_summary(tool_name: str, output: Any) -> Optional[Dict[str, Any]
     return summary
 
 
+def _coerce_structured_tool_output(output: Any) -> Optional[Dict[str, Any]]:
+    """Coerce JSON-like or model-backed tool output to a structured payload."""
+
+    payload = coerce_tool_event_dict(output)
+    if payload is not None:
+        return payload
+
+    model_dump = getattr(output, "model_dump", None)
+    if not callable(model_dump):
+        return None
+
+    try:
+        dumped = model_dump(mode="json")
+    except TypeError:
+        dumped = model_dump()
+    return dumped if isinstance(dumped, dict) else None
+
+
 def _tool_output_payload_for_finalization(
     tool_name: str,
     output: Any,
@@ -270,16 +288,7 @@ def _tool_output_payload_for_finalization(
     if lookup_config is None:
         return None
 
-    payload = coerce_tool_event_dict(output)
-    if payload is None:
-        model_dump = getattr(output, "model_dump", None)
-        if callable(model_dump):
-            try:
-                dumped = model_dump(mode="json")
-            except TypeError:
-                dumped = model_dump()
-            if isinstance(dumped, dict):
-                payload = dumped
+    payload = _coerce_structured_tool_output(output)
     if not isinstance(payload, dict):
         return None
 
@@ -5226,7 +5235,7 @@ async def run_specialist_with_events(
                             current_tool_name,
                             output,
                         )
-                        structured_output = coerce_tool_event_dict(output)
+                        structured_output = _coerce_structured_tool_output(output)
                         result_classification = _classify_structured_tool_result(
                             structured_output or {}
                         )

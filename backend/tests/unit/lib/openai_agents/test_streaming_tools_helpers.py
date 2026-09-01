@@ -38,6 +38,12 @@ class _Envelope(BaseModel):
     value: str
 
 
+class _StructuredToolResult(BaseModel):
+    status: str | None = None
+    status_code: int | None = None
+    message: str
+
+
 class _FakeRunResult:
     def __init__(self, events=None, final_output=None, new_items=None):
         self._events = events or []
@@ -623,7 +629,11 @@ def _search_document_stream_events() -> list[SimpleNamespace]:
     ]
 
 
-def _structured_tool_stream_events(payload: dict) -> list[SimpleNamespace]:
+def _structured_tool_stream_events(
+    payload: object,
+    *,
+    serialize: bool = True,
+) -> list[SimpleNamespace]:
     return [
         SimpleNamespace(
             type="run_item_stream_event",
@@ -637,7 +647,7 @@ def _structured_tool_stream_events(payload: dict) -> list[SimpleNamespace]:
             type="run_item_stream_event",
             item=SimpleNamespace(
                 type="tool_call_output_item",
-                output=json.dumps(payload),
+                output=json.dumps(payload) if serialize else payload,
                 raw_item=SimpleNamespace(),
             ),
         ),
@@ -646,11 +656,12 @@ def _structured_tool_stream_events(payload: dict) -> list[SimpleNamespace]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("payload", "expected_error_type", "notifier_result"),
+    ("payload", "expected_error_type", "notifier_result", "as_model"),
     [
-        ({"status": "upstream_error"}, "StructuredToolUpstreamError", True),
-        ({"status": "upstream_error"}, "StructuredToolUpstreamError", False),
-        ({"status_code": 503}, "StructuredToolHTTPError", True),
+        ({"status": "upstream_error"}, "StructuredToolUpstreamError", True, False),
+        ({"status": "upstream_error"}, "StructuredToolUpstreamError", False, False),
+        ({"status_code": 503}, "StructuredToolHTTPError", True, False),
+        ({"status": "upstream_error"}, "StructuredToolUpstreamError", True, True),
     ],
 )
 async def test_structured_failure_stream_event_is_failed_and_reported_once(
@@ -658,8 +669,14 @@ async def test_structured_failure_stream_event_is_failed_and_reported_once(
     payload,
     expected_error_type,
     notifier_result,
+    as_model,
 ):
     notifier_calls = []
+    output_payload = {
+        **payload,
+        "message": "raw provider response must not be reported",
+    }
+    output = _StructuredToolResult(**output_payload) if as_model else output_payload
 
     async def _notify_tool_failure(**kwargs):
         notifier_calls.append(kwargs)
@@ -671,10 +688,8 @@ async def test_structured_failure_stream_event_is_failed_and_reported_once(
         "run_streamed",
         lambda *_args, **_kwargs: _FakeRunResult(
             events=_structured_tool_stream_events(
-                {
-                    **payload,
-                    "message": "raw provider response must not be reported",
-                }
+                output,
+                serialize=not as_model,
             ),
             final_output="specialist output",
         ),
@@ -707,10 +722,10 @@ async def test_structured_failure_stream_event_is_failed_and_reported_once(
     )
     assert result == "specialist output"
     assert complete_event["details"]["success"] is False
-    assert json.loads(complete_event["internal"]["tool_output"]) == {
-        **payload,
-        "message": "raw provider response must not be reported",
-    }
+    if as_model:
+        assert complete_event["internal"]["tool_output"] is output
+    else:
+        assert json.loads(complete_event["internal"]["tool_output"]) == output_payload
     assert notifier_calls == [
         {
             "error_type": expected_error_type,
