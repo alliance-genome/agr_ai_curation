@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from typing import Any, Final
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request
 from fastapi.security import SecurityScopes
@@ -22,6 +24,8 @@ from src.lib.openai_agents.config import (
     get_benchmark_oidc_audience,
     get_benchmark_oidc_capability_scopes,
     get_benchmark_oidc_clock_skew_seconds,
+    get_benchmark_oidc_cognito_m2m_client_id,
+    get_benchmark_oidc_cognito_m2m_enabled,
     get_benchmark_oidc_issuer_url,
     get_benchmark_oidc_jwks_cache_ttl_seconds,
     get_benchmark_oidc_jwks_timeout_seconds,
@@ -46,6 +50,7 @@ BENCHMARK_CAPABILITIES: Final = frozenset(
 
 logger = logging.getLogger(__name__)
 _provider: OIDCAuthProvider | None = None
+_cognito_m2m_provider: OIDCAuthProvider | None = None
 _provider_lock = threading.Lock()
 
 
@@ -89,6 +94,59 @@ def _get_benchmark_provider() -> OIDCAuthProvider:
         return _provider
 
 
+def _is_cognito_issuer(issuer: str) -> bool:
+    parsed = urlparse(issuer)
+    hostname = parsed.hostname or ""
+    return (
+        parsed.scheme == "https"
+        and parsed.query == ""
+        and parsed.fragment == ""
+        and bool(parsed.path.strip("/"))
+        and re.fullmatch(
+            r"cognito-idp\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?",
+            hostname,
+        )
+        is not None
+    )
+
+
+def _get_cognito_m2m_provider() -> OIDCAuthProvider:
+    global _cognito_m2m_provider
+
+    if _cognito_m2m_provider is not None:
+        return _cognito_m2m_provider
+
+    with _provider_lock:
+        if _cognito_m2m_provider is not None:
+            return _cognito_m2m_provider
+
+        issuer = get_benchmark_oidc_issuer_url()
+        client_id = get_benchmark_oidc_cognito_m2m_client_id()
+        audience = get_benchmark_oidc_audience()
+        if not _is_cognito_issuer(issuer) or not audience or not client_id:
+            raise HTTPException(
+                status_code=503,
+                detail="Benchmark Cognito M2M authentication is not configured",
+            )
+
+        timeout = get_benchmark_oidc_jwks_timeout_seconds()
+        _cognito_m2m_provider = OIDCAuthProvider(
+            {
+                "issuer_url": issuer,
+                "validation_issuer": issuer,
+                "client_id": client_id,
+                "audience": audience,
+                "timeout_seconds": timeout,
+                "jwks_timeout_seconds": timeout,
+                "jwks_cache_ttl_seconds": get_benchmark_oidc_jwks_cache_ttl_seconds(),
+                "clock_skew_seconds": get_benchmark_oidc_clock_skew_seconds(),
+                "required_claims": ("exp", "iat", "token_use", "client_id"),
+                "verify_audience": False,
+            }
+        )
+        return _cognito_m2m_provider
+
+
 def _token_scopes(claims: dict[str, Any]) -> set[str]:
     value = claims.get("scope")
     if isinstance(value, str):
@@ -105,23 +163,67 @@ def _authorized_client_id(claims: dict[str, Any]) -> str:
         if isinstance((value := claims.get(claim)), str) and value
     }
     allowed = set(get_benchmark_oidc_allowed_client_ids())
-    if not asserted or not asserted.issubset(allowed):
+    if len(asserted) != 1 or not asserted.issubset(allowed):
         raise _InvalidBenchmarkTokenError("Unapproved benchmark token client")
-    return sorted(asserted)[0]
+    return asserted.pop()
+
+
+def _authorized_cognito_m2m_client_id(claims: dict[str, Any]) -> str:
+    client_id = claims.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        raise _InvalidBenchmarkTokenError("Missing Cognito M2M client identity")
+
+    if "azp" in claims:
+        authorized_party = claims["azp"]
+        if (
+            not isinstance(authorized_party, str)
+            or not authorized_party
+            or authorized_party != client_id
+        ):
+            raise _InvalidBenchmarkTokenError("Ambiguous Cognito M2M client identity")
+
+    if client_id != get_benchmark_oidc_cognito_m2m_client_id():
+        raise _InvalidBenchmarkTokenError("Unapproved Cognito M2M client")
+    return client_id
+
+
+def _validate_cognito_m2m_audience(claims: dict[str, Any]) -> None:
+    if "aud" not in claims:
+        return
+    audience = claims["aud"]
+    if not isinstance(audience, str) or audience != get_benchmark_oidc_audience():
+        raise _InvalidBenchmarkTokenError("Invalid Cognito M2M audience")
+
+
+async def _validated_bearer_claims(
+    token: str,
+) -> tuple[dict[str, Any], bool]:
+    if not get_benchmark_oidc_cognito_m2m_enabled():
+        return await _get_benchmark_provider().validate_token(token), False
+
+    claims = await _get_cognito_m2m_provider().validate_token(token)
+    if claims.get("token_use") != "access":
+        raise _InvalidBenchmarkTokenError("Invalid Cognito M2M token use")
+    return claims, True
 
 
 async def _authenticate_bearer(token: str, capability: str) -> dict[str, Any]:
-    provider = _get_benchmark_provider()
     try:
-        claims = await provider.validate_token(token)
-        client_id = _authorized_client_id(claims)
+        claims, is_cognito_m2m = await _validated_bearer_claims(token)
+        if is_cognito_m2m:
+            client_id = _authorized_cognito_m2m_client_id(claims)
+            _validate_cognito_m2m_audience(claims)
+            if "scope" in claims and not isinstance(claims["scope"], str):
+                raise _InvalidBenchmarkTokenError("Invalid Cognito M2M scope claim")
+        else:
+            client_id = _authorized_client_id(claims)
         required_scopes = set(get_benchmark_oidc_capability_scopes(capability))
         if not required_scopes or _token_scopes(claims).isdisjoint(required_scopes):
             raise HTTPException(status_code=403, detail="Benchmark capability required")
         return {
-            "sub": claims["sub"],
+            "sub": f"service:{client_id}" if is_cognito_m2m else claims["sub"],
             "client_id": client_id,
-            "token_use": "bearer",
+            "token_use": "access" if is_cognito_m2m else "bearer",
             "benchmark_capabilities": [capability],
         }
     except HTTPException:
@@ -211,9 +313,10 @@ async def require_benchmark_source_read(request: Request) -> dict[str, Any]:
 
 def reset_benchmark_auth_cache() -> None:
     """Clear the process-local verifier for tests and process reconfiguration."""
-    global _provider
+    global _cognito_m2m_provider, _provider
     with _provider_lock:
         _provider = None
+        _cognito_m2m_provider = None
 
 
 __all__ = [

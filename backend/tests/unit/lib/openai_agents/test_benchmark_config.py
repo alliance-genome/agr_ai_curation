@@ -166,6 +166,8 @@ def test_benchmark_oidc_defaults_and_overrides(monkeypatch):
         "BENCHMARK_OIDC_ISSUER_URL",
         "BENCHMARK_OIDC_AUDIENCE",
         "BENCHMARK_OIDC_ALLOWED_CLIENT_IDS",
+        "BENCHMARK_OIDC_COGNITO_M2M_ENABLED",
+        "BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID",
         "BENCHMARK_OIDC_READ_SCOPES",
         "BENCHMARK_OPERATOR_READ_GROUPS",
         "BENCHMARK_OIDC_JWKS_TIMEOUT_SECONDS",
@@ -178,6 +180,8 @@ def test_benchmark_oidc_defaults_and_overrides(monkeypatch):
     assert config.get_benchmark_oidc_issuer_url() == ""
     assert config.get_benchmark_oidc_audience() == ""
     assert config.get_benchmark_oidc_allowed_client_ids() == ()
+    assert config.get_benchmark_oidc_cognito_m2m_enabled() is False
+    assert config.get_benchmark_oidc_cognito_m2m_client_id() == ""
     assert config.get_benchmark_oidc_capability_scopes("benchmark:read") == ()
     assert config.get_benchmark_operator_capability_groups("benchmark:read") == ()
     assert config.get_benchmark_oidc_jwks_timeout_seconds() == 5
@@ -189,6 +193,8 @@ def test_benchmark_oidc_defaults_and_overrides(monkeypatch):
     monkeypatch.setenv(
         "BENCHMARK_OIDC_ALLOWED_CLIENT_IDS", " portal-client, operator-client "
     )
+    monkeypatch.setenv("BENCHMARK_OIDC_COGNITO_M2M_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID", " machine-client ")
     monkeypatch.setenv("BENCHMARK_OIDC_READ_SCOPES", " portal.read, alternate.read ")
     monkeypatch.setenv(
         "BENCHMARK_OPERATOR_READ_GROUPS", " benchmark-readers, benchmark-admins "
@@ -203,6 +209,8 @@ def test_benchmark_oidc_defaults_and_overrides(monkeypatch):
         "portal-client",
         "operator-client",
     )
+    assert config.get_benchmark_oidc_cognito_m2m_enabled() is True
+    assert config.get_benchmark_oidc_cognito_m2m_client_id() == "machine-client"
     assert config.get_benchmark_oidc_capability_scopes("benchmark:read") == (
         "portal.read",
         "alternate.read",

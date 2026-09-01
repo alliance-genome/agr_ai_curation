@@ -99,6 +99,19 @@ authorization contract also defines `benchmark:cancel`, `benchmark:delete`,
 and `benchmark:source:read`. The feature gate continues to return 404 when
 disabled.
 
+AWS Cognito client-credentials access tokens use a separate, default-off
+profile because they can omit `aud` and `sub`. Enable
+`BENCHMARK_OIDC_COGNITO_M2M_ENABLED` only with a Cognito user-pool issuer and
+set `BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID` to the one dedicated confidential
+orchestration client. When enabled, this profile is the only accepted bearer
+profile and `BENCHMARK_OIDC_ALLOWED_CLIENT_IDS` is ignored. The verifier
+requires `token_use=access`, that exact client identity, valid
+signature/issuer/time claims, and an endpoint scope. An absent audience is
+accepted only in this profile; a present audience must equal
+`BENCHMARK_OIDC_AUDIENCE`. The resulting principal is namespaced as
+`service:<client_id>`, never as a curator subject. Browser clients and ID
+tokens cannot enter this profile.
+
 ## Versioned Input Sources
 
 `POST /api/v1/benchmarks/sources/materialize` accepts only the strict
