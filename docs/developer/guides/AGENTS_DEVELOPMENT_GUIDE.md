@@ -400,6 +400,12 @@ Providers are defined in `config/providers.yaml` and loaded by `backend/src/lib/
 - Capability flags (parallel tool calls, reasoning support)
 - Model-to-provider mapping
 
+Provider routing is catalog-driven. Exactly one provider across
+`config/providers.yaml` and installed package provider drop-ins must set
+`default_for_runner: true`; there is no environment switch for changing the
+default provider. Environment variables still supply provider credentials and
+may override per-agent model selection.
+
 ### Per-Agent Model Override
 
 Set environment variables to override an agent's default model:
@@ -467,7 +473,7 @@ AGENT_MY_AGENT_TEMPERATURE=0.2
 
 ```bash
 OPENAI_API_KEY=sk-...
-LLM_PROVIDER=openai
+AGENT_SUPERVISOR_MODEL=gpt-5.6-sol
 AGENT_MAX_TURNS=20
 ```
 

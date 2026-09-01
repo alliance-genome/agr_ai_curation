@@ -287,8 +287,9 @@ def get_provider(provider_id: str) -> Optional[ProviderDefinition]:
     return _provider_registry.get(key)
 
 
+# Removed legacy LLM_PROVIDER switch — provider routing is catalog-driven by default_for_runner after ALL-921.
 def get_default_runner_provider() -> ProviderDefinition:
-    """Get provider flagged as default_for_runner."""
+    """Resolve the single catalog provider flagged as default_for_runner."""
     if not _initialized:
         load_providers()
     for provider in _provider_registry.values():
