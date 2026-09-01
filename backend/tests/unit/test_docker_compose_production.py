@@ -121,6 +121,26 @@ def test_provider_boundary_operational_limits_have_deployment_parity():
             )
 
 
+def test_benchmark_cognito_m2m_profile_has_compose_and_env_parity():
+    dev_env = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    test_env = _list_environment(
+        _load_test_compose()["services"]["backend-integration-tests"]["environment"]
+    )
+    env_example = _load_env_assignments(ENV_EXAMPLE_PATH)
+    expected = {
+        "BENCHMARK_OIDC_COGNITO_M2M_ENABLED": "${BENCHMARK_OIDC_COGNITO_M2M_ENABLED:-false}",
+        "BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID": "${BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID:-}",
+    }
+
+    for key, value in expected.items():
+        assert dev_env[key] == value
+        assert production_env[key] == value
+        assert test_env[key] == value
+    assert env_example["BENCHMARK_OIDC_COGNITO_M2M_ENABLED"] == "false"
+    assert env_example["BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID"] == ""
+
+
 def test_backend_test_services_mount_repo_config_as_explicit_runtime_override():
     services = _load_test_compose()["services"]
 

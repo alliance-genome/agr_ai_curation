@@ -39,6 +39,7 @@ class OIDCAuthProvider(AuthProvider):
         self.jwks_cache_ttl_seconds = config.get("jwks_cache_ttl_seconds")
         self.clock_skew_seconds = config.get("clock_skew_seconds", 0)
         self.required_claims = list(config.get("required_claims", ()))
+        self.verify_audience = bool(config.get("verify_audience", True))
 
         self._discovery: Optional[Dict[str, Any]] = None
         self._jwks_client: Optional[PyJWKClient] = None
@@ -172,7 +173,11 @@ class OIDCAuthProvider(AuthProvider):
         signing_key = await asyncio.to_thread(jwks_client.get_signing_key_from_jwt, token)
 
         issuer = self.validation_issuer or discovery.get("issuer", self.issuer_url)
-        options = {"require": self.required_claims} if self.required_claims else None
+        options: Dict[str, Any] = {}
+        if self.required_claims:
+            options["require"] = self.required_claims
+        if not self.verify_audience:
+            options["verify_aud"] = False
         return await asyncio.to_thread(
             jwt.decode,
             token,
@@ -181,7 +186,7 @@ class OIDCAuthProvider(AuthProvider):
             audience=self.audience,
             issuer=issuer,
             leeway=self.clock_skew_seconds,
-            options=options,
+            options=options or None,
         )
 
     def extract_principal(self, claims: Dict[str, Any]) -> AuthPrincipal:

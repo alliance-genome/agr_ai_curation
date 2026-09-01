@@ -205,3 +205,45 @@ def test_benchmark_validation_options_configure_jwks_and_time_claims(monkeypatch
     assert captured["decode"]["issuer"] == "https://issuer.example.org/"
     assert captured["decode"]["leeway"] == 60
     assert captured["decode"]["options"] == {"require": ["exp", "iat", "sub"]}
+
+
+def test_cognito_m2m_validation_disables_only_audience_verification(monkeypatch):
+    provider = OIDCAuthProvider(
+        {
+            "issuer_url": "https://cognito-idp.us-east-1.amazonaws.com/example-pool",
+            "validation_issuer": "https://cognito-idp.us-east-1.amazonaws.com/example-pool",
+            "client_id": "machine-client",
+            "audience": "benchmark-resource",
+            "required_claims": ("exp", "iat", "token_use", "client_id"),
+            "verify_audience": False,
+        }
+    )
+    captured = {}
+
+    class _FakeJwksClient:
+        def get_signing_key_from_jwt(self, _token):
+            return SimpleNamespace(key="key")
+
+    async def _discover_async():
+        return {"issuer": provider.validation_issuer}
+
+    async def _direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    def _decode(*_args, **kwargs):
+        captured.update(kwargs)
+        return {"client_id": "machine-client", "token_use": "access"}
+
+    monkeypatch.setattr(provider, "_discover_async", _discover_async)
+    monkeypatch.setattr(provider, "_get_jwks_client", lambda: _FakeJwksClient())
+    monkeypatch.setattr(oidc_module.asyncio, "to_thread", _direct_to_thread)
+    monkeypatch.setattr(oidc_module.jwt, "decode", _decode)
+
+    asyncio.run(provider.validate_token("access-token"))
+
+    assert captured["audience"] == "benchmark-resource"
+    assert captured["issuer"] == provider.validation_issuer
+    assert captured["options"] == {
+        "require": ["exp", "iat", "token_use", "client_id"],
+        "verify_aud": False,
+    }

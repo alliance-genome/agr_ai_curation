@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 from jwt.exceptions import (
     ExpiredSignatureError,
+    ImmatureSignatureError,
     InvalidAudienceError,
     InvalidIssuerError,
     InvalidSignatureError,
@@ -22,7 +23,9 @@ def _request(*, authorization: str = "", api_key: str = ""):
 
 
 @pytest.fixture(autouse=True)
-def _reset_provider():
+def _reset_provider(monkeypatch):
+    monkeypatch.delenv("BENCHMARK_OIDC_COGNITO_M2M_ENABLED", raising=False)
+    monkeypatch.delenv("BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID", raising=False)
     benchmark_auth.reset_benchmark_auth_cache()
     yield
     benchmark_auth.reset_benchmark_auth_cache()
@@ -251,3 +254,198 @@ def test_provider_requires_complete_bearer_configuration(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         benchmark_auth._get_benchmark_provider()
     assert exc_info.value.status_code == 503
+
+
+def _configure_cognito_m2m(monkeypatch, claims):
+    class Provider:
+        async def validate_token(self, token):
+            assert token == "signed-cognito-token"
+            return claims
+
+    monkeypatch.setattr(
+        benchmark_auth, "get_benchmark_oidc_cognito_m2m_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        benchmark_auth,
+        "get_benchmark_oidc_cognito_m2m_client_id",
+        lambda: "machine-client",
+    )
+    monkeypatch.setattr(
+        benchmark_auth, "get_benchmark_oidc_audience", lambda: "benchmark-resource"
+    )
+    monkeypatch.setattr(benchmark_auth, "_get_cognito_m2m_provider", Provider)
+    monkeypatch.setattr(
+        benchmark_auth,
+        "get_benchmark_oidc_capability_scopes",
+        lambda capability: ("benchmark-resource/read",)
+        if capability == benchmark_auth.BENCHMARK_READ
+        else (),
+    )
+
+
+@pytest.mark.parametrize("audience", [pytest.param(None, id="no-aud"), "benchmark-resource"])
+@pytest.mark.asyncio
+async def test_cognito_m2m_without_subject_uses_machine_principal(monkeypatch, audience):
+    claims = {
+        "iss": "https://cognito-idp.us-east-1.amazonaws.com/example-pool",
+        "client_id": "machine-client",
+        "token_use": "access",
+        "scope": "benchmark-resource/read benchmark-resource/run",
+        "iat": 1_700_000_000,
+        "exp": 1_700_003_600,
+    }
+    if audience is not None:
+        claims["aud"] = audience
+    _configure_cognito_m2m(monkeypatch, claims)
+
+    principal = await benchmark_auth.require_benchmark_read(
+        _request(authorization="Bearer signed-cognito-token")
+    )
+
+    assert principal == {
+        "sub": "service:machine-client",
+        "client_id": "machine-client",
+        "token_use": "access",
+        "benchmark_capabilities": [benchmark_auth.BENCHMARK_READ],
+    }
+
+
+@pytest.mark.parametrize(
+    "claim_updates",
+    [
+        pytest.param({"token_use": "id"}, id="id-token"),
+        pytest.param({"token_use": "refresh"}, id="wrong-token-use"),
+        pytest.param({"client_id": "browser-client"}, id="browser-client"),
+        pytest.param({"client_id": "unknown-client"}, id="unknown-client"),
+        pytest.param({"client_id": None}, id="missing-client"),
+        pytest.param({"azp": "conflicting-client"}, id="conflicting-client"),
+        pytest.param({"aud": "wrong-resource"}, id="wrong-optional-audience"),
+        pytest.param({"aud": ["benchmark-resource"]}, id="malformed-audience"),
+        pytest.param({"scope": ["benchmark-resource/read"]}, id="malformed-scope"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cognito_m2m_invalid_claim_matrix_fails_401(monkeypatch, claim_updates):
+    claims = {
+        "iss": "https://cognito-idp.us-east-1.amazonaws.com/example-pool",
+        "client_id": "machine-client",
+        "token_use": "access",
+        "scope": "benchmark-resource/read",
+        "iat": 1_700_000_000,
+        "exp": 1_700_003_600,
+        **claim_updates,
+    }
+    _configure_cognito_m2m(monkeypatch, claims)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await benchmark_auth.require_benchmark_read(
+            _request(authorization="Bearer signed-cognito-token")
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid benchmark access token"
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [pytest.param(None, id="missing"), pytest.param("benchmark-resource/run", id="wrong")],
+)
+@pytest.mark.asyncio
+async def test_cognito_m2m_missing_or_wrong_scope_fails_403(monkeypatch, scope):
+    claims = {
+        "iss": "https://cognito-idp.us-east-1.amazonaws.com/example-pool",
+        "client_id": "machine-client",
+        "token_use": "access",
+        "iat": 1_700_000_000,
+        "exp": 1_700_003_600,
+    }
+    if scope is not None:
+        claims["scope"] = scope
+    _configure_cognito_m2m(monkeypatch, claims)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await benchmark_auth.require_benchmark_read(
+            _request(authorization="Bearer signed-cognito-token")
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "token_error",
+    [
+        InvalidIssuerError("private wrong issuer"),
+        InvalidSignatureError("private bad signature"),
+        ExpiredSignatureError("private expired token"),
+        ImmatureSignatureError("private future iat"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cognito_m2m_signature_issuer_and_time_fail_sanitized(
+    monkeypatch, caplog, token_error
+):
+    class Provider:
+        async def validate_token(self, _token):
+            raise token_error
+
+    monkeypatch.setattr(
+        benchmark_auth, "get_benchmark_oidc_cognito_m2m_enabled", lambda: True
+    )
+    monkeypatch.setattr(benchmark_auth, "_get_cognito_m2m_provider", Provider)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await benchmark_auth.require_benchmark_read(
+            _request(authorization="Bearer private-token-value")
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid benchmark access token"
+    assert "private" not in caplog.text
+
+
+def test_cognito_m2m_provider_requires_explicit_cognito_configuration(monkeypatch):
+    monkeypatch.setattr(
+        benchmark_auth, "get_benchmark_oidc_issuer_url", lambda: "https://issuer.example.org"
+    )
+    monkeypatch.setattr(
+        benchmark_auth,
+        "get_benchmark_oidc_cognito_m2m_client_id",
+        lambda: "machine-client",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        benchmark_auth._get_cognito_m2m_provider()
+
+    assert exc_info.value.status_code == 503
+
+
+def test_cognito_m2m_provider_uses_exact_issuer_and_time_contract(monkeypatch):
+    issuer = "https://cognito-idp.us-east-1.amazonaws.com/example-pool"
+    monkeypatch.setattr(benchmark_auth, "get_benchmark_oidc_issuer_url", lambda: issuer)
+    monkeypatch.setattr(
+        benchmark_auth, "get_benchmark_oidc_audience", lambda: "benchmark-resource"
+    )
+    monkeypatch.setattr(
+        benchmark_auth,
+        "get_benchmark_oidc_cognito_m2m_client_id",
+        lambda: "machine-client",
+    )
+    monkeypatch.setattr(
+        benchmark_auth, "get_benchmark_oidc_jwks_timeout_seconds", lambda: 4
+    )
+    monkeypatch.setattr(
+        benchmark_auth, "get_benchmark_oidc_jwks_cache_ttl_seconds", lambda: 120
+    )
+    monkeypatch.setattr(
+        benchmark_auth, "get_benchmark_oidc_clock_skew_seconds", lambda: 30
+    )
+
+    provider = benchmark_auth._get_cognito_m2m_provider()
+
+    assert provider.validation_issuer == issuer
+    assert provider.audience == "benchmark-resource"
+    assert provider.required_claims == ["exp", "iat", "token_use", "client_id"]
+    assert provider.verify_audience is False
+    assert provider.jwks_timeout_seconds == 4
+    assert provider.jwks_cache_ttl_seconds == 120
+    assert provider.clock_skew_seconds == 30
