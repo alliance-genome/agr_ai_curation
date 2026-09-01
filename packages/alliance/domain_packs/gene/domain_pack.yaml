@@ -98,6 +98,9 @@ object_definitions:
           - primary_external_id
           - taxon
         groups:
+          # This is the curator decision surface: these are the canonical values
+          # reviewed for export. The groups below remain envelope context and must
+          # not be presented as peer validation/sign-off fields.
           - id: identity
             label: Gene identity
             fields:

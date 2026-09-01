@@ -23,6 +23,8 @@ function draftField({
   required = false,
   readOnly = false,
   renderAs,
+  groupKey = 'details',
+  groupLabel = 'Details',
 }: {
   fieldKey: string
   fieldPath?: string
@@ -32,6 +34,8 @@ function draftField({
   required?: boolean
   readOnly?: boolean
   renderAs?: string
+  groupKey?: string
+  groupLabel?: string
 }): CurationDraftField {
   return {
     field_key: fieldKey,
@@ -39,8 +43,8 @@ function draftField({
     value,
     seed_value: value,
     field_type: 'string',
-    group_key: 'details',
-    group_label: 'Details',
+    group_key: groupKey,
+    group_label: groupLabel,
     order,
     required,
     read_only: readOnly,
@@ -233,6 +237,77 @@ function validationProjection({
 }
 
 describe('buildHorizontalGridModel', () => {
+  it('keeps gene supporting envelope context out of the curator decision grid', () => {
+    const geneCandidate = candidate({
+      id: 'candidate-gene',
+      objectId: 'object-gene',
+      order: 0,
+      adapterKey: 'gene',
+      fields: [
+        draftField({
+          fieldKey: 'gene-symbol',
+          fieldPath: 'gene_symbol',
+          label: 'Gene symbol',
+          order: 0,
+          value: 'abc',
+          groupKey: 'identity',
+          groupLabel: 'Gene identity',
+        }),
+        draftField({
+          fieldKey: 'species',
+          label: 'Species',
+          order: 1,
+          value: 'Example organism',
+          readOnly: true,
+          groupKey: 'identity',
+          groupLabel: 'Gene identity',
+        }),
+        draftField({
+          fieldKey: 'proposed-symbol',
+          fieldPath: 'proposed_gene_symbol',
+          label: 'Proposed gene symbol',
+          order: 2,
+          value: 'abc',
+          readOnly: true,
+          renderAs: 'divergence',
+          groupKey: 'ai_proposal',
+          groupLabel: 'AI proposal',
+        }),
+        draftField({
+          fieldKey: 'section',
+          label: 'Section',
+          order: 3,
+          value: 'Results',
+          readOnly: true,
+          groupKey: 'evidence_location',
+          groupLabel: 'Evidence location',
+        }),
+        draftField({
+          fieldKey: 'confidence',
+          label: 'Confidence',
+          order: 4,
+          value: 'high',
+          readOnly: true,
+          groupKey: 'provenance',
+          groupLabel: 'Provenance & notes',
+        }),
+      ],
+    })
+
+    const model = modelForRows([workspaceRow({ candidate: geneCandidate })])
+
+    expect(model.columns.map((column) => column.fieldPath)).toEqual([
+      null,
+      'gene_symbol',
+      'species',
+    ])
+    expect(model.rows[0]!.cells[0]).toMatchObject({
+      extractorComparison: { outcome: 'unresolved', value: 'abc' },
+      value: 'abc',
+      valueSource: 'extractor',
+    })
+  })
+
   it('projects extractor proposals into their canonical field instead of peer columns', () => {
     const confirmedCandidate = candidate({
       id: 'candidate-confirmed',

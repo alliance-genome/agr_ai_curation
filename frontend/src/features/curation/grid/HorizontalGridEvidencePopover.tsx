@@ -75,8 +75,8 @@ export interface HorizontalGridEvidencePopoverProps {
 
 const POPPER_MODIFIERS = [
   { name: 'offset', options: { offset: [0, 9] } },
-  { name: 'flip', options: { fallbackPlacements: ['top'] } },
-  { name: 'preventOverflow', options: { padding: 12 } },
+  { name: 'flip', options: { fallbackPlacements: ['top', 'bottom-start', 'top-start'] } },
+  { name: 'preventOverflow', options: { altAxis: true, padding: 12, tether: false } },
 ]
 
 function evidenceQuote(projection: DomainEnvelopeEvidenceAnchorProjection): string {
@@ -164,6 +164,7 @@ export default function HorizontalGridEvidencePopover({
       modifiers={popperModifiers}
       open={target !== null}
       placement="bottom"
+      strategy="fixed"
       sx={(theme) => ({ zIndex: theme.zIndex.modal })}
     >
       {({ placement }) => target ? (
@@ -182,7 +183,10 @@ export default function HorizontalGridEvidencePopover({
               return {
                 position: 'relative',
                 width: 'min(390px, calc(100vw - 24px))',
-                overflow: 'visible',
+                maxHeight: 'calc(100dvh - 24px)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
                 border: `1px solid ${borderColor}`,
                 borderRadius: '7px',
                 backgroundColor: 'background.paper',
@@ -233,10 +237,11 @@ export default function HorizontalGridEvidencePopover({
             <Box
               data-testid="horizontal-grid-evidence-scroll-region"
               sx={{
-                maxHeight: 'min(620px, calc(100dvh - 32px))',
+                minHeight: 0,
                 overflowY: 'auto',
                 overscrollBehavior: 'contain',
                 p: '17px',
+                scrollbarGutter: 'stable',
               }}
             >
               <Stack alignItems="flex-start" direction="row" spacing="10px" sx={{ pr: '20px' }}>

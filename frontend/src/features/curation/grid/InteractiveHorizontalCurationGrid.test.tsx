@@ -532,10 +532,16 @@ describe('InteractiveHorizontalCurationGrid', () => {
     }))
 
     const details = screen.getByRole('dialog', { name: /Authors:/ })
+    expect(details).toHaveStyle({
+      display: 'flex',
+      maxHeight: 'calc(100dvh - 24px)',
+      overflow: 'hidden',
+    })
     expect(within(details).getByTestId('horizontal-grid-evidence-scroll-region')).toHaveStyle({
-      maxHeight: 'min(620px, calc(100dvh - 32px))',
+      minHeight: '0',
       overflowY: 'auto',
       overscrollBehavior: 'contain',
+      scrollbarGutter: 'stable',
     })
     expect(within(details).getByText('Evidence & validation details')).toBeInTheDocument()
     expect(within(details).getByText('Highlighted passage from the paper')).toBeInTheDocument()
