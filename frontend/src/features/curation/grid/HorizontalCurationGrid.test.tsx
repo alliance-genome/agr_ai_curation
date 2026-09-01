@@ -93,6 +93,8 @@ function fieldCell(
     fieldValidation: null,
     evidence: [],
     validation: emptyValidation,
+    extractorComparison: null,
+    valueSource: 'canonical',
   }
 }
 

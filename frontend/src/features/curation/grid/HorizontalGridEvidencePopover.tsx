@@ -20,15 +20,52 @@ import { alpha } from '@mui/material/styles'
 import { buildNavigationCommandFromEnvelopeEvidenceProjection } from '@/features/curation/evidence'
 import type { FieldStateKind } from '@/features/curation/editor/fieldState'
 import type { DomainEnvelopeEvidenceAnchorProjection } from '@/features/curation/types'
+import { formatHorizontalGridValue } from './horizontalGridFormatting'
+import type { HorizontalGridExtractorComparison } from './horizontalGridModel'
 
 export interface HorizontalGridEvidencePopoverTarget {
   anchorEl: HTMLElement
+  canonicalFieldValue: string | null
+  extractorComparison: HorizontalGridExtractorComparison | null
   fieldLabel: string
   fieldValue: string
   onEvidence: (projection: DomainEnvelopeEvidenceAnchorProjection) => void
   projections: readonly DomainEnvelopeEvidenceAnchorProjection[]
+  sourceMention: string | null
   state: FieldStateKind | null
+  validatorResolved: boolean
   validationMessages: readonly string[]
+}
+
+function comparisonPresentation(
+  outcome: HorizontalGridExtractorComparison['outcome'],
+): { heading: string; outcome: string; tone: 'confirmed' | 'warning' | 'error' | 'override' } {
+  if (outcome === 'different') {
+    return {
+      heading: 'Extractor and validator differ — curator review needed',
+      outcome: 'The validator resolved a different canonical value from the extractor result.',
+      tone: 'warning',
+    }
+  }
+  if (outcome === 'unresolved') {
+    return {
+      heading: 'Canonical value not resolved',
+      outcome: 'The extractor found a value, but the validator did not resolve a canonical value.',
+      tone: 'error',
+    }
+  }
+  if (outcome === 'overridden') {
+    return {
+      heading: 'Curator override',
+      outcome: 'The canonical value was accepted by curator override; it was not resolved by the validator.',
+      tone: 'override',
+    }
+  }
+  return {
+    heading: 'Extractor result confirmed',
+    outcome: 'The validator confirmed the extractor result.',
+    tone: 'confirmed',
+  }
 }
 
 export interface HorizontalGridEvidencePopoverProps {
@@ -298,6 +335,98 @@ export default function HorizontalGridEvidencePopover({
               </Box>
               )}
 
+              {target.extractorComparison ? (() => {
+                const comparison = comparisonPresentation(target.extractorComparison.outcome)
+                const extractorValue = formatHorizontalGridValue(target.extractorComparison.value) ?? 'Not available'
+                const validatorValue = target.canonicalFieldValue ?? 'Not resolved'
+
+                // The envelope intentionally preserves both stages for auditability.
+                // Keep the canonical value primary, show the extractor result here,
+                // and use warning emphasis only when the two stages disagree.
+                return (
+                  <Box
+                    aria-label={comparison.heading}
+                    data-testid="horizontal-grid-extractor-comparison"
+                    sx={(theme) => {
+                      const warning = comparison.tone === 'warning'
+                      const error = comparison.tone === 'error'
+                      const color = warning
+                        ? theme.palette.warning.main
+                        : error
+                          ? theme.palette.error.main
+                          : comparison.tone === 'override'
+                            ? theme.palette.info.main
+                            : theme.palette.success.main
+
+                      return {
+                        m: '0 0 12px',
+                        p: '11px 12px',
+                        border: `1px solid ${alpha(color, theme.palette.mode === 'light' ? 0.5 : 0.68)}`,
+                        borderRadius: '5px',
+                        backgroundColor: warning
+                          ? (theme.palette.mode === 'light' ? '#fff6df' : alpha(theme.palette.warning.main, 0.14))
+                          : error
+                            ? alpha(theme.palette.error.main, theme.palette.mode === 'light' ? 0.07 : 0.14)
+                            : comparison.tone === 'override'
+                              ? alpha(theme.palette.info.main, theme.palette.mode === 'light' ? 0.06 : 0.12)
+                              : alpha(theme.palette.success.main, theme.palette.mode === 'light' ? 0.06 : 0.12),
+                      }
+                    }}
+                  >
+                    <Stack alignItems="flex-start" direction="row" spacing="7px">
+                      {comparison.tone === 'warning' ? (
+                        <PriorityHighRoundedIcon
+                          sx={(theme) => ({
+                            color: theme.palette.mode === 'dark' ? theme.palette.warning.light : '#8a5b0d',
+                            fontSize: 17,
+                            mt: '1px',
+                          })}
+                        />
+                      ) : comparison.tone === 'error' ? (
+                        <ErrorOutlineRoundedIcon color="error" sx={{ fontSize: 17, mt: '1px' }} />
+                      ) : comparison.tone === 'override' ? (
+                        <InfoOutlinedIcon color="info" sx={{ fontSize: 17, mt: '1px' }} />
+                      ) : (
+                        <CheckRoundedIcon color="success" sx={{ fontSize: 17, mt: '1px' }} />
+                      )}
+                      <Typography sx={{ fontSize: 12, fontWeight: 750, lineHeight: 1.4 }}>
+                        {comparison.heading}
+                      </Typography>
+                    </Stack>
+                    <Stack spacing="5px" sx={{ mt: '9px' }}>
+                      {target.sourceMention ? (
+                        <Box>
+                          <Typography color="text.secondary" sx={{ fontSize: 9.5, fontWeight: 700 }}>
+                            Source context
+                          </Typography>
+                          <Typography sx={{ fontSize: 12 }}>{target.sourceMention}</Typography>
+                        </Box>
+                      ) : null}
+                      <Box>
+                        <Typography color="text.secondary" sx={{ fontSize: 9.5, fontWeight: 700 }}>
+                          Extractor result
+                        </Typography>
+                        <Typography sx={{ fontSize: 12 }}>{extractorValue}</Typography>
+                      </Box>
+                      <Box>
+                        <Typography color="text.secondary" sx={{ fontSize: 9.5, fontWeight: 700 }}>
+                          {target.extractorComparison.outcome === 'overridden'
+                            ? 'Curator override'
+                            : 'Validator result'}
+                        </Typography>
+                        <Typography sx={{ fontSize: 12, fontWeight: 700 }}>{validatorValue}</Typography>
+                      </Box>
+                      <Box>
+                        <Typography color="text.secondary" sx={{ fontSize: 9.5, fontWeight: 700 }}>
+                          Outcome
+                        </Typography>
+                        <Typography sx={{ fontSize: 12, lineHeight: 1.45 }}>{comparison.outcome}</Typography>
+                      </Box>
+                    </Stack>
+                  </Box>
+                )
+              })() : null}
+
               <Box
               sx={(theme) => ({
                 border: `1px solid ${theme.palette.divider}`,
@@ -319,14 +448,14 @@ export default function HorizontalGridEvidencePopover({
               >
                 Resolution
               </Typography>
-              {target.state === 'resolved' ? (
+              {target.canonicalFieldValue && target.validatorResolved ? (
                 <Typography sx={{ fontSize: 12.5, fontWeight: 700, lineHeight: 1.45, mt: '4px' }}>
-                  {target.fieldLabel} resolved to {target.fieldValue}.
+                  {target.fieldLabel} resolved to {target.canonicalFieldValue}.
                 </Typography>
               ) : null}
 
               {target.validationMessages.length > 0 ? (
-                <Box sx={{ mt: target.state === 'resolved' ? '9px' : '4px' }}>
+                <Box sx={{ mt: target.canonicalFieldValue ? '9px' : '4px' }}>
                   <Typography
                     color="text.secondary"
                     sx={{ fontSize: 10, fontWeight: 700, mb: '3px' }}
@@ -356,8 +485,8 @@ export default function HorizontalGridEvidencePopover({
                   display: 'flex',
                   flexWrap: 'wrap',
                   gap: '3px 6px',
-                  mt: target.validationMessages.length > 0 || target.state === 'resolved' ? '10px' : 0,
-                  pt: target.validationMessages.length > 0 || target.state === 'resolved' ? '8px' : 0,
+                  mt: target.validationMessages.length > 0 || target.canonicalFieldValue ? '10px' : 0,
+                  pt: target.validationMessages.length > 0 || target.canonicalFieldValue ? '8px' : 0,
                 }}
               >
                 <Typography color="text.secondary" sx={{ fontSize: 10, fontWeight: 650 }}>

@@ -351,6 +351,8 @@ function buildModel({
             fieldValidation: null,
             evidence: authorsEvidence,
             validation: authorsValidation,
+            extractorComparison: null,
+            valueSource: 'canonical',
           },
           {
             columnKey: 'field:locked',
@@ -365,6 +367,8 @@ function buildModel({
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
+            extractorComparison: null,
+            valueSource: 'canonical',
           },
           {
             columnKey: 'field:missing',
@@ -379,6 +383,8 @@ function buildModel({
             fieldValidation: null,
             evidence: [],
             validation: emptyValidation,
+            extractorComparison: null,
+            valueSource: 'canonical',
           },
         ],
         evidence: [...objectEvidence, ...authorsEvidence],
@@ -535,6 +541,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(within(details).getByText('Highlighted passage from the paper')).toBeInTheDocument()
     expect(within(details).getByText('Evidence for citation.authors')).toBeInTheDocument()
     expect(within(details).getByLabelText('Current status: Not validated')).toBeInTheDocument()
+    expect(within(details).queryByText(/^Authors resolved to /)).not.toBeInTheDocument()
     expect(within(details).queryByRole('button', { name: /Validate/ })).not.toBeInTheDocument()
     expect(navigateEvidence).toHaveBeenCalledTimes(1)
     expect(within(details).getByRole('button', { name: 'Close evidence details' })).toHaveFocus()
@@ -683,7 +690,9 @@ describe('InteractiveHorizontalCurationGrid', () => {
   it('keeps preview validation available for read-only fields but not unavailable cells', () => {
     renderGrid()
 
-    expect(screen.queryByRole('button', { name: /^Edit Locked identifier:/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: /^Edit unavailable for Locked identifier:/,
+    })).toBeDisabled()
     expect(screen.getByRole('button', {
       name: /^Show evidence and validation details for Locked identifier:/,
     })).toBeEnabled()
@@ -830,6 +839,13 @@ describe('InteractiveHorizontalCurationGrid', () => {
     const taxonCell = model.rows[0].cells[0]
     taxonCell.fieldPath = 'taxon'
     taxonCell.value = 'NCBITaxon:7227'
+    taxonCell.extractorComparison = {
+      fieldKey: 'proposed_taxon',
+      fieldPath: 'proposed_taxon',
+      label: 'Proposed taxon',
+      value: 'NCBITaxon:7227',
+      outcome: 'confirmed',
+    }
 
     renderGrid({ model, workspace: buildWorkspace(candidate) })
     await user.click(screen.getByRole('button', {
@@ -841,9 +857,183 @@ describe('InteractiveHorizontalCurationGrid', () => {
       'Taxon resolved to NCBITaxon:7227.',
     )).toBeInTheDocument()
     expect(within(details).getByText('Validator context')).toBeInTheDocument()
+    expect(within(details).getByLabelText('Extractor result confirmed')).toBeInTheDocument()
+    expect(within(details).getByText('Extractor result')).toBeInTheDocument()
+    expect(within(details).getByText('Validator result')).toBeInTheDocument()
+    expect(within(details).getByText('The validator confirmed the extractor result.')).toBeInTheDocument()
     expect(within(details).getByText(
       'Resolved Example organism sample (sym) as ExampleDB gene MOD:GENE-123.',
     )).toBeInTheDocument()
+  })
+
+  it('flags extractor and validator disagreement for curator review without a proposal column', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'abc'
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'abc'
+    symbolCell.state = 'needs-review'
+    symbolCell.extractorComparison = {
+      fieldKey: 'proposed_symbol',
+      fieldPath: 'proposed_symbol',
+      label: 'Proposed symbol',
+      value: 'abcd',
+      outcome: 'different',
+    }
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    expect(model.columns.map((column) => column.fieldPath)).not.toContain('proposed_symbol')
+    expect(screen.getByRole('img', {
+      name: /Extractor proposed abcd; validator resolved abc\. Curator review is needed/,
+    })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol:/,
+    }))
+
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    const comparison = within(details).getByTestId('horizontal-grid-extractor-comparison')
+    expect(within(comparison).getByText(
+      'Extractor and validator differ — curator review needed',
+    )).toBeInTheDocument()
+    expect(within(comparison).getByText('abcd')).toBeInTheDocument()
+    expect(within(comparison).getByText('abc')).toBeInTheDocument()
+    expect(within(details).getByLabelText('Current status: Needs review')).toBeInTheDocument()
+  })
+
+  it('labels an extractor fallback without attributing an unvalidated draft value to the validator', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'draft-seed'
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const model = buildModel({ authorsEvidence: [] })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'extracted-symbol'
+    symbolCell.valueSource = 'extractor'
+    symbolCell.state = 'needs-review'
+    symbolCell.extractorComparison = {
+      fieldKey: 'proposed_symbol',
+      fieldPath: 'proposed_symbol',
+      label: 'Proposed symbol',
+      value: 'extracted-symbol',
+      outcome: 'unresolved',
+    }
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    expect(screen.getByText('extracted-symbol · Extractor value')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol:/,
+    }))
+
+    const comparison = screen.getByTestId('horizontal-grid-extractor-comparison')
+    expect(within(comparison).getByText('Not resolved')).toBeInTheDocument()
+    expect(within(comparison).queryByText('draft-seed')).not.toBeInTheDocument()
+  })
+
+  it('attributes a waived comparison to curator override rather than validator resolution', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'curator-symbol'
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const waivedSummary = {
+      ...resolvedSummary(),
+      field_path: 'symbol',
+      status: 'waived' as const,
+      messages: ['Accepted by curator override.'],
+    }
+    const model = buildModel({
+      authorsEvidence: [],
+      authorsValidation: validationProjection([waivedSummary]),
+    })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'curator-symbol'
+    symbolCell.state = 'resolved'
+    symbolCell.extractorComparison = {
+      fieldKey: 'proposed_symbol',
+      fieldPath: 'proposed_symbol',
+      label: 'Proposed symbol',
+      value: 'extracted-symbol',
+      outcome: 'overridden',
+    }
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol:/,
+    }))
+
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    const comparison = within(details).getByTestId('horizontal-grid-extractor-comparison')
+    expect(within(comparison).getAllByText('Curator override')).toHaveLength(2)
+    expect(within(comparison).getByText('extracted-symbol')).toBeInTheDocument()
+    expect(within(comparison).getByText('curator-symbol')).toBeInTheDocument()
+    expect(within(comparison).getByText(
+      'The canonical value was accepted by curator override; it was not resolved by the validator.',
+    )).toBeInTheDocument()
+    expect(within(details).queryByText('Symbol resolved to curator-symbol.')).not.toBeInTheDocument()
+  })
+
+  it('does not attribute a stale resolved projection to the validator', async () => {
+    const user = userEvent.setup()
+    const candidate = buildCandidate()
+    const symbolField = candidate.draft.fields[0]
+    symbolField.label = 'Symbol'
+    symbolField.value = 'edited-symbol'
+    symbolField.stale_validation = true
+    symbolField.metadata = { source_field_path: 'symbol' }
+
+    const resolved = {
+      ...resolvedSummary(),
+      field_path: 'symbol',
+    }
+    const model = buildModel({
+      authorsEvidence: [],
+      authorsValidation: validationProjection([resolved]),
+    })
+    model.columns[1].fieldPath = 'symbol'
+    model.columns[1].label = 'Symbol'
+    const symbolCell = model.rows[0].cells[0]
+    symbolCell.fieldPath = 'symbol'
+    symbolCell.value = 'extracted-symbol'
+    symbolCell.valueSource = 'extractor'
+    symbolCell.staleValidation = true
+    symbolCell.state = 'ai-unconfirmed'
+    symbolCell.extractorComparison = {
+      fieldKey: 'proposed_symbol',
+      fieldPath: 'proposed_symbol',
+      label: 'Proposed symbol',
+      value: 'extracted-symbol',
+      outcome: 'unresolved',
+    }
+
+    renderGrid({ model, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', {
+      name: /^Show evidence and validation details for Symbol:/,
+    }))
+
+    const details = screen.getByRole('dialog', { name: /Symbol:/ })
+    expect(within(details).getByLabelText('Canonical value not resolved')).toBeInTheDocument()
+    expect(within(details).queryByText('Symbol resolved to edited-symbol.')).not.toBeInTheDocument()
+    expect(within(details).getByText('Not resolved')).toBeInTheDocument()
   })
 
   it('shows validation-only details and reserves warning/error symbols for field state', async () => {

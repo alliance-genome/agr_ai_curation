@@ -214,11 +214,21 @@ export default function InteractiveHorizontalCurationGrid({
           }
           setEvidenceTarget({
             anchorEl,
+            canonicalFieldValue: field && args.cell.extractorComparison?.outcome !== 'unresolved'
+              ? formatHorizontalGridValue(field.value)
+              : null,
+            extractorComparison: args.cell.extractorComparison,
             fieldLabel: field?.label ?? args.column.label,
-            fieldValue: field ? formatHorizontalGridValue(field.value) ?? '—' : '—',
+            fieldValue: formatHorizontalGridValue(args.cell.value) ?? '—',
             onEvidence: navigateEvidence,
             projections: args.cell.evidence,
+            sourceMention: args.row.contextCell.value.identityLabel,
             state: args.cell.state,
+            validatorResolved: !args.cell.staleValidation
+              && args.cell.validation.statuses.some((status) => status === 'resolved')
+              && args.cell.validation.statuses.every((status) => (
+                status === 'resolved' || status === 'waived'
+              )),
             validationMessages: args.cell.validation.summaries.flatMap((summary) => summary.messages),
           })
           const projection = args.cell.evidence.find(
@@ -286,11 +296,15 @@ export default function InteractiveHorizontalCurationGrid({
         }
         setEvidenceTarget({
           anchorEl,
+          canonicalFieldValue: null,
+          extractorComparison: null,
           fieldLabel: contextEvidenceLabel(projection),
           fieldValue: cell.value.identityLabel,
           onEvidence: navigateEvidence,
           projections: [projection],
+          sourceMention: null,
           state: null,
+          validatorResolved: false,
           validationMessages: [],
         })
         navigateEvidence(projection)

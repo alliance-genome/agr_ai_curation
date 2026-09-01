@@ -163,8 +163,14 @@ export function HorizontalGridFieldCellContent({
     )
   }
 
-  const value = formatHorizontalGridValue(field.value)
+  const value = formatHorizontalGridValue(cell.value)
   const validationMessages = cell.validation.summaries.flatMap((summary) => summary.messages)
+  const comparisonMessage = cell.extractorComparison?.outcome === 'different'
+    ? `Extractor proposed ${formatHorizontalGridValue(cell.extractorComparison.value)}; validator resolved ${value}. Curator review is needed.`
+    : cell.extractorComparison?.outcome === 'unresolved'
+      ? `Extractor found ${value}, but the validator did not resolve a canonical value.`
+      : null
+  const stateMessages = comparisonMessage ? [comparisonMessage] : validationMessages
   const stateLabel = state === 'resolved'
     ? 'Curator validated'
     : state === 'needs-review'
@@ -211,6 +217,7 @@ export function HorizontalGridFieldCellContent({
             }}
           >
             {value ?? '—'}
+            {cell.valueSource === 'extractor' ? ' · Extractor value' : ''}
           </Typography>
         </Stack>
       </ButtonBase>
@@ -219,8 +226,8 @@ export function HorizontalGridFieldCellContent({
           arrow
           title={(
             <Stack spacing={0.5}>
-              {validationMessages.length > 0
-                ? validationMessages.map((message, index) => (
+              {stateMessages.length > 0
+                ? stateMessages.map((message, index) => (
                     <Typography key={`${index}:${message}`} variant="caption">{message}</Typography>
                   ))
                 : <Typography variant="caption">{stateLabel}</Typography>}
@@ -228,7 +235,7 @@ export function HorizontalGridFieldCellContent({
           )}
         >
           <Box
-            aria-label={`${stateLabel}${validationMessages.length > 0 ? `: ${validationMessages.join(' ')}` : ''}`}
+            aria-label={`${stateLabel}${stateMessages.length > 0 ? `: ${stateMessages.join(' ')}` : ''}`}
             component="span"
             data-severity={state === 'needs-review' ? 'warning' : 'error'}
             data-slot="field-state-marker"
@@ -240,7 +247,7 @@ export function HorizontalGridFieldCellContent({
               {state === 'needs-review' ? '!' : '×'}
             </Box>
             <Box component="span" data-slot="field-state-marker-text">
-              {validationMessages.join(' ') || stateLabel}
+              {stateMessages.join(' ') || stateLabel}
             </Box>
           </Box>
         </Tooltip>

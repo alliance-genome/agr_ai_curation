@@ -40,7 +40,7 @@ export default function HorizontalGridCellActions({
   }
 
   const mutationDisabled = field.read_only || isSaving
-  const fieldValue = formatHorizontalGridValue(field.value) ?? 'Not available'
+  const fieldValue = formatHorizontalGridValue(cell.value) ?? 'Not available'
   const actionContext = `${field.label}: ${fieldValue} in ${recordLabel}`
 
   return (
@@ -58,6 +58,10 @@ export default function HorizontalGridCellActions({
         '& .MuiIconButton-root:not([data-validation-preview="true"])': {
           color: theme.palette.mode === 'light' ? '#60757a' : theme.palette.text.secondary,
           transition: 'background 140ms ease, box-shadow 140ms ease, color 140ms ease',
+        },
+        '& .MuiIconButton-root.Mui-disabled:not([data-validation-preview="true"])': {
+          color: theme.palette.mode === 'light' ? '#8b989b' : theme.palette.text.disabled,
+          opacity: 0.52,
         },
         '& .MuiIconButton-root:not([data-validation-preview="true"]):hover, & .MuiIconButton-root:not([data-validation-preview="true"]):focus-visible': {
           backgroundColor: theme.palette.background.paper,
@@ -124,28 +128,27 @@ export default function HorizontalGridCellActions({
             </IconButton>
           </Tooltip>
         ) : null}
-        {!field.read_only ? (
-          <>
-            {/* Validation execution remains intentionally unmounted. The check action above
-                changes client-local preview state only and never calls a validator service. */}
-            <Tooltip title="Edit field">
-              <span>
-                <IconButton
-                  aria-label={`Edit ${actionContext}`}
-                  disabled={mutationDisabled}
-                  onClick={() => {
-                    onSelect()
-                    onEdit(field)
-                  }}
-                  size="small"
-                  sx={{ borderRadius: '4px', height: 23, width: 23 }}
-                >
-                  <EditOutlinedIcon sx={{ fontSize: 14 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-          </>
-        ) : null}
+        {/* Keep the Details -> review check -> Edit rhythm stable for every real field.
+            Read-only context retains a disabled pencil instead of silently
+            losing an action, while only canonical editable fields open the editor. */}
+        <Tooltip title={field.read_only ? 'Read-only field' : 'Edit field'}>
+          <span>
+            <IconButton
+              aria-label={field.read_only
+                ? `Edit unavailable for ${actionContext}. Read-only field.`
+                : `Edit ${actionContext}`}
+              disabled={mutationDisabled}
+              onClick={() => {
+                onSelect()
+                onEdit(field)
+              }}
+              size="small"
+              sx={{ borderRadius: '4px', height: 23, width: 23 }}
+            >
+              <EditOutlinedIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
     </Stack>
   )
 }
