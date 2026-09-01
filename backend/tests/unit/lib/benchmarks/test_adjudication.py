@@ -1,6 +1,8 @@
 import asyncio
 import json
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -9,6 +11,7 @@ from src.lib.benchmarks.adjudication import (
     AdjudicationDecision,
     RawAdjudicationResponse,
     SupplementalAdjudicator,
+    execute_direct_openai_adjudication,
 )
 from src.lib.benchmarks.models import BenchmarkScorerReference, BilledCost
 from src.lib.benchmarks.scoring import score_case
@@ -71,6 +74,92 @@ def _response(outcome="supports_expected", *, billed_amount=None):
             else None
         ),
     )
+
+
+def _direct_openai_client(monkeypatch, *, response=None, request_error=None):
+    parse = AsyncMock(return_value=response, side_effect=request_error)
+    close = AsyncMock()
+    client = SimpleNamespace(
+        responses=SimpleNamespace(parse=parse),
+        close=close,
+    )
+    constructor_calls = []
+
+    def build_client(**kwargs):
+        constructor_calls.append(kwargs)
+        return client
+
+    monkeypatch.setattr("openai.AsyncOpenAI", build_client)
+    return client, constructor_calls
+
+
+async def test_direct_openai_adjudication_closes_client_after_success(monkeypatch):
+    decision = AdjudicationDecision(
+        outcome="supports_expected",
+        reason="expected value is supported",
+        confidence=Decimal("0.9"),
+        uncertainty="",
+    )
+    response = SimpleNamespace(
+        output_parsed=decision,
+        usage=SimpleNamespace(input_tokens=12, output_tokens=4),
+    )
+    client, constructor_calls = _direct_openai_client(
+        monkeypatch,
+        response=response,
+    )
+
+    result = await execute_direct_openai_adjudication(
+        "gpt-5.6-sol", "adjudicate this", 10_000
+    )
+
+    assert constructor_calls == [{"max_retries": 0}]
+    client.responses.parse.assert_awaited_once_with(
+        model="gpt-5.6-sol",
+        input="adjudicate this",
+        text_format=AdjudicationDecision,
+    )
+    client.close.assert_awaited_once_with()
+    assert result.decision == decision
+    assert result.input_tokens == 12
+    assert result.output_tokens == 4
+
+
+async def test_direct_openai_adjudication_closes_client_after_request_failure(
+    monkeypatch,
+):
+    request_error = RuntimeError("request failed")
+    client, _constructor_calls = _direct_openai_client(
+        monkeypatch,
+        request_error=request_error,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await execute_direct_openai_adjudication(
+            "gpt-5.6-sol", "adjudicate this", 10_000
+        )
+
+    assert exc_info.value is request_error
+    client.close.assert_awaited_once_with()
+
+
+async def test_direct_openai_adjudication_preserves_request_failure_when_close_fails(
+    monkeypatch,
+):
+    request_error = RuntimeError("request failed")
+    client, _constructor_calls = _direct_openai_client(
+        monkeypatch,
+        request_error=request_error,
+    )
+    client.close.side_effect = RuntimeError("close failed")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await execute_direct_openai_adjudication(
+            "gpt-5.6-sol", "adjudicate this", 10_000
+        )
+
+    assert exc_info.value is request_error
+    client.close.assert_awaited_once_with()
 
 
 async def test_completed_adjudication_preserves_structured_provenance():
