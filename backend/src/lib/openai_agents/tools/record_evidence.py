@@ -30,6 +30,7 @@ from src.lib.openai_agents.tools.evidence_workspace import (
     find_active_evidence_record,
     find_evidence_record_in_records,
 )
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.weaviate_client.chunks import get_chunk_by_id
 
 if TYPE_CHECKING:
@@ -107,6 +108,21 @@ class _ResolvedSpanFragment:
         if self.figure_reference:
             fragment["figure_reference"] = self.figure_reference
         return fragment
+
+
+class _ChunkLookupRuntimeError(RuntimeError):
+    """Sanitized chunk-store failure safe for logs and Sentry."""
+
+
+def _sanitized_chunk_lookup_error(exc: BaseException) -> _ChunkLookupRuntimeError:
+    try:
+        raise _ChunkLookupRuntimeError(
+            f"Evidence chunk lookup failed ({type(exc).__name__})"
+        ) from None
+    except _ChunkLookupRuntimeError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
 
 
 def _build_preview(chunk_text: str) -> str:
@@ -606,6 +622,7 @@ def _build_span_resolution_error_result(
     chunk_id: str | None = None,
     chunk_text: str | None = None,
     extra_fields: dict[str, Any] | None = None,
+    retry_instructions: str | None = _SPAN_RETRY_INSTRUCTIONS,
 ) -> dict[str, Any]:
     error: dict[str, Any] = {
         "span_id": failed_span_id,
@@ -629,8 +646,9 @@ def _build_span_resolution_error_result(
             f"Evidence span could not be resolved: {failed_span_error}. "
             "The evidence record was not created."
         ),
-        "retry_instructions": _SPAN_RETRY_INSTRUCTIONS,
     }
+    if retry_instructions is not None:
+        payload["retry_instructions"] = retry_instructions
     if failed_span_index is not None:
         payload["failed_span_index"] = failed_span_index
     if chunk_id:
@@ -1026,7 +1044,18 @@ def create_record_evidence_tool(
                     document_id=document_id,
                 )
             except Exception as exc:
-                logger.error("Failed to load chunk %s for record_evidence: %s", chunk_id, exc, exc_info=True)
+                sanitized_exc = _sanitized_chunk_lookup_error(exc)
+                report_runtime_exception(
+                    sanitized_exc,
+                    component="record_evidence",
+                    operation="evidence_chunk_lookup_failed",
+                    context={"document_id": document_id},
+                )
+                logger.error(
+                    "Evidence chunk lookup failed during record_evidence (%s)",
+                    type(exc).__name__,
+                    extra={"sentry_skip_event": True},
+                )
                 return _log_record_evidence_result(
                     _build_span_resolution_error_result(
                         entity=normalized_entity,
@@ -1040,6 +1069,7 @@ def create_record_evidence_tool(
                         resolution_failure="chunk_load_error",
                         chunk_id=chunk_id,
                         extra_fields=error_extra_fields,
+                        retry_instructions=None,
                     ),
                     document_id=document_id,
                     verification_method="chunk_load_error",
