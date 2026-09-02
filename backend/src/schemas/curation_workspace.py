@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import Annotated, Any, Literal, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from pydantic import (
     BaseModel,
@@ -20,7 +20,7 @@ from pydantic import (
     model_validator,
 )
 
-from src.schemas.domain_envelope import validate_field_path_syntax
+from src.schemas.domain_envelope import DomainEnvelopeStatus, validate_field_path_syntax
 
 
 class EvidenceAnchorKind(str, Enum):
@@ -244,6 +244,7 @@ class SubmissionDomainAdapter(Protocol):
         payload_context: Mapping[str, Any],
     ) -> SubmissionPayloadContract:
         """Build a submission payload for preview, export, or direct submission."""
+        ...
 
 
 class CurationWorkspaceBaseModel(BaseModel):
@@ -2433,6 +2434,83 @@ class CurationSubmissionHistoryResponse(CurationWorkspaceBaseModel):
     submission: CurationSubmissionRecord = Field(description="Submission history payload")
 
 
+class CurationBenchmarkSnapshotCreateRequest(CurationWorkspaceBaseModel):
+    """Optimistic request for one immutable current-revision snapshot."""
+
+    expected_revision: int = Field(ge=1)
+
+
+class CurationBenchmarkSchemaReference(CurationWorkspaceBaseModel):
+    """Stable schema identity retained with an exported envelope."""
+
+    schema_id: str
+    schema_version: Optional[str]
+
+
+class CurationBenchmarkSnapshotProvenance(CurationWorkspaceBaseModel):
+    """Document and flow provenance for a persisted envelope revision."""
+
+    document_id: str
+    flow_run_id: Optional[str]
+
+
+class CurationBenchmarkSnapshotBundleV1(CurationWorkspaceBaseModel):
+    """Exact immutable benchmark handoff bundle for a persisted envelope revision."""
+
+    schema_version: Literal["curation-benchmark-snapshot/v1"]
+    snapshot_id: str
+    session_id: str
+    envelope_id: str
+    envelope_revision: int = Field(ge=1)
+    envelope_status: DomainEnvelopeStatus
+    curation_state: Literal["ai_untouched", "curator_modified"]
+    schema_references: list[CurationBenchmarkSchemaReference]
+    provenance: CurationBenchmarkSnapshotProvenance
+    exported_at: datetime
+    envelope_digest: str
+    envelope: dict[str, Any]
+
+
+class CurationBenchmarkSnapshotCreateResponse(CurationWorkspaceBaseModel):
+    """Locator and immutable identity returned after snapshot creation."""
+
+    snapshot_id: str
+    schema_version: Literal["curation-benchmark-snapshot/v1"]
+    envelope_revision: int = Field(ge=1)
+    envelope_digest: str
+    download_path: str
+
+
+class CurationBenchmarkHandoffRequest(CurationWorkspaceBaseModel):
+    """Configured server-side destination selected by stable identifier only."""
+
+    destination_id: str = Field(min_length=1)
+
+
+class CurationBenchmarkHandoffResponse(CurationWorkspaceBaseModel):
+    """Durable snapshot handoff receipt without private destination details."""
+
+    handoff_id: str
+    snapshot_id: str
+    destination_id: str
+    status: Literal["succeeded", "failed", "unknown"]
+    receipt_id: Optional[str] = None
+    redirect_path: Optional[str] = None
+
+
+class CurationBenchmarkErrorDetail(CurationWorkspaceBaseModel):
+    """Stable, sanitized benchmark snapshot API error."""
+
+    error: str
+    message: str
+
+
+class CurationBenchmarkErrorResponse(CurationWorkspaceBaseModel):
+    """FastAPI error envelope for benchmark snapshot operations."""
+
+    detail: CurationBenchmarkErrorDetail
+
+
 class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
     """Request contract for persisting structured extraction envelopes."""
 
@@ -2508,6 +2586,14 @@ __all__ = [
     "CurationActorRef",
     "CurationActorType",
     "CurationAdapterRef",
+    "CurationBenchmarkErrorResponse",
+    "CurationBenchmarkHandoffRequest",
+    "CurationBenchmarkHandoffResponse",
+    "CurationBenchmarkSchemaReference",
+    "CurationBenchmarkSnapshotBundleV1",
+    "CurationBenchmarkSnapshotCreateRequest",
+    "CurationBenchmarkSnapshotCreateResponse",
+    "CurationBenchmarkSnapshotProvenance",
     "CurationCandidate",
     "CurationCandidateAction",
     "CurationCandidateDeleteResponse",

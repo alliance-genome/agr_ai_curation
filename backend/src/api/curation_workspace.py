@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
-from typing import Annotated, Callable, TypeVar
+from typing import Annotated, Callable, NoReturn, TypeVar
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
@@ -16,6 +16,12 @@ from src.lib.curation_workspace.bootstrap_service import (
     create_manual_session,
     get_document_bootstrap_availability,
     prepare_chat_curation_sessions,
+)
+from src.lib.curation_workspace.benchmark_snapshots import (
+    CurationBenchmarkSnapshotError,
+    create_benchmark_snapshot,
+    handoff_benchmark_snapshot,
+    load_benchmark_snapshot_bytes,
 )
 from src.lib.curation_workspace.curation_prep_invocation import (
     build_chat_curation_prep_preview,
@@ -74,6 +80,12 @@ from src.schemas.curation_workspace import (
     CurationCandidateDraftUpdateResponse,
     CurationCandidateValidationRequest,
     CurationCandidateValidationResponse,
+    CurationBenchmarkErrorResponse,
+    CurationBenchmarkHandoffRequest,
+    CurationBenchmarkHandoffResponse,
+    CurationBenchmarkSnapshotBundleV1,
+    CurationBenchmarkSnapshotCreateRequest,
+    CurationBenchmarkSnapshotCreateResponse,
     CurationDateRange,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
@@ -293,6 +305,152 @@ def _require_current_user_id(user: dict) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="User identifier not found in token")
     return user_id
+
+
+def _sanitized_benchmark_error(
+    exc: CurationBenchmarkSnapshotError,
+) -> CurationBenchmarkSnapshotError:
+    try:
+        raise CurationBenchmarkSnapshotError(
+            exc.status_code,
+            exc.error,
+            exc.message,
+        ) from None
+    except CurationBenchmarkSnapshotError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
+def _raise_benchmark_error(exc: CurationBenchmarkSnapshotError) -> NoReturn:
+    detail = {"error": exc.error, "message": exc.message}
+    if exc.status_code >= 500:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=exc.status_code,
+            detail=detail,
+            log_message="Curation benchmark snapshot operation failed",
+            exc=_sanitized_benchmark_error(exc),
+        )
+    raise HTTPException(status_code=exc.status_code, detail=detail) from None
+
+
+class _BenchmarkSnapshotPersistenceError(RuntimeError):
+    """Sanitized snapshot persistence failure safe for logs and Sentry."""
+
+
+def _sanitized_snapshot_persistence_error(
+    orig_type_name: str,
+) -> _BenchmarkSnapshotPersistenceError:
+    try:
+        raise _BenchmarkSnapshotPersistenceError(
+            f"Curation benchmark snapshot persistence failed ({orig_type_name})"
+        ) from None
+    except _BenchmarkSnapshotPersistenceError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
+_BENCHMARK_ERROR_RESPONSES = {
+    code: {"model": CurationBenchmarkErrorResponse}
+    for code in (400, 404, 409, 413, 500, 503)
+}
+
+
+@router.post(
+    "/sessions/{session_id}/envelopes/{envelope_id}/benchmark-snapshots",
+    response_model=CurationBenchmarkSnapshotCreateResponse,
+    responses=_BENCHMARK_ERROR_RESPONSES,
+)
+async def post_benchmark_snapshot(
+    session_id: UUID,
+    envelope_id: str,
+    request: CurationBenchmarkSnapshotCreateRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationBenchmarkSnapshotCreateResponse:
+    set_global_user_from_cognito(db, user)
+    owner_subject = _require_current_user_id(user)
+    try:
+        result = create_benchmark_snapshot(
+            db,
+            session_id=session_id,
+            envelope_id=envelope_id,
+            expected_revision=request.expected_revision,
+            current_user_id=owner_subject,
+        )
+        db.commit()
+        return result
+    except CurationBenchmarkSnapshotError as exc:
+        db.rollback()
+        _raise_benchmark_error(exc)
+    except Exception as exc:
+        db.rollback()
+        sanitized = _sanitized_snapshot_persistence_error(type(exc).__name__)
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail={
+                "error": "snapshot_persistence_failed",
+                "message": "Curation snapshot could not be persisted",
+            },
+            log_message="Curation benchmark snapshot persistence failed",
+            exc=sanitized,
+        )
+
+
+@router.get(
+    "/benchmark-snapshots/{snapshot_id}/download",
+    response_class=Response,
+    responses={
+        200: {"model": CurationBenchmarkSnapshotBundleV1},
+        **_BENCHMARK_ERROR_RESPONSES,
+    },
+)
+async def download_benchmark_snapshot(
+    snapshot_id: UUID,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> Response:
+    set_global_user_from_cognito(db, user)
+    try:
+        content = load_benchmark_snapshot_bytes(
+            db, snapshot_id=snapshot_id, current_user_id=_require_current_user_id(user)
+        )
+    except CurationBenchmarkSnapshotError as exc:
+        _raise_benchmark_error(exc)
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="curation-benchmark-{snapshot_id}.json"'},
+    )
+
+
+@router.post(
+    "/benchmark-snapshots/{snapshot_id}/handoffs",
+    response_model=CurationBenchmarkHandoffResponse,
+    response_model_exclude_none=True,
+    responses=_BENCHMARK_ERROR_RESPONSES,
+)
+async def post_benchmark_snapshot_handoff(
+    snapshot_id: UUID,
+    request: CurationBenchmarkHandoffRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationBenchmarkHandoffResponse:
+    set_global_user_from_cognito(db, user)
+    try:
+        return await handoff_benchmark_snapshot(
+            db,
+            snapshot_id=snapshot_id,
+            destination_id=request.destination_id,
+            current_user_id=_require_current_user_id(user),
+        )
+    except CurationBenchmarkSnapshotError as exc:
+        if db.in_transaction():
+            db.rollback()
+        _raise_benchmark_error(exc)
 
 
 @router.get("/sessions", response_model=CurationSessionListResponse)

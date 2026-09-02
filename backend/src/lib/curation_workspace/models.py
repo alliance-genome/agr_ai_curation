@@ -434,6 +434,103 @@ class DomainEnvelopeModel(Base):
     )
 
 
+class CurationBenchmarkSnapshot(Base):
+    """Immutable canonical export of one persisted envelope revision."""
+
+    __tablename__ = "curation_benchmark_snapshots"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    session_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        _fk("curation_review_sessions.id"),
+        nullable=False,
+    )
+    envelope_id: Mapped[str] = mapped_column(
+        String(),
+        _fk("domain_envelopes.envelope_id"),
+        nullable=False,
+    )
+    envelope_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    envelope_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    bundle_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_id: Mapped[str] = mapped_column(String(), nullable=False)
+    exported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "envelope_revision >= 1",
+            name="ck_curation_benchmark_snapshots_revision",
+        ),
+        CheckConstraint(
+            "envelope_digest ~ '^sha256:[0-9a-f]{64}$'",
+            name="ck_curation_benchmark_snapshots_digest",
+        ),
+        Index(
+            "ix_curation_benchmark_snapshots_envelope_revision",
+            "envelope_id",
+            "envelope_revision",
+        ),
+        Index("ix_curation_benchmark_snapshots_session", "session_id"),
+    )
+
+
+class CurationBenchmarkHandoffAttempt(Base):
+    """Durable idempotent delivery attempt for an immutable snapshot."""
+
+    __tablename__ = "curation_benchmark_handoff_attempts"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    snapshot_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        _fk("curation_benchmark_snapshots.id"),
+        nullable=False,
+    )
+    destination_id: Mapped[str] = mapped_column(String(), nullable=False)
+    replay_key: Mapped[str] = mapped_column(String(71), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(71), nullable=False)
+    status: Mapped[str] = mapped_column(String(), nullable=False)
+    receipt_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    redirect_path: Mapped[str | None] = mapped_column(String(), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('sending', 'succeeded', 'failed', 'unknown')",
+            name="ck_curation_benchmark_handoff_attempts_status",
+        ),
+        UniqueConstraint(
+            "replay_key",
+            name="uq_curation_benchmark_handoff_attempts_replay_key",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_curation_benchmark_handoff_attempts_idempotency_key",
+        ),
+        Index("ix_curation_benchmark_handoff_attempts_snapshot", "snapshot_id"),
+    )
+
+
 class DomainEnvelopeObject(Base):
     """Regenerated object lookup row for the current envelope revision."""
 
@@ -1311,6 +1408,8 @@ class CurationSavedView(Base):
 
 __all__ = [
     "CurationActionLogEntry",
+    "CurationBenchmarkHandoffAttempt",
+    "CurationBenchmarkSnapshot",
     "CurationCandidate",
     "CurationDraft",
     "CurationEvidenceRecord",

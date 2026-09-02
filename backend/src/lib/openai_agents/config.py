@@ -986,6 +986,32 @@ def get_benchmark_enabled() -> bool:
     return _get_env_bool("BENCHMARK_ENABLED", False)
 
 
+def get_benchmark_snapshot_handoff_enabled() -> bool:
+    """Whether curator-owned snapshots may be sent to configured destinations."""
+    return _get_env_bool("BENCHMARK_SNAPSHOT_HANDOFF_ENABLED", False)
+
+
+def get_benchmark_snapshot_handoff_destinations_json() -> str:
+    """Server-only JSON registry of exact benchmark snapshot destinations."""
+    return os.getenv("BENCHMARK_SNAPSHOT_HANDOFF_DESTINATIONS_JSON", "{}").strip()
+
+
+def get_benchmark_handoff_timeout_seconds() -> float:
+    """Total timeout for each outbound token or snapshot handoff request."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("BENCHMARK_HANDOFF_TIMEOUT_SECONDS", 30.0),
+    )
+
+
+def get_benchmark_max_snapshot_bytes() -> int:
+    """Maximum canonical bytes stored and delivered for one curation snapshot."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_MAX_SNAPSHOT_BYTES", 10_485_760),
+    )
+
+
 def get_benchmark_oidc_issuer_url() -> str:
     """Trusted issuer for benchmark bearer access tokens."""
     return os.getenv("BENCHMARK_OIDC_ISSUER_URL", "").strip()
