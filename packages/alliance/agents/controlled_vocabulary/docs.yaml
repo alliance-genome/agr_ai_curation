@@ -38,13 +38,13 @@ data_sources:
       - "abbreviations"
       - "synonyms"
       - "obsolete flags"
-note: "Validation runs automatically. This check runs on every pick-list value (relations, evidence codes, qualifiers, annotation types) an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list."
+note: "Validation runs automatically. This check runs on every pick-list value (relations, qualifiers, annotation types, condition relations) in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list."
 use_when:
   - "When you want a custom pick-list check: a changed prompt, a different term list, or a stricter or looser match than the automatic check."
   - "When you have an abbreviation or synonym and want the official term name and its status."
   - "When you want to review how pick-list values (evidence codes, relations, qualifiers) are matched against the Alliance list."
 avoid_when:
-  - "To get pick-list values validated; the domain pack already runs this check automatically on every record an extractor produces."
+  - "To get pick-list values validated; the domain pack already runs this check automatically on every disease, phenotype, and gene expression record an extractor produces."
   - "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent."
   - "For genes, alleles, or diseases; use the matching validation agent."
   - "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."

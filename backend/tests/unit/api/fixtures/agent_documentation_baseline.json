@@ -172,7 +172,7 @@
       "Transgene handling follows organism-specific rules: MGI retains stable inherited Cre-driver, reporter, and other transgenic lines as alleles, while transient expression and unlinked construct/reagent mentions are excluded",
       "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles"
     ],
-    "note": "The domain pack's validators run automatically on everything this agent extracts: each allele and the paper reference. You only need to add a validator to the flow if you want custom validation.",
+    "note": "The domain pack's validators run automatically on everything this agent extracts: each allele is confirmed against Alliance records. You only need to add a validator to the flow if you want custom validation.",
     "summary": "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers.",
     "use_when": [
       "When you upload a paper and want the alleles and variants it studies, with the quote that supports each one.",
@@ -358,7 +358,7 @@
   },
   "controlled_vocabulary": {
     "avoid_when": [
-      "To get pick-list values validated; the domain pack already runs this check automatically on every record an extractor produces.",
+      "To get pick-list values validated; the domain pack already runs this check automatically on every disease, phenotype, and gene expression record an extractor produces.",
       "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent.",
       "For genes, alleles, or diseases; use the matching validation agent.",
       "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
@@ -403,7 +403,7 @@
       "Cannot create or update controlled vocabulary rows.",
       "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
     ],
-    "note": "Validation runs automatically. This check runs on every pick-list value (relations, evidence codes, qualifiers, annotation types) an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list.",
+    "note": "Validation runs automatically. This check runs on every pick-list value (relations, qualifiers, annotation types, condition relations) in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list.",
     "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n",
     "use_when": [
       "When you want a custom pick-list check: a changed prompt, a different term list, or a stricter or looser match than the automatic check.",
@@ -413,7 +413,7 @@
   },
   "controlled_vocabulary_validation": {
     "avoid_when": [
-      "To get pick-list values validated; the domain pack already runs this check automatically on every record an extractor produces.",
+      "To get pick-list values validated; the domain pack already runs this check automatically on every disease, phenotype, and gene expression record an extractor produces.",
       "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent.",
       "For genes, alleles, or diseases; use the matching validation agent.",
       "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
@@ -458,7 +458,7 @@
       "Cannot create or update controlled vocabulary rows.",
       "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
     ],
-    "note": "Validation runs automatically. This check runs on every pick-list value (relations, evidence codes, qualifiers, annotation types) an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list.",
+    "note": "Validation runs automatically. This check runs on every pick-list value (relations, qualifiers, annotation types, condition relations) in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list.",
     "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n",
     "use_when": [
       "When you want a custom pick-list check: a changed prompt, a different term list, or a stricter or looser match than the automatic check.",
@@ -564,7 +564,7 @@
   },
   "data_provider": {
     "avoid_when": [
-      "To get providers validated; the domain pack already runs this check automatically on every record an extractor produces.",
+      "To get providers validated; the domain pack already runs this check automatically on every disease and gene expression record an extractor produces.",
       "To confirm gene, allele, or model identifiers; use the validation agent for that entity type.",
       "For paper and citation lookups; use the Reference Validation Agent.",
       "For pick-list terms or ontology terms; use the Controlled Vocabulary Validation Agent or the Ontology Term Resolver Agent."
@@ -617,7 +617,7 @@
       "Cannot create new provider records or taxon relationships.",
       "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
     ],
-    "note": "Validation runs automatically. This check runs on the data provider of every record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. This check runs on the data provider of every disease and gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
     "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n",
     "use_when": [
       "When you want a custom provider check: a changed prompt or a stricter or looser species match than the automatic check.",
@@ -627,7 +627,7 @@
   },
   "data_provider_validation": {
     "avoid_when": [
-      "To get providers validated; the domain pack already runs this check automatically on every record an extractor produces.",
+      "To get providers validated; the domain pack already runs this check automatically on every disease and gene expression record an extractor produces.",
       "To confirm gene, allele, or model identifiers; use the validation agent for that entity type.",
       "For paper and citation lookups; use the Reference Validation Agent.",
       "For pick-list terms or ontology terms; use the Controlled Vocabulary Validation Agent or the Ontology Term Resolver Agent."
@@ -680,7 +680,7 @@
       "Cannot create new provider records or taxon relationships.",
       "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
     ],
-    "note": "Validation runs automatically. This check runs on the data provider of every record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. This check runs on the data provider of every disease and gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
     "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n",
     "use_when": [
       "When you want a custom provider check: a changed prompt or a stricter or looser species match than the automatic check.",
@@ -738,7 +738,7 @@
       "Distinguishes diseases from phenotypes \u2014 observable traits in model organisms are phenotypes, not diseases",
       "Diseases mentioned only in introduction/background without new experimental findings are excluded"
     ],
-    "note": "The domain pack's validators run automatically on everything this agent extracts: the disease term, the subject gene, allele, or model, relation and evidence vocabulary, experimental conditions, data provider, and reference. You only need to add a validator to the flow if you want custom validation.",
+    "note": "The domain pack's validators run automatically on everything this agent extracts: the disease term, the subject gene, allele, or model, relation and evidence vocabulary, experimental conditions, and data provider. You only need to add a validator to the flow if you want custom validation.",
     "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation.",
     "use_when": [
       "When you upload a paper and want the diseases it links to genes, alleles, or models, with the evidence quote.",
@@ -853,7 +853,7 @@
       "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records.",
       "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."
     ],
-    "note": "Validation runs automatically. This check runs on every experimental condition an extractor captures, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on every experimental condition in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n",
     "use_when": [
       "When you want a custom condition check: a changed prompt, extra tools, or a stricter or looser check on ontology terms, chemicals, or units.",
@@ -916,7 +916,7 @@
       "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records.",
       "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."
     ],
-    "note": "Validation runs automatically. This check runs on every experimental condition an extractor captures, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on every experimental condition in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n",
     "use_when": [
       "When you want a custom condition check: a changed prompt, extra tools, or a stricter or looser check on ontology terms, chemicals, or units.",
@@ -1223,7 +1223,7 @@
   },
   "gene_validation": {
     "avoid_when": [
-      "To get genes validated in a flow; the domain pack already runs this check automatically on every gene an extractor produces.",
+      "To get genes validated in a flow; the domain pack already runs this check automatically on the genes in every gene, disease, and gene expression record an extractor produces.",
       "For alleles or variants; use the Allele Validation Agent.",
       "For diseases, chemicals, or ontology terms; use the matching validation agent.",
       "To find the genes a paper studies; that is the Gene Extraction Agent's job."
@@ -1267,7 +1267,7 @@
       "Only validates against Alliance group data",
       "Some newly published genes may not be in the database yet"
     ],
-    "note": "Validation runs automatically. This check runs on every gene an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on the genes in every gene, disease, and gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates gene identifiers against the Alliance Curation Database.",
     "use_when": [
       "When you want a custom gene check: a changed prompt, different tools, or a stricter or looser match than the automatic check.",
@@ -1490,7 +1490,7 @@
       "Requires ontology_term_type for generic label or synonym lookup.",
       "Requires data_provider for provider-scoped anatomy and life-stage lookup."
     ],
-    "note": "Validation runs automatically. This check runs on every disease, anatomy, life stage, and other ontology term an extractor produces, so you do not need to add this agent to a flow. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on every disease, phenotype, anatomy, life stage, assay, and evidence code term an extractor produces, so you do not need to add this agent to a flow. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Resolves exact ontology CURIEs and typed ontology-term labels with package lookup helpers while preserving ambiguous or unresolved candidates.\n",
     "use_when": [
       "When you want a custom ontology check: a changed prompt, a different ontology, or a stricter or looser match than the automatic check.",
@@ -1731,7 +1731,7 @@
       "Requires an uploaded PDF document \u2014 cannot extract phenotypes from chat text alone",
       "Wild-type/control observations are baselines, not phenotype assertions"
     ],
-    "note": "The domain pack's validators run automatically on everything this agent extracts: the phenotype term, the subject genotype, vocabulary values, experimental conditions, and reference. You only need to add a validator to the flow if you want custom validation.",
+    "note": "The domain pack's validators run automatically on everything this agent extracts: the phenotype term, vocabulary values, and experimental conditions. You only need to add a validator to the flow if you want custom validation.",
     "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",
     "use_when": [
       "When you upload a paper and want the phenotypes it reports, linked to the genotype that shows them.",
@@ -1741,7 +1741,7 @@
   },
   "reference": {
     "avoid_when": [
-      "To get references validated; the domain pack already runs this check automatically on every record an extractor produces.",
+      "To get the reference on a gene expression record validated; the domain pack already runs this check automatically.",
       "To read or summarize the paper's content; use the General PDF Extraction Agent.",
       "To confirm the genes, alleles, or diseases the paper reports; use the matching validation agent.",
       "To add a paper that is missing from the Alliance literature database."
@@ -1787,7 +1787,7 @@
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "note": "Validation runs automatically. This check runs on the reference of every record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. This check runs on the reference of every gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
     "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
     "use_when": [
       "When you want a custom reference check: a changed prompt or a stricter or looser match against the Alliance literature database.",
@@ -1797,7 +1797,7 @@
   },
   "reference_validation": {
     "avoid_when": [
-      "To get references validated; the domain pack already runs this check automatically on every record an extractor produces.",
+      "To get the reference on a gene expression record validated; the domain pack already runs this check automatically.",
       "To read or summarize the paper's content; use the General PDF Extraction Agent.",
       "To confirm the genes, alleles, or diseases the paper reports; use the matching validation agent.",
       "To add a paper that is missing from the Alliance literature database."
@@ -1843,7 +1843,7 @@
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "note": "Validation runs automatically. This check runs on the reference of every record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. This check runs on the reference of every gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
     "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
     "use_when": [
       "When you want a custom reference check: a changed prompt or a stricter or looser match against the Alliance literature database.",
@@ -1995,7 +1995,7 @@
   },
   "subject_entity": {
     "avoid_when": [
-      "To get subjects validated; the domain pack already runs this check automatically on every record that names its subject type.",
+      "To get the subject of a disease record validated; the domain pack already runs this check automatically.",
       "When the subject type is not stated; the agent does not guess it.",
       "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent.",
       "When you already know the subject is a gene, allele, or model; use that validation agent directly."
@@ -2049,7 +2049,7 @@
       "Cannot create missing subject records or assign new entity identifiers.",
       "Only routes among the supported subject validation paths exposed by the package."
     ],
-    "note": "Validation runs automatically. This check runs on the subject of every disease and phenotype record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on the subject of every disease record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
     "use_when": [
       "When you want a custom subject check: a changed prompt, different routing, or a stricter or looser match for gene, allele, or model subjects.",
@@ -2059,7 +2059,7 @@
   },
   "subject_entity_validation": {
     "avoid_when": [
-      "To get subjects validated; the domain pack already runs this check automatically on every record that names its subject type.",
+      "To get the subject of a disease record validated; the domain pack already runs this check automatically.",
       "When the subject type is not stated; the agent does not guess it.",
       "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent.",
       "When you already know the subject is a gene, allele, or model; use that validation agent directly."
@@ -2113,7 +2113,7 @@
       "Cannot create missing subject records or assign new entity identifiers.",
       "Only routes among the supported subject validation paths exposed by the package."
     ],
-    "note": "Validation runs automatically. This check runs on the subject of every disease and phenotype record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on the subject of every disease record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
     "use_when": [
       "When you want a custom subject check: a changed prompt, different routing, or a stricter or looser match for gene, allele, or model subjects.",

@@ -47,7 +47,7 @@ data_sources:
       - "taxon identifiers"
       - "ontology-backed condition terms"
       - "ChEBI chemical ontology terms (CHEBITerm)"
-note: "Validation runs automatically. This check runs on every experimental condition an extractor captures, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
+note: "Validation runs automatically. This check runs on every experimental condition in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
 use_when:
   - "When you want a custom condition check: a changed prompt, extra tools, or a stricter or looser check on ontology terms, chemicals, or units."
   - "When you have a condition (a treatment, temperature, chemical exposure, or diet) and want its parts checked together."

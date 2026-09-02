@@ -22,7 +22,7 @@ data_sources:
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content", "Figure legends"]
-note: "The domain pack's validators run automatically on everything this agent extracts: the phenotype term, the subject genotype, vocabulary values, experimental conditions, and reference. You only need to add a validator to the flow if you want custom validation."
+note: "The domain pack's validators run automatically on everything this agent extracts: the phenotype term, vocabulary values, and experimental conditions. You only need to add a validator to the flow if you want custom validation."
 use_when:
   - "When you upload a paper and want the phenotypes it reports, linked to the genotype that shows them."
   - "At the start of a phenotype curation flow; the domain pack's validators then confirm the ontology terms automatically."
