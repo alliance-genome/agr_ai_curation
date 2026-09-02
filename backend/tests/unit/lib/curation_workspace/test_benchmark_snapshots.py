@@ -123,6 +123,7 @@ def test_snapshot_is_canonical_redacted_and_history_classified(
     assert bundle["envelope_digest"] == f"sha256:{sha256(envelope_bytes).hexdigest()}"
     assert response.envelope_revision == 7
     assert str(response.snapshot_id) in response.download_path
+    assert db.envelope_statement is not None
     assert db.envelope_statement._for_update_arg is not None
 
 
@@ -367,6 +368,7 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
     )
     db = _HandoffDb(snapshot, SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"))
     call_count = 0
+    reported = []
 
     class _Client:
         def __init__(self, **_kwargs):
@@ -382,14 +384,24 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return _Response({"access_token": "token"})
-            raise httpx.ReadTimeout("ambiguous")
+                return _Response({"access_token": "fake-sensitive-access-token"})
+            request = httpx.Request(
+                "POST",
+                "https://sink.example/api/snapshots",
+                headers={"Authorization": "Bearer fake-sensitive-access-token"},
+            )
+            raise httpx.ReadTimeout("fake-sensitive-timeout", request=request)
 
     monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
     monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
     monkeypatch.setattr(module, "get_benchmark_handoff_timeout_seconds", lambda: 30)
     monkeypatch.setenv("PORTAL_CLIENT_SECRET", "secret")
     monkeypatch.setattr(module.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(
+        module,
+        "report_runtime_exception",
+        lambda exc, **kwargs: reported.append((exc, kwargs)),
+    )
 
     result = await module.handoff_benchmark_snapshot(
         db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1"
@@ -398,6 +410,14 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
     assert db.added is not None
     assert db.added.failure_code == "delivery_timeout"
     assert call_count == 2
+    assert len(reported) == 1
+    reported_exc, reported_kwargs = reported[0]
+    assert isinstance(reported_exc, module._BenchmarkHandoffFailure)
+    assert reported_kwargs["tags"] == {"failure_code": "delivery_timeout"}
+    assert "fake-sensitive" not in str(reported_exc)
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__context__ is None
+    assert reported_exc.__cause__ is None
 
     db.prior = db.added
     replay = await module.handoff_benchmark_snapshot(
@@ -416,6 +436,7 @@ async def test_token_failure_is_sanitized_and_persisted_failed(monkeypatch, capl
         bundle_json='{"exact":true}',
     )
     db = _HandoffDb(snapshot, SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"))
+    reported = []
 
     class _Client:
         def __init__(self, **_kwargs):
@@ -435,6 +456,11 @@ async def test_token_failure_is_sanitized_and_persisted_failed(monkeypatch, capl
     monkeypatch.setattr(module, "get_benchmark_handoff_timeout_seconds", lambda: 30)
     monkeypatch.setenv("PORTAL_CLIENT_SECRET", "fake-sensitive-client-secret")
     monkeypatch.setattr(module.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(
+        module,
+        "report_runtime_exception",
+        lambda exc, **kwargs: reported.append((exc, kwargs)),
+    )
     caplog.set_level("WARNING", logger=module.logger.name)
 
     result = await module.handoff_benchmark_snapshot(
@@ -446,6 +472,15 @@ async def test_token_failure_is_sanitized_and_persisted_failed(monkeypatch, capl
     assert db.added.failure_code == "token_request_failed"
     assert sensitive not in caplog.text
     assert "fake-sensitive-client-secret" not in caplog.text
+    assert len(reported) == 1
+    reported_exc, reported_kwargs = reported[0]
+    assert isinstance(reported_exc, module._BenchmarkHandoffFailure)
+    assert reported_kwargs["tags"] == {"failure_code": "token_request_failed"}
+    assert sensitive not in str(reported_exc)
+    assert "fake-sensitive-client-secret" not in str(reported_exc)
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__context__ is None
+    assert reported_exc.__cause__ is None
 
 
 def test_redirect_policy_rejects_prefix_confusion_and_query_values():

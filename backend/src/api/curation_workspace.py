@@ -83,6 +83,7 @@ from src.schemas.curation_workspace import (
     CurationBenchmarkErrorResponse,
     CurationBenchmarkHandoffRequest,
     CurationBenchmarkHandoffResponse,
+    CurationBenchmarkSnapshotBundleV1,
     CurationBenchmarkSnapshotCreateRequest,
     CurationBenchmarkSnapshotCreateResponse,
     CurationDateRange,
@@ -313,6 +314,23 @@ def _raise_benchmark_error(exc: CurationBenchmarkSnapshotError) -> NoReturn:
     raise HTTPException(status_code=exc.status_code, detail=detail) from None
 
 
+class _BenchmarkSnapshotPersistenceError(RuntimeError):
+    """Sanitized snapshot persistence failure safe for logs and Sentry."""
+
+
+def _sanitized_snapshot_persistence_error(
+    orig_type_name: str,
+) -> _BenchmarkSnapshotPersistenceError:
+    try:
+        raise _BenchmarkSnapshotPersistenceError(
+            f"Curation benchmark snapshot persistence failed ({orig_type_name})"
+        ) from None
+    except _BenchmarkSnapshotPersistenceError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
 _BENCHMARK_ERROR_RESPONSES = {
     code: {"model": CurationBenchmarkErrorResponse}
     for code in (400, 404, 409, 413, 500, 503)
@@ -348,6 +366,7 @@ async def post_benchmark_snapshot(
         _raise_benchmark_error(exc)
     except Exception as exc:
         db.rollback()
+        sanitized = _sanitized_snapshot_persistence_error(type(exc).__name__)
         raise_sanitized_http_exception(
             logger,
             status_code=500,
@@ -356,14 +375,17 @@ async def post_benchmark_snapshot(
                 "message": "Curation snapshot could not be persisted",
             },
             log_message="Curation benchmark snapshot persistence failed",
-            exc=exc,
+            exc=sanitized,
         )
 
 
 @router.get(
     "/benchmark-snapshots/{snapshot_id}/download",
     response_class=Response,
-    responses=_BENCHMARK_ERROR_RESPONSES,
+    responses={
+        200: {"model": CurationBenchmarkSnapshotBundleV1},
+        **_BENCHMARK_ERROR_RESPONSES,
+    },
 )
 async def download_benchmark_snapshot(
     snapshot_id: UUID,

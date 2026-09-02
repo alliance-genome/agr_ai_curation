@@ -31,6 +31,7 @@ from src.lib.openai_agents.config import (
     get_benchmark_snapshot_handoff_destinations_json,
     get_benchmark_snapshot_handoff_enabled,
 )
+from src.lib.observability.runtime import report_runtime_exception
 from src.schemas.curation_workspace import (
     CurationBenchmarkHandoffResponse,
     CurationBenchmarkSchemaReference,
@@ -63,6 +64,26 @@ class CurationBenchmarkSnapshotError(RuntimeError):
         self.status_code = status_code
         self.error = error
         self.message = message
+
+
+class _BenchmarkHandoffFailure(RuntimeError):
+    """Sanitized outbound handoff failure safe for logs and Sentry."""
+
+
+def _report_handoff_failure(failure_code: str) -> None:
+    try:
+        raise _BenchmarkHandoffFailure(
+            f"Curation benchmark snapshot handoff failed ({failure_code})"
+        ) from None
+    except _BenchmarkHandoffFailure as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        report_runtime_exception(
+            sanitized,
+            component="curation_benchmark_snapshots",
+            operation="snapshot_handoff_failed",
+            tags={"failure_code": failure_code},
+        )
 
 
 @dataclass(frozen=True)
@@ -432,6 +453,7 @@ async def handoff_benchmark_snapshot(
     client_secret = os.getenv(destination.client_secret_env, "")
     if not client_secret:
         logger.error("Benchmark snapshot handoff credential is unavailable")
+        _report_handoff_failure("credential_unavailable")
         return _finish_attempt(db, attempt, status="failed", failure_code="credential_unavailable")
 
     timeout = get_benchmark_handoff_timeout_seconds()
@@ -447,11 +469,13 @@ async def handoff_benchmark_snapshot(
             )
         except (httpx.TimeoutException, httpx.RequestError):
             logger.warning("Benchmark snapshot handoff token request failed")
+            _report_handoff_failure("token_request_failed")
             return _finish_attempt(
                 db, attempt, status="failed", failure_code="token_request_failed"
             )
         if not token_response.is_success:
             logger.warning("Benchmark snapshot handoff token request failed")
+            _report_handoff_failure("token_request_failed")
             return _finish_attempt(
                 db, attempt, status="failed", failure_code="token_request_failed"
             )
@@ -466,6 +490,7 @@ async def handoff_benchmark_snapshot(
             access_token = None
         if not isinstance(access_token, str) or not access_token:
             logger.warning("Benchmark snapshot handoff token response was invalid")
+            _report_handoff_failure("token_response_invalid")
             return _finish_attempt(
                 db, attempt, status="failed", failure_code="token_response_invalid"
             )
@@ -483,6 +508,7 @@ async def handoff_benchmark_snapshot(
             logger.warning(
                 "Benchmark snapshot handoff timed out with an ambiguous delivery result"
             )
+            _report_handoff_failure("delivery_timeout")
             return _finish_attempt(
                 db, attempt, status="unknown", failure_code="delivery_timeout"
             )
@@ -490,6 +516,7 @@ async def handoff_benchmark_snapshot(
             logger.warning(
                 "Benchmark snapshot handoff transport failed with an ambiguous delivery result"
             )
+            _report_handoff_failure("delivery_transport_error")
             return _finish_attempt(
                 db,
                 attempt,
@@ -499,6 +526,7 @@ async def handoff_benchmark_snapshot(
 
     if not sink_response.is_success:
         logger.warning("Benchmark snapshot handoff sink rejected the delivery")
+        _report_handoff_failure("sink_rejected")
         return _finish_attempt(db, attempt, status="failed", failure_code="sink_rejected")
     try:
         sink_payload = sink_response.json()
@@ -509,6 +537,7 @@ async def handoff_benchmark_snapshot(
         redirect_path = _validated_redirect_path(redirect_url, destination)
     except (TypeError, ValueError):
         logger.warning("Benchmark snapshot handoff receipt was invalid")
+        _report_handoff_failure("receipt_invalid")
         return _finish_attempt(db, attempt, status="failed", failure_code="receipt_invalid")
 
     return _finish_attempt(

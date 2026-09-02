@@ -128,12 +128,14 @@ async def test_benchmark_endpoint_reports_unexpected_failure_without_exposing_it
 ):
     monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
     underlying = RuntimeError("private envelope content")
+    reported = []
 
     def _fail(*_args, **_kwargs):
         raise underlying
 
     def _report(_logger, **kwargs):
-        assert kwargs["exc"] is underlying
+        reported.append(kwargs["exc"])
+        assert kwargs["exc"] is not underlying
         assert "private envelope content" not in str(kwargs["detail"])
         raise module.HTTPException(
             status_code=kwargs["status_code"], detail=kwargs["detail"]
@@ -158,6 +160,13 @@ async def test_benchmark_endpoint_reports_unexpected_failure_without_exposing_it
         "message": "Curation snapshot could not be persisted",
     }
     assert db.rollback_calls == 1
+    assert len(reported) == 1
+    assert isinstance(reported[0], module._BenchmarkSnapshotPersistenceError)
+    assert "RuntimeError" in str(reported[0])
+    assert "private envelope content" not in str(reported[0])
+    assert reported[0].__traceback__ is not None
+    assert reported[0].__context__ is None
+    assert reported[0].__cause__ is None
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,29 @@ def test_snapshot_handoff_openapi_exposes_only_the_reviewed_v1_shapes():
     assert "post" in document["paths"][handoff_path]
 
     schemas = document["components"]["schemas"]
+    download_schema = document["paths"][download_path]["get"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
+    assert download_schema == {
+        "$ref": "#/components/schemas/CurationBenchmarkSnapshotBundleV1"
+    }
+    assert set(schemas["CurationBenchmarkSnapshotBundleV1"]["properties"]) == {
+        "schema_version",
+        "snapshot_id",
+        "session_id",
+        "envelope_id",
+        "envelope_revision",
+        "envelope_status",
+        "curation_state",
+        "schema_references",
+        "provenance",
+        "exported_at",
+        "envelope_digest",
+        "envelope",
+    }
+    assert set(schemas["CurationBenchmarkSnapshotBundleV1"]["required"]) == set(
+        schemas["CurationBenchmarkSnapshotBundleV1"]["properties"]
+    )
     assert set(schemas["CurationBenchmarkSnapshotCreateRequest"]["properties"]) == {
         "expected_revision"
     }
