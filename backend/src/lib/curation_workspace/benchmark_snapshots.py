@@ -82,7 +82,7 @@ def _report_handoff_failure(failure_code: str) -> None:
             sanitized,
             component="curation_benchmark_snapshots",
             operation="snapshot_handoff_failed",
-            tags={"failure_code": failure_code},
+            context={"failure_code": failure_code},
         )
 
 

@@ -307,10 +307,31 @@ def _require_current_user_id(user: dict) -> str:
     return user_id
 
 
+def _sanitized_benchmark_error(
+    exc: CurationBenchmarkSnapshotError,
+) -> CurationBenchmarkSnapshotError:
+    try:
+        raise CurationBenchmarkSnapshotError(
+            exc.status_code,
+            exc.error,
+            exc.message,
+        ) from None
+    except CurationBenchmarkSnapshotError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
 def _raise_benchmark_error(exc: CurationBenchmarkSnapshotError) -> NoReturn:
     detail = {"error": exc.error, "message": exc.message}
     if exc.status_code >= 500:
-        logger.error("Curation benchmark snapshot operation failed: %s", exc.error)
+        raise_sanitized_http_exception(
+            logger,
+            status_code=exc.status_code,
+            detail=detail,
+            log_message="Curation benchmark snapshot operation failed",
+            exc=_sanitized_benchmark_error(exc),
+        )
     raise HTTPException(status_code=exc.status_code, detail=detail) from None
 
 

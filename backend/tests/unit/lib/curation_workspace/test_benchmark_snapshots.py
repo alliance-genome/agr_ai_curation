@@ -413,7 +413,7 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
     assert len(reported) == 1
     reported_exc, reported_kwargs = reported[0]
     assert isinstance(reported_exc, module._BenchmarkHandoffFailure)
-    assert reported_kwargs["tags"] == {"failure_code": "delivery_timeout"}
+    assert reported_kwargs["context"] == {"failure_code": "delivery_timeout"}
     assert "fake-sensitive" not in str(reported_exc)
     assert reported_exc.__traceback__ is not None
     assert reported_exc.__context__ is None
@@ -475,7 +475,7 @@ async def test_token_failure_is_sanitized_and_persisted_failed(monkeypatch, capl
     assert len(reported) == 1
     reported_exc, reported_kwargs = reported[0]
     assert isinstance(reported_exc, module._BenchmarkHandoffFailure)
-    assert reported_kwargs["tags"] == {"failure_code": "token_request_failed"}
+    assert reported_kwargs["context"] == {"failure_code": "token_request_failed"}
     assert sensitive not in str(reported_exc)
     assert "fake-sensitive-client-secret" not in str(reported_exc)
     assert reported_exc.__traceback__ is not None

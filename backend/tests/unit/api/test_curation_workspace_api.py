@@ -97,6 +97,7 @@ async def test_post_benchmark_snapshot_commits_service_result(monkeypatch):
 @pytest.mark.asyncio
 async def test_benchmark_endpoint_returns_stable_sanitized_error(monkeypatch):
     monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    reported = []
 
     def _stale(*_args, **_kwargs):
         raise module.CurationBenchmarkSnapshotError(
@@ -104,6 +105,11 @@ async def test_benchmark_endpoint_returns_stable_sanitized_error(monkeypatch):
         )
 
     monkeypatch.setattr(module, "create_benchmark_snapshot", _stale)
+    monkeypatch.setattr(
+        module,
+        "raise_sanitized_http_exception",
+        lambda *_args, **_kwargs: reported.append(_kwargs),
+    )
     db = _TransactionSpy()
     with pytest.raises(module.HTTPException) as exc_info:
         await module.post_benchmark_snapshot(
@@ -120,6 +126,52 @@ async def test_benchmark_endpoint_returns_stable_sanitized_error(monkeypatch):
         "message": "Envelope revision is not current",
     }
     assert db.rollback_calls == 1
+    assert reported == []
+
+
+@pytest.mark.asyncio
+async def test_benchmark_endpoint_reports_sanitized_service_5xx(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    underlying = module.CurationBenchmarkSnapshotError(
+        503,
+        "handoff_configuration_invalid",
+        "Benchmark snapshot handoff configuration is invalid",
+    )
+    reported = []
+
+    async def _fail(*_args, **_kwargs):
+        raise underlying
+
+    def _report(_logger, **kwargs):
+        reported.append(kwargs["exc"])
+        raise module.HTTPException(
+            status_code=kwargs["status_code"], detail=kwargs["detail"]
+        )
+
+    monkeypatch.setattr(module, "handoff_benchmark_snapshot", _fail)
+    monkeypatch.setattr(module, "raise_sanitized_http_exception", _report)
+    db = _TransactionSpy()
+
+    with pytest.raises(module.HTTPException) as exc_info:
+        await module.post_benchmark_snapshot_handoff(
+            uuid4(),
+            CurationBenchmarkHandoffRequest(destination_id="portal"),
+            user={"sub": "curator-1"},
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {
+        "error": "handoff_configuration_invalid",
+        "message": "Benchmark snapshot handoff configuration is invalid",
+    }
+    assert db.rollback_calls == 1
+    assert len(reported) == 1
+    assert isinstance(reported[0], module.CurationBenchmarkSnapshotError)
+    assert reported[0] is not underlying
+    assert reported[0].__traceback__ is not None
+    assert reported[0].__context__ is None
+    assert reported[0].__cause__ is None
 
 
 @pytest.mark.asyncio
