@@ -268,6 +268,7 @@ async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
     assert "broadcasts across a list" in capabilities["transform_rules"]["pair_join"]
     assert "conditional" in capabilities["allowed_transform_types"]
     assert "nested conditionals are rejected" in capabilities["transform_rules"]["conditional"]
+    assert "whole field value" in capabilities["transform_rules"]["conditional"]
 
 
 @pytest.mark.asyncio
