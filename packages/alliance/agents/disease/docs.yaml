@@ -18,6 +18,7 @@ data_sources:
     description: "The Alliance's curated copy of the Disease Ontology — official disease names, their IDs, definitions, and synonyms."
     species_supported: null
     data_types: ["disease terms", "DOIDs", "definitions", "synonyms"]
+note: "The disease term itself is confirmed automatically by the ontology term check in the disease pack. Use this agent for a dedicated Disease Ontology lookup, or add it to a flow when you want a custom disease check with a changed prompt or different tools."
 use_when:
   - "After any extractor that names a disease, on papers that assert a gene, allele, or model to disease link."
   - "When you have a disease name, synonym, or DOID and want the official term and its definition."

@@ -165,6 +165,18 @@ function AgentGuideTab({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.25 }}>
+      {/*
+        The note text comes from the agent's docs.yaml `note` key and is rendered
+        verbatim. There is deliberately no category or binding logic here: the UI
+        never decides which agents get a note or what it says.
+
+        Content rule for maintainers: notes appear on validation agents only, and
+        each note states whether that check runs automatically. Whether it runs is
+        decided by the domain packs' ACTIVE validator bindings; bindings in an
+        under_development bucket do not run. See packages/alliance/agents/<agent>/docs.yaml
+        for the notes and packages/alliance/domain_packs/<pack>/domain_pack.yaml for
+        the bindings.
+      */}
       {note && (
         <Alert
           severity="warning"

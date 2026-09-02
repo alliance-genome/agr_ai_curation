@@ -22,7 +22,6 @@ data_sources:
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents. Supports searching by query terms, filtering by section, and reading full sections or subsections."
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content"]
-note: "The domain pack's validators run automatically on everything this agent extracts: the gene, anatomy and stage terms, expression vocabulary, experimental conditions, data provider, and reference. You only need to add a validator to the flow if you want custom validation."
 use_when:
   - "When you upload a paper that reports where and when genes are expressed and want each pattern captured with its quote."
   - "At the start of a gene expression curation flow; the domain pack's validators then confirm genes, anatomy, and stage terms automatically."

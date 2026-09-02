@@ -22,6 +22,7 @@ data_sources:
     description: "Public REST API providing DIOPT-aggregated orthology predictions from multiple algorithms"
     species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "M. musculus (MGI)", "H. sapiens (HGNC)", "D. rerio (ZFIN)", "S. cerevisiae (SGD)", "R. norvegicus (RGD)"]
     data_types: ["ortholog relationships", "confidence scores", "prediction methods", "gene identifiers"]
+note: "This lookup does not run automatically; add it to a flow or ask for it in chat when you need it."
 use_when:
   - "When you have a confirmed gene and want its matching genes in other species."
   - "When you need to know how confident an ortholog prediction is and which methods agree."

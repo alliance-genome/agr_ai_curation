@@ -22,6 +22,7 @@ data_sources:
     description: "EBI-hosted curated ontology of molecular entities focused on small chemical compounds involved in biological processes, including drugs, metabolites, cofactors, and toxins."
     species_supported: null
     data_types: ["Chemical identifiers (ChEBI IDs)", "Molecular formulas", "InChI/SMILES structures", "Chemical definitions", "Ontology classifications", "Synonyms"]
+note: "This check does not run automatically yet. No domain pack includes chemical validation, so add this agent to your flow when you need ChEBI terms and IDs confirmed. Other checks declared by the domain packs run automatically."
 use_when:
   - "After an extractor names a chemical, drug, or treatment compound that needs an official ChEBI term and ID."
   - "When you have a compound name or synonym and want its ChEBI record, formula, and parent classes."

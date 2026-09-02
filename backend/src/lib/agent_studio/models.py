@@ -57,6 +57,10 @@ class AgentDocumentation(BaseModel):
         default_factory=list,
         description="Curator-voice situations where another agent is the right choice",
     )
+    # Content rule: notes appear on validation agents only, and each note states
+    # whether that check runs automatically. Whether it runs is decided by the
+    # domain packs' ACTIVE validator bindings (under_development bindings do not
+    # run); the UI renders the text verbatim and applies no category logic.
     note: str = Field(
         default="",
         description="Curator-voice note shown above the guidance, verbatim from docs.yaml",

@@ -18,6 +18,7 @@ data_sources:
     description: "Official GO API at api.geneontology.org providing gene annotations with evidence codes"
     species_supported: ["C. elegans (WB:)", "D. melanogaster (FB:)", "D. rerio (ZFIN:)", "H. sapiens (HGNC:)", "M. musculus (MGI:)", "R. norvegicus (RGD:)", "S. cerevisiae (SGD:)"]
     data_types: ["GO annotations", "evidence and ECO identifiers", "references", "relations", "With/From", "qualifiers and negation", "providers", "product types", "source provenance"]
+note: "This lookup does not run automatically; add it to a flow or ask for it in chat when you need it."
 use_when:
   - "When you have a confirmed gene ID and want the GO annotations already recorded for it, with evidence codes and sources."
   - "When you are comparing a paper's findings against what is already annotated for a gene."

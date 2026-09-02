@@ -29,7 +29,6 @@ data_sources:
       QuickGO term and hierarchy endpoints with retained provenance.
     species_supported: ["R. norvegicus (RGD)"]
     data_types: ["Gene-product identity", "Existing GO annotations", "GO terms", "GO hierarchy"]
-note: "For RGD curators, the RGD evidence policy check runs automatically on every GO recommendation this agent produces. You only need to add a validator to the flow if you want custom validation."
 use_when:
   - "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it."
   - "When you want a paper's findings compared against the GO annotations already recorded for its genes."
