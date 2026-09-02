@@ -42,6 +42,9 @@ def test_tsv_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
         "Do not build replacement row arrays",
         "`pair_join` transform",
         "do not use `concat` for list-valued fields",
+        "`conditional` transform",
+        "both `when_true` and `when_false`",
+        "nested conditionals and arbitrary expressions are not supported",
     ):
         assert required in content
 
