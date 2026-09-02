@@ -13,6 +13,10 @@ from src.schemas.curation_prep import (
     CurationPrepChatRunResponse,
 )
 from src.schemas.curation_workspace import (
+    CurationBenchmarkHandoffRequest,
+    CurationBenchmarkHandoffResponse,
+    CurationBenchmarkSnapshotCreateRequest,
+    CurationBenchmarkSnapshotCreateResponse,
     CurationCandidateDecisionRequest,
     CurationCandidateDraftUpdateRequest,
     CurationCandidateValidationRequest,
@@ -55,6 +59,135 @@ class _TransactionSpy:
 
     def in_transaction(self):
         return True
+
+
+@pytest.mark.asyncio
+async def test_post_benchmark_snapshot_commits_service_result(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    snapshot_id = uuid4()
+    expected = CurationBenchmarkSnapshotCreateResponse(
+        snapshot_id=str(snapshot_id),
+        schema_version="curation-benchmark-snapshot/v1",
+        envelope_revision=7,
+        envelope_digest="sha256:" + "a" * 64,
+        download_path=f"/api/curation-workspace/benchmark-snapshots/{snapshot_id}/download",
+    )
+    captured = {}
+
+    def _create(db, **kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(module, "create_benchmark_snapshot", _create)
+    db = _TransactionSpy()
+    result = await module.post_benchmark_snapshot(
+        uuid4(),
+        "env-1",
+        CurationBenchmarkSnapshotCreateRequest(expected_revision=7),
+        user={"sub": "curator-1"},
+        db=db,
+    )
+
+    assert result is expected
+    assert captured["expected_revision"] == 7
+    assert captured["current_user_id"] == "curator-1"
+    assert db.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_benchmark_endpoint_returns_stable_sanitized_error(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+
+    def _stale(*_args, **_kwargs):
+        raise module.CurationBenchmarkSnapshotError(
+            409, "stale_envelope_revision", "Envelope revision is not current"
+        )
+
+    monkeypatch.setattr(module, "create_benchmark_snapshot", _stale)
+    db = _TransactionSpy()
+    with pytest.raises(module.HTTPException) as exc_info:
+        await module.post_benchmark_snapshot(
+            uuid4(),
+            "env-1",
+            CurationBenchmarkSnapshotCreateRequest(expected_revision=7),
+            user={"sub": "curator-1"},
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "error": "stale_envelope_revision",
+        "message": "Envelope revision is not current",
+    }
+    assert db.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_benchmark_endpoint_reports_unexpected_failure_without_exposing_it(
+    monkeypatch,
+):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    underlying = RuntimeError("private envelope content")
+
+    def _fail(*_args, **_kwargs):
+        raise underlying
+
+    def _report(_logger, **kwargs):
+        assert kwargs["exc"] is underlying
+        assert "private envelope content" not in str(kwargs["detail"])
+        raise module.HTTPException(
+            status_code=kwargs["status_code"], detail=kwargs["detail"]
+        )
+
+    monkeypatch.setattr(module, "create_benchmark_snapshot", _fail)
+    monkeypatch.setattr(module, "raise_sanitized_http_exception", _report)
+    db = _TransactionSpy()
+
+    with pytest.raises(module.HTTPException) as exc_info:
+        await module.post_benchmark_snapshot(
+            uuid4(),
+            "env-1",
+            CurationBenchmarkSnapshotCreateRequest(expected_revision=7),
+            user={"sub": "curator-1"},
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == {
+        "error": "snapshot_persistence_failed",
+        "message": "Curation snapshot could not be persisted",
+    }
+    assert db.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_post_benchmark_handoff_accepts_only_destination_id(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    snapshot_id = uuid4()
+
+    async def _handoff(_db, **kwargs):
+        assert kwargs == {
+            "snapshot_id": snapshot_id,
+            "destination_id": "portal",
+            "current_user_id": "curator-1",
+        }
+        return CurationBenchmarkHandoffResponse(
+            handoff_id=str(uuid4()),
+            snapshot_id=str(snapshot_id),
+            destination_id="portal",
+            status="succeeded",
+            receipt_id="opaque",
+            redirect_path="/comparisons/opaque",
+        )
+
+    monkeypatch.setattr(module, "handoff_benchmark_snapshot", _handoff)
+    result = await module.post_benchmark_snapshot_handoff(
+        snapshot_id,
+        CurationBenchmarkHandoffRequest(destination_id="portal"),
+        user={"sub": "curator-1"},
+        db=_TransactionSpy(),
+    )
+    assert result.redirect_path == "/comparisons/opaque"
 
 
 def test_run_curation_mutation_commits_only_after_helper_succeeds():

@@ -71,10 +71,18 @@ def test_benchmark_operational_defaults(monkeypatch):
         "BENCHMARK_ARTIFACT_UPLOAD_TIMEOUT_SECONDS",
         "BENCHMARK_ARTIFACT_UPLOAD_CONCURRENCY",
         "BENCHMARK_ARTIFACT_SECRET_PATTERNS",
+        "BENCHMARK_SNAPSHOT_HANDOFF_ENABLED",
+        "BENCHMARK_SNAPSHOT_HANDOFF_DESTINATIONS_JSON",
+        "BENCHMARK_HANDOFF_TIMEOUT_SECONDS",
+        "BENCHMARK_MAX_SNAPSHOT_BYTES",
     ):
         monkeypatch.delenv(key, raising=False)
 
     assert config.get_benchmark_enabled() is False
+    assert config.get_benchmark_snapshot_handoff_enabled() is False
+    assert config.get_benchmark_snapshot_handoff_destinations_json() == "{}"
+    assert config.get_benchmark_handoff_timeout_seconds() == 30
+    assert config.get_benchmark_max_snapshot_bytes() == 10_485_760
     assert config.get_benchmark_root() == ""
     assert config.get_benchmark_source_timeout_seconds() == 30
     assert config.get_benchmark_max_input_bytes() == 52_428_800
@@ -119,6 +127,12 @@ def test_benchmark_operational_defaults(monkeypatch):
 
 def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_SNAPSHOT_HANDOFF_ENABLED", "true")
+    monkeypatch.setenv(
+        "BENCHMARK_SNAPSHOT_HANDOFF_DESTINATIONS_JSON", ' {"portal": {}} '
+    )
+    monkeypatch.setenv("BENCHMARK_HANDOFF_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_MAX_SNAPSHOT_BYTES", "0")
     monkeypatch.setenv("BENCHMARK_ROOT", "  /tmp/custom-benchmarks  ")
     monkeypatch.setenv("BENCHMARK_SOURCE_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_MAX_INPUT_BYTES", "0")
@@ -152,6 +166,10 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_ARTIFACT_SECRET_PATTERNS", " secret-a\nsecret-b ")
 
     assert config.get_benchmark_enabled() is True
+    assert config.get_benchmark_snapshot_handoff_enabled() is True
+    assert config.get_benchmark_snapshot_handoff_destinations_json() == '{"portal": {}}'
+    assert config.get_benchmark_handoff_timeout_seconds() == 0.1
+    assert config.get_benchmark_max_snapshot_bytes() == 1
     assert config.get_benchmark_root() == "/tmp/custom-benchmarks"
     assert config.get_benchmark_source_timeout_seconds() == 0.1
     assert config.get_benchmark_max_input_bytes() == 1
