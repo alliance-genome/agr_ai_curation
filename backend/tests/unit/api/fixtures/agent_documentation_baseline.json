@@ -53,7 +53,7 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "note": "Models in disease records are confirmed automatically by the subject entity check. This agent does not run automatically, so add it to your flow when you need models confirmed in phenotype records or on their own.",
+    "note": "Models in disease records are confirmed automatically by the subject entity check. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
     "use_when": [
       "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
@@ -115,7 +115,7 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "note": "Models in disease records are confirmed automatically by the subject entity check. This agent does not run automatically, so add it to your flow when you need models confirmed in phenotype records or on their own.",
+    "note": "Models in disease records are confirmed automatically by the subject entity check. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
     "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
     "use_when": [
       "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
@@ -790,7 +790,7 @@
       "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history.",
       "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
-    "note": "The disease term itself is confirmed automatically by the ontology term check in the disease pack. Use this agent for a dedicated Disease Ontology lookup, or add it to a flow when you want a custom disease check with a changed prompt or different tools.",
+    "note": "The disease term itself is confirmed automatically by the ontology term check in the disease pack. This agent runs only as a domain-pack validation attachment; clone it in the Agent Workshop when you want a custom disease check with a changed prompt or different tools.",
     "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence.",
     "use_when": [
       "After any extractor that names a disease, on papers that assert a gene, allele, or model to disease link.",

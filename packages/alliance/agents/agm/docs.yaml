@@ -45,7 +45,7 @@ data_sources:
       - "model labels"
       - "provider abbreviations"
       - "taxon context"
-note: "Models in disease records are confirmed automatically by the subject entity check. This agent does not run automatically, so add it to your flow when you need models confirmed in phenotype records or on their own."
+note: "Models in disease records are confirmed automatically by the subject entity check. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
 use_when:
   - "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record."
   - "When a paper's subject is a model (a strain, genotype, or fish line) rather than a single gene or allele."
