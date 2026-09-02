@@ -6,7 +6,7 @@ import WorkshopHeader, { type WorkshopHeaderProps } from './WorkshopHeader'
 function renderHeader(overrides: Partial<WorkshopHeaderProps> = {}) {
   const props: WorkshopHeaderProps = {
     icon: 'Dv',
-    name: 'ZFIN disease validator',
+    name: 'GROUP_A disease validator',
     originLabel: 'Template: disease_validator',
     saveState: 'idle',
     lastSavedAt: null,
@@ -29,7 +29,7 @@ function renderHeader(overrides: Partial<WorkshopHeaderProps> = {}) {
 describe('WorkshopHeader', () => {
   it('shows the agent name and origin line', () => {
     renderHeader()
-    expect(screen.getByRole('heading', { name: 'ZFIN disease validator' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'GROUP_A disease validator' })).toBeInTheDocument()
     expect(screen.getByText('Template: disease_validator')).toBeInTheDocument()
   })
 

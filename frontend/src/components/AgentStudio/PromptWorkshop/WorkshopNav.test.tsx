@@ -36,7 +36,7 @@ describe('WorkshopNav', () => {
   })
 
   it('flags sections with unsaved edits, including group overrides under Prompt', () => {
-    renderNav({ dirty: { setup: true, prompt: false, tools: true, groups: ['ZFIN'], any: true } })
+    renderNav({ dirty: { setup: true, prompt: false, tools: true, groups: ['GROUP_A'], any: true } })
     expect(screen.getByRole('button', { name: 'Setup, unsaved edits' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Prompt, unsaved edits' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Tools, 3 attached, unsaved edits' })).toBeInTheDocument()

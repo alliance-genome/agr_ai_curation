@@ -9,18 +9,18 @@ describe('SaveVersionDialog', () => {
     render(
       <SaveVersionDialog
         open
-        agentName="ZFIN disease validator"
+        agentName="GROUP_A disease validator"
         nextVersion={7}
         isNewAgent={false}
-        changedSections={['Your prompt', 'ZFIN instructions']}
+        changedSections={['Your prompt', 'GROUP_A instructions']}
         saving={false}
         onConfirm={onConfirm}
         onClose={vi.fn()}
       />
     )
     const dialog = screen.getByRole('dialog', { name: /Save as version 7/ })
-    expect(dialog).toHaveTextContent('ZFIN disease validator')
-    expect(dialog).toHaveTextContent('Changed since v6: Your prompt, ZFIN instructions.')
+    expect(dialog).toHaveTextContent('GROUP_A disease validator')
+    expect(dialog).toHaveTextContent('Changed since v6: Your prompt, GROUP_A instructions.')
     const note = within(dialog).getByLabelText('Note (optional)')
     expect(note).toHaveFocus()
     fireEvent.change(note, { target: { value: 'Strict primary-label rule' } })

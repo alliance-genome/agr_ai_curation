@@ -39,12 +39,12 @@ const modelOptions: ModelOption[] = [
 
 const templates: AgentTemplate[] = [
   { agent_id: 'gene', name: 'Gene Specialist', icon: 'G', model_id: 'gpt-5.6-terra', tool_ids: [], allowed_group_ids: [] },
-  { agent_id: 'disease', name: 'Disease Specialist', icon: 'D', model_id: 'gpt-5.6-terra', tool_ids: [], allowed_group_ids: ['ZFIN'] },
+  { agent_id: 'disease', name: 'Disease Specialist', icon: 'D', model_id: 'gpt-5.6-terra', tool_ids: [], allowed_group_ids: ['GROUP_A'] },
 ]
 
 const groupOptions: GroupOption[] = [
-  { group_id: 'ZFIN', name: 'ZFIN' },
-  { group_id: 'MGI', name: 'MGI' },
+  { group_id: 'GROUP_A', name: 'Group A' },
+  { group_id: 'GROUP_B', name: 'Group B' },
 ]
 
 const customAgents: CustomAgent[] = [
@@ -133,8 +133,8 @@ describe('SetupSection', () => {
   })
 
   it('explains a package restriction on the chosen template', () => {
-    renderSetup({ parentAgentId: 'disease', templateAllowedGroupIds: ['ZFIN', 'MGI'] })
-    expect(screen.getByText(/This template is restricted to ZFIN, MGI/)).toBeInTheDocument()
+    renderSetup({ parentAgentId: 'disease', templateAllowedGroupIds: ['GROUP_A', 'GROUP_B'] })
+    expect(screen.getByText(/This template is restricted to GROUP_A, GROUP_B/)).toBeInTheDocument()
   })
 
   it('warns when the saved agent names a template that is no longer installed', () => {
@@ -229,24 +229,24 @@ describe('SetupSection', () => {
     const groups = screen.getByRole('combobox', { name: 'Available to groups' })
     expect(groups).toHaveTextContent('All groups')
     fireEvent.mouseDown(groups)
-    fireEvent.click(await screen.findByRole('option', { name: /MGI/ }))
-    expect(props.onAllowedGroupIdsChange).toHaveBeenCalledWith(['MGI'])
+    fireEvent.click(await screen.findByRole('option', { name: /GROUP_B/ }))
+    expect(props.onAllowedGroupIdsChange).toHaveBeenCalledWith(['GROUP_B'])
   })
 
   it('shows the inherited access floor as a locked note and blocks widening', async () => {
     const props = renderSetup({
-      allowedGroupIds: ['ZFIN'],
-      inheritedAllowedGroupIds: ['ZFIN', 'MGI'],
+      allowedGroupIds: ['GROUP_A'],
+      inheritedAllowedGroupIds: ['GROUP_A', 'GROUP_B'],
       selectableGroupOptions: groupOptions,
     })
-    expect(screen.getByText('Inherits a ZFIN, MGI access floor; you can narrow it, not widen it.')).toBeInTheDocument()
+    expect(screen.getByText('Inherits a GROUP_A, GROUP_B access floor; you can narrow it, not widen it.')).toBeInTheDocument()
 
     const groups = screen.getByRole('combobox', { name: 'Available to groups' })
     fireEvent.mouseDown(groups)
     const listbox = await screen.findByRole('listbox')
     expect(within(listbox).queryByRole('option', { name: 'All groups' })).not.toBeInTheDocument()
     // Unchecking the only selected group would empty the list, which the floor forbids.
-    fireEvent.click(within(listbox).getByRole('option', { name: /ZFIN/ }))
+    fireEvent.click(within(listbox).getByRole('option', { name: /GROUP_A/ }))
     expect(props.onAllowedGroupIdsChange).not.toHaveBeenCalled()
   })
 })

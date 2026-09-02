@@ -15,18 +15,18 @@ function renderPrompt(overrides: Partial<PromptSectionProps> = {}) {
     onResetToTemplate: vi.fn(),
     overlayStatus: undefined,
     overlayWarning: '',
-    availableGroupIds: ['WB', 'ZFIN'],
-    selectedGroupId: 'ZFIN',
+    availableGroupIds: ['GROUP_C', 'GROUP_A'],
+    selectedGroupId: 'GROUP_A',
     onGroupChange: vi.fn(),
-    groupPromptOverrides: { ZFIN: 'ZFIN override' },
-    selectedGroupPrompt: 'ZFIN override',
+    groupPromptOverrides: { GROUP_A: 'GROUP_A override' },
+    selectedGroupPrompt: 'GROUP_A override',
     hasSelectedGroupOverride: true,
     onGroupPromptChange: vi.fn(),
     onResetGroupPrompt: vi.fn(),
     includeGroupRules: true,
     onIncludeGroupRulesChange: vi.fn(),
     loggedInAsLabel: 'Doug Howe',
-    loggedInGroupIds: ['ZFIN'],
+    loggedInGroupIds: ['GROUP_A'],
     onDiscussPromptWithClaude: vi.fn(),
     ...overrides,
   }
@@ -86,10 +86,10 @@ describe('PromptSection', () => {
 
   it('renders the group picker with override badges and the runtime toggle', () => {
     const props = renderPrompt()
-    expect(screen.getByRole('button', { name: 'ZFIN, edited' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'WB' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'WB' }))
-    expect(props.onGroupChange).toHaveBeenCalledWith('WB')
+    expect(screen.getByRole('button', { name: 'GROUP_A, edited' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'GROUP_C' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'GROUP_C' }))
+    expect(props.onGroupChange).toHaveBeenCalledWith('GROUP_C')
 
     const toggle = screen.getByRole('checkbox', { name: 'Add group instructions at runtime' })
     expect(toggle).toBeChecked()
@@ -99,12 +99,12 @@ describe('PromptSection', () => {
 
   it('edits and resets the selected group override', () => {
     const props = renderPrompt()
-    expect(screen.getByText('ZFIN instructions · your override')).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('ZFIN instructions'), { target: { value: 'New text' } })
+    expect(screen.getByText('GROUP_A instructions · your override')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('GROUP_A instructions'), { target: { value: 'New text' } })
     expect(props.onGroupPromptChange).toHaveBeenCalledWith('New text')
     fireEvent.click(screen.getAllByRole('button', { name: 'Reset to template' })[1])
     expect(props.onResetGroupPrompt).toHaveBeenCalledTimes(1)
-    expect(screen.getByText(/You are logged in as Doug Howe \(ZFIN\)\. Overrides: ZFIN\./)).toBeInTheDocument()
+    expect(screen.getByText(/You are logged in as Doug Howe \(GROUP_A\)\. Overrides: GROUP_A\./)).toBeInTheDocument()
   })
 
   it('explains when the template has no group instructions', () => {

@@ -61,7 +61,7 @@ describe('computeDirtyState', () => {
     expect(computeDirtyState(buildFields({ name: 'Renamed' }), saved).setup).toBe(true)
     expect(computeDirtyState(buildFields({ modelReasoning: 'high' }), saved).setup).toBe(true)
     expect(computeDirtyState(buildFields({ visibility: 'project' }), saved).setup).toBe(true)
-    expect(computeDirtyState(buildFields({ allowedGroupIds: ['ZFIN'] }), saved).setup).toBe(true)
+    expect(computeDirtyState(buildFields({ allowedGroupIds: ['GROUP_A'] }), saved).setup).toBe(true)
     expect(computeDirtyState(buildFields({ name: 'Renamed' }), saved).prompt).toBe(false)
   })
 
@@ -74,12 +74,12 @@ describe('computeDirtyState', () => {
   })
 
   it('lists each group whose override changed', () => {
-    const saved = buildFields({ groupPromptOverrides: { ZFIN: 'old', MGI: 'same' } })
+    const saved = buildFields({ groupPromptOverrides: { GROUP_A: 'old', GROUP_B: 'same' } })
     const dirty = computeDirtyState(
-      buildFields({ groupPromptOverrides: { ZFIN: 'new', MGI: 'same', FB: 'added' } }),
+      buildFields({ groupPromptOverrides: { GROUP_A: 'new', GROUP_B: 'same', GROUP_D: 'added' } }),
       saved
     )
-    expect(dirty.groups).toEqual(['FB', 'ZFIN'])
+    expect(dirty.groups).toEqual(['GROUP_A', 'GROUP_D'])
     expect(dirty.prompt).toBe(false)
   })
 
@@ -94,10 +94,10 @@ describe('describeChangedSections', () => {
   it('produces the Save dialog line in section order', () => {
     const saved = buildFields({ groupPromptOverrides: {} })
     const dirty = computeDirtyState(
-      buildFields({ name: 'X', customPrompt: 'Y', groupPromptOverrides: { ZFIN: 'z' }, toolIds: [] }),
+      buildFields({ name: 'X', customPrompt: 'Y', groupPromptOverrides: { GROUP_A: 'z' }, toolIds: [] }),
       saved
     )
-    expect(describeChangedSections(dirty)).toEqual(['Setup', 'Your prompt', 'ZFIN instructions', 'Tools'])
+    expect(describeChangedSections(dirty)).toEqual(['Setup', 'Your prompt', 'GROUP_A instructions', 'Tools'])
   })
 
   it('returns an empty list for a clean draft', () => {
@@ -108,7 +108,7 @@ describe('describeChangedSections', () => {
 
 describe('changedOverrideGroups', () => {
   it('detects removed overrides', () => {
-    expect(changedOverrideGroups({}, { WB: 'text' })).toEqual(['WB'])
+    expect(changedOverrideGroups({}, { GROUP_C: 'text' })).toEqual(['GROUP_C'])
   })
 })
 

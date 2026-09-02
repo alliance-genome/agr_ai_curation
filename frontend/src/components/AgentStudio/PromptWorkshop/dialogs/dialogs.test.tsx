@@ -113,9 +113,9 @@ describe('confirmation dialogs', () => {
   it('SelfExclusionDialog explains the mismatch and confirms', () => {
     const onConfirm = vi.fn()
     const onCancel = vi.fn()
-    render(<SelfExclusionDialog open allowedGroupIds={['GROUP_B']} currentUserGroupIds={['ZFIN']} onConfirm={onConfirm} onCancel={onCancel} />)
+    render(<SelfExclusionDialog open allowedGroupIds={['GROUP_B']} currentUserGroupIds={['GROUP_A']} onConfirm={onConfirm} onCancel={onCancel} />)
     const dialog = screen.getByRole('dialog', { name: 'Save a restriction that excludes you?' })
-    expect(dialog).toHaveTextContent(/your current groups are ZFIN/)
+    expect(dialog).toHaveTextContent(/your current groups are GROUP_A/)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Go back' }))
     expect(onCancel).toHaveBeenCalledTimes(1)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save restriction' }))
