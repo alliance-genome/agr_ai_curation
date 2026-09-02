@@ -643,7 +643,11 @@ export function AppContent() {
                 textDecoration: 'none',
                 color: 'inherit',
                 cursor: 'pointer',
-                maxWidth: { xs: 220, sm: 300 },
+                // Cap the title only on phones, where the toolbar scrolls sideways.
+                // From tablet width up it must show in full; a fixed cap here
+                // truncated "Alliance AI-Assisted Curation Interface" on desktop.
+                maxWidth: { xs: 220, sm: 300, md: 'none' },
+                fontSize: { xs: '1.25rem', md: '1.25rem', lg: '1.5rem' },
                 '&:hover': {
                   opacity: 0.9
                 }

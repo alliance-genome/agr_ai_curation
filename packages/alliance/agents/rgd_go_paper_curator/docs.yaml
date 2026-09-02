@@ -33,6 +33,7 @@ use_when:
   - "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it."
   - "When you want a paper's findings compared against the GO annotations already recorded for its genes."
 avoid_when:
+  - "To check recommendations against the RGD evidence policy; that check runs automatically on everything this agent produces."
   - "For curators outside RGD; the agent works only in the RGD group."
   - "For GO term definitions or hierarchy on their own; use the GO Term Lookup Agent."
   - "To submit or export GO annotations; the output is for review only."

@@ -74,6 +74,56 @@ def test_docs_yaml_use_when_and_avoid_when_reach_documentation(tmp_path):
     assert doc["limitations"] == ["Does not walk up or down the disease hierarchy."]
 
 
+def test_docs_yaml_note_reaches_documentation(tmp_path):
+    _write_agent_bundle(
+        tmp_path,
+        "gene",
+        agent_yaml="""
+            agent_id: gene_validation
+            name: "Gene Validation Agent"
+            model_config:
+              model: "gpt-5.5"
+        """,
+        docs_yaml="""
+            summary: "Confirms gene symbols against Alliance records."
+            note: "Validation runs automatically. This check runs on every gene an extractor produces."
+            limitations:
+              - "Does not find orthologs."
+        """,
+    )
+    reset_cache()
+    agents = load_agent_definitions(agents_path=tmp_path, force_reload=True)
+    reset_cache()
+
+    doc = agents["gene_validation"].documentation
+    assert doc["note"] == (
+        "Validation runs automatically. This check runs on every gene an extractor produces."
+    )
+
+
+def test_docs_yaml_without_note_carries_no_note_key(tmp_path):
+    _write_agent_bundle(
+        tmp_path,
+        "orthologs",
+        agent_yaml="""
+            agent_id: orthologs_lookup
+            name: "Ortholog Lookup Agent"
+            model_config:
+              model: "gpt-5.5"
+        """,
+        docs_yaml="""
+            summary: "Finds matching genes in other species."
+            limitations:
+              - "Does not find paralogs."
+        """,
+    )
+    reset_cache()
+    agents = load_agent_definitions(agents_path=tmp_path, force_reload=True)
+    reset_cache()
+
+    assert "note" not in agents["orthologs_lookup"].documentation
+
+
 def test_inline_documentation_and_docs_yaml_conflict_raises(tmp_path):
     _write_agent_bundle(
         tmp_path,

@@ -111,6 +111,7 @@ function buildDocumentedAgent(): PromptInfo {
       limitations: ['Only queries one ontology.'],
       use_when: ['After any extractor that names a term.'],
       avoid_when: ['For parent or child terms.'],
+      note: '',
     },
   }
 }
