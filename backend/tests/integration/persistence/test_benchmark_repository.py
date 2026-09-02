@@ -1,6 +1,7 @@
 """Real PostgreSQL coverage for durable benchmark repository invariants."""
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -21,7 +22,11 @@ from src.lib.benchmarks.models import (
     ResolvedBenchmarkCell,
     ResolvedBenchmarkPlan,
 )
-from src.lib.benchmarks.persistence import BenchmarkCellCursor, BenchmarkRepository
+from src.lib.benchmarks.persistence import (
+    BenchmarkCellCursor,
+    BenchmarkLeaseLostError,
+    BenchmarkRepository,
+)
 from src.models.sql.benchmark import (
     BenchmarkCell,
     BenchmarkCellStatus,
@@ -150,14 +155,15 @@ def _create_job(db, *, owner: str = "owner-a", cells: int = 3, rerun_of: UUID | 
 def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
     repository = BenchmarkRepository(db)
     now = datetime.now(timezone.utc)
+    lease_owner = uuid4()
     claimed = repository.claim_next_job(
-        lease_owner=uuid4(), lease_expires_at=now + timedelta(minutes=5), now=now
+        lease_owner=lease_owner, lease_expires_at=now + timedelta(minutes=5), now=now
     )
     assert claimed is not None and claimed.id == job_id
     while True:
         cell = repository.claim_next_cell(
             job_id=job_id,
-            lease_owner=uuid4(),
+            lease_owner=lease_owner,
             lease_expires_at=now + timedelta(minutes=5),
             now=now,
         )
@@ -165,14 +171,20 @@ def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
             break
         invocation = repository.append_invocation(
             cell_id=cell.id,
+            lease_owner=lease_owner,
             ordinal=0,
             attempt=cell.attempt_count,
             route_slot="supervisor",
             request_digest=_digest("1"),
+            requested_provider="openai",
+            requested_model="gpt-5.6-sol",
+            reasoning_effort="high",
+            sequence=1,
             started_at=now,
         )
         repository.finish_invocation(
             invocation_id=invocation.id,
+            lease_owner=lease_owner,
             status=BenchmarkInvocationStatus.SUCCEEDED,
             completed_at=now,
             response_digest=_digest("2"),
@@ -182,11 +194,15 @@ def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
         )
         repository.finish_cell(
             cell_id=cell.id,
+            lease_owner=lease_owner,
             status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now,
             generated_envelope={"schema_version": "1", "records": [{"position": cell.position}]},
+            result={"schema_version": "1", "records": [{"position": cell.position}]},
         )
-    return repository.complete_job(job_id=job_id, completed_at=now)
+    return repository.complete_job(
+        job_id=job_id, lease_owner=lease_owner, completed_at=now
+    )
 
 
 def test_repository_persists_plan_pages_without_envelopes_and_replays_events():
@@ -337,24 +353,30 @@ def test_terminal_cell_seals_invocations_and_requires_settled_invocations():
         db.commit()
         repository = BenchmarkRepository(db)
         now = datetime.now(timezone.utc)
+        lease_owner = uuid4()
         assert repository.claim_next_job(
-            lease_owner=uuid4(),
+            lease_owner=lease_owner,
             lease_expires_at=now + timedelta(minutes=5),
             now=now,
         ) is not None
         cell = repository.claim_next_cell(
             job_id=job.id,
-            lease_owner=uuid4(),
+            lease_owner=lease_owner,
             lease_expires_at=now + timedelta(minutes=5),
             now=now,
         )
         assert cell is not None
         invocation = repository.append_invocation(
             cell_id=cell.id,
+            lease_owner=lease_owner,
             ordinal=0,
             attempt=cell.attempt_count,
             route_slot="supervisor",
             request_digest=_digest("1"),
+            requested_provider="openai",
+            requested_model="gpt-5.6-sol",
+            reasoning_effort=None,
+            sequence=1,
             started_at=now,
         )
         invocation_id = invocation.id
@@ -363,6 +385,7 @@ def test_terminal_cell_seals_invocations_and_requires_settled_invocations():
         with pytest.raises(ValueError, match="running invocations"):
             repository.finish_cell(
                 cell_id=cell.id,
+                lease_owner=lease_owner,
                 status=BenchmarkCellStatus.CANCELLED,
                 completed_at=now,
             )
@@ -384,25 +407,33 @@ def test_terminal_cell_seals_invocations_and_requires_settled_invocations():
 
         repository.finish_invocation(
             invocation_id=invocation_id,
+            lease_owner=lease_owner,
             status=BenchmarkInvocationStatus.SUCCEEDED,
             completed_at=now,
             response_digest=_digest("2"),
         )
         repository.finish_cell(
             cell_id=cell.id,
+            lease_owner=lease_owner,
             status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now,
             generated_envelope={"ok": True},
+            result={"ok": True},
         )
         db.commit()
 
-        with pytest.raises(ValueError, match="require a running cell"):
+        with pytest.raises(BenchmarkLeaseLostError, match="lease is no longer owned"):
             repository.append_invocation(
                 cell_id=cell.id,
+                lease_owner=lease_owner,
                 ordinal=1,
                 attempt=cell.attempt_count,
                 route_slot="supervisor",
                 request_digest=_digest("3"),
+                requested_provider="openai",
+                requested_model="gpt-5.6-sol",
+                reasoning_effort=None,
+                sequence=2,
                 started_at=now,
             )
 
@@ -413,6 +444,9 @@ def test_terminal_cell_seals_invocations_and_requires_settled_invocations():
                 attempt=cell.attempt_count,
                 route_slot="supervisor",
                 request_digest=_digest("3"),
+                requested_provider="openai",
+                requested_model="gpt-5.6-sol",
+                sequence=2,
                 status=BenchmarkInvocationStatus.RUNNING,
                 started_at=now,
             )
@@ -437,7 +471,9 @@ def test_terminal_cell_seals_invocations_and_requires_settled_invocations():
             db.commit()
         db.rollback()
 
-        repository.complete_job(job_id=job.id, completed_at=now)
+        repository.complete_job(
+            job_id=job.id, lease_owner=lease_owner, completed_at=now
+        )
         db.commit()
     finally:
         db.rollback()
@@ -480,29 +516,36 @@ def test_envelope_limit_terminal_immutability_rerun_lineage_and_cascade(monkeypa
 
         repository = BenchmarkRepository(db)
         now = datetime.now(timezone.utc)
+        lease_owner = uuid4()
         claimed_job = repository.claim_next_job(
-            lease_owner=uuid4(),
+            lease_owner=lease_owner,
             lease_expires_at=now + timedelta(minutes=5),
             now=now,
         )
         assert claimed_job is not None and claimed_job.id == rerun.id
         cell = repository.claim_next_cell(
             job_id=rerun.id,
-            lease_owner=uuid4(),
+            lease_owner=lease_owner,
             lease_expires_at=now + timedelta(minutes=5),
             now=now,
         )
         assert cell is not None
         invocation = repository.append_invocation(
             cell_id=cell.id,
+            lease_owner=lease_owner,
             ordinal=0,
             attempt=cell.attempt_count,
             route_slot="supervisor",
             request_digest=_digest("1"),
+            requested_provider="openai",
+            requested_model="gpt-5.6-sol",
+            reasoning_effort=None,
+            sequence=1,
             started_at=now,
         )
         repository.finish_invocation(
             invocation_id=invocation.id,
+            lease_owner=lease_owner,
             status=BenchmarkInvocationStatus.SUCCEEDED,
             completed_at=now,
             response_digest=_digest("2"),
@@ -517,19 +560,25 @@ def test_envelope_limit_terminal_immutability_rerun_lineage_and_cascade(monkeypa
         with pytest.raises(ValueError, match="exceeds configured byte limit"):
             repository.finish_cell(
                 cell_id=cell.id,
+                lease_owner=lease_owner,
                 status=BenchmarkCellStatus.SUCCEEDED,
                 completed_at=now,
                 generated_envelope=boundary_envelope,
+                result=boundary_envelope,
             )
         monkeypatch.setenv("BENCHMARK_MAX_ENVELOPE_BYTES", "16")
         finished_cell = repository.finish_cell(
             cell_id=cell.id,
+            lease_owner=lease_owner,
             status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now,
             generated_envelope=boundary_envelope,
+            result=boundary_envelope,
         )
         assert finished_cell.envelope_size_bytes == 16
-        repository.complete_job(job_id=rerun.id, completed_at=now)
+        repository.complete_job(
+            job_id=rerun.id, lease_owner=lease_owner, completed_at=now
+        )
         db.commit()
 
         with pytest.raises(DBAPIError, match="immutable"):
@@ -663,3 +712,395 @@ def test_constraints_reject_invalid_status_owner_and_source_lineage():
                 )
                 db.commit()
         db.close()
+
+
+def test_expired_cell_is_failed_once_while_queued_sibling_remains_claimable():
+    db = SessionLocal()
+    job_id = None
+    try:
+        job = _create_job(db, owner="recovery-owner", cells=2)
+        job_id = job.id
+        db.commit()
+        repository = BenchmarkRepository(db)
+        now = datetime.now(timezone.utc)
+        lease_owner = uuid4()
+        repository.claim_next_job(
+            lease_owner=lease_owner,
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+        )
+        interrupted = repository.claim_next_cell(
+            job_id=job.id,
+            lease_owner=lease_owner,
+            lease_expires_at=now + timedelta(seconds=1),
+            now=now,
+        )
+        assert interrupted is not None
+        running = repository.append_invocation(
+            cell_id=interrupted.id,
+            lease_owner=lease_owner,
+            ordinal=0,
+            attempt=1,
+            route_slot="supervisor",
+            request_digest=_digest("1"),
+            requested_provider="openrouter",
+            requested_model="model-a",
+            reasoning_effort="high",
+            sequence=1,
+            started_at=now,
+        )
+        db.commit()
+
+        recovered = repository.recover_expired_cells(now=now + timedelta(seconds=2))
+        assert recovered == (interrupted.id,)
+        db.commit()
+        db.refresh(interrupted)
+        db.refresh(running)
+        assert interrupted.status == BenchmarkCellStatus.FAILED
+        assert interrupted.attempt_count == 1
+        assert interrupted.generated_envelope is None
+        assert interrupted.failure == {
+            "category": "interrupted_uncertain",
+            "retryable": False,
+        }
+        assert running.status == BenchmarkInvocationStatus.FAILED
+        assert running.failure == interrupted.failure
+
+        with pytest.raises(BenchmarkLeaseLostError):
+            repository.finish_cell(
+                cell_id=interrupted.id,
+                lease_owner=lease_owner,
+                status=BenchmarkCellStatus.SUCCEEDED,
+                completed_at=now + timedelta(seconds=2),
+                generated_envelope={"invalid": "stale"},
+                result={"invalid": "stale"},
+            )
+
+        sibling = repository.claim_next_cell(
+            job_id=job.id,
+            lease_owner=lease_owner,
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now + timedelta(seconds=2),
+        )
+        assert sibling is not None and sibling.id != interrupted.id
+        receipt = repository.append_invocation(
+            cell_id=sibling.id,
+            lease_owner=lease_owner,
+            ordinal=0,
+            attempt=1,
+            route_slot="supervisor",
+            request_digest=_digest("3"),
+            requested_provider="openrouter",
+            requested_model="model-a",
+            reasoning_effort="high",
+            sequence=1,
+            started_at=now + timedelta(seconds=2),
+        )
+        repository.finish_invocation(
+            invocation_id=receipt.id,
+            lease_owner=lease_owner,
+            status=BenchmarkInvocationStatus.SUCCEEDED,
+            completed_at=now + timedelta(seconds=3),
+            response_digest=_digest("4"),
+            actual_provider="openrouter",
+            actual_model="actual-model",
+            routing_attempt=2,
+            latency_ms=1234,
+            input_tokens=10,
+            output_tokens=20,
+            total_tokens=30,
+            billed_amount=Decimal("0.0012300"),
+            billed_unit="USD",
+            billed_source="provider",
+        )
+        envelope = {"records": [{"ok": True}]}
+        repository.finish_cell(
+            cell_id=sibling.id,
+            lease_owner=lease_owner,
+            status=BenchmarkCellStatus.SUCCEEDED,
+            completed_at=now + timedelta(seconds=3),
+            generated_envelope=envelope,
+            result=envelope["records"],
+        )
+        terminal = repository.complete_job(
+            job_id=job.id,
+            lease_owner=lease_owner,
+            completed_at=now + timedelta(seconds=3),
+        )
+        db.commit()
+        assert terminal.status == BenchmarkJobStatus.COMPLETED_WITH_FAILURES
+        assert sibling.envelope_digest is not None
+        assert sibling.result_digest is not None
+        assert receipt.billed_amount == Decimal("0.0012300")
+        assert receipt.billed_unit == "USD"
+        assert receipt.billed_source == "provider"
+    finally:
+        db.rollback()
+        if job_id is not None:
+            job = db.get(BenchmarkJob, job_id)
+            if job is not None and job.status in {
+                BenchmarkJobStatus.COMPLETED_WITH_FAILURES,
+                BenchmarkJobStatus.COMPLETED,
+            }:
+                BenchmarkRepository(db).delete_terminal_job(
+                    job_id=job_id, owner_subject="recovery-owner"
+                )
+                db.commit()
+        db.close()
+
+
+def test_claim_contention_and_heartbeat_are_lease_fenced():
+    first = SessionLocal()
+    second = SessionLocal()
+    job_id = None
+    try:
+        job = _create_job(first, owner="contention-owner", cells=1)
+        job_id = job.id
+        first.commit()
+        now = datetime.now(timezone.utc)
+        lease_owner = uuid4()
+        claimed = BenchmarkRepository(first).claim_next_job(
+            lease_owner=lease_owner,
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+        )
+        assert claimed is not None and claimed.id == job_id
+        assert (
+            BenchmarkRepository(second).claim_next_job(
+                lease_owner=uuid4(),
+                lease_expires_at=now + timedelta(minutes=5),
+                now=now,
+            )
+            is None
+        )
+        second.rollback()
+        first.commit()
+
+        cell = BenchmarkRepository(first).claim_next_cell(
+            job_id=job_id,
+            lease_owner=lease_owner,
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+        )
+        assert cell is not None
+        first.commit()
+        assert not BenchmarkRepository(second).heartbeat_leases(
+            job_id=job_id,
+            cell_id=cell.id,
+            lease_owner=uuid4(),
+            lease_seconds=300,
+            now=now + timedelta(seconds=1),
+        )
+        second.rollback()
+        assert BenchmarkRepository(first).heartbeat_leases(
+            job_id=job_id,
+            cell_id=cell.id,
+            lease_owner=lease_owner,
+            lease_seconds=300,
+            now=now + timedelta(seconds=1),
+        )
+        BenchmarkRepository(first).finish_cell(
+            cell_id=cell.id,
+            lease_owner=lease_owner,
+            status=BenchmarkCellStatus.CANCELLED,
+            completed_at=now + timedelta(seconds=2),
+        )
+        BenchmarkRepository(first).complete_job(
+            job_id=job_id,
+            lease_owner=lease_owner,
+            completed_at=now + timedelta(seconds=2),
+        )
+        first.commit()
+    finally:
+        first.rollback()
+        second.rollback()
+        if job_id is not None:
+            job = first.get(BenchmarkJob, job_id)
+            if job is not None and job.status == BenchmarkJobStatus.COMPLETED:
+                BenchmarkRepository(first).delete_terminal_job(
+                    job_id=job_id, owner_subject="contention-owner"
+                )
+                first.commit()
+        first.close()
+        second.close()
+
+
+def test_heartbeat_and_all_worker_writes_are_lease_fenced():
+    db = SessionLocal()
+    job_id = None
+    try:
+        job = _create_job(db, owner="fence-owner", cells=1)
+        job_id = job.id
+        db.commit()
+        repository = BenchmarkRepository(db)
+        now = datetime.now(timezone.utc)
+        owner = uuid4()
+        other = uuid4()
+        repository.claim_next_job(
+            lease_owner=owner,
+            lease_expires_at=now + timedelta(seconds=10),
+            now=now,
+        )
+        cell = repository.claim_next_cell(
+            job_id=job.id,
+            lease_owner=owner,
+            lease_expires_at=now + timedelta(seconds=10),
+            now=now,
+        )
+        assert cell is not None
+        db.commit()
+
+        assert not repository.heartbeat_leases(
+            job_id=job.id,
+            cell_id=cell.id,
+            lease_owner=other,
+            lease_seconds=30,
+            now=now + timedelta(seconds=1),
+        )
+        db.rollback()
+        assert repository.heartbeat_leases(
+            job_id=job.id,
+            cell_id=cell.id,
+            lease_owner=owner,
+            lease_seconds=30,
+            now=now + timedelta(seconds=1),
+        )
+        db.commit()
+
+        with pytest.raises(BenchmarkLeaseLostError):
+            repository.append_invocation(
+                cell_id=cell.id,
+                lease_owner=other,
+                ordinal=0,
+                attempt=1,
+                route_slot="supervisor",
+                request_digest=_digest("7"),
+                requested_provider="openai",
+                requested_model="model-a",
+                reasoning_effort=None,
+                sequence=1,
+                started_at=now + timedelta(seconds=2),
+            )
+        db.rollback()
+        repository.recover_expired_cells(now=now + timedelta(seconds=32))
+        replacement = uuid4()
+        reclaimed = repository.claim_next_job(
+            lease_owner=replacement,
+            lease_expires_at=now + timedelta(minutes=2),
+            now=now + timedelta(seconds=32),
+        )
+        assert reclaimed is not None and reclaimed.id == job.id
+        terminal = repository.complete_job(
+            job_id=job.id,
+            lease_owner=replacement,
+            completed_at=now + timedelta(seconds=32),
+            now=now + timedelta(seconds=32),
+        )
+        db.commit()
+        assert terminal.status == BenchmarkJobStatus.COMPLETED_WITH_FAILURES
+    finally:
+        db.rollback()
+        if job_id is not None:
+            job = db.get(BenchmarkJob, job_id)
+            if job is not None and job.status == BenchmarkJobStatus.COMPLETED_WITH_FAILURES:
+                BenchmarkRepository(db).delete_terminal_job(
+                    job_id=job_id, owner_subject="fence-owner"
+                )
+                db.commit()
+        db.close()
+
+
+def test_cooperative_cancellation_cancels_active_and_queued_cells():
+    db = SessionLocal()
+    job_id = None
+    try:
+        job = _create_job(db, owner="cancel-owner", cells=2)
+        job_id = job.id
+        db.commit()
+        repository = BenchmarkRepository(db)
+        now = datetime.now(timezone.utc)
+        owner = uuid4()
+        repository.claim_next_job(
+            lease_owner=owner,
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+        )
+        active = repository.claim_next_cell(
+            job_id=job.id,
+            lease_owner=owner,
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+        )
+        assert active is not None
+        repository.request_cancellation(
+            job_id=job.id, owner_subject="cancel-owner", requested_at=now
+        )
+        assert repository.cancellation_requested(
+            job_id=job.id, lease_owner=owner, now=now
+        )
+        repository.finish_cell(
+            cell_id=active.id,
+            lease_owner=owner,
+            status=BenchmarkCellStatus.CANCELLED,
+            completed_at=now,
+        )
+        assert repository.cancel_queued_cells(
+            job_id=job.id, lease_owner=owner, cancelled_at=now
+        ) == 1
+        terminal = repository.complete_job(
+            job_id=job.id, lease_owner=owner, completed_at=now
+        )
+        db.commit()
+        assert terminal.status == BenchmarkJobStatus.CANCELLED
+        assert terminal.cancelled_cells == 2
+    finally:
+        db.rollback()
+        if job_id is not None:
+            job = db.get(BenchmarkJob, job_id)
+            if job is not None and job.status == BenchmarkJobStatus.CANCELLED:
+                BenchmarkRepository(db).delete_terminal_job(
+                    job_id=job_id, owner_subject="cancel-owner"
+                )
+                db.commit()
+        db.close()
+
+
+def test_postgres_skip_locked_allows_only_one_job_claimant():
+    first = SessionLocal()
+    second = SessionLocal()
+    job_id = None
+    try:
+        job = _create_job(first, owner="contention-owner", cells=1)
+        job_id = job.id
+        first.commit()
+        now = datetime.now(timezone.utc)
+        claimed = BenchmarkRepository(first).claim_next_job(
+            lease_owner=uuid4(),
+            lease_expires_at=now + timedelta(minutes=5),
+            now=now,
+        )
+        assert claimed is not None and claimed.id == job.id
+        assert (
+            BenchmarkRepository(second).claim_next_job(
+                lease_owner=uuid4(),
+                lease_expires_at=now + timedelta(minutes=5),
+                now=now,
+            )
+            is None
+        )
+        second.rollback()
+        first.rollback()
+        _run_to_terminal(first, job.id)
+        first.commit()
+    finally:
+        second.rollback()
+        second.close()
+        first.rollback()
+        if job_id is not None:
+            job = first.get(BenchmarkJob, job_id)
+            if job is not None and job.status == BenchmarkJobStatus.COMPLETED:
+                BenchmarkRepository(first).delete_terminal_job(
+                    job_id=job_id, owner_subject="contention-owner"
+                )
+                first.commit()
+        first.close()

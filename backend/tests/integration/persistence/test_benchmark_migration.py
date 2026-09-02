@@ -25,6 +25,26 @@ def test_benchmark_migration_upgrade_indexes_and_downgrade():
     command.upgrade(ALEMBIC_CONFIG, "head")
     inspector = inspect(engine)
     assert TABLES <= set(inspector.get_table_names())
+    assert {
+        "envelope_digest",
+        "result_digest",
+    } <= {column["name"] for column in inspector.get_columns("benchmark_cells")}
+    assert {
+        "requested_provider",
+        "requested_model",
+        "reasoning_effort",
+        "actual_provider",
+        "actual_model",
+        "routing_attempt",
+        "sequence",
+        "latency_ms",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "billed_amount",
+        "billed_unit",
+        "billed_source",
+    } <= {column["name"] for column in inspector.get_columns("benchmark_invocations")}
 
     expected_indexes = {
         "benchmark_jobs": {

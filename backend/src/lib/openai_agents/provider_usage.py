@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 import logging
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional, Protocol
 
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,16 @@ class PendingProviderInvocation:
     started_at: float
 
 
+class ProviderInvocationObserver(Protocol):
+    """Durable benchmark checkpoint sink invoked around provider dispatch."""
+
+    def started(self, pending: PendingProviderInvocation) -> None: ...
+
+    def completed(
+        self, pending: PendingProviderInvocation, record: ProviderUsageRecord
+    ) -> None: ...
+
+
 @dataclass
 class _ProviderUsageCapture:
     records: list[ProviderUsageRecord]
@@ -80,6 +90,22 @@ _provider_usage_records: ContextVar[Optional[_ProviderUsageCapture]] = ContextVa
     "provider_usage_records",
     default=None,
 )
+_provider_invocation_observer: ContextVar[Optional[ProviderInvocationObserver]] = (
+    ContextVar("provider_invocation_observer", default=None)
+)
+
+
+@contextmanager
+def observe_provider_invocations(
+    observer: ProviderInvocationObserver,
+) -> Iterator[None]:
+    """Install a worker-owned durable start/finish checkpoint observer."""
+
+    token = _provider_invocation_observer.set(observer)
+    try:
+        yield
+    finally:
+        _provider_invocation_observer.reset(token)
 
 
 @contextmanager
@@ -142,7 +168,7 @@ def begin_provider_invocation(
             f"Benchmark cell exceeded {capture.max_records} provider invocations"
         )
     capture.reserved += 1
-    return PendingProviderInvocation(
+    pending = PendingProviderInvocation(
         route_slot=route_slot,
         requested_provider=requested_provider,
         requested_model=requested_model,
@@ -150,6 +176,10 @@ def begin_provider_invocation(
         sequence=capture.reserved,
         started_at=started_at,
     )
+    observer = _provider_invocation_observer.get()
+    if observer is not None:
+        observer.started(pending)
+    return pending
 
 
 def complete_provider_invocation(
@@ -159,18 +189,20 @@ def complete_provider_invocation(
     if pending is None:
         emit_provider_usage(record)
         return
-    emit_provider_usage(
-        replace(
-            record,
-            route_slot=pending.route_slot,
-            requested_provider=pending.requested_provider,
-            requested_model=pending.requested_model,
-            reasoning_effort=pending.reasoning_effort,
-            sequence=pending.sequence,
-            status="completed",
-            failure_detail=None,
-        )
+    completed = replace(
+        record,
+        route_slot=pending.route_slot,
+        requested_provider=pending.requested_provider,
+        requested_model=pending.requested_model,
+        reasoning_effort=pending.reasoning_effort,
+        sequence=pending.sequence,
+        status="completed",
+        failure_detail=None,
     )
+    observer = _provider_invocation_observer.get()
+    if observer is not None:
+        observer.completed(pending, completed)
+    emit_provider_usage(completed)
 
 
 def fail_provider_invocation(
@@ -191,25 +223,27 @@ def fail_provider_invocation(
         if isinstance(value, (int, str)) and str(value).strip():
             detail_parts.append(f"{field}={str(value).strip()}")
     detail = "; ".join(detail_parts)[:max_chars]
-    emit_provider_usage(
-        ProviderUsageRecord(
-            route_slot=pending.route_slot,
-            requested_provider=pending.requested_provider,
-            requested_model=pending.requested_model,
-            reasoning_effort=pending.reasoning_effort,
-            actual_provider=None,
-            actual_model=None,
-            routing_attempt=None,
-            latency_ms=max(0, latency_ms),
-            input_tokens=None,
-            output_tokens=None,
-            total_tokens=None,
-            billed_cost=None,
-            sequence=pending.sequence,
-            status="failed",
-            failure_detail=detail,
-        )
+    failed = ProviderUsageRecord(
+        route_slot=pending.route_slot,
+        requested_provider=pending.requested_provider,
+        requested_model=pending.requested_model,
+        reasoning_effort=pending.reasoning_effort,
+        actual_provider=None,
+        actual_model=None,
+        routing_attempt=None,
+        latency_ms=max(0, latency_ms),
+        input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        billed_cost=None,
+        sequence=pending.sequence,
+        status="failed",
+        failure_detail=detail,
     )
+    observer = _provider_invocation_observer.get()
+    if observer is not None:
+        observer.completed(pending, failed)
+    emit_provider_usage(failed)
 
 
 def complete_generic_provider_invocation(

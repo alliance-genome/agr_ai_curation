@@ -1012,6 +1012,32 @@ def get_benchmark_max_snapshot_bytes() -> int:
     )
 
 
+def get_benchmark_worker_enabled() -> bool:
+    """Whether the durable benchmark worker may poll its local database."""
+    return _get_env_bool("BENCHMARK_WORKER_ENABLED", False)
+
+
+def get_benchmark_execution_enabled() -> bool:
+    """Whether this deployment may dispatch benchmark provider calls."""
+    return _get_env_bool("BENCHMARK_EXECUTION_ENABLED", False)
+
+
+def get_benchmark_worker_concurrency() -> int:
+    return max(1, _get_env_int_with_fallback("BENCHMARK_WORKER_CONCURRENCY", 1))
+
+
+def get_benchmark_worker_lease_seconds() -> int:
+    return max(1, _get_env_int_with_fallback("BENCHMARK_WORKER_LEASE_SECONDS", 300))
+
+
+def get_benchmark_worker_heartbeat_seconds() -> int:
+    return max(1, _get_env_int_with_fallback("BENCHMARK_WORKER_HEARTBEAT_SECONDS", 30))
+
+
+def get_benchmark_cell_timeout_seconds() -> float:
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_CELL_TIMEOUT_SECONDS", 3600.0))
+
+
 def get_benchmark_oidc_issuer_url() -> str:
     """Trusted issuer for benchmark bearer access tokens."""
     return os.getenv("BENCHMARK_OIDC_ISSUER_URL", "").strip()

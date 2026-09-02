@@ -5,8 +5,13 @@ from decimal import Decimal
 from openai.types.chat import ChatCompletion
 
 from src.lib.openai_agents.provider_usage import (
+    ProviderUsageRecord,
+    begin_provider_invocation,
+    complete_provider_invocation,
+    capture_provider_usage,
     emit_provider_usage,
     normalize_openrouter_usage,
+    observe_provider_invocations,
 )
 
 
@@ -55,6 +60,51 @@ def test_normalize_openrouter_usage_uses_selected_route_and_exact_billed_cost():
     assert record.billed_cost.source == "openrouter_usage"
     assert not hasattr(record, "summary")
     assert not hasattr(record, "pipeline")
+
+
+def test_provider_observer_checkpoints_before_and_after_dispatch(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event",
+        lambda _record: None,
+    )
+    checkpoints = []
+
+    class Observer:
+        def started(self, pending):
+            checkpoints.append(("started", pending.sequence))
+
+        def completed(self, pending, record):
+            checkpoints.append((record.status, pending.sequence))
+
+    with observe_provider_invocations(Observer()), capture_provider_usage(
+        max_records=2, max_failure_detail_chars=20
+    ) as records:
+        pending = begin_provider_invocation(
+            requested_provider="openai",
+            requested_model="model-a",
+            route_slot="agent:a",
+            reasoning_effort="high",
+            started_at=1.0,
+        )
+        assert checkpoints == [("started", 1)]
+        complete_provider_invocation(
+            pending,
+            ProviderUsageRecord(
+                requested_provider="ignored",
+                requested_model="ignored",
+                actual_provider="openai",
+                actual_model="model-a",
+                routing_attempt=0,
+                latency_ms=10,
+                input_tokens=None,
+                output_tokens=None,
+                total_tokens=None,
+                billed_cost=None,
+            ),
+        )
+
+    assert checkpoints == [("started", 1), ("completed", 1)]
+    assert records[0].route_slot == "agent:a"
 
 
 def test_normalize_openrouter_usage_does_not_guess_route_or_cost():

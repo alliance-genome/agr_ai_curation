@@ -31,6 +31,12 @@ def test_approved_benchmark_models_load_from_canonical_registry(tmp_path):
 def test_benchmark_operational_defaults(monkeypatch):
     for key in (
         "BENCHMARK_ENABLED",
+        "BENCHMARK_WORKER_ENABLED",
+        "BENCHMARK_EXECUTION_ENABLED",
+        "BENCHMARK_WORKER_CONCURRENCY",
+        "BENCHMARK_WORKER_LEASE_SECONDS",
+        "BENCHMARK_WORKER_HEARTBEAT_SECONDS",
+        "BENCHMARK_CELL_TIMEOUT_SECONDS",
         "BENCHMARK_ROOT",
         "BENCHMARK_SOURCE_TIMEOUT_SECONDS",
         "BENCHMARK_MAX_INPUT_BYTES",
@@ -83,6 +89,12 @@ def test_benchmark_operational_defaults(monkeypatch):
     assert config.get_benchmark_snapshot_handoff_destinations_json() == "{}"
     assert config.get_benchmark_handoff_timeout_seconds() == 30
     assert config.get_benchmark_max_snapshot_bytes() == 10_485_760
+    assert config.get_benchmark_worker_enabled() is False
+    assert config.get_benchmark_execution_enabled() is False
+    assert config.get_benchmark_worker_concurrency() == 1
+    assert config.get_benchmark_worker_lease_seconds() == 300
+    assert config.get_benchmark_worker_heartbeat_seconds() == 30
+    assert config.get_benchmark_cell_timeout_seconds() == 3600
     assert config.get_benchmark_root() == ""
     assert config.get_benchmark_source_timeout_seconds() == 30
     assert config.get_benchmark_max_input_bytes() == 52_428_800
@@ -133,6 +145,12 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     )
     monkeypatch.setenv("BENCHMARK_HANDOFF_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_MAX_SNAPSHOT_BYTES", "0")
+    monkeypatch.setenv("BENCHMARK_WORKER_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_WORKER_CONCURRENCY", "0")
+    monkeypatch.setenv("BENCHMARK_WORKER_LEASE_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_WORKER_HEARTBEAT_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_CELL_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_ROOT", "  /tmp/custom-benchmarks  ")
     monkeypatch.setenv("BENCHMARK_SOURCE_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_MAX_INPUT_BYTES", "0")
@@ -170,6 +188,12 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_snapshot_handoff_destinations_json() == '{"portal": {}}'
     assert config.get_benchmark_handoff_timeout_seconds() == 0.1
     assert config.get_benchmark_max_snapshot_bytes() == 1
+    assert config.get_benchmark_worker_enabled() is True
+    assert config.get_benchmark_execution_enabled() is True
+    assert config.get_benchmark_worker_concurrency() == 1
+    assert config.get_benchmark_worker_lease_seconds() == 1
+    assert config.get_benchmark_worker_heartbeat_seconds() == 1
+    assert config.get_benchmark_cell_timeout_seconds() == 0.1
     assert config.get_benchmark_root() == "/tmp/custom-benchmarks"
     assert config.get_benchmark_source_timeout_seconds() == 0.1
     assert config.get_benchmark_max_input_bytes() == 1
