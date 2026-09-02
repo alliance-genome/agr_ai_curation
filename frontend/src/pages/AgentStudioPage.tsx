@@ -693,6 +693,16 @@ Agent ID: ${agentId}`
     setVerifyMessage(message)
   }, [showClaude])
 
+  const handleWorkshopViewEnvelope = useCallback((agentId: string) => {
+    setSelectedAgentId(agentId)
+    setSelectedGroupId(null)
+    setActiveTab('agents')
+    safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agents', {
+      owner: 'preferences',
+      key: AGENT_STUDIO_TAB_KEY,
+    })
+  }, [])
+
   const handleApplyWorkshopPromptUpdate = useCallback((proposal: WorkshopPromptUpdateProposal) => {
     promptUpdateCounterRef.current += 1
     setActiveTab('agent_workshop')
@@ -887,6 +897,7 @@ Agent ID: ${agentId}`
                   onVerifyRequest={handleWorkshopVerifyRequest}
                   opusConversation={opusConversation}
                   incomingPromptUpdate={workshopPromptUpdateRequest}
+                  onViewEnvelope={handleWorkshopViewEnvelope}
                 />
               )}
             </TabContent>
