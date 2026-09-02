@@ -9,10 +9,8 @@ import {
   DialogContent,
   DialogTitle,
   LinearProgress,
-  Paper,
+  Snackbar,
   Stack,
-  Tab,
-  Tabs,
   TextField,
   Typography,
 } from '@mui/material'
@@ -30,7 +28,9 @@ import {
 
 import ConversationList from './ConversationList'
 import formatConversationTitle from './formatConversationTitle'
-import HistorySearchBar from './HistorySearchBar'
+import { pluralize } from './historyLabels'
+import HistoryToolbar from './HistoryToolbar'
+import SelectionBar from './SelectionBar'
 import {
   useBulkDeleteChatSessionsMutation,
   useChatHistoryListQuery,
@@ -39,11 +39,6 @@ import {
 } from './useChatHistoryQuery'
 
 const HISTORY_PAGE_LIST_LIMIT = 100
-const HISTORY_KIND_OPTIONS: Array<{ label: string; value: ChatHistoryListKind }> = [
-  { label: 'All', value: ALL_CHAT_HISTORY_KIND },
-  { label: 'AI assistant chat', value: ASSISTANT_CHAT_HISTORY_KIND },
-  { label: 'Agent Studio chat', value: AGENT_STUDIO_CHAT_HISTORY_KIND },
-]
 
 function areSetsEqual(left: Set<string>, right: Set<string>): boolean {
   if (left.size !== right.size) {
@@ -88,18 +83,6 @@ function normalizeHistoryKind(value: string | null): ChatHistoryListKind {
   return ALL_CHAT_HISTORY_KIND
 }
 
-function getHistorySearchScopeLabel(chatKind: ChatHistoryListKind): string {
-  if (chatKind === AGENT_STUDIO_CHAT_HISTORY_KIND) {
-    return 'Agent Studio chats'
-  }
-
-  if (chatKind === ASSISTANT_CHAT_HISTORY_KIND) {
-    return 'AI assistant chats'
-  }
-
-  return 'all chats'
-}
-
 function buildRestoreLocation(session: ChatHistorySessionSummary): string {
   const encodedSessionId = encodeURIComponent(session.session_id)
 
@@ -123,6 +106,7 @@ export default function HistoryPage() {
   const [renameTitle, setRenameTitle] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ChatHistorySessionSummary | null>(null)
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
+  const [copyNotice, setCopyNotice] = useState<string | null>(null)
 
   useEffect(() => {
     const nextSearchParams = new URLSearchParams(searchParams)
@@ -158,10 +142,10 @@ export default function HistoryPage() {
   const deleteMutation = useDeleteChatSessionMutation()
   const bulkDeleteMutation = useBulkDeleteChatSessionsMutation()
 
-  const sessions = listQuery.data?.sessions ?? []
+  const sessions = useMemo(() => listQuery.data?.sessions ?? [], [listQuery.data])
   const visibleSessionIds = useMemo(() => sessions.map((session) => session.session_id), [sessions])
   const visibleSessionIdSet = useMemo(() => new Set(visibleSessionIds), [visibleSessionIds])
-  const allVisibleSelected = sessions.length > 0 && sessions.every((session) => selectedSessionIds.has(session.session_id))
+  const totalSessions = listQuery.data?.total_sessions ?? sessions.length
   const normalizedRenameTitle = normalizeChatHistoryValue(renameTitle)
 
   const updateHistoryParams = ({
@@ -319,105 +303,141 @@ export default function HistoryPage() {
     navigate(buildRestoreLocation(session))
   }
 
+  const handleCopySessionId = (session: ChatHistorySessionSummary) => {
+    navigator.clipboard.writeText(session.session_id).then(
+      () => setCopyNotice('Session ID copied'),
+      (error: unknown) => {
+        console.error('Failed to copy session ID', error)
+        setCopyNotice('Could not copy the session ID')
+      },
+    )
+  }
+
+  const listErrorMessage = listQuery.error?.message ?? null
+  const isInitialLoading = listQuery.isLoading
+  const hasSearch = Boolean(normalizedSearchQuery)
+  const showEmptyState = !isInitialLoading && !listErrorMessage && sessions.length === 0
+
   return (
     <Box
       sx={{
         flex: 1,
         minHeight: 0,
-        overflow: 'auto',
-        px: { xs: 2, md: 3 },
-        py: 3,
+        display: 'flex',
+        flexDirection: 'column',
+        px: { xs: 2, md: 2.5 },
+        pt: 1.75,
+        pb: 2,
+        gap: 1.25,
       }}
     >
-      <Stack spacing={3}>
-        <Stack spacing={1}>
-          <Stack direction="row" spacing={1.25} alignItems="center">
-            <HistoryIcon color="primary" />
-            <Typography variant="h4">Chat History</Typography>
-          </Stack>
-          <Typography color="text.secondary" variant="body1">
-            Browse stored conversations, search by title, and expand each transcript inline without leaving the page.
+      <Stack direction="row" spacing={1.5} alignItems="center">
+        <HistoryIcon color="primary" sx={{ fontSize: 20 }} />
+        <Typography component="h1" sx={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.3 }}>
+          Chat History
+        </Typography>
+        {isInitialLoading || listErrorMessage ? null : (
+          <Typography color="text.secondary" sx={{ fontSize: '13px' }}>
+            {totalSessions} {pluralize(totalSessions, 'conversation')}
           </Typography>
-        </Stack>
-
-        <Paper elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 3 }}>
-          <Tabs
-            aria-label="Chat kind filter"
-            onChange={(_event, nextKind: ChatHistoryListKind) => updateHistoryParams({ chatKind: nextKind })}
-            value={selectedKind}
-            variant="scrollable"
-            allowScrollButtonsMobile
-            sx={{
-              px: 1,
-              '& .MuiTab-root': {
-                minHeight: 56,
-                textTransform: 'none',
-              },
-            }}
-          >
-            {HISTORY_KIND_OPTIONS.map((option) => (
-              <Tab key={option.value} label={option.label} value={option.value} />
-            ))}
-          </Tabs>
-        </Paper>
-
-        <HistorySearchBar
-          allVisibleSelected={allVisibleSelected}
-          bulkDeleteDisabled={
-            selectedSessionIds.size === 0 || bulkDeleteMutation.isPending || sessions.length === 0
-          }
-          hasVisibleSessions={sessions.length > 0}
-          isFiltering={searchInput !== deferredSearchInput}
-          onBulkDelete={() => setBulkDeleteDialogOpen(true)}
-          onChange={(value) => updateHistoryParams({ query: value })}
-          onToggleSelectAll={handleToggleSelectAll}
-          searchScopeLabel={getHistorySearchScopeLabel(selectedKind)}
-          selectedCount={selectedSessionIds.size}
-          totalSessions={listQuery.data?.total_sessions ?? sessions.length}
-          value={searchInput}
-          visibleCount={sessions.length}
-        />
-
-        <Box sx={{ position: 'relative' }}>
-          {listQuery.isFetching ? (
-            <LinearProgress
-              sx={{
-                position: 'absolute',
-                top: -1,
-                left: 0,
-                right: 0,
-                zIndex: 1,
-              }}
-            />
-          ) : null}
-
-          {listQuery.error ? (
-            <Alert
-              action={
-                <Button color="inherit" onClick={() => void listQuery.refetch()} size="small">
-                  Retry
-                </Button>
-              }
-              severity="error"
-            >
-              {listQuery.error.message}
-            </Alert>
-          ) : (
-            <ConversationList
-              chatKind={selectedKind}
-              expandedSessionIds={expandedSessionIds}
-              onDeleteSession={setDeleteTarget}
-              onRenameSession={setRenameTarget}
-              onRestoreSession={handleRestoreSession}
-              onSelectSession={handleSelectSession}
-              onToggleExpandSession={handleToggleExpandSession}
-              searchQuery={normalizedSearchQuery ?? ''}
-              selectedSessionIds={selectedSessionIds}
-              sessions={sessions}
-            />
-          )}
-        </Box>
+        )}
       </Stack>
+
+      <HistoryToolbar
+        isLoading={isInitialLoading}
+        onKindChange={(chatKind) => updateHistoryParams({ chatKind })}
+        onSearchChange={(query) => updateHistoryParams({ query })}
+        searchValue={searchInput}
+        selectedKind={selectedKind}
+        totalSessions={totalSessions}
+        visibleCount={sessions.length}
+      />
+
+      <Box sx={{ height: 2, mt: -0.5 }}>
+        {listQuery.isFetching ? <LinearProgress sx={{ height: 2 }} /> : null}
+      </Box>
+
+      <SelectionBar
+        deleteDisabled={bulkDeleteMutation.isPending}
+        onClear={() => handleToggleSelectAll(false)}
+        onDelete={() => setBulkDeleteDialogOpen(true)}
+        onSelectAll={() => handleToggleSelectAll(true)}
+        selectedCount={selectedSessionIds.size}
+        visibleCount={sessions.length}
+      />
+
+      {listErrorMessage ? (
+        <Alert
+          action={
+            <Button color="inherit" onClick={() => void listQuery.refetch()} size="small">
+              Retry
+            </Button>
+          }
+          severity="error"
+        >
+          Could not load chat history: {listErrorMessage}
+        </Alert>
+      ) : null}
+
+      {showEmptyState ? (
+        <Stack
+          alignItems="center"
+          justifyContent="center"
+          spacing={0.5}
+          sx={{
+            flex: 1,
+            minHeight: 160,
+            border: '1px dashed',
+            borderColor: 'divider',
+            borderRadius: 2,
+            px: 3,
+            py: 4,
+            textAlign: 'center',
+          }}
+        >
+          <Typography sx={{ fontWeight: 500 }}>
+            {hasSearch ? `No conversations match "${normalizedSearchQuery}"` : 'No stored conversations yet'}
+          </Typography>
+          <Typography color="text.secondary" sx={{ fontSize: '13px' }}>
+            {hasSearch
+              ? 'Try a shorter title search, or switch the kind filter to All.'
+              : 'Completed conversations appear here once they are stored in history.'}
+          </Typography>
+          {hasSearch ? (
+            <Button
+              onClick={() => updateHistoryParams({ query: '' })}
+              size="small"
+              sx={{ mt: 1, textTransform: 'none' }}
+              variant="outlined"
+            >
+              Clear search
+            </Button>
+          ) : null}
+        </Stack>
+      ) : null}
+
+      {!listErrorMessage && !showEmptyState ? (
+        <ConversationList
+          expandedSessionIds={expandedSessionIds}
+          isLoading={isInitialLoading}
+          onCopySessionId={handleCopySessionId}
+          onDeleteSession={setDeleteTarget}
+          onRenameSession={setRenameTarget}
+          onRestoreSession={handleRestoreSession}
+          onSelectSession={handleSelectSession}
+          onToggleExpandSession={handleToggleExpandSession}
+          onToggleSelectAll={handleToggleSelectAll}
+          selectedSessionIds={selectedSessionIds}
+          sessions={sessions}
+        />
+      ) : null}
+
+      <Snackbar
+        autoHideDuration={2500}
+        message={copyNotice}
+        onClose={() => setCopyNotice(null)}
+        open={copyNotice !== null}
+      />
 
       <Dialog
         fullWidth
@@ -495,7 +515,9 @@ export default function HistoryPage() {
         onClose={bulkDeleteMutation.isPending ? undefined : clearBulkDeleteDialog}
         open={bulkDeleteDialogOpen}
       >
-        <DialogTitle>Delete selected conversations?</DialogTitle>
+        <DialogTitle>
+          Delete {selectedSessionIds.size} {pluralize(selectedSessionIds.size, 'conversation')}?
+        </DialogTitle>
         <DialogContent>
           {bulkDeleteMutation.error ? (
             <Alert severity="error" sx={{ mb: 2 }}>
@@ -503,7 +525,7 @@ export default function HistoryPage() {
             </Alert>
           ) : null}
           <Typography variant="body2">
-            Delete {selectedSessionIds.size} selected conversations from stored history? This action cannot be undone.
+            The selected {pluralize(selectedSessionIds.size, 'conversation')} will be removed from stored history. This action cannot be undone.
           </Typography>
         </DialogContent>
         <DialogActions>
@@ -517,7 +539,7 @@ export default function HistoryPage() {
             startIcon={<DeleteOutlineIcon />}
             variant="contained"
           >
-            Delete selected conversations
+            Delete {selectedSessionIds.size} {pluralize(selectedSessionIds.size, 'conversation')}
           </Button>
         </DialogActions>
       </Dialog>
