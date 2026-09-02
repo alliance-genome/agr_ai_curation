@@ -7,7 +7,7 @@ import {
   AutoAwesome as AgentStudioIcon,
   FactCheck as CurationIcon,
   Home as HomeIcon,
-  HelpOutline as HelpIcon,
+  HelpOutlined as HelpIcon,
   History as HistoryIcon,
   Update as ChangelogIcon,
 } from '@mui/icons-material'

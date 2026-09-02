@@ -1,4 +1,4 @@
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import HistoryIcon from '@mui/icons-material/History'
 import {
   Alert,
@@ -331,11 +331,15 @@ export default function HistoryPage() {
     >
       <Stack spacing={3}>
         <Stack spacing={1}>
-          <Stack direction="row" spacing={1.25} alignItems="center">
+          <Stack direction="row" spacing={1.25} sx={{
+            alignItems: "center"
+          }}>
             <HistoryIcon color="primary" />
             <Typography variant="h4">Chat History</Typography>
           </Stack>
-          <Typography color="text.secondary" variant="body1">
+          <Typography variant="body1" sx={{
+            color: "text.secondary"
+          }}>
             Browse stored conversations, search by title, and expand each transcript inline without leaving the page.
           </Typography>
         </Stack>
@@ -435,11 +439,13 @@ export default function HistoryPage() {
           <TextField
             autoFocus
             fullWidth
-            inputProps={{ maxLength: 255 }}
             label="Conversation title"
             margin="dense"
             onChange={(event) => setRenameTitle(event.target.value)}
             value={renameTitle}
+            slotProps={{
+              htmlInput: { maxLength: 255 }
+            }}
           />
         </DialogContent>
         <DialogActions>
@@ -522,5 +528,5 @@ export default function HistoryPage() {
         </DialogActions>
       </Dialog>
     </Box>
-  )
+  );
 }

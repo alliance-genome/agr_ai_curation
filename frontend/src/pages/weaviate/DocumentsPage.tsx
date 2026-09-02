@@ -68,7 +68,9 @@ const useDebouncedDocumentSearchTerm = (searchTerm: string): string => {
 function DocumentsPageSectionFallback() {
   return (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 160 }}>
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" sx={{
+        color: "text.secondary"
+      }}>
         Loading documents UI...
       </Typography>
     </Box>

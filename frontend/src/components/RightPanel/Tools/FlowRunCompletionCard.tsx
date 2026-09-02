@@ -224,9 +224,21 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
         background: `linear-gradient(180deg, ${alpha(statusColor, 0.12)}, ${alpha(theme.palette.background.paper, 0.72)})`,
       }}
     >
-      <Stack direction="row" spacing={1.5} alignItems="flex-start" justifyContent="space-between">
+      <Stack
+        direction="row"
+        spacing={1.5}
+        sx={{
+          alignItems: "flex-start",
+          justifyContent: "space-between"
+        }}>
         <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: "center",
+              mb: 1
+            }}>
             <Typography
               variant="subtitle2"
               sx={{ color: theme.palette.text.primary, fontWeight: 600 }}
@@ -275,7 +287,9 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
           </Typography>
         </Box>
 
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{
+          alignItems: "stretch"
+        }}>
           <AuthoritativeReviewAndCurateButton
             authoritativeReviewSessionIds={run.reviewSessionIds}
             allowBootstrapWithoutSession={canBootstrapReviewSession}
@@ -386,12 +400,12 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
         anchorEl={menuAnchorEl}
         open={Boolean(menuAnchorEl)}
         onClose={handleCloseMenu}
-        PaperProps={{
-          sx: {
+        slotProps={{
+          paper: { sx: {
             backgroundColor: theme.palette.background.paper,
             border: `1px solid ${theme.palette.divider}`,
             minWidth: 220,
-          },
+          } },
         }}
       >
         {EXPORT_FORMAT_OPTIONS.map((option) => (
@@ -413,5 +427,5 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
         ))}
       </Menu>
     </Box>
-  )
+  );
 }

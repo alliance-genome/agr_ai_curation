@@ -171,7 +171,9 @@ const DatabaseSettings: React.FC = () => {
         </Typography>
 
         <Box sx={{ mt: 2 }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Status:{' '}
             <strong
               style={{
@@ -182,27 +184,52 @@ const DatabaseSettings: React.FC = () => {
             </strong>
           </Typography>
           {healthData?.details?.weaviate?.version && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mt: 1
+              }}>
               Version: {healthData.details.weaviate.version}
             </Typography>
           )}
           {healthData?.details?.weaviate?.nodes !== undefined && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mt: 1
+              }}>
               Nodes: {healthData.details.weaviate.nodes}
             </Typography>
           )}
           {healthData?.details?.weaviate?.collections !== undefined && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mt: 1
+              }}>
               Collections: {healthData.details.weaviate.collections}
             </Typography>
           )}
           {settingsData?.database?.collection_name && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mt: 1
+              }}>
               Collection Name: {settingsData.database.collection_name}
             </Typography>
           )}
           {settingsData?.database?.schema_version && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mt: 1
+              }}>
               Schema Version: {settingsData.database.schema_version}
             </Typography>
           )}

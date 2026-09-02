@@ -261,7 +261,9 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
             <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1rem' }}>
               {agentName} Prompts
             </Typography>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               Inspect prompt layers in combined runtime order
             </Typography>
           </Box>
@@ -295,14 +297,21 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
           {!loading && !error && agent && (
             <>
               {/* Agent Description */}
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 {agent.description}
               </Typography>
 
               {/* Tools */}
               {agent.tools.length > 0 && (
                 <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: "text.secondary",
+                      mr: 0.5
+                    }}>
                     Tools:
                   </Typography>
                   {agent.tools.map((tool) => (
@@ -348,7 +357,9 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
                 )}
 
                 {!agent.has_group_rules && (
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{
+                    color: "text.secondary"
+                  }}>
                     No group-specific rules for this agent
                   </Typography>
                 )}
@@ -364,14 +375,18 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
                     variant="outlined"
                   />
                   {selectedLayer.locked && <Chip label="Locked" size="small" variant="outlined" />}
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{
+                    color: "text.secondary"
+                  }}>
                     Owner: {selectedLayer.provenance} • Source: {selectedLayer.source_ref}
                   </Typography>
                 </Box>
               )}
 
               {viewMode === 'combined' && !combinedPromptError && (
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" sx={{
+                  color: "text.secondary"
+                }}>
                   {promptLayers.length} layers shown in runtime order
                 </Typography>
               )}
@@ -387,7 +402,9 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
 
               {/* Version Info */}
               {agent.prompt_version && (
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" sx={{
+                  color: "text.secondary"
+                }}>
                   Version: {agent.prompt_version}
                   {agent.source_file && ` • Source: ${agent.source_file}`}
                 </Typography>
@@ -397,7 +414,7 @@ function PromptViewer({ agentId, agentName, open, onClose }: PromptViewerProps) 
         </ViewerContent>
       </ViewerContainer>
     </Slide>
-  )
+  );
 }
 
 export default PromptViewer

@@ -11,10 +11,12 @@ export default function EvidenceLocatorFieldValue({ value }: { value: unknown })
 
   if (!isRecord(value)) {
     return (
-      <Typography color="text.secondary" variant="body2">
+      <Typography variant="body2" sx={{
+        color: "text.secondary"
+      }}>
         {String(value)}
       </Typography>
-    )
+    );
   }
 
   const parts = [
@@ -25,8 +27,10 @@ export default function EvidenceLocatorFieldValue({ value }: { value: unknown })
   ].filter((part): part is string => Boolean(part))
 
   return (
-    <Typography color="text.secondary" variant="body2">
+    <Typography variant="body2" sx={{
+      color: "text.secondary"
+    }}>
       {parts.length > 0 ? parts.join(' · ') : JSON.stringify(value)}
     </Typography>
-  )
+  );
 }

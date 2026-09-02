@@ -270,7 +270,7 @@ function titleCaseFieldName(fieldName: string): string {
     .replace(/\bcurie\b/gi, 'CURIE')
     .replace(/\bagm\b/gi, 'AGM')
     .replace(/\bgo\b/gi, 'GO')
-    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function displayValue(value: unknown): string | null {
@@ -435,7 +435,7 @@ interface PromptLineDiff {
 }
 
 function normalizePromptForComparison(value: string | undefined | null): string {
-  return (value || '').replace(/\r\n/g, '\n').trim()
+  return (value || '').replace(/\r\n/g, '\n').trim();
 }
 
 function buildPromptLineDiff(currentPrompt: string, proposedPrompt: string): PromptLineDiff[] {
@@ -1272,7 +1272,9 @@ function OpusChat({
             }}
           >
             <AutoAwesomeIcon sx={{ fontSize: 48, opacity: 0.5 }} />
-            <Typography variant="body1" textAlign="center">
+            <Typography variant="body1" sx={{
+              textAlign: "center"
+            }}>
               {activeTab === 'flows' ? (
                 <>
                   Ask Claude about curation flows, flow design,
@@ -1547,7 +1549,12 @@ Claude is responding...
           </Box>
         ) : (
           <>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                color: "text.secondary",
+                mb: 2
+              }}>
               Claude will analyze your conversation and submit a feedback report to the development team.
             </Typography>
             <TextField
@@ -1664,7 +1671,7 @@ Claude is responding...
         </Alert>
       </Snackbar>
     </ChatContainer>
-  )
+  );
 }
 
 export default OpusChat

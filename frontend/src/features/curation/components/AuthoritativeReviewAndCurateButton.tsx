@@ -116,10 +116,17 @@ export default function AuthoritativeReviewAndCurateButton({
             />
           </MenuItem>
         ))}
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, pb: 1 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: "text.secondary",
+            display: 'block',
+            px: 2,
+            pb: 1
+          }}>
           Choose the adapter-specific prepared session.
         </Typography>
       </Menu>
     </>
-  )
+  );
 }

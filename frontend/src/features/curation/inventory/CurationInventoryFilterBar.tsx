@@ -109,8 +109,19 @@ function FilterChipGroup({
 
   return (
     <Stack spacing={1}>
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-        <Typography variant="body2" color="text.secondary" sx={{ minWidth: 72 }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{
+          alignItems: "center",
+          flexWrap: "wrap"
+        }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: "text.secondary",
+            minWidth: 72
+          }}>
           {label}
         </Typography>
         <Chip
@@ -137,7 +148,7 @@ function FilterChipGroup({
         })}
       </Stack>
     </Stack>
-  )
+  );
 }
 
 export default function CurationInventoryFilterBar({
@@ -166,12 +177,24 @@ export default function CurationInventoryFilterBar({
         <Stack
           direction={{ xs: 'column', xl: 'row' }}
           spacing={2}
-          alignItems={{ xs: 'stretch', xl: 'flex-start' }}
-          justifyContent="space-between"
-        >
+          sx={{
+            alignItems: { xs: 'stretch', xl: 'flex-start' },
+            justifyContent: "space-between"
+          }}>
           <Stack spacing={1.5} sx={{ flex: 1 }}>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-              <Typography variant="body2" color="text.secondary" sx={{ minWidth: 72 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: "center",
+                flexWrap: "wrap"
+              }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: "text.secondary",
+                  minWidth: 72
+                }}>
                 Scope
               </Typography>
               <ToggleButtonGroup
@@ -195,8 +218,19 @@ export default function CurationInventoryFilterBar({
             </Stack>
 
             <Stack spacing={1}>
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                <Typography variant="body2" color="text.secondary" sx={{ minWidth: 72 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: "center",
+                  flexWrap: "wrap"
+                }}>
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: "text.secondary",
+                    minWidth: 72
+                  }}>
                   Status
                 </Typography>
                 <Chip
@@ -243,9 +277,10 @@ export default function CurationInventoryFilterBar({
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
             spacing={1.5}
-            alignItems={{ xs: 'stretch', sm: 'center' }}
-            sx={{ minWidth: { xl: 340 } }}
-          >
+            sx={{
+              alignItems: { xs: 'stretch', sm: 'center' },
+              minWidth: { xl: 340 }
+            }}>
             <TextField
               fullWidth
               label="Search sessions"
@@ -253,12 +288,14 @@ export default function CurationInventoryFilterBar({
               placeholder="Title, PMID, DOI, or notes"
               size="small"
               value={searchInput}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" />
-                  </InputAdornment>
-                ),
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon fontSize="small" />
+                    </InputAdornment>
+                  ),
+                }
               }}
             />
             {hasActiveFilters && (
@@ -272,12 +309,17 @@ export default function CurationInventoryFilterBar({
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={1}
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-          justifyContent="space-between"
-        >
-          <Stack direction="row" spacing={1} alignItems="center">
+          sx={{
+            alignItems: { xs: 'flex-start', sm: 'center' },
+            justifyContent: "space-between"
+          }}>
+          <Stack direction="row" spacing={1} sx={{
+            alignItems: "center"
+          }}>
             {isRefreshing && <CircularProgress size={14} />}
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               {isRefreshing
                 ? 'Refreshing inventory results...'
                 : 'Status counts stay in sync with the current non-status filters.'}
@@ -292,5 +334,5 @@ export default function CurationInventoryFilterBar({
         </Stack>
       </Stack>
     </Paper>
-  )
+  );
 }

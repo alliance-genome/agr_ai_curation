@@ -571,7 +571,9 @@ function CurationWorkspacePageContent({
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
-              <Stack spacing={1} width="100%">
+              <Stack spacing={1} sx={{
+                width: "100%"
+              }}>
                 <WorkPaneToolbar
                   isPdfVisible={isPdfVisible}
                   selectedDecision={selectedCandidate ? {
@@ -592,7 +594,15 @@ function CurationWorkspacePageContent({
                   onAddObject={() => setManualObjectDialogOpen(true)}
                   onTogglePdf={isPdfVisible ? focusGrid : showPdf}
                 />
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" justifyContent="flex-end" useFlexGap>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  useFlexGap
+                  sx={{
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    justifyContent: "flex-end"
+                  }}>
                   <WorkspaceSessionNavigation
                     currentSessionId={workspace.session.session_id}
                     queueContext={queueNavigationState?.queueContext}
@@ -638,7 +648,12 @@ function CurationWorkspacePageContent({
                 >
                   <strong>Envelope-level validation:</strong>{' '}
                   {summary.messages.join(' ')} All objects from this envelope are affected.
-                  <Typography display="block" sx={{ mt: 0.75 }} variant="caption">
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      display: "block",
+                      mt: 0.75
+                    }}>
                     Validation details are read-only in this preview.
                   </Typography>
                 </Alert>
@@ -668,7 +683,9 @@ function CurationWorkspacePageContent({
       >
         <DialogTitle>Submission preview is in progress</DialogTitle>
         <DialogContent dividers>
-          <Typography color="text.secondary" variant="body2">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Submission preview and submission actions are a work in progress and are disabled
             at the moment. Curators can continue reviewing and editing objects here; the
             submission workflow will be re-enabled when it is ready.
@@ -690,7 +707,7 @@ function CurationWorkspacePageContent({
         open={manualObjectDialogOpen}
       />
     </Box>
-  )
+  );
 }
 
 function CurationWorkspacePage() {
@@ -827,14 +844,18 @@ function CurationWorkspacePage() {
           justifyContent: 'center',
         }}
       >
-        <Stack spacing={2} alignItems="center">
+        <Stack spacing={2} sx={{
+          alignItems: "center"
+        }}>
           <CircularProgress />
-          <Typography color="text.secondary">
+          <Typography sx={{
+            color: "text.secondary"
+          }}>
             Loading curation workspace...
           </Typography>
         </Stack>
       </Box>
-    )
+    );
   }
 
   if (!workspace || contextValue === null) {

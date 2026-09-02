@@ -51,31 +51,32 @@ export default function ConversationList({
   if (sessions.length === 0) {
     return (
       <Stack
-        alignItems="center"
-        justifyContent="center"
         spacing={1}
         sx={{
+          alignItems: "center",
+          justifyContent: "center",
           border: '1px dashed',
           borderColor: 'divider',
           borderRadius: 3,
           minHeight: 220,
           px: 3,
           py: 4,
-          textAlign: 'center',
-        }}
-      >
+          textAlign: 'center'
+        }}>
         <Typography variant="h6">
           {searchQuery
             ? `No ${conversationScopeLabel} matched your search.`
             : `No stored ${conversationScopeLabel} yet.`}
         </Typography>
-        <Typography color="text.secondary" variant="body2">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           {searchQuery
             ? 'Try a shorter or more specific title search.'
             : `Completed ${conversationScopeLabel} will appear here once they are stored in history.`}
         </Typography>
       </Stack>
-    )
+    );
   }
 
   return (

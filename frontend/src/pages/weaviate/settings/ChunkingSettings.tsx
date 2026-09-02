@@ -94,7 +94,9 @@ const ChunkingSettings: React.FC = () => {
         </Box>
 
         <Box sx={{ mt: 3, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             <strong>Note:</strong> Changes to chunking settings will only affect new documents.
             Existing documents will need to be reprocessed to apply new chunking settings.
           </Typography>

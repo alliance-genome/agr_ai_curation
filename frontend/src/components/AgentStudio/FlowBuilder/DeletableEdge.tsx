@@ -15,7 +15,7 @@ import {
 } from 'reactflow'
 import { styled } from '@mui/material/styles'
 import CloseIcon from '@mui/icons-material/Close'
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined'
 
 // Styled delete button that appears on hover
 const DeleteButton = styled('button')<{ visible: boolean }>(({ theme, visible }) => ({

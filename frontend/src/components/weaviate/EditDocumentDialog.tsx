@@ -61,7 +61,12 @@ const EditDocumentDialog: React.FC<EditDocumentDialogProps> = ({
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>
-        <Box display="flex" alignItems="center" justifyContent="space-between">
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between"
+          }}>
           Edit document metadata
           <IconButton onClick={onClose} size="small" aria-label="close">
             <Close fontSize="small" />
@@ -83,10 +88,12 @@ const EditDocumentDialog: React.FC<EditDocumentDialogProps> = ({
           variant="outlined"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          inputProps={{ maxLength: 255 }}
           helperText="Optional display title shown separately from the PDF filename."
           disabled={saving}
           sx={{ mt: 1 }}
+          slotProps={{
+            htmlInput: { maxLength: 255 }
+          }}
         />
         <TextField
           required
@@ -98,10 +105,12 @@ const EditDocumentDialog: React.FC<EditDocumentDialogProps> = ({
           variant="outlined"
           value={filename}
           onChange={(e) => setFilename(e.target.value)}
-          inputProps={{ maxLength: 255 }}
           helperText="Must be a safe filename ending in .pdf."
           disabled={saving}
           sx={{ mt: 2 }}
+          slotProps={{
+            htmlInput: { maxLength: 255 }
+          }}
         />
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 2 }}>

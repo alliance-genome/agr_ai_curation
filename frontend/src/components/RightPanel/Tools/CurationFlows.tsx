@@ -735,12 +735,14 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
       <Dialog
         open={deleteDialogOpen}
         onClose={handleDeleteCancel}
-        PaperProps={{
-          sx: {
-            backgroundColor: theme.palette.background.paper,
-            border: `1px solid ${theme.palette.divider}`,
-            borderRadius: '8px',
-          },
+        slotProps={{
+          paper: {
+            sx: {
+              backgroundColor: theme.palette.background.paper,
+              border: `1px solid ${theme.palette.divider}`,
+              borderRadius: '8px',
+            },
+          }
         }}
       >
         <DialogTitle sx={{ color: theme.palette.text.primary }}>
@@ -788,7 +790,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
         </DialogActions>
       </Dialog>
     </Box>
-  )
+  );
 }
 
 export default CurationFlows

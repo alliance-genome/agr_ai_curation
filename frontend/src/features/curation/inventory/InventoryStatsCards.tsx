@@ -142,12 +142,14 @@ function InventoryStatsCard({
         >
           {formatNumber(value)}
         </Typography>
-        <Typography color="text.secondary" variant="body2">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           {subtitle}
         </Typography>
       </Stack>
     </Paper>
-  )
+  );
 }
 
 function LoadingSkeletonCards() {
@@ -206,12 +208,15 @@ export default function InventoryStatsCards({
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={2}
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-          justifyContent="space-between"
-        >
+          sx={{
+            alignItems: { xs: 'flex-start', sm: 'center' },
+            justifyContent: "space-between"
+          }}>
           <Stack spacing={0.5}>
             <Typography variant="h6">Inventory stats unavailable</Typography>
-            <Typography color="text.secondary" variant="body2">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               {errorMessage
                 ? 'Status counts are temporarily unavailable. Session filters still work normally.'
                 : 'Inventory counts will appear here once the stats service responds.'}
@@ -224,7 +229,7 @@ export default function InventoryStatsCards({
           )}
         </Stack>
       </Paper>
-    )
+    );
   }
 
   return (

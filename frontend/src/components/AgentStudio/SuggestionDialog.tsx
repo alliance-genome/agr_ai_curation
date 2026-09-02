@@ -183,7 +183,9 @@ function SuggestionDialog({
               {context.trace_id && (
                 <>
                   <br />
-                  <Typography component="span" variant="caption" color="text.secondary">
+                  <Typography component="span" variant="caption" sx={{
+                    color: "text.secondary"
+                  }}>
                     Related trace: {context.trace_id}
                   </Typography>
                 </>
@@ -215,7 +217,13 @@ function SuggestionDialog({
             ))}
           </Select>
           {selectedTypeInfo && (
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.5 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                mt: 0.5,
+                ml: 1.5
+              }}>
               {selectedTypeInfo.description}
             </Typography>
           )}
@@ -232,8 +240,10 @@ function SuggestionDialog({
           size="small"
           disabled={isSubmitting}
           required
-          inputProps={{ maxLength: 200 }}
           helperText={`${summary.length}/200 characters`}
+          slotProps={{
+            htmlInput: { maxLength: 200 }
+          }}
         />
 
         {/* Detailed reasoning */}
@@ -262,7 +272,7 @@ function SuggestionDialog({
         />
       </Box>
     </ModelessFeedbackSurface>
-  )
+  );
 }
 
 export default SuggestionDialog

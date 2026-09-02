@@ -29,7 +29,7 @@ import {
   CheckCircle as CheckCircleIcon,
   CloudUpload as CloudUploadIcon,
   ContentCopy as ContentCopyIcon,
-  ErrorOutline as ErrorOutlineIcon,
+  ErrorOutlined as ErrorOutlineIcon,
   FileOpen as FileOpenIcon,
   HourglassTop as HourglassTopIcon,
   PlayArrow as PlayArrowIcon,
@@ -589,15 +589,22 @@ const AddLiteraturePage: React.FC = () => {
           <Stack spacing={2}>
             <Stack
               direction={{ xs: 'column', md: 'row' }}
-              justifyContent="space-between"
-              alignItems={{ xs: 'flex-start', md: 'center' }}
               spacing={1.5}
-            >
+              sx={{
+                justifyContent: "space-between",
+                alignItems: { xs: 'flex-start', md: 'center' }
+              }}>
               <Box>
                 <Typography variant="h4" component="h1" sx={{ fontWeight: 700 }}>
                   Add Literature
                 </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 720 }}>
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: "text.secondary",
+                    mt: 0.5,
+                    maxWidth: 720
+                  }}>
                   Add PDFs directly, or resolve source identifiers and retrieve the PDF when the catalog can provide it.
                 </Typography>
               </Box>
@@ -626,7 +633,9 @@ const AddLiteraturePage: React.FC = () => {
                   <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
                     Add Publication by Identifiers
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" sx={{
+                    color: "text.secondary"
+                  }}>
                     Resolve identifiers first, then import the resolved PDF-backed publications when the batch looks right.
                   </Typography>
                 </Box>
@@ -642,15 +651,19 @@ const AddLiteraturePage: React.FC = () => {
                   fullWidth
                   placeholder={identifierPlaceholder}
                   helperText={identifierHelp}
-                  InputProps={{
-                    sx: {
-                      alignItems: 'flex-start',
-                      fontFamily: 'monospace',
-                      fontSize: '0.92rem',
-                    },
+                  slotProps={{
+                    input: {
+                      sx: {
+                        alignItems: 'flex-start',
+                        fontFamily: 'monospace',
+                        fontSize: '0.92rem',
+                      },
+                    }
                   }}
                 />
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{
+                  alignItems: { xs: 'stretch', sm: 'center' }
+                }}>
                   <Button
                     variant="outlined"
                     startIcon={<SearchIcon />}
@@ -707,7 +720,9 @@ const AddLiteraturePage: React.FC = () => {
                     <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
                       Upload PDFs
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
                       Uploaded PDFs still use the existing processing path when no source md5 match is found.
                     </Typography>
                   </Box>
@@ -724,12 +739,19 @@ const AddLiteraturePage: React.FC = () => {
                       textAlign: 'center',
                     }}
                   >
-                    <Stack spacing={1.25} alignItems="center">
+                    <Stack spacing={1.25} sx={{
+                      alignItems: "center"
+                    }}>
                       <CloudUploadIcon color="primary" />
                       <Typography variant="body2" sx={{ fontWeight: 700 }}>
                         Drop PDFs here or choose files
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 560 }}>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: "text.secondary",
+                          maxWidth: 560
+                        }}>
                         Processing continues in the background, with progress visible in PDF Jobs and final documents available in the Library.
                       </Typography>
                       <Button variant="contained" component="label" startIcon={<CloudUploadIcon />} disabled={isUploading}>
@@ -758,7 +780,9 @@ const AddLiteraturePage: React.FC = () => {
               <Typography variant="h6" sx={{ fontWeight: 700 }}>
                 {mode === 'identifiers' ? 'Identifier Results' : 'Upload Results'}
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 PDF-backed source retrievals and upload jobs land in the Library.
               </Typography>
             </Box>
@@ -785,7 +809,9 @@ const AddLiteraturePage: React.FC = () => {
                 {results.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={5}>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" sx={{
+                        color: "text.secondary"
+                      }}>
                         No import results yet.
                       </Typography>
                     </TableCell>
@@ -801,7 +827,9 @@ const AddLiteraturePage: React.FC = () => {
                           <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
                             {result.identifier}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" sx={{
+                            color: "text.secondary"
+                          }}>
                             {result.normalizedIdentifier ?? 'No normalized identifier'}
                           </Typography>
                         </Stack>
@@ -816,7 +844,9 @@ const AddLiteraturePage: React.FC = () => {
                             variant={result.status === 'imported' || result.status === 'resolved' ? 'filled' : 'outlined'}
                             sx={{ alignSelf: 'flex-start', borderRadius: 1 }}
                           />
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" sx={{
+                            color: "text.secondary"
+                          }}>
                             {result.message}
                           </Typography>
                         </Stack>
@@ -827,7 +857,9 @@ const AddLiteraturePage: React.FC = () => {
                             <Typography variant="body2" sx={{ fontWeight: 700 }}>
                               {result.filename}
                             </Typography>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography variant="caption" sx={{
+                              color: "text.secondary"
+                            }}>
                               {result.jobId
                                 ? `Job ${result.jobId}`
                                 : result.status === 'duplicate' && result.documentId
@@ -844,7 +876,9 @@ const AddLiteraturePage: React.FC = () => {
                             </Typography>
                           </Stack>
                         ) : (
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography variant="body2" sx={{
+                            color: "text.secondary"
+                          }}>
                             Not queued
                           </Typography>
                         )}
@@ -855,12 +889,16 @@ const AddLiteraturePage: React.FC = () => {
                             <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
                               PDF {result.source.pdfArtifactId} / {convertedSourceLabel(result)}
                             </Typography>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography variant="caption" sx={{
+                              color: "text.secondary"
+                            }}>
                               {result.source.viewerMode}
                             </Typography>
                           </Stack>
                         ) : (
-                          <Typography variant="body2" color="text.secondary">
+                          <Typography variant="body2" sx={{
+                            color: "text.secondary"
+                          }}>
                             No local PDF
                           </Typography>
                         )}

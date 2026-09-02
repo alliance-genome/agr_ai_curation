@@ -147,7 +147,7 @@ export default function WorkspaceSessionNavigation({
   const nextButtonDisabled = !queueRequest || isLoading || !nextQuery.data?.session
 
   return (
-    <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+    <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
       <Button
         aria-label="Previous session"
         disabled={previousButtonDisabled}

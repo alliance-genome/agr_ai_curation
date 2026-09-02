@@ -239,7 +239,7 @@ function FeedbackDialog({
               '& .MuiInputBase-input': {
                 color: theme.palette.text.primary,
               },
-              '& .MuiInputBase-inputMultiline': {
+              '& .MuiInputBase-multiline > .MuiInputBase-input': {
                 height: '100% !important',
                 overflow: 'auto !important',
                 boxSizing: 'border-box',

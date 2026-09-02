@@ -47,13 +47,17 @@ export default function ConversationTranscriptView({
 
   if (detailQuery.isLoading) {
     return (
-      <Stack direction="row" spacing={1.5} alignItems="center">
+      <Stack direction="row" spacing={1.5} sx={{
+        alignItems: "center"
+      }}>
         <CircularProgress size={18} />
-        <Typography color="text.secondary" variant="body2">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           Loading transcript…
         </Typography>
       </Stack>
-    )
+    );
   }
 
   if (detailQuery.error) {
@@ -77,7 +81,9 @@ export default function ConversationTranscriptView({
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             Active document
           </Typography>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} useFlexGap sx={{
+            flexWrap: "wrap"
+          }}>
             <Chip label={detail.active_document.filename ?? detail.active_document.id} size="small" />
             {formatNumber(detail.active_document.chunk_count) ? (
               <Chip
@@ -113,10 +119,12 @@ export default function ConversationTranscriptView({
       )}
 
       {detail.next_message_cursor ? (
-        <Typography color="text.secondary" variant="caption">
+        <Typography variant="caption" sx={{
+          color: "text.secondary"
+        }}>
           Showing the newest stored transcript messages for this conversation.
         </Typography>
       ) : null}
     </Stack>
-  )
+  );
 }

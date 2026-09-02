@@ -115,6 +115,33 @@ describe('FeedbackDialog', () => {
     expect(screen.getByRole('button', { name: 'Close feedback popup' })).toBeInTheDocument()
   })
 
+  it('keeps the multiline feedback input full-height with internal scrolling', () => {
+    render(
+      <FeedbackDialog
+        open
+        onClose={vi.fn()}
+        sessionId="session-1"
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+      />
+    )
+
+    const textarea = screen.getByPlaceholderText(/enter your detailed feedback here/i)
+    expect(textarea.closest('.MuiInputBase-multiline')).toContainElement(textarea)
+
+    const multilineInputRule = Array.from(document.styleSheets)
+      .flatMap((styleSheet) => Array.from(styleSheet.cssRules))
+      .find((rule): rule is CSSStyleRule =>
+        rule instanceof CSSStyleRule &&
+        rule.selectorText.includes('.MuiInputBase-multiline>.MuiInputBase-input') &&
+        textarea.matches(rule.selectorText)
+      )
+
+    expect(multilineInputRule).toBeDefined()
+    expect(multilineInputRule?.style.getPropertyValue('height')).toBe('100%')
+    expect(multilineInputRule?.style.getPropertyValue('overflow')).toBe('auto')
+    expect(multilineInputRule?.style.getPropertyValue('box-sizing')).toBe('border-box')
+  })
+
   it('ignores the close control while feedback submission is in flight, then allows it after submission', async () => {
     let resolveSubmit!: () => void
     const onClose = vi.fn()
