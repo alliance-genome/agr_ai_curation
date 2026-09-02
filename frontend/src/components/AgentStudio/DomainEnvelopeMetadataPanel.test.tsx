@@ -68,6 +68,7 @@ describe('DomainEnvelopeMetadataPanel', () => {
               validation_attachments: [fieldFuture],
             },
           ],
+          field_groups: [],
         },
       ],
       validation_summary: {

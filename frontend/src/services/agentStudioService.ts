@@ -122,6 +122,16 @@ export interface DomainEnvelopeFieldMetadata {
   validation_attachments: ValidationAttachmentOption[]
 }
 
+/**
+ * Ordered field grouping declared by the domain pack's workspace_display.
+ * Field paths may name fields absent from `fields`; consumers ignore unknown paths.
+ */
+export interface DomainEnvelopeFieldGroup {
+  id: string
+  label: string
+  field_paths: string[]
+}
+
 export interface DomainEnvelopeObjectMetadata {
   object_type: string
   display_name: string
@@ -134,6 +144,7 @@ export interface DomainEnvelopeObjectMetadata {
   provider_refs: Record<string, unknown>
   validation_attachments: ValidationAttachmentOption[]
   fields: DomainEnvelopeFieldMetadata[]
+  field_groups: DomainEnvelopeFieldGroup[]
 }
 
 export interface DomainEnvelopeValidationSummary {
