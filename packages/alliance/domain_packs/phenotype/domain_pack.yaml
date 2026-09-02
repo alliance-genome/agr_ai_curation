@@ -974,6 +974,11 @@ metadata:
       - binding_id: phenotype_term_ontology_validator
         preflight_policy: provider_taxon_mapping_required
         display_name: Phenotype ontology term lookup
+        curator_label: Confirm each phenotype term against the phenotype ontology for the species
+        description: Checks that each phenotype term matches a term in the species phenotype ontology, by identifier or name. Worm terms check against WBPhenotype and mouse terms against Mammalian Phenotype, and other species stay unconfirmed until their lookup is verified.
+        when_off: Phenotype terms stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family phenotype, accepted prefixes MP and WBPhenotype) with live-verified provider/taxon mappings for WB (WBPhenotypeTerm) and MGI (MPTerm); unsupported provider/taxon mappings remain blocked before lookup until their live ontologyterm grounding is verified.
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -1069,6 +1074,12 @@ metadata:
           allowed: false
       - binding_id: phenotype_condition_relation_lookup
         display_name: Condition relation type lookup
+        curator_label: Confirm each condition relation type against the Condition Relation Type vocabulary
+        description: Checks that the relation type on each experimental condition, such as has_condition or induced_by, is a term in the Condition Relation Type vocabulary.
+        when_off: Condition relation types stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Condition Relation Type, subset Expression Condition Relation).
+          - Fans out one check per condition_relations entry.
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -1121,6 +1132,12 @@ metadata:
       # indexes so each composite request carries that condition's own components plus its relation context.
       - binding_id: experimental_condition_validation
         display_name: Experimental condition validation
+        curator_label: Confirm each experimental condition against the condition ontologies and vocabularies
+        description: Checks each experimental condition on the annotation as one unit. It confirms the condition class and ontology terms, any chemical, the taxon, and the data provider together, so one decision covers the whole condition.
+        when_off: Experimental conditions stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the experimental-condition package validator binding, which composes the phenotype condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision.
+          - Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
         validator_agent:
           package_id: agr.alliance
           agent_id: experimental_condition_validation
@@ -1288,22 +1305,42 @@ metadata:
     active:
       - validator_id: phenotype.domain_envelope_shape
         display_name: Phenotype data structure
-        description: Load the envelope through the provider-agnostic DomainEnvelope contract.
+        curator_label: Confirm the extracted data has the expected structure
+        description: Checks that the extracted phenotype data is in the structure the review screens and export expect.
+        definition_notes:
+          - Loads the envelope through the provider-agnostic DomainEnvelope contract.
       - validator_id: phenotype.pending_envelope_policy
         display_name: Phenotype export requirements
-        description: Pending PhenotypeAnnotation objects must carry blocked export/write policy until subject, reference, and ontology targets are resolved.
+        curator_label: Confirm phenotype records stay held from export until resolved
+        description: Checks that phenotype records are held back from export and database writes until their subject, source paper, and ontology terms are confirmed.
+        definition_notes:
+          - Pending PhenotypeAnnotation objects must carry blocked export/write policy until subject, reference, and ontology targets are resolved.
       - validator_id: phenotype.no_legacy_semantic_lists
         display_name: Current extraction format
-        description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
+        curator_label: Confirm the extraction uses the current record format
+        description: Checks that the extraction uses the current record format and not an older list-based layout.
+        definition_notes:
+          - Rejects legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
       - validator_id: phenotype_term_ontology_validator
         display_name: Phenotype ontology term lookup
-        description: Validate WB and MGI phenotype term CURIEs or labels through the active ontology-term package validator binding. Unsupported provider/taxon mappings remain blocked before lookup until their live ontologyterm grounding is verified.
+        curator_label: Confirm each phenotype term against the phenotype ontology for the species
+        description: Checks that each phenotype term matches a term in the species phenotype ontology, by identifier or name. Worm terms check against WBPhenotype and mouse terms against Mammalian Phenotype, and other species stay unconfirmed until their lookup is verified.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family phenotype, accepted prefixes MP and WBPhenotype) with live-verified provider/taxon mappings for WB (WBPhenotypeTerm) and MGI (MPTerm); unsupported provider/taxon mappings remain blocked before lookup until their live ontologyterm grounding is verified.
       - validator_id: phenotype_condition_relation_lookup
         display_name: Condition relation type lookup
-        description: Active package binding validates each phenotype condition relation type against the 'Condition Relation Type' controlled vocabulary (Expression Condition Relation subset); fans out per condition_relations entry.
+        curator_label: Confirm each condition relation type against the Condition Relation Type vocabulary
+        description: Checks that the relation type on each experimental condition, such as has_condition or induced_by, is a term in the Condition Relation Type vocabulary.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Condition Relation Type, subset Expression Condition Relation).
+          - Fans out one check per condition_relations entry.
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
-        description: Compose phenotype condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision. Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
+        curator_label: Confirm each experimental condition against the condition ontologies and vocabularies
+        description: Checks each experimental condition on the annotation as one unit. It confirms the condition class and ontology terms, any chemical, the taxon, and the data provider together, so one decision covers the whole condition.
+        definition_notes:
+          - Runs through the experimental-condition package validator binding, which composes the phenotype condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision.
+          - Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
     under_development:
       - validator_id: phenotype.subject_entity_resolution
         display_name: Phenotype subject resolution

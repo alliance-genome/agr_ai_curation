@@ -130,6 +130,11 @@ object_definitions:
         active:
           - binding_id: alliance_gene_reference_lookup
             display_name: Alliance gene lookup
+            curator_label: Confirm each gene mention in the Alliance records
+            description: Checks that each gene named in the paper matches an Alliance gene record, by symbol, name, or identifier, and fills in the confirmed identifier.
+            when_off: Gene mentions stay as the extractor wrote them, and review rows show them unconfirmed.
+            definition_notes:
+              - Runs through the gene package validator binding on the gene_mention_evidence object.
             validator_agent:
               package_id: agr.alliance
               agent_id: gene_validation
