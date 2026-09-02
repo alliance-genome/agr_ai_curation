@@ -1,9 +1,13 @@
 /**
  * Agent Studio Page
  *
- * Two-panel layout for exploring agent prompts, building flows, and chatting with Opus:
- * - Left panel: Chat with Claude Opus for guidance
- * - Right panel: Tabbed interface with [Prompts] and [Flows] tabs
+ * Adaptive shell for exploring agent prompts, building flows, and chatting with Claude:
+ * - Left: work surface with the Agents, Flows, and Agent Workshop tabs
+ * - Right: Claude copilot pane (30% by default) that collapses to a 44px rail
+ * - Below 1100px: the pane becomes a right-side drawer opened from the tab bar
+ *
+ * OpusChat stays mounted across collapse, expand, and drawer open/close so
+ * streaming, drafts, and the durable session survive every transition.
  *
  * Entry points:
  * 1. Nav bar link to /agent-studio (fresh start)
@@ -12,14 +16,29 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Box, Backdrop, CircularProgress, Alert, Typography, Stack, Tabs, Tab } from '@mui/material'
-import { styled, alpha } from '@mui/material/styles'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import {
+  Box,
+  Backdrop,
+  Badge,
+  Button,
+  CircularProgress,
+  Alert,
+  Typography,
+  Stack,
+  Tabs,
+  Tab,
+  useMediaQuery,
+} from '@mui/material'
+import { styled } from '@mui/material/styles'
+import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels'
 import DescriptionIcon from '@mui/icons-material/Description'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import ScienceIcon from '@mui/icons-material/Science'
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 
 import OpusChat from '@/components/AgentStudio/OpusChat'
+import ClaudeRail, { formatUnreadDescription } from '@/components/AgentStudio/ClaudeRail'
+import ClaudeDrawer from '@/components/AgentStudio/ClaudeDrawer'
 import { buildFlowVerificationPrompt } from '@/components/AgentStudio/flowVerificationPrompt'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
 import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
@@ -33,7 +52,7 @@ import {
   AGENT_STUDIO_CHAT_HISTORY_KIND,
   buildRestorableChatMessages,
 } from '@/services/chatHistoryApi'
-import { safeGetItem, safeSetItem } from '@/lib/browserStorage'
+import { safeGetItem, safeRemoveItem, safeSetItem } from '@/lib/browserStorage'
 import type {
   PromptCatalog,
   ChatContext,
@@ -49,17 +68,25 @@ const Root = styled(Box)(({ theme }) => ({
   display: 'flex',
   height: '100%',
   overflow: 'hidden',
-  padding: theme.spacing(2),
-  paddingTop: theme.spacing(1.5),
+  padding: theme.spacing(1),
 }))
 
-const PanelSection = styled(Box)(() => ({
-  flex: 1,
+/** Paper card with the shared 1px divider border and 8px radius from the shell mockup. */
+const PanelCard = styled(Box)(({ theme }) => ({
   display: 'flex',
   flexDirection: 'column',
   minHeight: 0,
   height: '100%',
-  paddingTop: 0,
+  backgroundColor: theme.palette.background.paper,
+  border: `1px solid ${theme.palette.divider}`,
+  borderRadius: theme.shape.borderRadius * 2,
+  overflow: 'hidden',
+}))
+
+const ClaudePanelSection = styled(PanelCard, {
+  shouldForwardProp: (prop) => prop !== 'collapsed',
+})<{ collapsed: boolean }>(({ collapsed }) => ({
+  visibility: collapsed ? 'hidden' : 'visible',
   '& > *': {
     flex: 1,
     minHeight: 0,
@@ -67,47 +94,63 @@ const PanelSection = styled(Box)(() => ({
   },
 }))
 
-const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
-  width: 4,
-  flex: '0 0 4px',
-  backgroundColor: theme.palette.divider,
+const ResizeHandle = styled(PanelResizeHandle, {
+  shouldForwardProp: (prop) => prop !== 'collapsed',
+})<{ collapsed: boolean }>(({ theme, collapsed }) => ({
+  width: 8,
+  flex: '0 0 8px',
+  display: collapsed ? 'none' : 'block',
   cursor: 'col-resize',
-  transition: 'background-color 0.2s ease',
-  borderRadius: theme.shape.borderRadius,
   position: 'relative',
-  '&:hover, &[data-resize-handle-active="true"]': {
-    backgroundColor: theme.palette.primary.main,
-  },
   '&::after': {
     content: '""',
     position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
+    top: 0,
+    bottom: 0,
+    left: 3,
     width: 2,
-    height: 32,
     borderRadius: 1,
-    backgroundColor: alpha(theme.palette.common.white, 0.45),
-    pointerEvents: 'none',
+    backgroundColor: theme.palette.divider,
+    transition: 'background-color 0.2s ease',
+  },
+  '&:hover::after, &[data-resize-handle-active]::after': {
+    backgroundColor: theme.palette.primary.main,
+  },
+  '&:focus-visible': {
+    outline: `2px solid ${theme.palette.primary.main}`,
+    outlineOffset: -2,
   },
 }))
 
-const RightPanelContainer = styled(Box)(({ theme }) => ({
+const TabBar = styled(Box)(({ theme }) => ({
   display: 'flex',
-  flexDirection: 'column',
-  height: '100%',
-  backgroundColor: theme.palette.background.paper,
-  borderRadius: theme.shape.borderRadius,
-  overflow: 'hidden',
-}))
-
-const StyledTabs = styled(Tabs)(({ theme }) => ({
+  alignItems: 'center',
   minHeight: 40,
   borderBottom: `1px solid ${theme.palette.divider}`,
+  paddingRight: theme.spacing(1),
+  flex: 'none',
+}))
+
+const StyledTabs = styled(Tabs)(() => ({
+  minHeight: 40,
+  flex: 1,
+  minWidth: 0,
   '& .MuiTabs-indicator': {
     height: 3,
   },
 }))
+
+const VisuallyHidden = styled('span')({
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+})
 
 const StyledTab = styled(Tab)(({ theme }) => ({
   minHeight: 40,
@@ -129,6 +172,34 @@ type TabValue = 'agents' | 'flows' | 'agent_workshop'
 
 // localStorage key for tab persistence
 const AGENT_STUDIO_TAB_KEY = 'agent-studio-tab'
+// Panel split persistence. The key changed with the Layout R shell so the old
+// 40/60 split cannot survive; the stale entry is removed once on mount.
+const AGENT_STUDIO_PANELS_AUTOSAVE_ID = 'agent-studio-panels-v2'
+const STALE_PANELS_STORAGE_KEY = 'react-resizable-panels:agent-studio-panels'
+const CLAUDE_COLLAPSED_KEY = 'agent-studio-claude-collapsed'
+const CLAUDE_PANEL_ID = 'agent-studio-claude-panel'
+const CLAUDE_DRAWER_ID = 'agent-studio-claude-drawer'
+const LAUNCHER_UNREAD_DESCRIPTION_ID = 'agent-studio-claude-launcher-unread'
+// Below this width the side panel and rail give way to the drawer.
+const NARROW_SHELL_QUERY = '(max-width:1099px)'
+// Below this width the drawer covers the full viewport.
+const FULL_WIDTH_DRAWER_QUERY = '(max-width:719px)'
+
+function readCollapsedPreference(): boolean {
+  const result = safeGetItem(() => window.localStorage, CLAUDE_COLLAPSED_KEY, {
+    owner: 'preferences',
+    key: CLAUDE_COLLAPSED_KEY,
+    quiet: true,
+  })
+  return result.ok && result.value === 'true'
+}
+
+function writeCollapsedPreference(collapsed: boolean) {
+  safeSetItem(() => window.localStorage, CLAUDE_COLLAPSED_KEY, String(collapsed), {
+    owner: 'preferences',
+    key: CLAUDE_COLLAPSED_KEY,
+  })
+}
 
 function normalizeSearchParam(value: string | null): string | null {
   return value?.trim() ? value.trim() : null
@@ -198,6 +269,141 @@ function AgentStudioPage() {
   const promptUpdateCounterRef = useRef(0)
   const hydratedConversationSessionRef = useRef<string | null>(null)
   const searchParamsRef = useRef(searchParams)
+
+  // Adaptive shell state
+  const isNarrow = useMediaQuery(NARROW_SHELL_QUERY)
+  const isFullWidthDrawer = useMediaQuery(FULL_WIDTH_DRAWER_QUERY)
+  const [claudeCollapsed, setClaudeCollapsed] = useState<boolean>(readCollapsedPreference)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [isClaudeStreaming, setIsClaudeStreaming] = useState(false)
+  const claudePanelRef = useRef<ImperativePanelHandle>(null)
+  const chatInputRef = useRef<HTMLTextAreaElement>(null)
+  const railButtonRef = useRef<HTMLButtonElement>(null)
+  const launcherButtonRef = useRef<HTMLButtonElement>(null)
+  const pendingFocusRef = useRef<'input' | 'toggle' | null>(null)
+  // The panel reports its initial layout through onExpand/onCollapse during
+  // mount. Those callbacks stay disarmed until the persisted flag is applied.
+  const panelCallbacksArmedRef = useRef(false)
+  const assistantMessageCountRef = useRef(0)
+  const claudeHidden = isNarrow ? !drawerOpen : claudeCollapsed
+
+  // Drop the pre-Layout-R saved split once so nobody keeps the 40/60 layout.
+  useEffect(() => {
+    safeRemoveItem(() => window.localStorage, STALE_PANELS_STORAGE_KEY, {
+      owner: 'preferences',
+      key: STALE_PANELS_STORAGE_KEY,
+      quiet: true,
+    })
+  }, [])
+
+  // Keep the resizable panel in step with the persisted collapsed flag. The
+  // panel remounts when the shell switches between desktop and drawer modes.
+  useEffect(() => {
+    if (isNarrow) {
+      panelCallbacksArmedRef.current = false
+      return
+    }
+    const panel = claudePanelRef.current
+    if (!panel) {
+      return
+    }
+    if (claudeCollapsed) {
+      panel.collapse()
+    } else {
+      panel.expand()
+    }
+    panelCallbacksArmedRef.current = true
+  }, [isNarrow, claudeCollapsed])
+
+  const showClaude = useCallback(() => {
+    pendingFocusRef.current = 'input'
+    if (isNarrow) {
+      setDrawerOpen(true)
+      return
+    }
+    setClaudeCollapsed(false)
+    writeCollapsedPreference(false)
+  }, [isNarrow])
+
+  const hideClaude = useCallback(() => {
+    pendingFocusRef.current = 'toggle'
+    if (isNarrow) {
+      setDrawerOpen(false)
+      return
+    }
+    setClaudeCollapsed(true)
+    writeCollapsedPreference(true)
+  }, [isNarrow])
+
+  const toggleClaude = useCallback(() => {
+    if (claudeHidden) {
+      showClaude()
+    } else {
+      hideClaude()
+    }
+  }, [claudeHidden, showClaude, hideClaude])
+
+  // Drag-to-collapse and drag-to-expand on the resize handle.
+  const handlePanelCollapse = useCallback(() => {
+    if (!panelCallbacksArmedRef.current) {
+      return
+    }
+    setClaudeCollapsed(true)
+    writeCollapsedPreference(true)
+  }, [])
+
+  const handlePanelExpand = useCallback(() => {
+    if (!panelCallbacksArmedRef.current) {
+      return
+    }
+    setClaudeCollapsed(false)
+    writeCollapsedPreference(false)
+  }, [])
+
+  // Ctrl+. / Cmd+. toggles Claude from anywhere on the page.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== '.' || !(event.ctrlKey || event.metaKey) || event.altKey) {
+        return
+      }
+      event.preventDefault()
+      toggleClaude()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [toggleClaude])
+
+  // Focus moves to the chat input on show and back to the toggle on hide.
+  useEffect(() => {
+    const pending = pendingFocusRef.current
+    if (!pending) {
+      return
+    }
+    pendingFocusRef.current = null
+    if (pending === 'input' && !claudeHidden) {
+      chatInputRef.current?.focus()
+    } else if (pending === 'toggle' && claudeHidden) {
+      const toggle = isNarrow ? launcherButtonRef.current : railButtonRef.current
+      toggle?.focus()
+    }
+  }, [claudeHidden, isNarrow])
+
+  // Unread tracking: assistant messages appended while Claude is hidden.
+  useEffect(() => {
+    const assistantCount = opusConversation.filter((message) => message.role === 'assistant').length
+    const previousCount = assistantMessageCountRef.current
+    assistantMessageCountRef.current = assistantCount
+    if (claudeHidden && assistantCount > previousCount) {
+      setUnreadCount((current) => current + (assistantCount - previousCount))
+    }
+  }, [opusConversation, claudeHidden])
+
+  useEffect(() => {
+    if (!claudeHidden) {
+      setUnreadCount(0)
+    }
+  }, [claudeHidden])
 
   useEffect(() => {
     searchParamsRef.current = searchParams
@@ -491,6 +697,28 @@ Agent ID: ${agentId}`
     setSearchParams(nextSearchParams, { replace: true })
   }, [setSearchParams])
 
+  const chatElement = (variant: 'panel' | 'drawer', panelId: string) => (
+    <OpusChat
+      context={chatContext}
+      initialConversation={seededConversation}
+      durableSessionId={effectiveDurableSessionId}
+      sourceSessionId={transcriptSourceSessionId}
+      selectedAgent={selectedAgentForChat}
+      verifyMessage={verifyMessage}
+      onVerifyMessageSent={handleVerifyMessageSent}
+      discussMessage={discussMessage}
+      onDiscussMessageSent={handleDiscussMessageSent}
+      onDurableSessionIdChange={handleDurableSessionIdChange}
+      onConversationSnapshotChange={setOpusConversation}
+      onApplyWorkshopPromptUpdate={handleApplyWorkshopPromptUpdate}
+      variant={variant}
+      panelId={panelId}
+      onHide={hideClaude}
+      inputRef={chatInputRef}
+      onStreamingChange={setIsClaudeStreaming}
+    />
+  )
+
   if (error || durableTranscriptError) {
     return (
       <Box sx={{ p: 3 }}>
@@ -520,35 +748,13 @@ Agent ID: ${agentId}`
 
       <PanelGroup
         direction="horizontal"
-        autoSaveId="agent-studio-panels"
-        style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden' }}
+        autoSaveId={AGENT_STUDIO_PANELS_AUTOSAVE_ID}
+        style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', overflow: 'hidden' }}
       >
-        {/* Left Panel: Opus Chat */}
-        <Panel defaultSize={40} minSize={25} maxSize={60}>
-          <PanelSection sx={{ pr: 1 }}>
-            <OpusChat
-              context={chatContext}
-              initialConversation={seededConversation}
-              durableSessionId={effectiveDurableSessionId}
-              sourceSessionId={transcriptSourceSessionId}
-              selectedAgent={selectedAgentForChat}
-              verifyMessage={verifyMessage}
-              onVerifyMessageSent={handleVerifyMessageSent}
-              discussMessage={discussMessage}
-              onDiscussMessageSent={handleDiscussMessageSent}
-              onDurableSessionIdChange={handleDurableSessionIdChange}
-              onConversationSnapshotChange={setOpusConversation}
-              onApplyWorkshopPromptUpdate={handleApplyWorkshopPromptUpdate}
-            />
-          </PanelSection>
-        </Panel>
-
-        <ResizeHandle />
-
-        {/* Right Panel: Tabbed Interface */}
-        <Panel defaultSize={60} minSize={40} maxSize={75}>
-          <PanelSection sx={{ pl: 1 }}>
-            <RightPanelContainer>
+        {/* Work surface: tabbed interface */}
+        <Panel id="work" order={1} defaultSize={70} minSize={50}>
+          <PanelCard>
+            <TabBar>
               <StyledTabs
                 value={activeTab}
                 onChange={handleTabChange}
@@ -573,43 +779,138 @@ Agent ID: ${agentId}`
                   iconPosition="start"
                 />
               </StyledTabs>
+              {isNarrow && (
+                <>
+                  <Badge
+                    variant="dot"
+                    color="warning"
+                    invisible={unreadCount === 0}
+                    sx={{
+                      '& .MuiBadge-badge': {
+                        width: 8,
+                        height: 8,
+                        minWidth: 8,
+                        border: '2px solid',
+                        borderColor: 'background.paper',
+                      },
+                    }}
+                  >
+                    <Button
+                      ref={launcherButtonRef}
+                      variant="outlined"
+                      size="small"
+                      startIcon={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
+                      aria-expanded={drawerOpen}
+                      aria-controls={CLAUDE_DRAWER_ID}
+                      aria-describedby={unreadCount > 0 ? LAUNCHER_UNREAD_DESCRIPTION_ID : undefined}
+                      onClick={toggleClaude}
+                      sx={{
+                        height: 28,
+                        textTransform: 'none',
+                        fontSize: '0.8rem',
+                        '&:focus-visible': {
+                          outline: '2px solid',
+                          outlineColor: 'primary.main',
+                          outlineOffset: 1,
+                        },
+                      }}
+                    >
+                      Claude
+                    </Button>
+                  </Badge>
+                  {unreadCount > 0 && (
+                    <VisuallyHidden id={LAUNCHER_UNREAD_DESCRIPTION_ID}>
+                      {formatUnreadDescription(unreadCount)}
+                    </VisuallyHidden>
+                  )}
+                </>
+              )}
+            </TabBar>
 
-              <TabContent>
-                {activeTab === 'agents' && catalog && (
-                  <AgentBrowser
-                    catalog={catalog}
-                    selectedAgentId={selectedAgentId}
-                    selectedGroupId={selectedGroupId}
-                    onAgentSelect={handleAgentSelect}
-                    onGroupSelect={handleGroupSelect}
-                    onDiscussWithClaude={handleDiscussWithClaude}
-                    onCloneToWorkshop={handleCloneToWorkshop}
-                  />
-                )}
-                {activeTab === 'flows' && (
-                  <FlowBuilder
-                    flowId={currentFlowId}
-                    onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
-                    onFlowChange={handleFlowChange}
-                    onVerifyRequest={handleVerifyRequest}
-                  />
-                )}
-                {activeTab === 'agent_workshop' && catalog && (
-                  <PromptWorkshop
-                    catalog={catalog}
-                    initialParentAgentId={agentWorkshopTemplateSource}
-                    initialCustomAgentId={agentWorkshopCustomAgentId}
-                    onContextChange={setAgentWorkshopContext}
-                    onVerifyRequest={handleWorkshopVerifyRequest}
-                    opusConversation={opusConversation}
-                    incomingPromptUpdate={workshopPromptUpdateRequest}
-                  />
-                )}
-              </TabContent>
-            </RightPanelContainer>
-          </PanelSection>
+            <TabContent>
+              {activeTab === 'agents' && catalog && (
+                <AgentBrowser
+                  catalog={catalog}
+                  selectedAgentId={selectedAgentId}
+                  selectedGroupId={selectedGroupId}
+                  onAgentSelect={handleAgentSelect}
+                  onGroupSelect={handleGroupSelect}
+                  onDiscussWithClaude={handleDiscussWithClaude}
+                  onCloneToWorkshop={handleCloneToWorkshop}
+                />
+              )}
+              {activeTab === 'flows' && (
+                <FlowBuilder
+                  flowId={currentFlowId}
+                  onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
+                  onFlowChange={handleFlowChange}
+                  onVerifyRequest={handleVerifyRequest}
+                />
+              )}
+              {activeTab === 'agent_workshop' && catalog && (
+                <PromptWorkshop
+                  catalog={catalog}
+                  initialParentAgentId={agentWorkshopTemplateSource}
+                  initialCustomAgentId={agentWorkshopCustomAgentId}
+                  onContextChange={setAgentWorkshopContext}
+                  onVerifyRequest={handleWorkshopVerifyRequest}
+                  opusConversation={opusConversation}
+                  incomingPromptUpdate={workshopPromptUpdateRequest}
+                />
+              )}
+            </TabContent>
+          </PanelCard>
         </Panel>
+
+        {!isNarrow && (
+          <>
+            <ResizeHandle collapsed={claudeCollapsed} />
+
+            {/* Claude copilot pane */}
+            <Panel
+              id="claude"
+              order={2}
+              ref={claudePanelRef}
+              defaultSize={30}
+              minSize={22}
+              maxSize={50}
+              collapsible
+              collapsedSize={0}
+              onCollapse={handlePanelCollapse}
+              onExpand={handlePanelExpand}
+            >
+              <ClaudePanelSection
+                id={CLAUDE_PANEL_ID}
+                collapsed={claudeCollapsed}
+                aria-hidden={claudeCollapsed ? 'true' : undefined}
+              >
+                {chatElement('panel', CLAUDE_PANEL_ID)}
+              </ClaudePanelSection>
+            </Panel>
+          </>
+        )}
       </PanelGroup>
+
+      {!isNarrow && claudeCollapsed && (
+        <ClaudeRail
+          ref={railButtonRef}
+          panelId={CLAUDE_PANEL_ID}
+          unreadCount={unreadCount}
+          isStreaming={isClaudeStreaming}
+          onShow={showClaude}
+        />
+      )}
+
+      {isNarrow && (
+        <ClaudeDrawer
+          id={CLAUDE_DRAWER_ID}
+          open={drawerOpen}
+          fullWidth={isFullWidthDrawer}
+          onClose={hideClaude}
+        >
+          {chatElement('drawer', CLAUDE_DRAWER_ID)}
+        </ClaudeDrawer>
+      )}
     </Root>
   )
 }
