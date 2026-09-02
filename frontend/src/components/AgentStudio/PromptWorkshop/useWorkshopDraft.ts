@@ -70,13 +70,10 @@ export interface WorkshopDraft {
   toolLibrary: ToolLibraryItem[]
   templateOptions: AgentTemplate[]
   groupOptions: GroupOption[]
-  workshopOptionsLoaded: boolean
   loading: boolean
 
   // Origin
   gettingStartedMode: GettingStartedMode
-  setGettingStartedMode: (mode: GettingStartedMode) => void
-  parentAgents: PromptInfo[]
   parentAgentId: string
   setParentAgentId: (agentId: string) => void
   parentAgent: PromptInfo | undefined
@@ -115,16 +112,13 @@ export interface WorkshopDraft {
   selectedModelReasoning: string
   setSelectedModelReasoning: (value: string) => void
   selectedToolIds: string[]
-  toggleTool: (toolKey: string) => void
   removeTool: (toolKey: string) => void
   applyToolSelection: (toolIds: string[]) => void
 
   // Groups
-  groupId: string
   setGroupId: (value: string) => void
   availableGroupIds: string[]
   selectedGroupId: string
-  selectedGroupBasePrompt: string
   selectedGroupPrompt: string
   hasSelectedGroupOverride: boolean
   handleSelectedGroupPromptChange: (value: string) => void
@@ -143,7 +137,6 @@ export interface WorkshopDraft {
   overlayWarning: string
 
   // Model
-  defaultModelId: string
   selectedModelOption: ModelOption | null
   selectedModelReasoningDescription: string
 
@@ -151,7 +144,6 @@ export interface WorkshopDraft {
   domainEnvelopeAgentId: string
 
   // Tools
-  toolPolicyByKey: Map<string, ToolLibraryItem>
   toolIdeaRequests: ToolIdeaRequest[]
   toolIdeasLoading: boolean
   submitToolIdea: (title: string, description: string, conversation: ToolIdeaConversationEntry[]) => Promise<boolean>
@@ -1138,14 +1130,6 @@ export function useWorkshopDraft({
     setCustomPrompt(parentBasePrompt)
   }, [parentBasePrompt])
 
-  const toggleTool = useCallback((toolKey: string) => {
-    const policy = toolPolicyByKey.get(toolKey)
-    if (policy && !policy.allow_attach) return
-    setSelectedToolIds((prev) => (
-      prev.includes(toolKey) ? prev.filter((existing) => existing !== toolKey) : [...prev, toolKey]
-    ))
-  }, [toolPolicyByKey])
-
   const removeTool = useCallback((toolKey: string) => {
     setSelectedToolIds((prev) => prev.filter((existing) => existing !== toolKey))
   }, [])
@@ -1204,12 +1188,9 @@ export function useWorkshopDraft({
     toolLibrary,
     templateOptions,
     groupOptions,
-    workshopOptionsLoaded,
     loading,
 
     gettingStartedMode,
-    setGettingStartedMode,
-    parentAgents,
     parentAgentId,
     setParentAgentId,
     parentAgent,
@@ -1246,15 +1227,12 @@ export function useWorkshopDraft({
     selectedModelReasoning,
     setSelectedModelReasoning,
     selectedToolIds,
-    toggleTool,
     removeTool,
     applyToolSelection,
 
-    groupId,
     setGroupId,
     availableGroupIds,
     selectedGroupId,
-    selectedGroupBasePrompt,
     selectedGroupPrompt,
     hasSelectedGroupOverride,
     handleSelectedGroupPromptChange,
@@ -1271,13 +1249,11 @@ export function useWorkshopDraft({
     overlayStatus,
     overlayWarning,
 
-    defaultModelId,
     selectedModelOption,
     selectedModelReasoningDescription,
 
     domainEnvelopeAgentId,
 
-    toolPolicyByKey,
     toolIdeaRequests,
     toolIdeasLoading,
     submitToolIdea,
