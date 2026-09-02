@@ -35,7 +35,7 @@ findings, and domain-pack policy.
 
 Browse the instructions given to each AI agent and chat with Opus about them.
 
-**Agent Browser (Right Panel)**
+**Agent Browser (Left Panel)**
 
 See all agent prompts organized by subcategory:
 - **System** - Supervisor Agent that routes your queries to specialists (internal, not available in Flow Builder)
@@ -102,7 +102,7 @@ This helps you understand exactly what capabilities each agent has and how they 
 
 Build visual curation workflows and chat with Opus about them. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide to building flows.
 
-**Flow Builder (Right Panel)**
+**Flow Builder (Left Panel)**
 
 Create workflows by dragging agents onto a canvas and connecting them:
 - 15 available agents from extraction to file output
@@ -240,7 +240,7 @@ Custom agents appear in the Flow Builder palette under "My Custom Agents". You c
 
 **Discuss with Claude**
 
-Click the **"Discuss with Claude"** button in the Workshop toolbar to send your current draft prompt to Opus for review. When the Agent Workshop tab is active, the left-panel chat is aware of your workshop context — your selected template source, draft prompt, and group settings. You can ask Claude to:
+Click the **"Discuss with Claude"** button in the Workshop toolbar to send your current draft prompt to Opus for review. When the Agent Workshop tab is active, the right-panel chat is aware of your workshop context — your selected template source, draft prompt, and group settings. You can ask Claude to:
 - "Critique this draft and suggest concrete edits"
 - "Help me restructure this prompt for clarity"
 - "What would happen if I changed this instruction?"
