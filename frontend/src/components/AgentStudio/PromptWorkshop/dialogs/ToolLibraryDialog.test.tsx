@@ -6,9 +6,9 @@ import type { ToolLibraryItem } from '@/types/promptExplorer'
 import ToolLibraryDialog from './ToolLibraryDialog'
 
 const tools: ToolLibraryItem[] = [
-  { tool_key: 'search_document', display_name: 'Search Document', description: 'Search document sections', category: 'Document', curator_visible: true, allow_attach: true, allow_execute: true, config: {} },
-  { tool_key: 'admin_only_tool', display_name: 'Admin Tool', description: 'writes are not permitted', category: 'Admin', curator_visible: true, allow_attach: false, allow_execute: false, config: {} },
-  { tool_key: 'chebi_lookup', display_name: 'ChEBI Lookup', description: 'Chemicals', category: 'External API', curator_visible: true, allow_attach: true, allow_execute: true, config: {} },
+  { tool_key: 'search_document', display_name: 'Search Document', description: 'Search document sections', category: 'Document', curator_visible: true, allow_attach: true, allow_execute: true, config: { requires_document: true } },
+  { tool_key: 'admin_only_tool', display_name: 'Admin Tool', description: 'writes are not permitted', category: 'Admin', curator_visible: true, allow_attach: false, allow_execute: false, config: { requires_document: false } },
+  { tool_key: 'chebi_lookup', display_name: 'ChEBI Lookup', description: 'Chemicals', category: 'External API', curator_visible: true, allow_attach: true, allow_execute: true, config: { requires_document: false } },
 ]
 
 describe('ToolLibraryDialog', () => {

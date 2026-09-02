@@ -325,7 +325,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: true,
       allow_execute: true,
-      config: {},
+      config: { requires_document: true },
     },
     {
       tool_key: 'admin_only_tool',
@@ -335,7 +335,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: false,
       allow_execute: false,
-      config: {},
+      config: { requires_document: false },
     },
     {
       tool_key: 'chebi_lookup',
@@ -345,7 +345,7 @@ describe('PromptWorkshop', () => {
       curator_visible: true,
       allow_attach: true,
       allow_execute: true,
-      config: {},
+      config: { requires_document: false },
     },
   ]
 
