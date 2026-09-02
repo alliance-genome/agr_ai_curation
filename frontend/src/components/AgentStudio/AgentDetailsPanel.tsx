@@ -9,7 +9,7 @@
  * - Prompts: one prompt layer at a time with an effective view
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Alert, Box, Button, Tab, Tabs, Typography } from '@mui/material'
 import { styled } from '@mui/material/styles'
 import ChatIcon from '@mui/icons-material/Chat'
@@ -110,6 +110,8 @@ function AgentDetailsPanel({
   const [loadingCombined, setLoadingCombined] = useState(false)
   const [selectedTool, setSelectedTool] = useState<string | null>(null)
   const [toolDescriptions, setToolDescriptions] = useState<Record<string, string>>({})
+  const [toolInventoryError, setToolInventoryError] = useState<string | null>(null)
+  const [toolInventoryAttempt, setToolInventoryAttempt] = useState(0)
 
   const domainEnvelopeMetadata = agent
     ? agentMetadata[agent.agent_id]?.domain_envelope
@@ -118,9 +120,10 @@ function AgentDetailsPanel({
     ? agentMetadata[agent.agent_id]?.allowed_group_ids || []
     : []
 
-  // Tool purposes for the tools table, loaded once for the panel.
+  // Tool purposes for the tools table. Reloads when the curator retries.
   useEffect(() => {
     let cancelled = false
+    setToolInventoryError(null)
     fetchAllTools()
       .then((tools) => {
         if (cancelled) return
@@ -131,11 +134,16 @@ function AgentDetailsPanel({
         )
       })
       .catch((err) => {
-        console.error('Failed to fetch tool descriptions:', err)
+        if (cancelled) return
+        setToolInventoryError(err instanceof Error ? err.message : 'Failed to load tool inventory')
       })
     return () => {
       cancelled = true
     }
+  }, [toolInventoryAttempt])
+
+  const handleRetryToolInventory = useCallback(() => {
+    setToolInventoryAttempt((attempt) => attempt + 1)
   }, [])
 
   // Load the combined prompt for the selected group.
@@ -290,6 +298,8 @@ function AgentDetailsPanel({
             documentation={documentation}
             tools={agent.tools}
             toolDescriptions={toolDescriptions}
+            toolInventoryError={toolInventoryError}
+            onRetryToolInventory={handleRetryToolInventory}
             narrow={narrow}
             onShowToolDetails={setSelectedTool}
             onDraftGuide={handleDraftGuide}

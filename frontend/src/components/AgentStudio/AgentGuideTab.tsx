@@ -18,6 +18,8 @@ interface AgentGuideTabProps {
   documentation?: AgentDocumentation
   tools: string[]
   toolDescriptions: Record<string, string>
+  toolInventoryError?: string | null
+  onRetryToolInventory?: () => void
   narrow?: boolean
   onShowToolDetails: (toolId: string) => void
   onDraftGuide: () => void
@@ -96,6 +98,8 @@ function AgentGuideTab({
   documentation,
   tools,
   toolDescriptions,
+  toolInventoryError,
+  onRetryToolInventory,
   narrow = false,
   onShowToolDetails,
   onDraftGuide,
@@ -109,7 +113,13 @@ function AgentGuideTab({
     || capabilities.length > 0 || limitations.length > 0
 
   const toolsSection = (
-    <AgentToolsTable tools={tools} descriptions={toolDescriptions} onShowDetails={onShowToolDetails} />
+    <AgentToolsTable
+      tools={tools}
+      descriptions={toolDescriptions}
+      inventoryError={toolInventoryError}
+      onRetryInventory={onRetryToolInventory}
+      onShowDetails={onShowToolDetails}
+    />
   )
 
   if (!hasGuide) {

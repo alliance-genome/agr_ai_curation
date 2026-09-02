@@ -69,4 +69,28 @@ describe('AgentToolsTable', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show all tools' }))
     expect(screen.getByTitle(longName)).toBeInTheDocument()
   })
+
+  it('shows an explicit error with Retry when the inventory failed and does not claim missing docs', () => {
+    const onRetryInventory = vi.fn()
+    render(
+      <AgentToolsTable
+        tools={['lookup_term', 'search_db']}
+        descriptions={{}}
+        inventoryError="Failed to fetch tools: 500"
+        onRetryInventory={onRetryInventory}
+        onShowDetails={vi.fn()}
+      />
+    )
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Tool descriptions could not be loaded. Failed to fetch tools: 500')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect(onRetryInventory).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all tools' }))
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    expect(screen.getAllByText('Not loaded')).toHaveLength(2)
+    expect(screen.queryByText('No description yet')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Details for search_db' })).toBeInTheDocument()
+  })
 })

@@ -9,6 +9,7 @@
 
 import { useId, useState } from 'react'
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -32,15 +33,36 @@ interface AgentToolsTableProps {
   tools: string[]
   /** One-line purpose per tool id. Missing entries render an honest placeholder. */
   descriptions: Record<string, string>
+  /** Set when the tool inventory request failed; purposes are then unknown, not missing. */
+  inventoryError?: string | null
+  onRetryInventory?: () => void
   onShowDetails: (toolId: string) => void
 }
 
+function InventoryErrorAlert({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <Alert
+      severity="error"
+      variant="outlined"
+      sx={{ py: 0.25, '& .MuiAlert-message': { fontSize: 12.5 } }}
+      action={onRetry ? (
+        <Button color="inherit" size="small" onClick={onRetry} sx={{ textTransform: 'none' }}>
+          Retry
+        </Button>
+      ) : undefined}
+    >
+      Tool descriptions could not be loaded. {message}
+    </Alert>
+  )
+}
 
-function AgentToolsTable({ tools, descriptions, onShowDetails }: AgentToolsTableProps) {
+
+function AgentToolsTable({ tools, descriptions, inventoryError, onRetryInventory, onShowDetails }: AgentToolsTableProps) {
   const [open, setOpen] = useState(false)
   const tableId = useId()
   const count = tools.length
   const countLabel = `${count} ${count === 1 ? 'tool' : 'tools'}`
+  const errorAlert = inventoryError ? <InventoryErrorAlert message={inventoryError} onRetry={onRetryInventory} /> : null
 
   if (count === 0) {
     return (
@@ -86,6 +108,7 @@ function AgentToolsTable({ tools, descriptions, onShowDetails }: AgentToolsTable
           )}
           {toggle}
         </Box>
+        {errorAlert}
       </Box>
     )
   }
@@ -95,6 +118,7 @@ function AgentToolsTable({ tools, descriptions, onShowDetails }: AgentToolsTable
       <SectionHeading action={toggle}>
         Tools <CountPill label={countLabel}>{count}</CountPill>
       </SectionHeading>
+      {errorAlert}
       <TableContainer id={tableId} sx={{ border: 1, borderColor: 'divider', borderRadius: 2 }}>
         <Table size="small" aria-label="Tools" sx={{ tableLayout: 'fixed' }}>
           <TableHead>
@@ -107,6 +131,7 @@ function AgentToolsTable({ tools, descriptions, onShowDetails }: AgentToolsTable
           <TableBody>
             {tools.map((tool) => {
               const purpose = descriptions[tool]
+              const purposeText = purpose || (inventoryError ? 'Not loaded' : 'No description yet')
               return (
                 <TableRow key={tool}>
                   <TableCell sx={{ fontSize: 13, py: 0.75, minWidth: 0 }}>
@@ -127,7 +152,7 @@ function AgentToolsTable({ tools, descriptions, onShowDetails }: AgentToolsTable
                     </Box>
                   </TableCell>
                   <TableCell sx={{ fontSize: 13, py: 0.75, color: purpose ? 'text.secondary' : 'text.disabled' }}>
-                    {purpose || 'No description yet'}
+                    {purposeText}
                   </TableCell>
                   <TableCell sx={{ py: 0.75, textAlign: 'right' }}>
                     <Link

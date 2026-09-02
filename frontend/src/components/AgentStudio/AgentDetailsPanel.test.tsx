@@ -184,6 +184,29 @@ describe('AgentDetailsPanel', () => {
     expect(await screen.findByText('Search DB')).toBeInTheDocument()
   })
 
+  it('surfaces a tool inventory failure in the Tools section and retries on demand', async () => {
+    serviceMocks.fetchAllTools
+      .mockRejectedValueOnce(new Error('Failed to fetch tools: 500'))
+      .mockResolvedValueOnce({ lookup_term: { name: 'Lookup term', description: 'Find a term by name.' } })
+
+    render(<AgentDetailsPanel agent={buildDocumentedAgent()} selectedGroupId={null} onGroupSelect={vi.fn()} />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Tool descriptions could not be loaded. Failed to fetch tools: 500')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all tools' }))
+    expect(screen.getAllByText('Not loaded')).toHaveLength(5)
+    expect(screen.queryByText('No description yet')).not.toBeInTheDocument()
+
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+    expect(serviceMocks.fetchAllTools).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('Find a term by name.')).toBeInTheDocument()
+    expect(screen.getAllByText('No description yet')).toHaveLength(4)
+  })
+
   it('sends a drafting prompt through the discuss handoff for sparse documentation', () => {
     const onDiscuss = vi.fn()
     const sparse = { ...buildDocumentedAgent(), documentation: undefined }
