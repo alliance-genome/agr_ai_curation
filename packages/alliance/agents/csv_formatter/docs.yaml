@@ -5,5 +5,12 @@ capabilities:
     description: "Converts normalized extraction output into comma-separated tabular rows"
     example_query: "Export extracted genes and evidence as CSV"
     example_result: "Returns a downloadable CSV with one record per row"
+use_when:
+  - "At the end of a flow when you want the results as a spreadsheet file to open in Excel or Google Sheets."
+  - "When you will sort, filter, or share the results outside the chat."
+avoid_when:
+  - "When the results have nested detail you want to keep intact; use the JSON File Formatter."
+  - "When a downstream tool expects tab-separated columns; use the TSV File Formatter."
+  - "When you only want to read the results in chat; use the Chat Output Agent."
 limitations:
   - "Nested structures may be flattened for tabular compatibility"

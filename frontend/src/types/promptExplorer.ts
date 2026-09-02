@@ -29,6 +29,10 @@ export interface AgentDocumentation {
   capabilities: AgentCapability[]
   data_sources: DataSourceInfo[]
   limitations: string[]
+  // Curator-voice guidance: when this agent is the right choice
+  use_when: string[]
+  // Curator-voice guidance: when another agent is the right choice
+  avoid_when: string[]
 }
 
 // ============================================================================
