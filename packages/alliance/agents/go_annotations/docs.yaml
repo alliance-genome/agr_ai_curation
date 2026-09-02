@@ -18,9 +18,14 @@ data_sources:
     description: "Official GO API at api.geneontology.org providing gene annotations with evidence codes"
     species_supported: ["C. elegans (WB:)", "D. melanogaster (FB:)", "D. rerio (ZFIN:)", "H. sapiens (HGNC:)", "M. musculus (MGI:)", "R. norvegicus (RGD:)", "S. cerevisiae (SGD:)"]
     data_types: ["GO annotations", "evidence and ECO identifiers", "references", "relations", "With/From", "qualifiers and negation", "providers", "product types", "source provenance"]
+use_when:
+  - "When you have a confirmed gene ID and want the GO annotations already recorded for it, with evidence codes and sources."
+  - "When you are comparing a paper's findings against what is already annotated for a gene."
+  - "When you need annotations split by molecular function, biological process, and cellular component."
+avoid_when:
+  - "To search GO terms by name or keyword; use the GO Term Lookup Agent."
+  - "To browse parent and child GO terms; use the GO Term Lookup Agent."
+  - "To find which genes carry a given GO term; the agent starts from a gene, not a term."
 limitations:
   - "Gene IDs must be in Alliance format (e.g., WB:WBGene00000898, HGNC:11998)"
-  - "Cannot search for GO terms by keyword - use Gene Ontology Lookup Agent for that"
-  - "Cannot find genes by GO term (e.g., 'what genes have kinase activity')"
-  - "Cannot explore GO term hierarchy or parent/child relationships"
   - "The adapter makes one bounded request to the Gene Ontology Consortium API and does not fall back to another source"

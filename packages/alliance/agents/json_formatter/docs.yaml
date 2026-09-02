@@ -5,5 +5,11 @@ capabilities:
     description: "Preserves nested objects and arrays for downstream programmatic use"
     example_query: "Export extraction results as JSON"
     example_result: "Returns hierarchical JSON matching extracted structure"
+use_when:
+  - "At the end of a flow when you want a file that keeps every nested detail of the results."
+  - "When the results feed another program or pipeline."
+avoid_when:
+  - "When you want to open the results in a spreadsheet; use the CSV or TSV File Formatter."
+  - "When you only want to read the results in chat; use the Chat Output Agent."
 limitations:
   - "File is optimized for machine consumption over spreadsheet readability"

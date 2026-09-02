@@ -47,9 +47,15 @@ data_sources:
       - "taxon identifiers"
       - "ontology-backed condition terms"
       - "ChEBI chemical ontology terms (CHEBITerm)"
+use_when:
+  - "When a record includes an experimental condition (a treatment, temperature, chemical exposure, or diet) whose parts need checking together."
+  - "After an extractor captures conditions for a disease, phenotype, or expression annotation."
+  - "Before curation handoff, so each condition's ontology term, chemical, and units are confirmed."
+avoid_when:
+  - "To pull conditions out of a paper; run the domain extractor first."
+  - "For a single chemical or ontology term on its own; use the Chemical Ontology Agent or the Ontology Term Resolver Agent."
+  - "To judge whether the experiment itself was well designed; that judgment stays with you."
 limitations:
-  - "Validates submitted condition payloads; it does not extract experimental conditions from PDFs."
   - "Component-level ambiguity can make the overall condition require curator review."
-  - "Does not decide whether an experiment is biologically well designed or statistically sufficient."
   - "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records."
   - "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."

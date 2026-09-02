@@ -26,8 +26,14 @@ data_sources:
     description: "The phenotype term validator confirms the official term for supported WormBase (WB) and Mouse Genome Informatics (MGI) phenotypes after extraction. Phenotypes from other databases aren't supported yet, so those are set aside rather than confirmed."
     species_supported: ["C. elegans (WB)", "M. musculus (MGI)"]
     data_types: ["Phenotype labels", "Provider/taxon hints", "Validator lookup results"]
+use_when:
+  - "When you upload a paper and want the phenotypes it reports, linked to the genotype that shows them."
+  - "At the start of a phenotype curation flow, before the validators confirm the ontology terms."
+  - "When a paper describes mutant or knockdown traits and you want polarity and severity captured."
+avoid_when:
+  - "For human diseases and clinical conditions; use the Disease Extraction Agent."
+  - "To confirm the official phenotype ontology term; that is the validators' job after extraction."
+  - "When there is no uploaded paper, since it cannot work from chat text alone."
 limitations:
   - "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone"
-  - "Distinguishes phenotypes from diseases — clinical conditions are handled by the Disease Extraction Agent"
   - "Wild-type/control observations are baselines, not phenotype assertions"
-  - "The extractor proposes the trait wording only; confirming the official ontology term is the phenotype term validator's job after extraction."

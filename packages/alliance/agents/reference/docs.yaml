@@ -37,9 +37,16 @@ data_sources:
       - "MOD reference IDs"
       - "titles"
       - "citation metadata"
+use_when:
+  - "When a record cites a paper by PMID, DOI, Alliance reference ID, or MOD reference ID and you want the matching Alliance literature record."
+  - "When you only have a title or citation text and need the paper identified."
+  - "Before curation handoff, so every annotation points at a confirmed reference."
+avoid_when:
+  - "To read or summarize the paper's content; use the General PDF Extraction Agent."
+  - "To confirm the genes, alleles, or diseases the paper reports; use the matching validation agent."
+  - "To add a paper that is missing from the Alliance literature database."
 limitations:
   - "Requires an identifier, title, or citation string from upstream extraction or domain-pack input."
   - "Fuzzy title and citation searches can return multiple plausible matches."
-  - "Does not read or summarize paper content; use PDF Extraction Agent for document text."
   - "Cannot create missing literature records or correct external reference metadata."
   - "Lookup quality depends on the Alliance literature service and indexed reference metadata."

@@ -46,9 +46,16 @@ data_sources:
       - "affected genomic models"
       - "entity labels"
       - "taxon context"
+use_when:
+  - "When an annotation names its subject and states whether that subject is a gene, an allele, or a model, and you want it sent to the right check."
+  - "In domain flows where a single record can carry gene, allele, and model subjects side by side."
+  - "Before curation handoff, so each subject is confirmed and keeps the identifier and label it arrived with."
+avoid_when:
+  - "When the subject type is not stated; the agent does not guess it."
+  - "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent."
+  - "When you already know the subject is a gene, allele, or model; go straight to that validation agent."
 limitations:
   - "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM."
-  - "Does not validate references, ontology terms, controlled vocabulary terms, or experimental conditions."
   - "Ambiguous or missing type-specific lookup results still require curator review."
   - "Cannot create missing subject records or assign new entity identifiers."
   - "Only routes among the supported subject validation paths exposed by the package."

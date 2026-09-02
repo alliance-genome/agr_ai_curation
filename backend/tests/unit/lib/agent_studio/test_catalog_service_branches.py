@@ -39,6 +39,62 @@ def test_prompt_key_and_documentation_conversion_branches(monkeypatch):
     assert doc.capabilities[0].name == "cap"
     assert doc.data_sources[0].name == "AGR"
     assert doc.limitations == ["limit-1"]
+    assert doc.use_when == []
+    assert doc.avoid_when == []
+
+
+def test_convert_documentation_parses_use_when_and_avoid_when():
+    doc = catalog_service._convert_documentation(
+        {
+            "summary": "Summary",
+            "use_when": ["After an extractor names a disease."],
+            "avoid_when": ["For gene to disease links; use the Gene Specialist."],
+            "limitations": ["Does not walk the disease hierarchy."],
+        }
+    )
+    assert doc is not None
+    assert doc.use_when == ["After an extractor names a disease."]
+    assert doc.avoid_when == ["For gene to disease links; use the Gene Specialist."]
+    assert doc.limitations == ["Does not walk the disease hierarchy."]
+
+
+def test_convert_documentation_with_only_use_when():
+    doc = catalog_service._convert_documentation(
+        {"summary": "Summary", "use_when": ["Before curation handoff."]}
+    )
+    assert doc is not None
+    assert doc.use_when == ["Before curation handoff."]
+    assert doc.avoid_when == []
+
+
+def test_convert_documentation_payload_shape_includes_guidance_keys():
+    doc = catalog_service._convert_documentation(
+        {
+            "summary": "Summary",
+            "use_when": ["When a paper names a chemical."],
+            "avoid_when": ["For drug targets."],
+        }
+    )
+    assert doc is not None
+    payload = doc.model_dump()
+    assert payload == {
+        "summary": "Summary",
+        "capabilities": [],
+        "data_sources": [],
+        "limitations": [],
+        "use_when": ["When a paper names a chemical."],
+        "avoid_when": ["For drug targets."],
+    }
+
+
+@pytest.mark.parametrize("key", ["use_when", "avoid_when"])
+def test_convert_documentation_rejects_non_list_guidance(key):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        catalog_service._convert_documentation(
+            {"summary": "Summary", key: "not a list"}
+        )
 
 
 def test_get_tool_registry_propagates_package_tool_instantiation_errors(monkeypatch):

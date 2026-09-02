@@ -42,6 +42,38 @@ def test_docs_yaml_populates_documentation(tmp_path):
     assert doc["capabilities"][0]["name"] == "Gene lookup"
 
 
+def test_docs_yaml_use_when_and_avoid_when_reach_documentation(tmp_path):
+    _write_agent_bundle(
+        tmp_path,
+        "disease",
+        agent_yaml="""
+            agent_id: disease_validation
+            name: "Disease Validation Agent"
+            model_config:
+              model: "gpt-5.5"
+        """,
+        docs_yaml="""
+            summary: "Confirms disease names against the Disease Ontology."
+            use_when:
+              - "After any extractor that names a disease."
+            avoid_when:
+              - "For gene to disease associations; use the Gene Specialist."
+            limitations:
+              - "Does not walk up or down the disease hierarchy."
+        """,
+    )
+    reset_cache()
+    agents = load_agent_definitions(agents_path=tmp_path, force_reload=True)
+    reset_cache()
+
+    doc = agents["disease_validation"].documentation
+    assert doc["use_when"] == ["After any extractor that names a disease."]
+    assert doc["avoid_when"] == [
+        "For gene to disease associations; use the Gene Specialist."
+    ]
+    assert doc["limitations"] == ["Does not walk up or down the disease hierarchy."]
+
+
 def test_inline_documentation_and_docs_yaml_conflict_raises(tmp_path):
     _write_agent_bundle(
         tmp_path,

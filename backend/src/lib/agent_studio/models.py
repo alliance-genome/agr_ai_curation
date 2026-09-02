@@ -3,7 +3,7 @@ Pydantic models for Prompt Explorer feature.
 
 Defines data structures for:
 - Agent prompt metadata (base prompts, group rules)
-- Agent documentation (capabilities, data sources, limitations)
+- Agent documentation (capabilities, data sources, limitations, usage guidance)
 - Chat messages for Opus conversations
 - Trace context for execution history
 """
@@ -48,6 +48,14 @@ class AgentDocumentation(BaseModel):
     )
     limitations: List[str] = Field(
         default_factory=list, description="Known limitations as simple strings"
+    )
+    use_when: List[str] = Field(
+        default_factory=list,
+        description="Curator-voice situations where this agent is the right choice",
+    )
+    avoid_when: List[str] = Field(
+        default_factory=list,
+        description="Curator-voice situations where another agent is the right choice",
     )
 
 

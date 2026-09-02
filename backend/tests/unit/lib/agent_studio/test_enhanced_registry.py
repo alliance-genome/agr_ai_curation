@@ -119,9 +119,13 @@ class TestEnhancedRegistry:
             assert documentation.get("data_sources"), (
                 f"{agent_id}: missing data sources"
             )
-            assert len(documentation.get("limitations", [])) >= 4, (
-                f"{agent_id}: expected at least four guidance limitations"
+            assert documentation.get("limitations"), (
+                f"{agent_id}: expected at least one true limitation"
             )
+            for guidance_key in ("use_when", "avoid_when"):
+                assert len(documentation.get(guidance_key, [])) >= 2, (
+                    f"{agent_id}: expected at least two '{guidance_key}' entries"
+                )
 
     def test_agent_browser_documentation_omits_retired_ontology_mapping_copy(self):
         """Agent Browser docs should reference typed ontology resolution only."""

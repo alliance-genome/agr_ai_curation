@@ -29,7 +29,13 @@ data_sources:
       QuickGO term and hierarchy endpoints with retained provenance.
     species_supported: ["R. norvegicus (RGD)"]
     data_types: ["Gene-product identity", "Existing GO annotations", "GO terms", "GO hierarchy"]
+use_when:
+  - "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it."
+  - "When you want a paper's findings compared against the GO annotations already recorded for its genes."
+avoid_when:
+  - "For curators outside RGD; the agent works only in the RGD group."
+  - "For GO term definitions or hierarchy on their own; use the GO Term Lookup Agent."
+  - "To submit or export GO annotations; the output is for review only."
 limitations:
-  - Introduction and Discussion are excluded as sole recommendation evidence.
-  - Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE.
-  - Review-only output; GO submission and export are unsupported.
+  - "Introduction and Discussion are excluded as sole recommendation evidence."
+  - "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE."

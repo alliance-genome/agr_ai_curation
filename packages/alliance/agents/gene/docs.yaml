@@ -21,6 +21,14 @@ data_sources:
       - "R. norvegicus"
       - "S. cerevisiae"
     data_types: ["genes", "symbols", "synonyms", "cross-references"]
+use_when:
+  - "After the Gene Extraction Agent proposes genes from a paper and each one needs a confirmed Alliance record."
+  - "When you have a gene symbol, name, or ID and want to confirm it exists and get its Alliance identifier."
+  - "Before an ortholog lookup, which needs a confirmed gene ID."
+avoid_when:
+  - "For alleles or variants; use the Allele Validation Agent."
+  - "For diseases, chemicals, or ontology terms; use the matching validation agent."
+  - "To find the genes a paper studies; run the Gene Extraction Agent first."
 limitations:
   - "Only validates against Alliance group data"
   - "Some newly published genes may not be in the database yet"

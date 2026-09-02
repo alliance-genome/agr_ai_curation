@@ -1,5 +1,10 @@
 {
   "agm": {
+    "avoid_when": [
+      "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent.",
+      "When the subject type is not yet known; use the Subject Entity Validation Agent to route it.",
+      "To pull model names out of a paper; run an extractor first and validate its output here."
+    ],
     "capabilities": [
       {
         "description": "Checks supplied affected genomic model identifiers against Alliance curation records.\n",
@@ -45,13 +50,22 @@
     "limitations": [
       "Cannot infer an AGM from paper text; it validates values supplied by extraction output or domain-pack validation inputs.",
       "Ambiguous model labels require provider or taxon context for reliable resolution.",
-      "Does not validate gene or allele subjects; use Subject Entity Validation Agent or the type-specific validation agent instead.",
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n"
+    "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
+    "use_when": [
+      "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
+      "When a paper's subject is a model (a strain, genotype, or fish line) rather than a single gene or allele.",
+      "Before curation handoff, so each model subject carries a confirmed Alliance identifier."
+    ]
   },
   "agm_validation": {
+    "avoid_when": [
+      "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent.",
+      "When the subject type is not yet known; use the Subject Entity Validation Agent to route it.",
+      "To pull model names out of a paper; run an extractor first and validate its output here."
+    ],
     "capabilities": [
       {
         "description": "Checks supplied affected genomic model identifiers against Alliance curation records.\n",
@@ -97,13 +111,22 @@
     "limitations": [
       "Cannot infer an AGM from paper text; it validates values supplied by extraction output or domain-pack validation inputs.",
       "Ambiguous model labels require provider or taxon context for reliable resolution.",
-      "Does not validate gene or allele subjects; use Subject Entity Validation Agent or the type-specific validation agent instead.",
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n"
+    "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
+    "use_when": [
+      "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
+      "When a paper's subject is a model (a strain, genotype, or fish line) rather than a single gene or allele.",
+      "Before curation handoff, so each model subject carries a confirmed Alliance identifier."
+    ]
   },
   "allele_extractor": {
+    "avoid_when": [
+      "To confirm an allele against the Alliance database; use the Allele Validation Agent.",
+      "For genes, diseases, or phenotypes; use the matching extraction agent.",
+      "When there is no uploaded paper, since it cannot work from chat text alone."
+    ],
     "capabilities": [
       {
         "description": "Scans the whole paper for allele symbols, variant notations (including HGVS, the standard way of writing sequence variants), and genotype descriptions.",
@@ -164,12 +187,21 @@
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract alleles from chat text alone",
       "Transgene handling follows organism-specific rules: MGI retains stable inherited Cre-driver, reporter, and other transgenic lines as alleles, while transient expression and unlinked construct/reagent mentions are excluded",
-      "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles",
-      "Confirming each allele against the Alliance database is the Allele Validation Agent's job; any unconfirmed or conflicting alleles stay visible to you as validator findings."
+      "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles"
     ],
-    "summary": "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers."
+    "summary": "Extracts experimentally supported allele and variant mentions from uploaded PDFs, distinguishing alleles from strains, transgenes, and balancers.",
+    "use_when": [
+      "When you upload a paper and want the alleles and variants it studies, with the quote that supports each one.",
+      "At the start of an allele curation flow, before the Allele Validation Agent confirms each allele.",
+      "When a paper mixes alleles with strains, transgenes, and balancers and you want them sorted."
+    ]
   },
   "allele_validation": {
+    "avoid_when": [
+      "For genes; use the Gene Validation Agent.",
+      "For diseases or phenotypes; use the Disease Ontology Agent or the phenotype validators.",
+      "To find the alleles a paper studies; run the Allele/Variant Extraction Agent first."
+    ],
     "capabilities": [
       {
         "description": "Search for alleles by symbol \u2014 partial symbols, synonyms, and any capitalization all work.",
@@ -221,13 +253,21 @@
     ],
     "limitations": [
       "Only validates against Alliance group data - newly published alleles may not be in the database yet",
-      "Searches alleles only - genes, diseases, and phenotypes are handled by separate agents",
       "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
       "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
-    "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association."
+    "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
+    "use_when": [
+      "After the Allele/Variant Extraction Agent proposes alleles from a paper and each one needs a confirmed Alliance record.",
+      "When you have an allele symbol or ID and want to confirm it exists and see the gene it belongs to.",
+      "When you need to check a whole list of alleles at once."
+    ]
   },
   "chat_output": {
+    "avoid_when": [
+      "When you need a file to download or share; use the CSV, TSV, or JSON File Formatter.",
+      "For large result sets that are easier to review in a spreadsheet."
+    ],
     "capabilities": [
       {
         "description": "Presents structured extraction output in readable chat-first format",
@@ -240,9 +280,17 @@
     "limitations": [
       "Output is optimized for interactive reading, not file export"
     ],
-    "summary": "Formats and displays final results directly in the chat interface for immediate curator review."
+    "summary": "Formats and displays final results directly in the chat interface for immediate curator review.",
+    "use_when": [
+      "At the end of a flow when you want to read the results in the chat window right away.",
+      "For quick checks and small result sets that do not need a file."
+    ]
   },
   "chat_output_formatter": {
+    "avoid_when": [
+      "When you need a file to download or share; use the CSV, TSV, or JSON File Formatter.",
+      "For large result sets that are easier to review in a spreadsheet."
+    ],
     "capabilities": [
       {
         "description": "Presents structured extraction output in readable chat-first format",
@@ -255,9 +303,18 @@
     "limitations": [
       "Output is optimized for interactive reading, not file export"
     ],
-    "summary": "Formats and displays final results directly in the chat interface for immediate curator review."
+    "summary": "Formats and displays final results directly in the chat interface for immediate curator review.",
+    "use_when": [
+      "At the end of a flow when you want to read the results in the chat window right away.",
+      "For quick checks and small result sets that do not need a file."
+    ]
   },
   "chemical_validation": {
+    "avoid_when": [
+      "For chemical to gene interactions, drug targets, or mechanisms of action, which ChEBI does not record.",
+      "For pathway information, which ChEBI does not cover.",
+      "For anatomy, life stage, or other non-chemical ontology terms; use the Ontology Term Resolver Agent."
+    ],
     "capabilities": [
       {
         "description": "Search for a chemical by name and get its ChEBI ID. Handles partial names and synonyms, so you don't need the exact official spelling.",
@@ -300,15 +357,22 @@
       }
     ],
     "limitations": [
-      "Cannot provide chemical-gene interactions (requires gene specialist agent)",
-      "Cannot provide drug targets or mechanisms of action",
-      "Cannot provide pathway information (pathways not in ChEBI)",
       "Multiple results for common names (e.g., 'glucose' matches many stereoisomers) - selects most biologically relevant form",
       "Every answer comes from a fresh, live lookup against ChEBI \u2014 it never answers from memory."
     ],
-    "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation."
+    "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation.",
+    "use_when": [
+      "After an extractor names a chemical, drug, or treatment compound that needs an official ChEBI term and ID.",
+      "When you have a compound name or synonym and want its ChEBI record, formula, and parent classes.",
+      "Before curation handoff, so chemical annotations and experimental conditions carry confirmed ChEBI IDs."
+    ]
   },
   "controlled_vocabulary": {
+    "avoid_when": [
+      "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent.",
+      "For genes, alleles, or diseases; use the matching validation agent.",
+      "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
+    ],
     "capabilities": [
       {
         "description": "Checks a submitted term name against a specific Alliance controlled vocabulary.\n",
@@ -345,14 +409,23 @@
     ],
     "limitations": [
       "Requires the target vocabulary name or field context to avoid cross-vocabulary ambiguity.",
-      "Does not validate ontology identities; use Ontology Term Resolver Agent for ontology CURIEs or typed ontology labels.",
       "Cannot decide biological correctness of a term choice outside the submitted field context.",
       "Cannot create or update controlled vocabulary rows.",
       "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
     ],
-    "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n"
+    "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n",
+    "use_when": [
+      "When a curation field takes a fixed pick-list value (for example an evidence code, relation, or qualifier) and the term must match the Alliance list exactly.",
+      "After an extractor supplies an abbreviation or synonym and you want the official term name and its status.",
+      "Before curation handoff, so no submitted term is obsolete or misspelled."
+    ]
   },
   "controlled_vocabulary_validation": {
+    "avoid_when": [
+      "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent.",
+      "For genes, alleles, or diseases; use the matching validation agent.",
+      "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
+    ],
     "capabilities": [
       {
         "description": "Checks a submitted term name against a specific Alliance controlled vocabulary.\n",
@@ -389,14 +462,23 @@
     ],
     "limitations": [
       "Requires the target vocabulary name or field context to avoid cross-vocabulary ambiguity.",
-      "Does not validate ontology identities; use Ontology Term Resolver Agent for ontology CURIEs or typed ontology labels.",
       "Cannot decide biological correctness of a term choice outside the submitted field context.",
       "Cannot create or update controlled vocabulary rows.",
       "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
     ],
-    "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n"
+    "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n",
+    "use_when": [
+      "When a curation field takes a fixed pick-list value (for example an evidence code, relation, or qualifier) and the term must match the Alliance list exactly.",
+      "After an extractor supplies an abbreviation or synonym and you want the official term name and its status.",
+      "Before curation handoff, so no submitted term is obsolete or misspelled."
+    ]
   },
   "csv_formatter": {
+    "avoid_when": [
+      "When the results have nested detail you want to keep intact; use the JSON File Formatter.",
+      "When a downstream tool expects tab-separated columns; use the TSV File Formatter.",
+      "When you only want to read the results in chat; use the Chat Output Agent."
+    ],
     "capabilities": [
       {
         "description": "Converts normalized extraction output into comma-separated tabular rows",
@@ -409,9 +491,14 @@
     "limitations": [
       "Nested structures may be flattened for tabular compatibility"
     ],
-    "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows."
+    "summary": "Formats structured extraction results as a downloadable CSV file for spreadsheet workflows.",
+    "use_when": [
+      "At the end of a flow when you want the results as a spreadsheet file to open in Excel or Google Sheets.",
+      "When you will sort, filter, or share the results outside the chat."
+    ]
   },
   "curation_handoff": {
+    "avoid_when": [],
     "capabilities": [
       {
         "description": "Turns prior extraction output into one or more curator-owned review sessions.",
@@ -438,9 +525,11 @@
       "Does not replace curator review, approval, or final submission",
       "Runs as a flow or batch terminal step rather than a standalone chat specialist"
     ],
-    "summary": "Creates curator review sessions from completed flow or batch extraction results."
+    "summary": "Creates curator review sessions from completed flow or batch extraction results.",
+    "use_when": []
   },
   "curation_prep": {
+    "avoid_when": [],
     "capabilities": [
       {
         "description": "Pulls together what the earlier agents extracted, what you confirmed was in scope, and the supporting quotes, into one review package.",
@@ -474,9 +563,15 @@
       "Does not replace curator review or approval; it prepares the review session but does not submit final curation",
       "The later automated steps still handle matching items to official records and saving them."
     ],
-    "summary": "Gathers everything the earlier agents found, checks that each item is complete and well-formed, and opens a ready-to-review session for you \u2014 keeping the supporting quotes attached to every item."
+    "summary": "Gathers everything the earlier agents found, checks that each item is complete and well-formed, and opens a ready-to-review session for you \u2014 keeping the supporting quotes attached to every item.",
+    "use_when": []
   },
   "data_provider": {
+    "avoid_when": [
+      "To confirm gene, allele, or model identifiers; use the validation agent for that entity type.",
+      "For paper and citation lookups; use the Reference Validation Agent.",
+      "For pick-list terms or ontology terms; use the Controlled Vocabulary Validation Agent or the Ontology Term Resolver Agent."
+    ],
     "capabilities": [
       {
         "description": "Checks whether a submitted data provider abbreviation exists in Alliance curation data.\n",
@@ -522,13 +617,22 @@
     "limitations": [
       "Requires a provider abbreviation, provider name, or taxon context from upstream data.",
       "Does not infer data provider ownership from paper affiliation or author text.",
-      "Cannot validate entity identifiers owned by the provider; use the relevant entity validation agent.",
       "Cannot create new provider records or taxon relationships.",
       "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
     ],
-    "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n"
+    "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n",
+    "use_when": [
+      "When a record names a data provider (for example a MOD abbreviation) and you want to confirm it is a recognized Alliance provider.",
+      "When you need to check that a provider matches the species in the record.",
+      "Before curation handoff, so every record carries a valid provider."
+    ]
   },
   "data_provider_validation": {
+    "avoid_when": [
+      "To confirm gene, allele, or model identifiers; use the validation agent for that entity type.",
+      "For paper and citation lookups; use the Reference Validation Agent.",
+      "For pick-list terms or ontology terms; use the Controlled Vocabulary Validation Agent or the Ontology Term Resolver Agent."
+    ],
     "capabilities": [
       {
         "description": "Checks whether a submitted data provider abbreviation exists in Alliance curation data.\n",
@@ -574,13 +678,22 @@
     "limitations": [
       "Requires a provider abbreviation, provider name, or taxon context from upstream data.",
       "Does not infer data provider ownership from paper affiliation or author text.",
-      "Cannot validate entity identifiers owned by the provider; use the relevant entity validation agent.",
       "Cannot create new provider records or taxon relationships.",
       "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
     ],
-    "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n"
+    "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n",
+    "use_when": [
+      "When a record names a data provider (for example a MOD abbreviation) and you want to confirm it is a recognized Alliance provider.",
+      "When you need to check that a provider matches the species in the record.",
+      "Before curation handoff, so every record carries a valid provider."
+    ]
   },
   "disease_extractor": {
+    "avoid_when": [
+      "To look a disease up in the Disease Ontology; use the Disease Ontology Agent.",
+      "For observable traits in model organisms; those are phenotypes, so use the Phenotype Extraction Agent.",
+      "When there is no uploaded paper, since it cannot work from chat text alone."
+    ],
     "capabilities": [
       {
         "description": "Scans the paper for disease names, condition descriptions, and disease model references across all sections",
@@ -633,12 +746,22 @@
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract diseases from chat text alone",
       "Distinguishes diseases from phenotypes \u2014 observable traits in model organisms are phenotypes, not diseases",
-      "Diseases mentioned only in introduction/background without new experimental findings are excluded",
-      "Looking each disease up in the Disease Ontology and confirming the provider is the Disease Validation Agent's job; any unconfirmed or conflicting diseases stay visible to you as validator findings."
+      "Diseases mentioned only in introduction/background without new experimental findings are excluded"
     ],
-    "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation."
+    "summary": "Extracts experimentally supported disease associations from uploaded PDFs, classifying disease roles and gene-disease relationship types for Alliance curation.",
+    "use_when": [
+      "When you upload a paper and want the diseases it links to genes, alleles, or models, with the evidence quote.",
+      "At the start of a disease curation flow, before the Disease Ontology Agent confirms each term.",
+      "When a paper reports a disease model or a new gene to disease finding."
+    ]
   },
   "disease_validation": {
+    "avoid_when": [
+      "For gene to disease associations; use the Gene Validation Agent.",
+      "For parent or child disease terms and obsolete history; use the Ontology Term Resolver Agent.",
+      "For disease vocabularies other than the Disease Ontology.",
+      "For disease prevalence or statistics."
+    ],
     "capabilities": [
       {
         "description": "Find DOID identifiers for disease names using case-insensitive search",
@@ -673,15 +796,22 @@
       }
     ],
     "limitations": [
-      "Only queries Disease Ontology (DOID) terms - does not include other disease vocabularies",
-      "Does not provide gene-disease associations (use Gene Specialist for that)",
-      "Disease prevalence and statistics are not available from this validator path",
-      "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history \u2014 ask the Ontology Term Resolver for related terms.",
+      "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history.",
       "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
-    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence."
+    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence.",
+    "use_when": [
+      "After any extractor that names a disease, on papers that assert a gene, allele, or model to disease link.",
+      "When you have a disease name, synonym, or DOID and want the official term and its definition.",
+      "Before curation handoff, so disease IDs are settled."
+    ]
   },
   "experimental_condition": {
+    "avoid_when": [
+      "To pull conditions out of a paper; run the domain extractor first.",
+      "For a single chemical or ontology term on its own; use the Chemical Ontology Agent or the Ontology Term Resolver Agent.",
+      "To judge whether the experiment itself was well designed; that judgment stays with you."
+    ],
     "capabilities": [
       {
         "description": "Reviews each experimental-condition component, including condition class, condition ID, chemical, taxon, relation, and free-text fields.\n",
@@ -726,15 +856,23 @@
       }
     ],
     "limitations": [
-      "Validates submitted condition payloads; it does not extract experimental conditions from PDFs.",
       "Component-level ambiguity can make the overall condition require curator review.",
-      "Does not decide whether an experiment is biologically well designed or statistically sufficient.",
       "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records.",
       "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."
     ],
-    "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n"
+    "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n",
+    "use_when": [
+      "When a record includes an experimental condition (a treatment, temperature, chemical exposure, or diet) whose parts need checking together.",
+      "After an extractor captures conditions for a disease, phenotype, or expression annotation.",
+      "Before curation handoff, so each condition's ontology term, chemical, and units are confirmed."
+    ]
   },
   "experimental_condition_validation": {
+    "avoid_when": [
+      "To pull conditions out of a paper; run the domain extractor first.",
+      "For a single chemical or ontology term on its own; use the Chemical Ontology Agent or the Ontology Term Resolver Agent.",
+      "To judge whether the experiment itself was well designed; that judgment stays with you."
+    ],
     "capabilities": [
       {
         "description": "Reviews each experimental-condition component, including condition class, condition ID, chemical, taxon, relation, and free-text fields.\n",
@@ -779,15 +917,23 @@
       }
     ],
     "limitations": [
-      "Validates submitted condition payloads; it does not extract experimental conditions from PDFs.",
       "Component-level ambiguity can make the overall condition require curator review.",
-      "Does not decide whether an experiment is biologically well designed or statistically sufficient.",
       "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records.",
       "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."
     ],
-    "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n"
+    "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n",
+    "use_when": [
+      "When a record includes an experimental condition (a treatment, temperature, chemical exposure, or diet) whose parts need checking together.",
+      "After an extractor captures conditions for a disease, phenotype, or expression annotation.",
+      "Before curation handoff, so each condition's ontology term, chemical, and units are confirmed."
+    ]
   },
   "gene_expression": {
+    "avoid_when": [
+      "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured.",
+      "To turn tissue or stage wording into official ontology IDs; use the Ontology Term Resolver Agent.",
+      "To produce a downloadable file; add a File Formatter after this agent."
+    ],
     "capabilities": [
       {
         "description": "Identifies and extracts gene expression patterns from PDFs including anatomical locations (tissues, cell types, organs), developmental stages, temporal qualifiers, and sex-specific expression.",
@@ -845,15 +991,22 @@
       }
     ],
     "limitations": [
-      "Returns plain text output only - JSON conversion is handled by a separate Formatter Agent",
-      "Does NOT extract expression data from mutant phenotypes or experimental perturbations (heat shock, RNAi knockdown, drug treatment) - only baseline/wild-type expression",
       "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)",
-      "The extractor records the term wording it finds; turning that into an official ontology ID is the validators' or the Ontology Term Resolver's job.",
       "Requires at least one document search or read tool call before returning results"
     ],
-    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm."
+    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm.",
+    "use_when": [
+      "When you upload a paper that reports where and when genes are expressed and want each pattern captured with its quote.",
+      "At the start of a gene expression curation flow, before the validators confirm genes, anatomy, and stage terms.",
+      "When a paper uses reporters, in situ hybridization, or antibody staining to show baseline expression."
+    ]
   },
   "gene_expression_extraction": {
+    "avoid_when": [
+      "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured.",
+      "To turn tissue or stage wording into official ontology IDs; use the Ontology Term Resolver Agent.",
+      "To produce a downloadable file; add a File Formatter after this agent."
+    ],
     "capabilities": [
       {
         "description": "Identifies and extracts gene expression patterns from PDFs including anatomical locations (tissues, cell types, organs), developmental stages, temporal qualifiers, and sex-specific expression.",
@@ -911,15 +1064,22 @@
       }
     ],
     "limitations": [
-      "Returns plain text output only - JSON conversion is handled by a separate Formatter Agent",
-      "Does NOT extract expression data from mutant phenotypes or experimental perturbations (heat shock, RNAi knockdown, drug treatment) - only baseline/wild-type expression",
       "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)",
-      "The extractor records the term wording it finds; turning that into an official ontology ID is the validators' or the Ontology Term Resolver's job.",
       "Requires at least one document search or read tool call before returning results"
     ],
-    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm."
+    "summary": "Reads an uploaded paper and pulls out where and when each gene is expressed \u2014 the tissues, cell types, developmental stages, and any sex-specific patterns \u2014 with the supporting quote, ready for the specialist validators to confirm.",
+    "use_when": [
+      "When you upload a paper that reports where and when genes are expressed and want each pattern captured with its quote.",
+      "At the start of a gene expression curation flow, before the validators confirm genes, anatomy, and stage terms.",
+      "When a paper uses reporters, in situ hybridization, or antibody staining to show baseline expression."
+    ]
   },
   "gene_extractor": {
+    "avoid_when": [
+      "To confirm a gene against the Alliance database; use the Gene Validation Agent.",
+      "For alleles, diseases, or phenotypes; use the matching extraction agent.",
+      "When there is no uploaded paper, since it cannot work from chat text alone."
+    ],
     "capabilities": [
       {
         "description": "Scans the full paper for gene symbols, names, and synonyms across all sections including titles, abstracts, results, figure legends, and tables",
@@ -980,12 +1140,21 @@
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract genes from chat text alone",
       "Genes mentioned only in references without experimental data in this paper are excluded",
-      "When a gene could belong to more than one species, it uses clues in the text; cases it can't settle are flagged for curator review.",
-      "Confirming each gene against the Alliance database is the Gene Validation Agent's job; any unconfirmed or conflicting genes stay visible to you as validator findings."
+      "When a gene could belong to more than one species, it uses clues in the text; cases it can't settle are flagged for curator review."
     ],
-    "summary": "Reads an uploaded paper and proposes the genes that have real experimental support in it, with the quote that backs each one \u2014 ready for the Gene Validation Agent to confirm against the Alliance database."
+    "summary": "Reads an uploaded paper and proposes the genes that have real experimental support in it, with the quote that backs each one \u2014 ready for the Gene Validation Agent to confirm against the Alliance database.",
+    "use_when": [
+      "When you upload a paper and want the genes it studies with experimental support, each with its evidence quote.",
+      "At the start of a gene curation flow, before the Gene Validation Agent confirms each gene.",
+      "When a paper covers several species and you want each gene assigned to the right one."
+    ]
   },
   "gene_ontology": {
+    "avoid_when": [
+      "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent.",
+      "To find which genes carry a given GO term; use the Gene GO Annotations Agent.",
+      "For GO enrichment analysis, which no agent performs."
+    ],
     "capabilities": [
       {
         "description": "Search for GO terms using name keywords or partial matches. Results are ranked by relevance with obsolete terms flagged.",
@@ -1034,14 +1203,21 @@
       }
     ],
     "limitations": [
-      "Cannot retrieve gene-to-GO annotations (use GO Annotations Agent instead)",
-      "Cannot determine which genes have a specific GO term (use GO Annotations Agent instead)",
-      "Does not perform GO enrichment analysis",
       "Every answer comes from a fresh, live lookup against the Gene Ontology \u2014 it never answers from memory."
     ],
-    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component."
+    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component.",
+    "use_when": [
+      "When you have a GO term name, keyword, or ID and want its definition and category.",
+      "When you need the broader or narrower terms around a GO term to pick the right level of detail.",
+      "When several GO terms need looking up at once."
+    ]
   },
   "gene_ontology_lookup": {
+    "avoid_when": [
+      "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent.",
+      "To find which genes carry a given GO term; use the Gene GO Annotations Agent.",
+      "For GO enrichment analysis, which no agent performs."
+    ],
     "capabilities": [
       {
         "description": "Search for GO terms using name keywords or partial matches. Results are ranked by relevance with obsolete terms flagged.",
@@ -1090,14 +1266,21 @@
       }
     ],
     "limitations": [
-      "Cannot retrieve gene-to-GO annotations (use GO Annotations Agent instead)",
-      "Cannot determine which genes have a specific GO term (use GO Annotations Agent instead)",
-      "Does not perform GO enrichment analysis",
       "Every answer comes from a fresh, live lookup against the Gene Ontology \u2014 it never answers from memory."
     ],
-    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component."
+    "summary": "Looks up Gene Ontology (GO) terms \u2014 their definitions, broader and narrower terms, and how they relate \u2014 across the three GO categories: molecular function, biological process, and cellular component.",
+    "use_when": [
+      "When you have a GO term name, keyword, or ID and want its definition and category.",
+      "When you need the broader or narrower terms around a GO term to pick the right level of detail.",
+      "When several GO terms need looking up at once."
+    ]
   },
   "gene_validation": {
+    "avoid_when": [
+      "For alleles or variants; use the Allele Validation Agent.",
+      "For diseases, chemicals, or ontology terms; use the matching validation agent.",
+      "To find the genes a paper studies; run the Gene Extraction Agent first."
+    ],
     "capabilities": [
       {
         "description": "Find genes by symbol, name, ID, or cross-reference",
@@ -1137,9 +1320,19 @@
       "Only validates against Alliance group data",
       "Some newly published genes may not be in the database yet"
     ],
-    "summary": "Validates gene identifiers against the Alliance Curation Database."
+    "summary": "Validates gene identifiers against the Alliance Curation Database.",
+    "use_when": [
+      "After the Gene Extraction Agent proposes genes from a paper and each one needs a confirmed Alliance record.",
+      "When you have a gene symbol, name, or ID and want to confirm it exists and get its Alliance identifier.",
+      "Before an ortholog lookup, which needs a confirmed gene ID."
+    ]
   },
   "go_annotations": {
+    "avoid_when": [
+      "To search GO terms by name or keyword; use the GO Term Lookup Agent.",
+      "To browse parent and child GO terms; use the GO Term Lookup Agent.",
+      "To find which genes carry a given GO term; the agent starts from a gene, not a term."
+    ],
     "capabilities": [
       {
         "description": "Retrieve existing GO annotations for a validated gene CURIE, showing term, aspect, evidence, references, relation, With/From, qualifiers, negation, provider, product type, and source-record provenance",
@@ -1188,14 +1381,21 @@
     ],
     "limitations": [
       "Gene IDs must be in Alliance format (e.g., WB:WBGene00000898, HGNC:11998)",
-      "Cannot search for GO terms by keyword - use Gene Ontology Lookup Agent for that",
-      "Cannot find genes by GO term (e.g., 'what genes have kinase activity')",
-      "Cannot explore GO term hierarchy or parent/child relationships",
       "The adapter makes one bounded request to the Gene Ontology Consortium API and does not fall back to another source"
     ],
-    "summary": "Retrieves typed existing GO annotations for specific genes from the Gene Ontology Consortium API with complete curator-comparison provenance."
+    "summary": "Retrieves typed existing GO annotations for specific genes from the Gene Ontology Consortium API with complete curator-comparison provenance.",
+    "use_when": [
+      "When you have a confirmed gene ID and want the GO annotations already recorded for it, with evidence codes and sources.",
+      "When you are comparing a paper's findings against what is already annotated for a gene.",
+      "When you need annotations split by molecular function, biological process, and cellular component."
+    ]
   },
   "go_annotations_lookup": {
+    "avoid_when": [
+      "To search GO terms by name or keyword; use the GO Term Lookup Agent.",
+      "To browse parent and child GO terms; use the GO Term Lookup Agent.",
+      "To find which genes carry a given GO term; the agent starts from a gene, not a term."
+    ],
     "capabilities": [
       {
         "description": "Retrieve existing GO annotations for a validated gene CURIE, showing term, aspect, evidence, references, relation, With/From, qualifiers, negation, provider, product type, and source-record provenance",
@@ -1244,14 +1444,20 @@
     ],
     "limitations": [
       "Gene IDs must be in Alliance format (e.g., WB:WBGene00000898, HGNC:11998)",
-      "Cannot search for GO terms by keyword - use Gene Ontology Lookup Agent for that",
-      "Cannot find genes by GO term (e.g., 'what genes have kinase activity')",
-      "Cannot explore GO term hierarchy or parent/child relationships",
       "The adapter makes one bounded request to the Gene Ontology Consortium API and does not fall back to another source"
     ],
-    "summary": "Retrieves typed existing GO annotations for specific genes from the Gene Ontology Consortium API with complete curator-comparison provenance."
+    "summary": "Retrieves typed existing GO annotations for specific genes from the Gene Ontology Consortium API with complete curator-comparison provenance.",
+    "use_when": [
+      "When you have a confirmed gene ID and want the GO annotations already recorded for it, with evidence codes and sources.",
+      "When you are comparing a paper's findings against what is already annotated for a gene.",
+      "When you need annotations split by molecular function, biological process, and cellular component."
+    ]
   },
   "json_formatter": {
+    "avoid_when": [
+      "When you want to open the results in a spreadsheet; use the CSV or TSV File Formatter.",
+      "When you only want to read the results in chat; use the Chat Output Agent."
+    ],
     "capabilities": [
       {
         "description": "Preserves nested objects and arrays for downstream programmatic use",
@@ -1264,9 +1470,19 @@
     "limitations": [
       "File is optimized for machine consumption over spreadsheet readability"
     ],
-    "summary": "Formats structured extraction results as downloadable JSON while preserving nested data."
+    "summary": "Formats structured extraction results as downloadable JSON while preserving nested data.",
+    "use_when": [
+      "At the end of a flow when you want a file that keeps every nested detail of the results.",
+      "When the results feed another program or pipeline."
+    ]
   },
   "ontology_term_validation": {
+    "avoid_when": [
+      "For gene symbols; use the Gene Validation Agent.",
+      "For chemicals; use the Chemical Ontology Agent.",
+      "For fixed pick-list values such as evidence codes; use the Controlled Vocabulary Validation Agent.",
+      "To pull terms out of a paper; run an extractor first."
+    ],
     "capabilities": [
       {
         "description": "Validate exact ontology CURIEs against unique curation database ontology terms.\n",
@@ -1318,16 +1534,23 @@
       }
     ],
     "limitations": [
-      "Cannot extract labels from PDFs; receives terms from prior extraction output or domain-pack validator inputs.",
-      "Cannot validate gene symbols; use Gene Validation Agent instead.",
-      "Cannot validate chemicals as ChEBI entities; use Chemical Validation Agent instead.",
       "Cannot create new ontology terms; only resolves existing terms.",
       "Requires ontology_term_type for generic label or synonym lookup.",
       "Requires data_provider for provider-scoped anatomy and life-stage lookup."
     ],
-    "summary": "Resolves exact ontology CURIEs and typed ontology-term labels with package lookup helpers while preserving ambiguous or unresolved candidates.\n"
+    "summary": "Resolves exact ontology CURIEs and typed ontology-term labels with package lookup helpers while preserving ambiguous or unresolved candidates.\n",
+    "use_when": [
+      "After an extractor supplies anatomy, life stage, GO, or other ontology wording that needs an official term and ID.",
+      "When you have an exact ontology ID and want to confirm it is current and see its label.",
+      "When you need parent or child terms, or a term's obsolete history, for a disease or other ontology term."
+    ]
   },
   "orthologs": {
+    "avoid_when": [
+      "For paralogs (duplicated genes within one species), which the agent does not find.",
+      "When you only have a gene symbol; confirm it with the Gene Validation Agent first.",
+      "For GO annotations or disease links on the orthologs; use the Gene GO Annotations Agent or the Disease Ontology Agent."
+    ],
     "capabilities": [
       {
         "description": "Query orthologs for a given gene ID across all supported species (human, mouse, fly, worm, zebrafish, yeast, rat)",
@@ -1378,12 +1601,21 @@
     "limitations": [
       "Gene ID must be in Alliance format with prefix (e.g., WB:WBGene00000898, not just WBGene00000898)",
       "Needs a confirmed gene ID, not just a symbol \u2014 run the gene through the Gene Validation Agent first.",
-      "Does not find paralogs (within-species gene duplications)",
       "Some genes have no orthologs in certain species (this is valid biological data, not an error)"
     ],
-    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach)."
+    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach).",
+    "use_when": [
+      "When you have a confirmed gene and want its matching genes in other species.",
+      "When you need to know how confident an ortholog prediction is and which methods agree.",
+      "When you want the best-scoring ortholog in a particular species."
+    ]
   },
   "orthologs_lookup": {
+    "avoid_when": [
+      "For paralogs (duplicated genes within one species), which the agent does not find.",
+      "When you only have a gene symbol; confirm it with the Gene Validation Agent first.",
+      "For GO annotations or disease links on the orthologs; use the Gene GO Annotations Agent or the Disease Ontology Agent."
+    ],
     "capabilities": [
       {
         "description": "Query orthologs for a given gene ID across all supported species (human, mouse, fly, worm, zebrafish, yeast, rat)",
@@ -1434,12 +1666,21 @@
     "limitations": [
       "Gene ID must be in Alliance format with prefix (e.g., WB:WBGene00000898, not just WBGene00000898)",
       "Needs a confirmed gene ID, not just a symbol \u2014 run the gene through the Gene Validation Agent first.",
-      "Does not find paralogs (within-species gene duplications)",
       "Some genes have no orthologs in certain species (this is valid biological data, not an error)"
     ],
-    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach)."
+    "summary": "Finds a gene's orthologs (the matching genes in other species) and tells you how confident the prediction is, based on how many ortholog-prediction methods agree (the DIOPT approach).",
+    "use_when": [
+      "When you have a confirmed gene and want its matching genes in other species.",
+      "When you need to know how confident an ortholog prediction is and which methods agree.",
+      "When you want the best-scoring ortholog in a particular species."
+    ]
   },
   "pdf_extraction": {
+    "avoid_when": [
+      "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent.",
+      "To confirm any identifier against a database; use a validation agent.",
+      "For content inside figures beyond their captions."
+    ],
     "capabilities": [
       {
         "description": "Find specific content within the PDF using semantic, keyword, or exact-token lexical search",
@@ -1478,9 +1719,19 @@
       "Very large tables may be truncated",
       "Figure analysis is limited to captions only"
     ],
-    "summary": "Extracts text, tables, and structured data from scientific papers using hybrid and lexical document search modes."
+    "summary": "Extracts text, tables, and structured data from scientific papers using hybrid and lexical document search modes.",
+    "use_when": [
+      "When you want to search an uploaded paper for a phrase, gene, method, or figure caption.",
+      "When you need a table or a specific section (methods, results) pulled out of the paper as text.",
+      "As a general reading tool when no specialized extractor fits the question."
+    ]
   },
   "phenotype_extractor": {
+    "avoid_when": [
+      "For human diseases and clinical conditions; use the Disease Extraction Agent.",
+      "To confirm the official phenotype ontology term; that is the validators' job after extraction.",
+      "When there is no uploaded paper, since it cannot work from chat text alone."
+    ],
     "capabilities": [
       {
         "description": "Scans the paper for phenotype descriptions, observable traits, and mutant characterizations across results, figures, and tables",
@@ -1535,13 +1786,21 @@
     ],
     "limitations": [
       "Requires an uploaded PDF document \u2014 cannot extract phenotypes from chat text alone",
-      "Distinguishes phenotypes from diseases \u2014 clinical conditions are handled by the Disease Extraction Agent",
-      "Wild-type/control observations are baselines, not phenotype assertions",
-      "The extractor proposes the trait wording only; confirming the official ontology term is the phenotype term validator's job after extraction."
+      "Wild-type/control observations are baselines, not phenotype assertions"
     ],
-    "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence."
+    "summary": "Extracts experimentally supported phenotype assertions from uploaded PDFs, capturing genotype-phenotype links, polarity, severity, and supporting evidence.",
+    "use_when": [
+      "When you upload a paper and want the phenotypes it reports, linked to the genotype that shows them.",
+      "At the start of a phenotype curation flow, before the validators confirm the ontology terms.",
+      "When a paper describes mutant or knockdown traits and you want polarity and severity captured."
+    ]
   },
   "reference": {
+    "avoid_when": [
+      "To read or summarize the paper's content; use the General PDF Extraction Agent.",
+      "To confirm the genes, alleles, or diseases the paper reports; use the matching validation agent.",
+      "To add a paper that is missing from the Alliance literature database."
+    ],
     "capabilities": [
       {
         "description": "Looks up exact PMID, DOI, AGRKB, or MOD reference identifiers for a source paper.\n",
@@ -1580,13 +1839,22 @@
     "limitations": [
       "Requires an identifier, title, or citation string from upstream extraction or domain-pack input.",
       "Fuzzy title and citation searches can return multiple plausible matches.",
-      "Does not read or summarize paper content; use PDF Extraction Agent for document text.",
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n"
+    "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
+    "use_when": [
+      "When a record cites a paper by PMID, DOI, Alliance reference ID, or MOD reference ID and you want the matching Alliance literature record.",
+      "When you only have a title or citation text and need the paper identified.",
+      "Before curation handoff, so every annotation points at a confirmed reference."
+    ]
   },
   "reference_validation": {
+    "avoid_when": [
+      "To read or summarize the paper's content; use the General PDF Extraction Agent.",
+      "To confirm the genes, alleles, or diseases the paper reports; use the matching validation agent.",
+      "To add a paper that is missing from the Alliance literature database."
+    ],
     "capabilities": [
       {
         "description": "Looks up exact PMID, DOI, AGRKB, or MOD reference identifiers for a source paper.\n",
@@ -1625,13 +1893,22 @@
     "limitations": [
       "Requires an identifier, title, or citation string from upstream extraction or domain-pack input.",
       "Fuzzy title and citation searches can return multiple plausible matches.",
-      "Does not read or summarize paper content; use PDF Extraction Agent for document text.",
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n"
+    "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
+    "use_when": [
+      "When a record cites a paper by PMID, DOI, Alliance reference ID, or MOD reference ID and you want the matching Alliance literature record.",
+      "When you only have a title or citation text and need the paper identified.",
+      "Before curation handoff, so every annotation points at a confirmed reference."
+    ]
   },
   "rgd_go_evidence_policy": {
+    "avoid_when": [
+      "For curators outside RGD; the check applies only to the RGD group.",
+      "To look up gene identity or search the paper for evidence; use the RGD GO Paper Curator.",
+      "To submit GO annotations; that step stays with you."
+    ],
     "capabilities": [
       {
         "description": "Checks IDA, IPI, IMP, IGI, and IEP selection, aspect, With/From, qualifier, negation, evidence location, and abstention rules.",
@@ -1659,9 +1936,18 @@
       "Runs automatically only for authenticated RGD group context through the GO domain-pack binding.",
       "Does not resolve gene-product identity, search for evidence, alter disease curation, or submit annotations."
     ],
-    "summary": "Validates RGD GO paper-curation candidates against the approved experimental evidence policy."
+    "summary": "Validates RGD GO paper-curation candidates against the approved experimental evidence policy.",
+    "use_when": [
+      "After the RGD GO Paper Curator proposes GO recommendations from a paper, to check each one against the RGD evidence policy.",
+      "When you are an RGD curator and want to know which recommendations rest on approved experimental evidence."
+    ]
   },
   "rgd_go_evidence_policy_validation": {
+    "avoid_when": [
+      "For curators outside RGD; the check applies only to the RGD group.",
+      "To look up gene identity or search the paper for evidence; use the RGD GO Paper Curator.",
+      "To submit GO annotations; that step stays with you."
+    ],
     "capabilities": [
       {
         "description": "Checks IDA, IPI, IMP, IGI, and IEP selection, aspect, With/From, qualifier, negation, evidence location, and abstention rules.",
@@ -1689,9 +1975,18 @@
       "Runs automatically only for authenticated RGD group context through the GO domain-pack binding.",
       "Does not resolve gene-product identity, search for evidence, alter disease curation, or submit annotations."
     ],
-    "summary": "Validates RGD GO paper-curation candidates against the approved experimental evidence policy."
+    "summary": "Validates RGD GO paper-curation candidates against the approved experimental evidence policy.",
+    "use_when": [
+      "After the RGD GO Paper Curator proposes GO recommendations from a paper, to check each one against the RGD evidence policy.",
+      "When you are an RGD curator and want to know which recommendations rest on approved experimental evidence."
+    ]
   },
   "rgd_go_paper_curator": {
+    "avoid_when": [
+      "For curators outside RGD; the agent works only in the RGD group.",
+      "For GO term definitions or hierarchy on their own; use the GO Term Lookup Agent.",
+      "To submit or export GO annotations; the output is for review only."
+    ],
     "capabilities": [
       {
         "description": "Reads Results, Methods, figures, and tables for named rat gene products and produces review-only GO recommendations with exact document evidence.\n",
@@ -1736,12 +2031,20 @@
     ],
     "limitations": [
       "Introduction and Discussion are excluded as sole recommendation evidence.",
-      "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE.",
-      "Review-only output; GO submission and export are unsupported."
+      "Mature-RNA ambiguity is never collapsed to a guessed precursor-gene CURIE."
     ],
-    "summary": "Authenticated RGD-only extraction specialist for evidence-backed GO recommendations from one active paper.\n"
+    "summary": "Authenticated RGD-only extraction specialist for evidence-backed GO recommendations from one active paper.\n",
+    "use_when": [
+      "When you are an RGD curator with a paper open and want evidence-backed GO recommendations from it.",
+      "When you want a paper's findings compared against the GO annotations already recorded for its genes."
+    ]
   },
   "subject_entity": {
+    "avoid_when": [
+      "When the subject type is not stated; the agent does not guess it.",
+      "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent.",
+      "When you already know the subject is a gene, allele, or model; go straight to that validation agent."
+    ],
     "capabilities": [
       {
         "description": "Uses the submitted subject_type to choose the correct validation path for gene, allele, or AGM subjects.\n",
@@ -1787,14 +2090,23 @@
     ],
     "limitations": [
       "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM.",
-      "Does not validate references, ontology terms, controlled vocabulary terms, or experimental conditions.",
       "Ambiguous or missing type-specific lookup results still require curator review.",
       "Cannot create missing subject records or assign new entity identifiers.",
       "Only routes among the supported subject validation paths exposed by the package."
     ],
-    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n"
+    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
+    "use_when": [
+      "When an annotation names its subject and states whether that subject is a gene, an allele, or a model, and you want it sent to the right check.",
+      "In domain flows where a single record can carry gene, allele, and model subjects side by side.",
+      "Before curation handoff, so each subject is confirmed and keeps the identifier and label it arrived with."
+    ]
   },
   "subject_entity_validation": {
+    "avoid_when": [
+      "When the subject type is not stated; the agent does not guess it.",
+      "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent.",
+      "When you already know the subject is a gene, allele, or model; go straight to that validation agent."
+    ],
     "capabilities": [
       {
         "description": "Uses the submitted subject_type to choose the correct validation path for gene, allele, or AGM subjects.\n",
@@ -1840,14 +2152,19 @@
     ],
     "limitations": [
       "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM.",
-      "Does not validate references, ontology terms, controlled vocabulary terms, or experimental conditions.",
       "Ambiguous or missing type-specific lookup results still require curator review.",
       "Cannot create missing subject records or assign new entity identifiers.",
       "Only routes among the supported subject validation paths exposed by the package."
     ],
-    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n"
+    "summary": "Routes biological annotation subjects by explicit subject type to gene, allele, or affected genomic model validation paths.\n",
+    "use_when": [
+      "When an annotation names its subject and states whether that subject is a gene, an allele, or a model, and you want it sent to the right check.",
+      "In domain flows where a single record can carry gene, allele, and model subjects side by side.",
+      "Before curation handoff, so each subject is confirmed and keeps the identifier and label it arrived with."
+    ]
   },
   "supervisor": {
+    "avoid_when": [],
     "capabilities": [
       {
         "description": "Automatically determines which specialist agent should handle your question",
@@ -1868,9 +2185,11 @@
       "Very ambiguous queries may be routed to a general agent first",
       "Not available in Flow Builder - works automatically in chat"
     ],
-    "summary": "Routes curator queries to the appropriate specialist agent - works behind the scenes."
+    "summary": "Routes curator queries to the appropriate specialist agent - works behind the scenes.",
+    "use_when": []
   },
   "task_input": {
+    "avoid_when": [],
     "capabilities": [
       {
         "description": "Tell the AI what data to extract from the paper",
@@ -1890,9 +2209,15 @@
       "Instructions should be clear and specific for best results",
       "Complex multi-part requests may need to be broken into separate flows"
     ],
-    "summary": "The starting point for curation workflows - defines what task the AI should perform."
+    "summary": "The starting point for curation workflows - defines what task the AI should perform.",
+    "use_when": []
   },
   "tsv_formatter": {
+    "avoid_when": [
+      "When you want a standard comma-separated spreadsheet file; use the CSV File Formatter.",
+      "When the results have nested detail you want to keep intact; use the JSON File Formatter.",
+      "When you only want to read the results in chat; use the Chat Output Agent."
+    ],
     "capabilities": [
       {
         "description": "Generates tab-delimited output for pipelines that expect TSV input",
@@ -1905,6 +2230,10 @@
     "limitations": [
       "Like CSV, complex nested fields may be flattened"
     ],
-    "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines."
+    "summary": "Formats structured extraction results as a downloadable TSV file for tab-delimited pipelines.",
+    "use_when": [
+      "At the end of a flow when a downstream tool or loader expects tab-separated columns.",
+      "When you want a spreadsheet-style file and the values themselves contain commas."
+    ]
   }
 }

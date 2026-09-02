@@ -42,9 +42,16 @@ data_sources:
       - "provider names"
       - "NCBITaxon identifiers"
       - "provider-to-taxon relationships"
+use_when:
+  - "When a record names a data provider (for example a MOD abbreviation) and you want to confirm it is a recognized Alliance provider."
+  - "When you need to check that a provider matches the species in the record."
+  - "Before curation handoff, so every record carries a valid provider."
+avoid_when:
+  - "To confirm gene, allele, or model identifiers; use the validation agent for that entity type."
+  - "For paper and citation lookups; use the Reference Validation Agent."
+  - "For pick-list terms or ontology terms; use the Controlled Vocabulary Validation Agent or the Ontology Term Resolver Agent."
 limitations:
   - "Requires a provider abbreviation, provider name, or taxon context from upstream data."
   - "Does not infer data provider ownership from paper affiliation or author text."
-  - "Cannot validate entity identifiers owned by the provider; use the relevant entity validation agent."
   - "Cannot create new provider records or taxon relationships."
   - "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
