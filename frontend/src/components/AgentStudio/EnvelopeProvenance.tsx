@@ -17,7 +17,8 @@ import type {
   DomainEnvelopeObjectMetadata,
   DomainEnvelopeSchemaRef,
 } from '@/services/agentStudioService'
-import { humanizeStatus, shortCommit, sourceOfTruthWord } from './envelopePresentation'
+import { createProviderWordResolver, humanizeStatus, shortCommit } from './envelopePresentation'
+import type { ProviderWordResolver } from './envelopePresentation'
 import { MONO_FONT_FAMILY } from './agentGuidePrimitives'
 
 interface EnvelopeProvenanceProps {
@@ -52,9 +53,10 @@ function providerRows(
   providerKey: string,
   value: unknown,
   schemaRefs: DomainEnvelopeSchemaRef[],
-  rowPrefix: string
+  rowPrefix: string,
+  resolveProviderWord: ProviderWordResolver
 ): ProvenanceRow[] {
-  const providerWord = sourceOfTruthWord(providerKey)
+  const providerWord = resolveProviderWord(providerKey)
   if (!isRecord(value)) {
     return [{ key: `${rowPrefix}:${providerKey}`, term: providerWord, detail: String(value) }]
   }
@@ -95,7 +97,11 @@ function providerRows(
   })
 }
 
-function objectRows(object: DomainEnvelopeObjectMetadata, schemaRefs: DomainEnvelopeSchemaRef[]): ProvenanceRow[] {
+function objectRows(
+  object: DomainEnvelopeObjectMetadata,
+  schemaRefs: DomainEnvelopeSchemaRef[],
+  providerWord: ProviderWordResolver
+): ProvenanceRow[] {
   const rows: ProvenanceRow[] = []
   if (object.schema_ref) {
     const ref = object.schema_ref
@@ -107,7 +113,7 @@ function objectRows(object: DomainEnvelopeObjectMetadata, schemaRefs: DomainEnve
     })
   }
   Object.entries(object.provider_refs).forEach(([providerKey, value]) => {
-    rows.push(...providerRows(providerKey, value, schemaRefs, object.object_type))
+    rows.push(...providerRows(providerKey, value, schemaRefs, object.object_type, providerWord))
   })
   if (object.definition_notes.length > 0) {
     rows.push({
@@ -148,6 +154,7 @@ function DefinitionList({ rows }: { rows: ProvenanceRow[] }) {
 function EnvelopeProvenance({ metadata, objects }: EnvelopeProvenanceProps) {
   const [open, setOpen] = useState(false)
   const regionId = useId()
+  const providerWord = createProviderWordResolver(metadata.schema_refs)
 
   const packRows: ProvenanceRow[] = [
     {
@@ -162,7 +169,7 @@ function EnvelopeProvenance({ metadata, objects }: EnvelopeProvenanceProps) {
     },
     ...metadata.schema_refs.map((ref) => ({
       key: `pack-schema:${ref.schema_id}`,
-      term: `${sourceOfTruthWord(ref.provider)} schema`,
+      term: 'Schema',
       detail: (
         <>
           {ref.uri ? <Link href={ref.uri} target="_blank" rel="noreferrer">{ref.name || ref.schema_id}</Link> : (ref.name || ref.schema_id)}
@@ -197,7 +204,7 @@ function EnvelopeProvenance({ metadata, objects }: EnvelopeProvenanceProps) {
         <Box id={regionId} sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <DefinitionList rows={packRows} />
           {objects.map((object) => {
-            const rows = objectRows(object, metadata.schema_refs)
+            const rows = objectRows(object, metadata.schema_refs, providerWord)
             if (rows.length === 0) return null
             return (
               <Box key={object.object_type}>

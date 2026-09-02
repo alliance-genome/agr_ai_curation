@@ -7,7 +7,7 @@ import {
   groupObjectFields,
   objectValidators,
   shortCommit,
-  sourceOfTruthWord,
+  createProviderWordResolver,
   validatorPolicyBadge,
   validatorPolicySentence,
 } from './envelopePresentation'
@@ -24,14 +24,25 @@ function buildObject(overrides: Partial<DomainEnvelopeObjectMetadata> = {}): Dom
   }
 }
 
-describe('sourceOfTruthWord', () => {
-  it('maps known providers to curator words and leaves unknown keys as-is', () => {
-    expect(sourceOfTruthWord('alliance_linkml')).toBe('LinkML')
-    expect(sourceOfTruthWord('curation_db')).toBe('Curation DB')
-    expect(sourceOfTruthWord('metadata')).toBe('Extractor')
-    expect(sourceOfTruthWord(null)).toBe('Extractor')
-    expect(sourceOfTruthWord(undefined)).toBe('Extractor')
-    expect(sourceOfTruthWord('other_provider')).toBe('other_provider')
+describe('createProviderWordResolver', () => {
+  it('names providers from the pack schema refs and leaves unknown keys as-is', () => {
+    const word = createProviderWordResolver([
+      { provider: 'provider_a', name: 'Provider A schema' },
+      { provider: 'provider_b', name: 'Provider B records' },
+      { provider: 'provider_a', name: 'Duplicate ignored' },
+      { provider: undefined, name: 'No provider' },
+    ])
+    expect(word('provider_a')).toBe('Provider A schema')
+    expect(word('provider_b')).toBe('Provider B records')
+    expect(word('other_provider')).toBe('other_provider')
+    expect(word(null)).toBe('Extractor')
+    expect(word(undefined)).toBe('Extractor')
+  })
+
+  it('falls back to raw keys when the pack declares no schema refs', () => {
+    const word = createProviderWordResolver([])
+    expect(word('provider_a')).toBe('provider_a')
+    expect(word(null)).toBe('Extractor')
   })
 })
 

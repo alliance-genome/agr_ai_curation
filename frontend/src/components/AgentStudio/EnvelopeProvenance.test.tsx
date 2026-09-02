@@ -14,9 +14,9 @@ function buildMetadata() {
     status: 'active',
     schema_refs: [
       {
-        schema_id: 'example.linkml',
-        provider: 'alliance_linkml',
-        name: 'Example LinkML schema',
+        schema_id: 'example.schema',
+        provider: 'provider_a',
+        name: 'Example schema',
         version: COMMIT,
         uri: `https://example.test/schema/tree/${COMMIT}`,
       },
@@ -29,8 +29,8 @@ function buildMetadata() {
         schema_ref: null,
         definition_notes: ['Abstract parent; concrete subtypes are the write targets.'],
         provider_refs: {
-          alliance_linkml: {
-            schema_ref: 'example.linkml',
+          provider_a: {
+            schema_ref: 'example.schema',
             commit: COMMIT,
             source_file: 'model/schema/annotation.yaml',
             class: 'Annotation',
@@ -61,17 +61,17 @@ describe('EnvelopeProvenance', () => {
     expect(screen.getByText('example.pack')).toBeInTheDocument()
     expect(screen.getByText(/v0\.1\.0, active/)).toBeInTheDocument()
 
-    expect(screen.getByText('LinkML schema')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Example LinkML schema' })).toHaveAttribute('href', `https://example.test/schema/tree/${COMMIT}`)
+    expect(screen.getAllByText('Schema').length).toBeGreaterThan(0)
+    expect(screen.getByRole('link', { name: 'Example schema' })).toHaveAttribute('href', `https://example.test/schema/tree/${COMMIT}`)
 
-    expect(screen.getByText('LinkML class')).toBeInTheDocument()
+    expect(screen.getByText('Example schema class')).toBeInTheDocument()
     expect(screen.getByText('Annotation', { selector: 'dd' })).toBeInTheDocument()
-    expect(screen.getByText('LinkML source file')).toBeInTheDocument()
+    expect(screen.getByText('Example schema source file')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /model\/schema\/annotation\.yaml/ })).toHaveAttribute(
       'href',
       `https://example.test/schema/tree/${COMMIT}/model/schema/annotation.yaml`
     )
-    expect(screen.getByText('LinkML commit')).toBeInTheDocument()
+    expect(screen.getByText('Example schema commit')).toBeInTheDocument()
     expect(screen.getAllByText('1b11d088').length).toBeGreaterThan(0)
 
     expect(screen.getByText('some_db inspected tables')).toBeInTheDocument()
@@ -80,7 +80,7 @@ describe('EnvelopeProvenance', () => {
 
     expect(screen.getByText('Notes')).toBeInTheDocument()
     expect(screen.getByText('Abstract parent; concrete subtypes are the write targets.')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /alliance_linkml/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /provider_a/ })).not.toBeInTheDocument()
   })
 
   it('names each object when several are shown together', () => {

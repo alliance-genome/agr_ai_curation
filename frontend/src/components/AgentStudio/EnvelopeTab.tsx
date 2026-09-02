@@ -13,6 +13,7 @@ import { Box, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
 
 import type { DomainEnvelopeMetadata } from '@/services/agentStudioService'
 import {
+  createProviderWordResolver,
   envelopeCounts,
   envelopeObjectChoices,
   groupObjectFields,
@@ -45,6 +46,7 @@ function EnvelopeTab({ metadata, narrow = false }: EnvelopeTabProps) {
   const choices = useMemo(() => envelopeObjectChoices(metadata), [metadata])
   const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(choices[0]?.id ?? null)
   const validatorsHeadingId = useId()
+  const providerWord = useMemo(() => createProviderWordResolver(metadata.schema_refs), [metadata.schema_refs])
 
   useEffect(() => {
     if (!choices.some((choice) => choice.id === selectedChoiceId)) {
@@ -149,6 +151,7 @@ function EnvelopeTab({ metadata, narrow = false }: EnvelopeTabProps) {
       <EnvelopeFieldTable
         groups={fieldGroups}
         ariaLabel={`${selectedChoice.label} fields`}
+        providerWord={providerWord}
         narrow={narrow}
       />
 

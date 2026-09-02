@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import EnvelopeFieldTable from './EnvelopeFieldTable'
-import { groupObjectFields } from './envelopePresentation'
+import { createProviderWordResolver, groupObjectFields } from './envelopePresentation'
 import {
   buildDomainEnvelopeMetadata,
   buildValidationAttachmentOption,
@@ -16,6 +16,11 @@ function field(overrides: Partial<DomainEnvelopeFieldMetadata>): DomainEnvelopeF
   return { ...baseField, validation_attachments: [], ...overrides }
 }
 
+const providerWord = createProviderWordResolver([
+  { provider: 'provider_a', name: 'Provider A schema' },
+  { provider: 'provider_b', name: 'Provider B records' },
+])
+
 function object(overrides: Partial<DomainEnvelopeObjectMetadata>): DomainEnvelopeObjectMetadata {
   return { ...baseObject, ...overrides }
 }
@@ -27,15 +32,15 @@ describe('EnvelopeFieldTable', () => {
     const future = buildValidationAttachmentOption({ attachment_id: 'x:dev', validator_id: 'dev', label: 'Reference materialization', state: 'under_development', blocking: false, allow_opt_out: false })
     const groups = groupObjectFields(object({
       fields: [
-        field({ field_path: 'symbol', display_name: 'Gene symbol', required: true, source_of_truth: 'alliance_linkml', validation_attachments: [blocking] }),
-        field({ field_path: 'relation', display_name: 'Relation', required: false, field_type: 'enum', enum_ref: 'RelationName', source_of_truth: 'curation_db', validation_attachments: [optOut] }),
-        field({ field_path: 'reference', display_name: 'Reference', required: false, source_of_truth: null, validation_attachments: [future] }),
+        field({ field_path: 'symbol', display_name: 'Gene symbol', required: true, source_of_truth: 'provider_a', validation_attachments: [blocking] }),
+        field({ field_path: 'relation', display_name: 'Relation', required: false, field_type: 'enum', enum_ref: 'RelationName', source_of_truth: 'provider_b', validation_attachments: [optOut] }),
+        field({ field_path: 'reference', display_name: 'Reference', required: false, source_of_truth: 'unknown_provider', validation_attachments: [future] }),
         field({ field_path: 'mention', display_name: 'Mention', required: true, source_of_truth: undefined }),
       ],
       field_groups: [],
     }))
 
-    render(<EnvelopeFieldTable groups={groups} ariaLabel="Gene fields" />)
+    render(<EnvelopeFieldTable groups={groups} ariaLabel="Gene fields" providerWord={providerWord} />)
 
     const table = screen.getByRole('table', { name: 'Gene fields' })
     expect(within(table).getByRole('columnheader', { name: /Req/ })).toBeInTheDocument()
@@ -44,10 +49,11 @@ describe('EnvelopeFieldTable', () => {
     expect(within(table).getAllByRole('img', { name: 'Required' })).toHaveLength(2)
 
     expect(within(table).getAllByText('string')).toHaveLength(3)
-    expect(within(table).getByText('· LinkML')).toBeInTheDocument()
+    expect(within(table).getByText('· Provider A schema')).toBeInTheDocument()
     expect(within(table).getByText('choice: RelationName')).toBeInTheDocument()
-    expect(within(table).getByText('· Curation DB')).toBeInTheDocument()
-    expect(within(table).getAllByText('· Extractor')).toHaveLength(2)
+    expect(within(table).getByText('· Provider B records')).toBeInTheDocument()
+    expect(within(table).getByText('· unknown_provider')).toBeInTheDocument()
+    expect(within(table).getByText('· Extractor')).toBeInTheDocument()
 
     expect(within(table).getByText('Symbol lookup')).toBeInTheDocument()
     expect(within(table).getByText('Blocking')).toBeInTheDocument()
@@ -69,7 +75,7 @@ describe('EnvelopeFieldTable', () => {
       ],
     }))
 
-    render(<EnvelopeFieldTable groups={groups} ariaLabel="Grouped fields" />)
+    render(<EnvelopeFieldTable groups={groups} ariaLabel="Grouped fields" providerWord={providerWord} />)
 
     const table = screen.getByRole('table', { name: 'Grouped fields' })
     const groupHeaders = within(table).getAllByRole('rowheader')
@@ -78,7 +84,7 @@ describe('EnvelopeFieldTable', () => {
 
   it('hides the type column and keeps validation at narrow width', () => {
     const groups = groupObjectFields(object({ field_groups: [] }))
-    render(<EnvelopeFieldTable groups={groups} ariaLabel="Narrow fields" narrow />)
+    render(<EnvelopeFieldTable groups={groups} ariaLabel="Narrow fields" providerWord={providerWord} narrow />)
 
     const table = screen.getByRole('table', { name: 'Narrow fields' })
     expect(within(table).queryByRole('columnheader', { name: 'Type · source' })).not.toBeInTheDocument()
@@ -89,12 +95,12 @@ describe('EnvelopeFieldTable', () => {
   it('exposes long field paths through a title attribute', () => {
     const longPath = 'disease_annotation_subject.subject_identifier.very.long.nested.path.that.overflows'
     const groups = groupObjectFields(object({ fields: [field({ field_path: longPath, display_name: 'Subject identifier' })], field_groups: [] }))
-    render(<EnvelopeFieldTable groups={groups} ariaLabel="Long fields" />)
+    render(<EnvelopeFieldTable groups={groups} ariaLabel="Long fields" providerWord={providerWord} />)
     expect(screen.getByTitle(longPath)).toBeInTheDocument()
   })
 
   it('states when the object declares no fields', () => {
-    render(<EnvelopeFieldTable groups={[{ id: 'x', label: null, fields: [] }]} ariaLabel="Empty" />)
+    render(<EnvelopeFieldTable groups={[{ id: 'x', label: null, fields: [] }]} ariaLabel="Empty" providerWord={providerWord} />)
     expect(screen.getByText('This object declares no fields.')).toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })

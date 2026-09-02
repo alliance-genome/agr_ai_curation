@@ -8,19 +8,34 @@ import type {
   DomainEnvelopeFieldMetadata,
   DomainEnvelopeMetadata,
   DomainEnvelopeObjectMetadata,
+  DomainEnvelopeSchemaRef,
   ValidationAttachmentOption,
 } from '@/services/agentStudioService'
 
-const SOURCE_OF_TRUTH_WORDS: Record<string, string> = {
-  alliance_linkml: 'LinkML',
-  curation_db: 'Curation DB',
-  metadata: 'Extractor',
-}
+/** Word used when a field has no provider: the extractor owns the value. */
+export const EXTRACTOR_SOURCE_WORD = 'Extractor'
 
-/** Word for a field's source of truth. Absent means the extractor owns the value. */
-export function sourceOfTruthWord(key?: string | null): string {
-  if (!key) return 'Extractor'
-  return SOURCE_OF_TRUTH_WORDS[key] ?? key
+export type ProviderWordResolver = (providerKey?: string | null) => string
+
+/**
+ * Build a resolver that names a provider from the domain pack's own schema
+ * references: the word for a provider key is the `name` of the schema ref
+ * declared with that `provider`. Unknown providers fall through to the raw
+ * key. A missing key means the extractor owns the value.
+ */
+export function createProviderWordResolver(
+  schemaRefs: Pick<DomainEnvelopeSchemaRef, 'provider' | 'name'>[]
+): ProviderWordResolver {
+  const words = new Map<string, string>()
+  for (const ref of schemaRefs) {
+    if (ref.provider && ref.name && !words.has(ref.provider)) {
+      words.set(ref.provider, ref.name)
+    }
+  }
+  return (providerKey) => {
+    if (!providerKey) return EXTRACTOR_SOURCE_WORD
+    return words.get(providerKey) ?? providerKey
+  }
 }
 
 export function fieldTypeLabel(field: Pick<DomainEnvelopeFieldMetadata, 'field_type' | 'enum_ref'>): string {

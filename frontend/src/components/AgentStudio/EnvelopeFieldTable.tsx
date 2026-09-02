@@ -19,14 +19,16 @@ import {
 import { alpha } from '@mui/material/styles'
 
 import type { DomainEnvelopeFieldMetadata, ValidationAttachmentOption } from '@/services/agentStudioService'
-import type { EnvelopeFieldGroupView } from './envelopePresentation'
-import { fieldTypeLabel, sourceOfTruthWord, validatorPolicyBadge } from './envelopePresentation'
+import type { EnvelopeFieldGroupView, ProviderWordResolver } from './envelopePresentation'
+import { fieldTypeLabel, validatorPolicyBadge } from './envelopePresentation'
 import { MONO_FONT_FAMILY, StateDot, tableHeadCellSx as headCellSx } from './agentGuidePrimitives'
 
 interface EnvelopeFieldTableProps {
   groups: EnvelopeFieldGroupView[]
   /** Accessible name for the table. */
   ariaLabel: string
+  /** Names a field's source-of-truth provider from the pack's schema refs. */
+  providerWord: ProviderWordResolver
   /** Hide the type column when the panel is narrow. */
   narrow?: boolean
   maxHeight?: number | string
@@ -92,7 +94,7 @@ function AutomaticCheckCell({ field }: { field: DomainEnvelopeFieldMetadata }) {
   )
 }
 
-function FieldRow({ field, narrow }: { field: DomainEnvelopeFieldMetadata; narrow: boolean }) {
+function FieldRow({ field, narrow, providerWord }: { field: DomainEnvelopeFieldMetadata; narrow: boolean; providerWord: ProviderWordResolver }) {
   const label = field.display_name || field.field_path
   return (
     <TableRow>
@@ -123,7 +125,7 @@ function FieldRow({ field, narrow }: { field: DomainEnvelopeFieldMetadata; narro
       {!narrow && (
         <TableCell sx={{ ...bodyCellSx, color: 'text.secondary', fontSize: 12.5 }}>
           {fieldTypeLabel(field)}
-          <Box component="span" sx={{ color: 'text.disabled' }}> · {sourceOfTruthWord(field.source_of_truth)}</Box>
+          <Box component="span" sx={{ color: 'text.disabled' }}> · {providerWord(field.source_of_truth)}</Box>
         </TableCell>
       )}
       <TableCell sx={{ ...bodyCellSx, minWidth: 0, maxWidth: 0, width: narrow ? '45%' : '30%' }}>
@@ -133,7 +135,7 @@ function FieldRow({ field, narrow }: { field: DomainEnvelopeFieldMetadata; narro
   )
 }
 
-function EnvelopeFieldTable({ groups, ariaLabel, narrow = false, maxHeight = 480 }: EnvelopeFieldTableProps) {
+function EnvelopeFieldTable({ groups, ariaLabel, providerWord, narrow = false, maxHeight = 480 }: EnvelopeFieldTableProps) {
   const columnCount = narrow ? 3 : 4
   const hasFields = groups.some((group) => group.fields.length > 0)
 
@@ -185,7 +187,7 @@ function EnvelopeFieldTable({ groups, ariaLabel, narrow = false, maxHeight = 480
               </TableRow>
             )}
             {group.fields.map((field) => (
-              <FieldRow key={field.field_path} field={field} narrow={narrow} />
+              <FieldRow key={field.field_path} field={field} narrow={narrow} providerWord={providerWord} />
             ))}
           </TableBody>
         ))}

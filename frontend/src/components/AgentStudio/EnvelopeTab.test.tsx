@@ -51,8 +51,8 @@ function buildDiseaseLikeMetadata() {
         object_role: 'curatable_unit',
         fields: [
           { ...baseField, field_path: 'mention', display_name: 'Paper disease mention', required: true, source_of_truth: null, validation_attachments: [] },
-          { ...baseField, field_path: 'term.name', display_name: 'Disease term name', required: true, source_of_truth: 'alliance_linkml', validation_attachments: [termLookup] },
-          { ...baseField, field_path: 'subject.identifier', display_name: 'Subject identifier', required: false, source_of_truth: 'curation_db', validation_attachments: [subjectCheck] },
+          { ...baseField, field_path: 'term.name', display_name: 'Disease term name', required: true, source_of_truth: 'provider_a', validation_attachments: [termLookup] },
+          { ...baseField, field_path: 'subject.identifier', display_name: 'Subject identifier', required: false, source_of_truth: 'provider_b', validation_attachments: [subjectCheck] },
           { ...baseField, field_path: 'single_reference', display_name: 'Source reference', required: false, validation_attachments: [referenceFuture] },
         ],
         field_groups: [
