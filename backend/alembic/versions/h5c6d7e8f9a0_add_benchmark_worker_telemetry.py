@@ -1,7 +1,7 @@
 """Add durable benchmark worker result and invocation telemetry.
 
-Revision ID: g4b5c6d7e8f9
-Revises: f3a4b5c6d7e8
+Revision ID: h5c6d7e8f9a0
+Revises: g4b5c6d7e8f9
 """
 
 from collections.abc import Sequence
@@ -10,8 +10,8 @@ from alembic import op  # pyright: ignore[reportAttributeAccessIssue]
 import sqlalchemy as sa
 
 
-revision: str = "g4b5c6d7e8f9"
-down_revision: str | Sequence[str] | None = "f3a4b5c6d7e8"
+revision: str = "h5c6d7e8f9a0"
+down_revision: str | Sequence[str] | None = "g4b5c6d7e8f9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
