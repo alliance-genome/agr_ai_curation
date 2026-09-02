@@ -44,7 +44,7 @@ describe('NodePanelDock', () => {
     expect(handle).toHaveAttribute('aria-valuenow', '424')
   })
 
-  it('never exceeds half the canvas area or drops below 380px', async () => {
+  it('never exceeds half the canvas area and keeps the 380 minimum while the area allows it', async () => {
     const user = userEvent.setup()
     renderDock({ areaWidth: 800 })
 
@@ -68,12 +68,17 @@ describe('NodePanelDock', () => {
     expect(onExpand).toHaveBeenCalledTimes(1)
   })
 
-  it('becomes a drawer over the canvas in drawer mode', async () => {
+  it('becomes an in-builder drawer with no portal and no backdrop in drawer mode', async () => {
     const user = userEvent.setup()
     const { onClose } = renderDock({ mode: 'drawer' })
 
-    expect(screen.getByRole('presentation')).toBeInTheDocument()
-    expect(screen.getByText('panel body')).toBeInTheDocument()
+    const drawer = screen.getByTestId('node-panel-drawer')
+    expect(drawer).toHaveStyle({ position: 'absolute', top: '0px', right: '0px', bottom: '0px', width: '440px' })
+    expect(drawer).toContainElement(screen.getByText('panel body'))
+    expect(screen.queryByRole('presentation')).not.toBeInTheDocument()
+    expect(document.querySelector('.MuiBackdrop-root')).toBeNull()
+
+    drawer.focus()
     await user.keyboard('{Escape}')
     expect(onClose).toHaveBeenCalledTimes(1)
   })

@@ -638,7 +638,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   )
 
   // React Flow state
-  const builderRootRef = useRef<HTMLDivElement>(null)
+  // The drawer-vs-docked breakpoint reads the whole builder (palette, canvas,
+  // dock), not the canvas row, which is far narrower once the Claude pane is open.
+  const [builderRootRef, builderWidth] = useContainerWidth<HTMLDivElement>()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const primaryShortcutLabel = useMemo(getPrimaryShortcutLabel, [])
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
@@ -667,7 +669,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   // before the selection changes so unapplied edits are never dropped silently.
   const [nodePanelCollapsed, setNodePanelCollapsed] = useState(false)
   const nodePanelGuardRef = useRef<NodePanelLeaveGuard | null>(null)
-  const [builderContentRef, builderWidth] = useContainerWidth<HTMLDivElement>()
   const [canvasSplitRef, canvasAreaWidth] = useContainerWidth<HTMLDivElement>()
 
   // Menu bar state
@@ -2027,7 +2028,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
         </ToolbarStatus>
       </Toolbar>
 
-      <BuilderContent ref={builderContentRef}>
+      <BuilderContent>
         <PanelGroup
           direction="horizontal"
           autoSaveId="flow-builder-palette"

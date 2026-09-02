@@ -3,13 +3,14 @@
  *
  * Places the node panel inside the canvas area. Docked mode is a resizable
  * column the canvas shrinks beside; it collapses to a 44px rail. Drawer mode,
- * used when the builder is narrower than 1100px, is a full-height drawer over
- * the canvas.
+ * used when the whole builder is narrower than 760px, is a full-height panel
+ * positioned inside the builder (no portal, no backdrop), so it never goes
+ * under the app bar or over the Claude pane.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { Box, Drawer, IconButton, Tooltip, Typography } from '@mui/material'
+import { Box, IconButton, Tooltip, Typography } from '@mui/material'
 import { alpha } from '@mui/material/styles'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 
@@ -43,7 +44,7 @@ export interface NodePanelDockProps {
   /** Name shown on the collapsed rail. */
   railLabel: string
   onExpand: () => void
-  /** Drawer dismissal (scrim click or Escape). */
+  /** Drawer dismissal on Escape. */
   onClose: () => void
   children: ReactNode
 }
@@ -96,15 +97,31 @@ function NodePanelDock({ mode, collapsed, areaWidth, railLabel, onExpand, onClos
 
   if (mode === 'drawer') {
     return (
-      <Drawer
-        anchor="right"
-        open
-        onClose={onClose}
-        ModalProps={{ keepMounted: false }}
-        PaperProps={{ sx: { width: { xs: '100%', sm: NODE_PANEL_DEFAULT_WIDTH }, maxWidth: '100%' } }}
+      <Box
+        data-testid="node-panel-drawer"
+        tabIndex={-1}
+        onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+          if (event.key === 'Escape') onClose()
+        }}
+        sx={{
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: NODE_PANEL_DEFAULT_WIDTH,
+          maxWidth: '100%',
+          zIndex: 10,
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          borderLeft: 1,
+          borderColor: 'divider',
+          backgroundColor: 'background.paper',
+          boxShadow: 8,
+        }}
       >
         {children}
-      </Drawer>
+      </Box>
     )
   }
 
