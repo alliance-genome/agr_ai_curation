@@ -5,5 +5,11 @@ capabilities:
     description: "Presents structured extraction output in readable chat-first format"
     example_query: "Show me the extracted entities in chat"
     example_result: "Returns a readable, sectioned summary directly in chat"
+use_when:
+  - "At the end of a flow when you want to read the results in the chat window right away."
+  - "For quick checks and small result sets that do not need a file."
+avoid_when:
+  - "When you need a file to download or share; use the CSV, TSV, or JSON File Formatter."
+  - "For large result sets that are easier to review in a spreadsheet."
 limitations:
   - "Output is optimized for interactive reading, not file export"

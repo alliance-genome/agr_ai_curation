@@ -45,10 +45,16 @@ data_sources:
       - "anatomy terms"
       - "life-stage terms"
       - "GO terms"
+use_when:
+  - "After an extractor supplies anatomy, life stage, GO, or other ontology wording that needs an official term and ID."
+  - "When you have an exact ontology ID and want to confirm it is current and see its label."
+  - "When you need parent or child terms, or a term's obsolete history, for a disease or other ontology term."
+avoid_when:
+  - "For gene symbols; use the Gene Validation Agent."
+  - "For chemicals; use the Chemical Ontology Agent."
+  - "For fixed pick-list values such as evidence codes; use the Controlled Vocabulary Validation Agent."
+  - "To pull terms out of a paper; run an extractor first."
 limitations:
-  - "Cannot extract labels from PDFs; receives terms from prior extraction output or domain-pack validator inputs."
-  - "Cannot validate gene symbols; use Gene Validation Agent instead."
-  - "Cannot validate chemicals as ChEBI entities; use Chemical Validation Agent instead."
   - "Cannot create new ontology terms; only resolves existing terms."
   - "Requires ontology_term_type for generic label or synonym lookup."
   - "Requires data_provider for provider-scoped anatomy and life-stage lookup."

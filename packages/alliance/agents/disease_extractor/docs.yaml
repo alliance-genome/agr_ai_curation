@@ -26,8 +26,15 @@ data_sources:
     description: "The specialist validator that takes the proposed diseases and authoritatively confirms each one after extraction — matching the Disease Ontology term, the relationship vocabulary, and the data provider."
     species_supported: null
     data_types: ["Disease labels/CURIE hints", "Relation names", "Data-provider abbreviations", "Validator lookup results"]
+use_when:
+  - "When you upload a paper and want the diseases it links to genes, alleles, or models, with the evidence quote."
+  - "At the start of a disease curation flow, before the Disease Ontology Agent confirms each term."
+  - "When a paper reports a disease model or a new gene to disease finding."
+avoid_when:
+  - "To look a disease up in the Disease Ontology; use the Disease Ontology Agent."
+  - "For observable traits in model organisms; those are phenotypes, so use the Phenotype Extraction Agent."
+  - "When there is no uploaded paper, since it cannot work from chat text alone."
 limitations:
   - "Requires an uploaded PDF document — cannot extract diseases from chat text alone"
   - "Distinguishes diseases from phenotypes — observable traits in model organisms are phenotypes, not diseases"
   - "Diseases mentioned only in introduction/background without new experimental findings are excluded"
-  - "Looking each disease up in the Disease Ontology and confirming the provider is the Disease Validation Agent's job; any unconfirmed or conflicting diseases stay visible to you as validator findings."
