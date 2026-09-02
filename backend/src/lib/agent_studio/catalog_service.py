@@ -418,6 +418,7 @@ def _convert_documentation(doc_dict: Optional[Dict[str, Any]]) -> Optional[Agent
         limitations=doc_dict.get("limitations", []),
         use_when=doc_dict.get("use_when", []),
         avoid_when=doc_dict.get("avoid_when", []),
+        note=doc_dict.get("note", ""),
     )
 
 

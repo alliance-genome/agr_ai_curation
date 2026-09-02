@@ -33,6 +33,8 @@ export interface AgentDocumentation {
   use_when: string[]
   // Curator-voice guidance: when another agent is the right choice
   avoid_when: string[]
+  // Curator-voice note shown above the guidance, verbatim from docs.yaml; empty when none
+  note: string
 }
 
 // ============================================================================

@@ -21,14 +21,16 @@ data_sources:
       - "R. norvegicus"
       - "S. cerevisiae"
     data_types: ["genes", "symbols", "synonyms", "cross-references"]
+note: "Validation runs automatically. This check runs on the genes in every gene, disease, and gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
 use_when:
-  - "After the Gene Extraction Agent proposes genes from a paper and each one needs a confirmed Alliance record."
+  - "When you want a custom gene check: a changed prompt, different tools, or a stricter or looser match than the automatic check."
   - "When you have a gene symbol, name, or ID and want to confirm it exists and get its Alliance identifier."
-  - "Before an ortholog lookup, which needs a confirmed gene ID."
+  - "When you want to review how genes in extracted records are confirmed, or need a confirmed gene ID before an ortholog lookup."
 avoid_when:
+  - "To get genes validated in a flow; the domain pack already runs this check automatically on the genes in every gene, disease, and gene expression record an extractor produces."
   - "For alleles or variants; use the Allele Validation Agent."
   - "For diseases, chemicals, or ontology terms; use the matching validation agent."
-  - "To find the genes a paper studies; run the Gene Extraction Agent first."
+  - "To find the genes a paper studies; that is the Gene Extraction Agent's job."
 limitations:
   - "Only validates against Alliance group data"
   - "Some newly published genes may not be in the database yet"

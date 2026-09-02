@@ -1,13 +1,14 @@
 /**
  * AgentGuideTab
  *
- * The curator guide for one agent, in this order: when to use it and when
- * not to (stripes), what it reads, capabilities, limitations, and tools.
- * Sections render only when the documentation payload carries their data.
- * Nothing is synthesized in the frontend.
+ * The curator guide for one agent, in this order: an optional note, when to
+ * use it and when not to (stripes), capabilities, limitations, data sources,
+ * and tools. Sections render only when the documentation payload carries
+ * their data. Every word comes from the agent's docs.yaml; nothing is
+ * synthesized in the frontend.
  */
 
-import { Box, Button, Typography } from '@mui/material'
+import { Alert, Box, Button, Typography } from '@mui/material'
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined'
 
 import type { AgentCapability, AgentDocumentation, DataSourceInfo } from '@/types/promptExplorer'
@@ -44,16 +45,15 @@ function Stripe({ tone, heading, items }: { tone: 'success' | 'warning'; heading
 }
 
 function DataSourceRow({ source }: { source: DataSourceInfo }) {
-  const details = [
-    source.description,
-    source.species_supported && source.species_supported.length > 0 ? `Species: ${source.species_supported.join(', ')}.` : null,
-    source.data_types && source.data_types.length > 0 ? `Data types: ${source.data_types.join(', ')}.` : null,
-  ].filter(Boolean).join(' ')
+  const species = source.species_supported ?? []
   return (
-    <>
-      <Box component="span" sx={{ fontWeight: 500 }}>{source.name}</Box>
-      {details ? `: ${details}` : ''}
-    </>
+    <Box component="li" sx={{ my: 0.5 }}>
+      <Box sx={{ fontWeight: 600 }}>{source.name}</Box>
+      <Box sx={{ color: 'text.secondary' }}>{source.description}</Box>
+      {species.length > 0 && (
+        <Box sx={{ color: 'text.secondary' }}>{`Species: ${species.join(', ')}`}</Box>
+      )}
+    </Box>
   )
 }
 
@@ -104,6 +104,7 @@ function AgentGuideTab({
   onShowToolDetails,
   onDraftGuide,
 }: AgentGuideTabProps) {
+  const note = documentation?.note?.trim() ?? ''
   const useWhen = documentation?.use_when ?? []
   const avoidWhen = documentation?.avoid_when ?? []
   const dataSources = documentation?.data_sources ?? []
@@ -164,36 +165,32 @@ function AgentGuideTab({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.25 }}>
+      {/*
+        The note text comes from the agent's docs.yaml `note` key and is rendered
+        verbatim. There is deliberately no category or binding logic here: the UI
+        never decides which agents get a note or what it says.
+
+        Content rule for maintainers: notes appear on validation agents only, and
+        each note states whether that check runs automatically. Whether it runs is
+        decided by the domain packs' ACTIVE validator bindings; bindings in an
+        under_development bucket do not run. See packages/alliance/agents/<agent>/docs.yaml
+        for the notes and packages/alliance/domain_packs/<pack>/domain_pack.yaml for
+        the bindings.
+      */}
+      {note && (
+        <Alert
+          severity="warning"
+          data-testid="guide-note"
+          sx={{ py: 0.25, maxWidth: '78ch', '& .MuiAlert-message': { fontSize: 13 } }}
+        >
+          {note}
+        </Alert>
+      )}
+
       {(useWhen.length > 0 || avoidWhen.length > 0) && (
         <Box sx={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: 2.25 }}>
           {useWhen.length > 0 && <Stripe tone="success" heading="When to use it" items={useWhen} />}
           {avoidWhen.length > 0 && <Stripe tone="warning" heading="When not to use it" items={avoidWhen} />}
-        </Box>
-      )}
-
-      {dataSources.length > 0 && (
-        <Box component="section" aria-label="What it needs and returns" sx={sectionSx}>
-          <SectionHeading>What it needs and returns</SectionHeading>
-          <Box
-            component="dl"
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: '150px minmax(0, 1fr)' },
-              gap: '4px 14px',
-              m: 0,
-              fontSize: 13,
-              maxWidth: '78ch',
-            }}
-          >
-            <Box component="dt" sx={{ color: 'text.secondary', m: 0 }}>Reads</Box>
-            <Box component="dd" sx={{ m: 0 }}>
-              <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none', '& li': { my: 0.25 } }}>
-                {dataSources.map((source) => (
-                  <li key={source.name}><DataSourceRow source={source} /></li>
-                ))}
-              </Box>
-            </Box>
-          </Box>
         </Box>
       )}
 
@@ -213,6 +210,17 @@ function AgentGuideTab({
           <SectionHeading>Limitations</SectionHeading>
           <Box component="ul" sx={{ ...listSx, '& li::marker': { color: 'warning.main' } }}>
             {limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}
+          </Box>
+        </Box>
+      )}
+
+      {dataSources.length > 0 && (
+        <Box component="section" aria-label="Data sources" sx={sectionSx}>
+          <SectionHeading>Data sources</SectionHeading>
+          <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none', maxWidth: '78ch', fontSize: 13 }}>
+            {dataSources.map((source) => (
+              <DataSourceRow key={source.name} source={source} />
+            ))}
           </Box>
         </Box>
       )}
