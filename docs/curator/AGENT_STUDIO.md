@@ -8,11 +8,20 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. All tabs include a chat panel where you can talk with Claude Opus.
+Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. The tabs sit on the left. The Claude chat sits in a panel on the right, and it is available from every tab.
 
-### Opus Chat (Left Panel)
+### Claude Chat (Right Panel)
 
-On both tabs, the left panel is your chat with Claude Opus. You can ask Opus about whatever you're viewing on the right - agent prompts or flows.
+The panel on the right is your chat with Claude Opus. You can ask Opus about whatever you are viewing on the left - agent prompts, flows, or your workshop draft.
+
+You can make more room for your work:
+
+- Click **Hide Claude** in the chat header to shrink the panel to a narrow strip on the right edge. Click **Show Claude** on that strip to bring it back. A small orange dot on the strip means Claude answered while the panel was hidden.
+- Press **Ctrl+.** (or **Cmd+.** on a Mac) to hide or show Claude from anywhere in Agent Studio.
+- Drag the divider between the tabs and the chat to change how much space each side gets. Your choice is remembered.
+- On a narrow browser window, the panel is replaced by a **Claude** button at the right end of the tab bar. Click it to open the chat as a slide-out sheet. Press **Escape**, click outside the sheet, or click **Close Claude** to put it away.
+
+When you click **Discuss with Claude** on an agent or **Verify with Claude** in a flow, the chat opens by itself if it was hidden.
 
 When your question is about how the application itself works, Opus can inspect the live repository in read-only mode to verify whether a feature, restriction, or code path exists before answering.
 
@@ -26,7 +35,7 @@ findings, and domain-pack policy.
 
 Browse the instructions given to each AI agent and chat with Opus about them.
 
-**Agent Browser (Right Panel)**
+**Agent Browser (Left Panel)**
 
 See all agent prompts organized by subcategory:
 - **System** - Supervisor Agent that routes your queries to specialists (internal, not available in Flow Builder)
@@ -93,7 +102,7 @@ This helps you understand exactly what capabilities each agent has and how they 
 
 Build visual curation workflows and chat with Opus about them. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide to building flows.
 
-**Flow Builder (Right Panel)**
+**Flow Builder (Left Panel)**
 
 Create workflows by dragging agents onto a canvas and connecting them:
 - 15 available agents from extraction to file output
@@ -231,7 +240,7 @@ Custom agents appear in the Flow Builder palette under "My Custom Agents". You c
 
 **Discuss with Claude**
 
-Click the **"Discuss with Claude"** button in the Workshop toolbar to send your current draft prompt to Opus for review. When the Agent Workshop tab is active, the left-panel chat is aware of your workshop context — your selected template source, draft prompt, and group settings. You can ask Claude to:
+Click the **"Discuss with Claude"** button in the Workshop toolbar to send your current draft prompt to Opus for review. When the Agent Workshop tab is active, the right-panel chat is aware of your workshop context — your selected template source, draft prompt, and group settings. You can ask Claude to:
 - "Critique this draft and suggest concrete edits"
 - "Help me restructure this prompt for clarity"
 - "What would happen if I changed this instruction?"
@@ -294,7 +303,7 @@ Your domain expertise is invaluable for improving the AI. Agent Studio provides 
 
 ### AI-Assisted Suggestions
 
-Click the **"AI-Assisted"** button in the chat header. Opus will:
+Click **Send feedback** (the light bulb) in the chat header, then choose **AI-assisted**. Opus will:
 - Review your conversation
 - Summarize the issue you've discussed
 - Draft a concrete improvement suggestion
@@ -304,7 +313,7 @@ Click the **"AI-Assisted"** button in the chat header. Opus will:
 
 ### Manual Suggestions
 
-Click the **"Manual"** button to fill out a suggestion form yourself:
+Click **Send feedback** in the chat header, then choose **Manual** to fill out a suggestion form yourself:
 
 - **Suggestion Type:**
   - *Improvement* - General enhancement
