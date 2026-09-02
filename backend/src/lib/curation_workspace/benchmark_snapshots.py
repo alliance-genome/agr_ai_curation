@@ -81,8 +81,7 @@ def _report_handoff_failure(failure_code: str) -> None:
         report_runtime_exception(
             sanitized,
             component="curation_benchmark_snapshots",
-            operation="snapshot_handoff_failed",
-            context={"failure_code": failure_code},
+            operation=f"snapshot_handoff_{failure_code}",
         )
 
 

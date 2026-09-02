@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from src.lib.curation_workspace import benchmark_snapshots as module
+from src.lib.observability.sentry import _redact_runtime_exception_context
 from src.schemas.domain_envelope import DomainEnvelopeStatus
 
 
@@ -413,7 +414,17 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
     assert len(reported) == 1
     reported_exc, reported_kwargs = reported[0]
     assert isinstance(reported_exc, module._BenchmarkHandoffFailure)
-    assert reported_kwargs["context"] == {"failure_code": "delivery_timeout"}
+    assert reported_kwargs["operation"] == "snapshot_handoff_delivery_timeout"
+    assert "context" not in reported_kwargs
+    assert _redact_runtime_exception_context(
+        {
+            "component": reported_kwargs["component"],
+            "operation": reported_kwargs["operation"],
+        }
+    ) == {
+        "component": "curation_benchmark_snapshots",
+        "operation": "snapshot_handoff_delivery_timeout",
+    }
     assert "fake-sensitive" not in str(reported_exc)
     assert reported_exc.__traceback__ is not None
     assert reported_exc.__context__ is None
@@ -475,7 +486,8 @@ async def test_token_failure_is_sanitized_and_persisted_failed(monkeypatch, capl
     assert len(reported) == 1
     reported_exc, reported_kwargs = reported[0]
     assert isinstance(reported_exc, module._BenchmarkHandoffFailure)
-    assert reported_kwargs["context"] == {"failure_code": "token_request_failed"}
+    assert reported_kwargs["operation"] == "snapshot_handoff_token_request_failed"
+    assert "context" not in reported_kwargs
     assert sensitive not in str(reported_exc)
     assert "fake-sensitive-client-secret" not in str(reported_exc)
     assert reported_exc.__traceback__ is not None
