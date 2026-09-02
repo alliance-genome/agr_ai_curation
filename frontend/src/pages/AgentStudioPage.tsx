@@ -653,9 +653,9 @@ function AgentStudioPage() {
   }, [])
 
   // Handle discuss request from AgentDetailsPanel
-  const handleDiscussWithClaude = useCallback((agentId: string, agentName: string) => {
+  const handleDiscussWithClaude = useCallback((agentId: string, agentName: string, prompt?: string) => {
     showClaude()
-    const message = `I'd like to discuss the **${agentName}** agent. Help me understand:
+    const message = prompt ?? `I'd like to discuss the **${agentName}** agent. Help me understand:
 1. What this agent does and when it's used
 2. Its capabilities and limitations
 3. How its prompts are structured
