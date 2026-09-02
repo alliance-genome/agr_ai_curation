@@ -1415,6 +1415,183 @@ def test_pair_join_does_not_broadcast_one_element_lists(
     ]
 
 
+def _conditional_source_plan() -> FlowOutputProjectionPlan:
+    return FlowOutputProjectionPlan(
+        format="tsv",
+        row_source="object",
+        source_extraction_result_ids=["extract-generic-1"],
+        columns=[
+            FlowOutputColumnSpec(
+                key="source",
+                transform=FlowOutputTransformSpec(
+                    type="conditional",
+                    field_ref="object.attribute.source_status",
+                    condition_op="eq",
+                    value="new_in_paper",
+                    when_true=FlowOutputTransformSpec(
+                        type="literal",
+                        value="New in paper",
+                    ),
+                    when_false=FlowOutputTransformSpec(
+                        type="pair_join",
+                        field_refs=[
+                            "object.attribute.source",
+                            "object.attribute.source_identifier",
+                        ],
+                        pair_separator=":",
+                        separator="|",
+                    ),
+                ),
+            )
+        ],
+    )
+
+
+def _conditional_source_bundle():
+    step = _completed_generic_pdf_step()
+    objects = step["candidate"].payload_json["extracted_objects"]
+    for item in objects:
+        payload = item["payload"]
+        payload["attributes"] = {
+            "source_status": "existing",
+            "source": payload["source"],
+            "source_identifier": payload["source_identifier"],
+        }
+    objects[0]["payload"]["attributes"].update(
+        {
+            "source_status": "new_in_paper",
+            "source": "This study",
+            "source_identifier": "New in paper",
+        }
+    )
+    return build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Two-column reagent extractor",
+        output_format="tsv",
+    )
+
+
+def test_conditional_selects_literal_or_pair_join_for_reported_source_rules():
+    bundle = _conditional_source_bundle()
+    rows = bundle.rows_for_source("object")
+    # The unselected pair_join branch must not validate or execute against this row.
+    rows[0]["object.attribute.source"] = ["This study"]
+    rows[0]["object.attribute.source_identifier"] = ["New in paper", "unused"]
+    rows[1]["object.attribute.source"] = "BDSC"
+    rows[1]["object.attribute.source_identifier"] = ["31612", "35446"]
+
+    result = apply_projection_plan(bundle, _conditional_source_plan())
+
+    assert result.rows == [
+        {"source": "New in paper"},
+        {"source": "BDSC:31612|BDSC:35446"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source", "source_identifier", "expected"),
+    [
+        ("Gift from G-C Chen", None, "Gift from G-C Chen"),
+        (None, None, ""),
+        (["BDSC", "VDRC"], ["31612", "109733"], "BDSC:31612|VDRC:109733"),
+    ],
+)
+def test_conditional_false_branch_preserves_source_only_missing_and_list_values(
+    source,
+    source_identifier,
+    expected,
+):
+    bundle = _conditional_source_bundle()
+    row = bundle.rows_for_source("object")[1]
+    row["object.attribute.source"] = source
+    row["object.attribute.source_identifier"] = source_identifier
+
+    result = apply_projection_plan(bundle, _conditional_source_plan())
+
+    assert result.rows[1]["source"] == expected
+
+
+def test_conditional_rejects_missing_or_nested_branches():
+    with pytest.raises(ValueError, match="requires both when_true and when_false"):
+        FlowOutputTransformSpec(
+            type="conditional",
+            field_ref="object.attribute.source_status",
+            value="new_in_paper",
+            when_true=FlowOutputTransformSpec(type="literal", value="New in paper"),
+        )
+
+    with pytest.raises(ValueError, match="cannot contain another conditional"):
+        FlowOutputTransformSpec(
+            type="conditional",
+            field_ref="object.attribute.source_status",
+            value="new_in_paper",
+            when_true=FlowOutputTransformSpec(
+                type="conditional",
+                field_ref="object.attribute.source",
+                value="BDSC",
+                when_true=FlowOutputTransformSpec(type="literal", value="BDSC"),
+                when_false=FlowOutputTransformSpec(type="literal", value="Other"),
+            ),
+            when_false=FlowOutputTransformSpec(type="literal", value="Existing"),
+        )
+
+
+def test_conditional_in_uses_literal_values_without_treating_dotted_labels_as_refs():
+    bundle = _conditional_source_bundle()
+    plan = _conditional_source_plan()
+    conditional = plan.columns[0].transform
+    assert conditional is not None
+    conditional.condition_op = "in"
+    conditional.value = None
+    conditional.values = ["new_in_paper", "new.in.paper"]
+
+    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
+    result = apply_projection_plan(bundle, plan)
+
+    assert errors == []
+    assert result.rows[0]["source"] == "New in paper"
+
+
+def test_conditional_in_requires_values():
+    with pytest.raises(ValueError, match="operator 'in' requires values"):
+        FlowOutputTransformSpec(
+            type="conditional",
+            field_ref="object.attribute.source_status",
+            condition_op="in",
+            when_true=FlowOutputTransformSpec(type="literal", value="New in paper"),
+            when_false=FlowOutputTransformSpec(type="literal", value="Existing"),
+        )
+
+
+def test_conditional_validates_branch_refs_and_pair_alignment():
+    bundle = _conditional_source_bundle()
+    plan = _conditional_source_plan()
+    conditional = plan.columns[0].transform
+    assert conditional is not None
+    false_branch = conditional.when_false
+    assert false_branch is not None
+    false_branch.field_refs[1] = "object.attribute.unknown_identifier"
+
+    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
+
+    assert errors == [
+        "Column 'source' transform uses unknown field_ref "
+        "'object.attribute.unknown_identifier'."
+    ]
+
+    false_branch.field_refs[1] = "object.attribute.source_identifier"
+    row = bundle.rows_for_source("object")[1]
+    row["object.attribute.source"] = ["BDSC"]
+    row["object.attribute.source_identifier"] = ["31612", "35446"]
+
+    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
+
+    assert errors == [
+        "Column 'source' pair_join cannot align list values with incompatible lengths "
+        "1 and 2; use equal-length lists or a scalar value."
+    ]
+
+
 def test_projection_membership_emptiness_contains_filters_and_sort_are_applied():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_domain_step()],

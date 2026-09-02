@@ -236,11 +236,17 @@ def _source_refs_for_transform(transform: FlowOutputTransformSpec) -> list[str]:
     if transform.field_ref:
         refs.append(transform.field_ref)
     refs.extend(transform.field_refs)
-    for value in transform.values:
-        if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
-            refs.append(str(value["field_ref"]))
-        elif isinstance(value, str) and "." in value:
-            refs.append(value)
+    if transform.type != "conditional":
+        for value in transform.values:
+            if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
+                refs.append(str(value["field_ref"]))
+            elif isinstance(value, str) and "." in value:
+                refs.append(value)
+    if transform.type == "conditional":
+        if transform.when_true is not None:
+            refs.extend(_source_refs_for_transform(transform.when_true))
+        if transform.when_false is not None:
+            refs.extend(_source_refs_for_transform(transform.when_false))
     return refs
 
 
@@ -283,7 +289,14 @@ def _transform_literal_payload_errors(
     errors: list[str] = []
     if transform.type == "literal":
         errors.extend(_literal_value_errors(transform.value, context=f"{context} literal value"))
+    elif transform.type == "conditional":
+        errors.extend(
+            _literal_value_errors(transform.value, context=f"{context} condition value")
+        )
     for index, value in enumerate(transform.values, start=1):
+        if transform.type == "conditional":
+            errors.extend(_literal_value_errors(value, context=f"{context} values[{index}]"))
+            continue
         if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
             extra_keys = [key for key in value if key != "field_ref"]
             if extra_keys:
@@ -312,6 +325,18 @@ def _transform_literal_payload_errors(
         ("unknown_label", transform.unknown_label),
     ):
         errors.extend(_literal_value_errors(label_value, context=f"{context} {label_name}"))
+    if transform.type == "conditional":
+        for branch_name, branch in (
+            ("when_true", transform.when_true),
+            ("when_false", transform.when_false),
+        ):
+            if branch is not None:
+                errors.extend(
+                    _transform_literal_payload_errors(
+                        branch,
+                        context=f"{context} {branch_name}",
+                    )
+                )
     return errors
 
 
@@ -356,6 +381,28 @@ def _reject_extra_keys(
     ]
 
 
+def _raw_transform_extra_key_errors(
+    raw_transform: Mapping[str, Any],
+    *,
+    context: str,
+) -> list[str]:
+    errors = _reject_extra_keys(
+        raw_transform,
+        model=FlowOutputTransformSpec,
+        context=context,
+    )
+    for branch_name in ("when_true", "when_false"):
+        branch = raw_transform.get(branch_name)
+        if isinstance(branch, Mapping):
+            errors.extend(
+                _raw_transform_extra_key_errors(
+                    branch,
+                    context=f"{context} {branch_name}",
+                )
+            )
+    return errors
+
+
 def _projection_plan_extra_key_errors(raw_plan: Mapping[str, Any]) -> list[str]:
     errors = _reject_extra_keys(
         raw_plan,
@@ -380,9 +427,8 @@ def _projection_plan_extra_key_errors(raw_plan: Mapping[str, Any]) -> list[str]:
             raw_transform = raw_column.get("transform")
             if isinstance(raw_transform, Mapping):
                 errors.extend(
-                    _reject_extra_keys(
+                    _raw_transform_extra_key_errors(
                         raw_transform,
-                        model=FlowOutputTransformSpec,
                         context=f"Column {index} transform",
                     )
                 )
@@ -957,6 +1003,12 @@ def _capabilities_payload(
                 "Use exactly two field_refs. Values are joined with pair_separator; "
                 "pairs are joined with separator. A scalar broadcasts across a list, "
                 "equal-length lists zip, and incompatible list lengths are rejected."
+            ),
+            "conditional": (
+                "Use field_ref plus condition_op/value (or values for 'in') and both "
+                "when_true/when_false branch transforms. Branches may use existing "
+                "non-conditional transforms such as literal, first_non_empty, or pair_join; "
+                "nested conditionals are rejected."
             ),
         },
         "json_shapes": list(get_args(FlowOutputJsonShape)),
