@@ -495,6 +495,12 @@ function AgentStudioPage() {
         return currentConversation
       }
 
+      // The restored transcript replaces the chat. Move the unread baseline to
+      // its assistant count so the snapshot OpusChat publishes for it (before
+      // or after this effect) does not count as new messages.
+      assistantMessageCountRef.current = seededConversation.filter(
+        (message) => message.role === 'assistant',
+      ).length
       return seededConversation
     })
     setPendingUrlSwapSessionId((currentPendingSessionId) => (

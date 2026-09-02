@@ -1044,6 +1044,64 @@ describe('AgentStudioPage', () => {
       })
     })
 
+    it('does not count a transcript that hydrates after mount as unread when Claude starts collapsed', async () => {
+      localStorage.setItem(COLLAPSED_KEY, 'true')
+      historyMocks.useChatHistoryDetailQuery.mockReturnValue(
+        buildSessionDetail('agent-studio-session-12345678', 'agent_studio')
+      )
+      let transcriptResolved = false
+      historyMocks.useChatHistoryTranscriptQuery.mockImplementation(() => (
+        transcriptResolved
+          ? buildTranscript('agent-studio-session-12345678', 'agent_studio', [
+              {
+                message_id: 'message-1',
+                role: 'user',
+                message_type: 'text',
+                content: 'Restored question',
+                created_at: '2026-04-22T00:00:01Z',
+              },
+              {
+                message_id: 'message-2',
+                role: 'assistant',
+                message_type: 'text',
+                content: 'Restored answer',
+                created_at: '2026-04-22T00:00:02Z',
+              },
+            ])
+          : { data: undefined, isLoading: true, isSuccess: false, error: null }
+      ))
+
+      const view = render(
+        <MemoryRouter initialEntries={['/agent-studio?session_id=agent-studio-session-12345678']}>
+          <AgentStudioPage />
+        </MemoryRouter>
+      )
+      await waitFor(() => {
+        expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(1)
+      })
+      expect(screen.getByTestId('opus-chat-initial-conversation')).toHaveTextContent('none')
+
+      transcriptResolved = true
+      view.rerender(
+        <MemoryRouter initialEntries={['/agent-studio?session_id=agent-studio-session-12345678']}>
+          <AgentStudioPage />
+        </MemoryRouter>
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('opus-chat-initial-conversation')).toHaveTextContent(
+          'Restored question|Restored answer'
+        )
+      })
+      const showButton = screen.getByRole('button', { name: 'Show Claude' })
+      expect(showButton).not.toHaveAccessibleDescription()
+
+      fireEvent.click(screen.getByText('append-assistant-reply'))
+      await waitFor(() => {
+        expect(showButton).toHaveAccessibleDescription('1 new message from Claude')
+      })
+    })
+
     it('reveals a collapsed Claude and focuses the input when a discuss request arrives', async () => {
       localStorage.setItem(COLLAPSED_KEY, 'true')
       await renderStudio()
