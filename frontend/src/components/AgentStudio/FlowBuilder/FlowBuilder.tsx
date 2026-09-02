@@ -61,10 +61,9 @@ import CloseIcon from '@mui/icons-material/Close'
 import FlowNode from './FlowNode'
 import DeletableEdge from './DeletableEdge'
 import AgentPalette from './AgentPalette'
-import NodeEditor from './NodeEditor'
-import TaskInputEditor from './TaskInputEditor'
-import PromptViewer from './PromptViewer'
-import DomainEnvelopeViewer from './DomainEnvelopeViewer'
+import { NodePanel, NodePanelDock, nodePanelMode, stepOrder } from './NodePanel'
+import type { NodePanelLeaveGuard, ValidatorAttachmentView } from './NodePanel'
+import { useContainerWidth } from '../useContainerWidth'
 import { validationAttachmentForPersistence } from './types'
 import { projectExecutableFlowGraph } from './executableFlowGraph'
 import type {
@@ -517,7 +516,9 @@ const BuilderContent = styled(Box)(() => ({
 }))
 
 const CanvasArea = styled(Box)(({ theme }) => ({
-  flex: 1,
+  flex: '1 1 0%',
+  minWidth: 0,
+  minHeight: 0,
   position: 'relative',
   backgroundColor: alpha(theme.palette.background.default, 0.5),
   '&:focus-visible': {
@@ -542,6 +543,23 @@ const CanvasArea = styled(Box)(({ theme }) => ({
   '& .react-flow__node-output.selectable:hover, & .react-flow__node-output.selectable.selected, & .react-flow__node-output.selectable:focus, & .react-flow__node-output.selectable:focus-visible': {
     boxShadow: 'none',
   },
+}))
+
+// Canvas plus the docked node panel; the panel takes width from the canvas.
+// The parent Panel is a flex row, so without an explicit basis this row would
+// shrink to its content, and React Flow has no intrinsic width (ALL-1014 hit
+// the same collapse with PanelCard).
+const CANVAS_SPLIT_FILL_STYLE = {
+  display: 'flex',
+  flex: '1 1 0%',
+  width: '100%',
+  height: '100%',
+  minWidth: 0,
+  minHeight: 0,
+} as const
+
+const CanvasSplit = styled(Box)(() => ({
+  ...CANVAS_SPLIT_FILL_STYLE,
 }))
 
 const SidePanel = styled(Box)(({ theme }) => ({
@@ -603,7 +621,7 @@ const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
   return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? 'Cmd' : 'Ctrl'
 }
 
-function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }: FlowBuilderProps) {
+function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, onOpenAgent, active = true }: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   const isValidationAgentDynamic = useCallback(
@@ -620,7 +638,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   )
 
   // React Flow state
-  const builderRootRef = useRef<HTMLDivElement>(null)
+  // The drawer-vs-docked breakpoint reads the whole builder (palette, canvas,
+  // dock), not the canvas row, which is far narrower once the Claude pane is open.
+  const [builderRootRef, builderWidth] = useContainerWidth<HTMLDivElement>()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const primaryShortcutLabel = useMemo(getPrimaryShortcutLabel, [])
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
@@ -644,11 +664,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     severity: 'success' | 'warning' | 'error'
   } | null>(null)
 
-  // Prompt viewer state
-  const [promptViewerOpen, setPromptViewerOpen] = useState(false)
-  const [promptViewerAgent, setPromptViewerAgent] = useState<{ id: string; name: string } | null>(null)
-  const [domainEnvelopeViewerNodeId, setDomainEnvelopeViewerNodeId] = useState<string | null>(null)
-  const [domainEnvelopeViewerOpen, setDomainEnvelopeViewerOpen] = useState(false)
+  // Node panel: docked beside the canvas, collapsible to a rail, a drawer when
+  // the builder is narrow. The panel owns its draft; the leave guard asks it
+  // before the selection changes so unapplied edits are never dropped silently.
+  const [nodePanelCollapsed, setNodePanelCollapsed] = useState(false)
+  const nodePanelGuardRef = useRef<NodePanelLeaveGuard | null>(null)
+  const [canvasSplitRef, canvasAreaWidth] = useContainerWidth<HTMLDivElement>()
 
   // Menu bar state
   const [fileMenuAnchor, setFileMenuAnchor] = useState<HTMLElement | null>(null)
@@ -1300,16 +1321,33 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     ]
   )
 
-  // Handle node selection
-  const onNodeClick = useCallback((_event: React.MouseEvent, node: { id: string; data: AgentNodeData }) => {
-    // Cast to our AgentNode type (React Flow types are generic)
-    setSelectedNode(node as AgentNode)
+  const confirmLeaveNode = useCallback((): Promise<boolean> => {
+    const guard = nodePanelGuardRef.current
+    if (!guard) return Promise.resolve(true)
+    return guard.requestLeave()
   }, [])
 
-  // Handle canvas click (deselect)
+  // Handle node selection. Clicking another node while the panel holds
+  // unapplied edits asks Apply, Discard, or Keep editing first.
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: { id: string; data: AgentNodeData }) => {
+    // Cast to our AgentNode type (React Flow types are generic)
+    const next = node as AgentNode
+    setNodePanelCollapsed(false)
+    setSelectedNode((current) => {
+      if (!current || current.id === next.id) return next
+      void confirmLeaveNode().then((leave) => {
+        if (leave) setSelectedNode(next)
+      })
+      return current
+    })
+  }, [confirmLeaveNode])
+
+  // Handle canvas click (deselect), through the same guard.
   const onPaneClick = useCallback(() => {
-    setSelectedNode(null)
-  }, [])
+    void confirmLeaveNode().then((leave) => {
+      if (leave) setSelectedNode(null)
+    })
+  }, [confirmLeaveNode])
 
   // Handle drag over (allow drop)
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -1431,7 +1469,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     [setNodes, edges, revalidateValidators]
   )
 
-  // Handle node deletion by ID (for NodeEditor delete button)
+  // Handle node deletion by ID (for the step panel Delete step action)
   const handleDeleteNode = useCallback((nodeId: string) => {
     setNodes((nds) => nds.filter((n) => n.id !== nodeId))
     setEdges((eds) =>
@@ -1440,38 +1478,42 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     setSelectedNode(null)
   }, [setNodes, setEdges])
 
-  const domainEnvelopeViewerNode = useMemo(() => {
-    if (!domainEnvelopeViewerNodeId) return null
-    return nodes.find((node) => node.id === domainEnvelopeViewerNodeId) ?? null
-  }, [nodes, domainEnvelopeViewerNodeId])
+  // Step numbers for the panel header and its cross-step sentences.
+  const stepIds = useMemo(
+    () => stepOrder(
+      nodes as AgentNode[],
+      edges as FlowEdge[],
+      nodes.find((node) => node.data.agent_id === 'task_input')?.id,
+    ),
+    [nodes, edges]
+  )
+  const stepNumbersById = useMemo(
+    () => Object.fromEntries(stepIds.map((id, index) => [id, index + 1])) as Record<string, number>,
+    [stepIds]
+  )
 
-  const domainEnvelopeViewerMetadata = domainEnvelopeViewerNode
-    ? agentMetadata[domainEnvelopeViewerNode.data.agent_id]?.domain_envelope
-    : undefined
+  // How a selected custom validator step attaches to its extraction step.
+  const selectedValidatorAttachment = useMemo((): ValidatorAttachmentView | null => {
+    if (!selectedEditorNode) return null
+    const edge = (edges as FlowEdge[]).find((candidate) => (
+      edgeRole(candidate) === 'validation_attachment' && candidate.target === selectedEditorNode.id
+    ))
+    if (!edge) return null
+    const source = nodes.find((node) => node.id === edge.source) as AgentNode | undefined
+    if (!source) return null
+    const replaced = edge.data?.replaces_attachment_id
+      ? source.data.validation_attachments?.find(
+          (attachment) => attachment.attachment_id === edge.data?.replaces_attachment_id
+        )
+      : undefined
+    return {
+      sourceLabel: source.data.agent_display_name,
+      sourceStep: stepNumbersById[source.id],
+      replacesLabel: replaced?.label ?? null,
+    }
+  }, [edges, nodes, selectedEditorNode, stepNumbersById])
 
-  // Handle marking a node as manually configured when user saves in NodeEditor
-  // This prevents auto-switching on future connections
-  // Handle opening prompt viewer
-  const handleViewPrompts = useCallback((agentId: string, agentName: string) => {
-    setPromptViewerAgent({ id: agentId, name: agentName })
-    setPromptViewerOpen(true)
-  }, [])
-
-  // Handle closing prompt viewer
-  const handleClosePromptViewer = useCallback(() => {
-    setPromptViewerOpen(false)
-  }, [])
-
-  // Handle opening domain envelope viewer
-  const handleViewDomainEnvelope = useCallback((nodeId: string) => {
-    setDomainEnvelopeViewerNodeId(nodeId)
-    setDomainEnvelopeViewerOpen(true)
-  }, [])
-
-  // Handle closing domain envelope viewer
-  const handleCloseDomainEnvelopeViewer = useCallback(() => {
-    setDomainEnvelopeViewerOpen(false)
-  }, [])
+  const panelMode = nodePanelMode(builderWidth)
 
   // File menu handlers
   const handleFileMenuOpen = useCallback((event: React.MouseEvent<HTMLElement>) => {
@@ -1783,6 +1825,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (!active) return
       if (isEditableShortcutTarget(event.target)) return
       if (!isBuilderShortcutContext(event)) return
 
@@ -1811,7 +1854,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleSaveClick, handleSelectAll, handleDeleteAllSelected, nodes.length, selectedElementsCount])
+  }, [active, builderRootRef, handleSaveClick, handleSelectAll, handleDeleteAllSelected, nodes.length, selectedElementsCount])
 
   const saveActionsDisabled = saving || nodes.length === 0
 
@@ -2010,6 +2053,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           <ResizeHandle />
 
           <Panel defaultSize={72} minSize={60}>
+            <CanvasSplit ref={canvasSplitRef} data-testid="flow-canvas-split">
             <CanvasArea
               ref={reactFlowWrapper}
               role="region"
@@ -2049,48 +2093,36 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                 </ReactFlow>
               )}
 
-              {/* Node Editor Panel - Show different editors based on node type */}
-              {selectedEditorNode && (selectedEditorNode.type === 'task_input' || selectedEditorNode.data.agent_id === 'task_input') ? (
-                <TaskInputEditor
-                  node={selectedEditorNode}
-                  onSave={handleNodeDataUpdate}
-                  onClose={() => setSelectedNode(null)}
-                  onTaskInstructionsAuthored={() => setTaskInstructionsDefaultOnly(false)}
-                  onDelete={handleDeleteNode}
-                />
-              ) : selectedEditorNode ? (
-                <NodeEditor
-                  node={selectedEditorNode}
-                  outputBinding={selectedOutputBinding}
-                  onSave={handleNodeDataUpdate}
-                  onClose={() => setSelectedNode(null)}
-                  onDelete={handleDeleteNode}
-                  onViewPrompts={handleViewPrompts}
-                  onViewDomainEnvelope={handleViewDomainEnvelope}
-                />
-              ) : null}
-
-              {/* Domain Envelope Slide-over */}
-              {domainEnvelopeViewerNode && domainEnvelopeViewerMetadata && (
-                <DomainEnvelopeViewer
-                  agentName={domainEnvelopeViewerNode.data.agent_display_name}
-                  metadata={domainEnvelopeViewerMetadata}
-                  validationAttachments={domainEnvelopeViewerNode.data.validation_attachments || []}
-                  open={domainEnvelopeViewerOpen}
-                  onClose={handleCloseDomainEnvelopeViewer}
-                />
-              )}
-
-              {/* Prompt Viewer Slide-over */}
-              {promptViewerAgent && (
-                <PromptViewer
-                  agentId={promptViewerAgent.id}
-                  agentName={promptViewerAgent.name}
-                  open={promptViewerOpen}
-                  onClose={handleClosePromptViewer}
-                />
-              )}
             </CanvasArea>
+
+            {/* Node panel: docked beside the canvas so the canvas shrinks instead of being covered. */}
+            {selectedEditorNode && (
+              <NodePanelDock
+                mode={panelMode}
+                collapsed={nodePanelCollapsed}
+                areaWidth={canvasAreaWidth}
+                railLabel={selectedEditorNode.data.agent_display_name}
+                onExpand={() => setNodePanelCollapsed(false)}
+                onClose={onPaneClick}
+              >
+                <NodePanel
+                  node={selectedEditorNode}
+                  stepNumber={stepNumbersById[selectedEditorNode.id]}
+                  stepCount={stepIds.length}
+                  stepNumbersById={stepNumbersById}
+                  outputBinding={selectedOutputBinding}
+                  validatorAttachment={selectedValidatorAttachment}
+                  mode={panelMode}
+                  onApply={handleNodeDataUpdate}
+                  onDelete={handleDeleteNode}
+                  onHide={panelMode === 'drawer' ? onPaneClick : () => setNodePanelCollapsed(true)}
+                  onTaskInstructionsAuthored={() => setTaskInstructionsDefaultOnly(false)}
+                  onOpenAgent={onOpenAgent}
+                  leaveGuardRef={nodePanelGuardRef}
+                />
+              </NodePanelDock>
+            )}
+            </CanvasSplit>
           </Panel>
         </PanelGroup>
       </BuilderContent>

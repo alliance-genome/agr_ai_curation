@@ -38,6 +38,7 @@ import SearchIcon from '@mui/icons-material/Search'
 import ClearIcon from '@mui/icons-material/Clear'
 
 import AgentDetailsPanel from './AgentDetailsPanel'
+import type { AgentDetailsRequest } from './agentBrowserRequest'
 import type { PromptCatalog, PromptInfo } from '@/types/promptExplorer'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import { CountPill, NARROW_BROWSER_WIDTH } from './agentGuidePrimitives'
@@ -98,6 +99,8 @@ interface AgentBrowserProps {
   onGroupSelect: (groupId: string | null) => void
   onDiscussWithClaude?: (agentId: string, agentName: string, prompt?: string) => void
   onCloneToWorkshop?: (agentId: string) => void
+  /** Deep link: open the selected agent on a tab, optionally on one envelope field. */
+  detailsRequest?: AgentDetailsRequest | null
 }
 
 type BrowserFilter = 'all' | 'shared' | 'templates'
@@ -111,6 +114,7 @@ function AgentBrowser({
   onGroupSelect,
   onDiscussWithClaude,
   onCloneToWorkshop,
+  detailsRequest = null,
 }: AgentBrowserProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const [expandedCategories, setExpandedCategories] = useState<string[]>([])
@@ -208,6 +212,11 @@ function AgentBrowser({
       }
     }
   }, [selectedAgentId, allAgents])
+
+  // A deep link lands on the detail view even at narrow width.
+  useEffect(() => {
+    if (detailsRequest) setNarrowView('detail')
+  }, [detailsRequest])
 
   const handleCategoryToggle = (category: string) => {
     setExpandedCategories((prev) =>
@@ -423,6 +432,7 @@ function AgentBrowser({
             onCloneToWorkshop={onCloneToWorkshop}
             onBack={narrow ? () => setNarrowView('list') : undefined}
             narrow={narrow}
+            request={detailsRequest}
           />
         </DetailsContainer>
       )}

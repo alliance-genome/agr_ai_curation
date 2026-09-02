@@ -6,6 +6,7 @@
  * domain pack's field-group labels when present.
  */
 
+import { useEffect, useRef } from 'react'
 import {
   Box,
   Table,
@@ -32,6 +33,8 @@ interface EnvelopeFieldTableProps {
   /** Hide the type column when the panel is narrow. */
   narrow?: boolean
   maxHeight?: number | string
+  /** Marks and scrolls to one field row, from a deep link. */
+  highlightFieldPath?: string
 }
 
 
@@ -94,10 +97,26 @@ function AutomaticCheckCell({ field }: { field: DomainEnvelopeFieldMetadata }) {
   )
 }
 
-function FieldRow({ field, narrow, providerWord }: { field: DomainEnvelopeFieldMetadata; narrow: boolean; providerWord: ProviderWordResolver }) {
+function FieldRow({
+  field,
+  narrow,
+  providerWord,
+  highlighted,
+}: {
+  field: DomainEnvelopeFieldMetadata
+  narrow: boolean
+  providerWord: ProviderWordResolver
+  highlighted: boolean
+}) {
   const label = field.display_name || field.field_path
+  const rowRef = useRef<HTMLTableRowElement>(null)
+
+  useEffect(() => {
+    if (highlighted) rowRef.current?.scrollIntoView({ block: 'center' })
+  }, [highlighted])
+
   return (
-    <TableRow>
+    <TableRow ref={rowRef} selected={highlighted} aria-current={highlighted ? 'true' : undefined}>
       <TableCell sx={{ ...bodyCellSx, textAlign: 'center', px: 0.5, color: 'error.main', fontWeight: 600 }}>
         {field.required ? <span role="img" aria-label="Required">•</span> : null}
       </TableCell>
@@ -135,7 +154,7 @@ function FieldRow({ field, narrow, providerWord }: { field: DomainEnvelopeFieldM
   )
 }
 
-function EnvelopeFieldTable({ groups, ariaLabel, providerWord, narrow = false, maxHeight = 480 }: EnvelopeFieldTableProps) {
+function EnvelopeFieldTable({ groups, ariaLabel, providerWord, narrow = false, maxHeight = 480, highlightFieldPath }: EnvelopeFieldTableProps) {
   const columnCount = narrow ? 3 : 4
   const hasFields = groups.some((group) => group.fields.length > 0)
 
@@ -187,7 +206,13 @@ function EnvelopeFieldTable({ groups, ariaLabel, providerWord, narrow = false, m
               </TableRow>
             )}
             {group.fields.map((field) => (
-              <FieldRow key={field.field_path} field={field} narrow={narrow} providerWord={providerWord} />
+              <FieldRow
+                key={field.field_path}
+                field={field}
+                narrow={narrow}
+                providerWord={providerWord}
+                highlighted={field.field_path === highlightFieldPath}
+              />
             ))}
           </TableBody>
         ))}

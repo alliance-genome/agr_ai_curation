@@ -71,10 +71,14 @@ export interface ValidationAttachmentOption {
   label: string
   target_label?: string
   description?: string
-  /** Curator-voice switch sentence naming what the check confirms and against what. */
-  curator_label?: string
-  /** Curator-voice consequence of turning the check off; present only when allow_opt_out is true. */
-  when_off?: string
+  /**
+   * Curator-voice switch sentence naming what the check confirms and against
+   * what. The backend always emits the key: a string on every active binding
+   * (enforced by the pack contract test), null on under-development ones.
+   */
+  curator_label: string | null
+  /** Curator-voice consequence of turning the check off. A string only when allow_opt_out is true, otherwise null. */
+  when_off: string | null
   definition_state?: string
   reason?: string
   state_explanation?: string

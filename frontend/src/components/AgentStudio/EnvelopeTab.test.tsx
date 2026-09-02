@@ -81,6 +81,16 @@ function buildDiseaseLikeMetadata() {
 }
 
 describe('EnvelopeTab', () => {
+  it('selects the object that holds a focused field and marks its row', () => {
+    render(<EnvelopeTab metadata={buildDiseaseLikeMetadata()} focus={{ objectType: 'Term', fieldPath: 'curie' }} />)
+
+    const picker = screen.getByRole('group', { name: 'Envelope object' })
+    expect(within(picker).getByRole('button', { name: 'Embedded references (2)' })).toHaveAttribute('aria-pressed', 'true')
+    const row = screen.getByText('CURIE').closest('tr') as HTMLElement
+    expect(row).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByText('Subject label').closest('tr')).not.toHaveAttribute('aria-current')
+  })
+
   it('shows the produced object, a count line, a grouped table, validators, and closed provenance', () => {
     render(<EnvelopeTab metadata={buildDiseaseLikeMetadata()} />)
 

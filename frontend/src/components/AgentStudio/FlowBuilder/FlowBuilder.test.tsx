@@ -173,16 +173,9 @@ vi.mock('./AgentPalette', () => ({
   default: () => <div data-testid="agent-palette" />,
 }))
 
-vi.mock('./NodeEditor', () => ({
-  default: () => null,
-}))
-
-vi.mock('./TaskInputEditor', () => ({
-  default: () => null,
-}))
-
-vi.mock('./PromptViewer', () => ({
-  default: () => null,
+vi.mock('./NodePanel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./NodePanel')>()),
+  NodePanel: () => null,
 }))
 
 function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse {
@@ -258,6 +251,14 @@ function expectedPrimaryShortcutLabel() {
 }
 
 describe('FlowBuilder', () => {
+  it('gives the canvas row an explicit flex basis so React Flow gets a width inside the Panel', async () => {
+    render(<FlowBuilder />)
+    const split = await screen.findByTestId('flow-canvas-split')
+    expect(split).toHaveStyle({ display: 'flex', flex: '1 1 0%', width: '100%', height: '100%', minWidth: '0', minHeight: '0' })
+    const canvas = screen.getByRole('region', { name: 'Flow canvas' })
+    expect(canvas).toHaveStyle({ flex: '1 1 0%', minWidth: '0' })
+  })
+
   beforeEach(() => {
     serviceMocks.createFlow.mockReset()
     serviceMocks.updateFlow.mockReset()
@@ -308,6 +309,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'identity',
                 label: 'Gene identity validation',
                 state: 'active',
+                curator_label: 'Confirm gene identity validation',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 required: true,
                 blocking: false,
@@ -832,6 +835,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'symbol',
                 label: 'Allele symbol lookup',
                 state: 'active',
+                curator_label: 'Confirm allele symbol lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'symbol',
                 required: true,
@@ -847,6 +852,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'identifier',
                 label: 'Allele identifier lookup',
                 state: 'active',
+                curator_label: 'Confirm allele identifier lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'identifier',
                 required: true,
@@ -935,6 +942,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'symbol',
                 label: 'Allele symbol lookup',
                 state: 'active',
+                curator_label: 'Confirm allele symbol lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'symbol',
                 required: true,
@@ -990,6 +999,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'identifier',
                 label: 'Allele identifier lookup',
                 state: 'active',
+                curator_label: 'Confirm allele identifier lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'identifier',
                 required: true,
@@ -1005,6 +1016,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'future-reference',
                 label: 'Future reference lookup',
                 state: 'under_development',
+                curator_label: null,
+                when_off: null,
                 scope: 'field',
                 field_path: 'reference.curie',
                 required: false,
@@ -1071,6 +1084,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'symbol',
                 label: 'Allele symbol lookup',
                 state: 'active',
+                curator_label: 'Confirm allele symbol lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'symbol',
                 required: true,
@@ -1227,6 +1242,8 @@ describe('FlowBuilder', () => {
             validator_binding_id: 'identifier',
             label: 'Allele identifier lookup',
             state: 'active',
+            curator_label: 'Confirm allele identifier lookup',
+            when_off: 'Stays as the extractor wrote it.',
             scope: 'field',
             object_type: 'Allele',
             field_path: 'allele_identifier',
@@ -1241,6 +1258,8 @@ describe('FlowBuilder', () => {
             validator_id: 'future_validator',
             label: 'Future validator',
             state: 'under_development',
+            curator_label: null,
+            when_off: null,
             scope: 'pack',
             state_explanation: 'Future validation is visible but not runnable yet.',
             required: false,
