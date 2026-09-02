@@ -1,333 +1,46 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  Chip,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Divider,
-  FormHelperText,
-  FormControl,
-  FormControlLabel,
-  IconButton,
-  InputAdornment,
-  InputLabel,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemText,
-  Menu,
-  MenuItem,
-  Paper,
-  Select,
-  Stack,
-  Switch,
-  TextField,
-  ToggleButton,
-  ToggleButtonGroup,
-  Tooltip,
-  Typography,
-} from '@mui/material'
-import { styled, alpha } from '@mui/material/styles'
-import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh'
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
-import SearchIcon from '@mui/icons-material/Search'
-import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
-import DeleteIcon from '@mui/icons-material/Delete'
-import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Alert, Box } from '@mui/material'
 
 import type {
-  PromptCatalog,
-  PromptInfo,
-  CustomAgent,
-  CustomAgentVersion,
   AgentWorkshopContext,
-  ModelOption,
-  ToolLibraryItem,
-  AgentTemplate,
-  GroupOption,
-  ToolIdeaRequest,
+  CustomAgent,
+  PromptCatalog,
   ToolIdeaConversationEntry,
   WorkshopPromptUpdateRequest,
 } from '@/types/promptExplorer'
-import {
-  createCustomAgent,
-  deleteCustomAgent,
-  fetchAgentTemplates,
-  fetchModelOptions,
-  fetchToolLibrary,
-  listToolIdeaRequests,
-  listCustomAgentVersions,
-  listCustomAgents,
-  revertCustomAgentVersion,
-  setCustomAgentVisibility,
-  submitToolIdeaRequest,
-  updateCustomAgent,
-} from '@/services/agentStudioService'
+import type { AgentMetadata } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
-import { useAuth } from '@/contexts/AuthContext'
-import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
 
-const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
-const ALL_GROUPS_VALUE = '__all_groups__'
-
-function areStringRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
-  const leftKeys = Object.keys(left).sort()
-  const rightKeys = Object.keys(right).sort()
-  return leftKeys.length === rightKeys.length
-    && leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key])
-}
-
-function areStringArraysEqual(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) return false
-  const sortedLeft = [...left].sort()
-  const sortedRight = [...right].sort()
-  return sortedLeft.every((value, index) => value === sortedRight[index])
-}
-
-const Toolbar = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  height: 32,
-  minHeight: 32,
-  padding: theme.spacing(0, 0.5),
-  borderBottom: `1px solid ${theme.palette.divider}`,
-  backgroundColor: alpha(theme.palette.background.default, 0.4),
-  gap: theme.spacing(0.25),
-}))
-
-const MenuTrigger = styled(Box)(({ theme }) => ({
-  display: 'inline-flex',
-  alignItems: 'center',
-  padding: theme.spacing(0.25, 1),
-  fontSize: '0.8rem',
-  fontWeight: 500,
-  cursor: 'pointer',
-  borderRadius: 3,
-  color: theme.palette.text.secondary,
-  transition: 'all 0.1s ease',
-  userSelect: 'none',
-  '&:hover': {
-    backgroundColor: alpha(theme.palette.action.hover, 0.8),
-    color: theme.palette.text.primary,
-  },
-}))
-
-const StyledMenu = styled(Menu)(({ theme }) => ({
-  '& .MuiPaper-root': {
-    minWidth: 200,
-    backgroundColor: theme.palette.background.paper,
-    border: `1px solid ${theme.palette.divider}`,
-    boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-    borderRadius: 6,
-    marginTop: 2,
-  },
-  '& .MuiList-root': {
-    padding: theme.spacing(0.5, 0),
-  },
-}))
-
-const SectionCard = styled(Paper)(({ theme }) => ({
-  padding: theme.spacing(2.5),
-  borderRadius: 10,
-  border: 'none',
-  backgroundColor: alpha(theme.palette.background.paper, 0.45),
-}))
-
-const SectionHeader = styled(Typography)(({ theme }) => ({
-  fontSize: '0.7rem',
-  fontWeight: 700,
-  letterSpacing: '0.08em',
-  textTransform: 'uppercase',
-  color: theme.palette.text.secondary,
-  paddingLeft: theme.spacing(1.5),
-  borderLeft: `3px solid ${theme.palette.primary.main}`,
-  marginBottom: theme.spacing(2),
-}))
-
-const PromptLayerPreview = styled(Box)(({ theme }) => ({
-  padding: theme.spacing(1.5),
-  borderRadius: 6,
-  border: `1px solid ${alpha(theme.palette.divider, 0.2)}`,
-  backgroundColor: alpha(theme.palette.common.black, 0.12),
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-  fontSize: '0.78rem',
-  lineHeight: 1.55,
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
-  maxHeight: 260,
-  overflow: 'auto',
-}))
-
-const StyledToggleButtonGroup = styled(ToggleButtonGroup)(({ theme }) => ({
-  '& .MuiToggleButton-root': {
-    textTransform: 'none',
-    fontSize: '0.8rem',
-    fontWeight: 500,
-    padding: theme.spacing(0.5, 1.5),
-    border: `1px solid ${theme.palette.divider}`,
-    '&.Mui-selected': {
-      backgroundColor: alpha(theme.palette.primary.main, 0.12),
-      color: theme.palette.primary.main,
-      borderColor: alpha(theme.palette.primary.main, 0.4),
-      '&:hover': {
-        backgroundColor: alpha(theme.palette.primary.main, 0.18),
-      },
-    },
-  },
-}))
-
-const StyledAccordion = styled(Accordion)(({ theme }) => ({
-  backgroundColor: 'transparent',
-  boxShadow: 'none',
-  border: `1px solid ${alpha(theme.palette.divider, 0.18)}`,
-  borderRadius: `${theme.shape.borderRadius}px !important`,
-  '&::before': { display: 'none' },
-  '&:not(:last-child)': { marginBottom: theme.spacing(1) },
-  '& .MuiAccordionSummary-root': {
-    minHeight: 42,
-    padding: theme.spacing(0, 1.5),
-    '& .MuiAccordionSummary-content': {
-      margin: theme.spacing(0.75, 0),
-    },
-  },
-  '& .MuiAccordionDetails-root': {
-    padding: theme.spacing(0, 1.5, 1.5),
-  },
-}))
-
-const ToolbarStatus = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: theme.spacing(1),
-  marginLeft: 'auto',
-  paddingRight: theme.spacing(1),
-  color: theme.palette.text.secondary,
-  fontSize: '0.75rem',
-}))
-
-const StyledMenuItem = styled(MenuItem)(({ theme }) => ({
-  padding: theme.spacing(0.5, 1.5),
-  minHeight: 28,
-  fontSize: '0.8rem',
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: theme.spacing(3),
-  '&:hover': {
-    backgroundColor: alpha(theme.palette.primary.main, 0.12),
-  },
-  '&.Mui-disabled': {
-    opacity: 0.4,
-  },
-}))
-
-function toolIdeaStatusLabel(status: ToolIdeaRequest['status']): string {
-  return status.replace(/_/g, ' ')
-}
-
-function toolIdeaStatusColor(
-  status: ToolIdeaRequest['status']
-): 'default' | 'info' | 'warning' | 'success' | 'error' {
-  if (status === 'reviewed') return 'info'
-  if (status === 'in_progress') return 'warning'
-  if (status === 'completed') return 'success'
-  if (status === 'declined') return 'error'
-  return 'default'
-}
-
-function normalizeReasoningValue(value?: string | null): string {
-  return (value || '').trim().toLowerCase()
-}
-
-function formatReasoningLabel(value: string): string {
-  const normalized = normalizeReasoningValue(value)
-  if (!normalized) return value
-  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
-}
-
-function resolveModelSelection(
-  modelOptions: ModelOption[],
-  fallbackModelId: string,
-  candidateModelId?: string | null
-): string {
-  const candidate = (candidateModelId || '').trim()
-  if (candidate && modelOptions.some((model) => model.model_id === candidate)) {
-    return candidate
-  }
-  return fallbackModelId
-}
-
-function resolveReasoningSelection(
-  modelOptions: ModelOption[],
-  modelId: string,
-  candidateReasoning?: string | null
-): string {
-  const model = modelOptions.find((entry) => entry.model_id === modelId)
-  if (!model || !model.supports_reasoning || model.reasoning_options.length === 0) {
-    return ''
-  }
-
-  const normalizedCandidate = normalizeReasoningValue(candidateReasoning)
-  if (normalizedCandidate && model.reasoning_options.includes(normalizedCandidate)) {
-    return normalizedCandidate
-  }
-
-  const defaultReasoning = normalizeReasoningValue(model.default_reasoning)
-  if (defaultReasoning && model.reasoning_options.includes(defaultReasoning)) {
-    return defaultReasoning
-  }
-
-  return model.reasoning_options[0] || ''
-}
-
-function buildModelHelpText(models: ModelOption[]): string {
-  if (models.length === 0) return 'No curator-visible models are currently configured.'
-
-  return [
-    'Configured model guidance:',
-    ...models.map((model) => {
-      const defaultReasoning = model.default_reasoning
-        ? ` (default reasoning: ${model.default_reasoning})`
-        : ''
-      return `• ${model.model_id}${defaultReasoning}: ${model.guidance || model.description || 'No guidance configured.'}`
-    }),
-  ].join('\n')
-}
-
-const REASONING_HELP_TEXT = [
-  'Reasoning levels trade off speed and depth:',
-  '• low: fastest',
-  '• medium: recommended default',
-  '• high: slowest, use only for hard ambiguity',
-].join('\n')
-
-function resolveUserGroupIds(userGroups: string[] | undefined, availableGroupIds: string[]): string[] {
-  if (!userGroups || userGroups.length === 0 || availableGroupIds.length === 0) return []
-  const available = new Set(availableGroupIds.map((group) => group.toUpperCase()))
-  const resolved: string[] = []
-  for (const rawGroup of userGroups) {
-    const normalized = rawGroup.trim().toUpperCase()
-    if (!normalized) continue
-    const direct = available.has(normalized) ? normalized : ''
-    const inferred = direct || availableGroupIds.find((groupId) => {
-      const loweredGroup = rawGroup.trim().toLowerCase()
-      return loweredGroup === groupId.toLowerCase() || loweredGroup.includes(groupId.toLowerCase())
-    })?.toUpperCase() || ''
-    if (inferred && !resolved.includes(inferred)) {
-      resolved.push(inferred)
-    }
-  }
-  return resolved
-}
+import { useWorkshopDraft } from './useWorkshopDraft'
+import {
+  buildDiscussDraftMessage,
+  buildDiscussPromptMessage,
+  buildModelAdviceMessage,
+  buildToolRequestMessage,
+  describeChangedSections,
+  type GettingStartedMode,
+  type WorkshopSection,
+} from './workshopDraftUtils'
+import { NARROW_QUERY } from './workshopStyles'
+import WorkshopHeader from './WorkshopHeader'
+import WorkshopNav from './WorkshopNav'
+import WorkshopStartScreen from './WorkshopStartScreen'
+import SetupSection, { type EnvelopeSummary } from './SetupSection'
+import PromptSection from './PromptSection'
+import ToolsSection from './ToolsSection'
+import VersionsSection from './VersionsSection'
+import SaveVersionDialog from './dialogs/SaveVersionDialog'
+import SaveAsDialog from './dialogs/SaveAsDialog'
+import OpenAgentDialog from './dialogs/OpenAgentDialog'
+import ManageAgentsDialog from './dialogs/ManageAgentsDialog'
+import ToolLibraryDialog from './dialogs/ToolLibraryDialog'
+import ToolRequestDialog from './dialogs/ToolRequestDialog'
+import {
+  DeleteAgentDialog,
+  RevertVersionDialog,
+  SelfExclusionDialog,
+  UnsavedChangesDialog,
+} from './dialogs/ConfirmDialogs'
 
 interface PromptWorkshopProps {
   catalog: PromptCatalog
@@ -337,9 +50,27 @@ interface PromptWorkshopProps {
   onVerifyRequest?: (message: string) => void
   opusConversation?: ToolIdeaConversationEntry[]
   incomingPromptUpdate?: WorkshopPromptUpdateRequest | null
+  /** Open the given system agent in the Agents tab with its Envelope view. */
+  onViewEnvelope?: (agentId: string) => void
 }
 
-type GettingStartedMode = 'template' | 'scratch' | 'clone'
+function summarizeEnvelope(metadata: AgentMetadata | undefined): EnvelopeSummary | null {
+  const envelope = metadata?.domain_envelope
+  if (!envelope) return null
+  const objects = envelope.object_definitions
+  const objectLabel = objects.length === 1
+    ? `${objects[0].display_name} objects`
+    : objects.length === 0
+      ? `${envelope.display_name} objects`
+      : `${objects.length} object types`
+  const isValidator = /valid/i.test(metadata?.category || '')
+  return {
+    status: envelope.status,
+    producesLabel: isValidator ? `Validation findings on ${objectLabel}` : `Produces ${objectLabel}`,
+    activeChecks: envelope.validation_summary.by_state.active,
+    underDevelopment: envelope.validation_summary.by_state.under_development,
+  }
+}
 
 function PromptWorkshop({
   catalog,
@@ -349,2407 +80,440 @@ function PromptWorkshop({
   onVerifyRequest,
   opusConversation = [],
   incomingPromptUpdate = null,
+  onViewEnvelope,
 }: PromptWorkshopProps) {
-  const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
-  const { user: authUser } = useAuth()
-
-  const [parentAgentId, setParentAgentId] = useState('')
-  const [workshopSection, setWorkshopSection] = useState<'setup' | 'prompt' | 'tools' | 'reference'>('setup')
-  const [gettingStartedMode, setGettingStartedMode] = useState<GettingStartedMode>('template')
-  const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
-  const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
-  const [cloneSourceAgentId, setCloneSourceAgentId] = useState<string>('')
-  const [versions, setVersions] = useState<CustomAgentVersion[]>([])
-  const [loading, setLoading] = useState(false)
-  const [workshopOptionsLoaded, setWorkshopOptionsLoaded] = useState(false)
-  const [hydrationVersion, setHydrationVersion] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [status, setStatus] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [customPrompt, setCustomPrompt] = useState('')
-  const [debouncedPromptDraft, setDebouncedPromptDraft] = useState('')
-  const [groupPromptOverrides, setGroupPromptOverrides] = useState<Record<string, string>>({})
-  const [debouncedGroupPromptOverrides, setDebouncedGroupPromptOverrides] = useState<Record<string, string>>({})
-  const [includeGroupRules, setIncludeGroupRules] = useState(true)
-  const [selectedVisibility, setSelectedVisibility] = useState<'private' | 'project'>('private')
-  const [selectedAllowedGroupIds, setSelectedAllowedGroupIds] = useState<string[]>([])
-  const [selectedModelId, setSelectedModelId] = useState('')
-  const [selectedModelReasoning, setSelectedModelReasoning] = useState('')
-  const [selectedToolIds, setSelectedToolIds] = useState<string[]>([])
-  const [outputSchemaKey, setOutputSchemaKey] = useState('')
-  const [icon, setIcon] = useState('🔧')
-  const [saveNotes, setSaveNotes] = useState('')
-  const [groupId, setGroupId] = useState('')
-
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
-  const [toolLibrary, setToolLibrary] = useState<ToolLibraryItem[]>([])
-  const [templateOptions, setTemplateOptions] = useState<AgentTemplate[]>([])
-  const [groupOptions, setGroupOptions] = useState<GroupOption[]>([])
-  const [toolIdeaRequests, setToolIdeaRequests] = useState<ToolIdeaRequest[]>([])
-  const [toolIdeasLoading, setToolIdeasLoading] = useState(false)
-  const [toolIdeaDialogOpen, setToolIdeaDialogOpen] = useState(false)
-  const [toolIdeaSubmitting, setToolIdeaSubmitting] = useState(false)
-  const [toolIdeaTitle, setToolIdeaTitle] = useState('')
-  const [toolIdeaDescription, setToolIdeaDescription] = useState('')
-
-  const [fileMenuAnchor, setFileMenuAnchor] = useState<HTMLElement | null>(null)
-  const [openDialogOpen, setOpenDialogOpen] = useState(false)
-  const [openSearchTerm, setOpenSearchTerm] = useState('')
-  const [manageDialogOpen, setManageDialogOpen] = useState(false)
-  const [toolLibraryDialogOpen, setToolLibraryDialogOpen] = useState(false)
-  const [toolLibrarySearch, setToolLibrarySearch] = useState('')
-  const [toolLibraryCategory, setToolLibraryCategory] = useState('all')
-  const [saveAsDialogOpen, setSaveAsDialogOpen] = useState(false)
-  const [saveAsName, setSaveAsName] = useState('')
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const [selfExclusionDialogOpen, setSelfExclusionDialogOpen] = useState(false)
-  const [pendingSaveOptions, setPendingSaveOptions] = useState<{ forceCreate?: boolean; nameOverride?: string }>()
-  const [pendingDeleteAgent, setPendingDeleteAgent] = useState<CustomAgent | null>(null)
-  const appliedInitialCustomAgentId = useRef<string | null>(null)
-  const refreshAttemptedForInitialCustomAgentId = useRef<string | null>(null)
-  const appliedPromptUpdateId = useRef<number | null>(null)
-  const appliedPromptUpdateHydrationVersion = useRef<number>(-1)
-  const customAgentsLoadingRef = useRef(false)
-
-  const parentAgents = useMemo(() => {
-    const seen = new Set<string>()
-    const agents: PromptInfo[] = []
-    for (const category of catalog.categories) {
-      for (const agent of category.agents) {
-        if (agent.agent_id === 'task_input') continue
-        if (agent.agent_id.startsWith('ca_')) continue
-        if (seen.has(agent.agent_id)) continue
-        seen.add(agent.agent_id)
-        agents.push(agent)
-      }
-    }
-    return agents.sort((a, b) => a.agent_name.localeCompare(b.agent_name))
-  }, [catalog])
-
-  const parentAgent = useMemo(
-    () => parentAgents.find((agent) => agent.agent_id === parentAgentId),
-    [parentAgents, parentAgentId]
-  )
-  const selectedTemplate = useMemo(
-    () => templateOptions.find((template) => template.agent_id === parentAgentId),
-    [templateOptions, parentAgentId]
-  )
-
-  const selectedCustomAgent = useMemo(
-    () => customAgents.find((agent) => agent.id === selectedCustomAgentId),
-    [customAgents, selectedCustomAgentId]
-  )
-  const selectedCloneSource = useMemo(
-    () => customAgents.find((agent) => agent.id === cloneSourceAgentId),
-    [customAgents, cloneSourceAgentId]
-  )
-
-  const groupRuleSourceAgent = useMemo(() => {
-    if (selectedCustomAgent) {
-      if (!selectedCustomAgent.template_source) return null
-      return parentAgents.find((agent) => agent.agent_id === selectedCustomAgent.template_source) || null
-    }
-
-    if (gettingStartedMode === 'clone') {
-      if (!selectedCloneSource?.template_source) return null
-      return parentAgents.find((agent) => agent.agent_id === selectedCloneSource.template_source) || null
-    }
-
-    if (gettingStartedMode === 'template') {
-      if (!parentAgentId) return null
-      return parentAgents.find((agent) => agent.agent_id === parentAgentId) || null
-    }
-
-    return null
-  }, [
-    gettingStartedMode,
-    parentAgentId,
-    parentAgents,
-    selectedCloneSource?.template_source,
-    selectedCustomAgent,
-  ])
-
-  const availableGroupIds = useMemo(
-    () => Object.keys(groupRuleSourceAgent?.group_rules || {}).sort(),
-    [groupRuleSourceAgent]
-  )
-  const loggedInGroupIds = useMemo(
-    () => resolveUserGroupIds(
-      authUser?.groups?.length ? authUser.groups : authUser?.providerGroups,
-      availableGroupIds
-    ),
-    [authUser?.groups, authUser?.providerGroups, availableGroupIds]
-  )
-  const currentUserGroupIds = useMemo(
-    () => Array.from(new Set((authUser?.groups || []).map((group) => group.trim().toUpperCase()).filter(Boolean))),
-    [authUser?.groups]
-  )
-
-  const inheritedAllowedGroupIds = useMemo(() => {
-    if (selectedCustomAgent) {
-      return selectedCustomAgent.inherited_allowed_group_ids
-    }
-    if (gettingStartedMode === 'clone' && !selectedCustomAgent) {
-      return selectedCloneSource?.allowed_group_ids || []
-    }
-    return selectedTemplate?.allowed_group_ids || []
-  }, [gettingStartedMode, selectedCloneSource?.allowed_group_ids, selectedCustomAgent, selectedTemplate?.allowed_group_ids])
-
-  const selectableGroupOptions = useMemo(() => {
-    if (inheritedAllowedGroupIds.length === 0) return groupOptions
-    const inherited = new Set(inheritedAllowedGroupIds)
-    return groupOptions.filter((group) => inherited.has(group.group_id))
-  }, [groupOptions, inheritedAllowedGroupIds])
-
-  const selectedGroupId = useMemo(() => groupId.trim().toUpperCase(), [groupId])
-
-  const selectedGroupBasePrompt = useMemo(() => {
-    if (!selectedGroupId) return ''
-    return groupRuleSourceAgent?.group_rules[selectedGroupId]?.content || ''
-  }, [groupRuleSourceAgent, selectedGroupId])
-
-  const selectedGroupPrompt = useMemo(() => {
-    if (!selectedGroupId) return ''
-    if (Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)) {
-      return groupPromptOverrides[selectedGroupId]
-    }
-    return selectedGroupBasePrompt
-  }, [groupPromptOverrides, selectedGroupId, selectedGroupBasePrompt])
-
-  const selectedGroupPromptForContext = useMemo(() => {
-    if (!selectedGroupId) return undefined
-    if (Object.prototype.hasOwnProperty.call(debouncedGroupPromptOverrides, selectedGroupId)) {
-      return debouncedGroupPromptOverrides[selectedGroupId]
-    }
-    return groupRuleSourceAgent?.group_rules[selectedGroupId]?.content
-  }, [debouncedGroupPromptOverrides, groupRuleSourceAgent, selectedGroupId])
-
-  const parentPromptLayers = parentAgent?.prompt_layers || []
-  const parentCorePrompt = parentPromptLayers
-    .filter((layer) => layer.kind === 'core_static')
-    .map((layer) => layer.content)
-    .join('\n\n')
-  const parentGeneratedContract = parentPromptLayers
-    .filter((layer) => layer.kind === 'core_generated')
-    .map((layer) => layer.content)
-    .join('\n\n')
-  const parentBasePrompt = parentPromptLayers
-    .filter((layer) => layer.kind === 'base_prompt')
-    .map((layer) => layer.content)
-    .join('\n\n') || parentAgent?.base_prompt || ''
-  const overlayStatus = selectedCustomAgent?.custom_prompt_overlay_status
-  const overlayWarning = selectedCustomAgent?.custom_prompt_warning || ''
-  const loggedInAsLabel = authUser?.name || authUser?.email || authUser?.uid || 'the current user'
-  const loggedInGroupsLabel = loggedInGroupIds.length > 0 ? loggedInGroupIds.join(', ') : 'No matching group detected'
-
-  const hasSelectedGroupOverride = useMemo(
-    () => Boolean(selectedGroupId && Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)),
-    [groupPromptOverrides, selectedGroupId]
-  )
-
-  const hasAnyGroupOverrides = useMemo(
-    () => Object.keys(groupPromptOverrides).length > 0,
-    [groupPromptOverrides]
-  )
-
-  const iconOptions = useMemo(() => {
-    const discovered = Object.values(agentMetadata)
-      .map((agent) => agent.icon)
-      .filter((candidate): candidate is string => Boolean(candidate && candidate.trim()))
-    return Array.from(new Set([...FALLBACK_ICON_OPTIONS, ...discovered, icon || '🔧']))
-  }, [agentMetadata, icon])
-
-  const filteredOpenAgents = useMemo(() => {
-    if (!openSearchTerm.trim()) return customAgents
-    const query = openSearchTerm.toLowerCase()
-    return customAgents.filter((agent) => {
-      return agent.name.toLowerCase().includes(query) || (agent.description || '').toLowerCase().includes(query)
-    })
-  }, [customAgents, openSearchTerm])
-
-  const defaultModelId = useMemo(() => {
-    const explicitDefault = modelOptions.find((model) => model.default)
-    if (explicitDefault) return explicitDefault.model_id
-    if (modelOptions.length > 0) return modelOptions[0].model_id
-    return ''
-  }, [modelOptions])
-
-  const selectedModelOption = useMemo(
-    () => modelOptions.find((model) => model.model_id === selectedModelId) || null,
-    [modelOptions, selectedModelId]
-  )
-
-  const selectedModelReasoningDescription = useMemo(() => {
-    if (!selectedModelOption || !selectedModelReasoning) return ''
-    return selectedModelOption.reasoning_descriptions[selectedModelReasoning] || ''
-  }, [selectedModelOption, selectedModelReasoning])
-
-  const domainEnvelopeAgentId = useMemo(() => {
-    if (selectedCustomAgent?.template_source) return selectedCustomAgent.template_source
-    if (gettingStartedMode === 'clone' && selectedCloneSource?.template_source) {
-      return selectedCloneSource.template_source
-    }
-    if (gettingStartedMode === 'template') return parentAgentId
-    return ''
-  }, [
-    gettingStartedMode,
-    parentAgentId,
-    selectedCloneSource?.template_source,
-    selectedCustomAgent?.template_source,
-  ])
-
-  const domainEnvelopeMetadata = domainEnvelopeAgentId
-    ? agentMetadata[domainEnvelopeAgentId]?.domain_envelope
-    : undefined
-
-  const toolCategories = useMemo(() => {
-    const categories = Array.from(new Set(toolLibrary.map((tool) => tool.category).filter(Boolean)))
-    categories.sort((a, b) => a.localeCompare(b))
-    return categories
-  }, [toolLibrary])
-
-  const filteredToolLibrary = useMemo(() => {
-    const query = toolLibrarySearch.trim().toLowerCase()
-    return toolLibrary.filter((tool) => {
-      const matchesCategory = toolLibraryCategory === 'all' || tool.category === toolLibraryCategory
-      const matchesSearch = !query
-        || tool.display_name.toLowerCase().includes(query)
-        || tool.tool_key.toLowerCase().includes(query)
-        || tool.category.toLowerCase().includes(query)
-      return matchesCategory && matchesSearch
-    })
-  }, [toolLibrary, toolLibraryCategory, toolLibrarySearch])
-
-  const toolPolicyByKey = useMemo(
-    () => new Map(toolLibrary.map((tool) => [tool.tool_key, tool])),
-    [toolLibrary]
-  )
-
-  useEffect(() => {
-    if (!initialParentAgentId) return
-    if (templateOptions.some((template) => template.agent_id === initialParentAgentId)) {
-      setParentAgentId(initialParentAgentId)
-    }
-  }, [initialParentAgentId, templateOptions])
-
-  useEffect(() => {
-    const targetId = (initialCustomAgentId || '').trim()
-    if (!targetId) return
-    if (appliedInitialCustomAgentId.current === targetId) return
-
-    const found = customAgents.find((agent) => agent.id === targetId)
-    if (!found) return
-
-    appliedInitialCustomAgentId.current = targetId
-    setSelectedCustomAgentId(found.id)
-    setCloneSourceAgentId(found.id)
-    setStatus(`Opened "${found.name}"`)
-  }, [customAgents, initialCustomAgentId])
-
-  useEffect(() => {
-    async function loadWorkshopOptions() {
-      setWorkshopOptionsLoaded(false)
-      try {
-        const [models, tools, workshopMetadata] = await Promise.all([
-          fetchModelOptions(),
-          fetchToolLibrary(),
-          fetchAgentTemplates(),
-        ])
-        setModelOptions(models)
-        setToolLibrary(tools)
-        setTemplateOptions(workshopMetadata.templates)
-        setGroupOptions(workshopMetadata.group_options)
-        if (models.length === 0) {
-          setError('No model options are configured. Add entries in config/models.yaml before creating agents.')
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load workshop options')
-      } finally {
-        setWorkshopOptionsLoaded(true)
-      }
-    }
-    void loadWorkshopOptions()
-  }, [])
-
-  useEffect(() => {
-    async function loadToolIdeaRequests() {
-      setToolIdeasLoading(true)
-      try {
-        const response = await listToolIdeaRequests()
-        setToolIdeaRequests(response.tool_ideas)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load tool idea requests')
-      } finally {
-        setToolIdeasLoading(false)
-      }
-    }
-    void loadToolIdeaRequests()
-  }, [])
-
-  useEffect(() => {
-    if (!parentAgentId && templateOptions.length > 0) {
-      setParentAgentId(templateOptions[0].agent_id)
-    }
-  }, [parentAgentId, templateOptions])
-
-  useEffect(() => {
-    if (!selectedModelId) return
-    const resolvedReasoning = resolveReasoningSelection(
-      modelOptions,
-      selectedModelId,
-      selectedModelReasoning
-    )
-    if (resolvedReasoning !== selectedModelReasoning) {
-      setSelectedModelReasoning(resolvedReasoning)
-    }
-  }, [modelOptions, selectedModelId, selectedModelReasoning])
-
-  const getTemplateAlignedAgentId = useCallback((agents: CustomAgent[]): string => {
-    if (!parentAgentId) return ''
-    return agents.find((agent) => agent.template_source === parentAgentId)?.id || ''
-  }, [parentAgentId])
-
-  const loadCustomAgents = useCallback(async (options?: { silent?: boolean }) => {
-    const silent = options?.silent ?? false
-    customAgentsLoadingRef.current = true
-    if (!silent) {
-      setLoading(true)
-      setError(null)
-      setStatus(null)
-    }
-
-    try {
-      const response = await listCustomAgents()
-      setCustomAgents(response.custom_agents)
-
-      const templateAlignedAgentId = getTemplateAlignedAgentId(response.custom_agents)
-
-      if (response.custom_agents.length > 0) {
-        setSelectedCustomAgentId((prev) => {
-          const existing = response.custom_agents.find((agent) => agent.id === prev)
-          if (!existing) return ''
-          if (parentAgentId && existing.template_source !== parentAgentId) {
-            return ''
-          }
-          return prev
-        })
-        setCloneSourceAgentId((prev) => {
-          const stillExists = response.custom_agents.some((agent) => agent.id === prev)
-          if (stillExists) return prev
-          return templateAlignedAgentId || response.custom_agents[0].id
-        })
-      } else {
-        setSelectedCustomAgentId('')
-        setCloneSourceAgentId('')
-        setVersions([])
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load custom agents')
-    } finally {
-      customAgentsLoadingRef.current = false
-      if (!silent) {
-        setLoading(false)
-      }
-    }
-  }, [getTemplateAlignedAgentId, parentAgentId])
-
-  useEffect(() => {
-    void loadCustomAgents()
-  }, [loadCustomAgents])
-
-  useEffect(() => {
-    const targetId = (initialCustomAgentId || '').trim()
-    if (!targetId) return
-    if (customAgents.some((agent) => agent.id === targetId)) return
-    if (refreshAttemptedForInitialCustomAgentId.current === targetId) return
-
-    refreshAttemptedForInitialCustomAgentId.current = targetId
-    // Clone-to-workshop can create a new agent after this component already loaded.
-    // Refresh once so the initial id can be resolved without requiring a full page reload.
-    void loadCustomAgents({ silent: true })
-  }, [customAgents, initialCustomAgentId, loadCustomAgents])
-
-  useEffect(() => {
-    async function loadVersions() {
-      if (!selectedCustomAgentId) {
-        setVersions([])
-        return
-      }
-      try {
-        const loaded = await listCustomAgentVersions(selectedCustomAgentId)
-        setVersions(loaded)
-      } catch {
-        setVersions([])
-      }
-    }
-    void loadVersions()
-  }, [selectedCustomAgentId])
-
-  useEffect(() => {
-    if (!selectedCustomAgent) {
-      if (gettingStartedMode === 'clone' && selectedCloneSource) {
-        const clonedName = selectedCloneSource.name.endsWith(' (Copy)')
-          ? selectedCloneSource.name
-          : `${selectedCloneSource.name} (Copy)`
-        setName(clonedName)
-        setDescription(selectedCloneSource.description || '')
-        setCustomPrompt(selectedCloneSource.custom_prompt)
-        setDebouncedPromptDraft(selectedCloneSource.custom_prompt)
-        setGroupPromptOverrides(selectedCloneSource.group_prompt_overrides || {})
-        setDebouncedGroupPromptOverrides(selectedCloneSource.group_prompt_overrides || {})
-        setIncludeGroupRules(selectedCloneSource.include_group_rules)
-        setSelectedAllowedGroupIds(selectedCloneSource.allowed_group_ids || [])
-        setSelectedVisibility('private')
-        const cloneModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCloneSource.model_id)
-        setSelectedModelId(cloneModelId)
-        setSelectedModelReasoning(
-          resolveReasoningSelection(modelOptions, cloneModelId, selectedCloneSource.model_reasoning)
-        )
-        setSelectedToolIds(selectedCloneSource.tool_ids || [])
-        setOutputSchemaKey(selectedCloneSource.output_schema_key || '')
-        setIcon(selectedCloneSource.icon || '🔧')
-        setHydrationVersion((prev) => prev + 1)
-        if (selectedCloneSource.template_source) {
-          setParentAgentId(selectedCloneSource.template_source)
-        }
-        return
-      }
-
-      if (gettingStartedMode === 'scratch') {
-        setName('')
-        setDescription('')
-        setCustomPrompt('')
-        setDebouncedPromptDraft('')
-        setGroupPromptOverrides({})
-        setDebouncedGroupPromptOverrides({})
-        setIncludeGroupRules(false)
-        setSelectedAllowedGroupIds([])
-        setSelectedVisibility('private')
-        setSelectedModelId(defaultModelId)
-        setSelectedModelReasoning(resolveReasoningSelection(modelOptions, defaultModelId))
-        setSelectedToolIds([])
-        setOutputSchemaKey('')
-        setIcon('🔧')
-        setHydrationVersion((prev) => prev + 1)
-        return
-      }
-
-      setName(parentAgent ? `${parentAgent.agent_name} (Custom)` : '')
-      setDescription('')
-      setCustomPrompt(parentBasePrompt)
-      setDebouncedPromptDraft(parentBasePrompt)
-      setGroupPromptOverrides({})
-      setDebouncedGroupPromptOverrides({})
-      setIncludeGroupRules(true)
-      setSelectedAllowedGroupIds(selectedTemplate?.allowed_group_ids || [])
-      setSelectedVisibility('private')
-      const templateModelId = resolveModelSelection(modelOptions, defaultModelId, selectedTemplate?.model_id)
-      setSelectedModelId(templateModelId)
-      setSelectedModelReasoning(resolveReasoningSelection(modelOptions, templateModelId))
-      setSelectedToolIds(selectedTemplate?.tool_ids || [])
-      setOutputSchemaKey(selectedTemplate?.output_schema_key || '')
-      setIcon('🔧')
-      setHydrationVersion((prev) => prev + 1)
-      return
-    }
-
-    setName(selectedCustomAgent.name)
-    setDescription(selectedCustomAgent.description || '')
-    const savedMainPrompt = selectedCustomAgent.custom_prompt || parentBasePrompt
-    setCustomPrompt(savedMainPrompt)
-    setDebouncedPromptDraft(savedMainPrompt)
-    setGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
-    setDebouncedGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
-    setIncludeGroupRules(selectedCustomAgent.include_group_rules)
-    setSelectedAllowedGroupIds(selectedCustomAgent.allowed_group_ids || [])
-    setSelectedVisibility(selectedCustomAgent.visibility === 'project' ? 'project' : 'private')
-    const customModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCustomAgent.model_id)
-    setSelectedModelId(customModelId)
-    setSelectedModelReasoning(
-      resolveReasoningSelection(modelOptions, customModelId, selectedCustomAgent.model_reasoning)
-    )
-    setSelectedToolIds(selectedCustomAgent.tool_ids || [])
-    setOutputSchemaKey(selectedCustomAgent.output_schema_key || '')
-    setIcon(selectedCustomAgent.icon || '🔧')
-    setHydrationVersion((prev) => prev + 1)
-    if (selectedCustomAgent.template_source) {
-      setParentAgentId(selectedCustomAgent.template_source)
-    }
-  }, [
-    modelOptions,
-    defaultModelId,
-    gettingStartedMode,
-    parentAgent,
-    parentBasePrompt,
-    selectedCloneSource,
-    selectedCustomAgent,
-    selectedTemplate,
-  ])
-
-  useEffect(() => {
-    if (availableGroupIds.length === 0) {
-      if (groupId) setGroupId('')
-      return
-    }
-    if (groupId && availableGroupIds.includes(groupId)) {
-      return
-    }
-
-    const overrideGroup = Object.keys(groupPromptOverrides)
-      .map((group) => group.trim().toUpperCase())
-      .find((group) => availableGroupIds.includes(group))
-    if (overrideGroup) {
-      setGroupId(overrideGroup)
-      return
-    }
-
-    const loggedInGroup = loggedInGroupIds.find((group) => availableGroupIds.includes(group))
-    if (loggedInGroup) {
-      setGroupId(loggedInGroup)
-      return
-    }
-
-    if (groupId) {
-      setGroupId('')
-    }
-  }, [availableGroupIds, groupId, groupPromptOverrides, loggedInGroupIds])
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedPromptDraft(customPrompt)
-    }, 450)
-
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [customPrompt])
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedGroupPromptOverrides(groupPromptOverrides)
-    }, 450)
-
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [groupPromptOverrides])
-
-  useEffect(() => {
-    if (!onContextChange) return
-    const contextTemplateId = selectedCustomAgent?.template_source
-      || (gettingStartedMode === 'template' ? parentAgentId : undefined)
-    const contextTemplateName = contextTemplateId
-      ? (selectedTemplate?.name || parentAgent?.agent_name)
-      : undefined
-    const normalizedSelectedGroupOverrides = selectedCustomAgent?.group_prompt_overrides || {}
-    const draftIsDirty = selectedCustomAgent
-      ? customPrompt !== selectedCustomAgent.custom_prompt
-        || !areStringRecordsEqual(groupPromptOverrides, normalizedSelectedGroupOverrides)
-        || includeGroupRules !== selectedCustomAgent.include_group_rules
-        || !areStringArraysEqual(selectedAllowedGroupIds, selectedCustomAgent.allowed_group_ids || [])
-        || selectedModelId !== selectedCustomAgent.model_id
-        || (selectedModelReasoning || '') !== (selectedCustomAgent.model_reasoning || '')
-        || !areStringArraysEqual(selectedToolIds, selectedCustomAgent.tool_ids || [])
-        || (outputSchemaKey || '') !== (selectedCustomAgent.output_schema_key || '')
-      : Boolean(customPrompt.trim())
-    onContextChange({
-      template_source: contextTemplateId || undefined,
-      template_name: contextTemplateName,
-      custom_agent_id: selectedCustomAgent?.agent_id,
-      custom_agent_name: selectedCustomAgent?.name,
-      include_group_rules: includeGroupRules,
-      selected_group_id: selectedGroupId || undefined,
-      prompt_draft: debouncedPromptDraft,
-      selected_group_prompt_draft: selectedGroupPromptForContext,
-      draft_is_dirty: draftIsDirty,
-      custom_agent_updated_at: selectedCustomAgent?.updated_at,
-      group_prompt_override_count: Object.keys(debouncedGroupPromptOverrides).length,
-      has_group_prompt_overrides: Object.keys(debouncedGroupPromptOverrides).length > 0,
-      draft_tool_ids: selectedToolIds,
-      draft_model_id: selectedModelId || undefined,
-      draft_model_reasoning: selectedModelReasoning || undefined,
-    })
-  }, [
-    gettingStartedMode,
+  const { agents: agentMetadata } = useAgentMetadata()
+  const draft = useWorkshopDraft({
+    catalog,
+    initialParentAgentId,
+    initialCustomAgentId,
     onContextChange,
+    incomingPromptUpdate,
+  })
+
+  const [section, setSection] = useState<WorkshopSection>('setup')
+  const [startScreenRequested, setStartScreenRequested] = useState(
+    () => !(initialParentAgentId || '').trim() && !(initialCustomAgentId || '').trim()
+  )
+  const [focusOriginToken, setFocusOriginToken] = useState(0)
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [saveAsDialogOpen, setSaveAsDialogOpen] = useState(false)
+  const [openDialogOpen, setOpenDialogOpen] = useState(false)
+  const [manageDialogOpen, setManageDialogOpen] = useState(false)
+  const [toolLibraryOpen, setToolLibraryOpen] = useState(false)
+  const [toolRequestOpen, setToolRequestOpen] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<CustomAgent | null>(null)
+  const [pendingRevert, setPendingRevert] = useState<number | null>(null)
+  const [pendingGuardedAction, setPendingGuardedAction] = useState<(() => void) | null>(null)
+
+  const {
+    selectedCustomAgent,
+    selectedCustomAgentId,
+    selectedTemplate,
+    parentAgent,
     parentAgentId,
-    parentAgent?.agent_name,
-    selectedTemplate?.name,
-    selectedCustomAgent?.agent_id,
-    selectedCustomAgent?.name,
-    selectedCustomAgent?.custom_prompt,
-    selectedCustomAgent?.group_prompt_overrides,
-    selectedCustomAgent?.include_group_rules,
-    selectedCustomAgent?.allowed_group_ids,
-    selectedCustomAgent?.model_id,
-    selectedCustomAgent?.model_reasoning,
-    selectedCustomAgent?.tool_ids,
-    selectedCustomAgent?.output_schema_key,
-    selectedCustomAgent?.updated_at,
-    selectedCustomAgent?.template_source,
-    includeGroupRules,
-    selectedGroupId,
-    customPrompt,
-    groupPromptOverrides,
-    debouncedPromptDraft,
-    selectedGroupPromptForContext,
-    debouncedGroupPromptOverrides,
-    selectedToolIds,
-    selectedAllowedGroupIds,
-    selectedModelId,
-    selectedModelReasoning,
-    outputSchemaKey,
-  ])
+    gettingStartedMode,
+    selectedCloneSource,
+    templateMissing,
+    dirty,
+    isNewDraft,
+    versions,
+  } = draft
+
+  const showStartScreen = startScreenRequested && !selectedCustomAgentId
 
   useEffect(() => {
     if (!incomingPromptUpdate) return
-    if (!workshopOptionsLoaded) return
-    if (loading || customAgentsLoadingRef.current) return
-    if (gettingStartedMode === 'template' && !parentAgentId && !selectedCustomAgentId) return
-    if (gettingStartedMode === 'clone' && !selectedCustomAgentId && !selectedCloneSource && !cloneSourceAgentId) return
-    if (
-      appliedPromptUpdateId.current === incomingPromptUpdate.request_id
-      && appliedPromptUpdateHydrationVersion.current === hydrationVersion
-    ) {
+    setStartScreenRequested(false)
+    setSection('prompt')
+  }, [incomingPromptUpdate])
+
+  const guard = useCallback((action: () => void) => {
+    if (dirty.any) {
+      setPendingGuardedAction(() => action)
       return
     }
-    appliedPromptUpdateId.current = incomingPromptUpdate.request_id
-    appliedPromptUpdateHydrationVersion.current = hydrationVersion
+    action()
+  }, [dirty.any])
 
-    if (
-      incomingPromptUpdate.apply_mode
-      && incomingPromptUpdate.apply_mode !== 'replace'
-      && incomingPromptUpdate.apply_mode !== 'targeted_edit'
-    ) {
-      setError(`Unsupported prompt update mode: ${incomingPromptUpdate.apply_mode}`)
-      return
-    }
-    if (typeof incomingPromptUpdate.prompt !== 'string' || !incomingPromptUpdate.prompt.trim()) {
-      setError('Received an invalid prompt update payload')
-      return
-    }
+  const envelope = useMemo(
+    () => summarizeEnvelope(draft.domainEnvelopeAgentId ? agentMetadata[draft.domainEnvelopeAgentId] : undefined),
+    [agentMetadata, draft.domainEnvelopeAgentId]
+  )
 
-    const targetPrompt = incomingPromptUpdate.target_prompt === 'group' ? 'group' : 'main'
-    if (targetPrompt === 'group') {
-      const targetGroupId = (incomingPromptUpdate.target_group_id || selectedGroupId || '').trim().toUpperCase()
-      if (!targetGroupId) {
-        setError('Cannot apply group prompt update because no group is selected.')
-        return
-      }
-      if (availableGroupIds.length > 0 && !availableGroupIds.includes(targetGroupId)) {
-        setError(`Cannot apply group prompt update: ${targetGroupId} is not available for this template.`)
-        return
-      }
-
-      setGroupId(targetGroupId)
-      setGroupPromptOverrides((prev) => ({
-        ...prev,
-        [targetGroupId]: incomingPromptUpdate.prompt,
-      }))
-      setDebouncedGroupPromptOverrides((prev) => ({
-        ...prev,
-        [targetGroupId]: incomingPromptUpdate.prompt,
-      }))
-      setError(null)
-      setStatus(
-        incomingPromptUpdate.summary?.trim()
-          ? `Applied Claude group update (${targetGroupId}): ${incomingPromptUpdate.summary.trim()}`
-          : `Applied Claude prompt update to ${targetGroupId} group draft`
-      )
-      return
-    }
-
-    setCustomPrompt(incomingPromptUpdate.prompt)
-    setDebouncedPromptDraft(incomingPromptUpdate.prompt)
-    setError(null)
-    setStatus(
-      incomingPromptUpdate.summary?.trim()
-        ? `Applied Claude update: ${incomingPromptUpdate.summary.trim()}`
-        : 'Applied Claude prompt update to the draft'
-    )
-  }, [
-    incomingPromptUpdate,
-    availableGroupIds,
-    selectedGroupId,
-    workshopOptionsLoaded,
-    gettingStartedMode,
-    parentAgentId,
-    selectedCustomAgentId,
-    selectedCloneSource,
-    cloneSourceAgentId,
-    loading,
-    hydrationVersion,
-  ])
-
-  const handleNew = () => {
+  const templateLabel = selectedTemplate?.name || parentAgent?.agent_name || ''
+  const originLabel = (() => {
+    if (showStartScreen) return 'Not saved yet'
     if (selectedCustomAgent) {
-      setCloneSourceAgentId(selectedCustomAgent.id)
+      if (!selectedCustomAgent.template_source) return 'From scratch'
+      if (templateMissing) return `Template: ${selectedCustomAgent.template_source} (no longer available)`
+      return `Template: ${templateLabel || selectedCustomAgent.template_source}`
     }
-    setSelectedCustomAgentId('')
-    setSelectedVisibility('private')
-    setSelectedAllowedGroupIds([])
-    setSaveNotes('')
-    setStatus('Creating a new custom agent draft')
+    const base = gettingStartedMode === 'clone'
+      ? `Cloned from ${selectedCloneSource?.name || '(no source)'}`
+      : gettingStartedMode === 'scratch'
+        ? 'From scratch'
+        : `Template: ${templateLabel || '(none selected)'}`
+    return `${base} · Not saved yet`
+  })()
+
+  const targetName = selectedCustomAgent?.name || draft.name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
+  const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
+
+  const handleAskClaude = onVerifyRequest
+    ? () => onVerifyRequest(buildDiscussDraftMessage(targetName, targetId, draft.selectedGroupId))
+    : undefined
+  const handleDiscussPrompt = onVerifyRequest
+    ? () => {
+      onVerifyRequest(buildDiscussPromptMessage(targetName, targetId, draft.selectedGroupId))
+      draft.setStatus('Opened system-prompt discussion with Claude')
+    }
+    : undefined
+  const handleAskAboutModels = onVerifyRequest
+    ? () => {
+      onVerifyRequest(buildModelAdviceMessage(
+        targetName,
+        draft.modelOptions,
+        draft.selectedModelId,
+        draft.selectedModelReasoning,
+        draft.selectedToolIds
+      ))
+      draft.setStatus('Opened model-selection discussion with Claude')
+    }
+    : undefined
+  const handleAskForTool = onVerifyRequest
+    ? () => {
+      onVerifyRequest(buildToolRequestMessage(
+        targetName,
+        selectedCustomAgent?.agent_id || parentAgentId || 'unsaved_draft',
+        draft.selectedToolIds
+      ))
+      draft.setStatus('Opened tool-ideation discussion with Claude')
+    }
+    : undefined
+
+  const handleNew = () => guard(() => {
+    draft.handleNew()
+    setStartScreenRequested(true)
+    setSection('setup')
+  })
+
+  const handleChooseStart = (mode: GettingStartedMode) => {
+    draft.startDraft(mode)
+    setStartScreenRequested(false)
+    setSection('setup')
+    setFocusOriginToken((token) => token + 1)
   }
 
-  const reloadAfterSave = async (keepId?: string) => {
-    const response = await listCustomAgents()
-    setCustomAgents(response.custom_agents)
-    if (keepId) {
-      setSelectedCustomAgentId(keepId)
-      setCloneSourceAgentId(keepId)
-    } else if (response.custom_agents.length > 0) {
-      const templateAlignedAgentId = getTemplateAlignedAgentId(response.custom_agents)
-      setSelectedCustomAgentId(templateAlignedAgentId)
-      setCloneSourceAgentId(templateAlignedAgentId || response.custom_agents[0].id)
-    } else {
-      setSelectedCustomAgentId('')
-      setCloneSourceAgentId('')
-    }
-    await refreshAgentMetadata()
-  }
+  const handleModeChange = (mode: GettingStartedMode) => guard(() => draft.startDraft(mode))
 
-  const handleSave = async (
-    options?: { forceCreate?: boolean; nameOverride?: string },
-    selfExclusionConfirmed = false
-  ) => {
-    const forceCreate = options?.forceCreate ?? false
-    const nameToSave = (options?.nameOverride ?? name).trim()
-
-    if (gettingStartedMode === 'template' && !parentAgentId && !selectedCustomAgentId) {
-      setError('Please select a template')
+  const handleTemplateChange = (agentId: string) => {
+    if (!selectedCustomAgent) {
+      draft.setParentAgentId(agentId)
       return
     }
-    if (gettingStartedMode === 'clone' && !cloneSourceAgentId && !selectedCustomAgentId) {
-      setError('Please select an agent to clone')
-      return
-    }
-    if (!selectedModelId.trim()) {
-      setError('Please select a model')
-      return
-    }
-    if (!nameToSave) {
-      setError('Please enter a custom agent name')
-      return
-    }
-    if (!customPrompt.trim() && !parentAgentId) {
-      setError('Prompt text cannot be empty')
-      return
-    }
-    const updatingExistingAgent = !forceCreate && Boolean(selectedCustomAgentId)
-    const existingToolCount = selectedCustomAgent?.tool_ids?.length || 0
-    if (updatingExistingAgent && existingToolCount > 0 && selectedToolIds.length === 0) {
-      setError(
-        'Cannot save this agent with no tools selected because it previously had attached tools. '
-        + 'Re-attach at least one tool or use Save As to intentionally create a tool-free copy.'
-      )
-      return
-    }
-    const excludesCurrentUserGroups = selectedAllowedGroupIds.length > 0
-      && currentUserGroupIds.length > 0
-      && !currentUserGroupIds.some((groupId) => selectedAllowedGroupIds.includes(groupId))
-    if (excludesCurrentUserGroups && !selfExclusionConfirmed) {
-      setPendingSaveOptions(options)
-      setSelfExclusionDialogOpen(true)
-      return
-    }
-
-    setSaving(true)
-    setError(null)
-    setStatus(null)
-
-    try {
-      const shouldCreate = forceCreate || !selectedCustomAgentId
-      if (!shouldCreate && selectedCustomAgentId) {
-        let updated = await updateCustomAgent(selectedCustomAgentId, {
-          name: nameToSave,
-          description: description.trim() || undefined,
-          custom_prompt: customPrompt,
-          group_prompt_overrides: groupPromptOverrides,
-          include_group_rules: includeGroupRules,
-          model_id: selectedModelId,
-          model_reasoning: selectedModelReasoning || undefined,
-          tool_ids: selectedToolIds,
-          output_schema_key: outputSchemaKey || undefined,
-          icon: icon || undefined,
-          notes: saveNotes.trim() || undefined,
-          allowed_group_ids: selectedAllowedGroupIds,
-        })
-        const currentVisibility = updated.visibility === 'project' ? 'project' : 'private'
-        if (currentVisibility !== selectedVisibility) {
-          updated = await setCustomAgentVisibility(updated.agent_id, selectedVisibility)
-        }
-        await reloadAfterSave(updated.id)
-        setStatus(`Updated "${updated.name}"`)
-      } else {
-        const templateSource = selectedCustomAgent?.template_source
-          || (gettingStartedMode === 'template'
-            ? parentAgentId
-            : (gettingStartedMode === 'clone' ? selectedCloneSource?.template_source : undefined))
-        let created = await createCustomAgent({
-          template_source: templateSource || undefined,
-          name: nameToSave,
-          description: description.trim() || undefined,
-          custom_prompt: customPrompt,
-          group_prompt_overrides: groupPromptOverrides,
-          include_group_rules: includeGroupRules,
-          model_id: selectedModelId,
-          model_reasoning: selectedModelReasoning || undefined,
-          tool_ids: selectedToolIds,
-          output_schema_key: outputSchemaKey || undefined,
-          icon: icon || undefined,
-          allowed_group_ids: selectedAllowedGroupIds,
-        })
-        if (selectedVisibility === 'project') {
-          created = await setCustomAgentVisibility(created.agent_id, 'project')
-        }
-        await reloadAfterSave(created.id)
-        setStatus(forceCreate ? `Saved as "${created.name}"` : `Created "${created.name}"`)
-      }
-      setSaveNotes('')
-      if (forceCreate) {
-        setSaveAsName('')
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save custom agent')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleDeleteById = async (agent: CustomAgent) => {
-    setSaving(true)
-    setError(null)
-    try {
-      await deleteCustomAgent(agent.id)
-      await reloadAfterSave()
-      if (selectedCustomAgentId === agent.id) {
-        const hasRemaining = customAgents.some((candidate) => candidate.id !== agent.id)
-        if (!hasRemaining) handleNew()
-      }
-      setStatus(`Deleted "${agent.name}"`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete custom agent')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleRevert = async (version: number) => {
-    if (!selectedCustomAgentId) return
-    setSaving(true)
-    setError(null)
-    try {
-      const reverted = await revertCustomAgentVersion(selectedCustomAgentId, version, saveNotes || undefined)
-      await reloadAfterSave(reverted.id)
-      setStatus(`Reverted to version ${version}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to revert version')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleSelectedGroupPromptChange = (value: string) => {
-    if (!selectedGroupId) return
-    setGroupPromptOverrides((prev) => {
-      const next = { ...prev }
-      if (value === selectedGroupBasePrompt || (!value.trim() && !selectedGroupBasePrompt.trim())) {
-        delete next[selectedGroupId]
-      } else {
-        next[selectedGroupId] = value
-      }
-      return next
+    guard(() => {
+      draft.startDraft('template')
+      draft.setParentAgentId(agentId)
     })
   }
 
-  const handleResetSelectedGroupPrompt = () => {
-    if (!selectedGroupId) return
-    setGroupPromptOverrides((prev) => {
-      if (!Object.prototype.hasOwnProperty.call(prev, selectedGroupId)) return prev
-      const next = { ...prev }
-      delete next[selectedGroupId]
-      return next
-    })
-  }
-
-  const handleToggleTool = (toolKey: string) => {
-    const policy = toolPolicyByKey.get(toolKey)
-    if (policy && !policy.allow_attach) return
-
-    setSelectedToolIds((prev) => {
-      if (prev.includes(toolKey)) {
-        return prev.filter((existing) => existing !== toolKey)
-      }
-      return [...prev, toolKey]
-    })
-  }
-
-  const handleRemoveTool = (toolKey: string) => {
-    setSelectedToolIds((prev) => prev.filter((existing) => existing !== toolKey))
-  }
-
-  const handleOpenToolLibrary = () => {
-    setToolLibraryDialogOpen(true)
-  }
-
-  const handleCloseToolLibrary = () => {
-    setToolLibraryDialogOpen(false)
-    setToolLibrarySearch('')
-    setToolLibraryCategory('all')
-  }
-
-  const refreshToolIdeas = async () => {
-    const response = await listToolIdeaRequests()
-    setToolIdeaRequests(response.tool_ideas)
-  }
-
-  const handleAskClaudeForTool = () => {
-    const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
-    const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unsaved_draft'
-    const attachedTools = selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'
-    const message = `I need help designing a NEW tool request for Agent Workshop.\n\nContext:\n- Agent draft: ${targetName}\n- Agent ID: ${targetId}\n- Attached tools: ${attachedTools}\n\nPlease guide me with focused questions and help me produce:\n1. A concise request title\n2. Clear problem statement\n3. Required inputs\n4. Expected output format\n5. One concrete usage example\n\nWhen we finish, provide a final polished request that I can submit to developers.\n\n[Request ID: ${Date.now()}]`
-    onVerifyRequest?.(message)
-    setStatus('Opened tool-ideation discussion with Claude')
-  }
-
-  const handleOpenToolIdeaDialog = () => {
-    setToolIdeaDialogOpen(true)
-  }
-
-  const handleCloseToolIdeaDialog = () => {
-    setToolIdeaDialogOpen(false)
-    setToolIdeaTitle('')
-    setToolIdeaDescription('')
-  }
-
-  const handleSubmitToolIdea = async () => {
-    if (!toolIdeaTitle.trim()) {
-      setError('Please enter a tool request title')
-      return
-    }
-    if (!toolIdeaDescription.trim()) {
-      setError('Please enter a tool request description')
-      return
-    }
-
-    setToolIdeaSubmitting(true)
-    setError(null)
-    try {
-      const ideationTranscript = opusConversation
-        .filter((entry) => Boolean(entry.content && entry.content.trim()))
-        .slice(-30)
-
-      const created = await submitToolIdeaRequest({
-        title: toolIdeaTitle.trim(),
-        description: toolIdeaDescription.trim(),
-        opus_conversation: ideationTranscript,
-      })
-      await refreshToolIdeas()
-      setStatus(`Submitted tool request "${created.title}"`)
-      handleCloseToolIdeaDialog()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit tool request')
-    } finally {
-      setToolIdeaSubmitting(false)
-    }
-  }
-
-  const handleFileMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setFileMenuAnchor(event.currentTarget)
-  }
-
-  const handleFileMenuClose = () => {
-    setFileMenuAnchor(null)
-  }
-
-  const handleOpenDialogOpen = () => {
-    handleFileMenuClose()
-    setOpenDialogOpen(true)
-  }
-
-  const handleOpenDialogClose = () => {
+  const openAgent = (agentId: string) => guard(() => {
+    draft.selectCustomAgent(agentId)
+    setStartScreenRequested(false)
     setOpenDialogOpen(false)
-    setOpenSearchTerm('')
+  })
+
+  const handleSaveClick = () => {
+    if (!draft.canSave) return
+    setSaveDialogOpen(true)
   }
 
-  const handleManageDialogOpen = () => {
-    handleFileMenuClose()
-    setManageDialogOpen(true)
+  const handleSaveConfirm = (note: string) => {
+    setSaveDialogOpen(false)
+    void draft.handleSave({ notes: note })
   }
 
-  const handleManageDialogClose = () => {
-    setManageDialogOpen(false)
-  }
-
-  const handleSaveAsOpen = () => {
-    handleFileMenuClose()
-    const suggestedName = (name || selectedCustomAgent?.name || '').trim()
-    setSaveAsName(suggestedName ? `${suggestedName} (Copy)` : '')
-    setSaveAsDialogOpen(true)
-  }
-
-  const handleSaveAsClose = () => {
+  const handleSaveAsConfirm = (name: string) => {
     setSaveAsDialogOpen(false)
-    setSaveAsName('')
+    void draft.handleSave({ forceCreate: true, nameOverride: name })
   }
 
-  const handleSaveAsConfirm = async () => {
-    const trimmedName = saveAsName.trim()
-    if (!trimmedName) {
-      setError('Please enter a custom agent name')
-      return
-    }
-
-    setSaveAsDialogOpen(false)
-    await handleSave({ forceCreate: true, nameOverride: trimmedName })
+  const handleDeleteConfirm = () => {
+    if (!pendingDelete) return
+    const target = pendingDelete
+    setPendingDelete(null)
+    void draft.handleDeleteById(target).then(() => {
+      if (target.id === selectedCustomAgentId) setStartScreenRequested(true)
+    })
   }
 
-  const requestDelete = (agent?: CustomAgent) => {
-    const target = agent || selectedCustomAgent
-    if (!target) return
-    handleFileMenuClose()
-    setPendingDeleteAgent(target)
-    setDeleteConfirmOpen(true)
+  const handleRevertConfirm = () => {
+    if (pendingRevert === null) return
+    const version = pendingRevert
+    setPendingRevert(null)
+    void draft.handleRevert(version)
   }
 
-  const handleDeleteCancel = () => {
-    setDeleteConfirmOpen(false)
-    setPendingDeleteAgent(null)
-  }
-
-  const handleDeleteConfirm = async () => {
-    if (!pendingDeleteAgent) return
-    const target = pendingDeleteAgent
-    setDeleteConfirmOpen(false)
-    setPendingDeleteAgent(null)
-    await handleDeleteById(target)
-  }
-
-  const handleDiscussWithClaude = () => {
-    const targetName = selectedCustomAgent?.name || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
-    const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
-    const groupPart = selectedGroupId ? `Selected Group: ${selectedGroupId}` : 'Selected Group: none'
-    const message = `Discuss my Agent Workshop draft for "${targetName}".\n\nPlease refresh the current draft and inspect current prompt/tool schemas before giving authoritative advice.\n\nPlease help with:\n1. Prompt quality and clarity issues\n2. Risky or ambiguous instructions\n3. Concrete edits to improve behavior\n4. Suggested flow-based validation tests\n5. Whether any PDF evidence instructions preserve search_document, read_chunk span IDs, and record_evidence(span_ids)\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
-
-    onVerifyRequest?.(message)
-  }
-
-  const handleModelChange = (modelId: string) => {
-    setSelectedModelId(modelId)
-    setSelectedModelReasoning(resolveReasoningSelection(modelOptions, modelId))
-  }
-
-  const handleAskClaudeAboutModels = () => {
-    const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
-    const modelLines = modelOptions
-      // modelOptions already comes from GET /models, which the backend filters to
-      // curator-visible models (config/models.yaml curator_visible), so no extra filter here.
-      .map((model) => {
-        const reasoning = model.reasoning_options.length > 0
-          ? `Reasoning: ${model.reasoning_options.join(', ')} (default: ${model.default_reasoning || 'none'})`
-          : 'Reasoning: n/a'
-        return `- ${model.name} [${model.model_id}] via ${model.provider}\n  Guidance: ${model.guidance || model.description || 'n/a'}\n  ${reasoning}`
-      }).join('\n')
-
-    const message = `Help me choose the best model settings for my Agent Workshop draft.\n\nAgent draft: ${targetName}\nCurrent model: ${selectedModelId || 'none'}\nCurrent reasoning: ${selectedModelReasoning || 'none'}\nAttached tools: ${selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'}\n\nAvailable models (authoritative configured choices):\n${modelLines}\n\nUse only the available models and their configured guidance above. Do not rely on historical model names or unlisted variants.\n\nPlease:\n1. Ask 1-3 focused questions to understand my use case\n2. Recommend a model and (if applicable) reasoning level\n3. Explain tradeoffs in plain curator-friendly language\n4. Give one backup model choice\n\n[Request ID: ${Date.now()}]`
-    onVerifyRequest?.(message)
-    setStatus('Opened model-selection discussion with Claude')
-  }
-
-  const handleDiscussPromptChangesWithClaude = () => {
-    const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
-    const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
-    const groupPart = selectedGroupId ? `Selected Group: ${selectedGroupId}` : 'Selected Group: none'
-    const message = `Help me improve the SYSTEM PROMPT for "${targetName}".\n\nPlease refresh the current draft and inspect current prompt/tool schemas before proposing edits.\n\nPlease:\n1. Identify unclear, conflicting, or risky instructions.\n2. Propose concrete edits focused on behavior and extraction quality.\n3. Explain why each suggested edit helps.\n4. Keep changes minimal unless a full rewrite is truly needed.\n5. Preserve span-backed PDF evidence guidance when document tools are attached: search_document for candidates, read_chunk for span IDs, and record_evidence(span_ids) for retained evidence.\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
-
-    onVerifyRequest?.(message)
-    setStatus('Opened system-prompt discussion with Claude')
-  }
+  const nextVersion = versions.reduce((max, version) => Math.max(max, version.version), 0) + 1
+  const hasTemplate = Boolean(draft.parentAgent) && (gettingStartedMode !== 'scratch' || Boolean(selectedCustomAgent?.template_source))
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Toolbar>
-        <MenuTrigger onClick={handleFileMenuOpen}>File</MenuTrigger>
-        <StyledMenu
-          anchorEl={fileMenuAnchor}
-          open={Boolean(fileMenuAnchor)}
-          onClose={handleFileMenuClose}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-          transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-        >
-          <StyledMenuItem
-            onClick={() => {
-              handleFileMenuClose()
-              handleNew()
-            }}
-          >
-            <span>New Agent</span>
-          </StyledMenuItem>
-          <StyledMenuItem onClick={handleOpenDialogOpen}>
-            <span>Open Agent...</span>
-          </StyledMenuItem>
-          <StyledMenuItem onClick={handleManageDialogOpen}>
-            <span>Manage Agents...</span>
-          </StyledMenuItem>
-          <Divider />
-          <StyledMenuItem onClick={() => void handleSave()} disabled={saving}>
-            <span>{selectedCustomAgentId ? 'Save Agent' : 'Save New Agent'}</span>
-          </StyledMenuItem>
-          <StyledMenuItem onClick={handleSaveAsOpen} disabled={saving}>
-            <span>Save Agent As...</span>
-          </StyledMenuItem>
-          <StyledMenuItem onClick={() => requestDelete()} disabled={!selectedCustomAgentId || saving}>
-            <span>Delete Agent</span>
-          </StyledMenuItem>
-        </StyledMenu>
+    <Box
+      sx={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        containerType: 'inline-size',
+        containerName: 'workshop',
+      }}
+    >
+      <WorkshopHeader
+        icon={draft.icon}
+        name={showStartScreen ? '' : draft.name}
+        originLabel={originLabel}
+        saveState={draft.saveState}
+        lastSavedAt={draft.lastSavedAt}
+        dirty={dirty.any}
+        canSave={!showStartScreen && draft.canSave}
+        canDelete={Boolean(selectedCustomAgent)}
+        saving={draft.saving}
+        onOpen={() => setOpenDialogOpen(true)}
+        onNew={handleNew}
+        onSave={handleSaveClick}
+        onSaveAs={() => setSaveAsDialogOpen(true)}
+        onManage={() => setManageDialogOpen(true)}
+        onDelete={() => {
+          if (selectedCustomAgent) setPendingDelete(selectedCustomAgent)
+        }}
+      />
 
-        {/* Discuss with Claude Button */}
-        {onVerifyRequest && (
-          <Button
-            onClick={handleDiscussWithClaude}
-            size="small"
-            startIcon={<AutoFixHighIcon sx={{ fontSize: 14 }} />}
-            sx={{
-              ml: 1,
-              px: 1,
-              py: 0.25,
-              minHeight: 'auto',
-              fontSize: '0.75rem',
-              fontWeight: 500,
-              textTransform: 'none',
-              color: 'primary.main',
-              backgroundColor: 'transparent',
-              '&:hover': {
-                backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.08),
-              },
-            }}
-          >
-            Discuss with Claude
-          </Button>
-        )}
-
-        <ToolbarStatus>
-          <Typography variant="caption" color="text.secondary">
-            {selectedCustomAgent ? `Editing: ${selectedCustomAgent.name}` : 'Editing: New draft'}
-          </Typography>
-          {(loading || saving) && <CircularProgress size={16} />}
-        </ToolbarStatus>
-      </Toolbar>
-
-      {/* ── Fixed header region (does not scroll): identity crown + section nav ── */}
       <Box
         sx={{
-          flexShrink: 0,
-          px: 2.5,
-          pt: 2,
-          pb: 1.5,
-          backgroundColor: 'background.paper',
-          borderBottom: (theme) => `1px solid ${alpha(theme.palette.divider, 0.25)}`,
-          boxShadow: (theme) => `0 1px 2px ${alpha(theme.palette.common.black, 0.18)}`,
-          zIndex: 2,
+          flex: 1,
+          minHeight: 0,
+          display: 'grid',
+          gridTemplateColumns: '200px minmax(0, 1fr)',
+          [NARROW_QUERY]: { gridTemplateColumns: 'minmax(0, 1fr)', gridTemplateRows: 'auto minmax(0, 1fr)' },
         }}
       >
-        <Stack spacing={1.5}>
-          {/* Agent identity title block */}
-          <Box>
-            <Typography
-              variant="overline"
-              sx={{ display: 'block', letterSpacing: '0.12em', color: 'text.secondary', lineHeight: 1.4 }}
-            >
-              Configure your agent
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'baseline', flexWrap: 'wrap' }}>
-              <Typography
-                variant="h6"
-                sx={{ fontWeight: 600, lineHeight: 1.2, color: name.trim() ? 'text.primary' : 'text.secondary' }}
-              >
-                {name.trim() || 'New Agent'}
-              </Typography>
-              <Chip
-                size="small"
-                variant="outlined"
-                label={
-                  gettingStartedMode === 'clone'
-                    ? `Custom — cloned from ${selectedCloneSource?.name || '(no source)'}`
-                    : gettingStartedMode === 'scratch'
-                      ? 'Custom — from scratch'
-                      : `Template: ${selectedTemplate?.name || parentAgent?.agent_name || '(none selected)'}`
-                }
-                sx={{ maxWidth: 280, '& .MuiChip-label': { fontSize: '0.72rem' } }}
-              />
-            </Box>
-          </Box>
+        <WorkshopNav
+          section={section}
+          onSectionChange={setSection}
+          dirty={dirty}
+          toolCount={draft.selectedToolIds.length}
+          versionCount={versions.length}
+          onAskClaude={handleAskClaude}
+        />
 
-          {/* Section navigation */}
-          <StyledToggleButtonGroup
-            exclusive
-            size="small"
-            value={workshopSection}
-            onChange={(_event, value) => value && setWorkshopSection(value)}
-            sx={{ width: '100%', '& .MuiToggleButton-root': { flex: 1 } }}
-          >
-            <ToggleButton value="setup">Setup</ToggleButton>
-            <ToggleButton value="prompt">Prompt</ToggleButton>
-            <ToggleButton value="tools">Tools</ToggleButton>
-            <ToggleButton value="reference">Reference</ToggleButton>
-          </StyledToggleButtonGroup>
-        </Stack>
-      </Box>
-
-      {/* ── Scrollable content region ── */}
-      <Box sx={{ flex: 1, p: 2.5, overflow: 'auto' }}>
-        <Stack spacing={3}>
-          {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
-          {status && <Alert severity="success" sx={{ borderRadius: 2 }}>{status}</Alert>}
-
-          {/* ── Section 1 (setup): Identity & Configuration ── */}
-          {workshopSection === 'setup' && (
-          <SectionCard elevation={0}>
-            <SectionHeader>Identity & Configuration</SectionHeader>
-
-            <Stack spacing={2}>
-              {/* Getting Started mode selector */}
-              <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ mb: 0.75, display: 'block' }}>
-                  Starting point
-                </Typography>
-                <StyledToggleButtonGroup
-                  exclusive
-                  size="small"
-                  value={gettingStartedMode}
-                  onChange={(_event, value) => {
-                    if (value !== null) {
-                      setGettingStartedMode(value as GettingStartedMode)
-                      setSelectedCustomAgentId('')
-                    }
-                  }}
-                >
-                  <ToggleButton value="template">Template</ToggleButton>
-                  <ToggleButton value="scratch">Scratch</ToggleButton>
-                  <ToggleButton value="clone">Clone</ToggleButton>
-                </StyledToggleButtonGroup>
-              </Box>
-
-              {gettingStartedMode === 'template' && (
-                <Stack spacing={1} sx={{ maxWidth: 520 }}>
-                  <FormControl size="small" sx={{ maxWidth: 360 }}>
-                    <InputLabel>Template</InputLabel>
-                    <Select
-                      label="Template"
-                      value={parentAgentId}
-                      disabled={templateOptions.length === 0}
-                      onChange={(event) => setParentAgentId(event.target.value)}
-                    >
-                      {templateOptions.length === 0 ? (
-                        <MenuItem value="" disabled>
-                          No templates available
-                        </MenuItem>
-                      ) : (
-                        templateOptions.map((template) => (
-                          <MenuItem key={template.agent_id} value={template.agent_id}>
-                            {template.name}
-                          </MenuItem>
-                        ))
-                      )}
-                    </Select>
-                  </FormControl>
-                  {selectedTemplate && selectedTemplate.allowed_group_ids.length > 0 && (
-                    <Alert severity="info" icon={<LockOutlinedIcon fontSize="inherit" />}>
-                      Package restriction (read-only): available to {selectedTemplate.allowed_group_ids.join(', ')}.
-                      A custom copy may keep or narrow this restriction, but cannot widen it.
-                    </Alert>
-                  )}
-                </Stack>
-              )}
-
-              {gettingStartedMode === 'clone' && (
-                <FormControl size="small" sx={{ maxWidth: 360 }}>
-                  <InputLabel>Clone Source</InputLabel>
-                  <Select
-                    label="Clone Source"
-                    value={cloneSourceAgentId}
-                    onChange={(event) => setCloneSourceAgentId(event.target.value)}
-                  >
-                    {customAgents.map((agent) => (
-                      <MenuItem key={agent.id} value={agent.id}>
-                        {agent.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              )}
-
-              {/* Icon + Agent Name row */}
-              <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', maxWidth: 420 }}>
-                <FormControl size="small" sx={{ width: 72, flexShrink: 0 }}>
-                  <InputLabel>Icon</InputLabel>
-                  <Select
-                    label="Icon"
-                    value={icon}
-                    onChange={(event) => setIcon(event.target.value)}
-                    sx={{ '& .MuiSelect-select': { textAlign: 'center', fontSize: '1.1rem' } }}
-                  >
-                    {iconOptions.map((option) => (
-                      <MenuItem key={option} value={option}>
-                        {option}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <TextField
-                  size="small"
-                  label="Agent Name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  sx={{ flex: 1 }}
-                />
-              </Box>
-
-              <TextField
-                fullWidth
-                multiline
-                minRows={2}
-                maxRows={5}
-                size="small"
-                label="Description"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="Brief description of what this agent does"
-              />
-
-              {domainEnvelopeMetadata && (
+        <Box
+          sx={{
+            minWidth: 0,
+            minHeight: 0,
+            overflow: 'auto',
+            px: 3,
+            pt: 2.25,
+            pb: 3.5,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2.5,
+          }}
+        >
+          {draft.error && (
+            <Alert severity="error" onClose={() => draft.setError(null)} sx={{ maxWidth: 780 }}>
+              {draft.saveState === 'failed' ? (
                 <>
-                  <DomainEnvelopeMetadataPanel
-                    metadata={domainEnvelopeMetadata}
-                    compact
-                    title="Envelope & Validation"
-                    validationModeNote="This template produces domain-envelope objects. Automatic validation defaults come from the domain pack; custom validation can be added in Flow Builder with validation attachments and steering prompts."
-                  />
-                  <Divider sx={{ opacity: 0.5 }} />
+                  <strong style={{ fontWeight: 500 }}>Could not save.</strong> {draft.error} Your edits are still here.
                 </>
-              )}
-
-              {/* Model & behavior */}
-              <Typography
-                variant="overline"
-                sx={{ display: 'block', letterSpacing: '0.1em', color: 'text.secondary', mt: 0.5 }}
-              >
-                Model & behavior
-              </Typography>
-
-              {/* Model & Visibility */}
-              <Stack direction="row" alignItems="center" spacing={0.5}>
-                <Typography variant="caption" color="text.secondary">
-                  Model guidance
-                </Typography>
-                <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{buildModelHelpText(modelOptions)}</span>} placement="top">
-                  <IconButton aria-label="Show configured model guidance" size="small" sx={{ p: 0.25 }}>
-                    <HelpOutlineIcon sx={{ fontSize: 15 }} />
-                  </IconButton>
-                </Tooltip>
-              </Stack>
-              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-                <FormControl size="small" sx={{ minWidth: 200, flex: 1 }}>
-                  <InputLabel>Model</InputLabel>
-                  <Select
-                    label="Model"
-                    value={selectedModelId}
-                    onChange={(event) => handleModelChange(event.target.value)}
-                  >
-                    {modelOptions
-                      // Backend already returns only curator-visible models (config-driven).
-                      .map((model) => (
-                        <MenuItem key={model.model_id} value={model.model_id}>
-                          {model.name}
-                        </MenuItem>
-                      ))}
-                  </Select>
-                </FormControl>
-                <FormControl size="small" sx={{ minWidth: 180, flex: 1 }}>
-                  <InputLabel>Visibility</InputLabel>
-                  <Select
-                    label="Visibility"
-                    value={selectedVisibility}
-                    onChange={(event) => setSelectedVisibility(event.target.value as 'private' | 'project')}
-                  >
-                    <MenuItem value="private">Private</MenuItem>
-                    <MenuItem value="project">Shared with Project</MenuItem>
-                  </Select>
-                </FormControl>
-              </Box>
-
-              <FormControl size="small" fullWidth>
-                <InputLabel id="available-groups-label">Available to groups</InputLabel>
-                <Select
-                  labelId="available-groups-label"
-                  label="Available to groups"
-                  multiple
-                  value={selectedAllowedGroupIds}
-                  aria-describedby="available-groups-helper-text"
-                  onChange={(event) => {
-                    const value = event.target.value as string[]
-                    const nextValue = value.includes(ALL_GROUPS_VALUE) ? [] : value
-                    if (inheritedAllowedGroupIds.length > 0 && nextValue.length === 0) return
-                    setSelectedAllowedGroupIds(nextValue)
-                  }}
-                  renderValue={(selected) => {
-                    const groupIds = selected as string[]
-                    return groupIds.length === 0 ? 'All groups' : groupIds.join(', ')
-                  }}
-                >
-                  {inheritedAllowedGroupIds.length === 0 && (
-                    <MenuItem value={ALL_GROUPS_VALUE}>
-                      <Checkbox checked={selectedAllowedGroupIds.length === 0} />
-                      <ListItemText primary="All groups" />
-                    </MenuItem>
-                  )}
-                  {selectableGroupOptions.map((group) => (
-                    <MenuItem key={group.group_id} value={group.group_id}>
-                      <Checkbox checked={selectedAllowedGroupIds.includes(group.group_id)} />
-                      <ListItemText primary={group.name} secondary={group.group_id} />
-                    </MenuItem>
-                  ))}
-                </Select>
-                <FormHelperText id="available-groups-helper-text">
-                  Sharing determines which people or projects could otherwise see this agent. Allowed groups further
-                  restrict which authenticated curator groups may use it. Group-specific instructions only change
-                  behavior after access is granted.
-                  {inheritedAllowedGroupIds.length > 0
-                    ? ` This copy inherits a ${inheritedAllowedGroupIds.join(', ')} access floor and may only be narrowed.`
-                    : ''}
-                </FormHelperText>
-              </FormControl>
-
-              {selectedModelOption && (
-                <Box
-                  sx={{
-                    border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.18)}`,
-                    borderRadius: 1.5,
-                    p: 1.5,
-                    backgroundColor: (theme) => alpha(theme.palette.background.default, 0.35),
-                  }}
-                >
-                  <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1.5}>
-                    <Box>
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        {selectedModelOption.name}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {selectedModelOption.provider.toUpperCase()} · {selectedModelOption.model_id}
-                      </Typography>
-                    </Box>
-                    {onVerifyRequest && (
-                      <Button size="small" variant="outlined" onClick={handleAskClaudeAboutModels}>
-                        Confused about models? Chat with Claude
-                      </Button>
-                    )}
-                  </Stack>
-
-                  {selectedModelOption.description && (
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                      {selectedModelOption.description}
-                    </Typography>
-                  )}
-
-                  {selectedModelOption.guidance && selectedModelOption.guidance !== selectedModelOption.description && (
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
-                      {selectedModelOption.guidance}
-                    </Typography>
-                  )}
-
-                  {(selectedModelOption.recommended_for.length > 0 || selectedModelOption.avoid_for.length > 0) && (
-                    <Box sx={{ mt: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-                        Model fit
-                      </Typography>
-                      {selectedModelOption.recommended_for.length > 0 && (
-                        <>
-                          <Typography variant="caption" color="text.secondary">
-                            Recommended for
-                          </Typography>
-                          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
-                            {selectedModelOption.recommended_for.map((item) => (
-                              <Chip key={item} size="small" variant="outlined" label={item} />
-                            ))}
-                          </Box>
-                        </>
-                      )}
-                      {selectedModelOption.avoid_for.length > 0 && (
-                        <>
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.25 }}>
-                            Avoid for
-                          </Typography>
-                          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.5 }}>
-                            {selectedModelOption.avoid_for.map((item) => (
-                              <Chip key={item} size="small" variant="outlined" label={item} />
-                            ))}
-                          </Box>
-                        </>
-                      )}
-                    </Box>
-                  )}
-
-                  {selectedModelOption.supports_reasoning && selectedModelOption.reasoning_options.length > 0 && (
-                    <Box sx={{ mt: 1.5 }}>
-                      <Divider sx={{ mb: 1.25, opacity: 0.6 }} />
-                      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Reasoning level
-                        </Typography>
-                        <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{REASONING_HELP_TEXT}</span>} placement="top">
-                          <IconButton size="small" sx={{ p: 0.25 }}>
-                            <HelpOutlineIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
-                      <FormControl size="small" sx={{ minWidth: 220, maxWidth: 320 }}>
-                        <InputLabel>Reasoning</InputLabel>
-                        <Select
-                          label="Reasoning"
-                          value={selectedModelReasoning}
-                          onChange={(event) => setSelectedModelReasoning(event.target.value)}
-                        >
-                          {selectedModelOption.reasoning_options.map((reasoningOption) => (
-                            <MenuItem key={reasoningOption} value={reasoningOption}>
-                              {formatReasoningLabel(reasoningOption)}
-                            </MenuItem>
-                          ))}
-                        </Select>
-                        {selectedModelReasoningDescription && (
-                          <FormHelperText>{selectedModelReasoningDescription}</FormHelperText>
-                        )}
-                      </FormControl>
-                    </Box>
-                  )}
-                </Box>
-              )}
-
-            </Stack>
-          </SectionCard>
-          )}
-
-          {/* ── Section (prompt): Prompt ── */}
-          {workshopSection === 'prompt' && (
-          <SectionCard elevation={0}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1.5} sx={{ mb: 2 }}>
-              <SectionHeader sx={{ mb: 0 }}>Prompt</SectionHeader>
-              {onVerifyRequest && (
-                <Button size="small" variant="outlined" onClick={handleDiscussPromptChangesWithClaude}>
-                  Discuss prompt changes with Claude
-                </Button>
-              )}
-            </Stack>
-            <Stack spacing={1}>
-              <StyledAccordion defaultExpanded={true}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Main / base prompt</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  {overlayStatus === 'needs_review' && (
-                    <Alert severity="warning" sx={{ mb: 1.5 }}>
-                      {overlayWarning || 'This saved main prompt contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
-                    </Alert>
-                  )}
-                  <TextField
-                    fullWidth
-                    multiline
-                    minRows={14}
-                    value={customPrompt}
-                    onChange={(event) => setCustomPrompt(event.target.value)}
-                    placeholder="Edit the main prompt for this custom agent."
-                    variant="outlined"
-                    sx={{
-                      '& .MuiInputBase-root': {
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                        fontSize: '0.85rem',
-                        backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
-                        borderRadius: 1.5,
-                      },
-                      '& .MuiOutlinedInput-notchedOutline': {
-                        borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                      },
-                    }}
-                  />
-                </AccordionDetails>
-              </StyledAccordion>
-
-              <StyledAccordion defaultExpanded={true}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Group-specific instructions</Typography>
-                    {hasAnyGroupOverrides && (
-                      <Chip size="small" label={`${Object.keys(groupPromptOverrides).length} override${Object.keys(groupPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                    )}
-                  </Stack>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Stack spacing={1.5}>
-                    <Alert severity="info" sx={{ borderRadius: 1.5 }}>
-                      Logged in as {loggedInAsLabel}. Group membership: {loggedInGroupsLabel}.
-                      {selectedGroupId ? ` Editing ${selectedGroupId} instructions.` : ' Select a group to edit its instructions.'}
-                    </Alert>
-                    <Stack direction="row" spacing={0.5} alignItems="center">
-                      <FormControlLabel
-                        sx={{ ml: 0, mr: 0 }}
-                        control={
-                          <Switch
-                            size="small"
-                            checked={includeGroupRules}
-                            onChange={(event) => setIncludeGroupRules(event.target.checked)}
-                          />
-                        }
-                        label={
-                          <Typography variant="body2" color="text.secondary">
-                            Add group prompts at runtime
-                          </Typography>
-                        }
-                      />
-                      <Tooltip
-                        title="When enabled, group-specific instructions are included at runtime for this agent."
-                        placement="top"
-                      >
-                        <IconButton size="small" sx={{ p: 0.25 }} aria-label="group prompt runtime help">
-                          <HelpOutlineIcon sx={{ fontSize: 14 }} />
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
-
-                    {availableGroupIds.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        This template has no group-specific prompts to override.
-                      </Typography>
-                    ) : (
-                      <Stack spacing={1.5}>
-                        <Stack direction="row" spacing={1} alignItems="center">
-                          <Select
-                            size="small"
-                            value={groupId}
-                            displayEmpty
-                            onChange={(event) => setGroupId(event.target.value)}
-                            sx={{ minWidth: 180 }}
-                          >
-                            <MenuItem value="">
-                              Select group
-                            </MenuItem>
-                            {availableGroupIds.map((availableGroupId) => (
-                              <MenuItem key={availableGroupId} value={availableGroupId}>
-                                {availableGroupId}
-                              </MenuItem>
-                            ))}
-                          </Select>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={handleResetSelectedGroupPrompt}
-                            disabled={!hasSelectedGroupOverride}
-                          >
-                            Reset to Template
-                          </Button>
-                        </Stack>
-                        <TextField
-                          fullWidth
-                          multiline
-                          minRows={10}
-                          label={selectedGroupId ? `${selectedGroupId} instructions` : 'Group-specific instructions'}
-                          value={selectedGroupPrompt}
-                          onChange={(event) => handleSelectedGroupPromptChange(event.target.value)}
-                          disabled={!selectedGroupId}
-                          sx={{
-                            '& .MuiInputBase-root': {
-                              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                              fontSize: '0.8rem',
-                              backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
-                              borderRadius: 1.5,
-                            },
-                            '& .MuiOutlinedInput-notchedOutline': {
-                              borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                            },
-                          }}
-                        />
-                        <Typography variant="caption" color="text.secondary">
-                          {selectedGroupId
-                            ? hasSelectedGroupOverride
-                              ? `Custom override active for ${selectedGroupId}.`
-                              : `Using template ${selectedGroupId} prompt content.`
-                            : 'No group selected.'}
-                          {hasAnyGroupOverrides ? ` Total overrides: ${Object.keys(groupPromptOverrides).length}.` : ''}
-                        </Typography>
-                      </Stack>
-                    )}
-                  </Stack>
-                </AccordionDetails>
-              </StyledAccordion>
-            </Stack>
-          </SectionCard>
-          )}
-
-          {/* ── Section (reference): Reference (read-only) ── */}
-          {workshopSection === 'reference' && (
-          <SectionCard elevation={0}>
-            <SectionHeader>Reference (read-only)</SectionHeader>
-            <Box
-              sx={{
-                mb: 2,
-                p: 1.5,
-                borderRadius: 1.5,
-                backgroundColor: (theme) => alpha(theme.palette.info.main, 0.08),
-              }}
-            >
-              <Typography variant="body2" color="text.secondary">
-                These are the built-in instruction layers that make up this agent. They&apos;re read-only here — shown so you can see what your own instructions (on the Prompt tab) build on. You don&apos;t need to change anything on this tab.
-              </Typography>
-            </Box>
-            <Stack spacing={1}>
-              <StyledAccordion defaultExpanded={false}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Built-in instructions</Typography>
-                    <Chip size="small" icon={<LockOutlinedIcon />} label="Locked" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                  </Stack>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <PromptLayerPreview>
-                    {parentCorePrompt || 'No backend-owned core prompt layer was returned for this template.'}
-                  </PromptLayerPreview>
-                </AccordionDetails>
-              </StyledAccordion>
-
-              <StyledAccordion defaultExpanded={false}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Output structure</Typography>
-                    <Chip size="small" icon={<LockOutlinedIcon />} label="Automatic" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                  </Stack>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <PromptLayerPreview>
-                    {parentGeneratedContract || 'No generated runtime contract layer is required for this template.'}
-                  </PromptLayerPreview>
-                </AccordionDetails>
-              </StyledAccordion>
-
-              <StyledAccordion defaultExpanded={false}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Template instructions</Typography>
-                    <Chip size="small" label="From template" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                  </Stack>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <PromptLayerPreview>
-                    {parentBasePrompt || 'No base prompt is available for this template.'}
-                  </PromptLayerPreview>
-                </AccordionDetails>
-              </StyledAccordion>
-
-            </Stack>
-          </SectionCard>
-          )}
-
-          {/* ── Section (tools): Advanced Settings ── */}
-          {workshopSection === 'tools' && (
-          <SectionCard elevation={0}>
-            <SectionHeader>Advanced Settings</SectionHeader>
-
-            {/* Tools accordion */}
-            <StyledAccordion defaultExpanded={selectedToolIds.length > 0}>
-              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Tools</Typography>
-                  {selectedToolIds.length > 0 && (
-                    <Chip size="small" label={`${selectedToolIds.length} attached`} color="primary" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                  )}
-                </Stack>
-              </AccordionSummary>
-              <AccordionDetails>
-                <Stack spacing={1.5}>
-                  {selectedToolIds.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary">
-                      No tools selected.
-                    </Typography>
-                  ) : (
-                    <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-                      {selectedToolIds.map((toolId) => {
-                        const tool = toolLibrary.find((entry) => entry.tool_key === toolId)
-                        return (
-                          <Chip
-                            key={toolId}
-                            size="small"
-                            label={tool?.display_name || toolId}
-                            onDelete={() => handleRemoveTool(toolId)}
-                          />
-                        )
-                      })}
-                    </Box>
-                  )}
-                  <Stack direction="row" spacing={1} flexWrap="wrap">
-                    <Button size="small" variant="outlined" onClick={handleOpenToolLibrary}>
-                      Manage Tools
-                    </Button>
-                    {onVerifyRequest && (
-                      <Button size="small" variant="outlined" onClick={handleAskClaudeForTool}>
-                        Need a new tool? Ask Claude
-                      </Button>
-                    )}
-                    <Button size="small" variant="contained" onClick={handleOpenToolIdeaDialog}>
-                      Send to Developers
-                    </Button>
-                  </Stack>
-                </Stack>
-              </AccordionDetails>
-            </StyledAccordion>
-
-            {/* Tool Requests accordion */}
-            <StyledAccordion>
-              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Tool Requests</Typography>
-                  {toolIdeaRequests.length > 0 && (
-                    <Chip size="small" label={toolIdeaRequests.length} variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                  )}
-                  {toolIdeasLoading && <CircularProgress size={14} />}
-                </Stack>
-              </AccordionSummary>
-              <AccordionDetails>
-                {toolIdeaRequests.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    No tool requests submitted yet.
-                  </Typography>
-                ) : (
-                  <Stack spacing={1}>
-                    {toolIdeaRequests.slice(0, 8).map((request) => (
-                      <Stack
-                        key={request.id}
-                        direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
-                        spacing={1}
-                      >
-                        <Box sx={{ minWidth: 0 }}>
-                          <Typography variant="body2" noWrap>
-                            {request.title}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {new Date(request.created_at).toLocaleDateString()}
-                          </Typography>
-                        </Box>
-                        <Chip
-                          size="small"
-                          color={toolIdeaStatusColor(request.status)}
-                          label={toolIdeaStatusLabel(request.status)}
-                        />
-                      </Stack>
-                    ))}
-                  </Stack>
-                )}
-              </AccordionDetails>
-            </StyledAccordion>
-          </SectionCard>
-          )}
-
-          {/* ── Section 4: Save & History ── */}
-          <SectionCard elevation={0}>
-            <SectionHeader>Save & History</SectionHeader>
-
-            <Stack spacing={2}>
-              <TextField
-                fullWidth
-                size="small"
-                label="Save Notes"
-                value={saveNotes}
-                onChange={(event) => setSaveNotes(event.target.value)}
-                placeholder="Optional notes for version history (saved via File > Save)"
-              />
-
-              <StyledAccordion defaultExpanded={versions.length > 0 && versions.length <= 5}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Version History</Typography>
-                    {versions.length > 0 && (
-                      <Chip size="small" label={`${versions.length} version${versions.length !== 1 ? 's' : ''}`} variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                    )}
-                  </Stack>
-                </AccordionSummary>
-                <AccordionDetails>
-                  {versions.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary">
-                      No versions yet
-                    </Typography>
-                  ) : (
-                    <Stack spacing={0.75}>
-                      {versions.map((version) => (
-                        <Stack
-                          key={version.id}
-                          direction="row"
-                          spacing={1}
-                          alignItems="center"
-                          justifyContent="space-between"
-                          sx={{
-                            py: 0.5,
-                            px: 1,
-                            borderRadius: 1,
-                            '&:hover': {
-                              backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.5),
-                            },
-                          }}
-                        >
-                          <Typography variant="body2">
-                            v{version.version} {version.notes ? `- ${version.notes}` : ''}
-                          </Typography>
-                          <Button
-                            size="small"
-                            variant="text"
-                            onClick={() => handleRevert(version.version)}
-                            disabled={!selectedCustomAgentId || saving}
-                          >
-                            Revert
-                          </Button>
-                        </Stack>
-                      ))}
-                    </Stack>
-                  )}
-                </AccordionDetails>
-              </StyledAccordion>
-            </Stack>
-          </SectionCard>
-
-        <Dialog
-          open={openDialogOpen}
-          onClose={handleOpenDialogClose}
-          maxWidth="sm"
-          fullWidth
-          PaperProps={{ sx: { borderRadius: 2, maxHeight: '70vh' } }}
-        >
-          <DialogTitle sx={{ pb: 1 }}>
-            <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-              Open Agent
-            </Typography>
-          </DialogTitle>
-          <DialogContent sx={{ pt: 1 }}>
-            <TextField
-              fullWidth
-              size="small"
-              placeholder="Search agents..."
-              value={openSearchTerm}
-              onChange={(event) => setOpenSearchTerm(event.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-                  </InputAdornment>
-                ),
-              }}
-              sx={{ mb: 2 }}
-            />
-            <Box sx={{ minHeight: 200, maxHeight: 320, overflow: 'auto' }}>
-              {loading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-                  <CircularProgress size={24} />
-                </Box>
-              ) : filteredOpenAgents.length === 0 ? (
-                <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
-                  <Typography variant="body2">
-                    {openSearchTerm ? 'No agents match your search' : 'No saved agents yet'}
-                  </Typography>
-                </Box>
-              ) : (
-                <List disablePadding>
-                  {filteredOpenAgents.map((agent) => (
-                    <ListItem key={agent.id} disablePadding>
-                      <ListItemButton
-                        onClick={() => {
-                          setSelectedCustomAgentId(agent.id)
-                          handleOpenDialogClose()
-                          setStatus(`Opened "${agent.name}"`)
-                        }}
-                        selected={agent.id === selectedCustomAgentId}
-                        sx={{
-                          borderRadius: 1,
-                          mb: 0.5,
-                          '&.Mui-selected': {
-                            backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.12),
-                          },
-                        }}
-                      >
-                        <DescriptionOutlinedIcon sx={{ fontSize: 18, mr: 1.5, color: 'text.secondary' }} />
-                          <ListItemText
-                            primary={agent.name}
-                            secondary={agent.description || 'Custom agent'}
-                            primaryTypographyProps={{ fontSize: '0.85rem' }}
-                            secondaryTypographyProps={{ fontSize: '0.75rem' }}
-                          />
-                      </ListItemButton>
-                    </ListItem>
-                  ))}
-                </List>
-              )}
-            </Box>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button onClick={handleOpenDialogClose} size="small">
-              Cancel
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        <Dialog
-          open={manageDialogOpen}
-          onClose={handleManageDialogClose}
-          maxWidth="sm"
-          fullWidth
-          PaperProps={{ sx: { borderRadius: 2, maxHeight: '70vh' } }}
-        >
-          <DialogTitle sx={{ pb: 1 }}>
-            <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-              Manage Agents
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              Open or delete your saved agents
-            </Typography>
-          </DialogTitle>
-          <DialogContent sx={{ pt: 1 }}>
-            <Box sx={{ minHeight: 200, maxHeight: 360, overflow: 'auto' }}>
-              {loading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-                  <CircularProgress size={24} />
-                </Box>
-              ) : customAgents.length === 0 ? (
-                <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
-                  <Typography variant="body2">No saved agents yet</Typography>
-                </Box>
-              ) : (
-                <List disablePadding>
-                  {customAgents.map((agent) => (
-                    <ListItem
-                      key={agent.id}
-                      disablePadding
-                      sx={{
-                        mb: 0.5,
-                        border: (theme) => `1px solid ${theme.palette.divider}`,
-                        borderRadius: 1,
-                        backgroundColor:
-                          agent.id === selectedCustomAgentId
-                            ? (theme) => alpha(theme.palette.primary.main, 0.08)
-                            : 'transparent',
-                      }}
-                    >
-                      <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', py: 0.5, px: 1 }}>
-                        <DescriptionOutlinedIcon sx={{ fontSize: 18, mr: 1.5, color: 'text.secondary' }} />
-                        <Box sx={{ flex: 1, minWidth: 0 }}>
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              fontSize: '0.85rem',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {agent.name}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {agent.description || 'Custom agent'}
-                            {agent.id === selectedCustomAgentId && ' • Currently open'}
-                          </Typography>
-                        </Box>
-                        <Button
-                          size="small"
-                          variant="text"
-                          onClick={() => {
-                            setSelectedCustomAgentId(agent.id)
-                            setStatus(`Opened "${agent.name}"`)
-                          }}
-                        >
-                          Open
-                        </Button>
-                        <Tooltip title="Delete">
-                          <IconButton
-                            size="small"
-                            onClick={() => requestDelete(agent)}
-                            sx={{ color: 'error.main' }}
-                            disabled={saving}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </ListItem>
-                  ))}
-                </List>
-              )}
-            </Box>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button onClick={handleManageDialogClose} size="small">
-              Close
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        <Dialog
-          open={saveAsDialogOpen}
-          onClose={handleSaveAsClose}
-          maxWidth="xs"
-          fullWidth
-          PaperProps={{ sx: { borderRadius: 2 } }}
-        >
-          <DialogTitle sx={{ pb: 1 }}>
-            <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-              Save Agent As
-            </Typography>
-          </DialogTitle>
-          <DialogContent>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Enter a name for the new copy
-            </Typography>
-            <TextField
-              fullWidth
-              size="small"
-              label="Agent Name"
-              value={saveAsName}
-              onChange={(event) => setSaveAsName(event.target.value)}
-              autoFocus
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  void handleSaveAsConfirm()
-                }
-              }}
-            />
-          </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button onClick={handleSaveAsClose} size="small" disabled={saving}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void handleSaveAsConfirm()}
-              variant="contained"
-              size="small"
-              disabled={saving || !saveAsName.trim()}
-            >
-              {saving ? 'Saving...' : 'Save As'}
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        <Dialog
-          open={toolLibraryDialogOpen}
-          onClose={handleCloseToolLibrary}
-          maxWidth="sm"
-          fullWidth
-          PaperProps={{ sx: { borderRadius: 2, maxHeight: '75vh' } }}
-        >
-          <DialogTitle sx={{ pb: 1 }}>
-            <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-              Tool Library
-            </Typography>
-          </DialogTitle>
-          <DialogContent sx={{ pt: 1 }}>
-            <TextField
-              fullWidth
-              size="small"
-              placeholder="Search tools..."
-              value={toolLibrarySearch}
-              onChange={(event) => setToolLibrarySearch(event.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-                  </InputAdornment>
-                ),
-              }}
-              sx={{ mb: 2 }}
-            />
-            <FormControl size="small" fullWidth sx={{ mb: 2 }}>
-              <InputLabel>Category</InputLabel>
-              <Select
-                label="Category"
-                value={toolLibraryCategory}
-                onChange={(event) => setToolLibraryCategory(event.target.value)}
-              >
-                <MenuItem value="all">All categories</MenuItem>
-                {toolCategories.map((category) => (
-                  <MenuItem key={category} value={category}>
-                    {category}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Box sx={{ minHeight: 240, maxHeight: 380, overflow: 'auto' }}>
-              {filteredToolLibrary.length === 0 ? (
-                <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
-                  <Typography variant="body2">No tools match your search</Typography>
-                </Box>
-              ) : (
-                <List disablePadding>
-                  {filteredToolLibrary.map((tool) => {
-                    const selected = selectedToolIds.includes(tool.tool_key)
-                    const attachable = tool.allow_attach
-                    return (
-                      <ListItem key={tool.tool_key} disablePadding>
-                        <ListItemButton
-                          onClick={() => {
-                            if (!attachable) return
-                            handleToggleTool(tool.tool_key)
-                          }}
-                          selected={selected}
-                          disabled={!attachable}
-                          sx={{
-                            borderRadius: 1,
-                            mb: 0.5,
-                            alignItems: 'flex-start',
-                            opacity: attachable ? 1 : 0.55,
-                            '&.Mui-selected': {
-                              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.12),
-                            },
-                          }}
-                        >
-                          <Checkbox
-                            size="small"
-                            edge="start"
-                            checked={selected}
-                            tabIndex={-1}
-                            disableRipple
-                            disabled={!attachable}
-                          />
-                          <ListItemText
-                            primary={tool.display_name}
-                            secondary={
-                              attachable
-                                ? `${tool.category} • ${tool.description}`
-                                : `${tool.category} • ${tool.description} • Not attachable by policy`
-                            }
-                            primaryTypographyProps={{ fontSize: '0.85rem' }}
-                            secondaryTypographyProps={{ fontSize: '0.75rem' }}
-                          />
-                        </ListItemButton>
-                      </ListItem>
-                    )
-                  })}
-                </List>
-              )}
-            </Box>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button onClick={handleCloseToolLibrary} size="small">
-              Done
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        <Dialog
-          open={toolIdeaDialogOpen}
-          onClose={handleCloseToolIdeaDialog}
-          maxWidth="sm"
-          fullWidth
-          PaperProps={{ sx: { borderRadius: 2 } }}
-        >
-          <DialogTitle sx={{ pb: 1 }}>
-            <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-              Submit Tool Request
-            </Typography>
-          </DialogTitle>
-          <DialogContent sx={{ pt: 1 }}>
-            <Stack spacing={1.5}>
-              <Typography variant="body2" color="text.secondary">
-                Share a concise request for the developers. You can draft it with Claude first.
-              </Typography>
-              <TextField
-                size="small"
-                fullWidth
-                label="Title"
-                value={toolIdeaTitle}
-                onChange={(event) => setToolIdeaTitle(event.target.value)}
-                placeholder="Example: Add GO synonym expansion tool"
-              />
-              <TextField
-                fullWidth
-                multiline
-                minRows={6}
-                label="Description"
-                value={toolIdeaDescription}
-                onChange={(event) => setToolIdeaDescription(event.target.value)}
-                placeholder="Describe the problem, required inputs, expected output, and one example use case."
-              />
-            </Stack>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button onClick={handleCloseToolIdeaDialog} size="small" disabled={toolIdeaSubmitting}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmitToolIdea}
-              variant="contained"
-              size="small"
-              disabled={toolIdeaSubmitting}
-            >
-              {toolIdeaSubmitting ? 'Submitting...' : 'Submit'}
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        <Dialog
-          open={selfExclusionDialogOpen}
-          onClose={() => setSelfExclusionDialogOpen(false)}
-          maxWidth="xs"
-          fullWidth
-        >
-          <DialogTitle>Save a restriction that excludes you?</DialogTitle>
-          <DialogContent>
-            <Alert severity="warning">
-              Available to groups is set to {selectedAllowedGroupIds.join(', ')}, but your current groups are
-              {' '}{currentUserGroupIds.join(', ')}. After saving, server authorization may prevent you from using
-              this agent.
+              ) : draft.error}
             </Alert>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setSelfExclusionDialogOpen(false)}>Go back</Button>
-            <Button
-              variant="contained"
-              color="warning"
-              onClick={() => {
-                setSelfExclusionDialogOpen(false)
-                const options = pendingSaveOptions
-                setPendingSaveOptions(undefined)
-                void handleSave(options, true)
-              }}
-            >
-              Save restriction
-            </Button>
-          </DialogActions>
-        </Dialog>
+          )}
+          {draft.status && (
+            <Alert severity="success" onClose={() => draft.setStatus(null)} sx={{ maxWidth: 780 }}>
+              {draft.status}
+            </Alert>
+          )}
 
-        <Dialog
-          open={deleteConfirmOpen}
-          onClose={handleDeleteCancel}
-          PaperProps={{ sx: { minWidth: 320, borderRadius: 2 } }}
-        >
-          <DialogTitle sx={{ fontSize: '1rem' }}>Delete Agent?</DialogTitle>
-          <DialogContent>
-            <Typography variant="body2" color="text.secondary">
-              Are you sure you want to delete &ldquo;{pendingDeleteAgent?.name}&rdquo;? This action cannot be undone.
-            </Typography>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button onClick={handleDeleteCancel} disabled={saving} size="small">
-              Cancel
-            </Button>
-            <Button
-              onClick={handleDeleteConfirm}
-              color="error"
-              variant="contained"
-              disabled={saving}
-              size="small"
-            >
-              {saving ? 'Deleting...' : 'Delete'}
-            </Button>
-          </DialogActions>
-        </Dialog>
-        </Stack>
+          {showStartScreen ? (
+            <WorkshopStartScreen
+              onChoose={handleChooseStart}
+              hasTemplates={draft.templateOptions.length > 0}
+              hasSavedAgents={draft.customAgents.length > 0}
+            />
+          ) : section === 'setup' ? (
+            <SetupSection
+              gettingStartedMode={gettingStartedMode}
+              onModeChange={handleModeChange}
+              templateOptions={draft.templateOptions}
+              parentAgentId={parentAgentId}
+              onTemplateChange={handleTemplateChange}
+              missingTemplateId={templateMissing ? selectedCustomAgent?.template_source || null : null}
+              templateAllowedGroupIds={selectedTemplate?.allowed_group_ids || []}
+              customAgents={draft.customAgents}
+              cloneSourceAgentId={draft.cloneSourceAgentId}
+              onCloneSourceChange={draft.setCloneSourceAgentId}
+              isExistingAgent={Boolean(selectedCustomAgent)}
+              focusOriginToken={focusOriginToken}
+              icon={draft.icon}
+              iconOptions={draft.iconOptions}
+              onIconChange={draft.setIcon}
+              name={draft.name}
+              onNameChange={draft.setName}
+              description={draft.description}
+              onDescriptionChange={draft.setDescription}
+              envelope={envelope}
+              onViewEnvelope={onViewEnvelope && draft.domainEnvelopeAgentId
+                ? () => onViewEnvelope(draft.domainEnvelopeAgentId)
+                : undefined}
+              modelOptions={draft.modelOptions}
+              selectedModelId={draft.selectedModelId}
+              onModelChange={draft.handleModelChange}
+              selectedModelOption={draft.selectedModelOption}
+              selectedModelReasoning={draft.selectedModelReasoning}
+              onReasoningChange={draft.setSelectedModelReasoning}
+              reasoningDescription={draft.selectedModelReasoningDescription}
+              onAskClaudeAboutModels={handleAskAboutModels}
+              visibility={draft.selectedVisibility}
+              onVisibilityChange={draft.setSelectedVisibility}
+              allowedGroupIds={draft.selectedAllowedGroupIds}
+              onAllowedGroupIdsChange={draft.setSelectedAllowedGroupIds}
+              selectableGroupOptions={draft.selectableGroupOptions}
+              inheritedAllowedGroupIds={draft.inheritedAllowedGroupIds}
+            />
+          ) : section === 'prompt' ? (
+            <PromptSection
+              parentCorePrompt={draft.parentCorePrompt}
+              parentGeneratedContract={draft.parentGeneratedContract}
+              parentBasePrompt={draft.parentBasePrompt}
+              hasTemplate={hasTemplate}
+              templateName={templateLabel}
+              customPrompt={draft.customPrompt}
+              onCustomPromptChange={draft.setCustomPrompt}
+              onResetToTemplate={draft.resetCustomPromptToTemplate}
+              overlayStatus={draft.overlayStatus}
+              overlayWarning={draft.overlayWarning}
+              availableGroupIds={draft.availableGroupIds}
+              selectedGroupId={draft.selectedGroupId}
+              onGroupChange={draft.setGroupId}
+              groupPromptOverrides={draft.groupPromptOverrides}
+              selectedGroupPrompt={draft.selectedGroupPrompt}
+              hasSelectedGroupOverride={draft.hasSelectedGroupOverride}
+              onGroupPromptChange={draft.handleSelectedGroupPromptChange}
+              onResetGroupPrompt={draft.handleResetSelectedGroupPrompt}
+              includeGroupRules={draft.includeGroupRules}
+              onIncludeGroupRulesChange={draft.setIncludeGroupRules}
+              loggedInAsLabel={draft.loggedInAsLabel}
+              loggedInGroupIds={draft.loggedInGroupIds}
+              onDiscussPromptWithClaude={handleDiscussPrompt}
+            />
+          ) : section === 'tools' ? (
+            <ToolsSection
+              selectedToolIds={draft.selectedToolIds}
+              toolLibrary={draft.toolLibrary}
+              onRemoveTool={draft.removeTool}
+              onAddTools={() => setToolLibraryOpen(true)}
+              hasTemplate={hasTemplate}
+              requests={draft.toolIdeaRequests}
+              requestsLoading={draft.toolIdeasLoading}
+              onNewRequest={() => setToolRequestOpen(true)}
+              onAskClaudeToDraft={handleAskForTool}
+            />
+          ) : (
+            <VersionsSection
+              versions={versions}
+              hasAgent={Boolean(selectedCustomAgent)}
+              saving={draft.saving}
+              onRevert={setPendingRevert}
+            />
+          )}
+        </Box>
       </Box>
+
+      <SaveVersionDialog
+        open={saveDialogOpen}
+        agentName={draft.name}
+        nextVersion={isNewDraft ? 1 : nextVersion}
+        isNewAgent={isNewDraft}
+        changedSections={describeChangedSections(dirty)}
+        saving={draft.saving}
+        onConfirm={handleSaveConfirm}
+        onClose={() => setSaveDialogOpen(false)}
+      />
+      <SaveAsDialog
+        open={saveAsDialogOpen}
+        initialName={(draft.name || selectedCustomAgent?.name || '').trim() ? `${(draft.name || selectedCustomAgent?.name || '').trim()} (Copy)` : ''}
+        saving={draft.saving}
+        onConfirm={handleSaveAsConfirm}
+        onClose={() => setSaveAsDialogOpen(false)}
+      />
+      <OpenAgentDialog
+        open={openDialogOpen}
+        agents={draft.customAgents}
+        loading={draft.loading}
+        selectedAgentId={selectedCustomAgentId}
+        onSelect={openAgent}
+        onClose={() => setOpenDialogOpen(false)}
+      />
+      <ManageAgentsDialog
+        open={manageDialogOpen}
+        agents={draft.customAgents}
+        loading={draft.loading}
+        saving={draft.saving}
+        selectedAgentId={selectedCustomAgentId}
+        onOpenAgent={(agentId) => {
+          setManageDialogOpen(false)
+          openAgent(agentId)
+        }}
+        onDeleteAgent={setPendingDelete}
+        onClose={() => setManageDialogOpen(false)}
+      />
+      <ToolLibraryDialog
+        open={toolLibraryOpen}
+        tools={draft.toolLibrary}
+        attachedToolIds={draft.selectedToolIds}
+        onConfirm={(toolIds) => {
+          draft.applyToolSelection(toolIds)
+          setToolLibraryOpen(false)
+        }}
+        onClose={() => setToolLibraryOpen(false)}
+      />
+      <ToolRequestDialog
+        open={toolRequestOpen}
+        submitting={draft.toolIdeaSubmitting}
+        onSubmit={(title, description) => draft.submitToolIdea(title, description, opusConversation)}
+        onClose={() => setToolRequestOpen(false)}
+      />
+      <SelfExclusionDialog
+        open={Boolean(draft.selfExclusionPrompt)}
+        allowedGroupIds={draft.selectedAllowedGroupIds}
+        currentUserGroupIds={draft.currentUserGroupIds}
+        onConfirm={draft.confirmSelfExclusion}
+        onCancel={draft.cancelSelfExclusion}
+      />
+      <DeleteAgentDialog
+        open={Boolean(pendingDelete)}
+        agentName={pendingDelete?.name || ''}
+        saving={draft.saving}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setPendingDelete(null)}
+      />
+      <RevertVersionDialog
+        open={pendingRevert !== null}
+        version={pendingRevert}
+        saving={draft.saving}
+        onConfirm={handleRevertConfirm}
+        onCancel={() => setPendingRevert(null)}
+      />
+      <UnsavedChangesDialog
+        open={Boolean(pendingGuardedAction)}
+        onDiscard={() => {
+          const action = pendingGuardedAction
+          setPendingGuardedAction(null)
+          action?.()
+        }}
+        onKeepEditing={() => setPendingGuardedAction(null)}
+      />
     </Box>
   )
 }
