@@ -93,9 +93,25 @@ jobs:
           echo "Pull requests are explicit no-op lanes for public publishing." >> "${GITHUB_STEP_SUMMARY}"
           echo "No runtime images, bundled core artifacts, or release manifests were pushed." >> "${GITHUB_STEP_SUMMARY}"
 
+  trace-review-backend-tests:
+    name: TraceReview Backend Tests
+    needs: prepare
+    if: needs.prepare.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run complete TraceReview backend suite
+        run: docker compose -f trace_review/docker-compose.yml run --rm --build backend-tests
+
+      - name: Cleanup TraceReview test resources
+        if: always()
+        run: docker compose -f trace_review/docker-compose.yml down --volumes --remove-orphans --rmi local
+
   publish-images:
     name: Publish ${{ matrix.display_name }} image
-    needs: prepare
+    needs: [prepare, trace-review-backend-tests]
     if: needs.prepare.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     permissions:

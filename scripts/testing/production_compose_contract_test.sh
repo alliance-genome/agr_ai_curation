@@ -94,6 +94,10 @@ grep -Fq '.vite_dev_mode == false' "${publish_workflow}"
 grep -Fq 'Verify TraceReview runtime provenance' "${publish_workflow}"
 grep -Fq 'TRACE_REVIEW_BUILD_REF=${{ needs.prepare.outputs.published_image_tag }}' "${publish_workflow}"
 grep -Fq '.trace_extractor_sha256 == $trace_extractor_sha256' "${publish_workflow}"
+grep -Fq 'trace-review-backend-tests:' "${publish_workflow}"
+grep -Fq 'run: docker compose -f trace_review/docker-compose.yml run --rm --build backend-tests' \
+  "${publish_workflow}"
+grep -Fq 'needs: [prepare, trace-review-backend-tests]' "${publish_workflow}"
 
 docker compose --env-file "${default_env_file}" -f "${compose_file}" \
   config --format json >"${default_rendered_file}"
