@@ -33,18 +33,11 @@ export default defineConfig({
     exclude: ['node_modules', 'dist'],
   },
   resolve: {
-    alias: [
-      { find: '@', replacement: path.resolve(__dirname, './src') },
-      // Vitest resolves the package's "node" export, which is the server build:
-      // panels never register, so the imperative collapse/expand API, autosave,
-      // and getSize() are inert. Agent Studio shell tests need the browser build.
-      {
-        find: 'react-resizable-panels',
-        replacement: path.resolve(
-          __dirname,
-          './node_modules/react-resizable-panels/dist/react-resizable-panels.browser.development.esm.js',
-        ),
-      },
-    ],
+    alias: [{ find: '@', replacement: path.resolve(__dirname, './src') }],
+    // Vitest defaults to Node's export conditions even under jsdom, so a
+    // package that ships a separate server build (react-resizable-panels:
+    // panels never register, collapse/expand, autosave and getSize() are
+    // inert) resolves to it. Ask for the `browser` export instead.
+    conditions: ['browser'],
   },
 });
