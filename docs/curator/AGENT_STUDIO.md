@@ -209,7 +209,7 @@ Every save creates a new version. The Versions table lists each version with its
 
 - **Save** opens a small dialog that names the version it creates, lists which sections changed, and lets you add an optional note. The Save button is enabled only when there is something to save.
 - **Save as** (in the More menu) saves a copy under a new name and leaves the original unchanged.
-- If you click **New** or open another agent while you have unsaved edits, the Workshop asks whether to discard them or keep editing. Closing the browser tab also warns you.
+- If you click **New**, open another agent, or switch to the **Agents** or **Flows** tab while you have unsaved edits, the Workshop asks whether to discard them or keep editing. Closing the browser tab also warns you.
 
 **Icon Picker**
 
