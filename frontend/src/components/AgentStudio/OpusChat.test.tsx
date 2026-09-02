@@ -3,7 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 
 import OpusChat, { resetSharedOpusChatStateForTests } from './OpusChat'
-import type { ChatContext } from '@/types/promptExplorer'
+import type { ChatContext, PromptInfo } from '@/types/promptExplorer'
+
+const DISEASE_VALIDATOR: PromptInfo = {
+  agent_id: 'disease_validator',
+  agent_name: 'Disease Validator',
+  description: 'Checks disease terms.',
+  base_prompt: 'Validate diseases.',
+  source_file: 'database',
+  has_group_rules: false,
+  group_rules: {},
+}
 
 const serviceMocks = vi.hoisted(() => ({
   createAgentStudioSession: vi.fn(),
@@ -373,9 +383,11 @@ describe('OpusChat', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', {
-      name: /Have Claude analyze your conversation and submit feedback to developers/i,
-    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'AI-assisted' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    })
 
     const dialog = screen.getByRole('dialog', { name: 'Submit Feedback to Developers?' })
     expect(dialog).toHaveAttribute('aria-modal', 'false')
@@ -733,5 +745,148 @@ describe('OpusChat', () => {
 
     expect(screen.getByText(/Proposed removals are highlighted in red with strikethrough/)).toBeInTheDocument()
     expect(screen.getByText('Line B')).toBeInTheDocument()
+  })
+
+  it('renders the compact header with one context chip, a feedback menu, and a hide control', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    const onHide = vi.fn()
+
+    render(
+      <OpusChat
+        context={{ active_tab: 'agents' }}
+        selectedAgent={DISEASE_VALIDATOR}
+        variant="panel"
+        panelId="agent-studio-claude-panel"
+        onHide={onHide}
+        initialConversation={[
+          { role: 'user', content: 'Hello', timestamp: '2026-04-22T00:00:01Z' },
+          { role: 'assistant', content: 'Hi', timestamp: '2026-04-22T00:00:02Z' },
+        ]}
+      />
+    )
+
+    expect(screen.getByRole('heading', { name: 'Claude' })).toBeInTheDocument()
+    expect(screen.queryByText('Chat with Claude')).not.toBeInTheDocument()
+    expect(screen.queryByText('Contact Devs:')).not.toBeInTheDocument()
+    expect(screen.getByText('Disease Validator')).toBeInTheDocument()
+
+    const hideButton = screen.getByRole('button', { name: 'Hide Claude' })
+    expect(hideButton).toHaveAttribute('aria-expanded', 'true')
+    expect(hideButton).toHaveAttribute('aria-controls', 'agent-studio-claude-panel')
+    fireEvent.click(hideButton)
+    expect(onHide).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }))
+    const aiAssisted = screen.getByRole('menuitem', { name: 'AI-assisted' })
+    const manual = screen.getByRole('menuitem', { name: 'Manual' })
+    expect(aiAssisted).not.toHaveAttribute('aria-disabled', 'true')
+    expect(manual).not.toHaveAttribute('aria-disabled', 'true')
+
+    fireEvent.click(manual)
+    expect(await screen.findByRole('dialog', { name: 'Submit Prompt Suggestion' })).toBeInTheDocument()
+  })
+
+  it('prefers the restored-session label over the agent chip and disables feedback with no messages', () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    render(
+      <OpusChat
+        context={{ active_tab: 'agents', session_id: 'assistant-session-12345678' }}
+        sourceSessionId="assistant-session-12345678"
+        selectedAgent={DISEASE_VALIDATOR}
+        variant="drawer"
+        panelId="agent-studio-claude-drawer"
+        onHide={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('Loaded from durable chat assistan...')).toBeInTheDocument()
+    expect(screen.queryByText('Disease Validator')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close Claude' })).toHaveAttribute(
+      'aria-controls',
+      'agent-studio-claude-drawer',
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }))
+    expect(screen.getByRole('menuitem', { name: 'AI-assisted' })).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByRole('menuitem', { name: 'Manual' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('keeps streaming, tool calls, and the draft input alive while the shell hides and re-shows the chat', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    let releaseCompletion: () => void = () => {}
+    const completionGate = new Promise<void>((resolve) => {
+      releaseCompletion = resolve
+    })
+
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TOOL_USE', tool_name: 'get_prompt', tool_input: { agent_id: 'gene' } }
+      yield { type: 'TOOL_RESULT', tool_name: 'get_prompt', result: { success: true } }
+      yield { type: 'TEXT_DELTA', delta: 'Partial reply' }
+      await completionGate
+      yield { type: 'TEXT_DELTA', delta: ' completed' }
+      yield { type: 'DONE' }
+    })
+
+    const onStreamingChange = vi.fn()
+
+    function Shell() {
+      const [hidden, setHidden] = useState(false)
+      return (
+        <>
+          <button onClick={() => setHidden((current) => !current)}>toggle-shell</button>
+          <div data-testid="shell-slot" style={{ visibility: hidden ? 'hidden' : 'visible' }}>
+            <OpusChat
+              context={{ active_tab: 'agents' }}
+              onStreamingChange={onStreamingChange}
+            />
+          </div>
+        </>
+      )
+    }
+
+    render(<Shell />)
+
+    const input = screen.getByPlaceholderText('Ask about prompts...')
+    fireEvent.change(input, { target: { value: 'Keep this running while hidden.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    expect(await screen.findByText('Partial reply')).toBeInTheDocument()
+    expect(onStreamingChange).toHaveBeenLastCalledWith(true)
+    expect(screen.getByText('Tool Calls (1)')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), {
+      target: { value: 'Draft typed mid-stream' },
+    })
+    const chatBeforeToggle = screen.getByRole('heading', { name: 'Claude' })
+
+    fireEvent.click(screen.getByText('toggle-shell'))
+    fireEvent.click(screen.getByText('toggle-shell'))
+
+    expect(screen.getByRole('heading', { name: 'Claude' })).toBe(chatBeforeToggle)
+    expect(screen.getByText('Partial reply')).toBeInTheDocument()
+    expect(screen.getByText('Tool Calls (1)')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask about prompts...')).toHaveValue('Draft typed mid-stream')
+
+    releaseCompletion()
+
+    expect(await screen.findByText('Partial reply completed')).toBeInTheDocument()
+    expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(1)
+    await waitFor(() => {
+      expect(onStreamingChange).toHaveBeenLastCalledWith(false)
+    })
   })
 })
