@@ -1008,7 +1008,9 @@ def _capabilities_payload(
                 "Use field_ref plus condition_op/value (or values for 'in') and both "
                 "when_true/when_false branch transforms. Branches may use existing "
                 "non-conditional transforms such as literal, first_non_empty, or pair_join; "
-                "nested conditionals are rejected."
+                "nested conditionals are rejected. The condition is evaluated once per row "
+                "against the whole field value, so a list-valued condition selects one branch "
+                "for the entire row."
             ),
         },
         "json_shapes": list(get_args(FlowOutputJsonShape)),

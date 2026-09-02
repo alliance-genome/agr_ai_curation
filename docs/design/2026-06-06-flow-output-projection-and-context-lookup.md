@@ -366,7 +366,9 @@ Allowed transforms:
 - `conditional`: evaluate one validated filter condition over a saved field and
   choose between required `when_true` and `when_false` transforms. Branches may
   use existing transforms such as `literal`, `first_non_empty`, or `pair_join`;
-  nested conditionals and arbitrary expressions are rejected.
+  nested conditionals and arbitrary expressions are rejected. The condition is
+  evaluated once per row against the whole field value, so a list-valued
+  condition selects one branch for the entire row.
 - `count`: count items at a list field.
 - `map_value`: map exact input values to labels with a default.
 - `boolean_label`: map boolean-ish values to configured labels.
