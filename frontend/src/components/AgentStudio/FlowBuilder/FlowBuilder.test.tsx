@@ -173,16 +173,9 @@ vi.mock('./AgentPalette', () => ({
   default: () => <div data-testid="agent-palette" />,
 }))
 
-vi.mock('./NodeEditor', () => ({
-  default: () => null,
-}))
-
-vi.mock('./TaskInputEditor', () => ({
-  default: () => null,
-}))
-
-vi.mock('./PromptViewer', () => ({
-  default: () => null,
+vi.mock('./NodePanel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./NodePanel')>()),
+  NodePanel: () => null,
 }))
 
 function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse {

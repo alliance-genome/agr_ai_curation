@@ -5,6 +5,9 @@
 
 import type { Node, Edge } from 'reactflow'
 import type { ValidationAttachmentOption } from '@/services/agentStudioService'
+import type { AgentBrowserRequest } from '../agentBrowserRequest'
+
+export type { AgentBrowserRequest, AgentBrowserTab, AgentBrowserFocus } from '../agentBrowserRequest'
 
 // ============================================================================
 // Agent Catalog Types (from /api/agent-studio/catalog)
@@ -256,6 +259,8 @@ export interface FlowBuilderProps {
   onFlowChange?: (flowState: FlowState) => void
   /** Callback to trigger a verify request to Claude */
   onVerifyRequest?: () => void
+  /** Opens the Agent Browser on an agent's Guide, Envelope, or Prompts tab. */
+  onOpenAgent?: (request: AgentBrowserRequest) => void
 }
 
 export interface AgentPaletteProps {
@@ -269,23 +274,6 @@ export interface FlowNodeProps {
   data: AgentNodeData
   id: string
   selected: boolean
-}
-
-export interface NodeEditorProps {
-  /** The node being edited */
-  node: AgentNode | null
-  /** Current graph-derived formatter binding; never copied into node data on save. */
-  outputBinding?: OutputBindingView
-  /** Callback to save changes */
-  onSave: (nodeId: string, data: Partial<AgentNodeData>) => void
-  /** Callback to close the editor */
-  onClose: () => void
-  /** Callback to delete the node */
-  onDelete?: (nodeId: string) => void
-  /** Callback to view the agent's prompts */
-  onViewPrompts?: (agentId: string, agentName: string) => void
-  /** Callback to open the domain envelope inspector */
-  onViewDomainEnvelope?: (nodeId: string) => void
 }
 
 // ============================================================================
