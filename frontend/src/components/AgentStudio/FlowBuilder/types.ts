@@ -261,6 +261,12 @@ export interface FlowBuilderProps {
   onVerifyRequest?: () => void
   /** Opens the Agent Browser on an agent's Guide, Envelope, or Prompts tab. */
   onOpenAgent?: (request: AgentBrowserRequest) => void
+  /**
+   * False while the Flows tab is hidden. The builder stays mounted so an
+   * unsaved graph survives a visit to the Agent Browser, but a hidden builder
+   * must not answer keyboard shortcuts. Defaults to true.
+   */
+  active?: boolean
 }
 
 export interface AgentPaletteProps {

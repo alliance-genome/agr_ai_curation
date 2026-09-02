@@ -254,6 +254,10 @@ function AgentStudioPage() {
 
   const workshopLeaveGuardRef = useRef<WorkshopLeaveGuard | null>(null)
 
+  useEffect(() => {
+    if (activeTab === 'flows') setFlowsVisited(true)
+  }, [activeTab])
+
   // Persist tab changes
   const applyTab = useCallback((newValue: TabValue) => {
     setActiveTab(newValue)
@@ -282,6 +286,9 @@ function AgentStudioPage() {
   }, [activeTab, applyTab, confirmLeaveWorkshop])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  // The Flows tab mounts on first visit and then stays mounted (hidden) so an
+  // unsaved flow graph survives a trip to the Agent Browser or the Workshop.
+  const [flowsVisited, setFlowsVisited] = useState(false)
   // A deep link into the Agent Browser (from the Flow Builder node panel or the Workshop).
   const [agentDetailsRequest, setAgentDetailsRequest] = useState<AgentDetailsRequest | null>(null)
   const agentDetailsRequestCounterRef = useRef(0)
@@ -912,14 +919,21 @@ Agent ID: ${agentId}`
                   detailsRequest={agentDetailsRequest}
                 />
               )}
-              {activeTab === 'flows' && (
-                <FlowBuilder
-                  flowId={currentFlowId}
-                  onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
-                  onFlowChange={handleFlowChange}
-                  onVerifyRequest={handleVerifyRequest}
-                  onOpenAgent={openAgentBrowser}
-                />
+              {flowsVisited && (
+                <Box
+                  data-testid="flows-tab-panel"
+                  hidden={activeTab !== 'flows'}
+                  sx={{ height: '100%', minHeight: 0, '&[hidden]': { display: 'none' } }}
+                >
+                  <FlowBuilder
+                    flowId={currentFlowId}
+                    onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
+                    onFlowChange={handleFlowChange}
+                    onVerifyRequest={handleVerifyRequest}
+                    onOpenAgent={openAgentBrowser}
+                    active={activeTab === 'flows'}
+                  />
+                </Box>
               )}
               {activeTab === 'agent_workshop' && catalog && (
                 <PromptWorkshop

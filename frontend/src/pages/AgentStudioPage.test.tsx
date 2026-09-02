@@ -149,15 +149,27 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
   return { default: OpusChatMock }
 })
 
-vi.mock('@/components/AgentStudio/FlowBuilder', () => ({
+const flowBuilderInstances = vi.hoisted(() => ({ count: 0 }))
+
+vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
+  const react = await import('react')
+  return {
   FlowBuilder: ({
     onFlowChange,
     onVerifyRequest,
+    active,
   }: {
     onFlowChange?: (flow: Record<string, unknown>) => void
     onVerifyRequest?: () => void
-  }) => (
-    <div data-testid="flow-builder">
+    active?: boolean
+  }) => {
+    // One id per mounted instance, so a test can prove the builder was not remounted.
+    const [instance] = react.useState(() => {
+      flowBuilderInstances.count += 1
+      return flowBuilderInstances.count
+    })
+    return (
+    <div data-testid="flow-builder" data-instance={instance} data-active={String(active ?? true)}>
       Flow
       <button
         onClick={() => onFlowChange?.({
@@ -185,8 +197,10 @@ vi.mock('@/components/AgentStudio/FlowBuilder', () => ({
       </button>
       <button onClick={() => onVerifyRequest?.()}>verify-flow</button>
     </div>
-  ),
-}))
+    )
+  },
+  }
+})
 
 vi.mock('@/components/AgentStudio/AgentBrowser', () => ({
   default: ({
@@ -1033,6 +1047,25 @@ describe('AgentStudioPage', () => {
         expect(localStorage.getItem(PANEL_KEY)).not.toBeNull()
       })
       expect(getPanelSize('agent-studio-claude-panel')).toBe('30.0')
+    })
+
+    it('keeps the Flow Builder mounted and inactive while another tab is open', async () => {
+      await renderStudio()
+      expect(screen.queryByTestId('flow-builder')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      const builder = screen.getByTestId('flow-builder')
+      const instance = builder.getAttribute('data-instance')
+      expect(builder).toHaveAttribute('data-active', 'true')
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
+      expect(screen.getByTestId('flows-tab-panel')).not.toBeVisible()
+      expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-active', 'false')
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      expect(screen.getByTestId('flows-tab-panel')).toBeVisible()
+      expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-instance', instance)
+      expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-active', 'true')
     })
 
     it('keeps the active tab across collapse and restore', async () => {

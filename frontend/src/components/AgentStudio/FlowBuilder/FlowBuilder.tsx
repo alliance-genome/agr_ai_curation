@@ -621,7 +621,7 @@ const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
   return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? 'Cmd' : 'Ctrl'
 }
 
-function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, onOpenAgent }: FlowBuilderProps) {
+function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, onOpenAgent, active = true }: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   const isValidationAgentDynamic = useCallback(
@@ -1825,6 +1825,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (!active) return
       if (isEditableShortcutTarget(event.target)) return
       if (!isBuilderShortcutContext(event)) return
 
@@ -1853,7 +1854,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleSaveClick, handleSelectAll, handleDeleteAllSelected, nodes.length, selectedElementsCount])
+  }, [active, builderRootRef, handleSaveClick, handleSelectAll, handleDeleteAllSelected, nodes.length, selectedElementsCount])
 
   const saveActionsDisabled = saving || nodes.length === 0
 
