@@ -35,6 +35,8 @@ describe('NodePanelDock', () => {
     const dock = screen.getByTestId('node-panel-dock')
     expect(dock).toHaveStyle({ width: '440px', flex: '0 0 440px', height: '100%' })
     const handle = screen.getByRole('separator', { name: 'Resize step panel' })
+    expect(handle).toHaveAttribute('aria-valuemin', '380')
+    expect(handle).toHaveAttribute('aria-valuemax', '600')
     expect(handle).toHaveAttribute('aria-valuenow', '440')
 
     handle.focus()
@@ -49,6 +51,7 @@ describe('NodePanelDock', () => {
     renderDock({ areaWidth: 800 })
 
     const handle = screen.getByRole('separator', { name: 'Resize step panel' })
+    expect(handle).toHaveAttribute('aria-valuemax', '400')
     expect(handle).toHaveAttribute('aria-valuenow', '400')
     handle.focus()
     await user.keyboard('{ArrowLeft}')
