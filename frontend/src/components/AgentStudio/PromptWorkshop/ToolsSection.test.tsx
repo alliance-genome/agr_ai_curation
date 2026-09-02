@@ -24,7 +24,7 @@ const toolLibrary: ToolLibraryItem[] = [
     curator_visible: true,
     allow_attach: true,
     allow_execute: true,
-    config: {},
+    config: { requires_document: false },
   },
   {
     tool_key: 'blocked_tool',
@@ -34,7 +34,7 @@ const toolLibrary: ToolLibraryItem[] = [
     curator_visible: true,
     allow_attach: true,
     allow_execute: false,
-    config: {},
+    config: { requires_document: false },
   },
 ]
 

@@ -284,6 +284,9 @@ def test_tool_lookup_and_expansion_helpers(monkeypatch):
     assert catalog_service._canonical_tool_ids(["search_genes", "agr_curation_query"]) == ["agr_curation_query"]
     assert catalog_service._uses_document_tools(["search_document"]) is True
     assert catalog_service._uses_document_tools(["agr_curation_query"]) is False
+    assert catalog_service.tool_requires_document("search_document") is True
+    assert catalog_service.tool_requires_document("  read_chunk ") is True
+    assert catalog_service.tool_requires_document("agr_curation_query") is False
 
     expanded = catalog_service.expand_tools_for_agent("gene", ["agr_curation_query", "unknown_tool"])
     assert expanded == ["search_genes", "unknown_tool"]
