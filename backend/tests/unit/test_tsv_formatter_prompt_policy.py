@@ -40,6 +40,8 @@ def test_tsv_formatter_prompt_uses_runtime_tool_contract(relative_path: str):
         "source_ref",
         "latest `extraction-result:<uuid>`",
         "Do not build replacement row arrays",
+        "`pair_join` transform",
+        "do not use `concat` for list-valued fields",
     ):
         assert required in content
 
