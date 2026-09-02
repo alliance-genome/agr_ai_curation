@@ -74,10 +74,10 @@ function getBubbleStyles(
     case 'user':
       return {
         alignSelf: 'flex-end',
-        maxWidth: '75%',
+        maxWidth: '78%',
         backgroundColor: theme.palette.mode === 'dark' ? theme.palette.grey[800] : theme.palette.grey[100],
         color: theme.palette.text.primary,
-        borderRadius: '18px 18px 4px 18px',
+        borderRadius: '12px 12px 4px 12px',
         boxShadow: messageShadow,
       }
     case 'flow':
@@ -88,7 +88,7 @@ function getBubbleStyles(
           ? alpha(theme.palette.common.white, 0.08)
           : alpha(theme.palette.text.primary, 0.06),
         color: theme.palette.text.primary,
-        borderRadius: '18px 18px 18px 4px',
+        borderRadius: '12px 12px 12px 4px',
         boxShadow: messageShadow,
       }
     case 'assistant':
@@ -97,7 +97,7 @@ function getBubbleStyles(
         maxWidth: '85%',
         backgroundColor: theme.palette.secondary.main,
         color: theme.palette.secondary.contrastText,
-        borderRadius: hasEvidenceCard ? '18px 18px 4px 4px' : '18px 18px 18px 4px',
+        borderRadius: hasEvidenceCard ? '12px 12px 4px 4px' : '12px 12px 12px 4px',
         boxShadow: messageShadow,
       }
   }
@@ -144,19 +144,19 @@ export default function TranscriptMessage({ message }: TranscriptMessageProps) {
         sx={{
           backgroundColor: bubbleStyles.backgroundColor,
           color: bubbleStyles.color,
-          padding: '1rem 1.5rem',
+          padding: '8px 12px',
           borderRadius: bubbleStyles.borderRadius,
           boxShadow: bubbleStyles.boxShadow,
         }}
       >
         <Box
           sx={{
-            fontSize: '0.75rem',
+            fontSize: '10.5px',
             fontWeight: 600,
-            opacity: 0.8,
-            mb: '0.5rem',
+            opacity: 0.75,
+            mb: '3px',
             textTransform: 'uppercase',
-            letterSpacing: '0.5px',
+            letterSpacing: '0.06em',
           }}
         >
           {getRoleLabel(message.role)}
@@ -164,7 +164,8 @@ export default function TranscriptMessage({ message }: TranscriptMessageProps) {
 
         <Box
           sx={{
-            lineHeight: 1.5,
+            fontSize: '13.5px',
+            lineHeight: 1.45,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
           }}
