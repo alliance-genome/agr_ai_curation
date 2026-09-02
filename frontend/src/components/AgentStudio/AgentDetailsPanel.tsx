@@ -23,6 +23,7 @@ import type { CombinedPromptResponse, PromptInfo } from '@/types/promptExplorer'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import ToolDetailsDialog from './ToolDetailsDialog'
 import AgentGuideTab from './AgentGuideTab'
+import type { AgentBrowserFocus, AgentDetailsRequest } from './agentBrowserRequest'
 import EnvelopeTab from './EnvelopeTab'
 import AgentPromptsTab from './AgentPromptsTab'
 
@@ -81,6 +82,8 @@ interface AgentDetailsPanelProps {
   onBack?: () => void
   /** True when the browser is below the narrow-width threshold. */
   narrow?: boolean
+  /** Deep link: switch to a tab, and focus one envelope field, when a new request arrives. */
+  request?: AgentDetailsRequest | null
 }
 
 function draftGuidePrompt(agentId: string, agentName: string): string {
@@ -103,9 +106,11 @@ function AgentDetailsPanel({
   onCloneToWorkshop,
   onBack,
   narrow = false,
+  request = null,
 }: AgentDetailsPanelProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const [activeTab, setActiveTab] = useState<TabValue>('guide')
+  const [envelopeFocus, setEnvelopeFocus] = useState<AgentBrowserFocus | null>(null)
   const [combinedPrompt, setCombinedPrompt] = useState<CombinedPromptResponse | null>(null)
   const [loadingCombined, setLoadingCombined] = useState(false)
   const [selectedTool, setSelectedTool] = useState<string | null>(null)
@@ -172,6 +177,13 @@ function AgentDetailsPanel({
       setActiveTab('guide')
     }
   }, [activeTab, domainEnvelopeMetadata])
+
+  // Each request carries a fresh token, so the same tab can be asked for twice.
+  useEffect(() => {
+    if (!request || request.agentId !== agent?.agent_id) return
+    setActiveTab(request.tab)
+    setEnvelopeFocus(request.focus ?? null)
+  }, [request, agent?.agent_id])
 
   const handleTabChange = (_: React.SyntheticEvent, newValue: TabValue) => {
     setActiveTab(newValue)
@@ -307,7 +319,7 @@ function AgentDetailsPanel({
         )}
 
         {activeTab === 'envelope' && domainEnvelopeMetadata && (
-          <EnvelopeTab metadata={domainEnvelopeMetadata} narrow={narrow} />
+          <EnvelopeTab metadata={domainEnvelopeMetadata} narrow={narrow} focus={envelopeFocus} />
         )}
 
         {activeTab === 'prompts' && (

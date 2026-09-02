@@ -225,6 +225,43 @@ describe('AgentDetailsPanel', () => {
     expect(prompt).toMatch(/Agent ID: example_validator/)
   })
 
+  it('follows a details request onto the Envelope tab and focuses the requested field', () => {
+    metadataMocks.agents = {
+      example_validator: { domain_envelope: buildDomainEnvelopeMetadata() },
+    }
+    const agent = buildDocumentedAgent()
+    const { rerender } = render(
+      <AgentDetailsPanel agent={agent} selectedGroupId={null} onGroupSelect={vi.fn()} request={null} />
+    )
+    expect(screen.getByRole('tab', { name: 'Guide' })).toHaveAttribute('aria-selected', 'true')
+
+    rerender(
+      <AgentDetailsPanel
+        agent={agent}
+        selectedGroupId={null}
+        onGroupSelect={vi.fn()}
+        request={{ agentId: 'example_validator', tab: 'envelope', focus: { objectType: 'gene_mention_evidence', fieldPath: 'gene_symbol' }, token: 1 }}
+      />
+    )
+
+    expect(screen.getByRole('tab', { name: 'Envelope' })).toHaveAttribute('aria-selected', 'true')
+    const row = screen.getByText('Gene symbol').closest('tr') as HTMLElement
+    expect(row).toHaveAttribute('aria-current', 'true')
+  })
+
+  it('ignores a details request addressed to another agent', () => {
+    const agent = buildDocumentedAgent()
+    render(
+      <AgentDetailsPanel
+        agent={agent}
+        selectedGroupId={null}
+        onGroupSelect={vi.fn()}
+        request={{ agentId: 'someone_else', tab: 'prompts', token: 1 }}
+      />
+    )
+    expect(screen.getByRole('tab', { name: 'Guide' })).toHaveAttribute('aria-selected', 'true')
+  })
+
   it('shows the Envelope tab only when the agent declares a domain pack', () => {
     metadataMocks.agents = {
       example_validator: { domain_envelope: buildDomainEnvelopeMetadata() },

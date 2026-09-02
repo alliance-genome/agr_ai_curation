@@ -108,8 +108,8 @@ Create workflows by dragging agents onto a canvas and connecting them:
 - 15 available agents from extraction to file output
 - Save, load, and reuse flows
 - Generate downloadable CSV, TSV, or JSON files
-- Inspect which domain-envelope objects an extraction node will produce
-- Inspect automatic validators attached from domain-pack metadata
+- Adjust, per flow, which optional automatic checks run on an extraction step
+- Reach each agent's guide, envelope, and prompts from the step panel's "About this agent" row
 
 **Verify with Claude (Important!)**
 
@@ -121,20 +121,20 @@ Before running a flow, click the **"Verify with Claude"** button. Claude will:
 
 This is especially valuable when building new flows or troubleshooting ones that aren't working as expected.
 
-**Automatic Validation Attachments**
+**Automatic Checks**
 
-When an extraction agent declares domain-pack validation metadata, Flow Builder
-attaches the default active validators to the extraction node. Active validators
-are enabled by default. Curators can skip an active default validator only when
-flow configuration replaces or supplements it with explicit validation for the
-same field or object. Validators explicitly marked by the domain pack as not
-allowing flow replacement stay locked on.
-Under-development validators remain visible metadata only and do not run.
+When an extraction agent declares domain-pack validation metadata, its automatic
+checks run after extraction. Select the node to see them in the step panel: a
+summary of how many checks run, how many always run, and one switch per check
+you may turn off for this flow. Blocking checks and checks the domain pack locks
+on are counted, not listed. The info circle beside each switch explains what the
+check does, which fields it checks, and what happens if it is off, in the same
+words the Agents tab uses. Under-development checks do not run and are not shown.
 
 To add a custom validation step, place a data-validation agent after the
 extractor and use its steering prompt to name the envelope object, field path, or
 curation concern you want checked. Custom validation agents are saved as regular
-flow nodes; automatic validation remains controlled by the extraction agent's
+flow nodes; automatic checks remain controlled by the extraction agent's
 domain-pack metadata.
 
 **Ask Opus about flows:**
