@@ -3,13 +3,16 @@
 from decimal import Decimal
 
 from openai.types.chat import ChatCompletion
+import pytest
 
 from src.lib.openai_agents.provider_usage import (
+    PendingProviderInvocation,
     ProviderUsageRecord,
     begin_provider_invocation,
     complete_provider_invocation,
     capture_provider_usage,
     emit_provider_usage,
+    fail_provider_invocation,
     normalize_openrouter_usage,
     observe_provider_invocations,
 )
@@ -105,6 +108,64 @@ def test_provider_observer_checkpoints_before_and_after_dispatch(monkeypatch):
 
     assert checkpoints == [("started", 1), ("completed", 1)]
     assert records[0].route_slot == "agent:a"
+
+
+@pytest.mark.parametrize("provider_failed", [False, True])
+def test_provider_usage_is_emitted_before_observer_settlement(
+    monkeypatch, provider_failed: bool
+):
+    trace_records = []
+    monkeypatch.setattr(
+        "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event",
+        trace_records.append,
+    )
+
+    class Observer:
+        def started(self, pending: PendingProviderInvocation) -> None:
+            pass
+
+        def completed(
+            self,
+            pending: PendingProviderInvocation,
+            record: ProviderUsageRecord,
+        ) -> None:
+            raise RuntimeError("durable settlement failed")
+
+    with observe_provider_invocations(Observer()), capture_provider_usage(
+        max_records=1, max_failure_detail_chars=20
+    ) as records:
+        pending = begin_provider_invocation(
+            requested_provider="openai",
+            requested_model="model-a",
+            started_at=1.0,
+        )
+        with pytest.raises(RuntimeError, match="durable settlement failed"):
+            if provider_failed:
+                fail_provider_invocation(
+                    pending,
+                    RuntimeError("provider failed"),
+                    latency_ms=10,
+                )
+            else:
+                complete_provider_invocation(
+                    pending,
+                    ProviderUsageRecord(
+                        requested_provider="ignored",
+                        requested_model="ignored",
+                        actual_provider="openai",
+                        actual_model="model-a",
+                        routing_attempt=0,
+                        latency_ms=10,
+                        input_tokens=1,
+                        output_tokens=2,
+                        total_tokens=3,
+                        billed_cost=None,
+                    ),
+                )
+
+    assert len(records) == 1
+    assert trace_records == records
+    assert records[0].status == ("failed" if provider_failed else "completed")
 
 
 def test_normalize_openrouter_usage_does_not_guess_route_or_cost():

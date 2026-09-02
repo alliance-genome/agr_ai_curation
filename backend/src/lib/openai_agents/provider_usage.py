@@ -199,10 +199,10 @@ def complete_provider_invocation(
         status="completed",
         failure_detail=None,
     )
+    emit_provider_usage(completed)
     observer = _provider_invocation_observer.get()
     if observer is not None:
         observer.completed(pending, completed)
-    emit_provider_usage(completed)
 
 
 def fail_provider_invocation(
@@ -240,10 +240,10 @@ def fail_provider_invocation(
         status="failed",
         failure_detail=detail,
     )
+    emit_provider_usage(failed)
     observer = _provider_invocation_observer.get()
     if observer is not None:
         observer.completed(pending, failed)
-    emit_provider_usage(failed)
 
 
 def complete_generic_provider_invocation(
