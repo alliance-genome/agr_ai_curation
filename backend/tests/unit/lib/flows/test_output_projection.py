@@ -1563,6 +1563,45 @@ def test_conditional_in_requires_values():
         )
 
 
+def test_nonconditional_transform_rejects_conditional_branches():
+    with pytest.raises(ValueError, match="supported only by conditional"):
+        FlowOutputTransformSpec(
+            type="literal",
+            value="Existing",
+            when_true=FlowOutputTransformSpec(type="literal", value="New in paper"),
+        )
+
+
+def test_conditional_ordered_comparison_reports_contextual_validation_error():
+    bundle = _conditional_source_bundle()
+    plan = _conditional_source_plan()
+    conditional = plan.columns[0].transform
+    assert conditional is not None
+    conditional.condition_op = "gt"
+    conditional.value = 1
+
+    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
+
+    assert errors == [
+        "Column 'source' conditional condition is invalid: Filter operator 'gt' "
+        "requires numeric values for field 'object.attribute.source_status'; got "
+        "non-numeric value 'new_in_paper'."
+    ]
+
+
+def test_conditional_warns_for_null_literal_branch():
+    bundle = _conditional_source_bundle()
+    plan = _conditional_source_plan()
+    conditional = plan.columns[0].transform
+    assert conditional is not None
+    conditional.when_true = FlowOutputTransformSpec(type="literal", value=None)
+
+    errors, warnings, _ = output_projection_module.validate_projection_plan(bundle, plan)
+
+    assert errors == []
+    assert "Column 'source' literal transform has a null value." in warnings
+
+
 def test_conditional_validates_branch_refs_and_pair_alignment():
     bundle = _conditional_source_bundle()
     plan = _conditional_source_plan()
