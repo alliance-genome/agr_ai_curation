@@ -62,7 +62,7 @@ function providerRows(
   const schemaRefId = typeof value.schema_ref === 'string' ? value.schema_ref : null
   const schemaRef = schemaRefId ? schemaRefs.find((ref) => ref.schema_id === schemaRefId) : undefined
 
-  return Object.entries(value).flatMap(([entryKey, entryValue]) => {
+  return Object.entries(value).flatMap(([entryKey, entryValue]): ProvenanceRow[] => {
     if (entryKey === 'schema_ref') return []
     const rowKey = `${rowPrefix}:${providerKey}:${entryKey}`
     const term = `${providerWord} ${humanizeKey(entryKey)}`
