@@ -131,6 +131,12 @@ function AgentBrowser({
     return allAgents.find((a) => a.agent_id === selectedAgentId) || null
   }, [allAgents, selectedAgentId])
 
+  // The catalog carries category on the group, not on each agent
+  const selectedAgentCategory = useMemo(() => {
+    if (!selectedAgentId) return undefined
+    return catalog.categories.find((cat) => cat.agents.some((a) => a.agent_id === selectedAgentId))?.category
+  }, [catalog, selectedAgentId])
+
   const filterCounts = useMemo(() => {
     const shared = allAgents.filter((agent) => agent.subcategory === 'Shared Agents').length
     const templates = allAgents.filter((agent) => !agent.agent_id.startsWith('ca_')).length
@@ -417,6 +423,7 @@ function AgentBrowser({
         <DetailsContainer>
           <AgentDetailsPanel
             agent={selectedAgent}
+            category={selectedAgentCategory}
             selectedGroupId={selectedGroupId}
             onGroupSelect={onGroupSelect}
             onDiscussWithClaude={onDiscussWithClaude}

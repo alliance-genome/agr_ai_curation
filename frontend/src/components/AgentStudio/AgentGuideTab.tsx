@@ -7,7 +7,7 @@
  * Nothing is synthesized in the frontend.
  */
 
-import { Box, Button, Typography } from '@mui/material'
+import { Alert, Box, Button, Typography } from '@mui/material'
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined'
 
 import type { AgentCapability, AgentDocumentation, DataSourceInfo } from '@/types/promptExplorer'
@@ -16,6 +16,8 @@ import { MONO_FONT_FAMILY, SectionHeading } from './agentGuidePrimitives'
 
 interface AgentGuideTabProps {
   documentation?: AgentDocumentation
+  /** Catalog category of the agent (for example "Validation" or "Extraction"). */
+  category?: string
   tools: string[]
   toolDescriptions: Record<string, string>
   toolInventoryError?: string | null
@@ -26,6 +28,26 @@ interface AgentGuideTabProps {
 }
 
 const sectionSx = { display: 'flex', flexDirection: 'column', gap: 0.75 } as const
+
+/**
+ * Note shown above the stripes for agent categories where curators tend to
+ * assume they must add validators to a flow. Keyed by lower-cased category.
+ */
+export const AUTOMATIC_VALIDATION_NOTE_LEAD = 'Validation runs automatically.'
+export const AUTOMATIC_VALIDATION_NOTES: Record<string, string> = {
+  validation:
+    'Every validator in the domain pack runs automatically on the objects an extractor produces. '
+    + 'Add this validator to a flow only when you want custom validation: a changed prompt, different tools, '
+    + 'or a check the pack does not include. Clone it in the Agent Workshop to customize it.',
+  extraction:
+    "The domain pack's validators run automatically on everything this agent extracts. "
+    + 'You do not need to add validators to the flow unless you want custom validation.',
+}
+
+function automaticValidationNote(category?: string): string | undefined {
+  if (!category) return undefined
+  return AUTOMATIC_VALIDATION_NOTES[category.trim().toLowerCase()]
+}
 const listSx = { m: 0, pl: 2.25, maxWidth: '70ch', fontSize: 13, '& li': { my: 0.25 } } as const
 
 function Stripe({ tone, heading, items }: { tone: 'success' | 'warning'; heading: string; items: string[] }) {
@@ -96,6 +118,7 @@ function CapabilityRow({ capability }: { capability: AgentCapability }) {
 
 function AgentGuideTab({
   documentation,
+  category,
   tools,
   toolDescriptions,
   toolInventoryError,
@@ -111,6 +134,7 @@ function AgentGuideTab({
   const limitations = documentation?.limitations ?? []
   const hasGuide = useWhen.length > 0 || avoidWhen.length > 0 || dataSources.length > 0
     || capabilities.length > 0 || limitations.length > 0
+  const validationNote = automaticValidationNote(category)
 
   const toolsSection = (
     <AgentToolsTable
@@ -164,6 +188,18 @@ function AgentGuideTab({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.25 }}>
+      {validationNote && (
+        <Alert
+          severity="warning"
+          data-testid="automatic-validation-note"
+          sx={{ py: 0.25, maxWidth: '78ch', '& .MuiAlert-message': { fontSize: 13 } }}
+        >
+          <Box component="strong" sx={{ fontWeight: 600 }}>{AUTOMATIC_VALIDATION_NOTE_LEAD}</Box>
+          {' '}
+          {validationNote}
+        </Alert>
+      )}
+
       {(useWhen.length > 0 || avoidWhen.length > 0) && (
         <Box sx={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: 2.25 }}>
           {useWhen.length > 0 && <Stripe tone="success" heading="When to use it" items={useWhen} />}

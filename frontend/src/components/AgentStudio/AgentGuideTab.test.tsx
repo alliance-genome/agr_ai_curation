@@ -78,6 +78,43 @@ describe('AgentGuideTab', () => {
     expect(screen.queryByText('No curator guide yet')).not.toBeInTheDocument()
   })
 
+  it('shows the automatic validation note above the stripes for a Validation agent', () => {
+    render(<AgentGuideTab {...baseProps} category="Validation" documentation={richDocumentation()} />)
+
+    const note = screen.getByTestId('automatic-validation-note')
+    expect(note).toHaveAttribute('role', 'alert')
+    expect(note).toHaveClass('MuiAlert-standardWarning')
+    expect(within(note).getByText('Validation runs automatically.').tagName).toBe('STRONG')
+    expect(note).toHaveTextContent(
+      'Every validator in the domain pack runs automatically on the objects an extractor produces. '
+      + 'Add this validator to a flow only when you want custom validation: a changed prompt, different tools, '
+      + 'or a check the pack does not include. Clone it in the Agent Workshop to customize it.'
+    )
+    const useStripe = screen.getByRole('region', { name: 'When to use it' })
+    expect(note.compareDocumentPosition(useStripe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows the extractor wording for an Extraction agent, matching the category case-insensitively', () => {
+    render(<AgentGuideTab {...baseProps} category="extraction" documentation={richDocumentation()} />)
+
+    const note = screen.getByTestId('automatic-validation-note')
+    expect(within(note).getByText('Validation runs automatically.')).toBeInTheDocument()
+    expect(note).toHaveTextContent(
+      "The domain pack's validators run automatically on everything this agent extracts. "
+      + 'You do not need to add validators to the flow unless you want custom validation.'
+    )
+    expect(note).not.toHaveTextContent('Clone it in the Agent Workshop')
+  })
+
+  it('omits the note for other categories and when no category is known', () => {
+    const { unmount } = render(<AgentGuideTab {...baseProps} category="Output" documentation={richDocumentation()} />)
+    expect(screen.queryByTestId('automatic-validation-note')).not.toBeInTheDocument()
+    unmount()
+
+    render(<AgentGuideTab {...baseProps} documentation={richDocumentation()} />)
+    expect(screen.queryByTestId('automatic-validation-note')).not.toBeInTheDocument()
+  })
+
   it('omits the stripes when use_when and avoid_when are absent and still lists limitations', () => {
     render(<AgentGuideTab {...baseProps} documentation={richDocumentation({ use_when: [], avoid_when: [] })} />)
 

@@ -104,6 +104,35 @@ describe('AgentBrowser', () => {
     expect(screen.queryByText('Unauthorized Agent')).not.toBeInTheDocument()
   })
 
+  it('passes the catalog group category to the guide so validators get the automatic validation note', () => {
+    const documentation = {
+      summary: 'Checks terms.',
+      capabilities: [],
+      data_sources: [],
+      limitations: ['Only one ontology.'],
+      use_when: ['When you want a custom check.'],
+      avoid_when: ['To get validation; it already runs automatically.'],
+    }
+    const catalog: PromptCatalog = {
+      categories: [
+        { category: 'Validation', agents: [buildAgent('validator_a', 'Validator A', { documentation })] },
+        { category: 'Output', agents: [buildAgent('formatter_a', 'Formatter A', { subcategory: 'Formatters', documentation })] },
+      ],
+      total_agents: 2,
+      available_groups: [],
+      last_updated: '2026-08-27T00:00:00Z',
+    }
+    const { rerender } = render(
+      <AgentBrowser catalog={catalog} selectedAgentId="validator_a" selectedGroupId={null} onAgentSelect={vi.fn()} onGroupSelect={vi.fn()} />
+    )
+    expect(screen.getByTestId('automatic-validation-note')).toHaveTextContent('Validation runs automatically.')
+
+    rerender(
+      <AgentBrowser catalog={catalog} selectedAgentId="formatter_a" selectedGroupId={null} onAgentSelect={vi.fn()} onGroupSelect={vi.fn()} />
+    )
+    expect(screen.queryByTestId('automatic-validation-note')).not.toBeInTheDocument()
+  })
+
   it('renders the list pane with counts, filter tabs, search, and category groups beside the detail', () => {
     const onAgentSelect = vi.fn()
     render(
