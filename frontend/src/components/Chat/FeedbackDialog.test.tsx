@@ -132,11 +132,11 @@ describe('FeedbackDialog', () => {
       .flatMap((styleSheet) => Array.from(styleSheet.cssRules))
       .find((rule): rule is CSSStyleRule =>
         rule instanceof CSSStyleRule &&
-        rule.selectorText.replaceAll(' ', '').includes(
-          '.MuiInputBase-multiline>.MuiInputBase-input'
-        )
+        rule.selectorText.includes('.MuiInputBase-multiline>.MuiInputBase-input') &&
+        textarea.matches(rule.selectorText)
       )
 
+    expect(multilineInputRule).toBeDefined()
     expect(multilineInputRule?.style.getPropertyValue('height')).toBe('100%')
     expect(multilineInputRule?.style.getPropertyValue('overflow')).toBe('auto')
     expect(multilineInputRule?.style.getPropertyValue('box-sizing')).toBe('border-box')
