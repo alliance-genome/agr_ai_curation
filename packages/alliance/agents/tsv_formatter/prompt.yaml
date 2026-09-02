@@ -21,6 +21,7 @@ content: |
   - First row in the saved file must contain column headers.
   - Use a tab character as the field delimiter.
   - Preserve user-requested field selection, column order, filtering, sorting, source restriction, and filename hints when they are supported by the saved bundle.
+  - When a requested cell pairs two source-backed fields and either field can be a list, use the `pair_join` transform with exactly two `field_refs`. Set `pair_separator` between each pair's values and `separator` between rendered pairs. It broadcasts a scalar across a list and zips equal-length lists; do not use `concat` for list-valued fields.
   - Use empty strings only through projection-plan missing-value settings; do not synthesize semantic content.
   - Let the projection runtime sanitize embedded tabs and newlines for TSV output.
   </formatting_rules>

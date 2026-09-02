@@ -1257,6 +1257,164 @@ def test_projection_safe_derived_transforms_cover_supported_surface():
     ]
 
 
+def test_pair_join_broadcasts_source_across_multi_valued_identifiers():
+    step = _completed_generic_pdf_step()
+    objects = step["candidate"].payload_json["extracted_objects"]
+    for item in objects:
+        payload = item["payload"]
+        payload["attributes"] = {
+            "source": payload["source"],
+            "source_identifier": payload["source_identifier"],
+        }
+    first_attributes = objects[0]["payload"]["attributes"]
+    first_attributes["source"] = "BDSC"
+    first_attributes["source_identifier"] = [
+        "RRID:BDSC_31612",
+        "RRID:BDSC_35446",
+    ]
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Two-column reagent extractor",
+        output_format="tsv",
+    )
+    plan = FlowOutputProjectionPlan(
+        format="tsv",
+        row_source="object",
+        source_extraction_result_ids=["extract-generic-1"],
+        columns=[
+            FlowOutputColumnSpec(
+                key="source",
+                transform=FlowOutputTransformSpec(
+                    type="pair_join",
+                    field_refs=[
+                        "object.attribute.source",
+                        "object.attribute.source_identifier",
+                    ],
+                    pair_separator=":",
+                    separator="|",
+                ),
+            ),
+        ],
+    )
+
+    result = apply_projection_plan(bundle, plan)
+
+    assert result.rows[0]["source"] == (
+        "BDSC:RRID:BDSC_31612|BDSC:RRID:BDSC_35446"
+    )
+    assert result.rows[1]["source"] == "Source not found:Not found"
+
+
+def test_pair_join_zips_lists_and_rejects_incompatible_lengths():
+    step = _completed_generic_pdf_step()
+    objects = step["candidate"].payload_json["extracted_objects"]
+    for item in objects:
+        payload = item["payload"]
+        payload["attributes"] = {
+            "source": payload["source"],
+            "source_identifier": payload["source_identifier"],
+        }
+    first_attributes = objects[0]["payload"]["attributes"]
+    first_attributes["source"] = ["BDSC", "VDRC"]
+    first_attributes["source_identifier"] = ["BDSC:1", "VDRC:2"]
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Two-column reagent extractor",
+        output_format="tsv",
+    )
+    transform = FlowOutputTransformSpec(
+        type="pair_join",
+        field_refs=[
+            "object.attribute.source",
+            "object.attribute.source_identifier",
+        ],
+        pair_separator=":",
+        separator="|",
+    )
+    plan = FlowOutputProjectionPlan(
+        format="tsv",
+        row_source="object",
+        source_extraction_result_ids=["extract-generic-1"],
+        columns=[FlowOutputColumnSpec(key="source", transform=transform)],
+    )
+
+    result = apply_projection_plan(bundle, plan)
+    assert result.rows[0]["source"] == "BDSC:BDSC:1|VDRC:VDRC:2"
+
+    first_attributes["source"] = ["BDSC", "VDRC"]
+    first_attributes["source_identifier"] = ["BDSC:1", "VDRC:2", "DOI:3"]
+    incompatible_bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Two-column reagent extractor",
+        output_format="tsv",
+    )
+    errors, _, _ = output_projection_module.validate_projection_plan(
+        incompatible_bundle,
+        plan,
+    )
+
+    assert errors == [
+        "Column 'source' pair_join cannot align list values with incompatible lengths "
+        "2 and 3; use equal-length lists or a scalar value."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("sources", "source_identifiers", "lengths"),
+    [
+        (["BDSC"], ["BDSC:1", "BDSC:2"], "1 and 2"),
+        (["BDSC", "VDRC"], ["BDSC:1"], "2 and 1"),
+    ],
+)
+def test_pair_join_does_not_broadcast_one_element_lists(
+    sources,
+    source_identifiers,
+    lengths,
+):
+    step = _completed_generic_pdf_step()
+    objects = step["candidate"].payload_json["extracted_objects"]
+    for item in objects:
+        payload = item["payload"]
+        payload["attributes"] = {
+            "source": payload["source"],
+            "source_identifier": payload["source_identifier"],
+        }
+    first_attributes = objects[0]["payload"]["attributes"]
+    first_attributes["source"] = sources
+    first_attributes["source_identifier"] = source_identifiers
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="Two-column reagent extractor",
+        output_format="tsv",
+    )
+    plan = FlowOutputProjectionPlan(
+        format="tsv",
+        row_source="object",
+        source_extraction_result_ids=["extract-generic-1"],
+        columns=[
+            FlowOutputColumnSpec(
+                key="source",
+                transform=FlowOutputTransformSpec(
+                    type="pair_join",
+                    field_refs=[
+                        "object.attribute.source",
+                        "object.attribute.source_identifier",
+                    ],
+                    pair_separator=":",
+                    separator="|",
+                ),
+            )
+        ],
+    )
+
+    errors, _, _ = output_projection_module.validate_projection_plan(bundle, plan)
+
+    assert errors == [
+        "Column 'source' pair_join cannot align list values with incompatible lengths "
+        f"{lengths}; use equal-length lists or a scalar value."
+    ]
+
+
 def test_projection_membership_emptiness_contains_filters_and_sort_are_applied():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_domain_step()],
