@@ -152,7 +152,49 @@ def _object_definition_payload(
             )
             for field_definition in object_definition.fields
         ],
+        "field_groups": _field_groups_payload(object_definition.metadata),
     }
+
+
+def _field_groups_payload(metadata: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return ``workspace_display.groups`` as ordered ``field_groups`` entries.
+
+    Groups pass through in domain-pack order. Field paths are not checked
+    against the object's declared fields; the frontend ignores unknown paths.
+    """
+
+    workspace_display = metadata.get("workspace_display")
+    if not isinstance(workspace_display, Mapping):
+        return []
+
+    raw_groups = workspace_display.get("groups")
+    if not isinstance(raw_groups, list):
+        return []
+
+    field_groups: list[dict[str, Any]] = []
+    for raw_group in raw_groups:
+        if not isinstance(raw_group, Mapping):
+            continue
+        group_id = _optional_string(raw_group.get("id"))
+        group_label = _optional_string(raw_group.get("label"))
+        if group_id is None or group_label is None:
+            continue
+        raw_fields = raw_group.get("fields")
+        field_paths = (
+            [
+                field_path
+                for field_path in (
+                    _optional_string(raw_field_path) for raw_field_path in raw_fields
+                )
+                if field_path is not None
+            ]
+            if isinstance(raw_fields, list)
+            else []
+        )
+        field_groups.append(
+            {"id": group_id, "label": group_label, "field_paths": field_paths}
+        )
+    return field_groups
 
 
 def _field_definition_payload(
