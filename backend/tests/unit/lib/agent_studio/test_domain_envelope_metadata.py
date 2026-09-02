@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 import src.lib.agent_studio.domain_envelope_metadata as metadata_module
+from src.lib.flows.validation_attachments import FlowValidationAttachmentError
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
@@ -189,4 +190,73 @@ def test_field_groups_do_not_change_other_object_keys(monkeypatch, tmp_path):
         "subject.label",
         "evidence_code_curies",
         "data_provider.abbreviation",
+    ]
+
+
+def _catalog_for_pack_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pack_text: str
+) -> dict[str, Any]:
+    pack_path = tmp_path / "fixture.groups"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(pack_text, encoding="utf-8")
+    metadata = load_domain_pack_metadata(metadata_path)
+    loaded_pack = LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+        package_id="org.owner",
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(loaded_pack)
+    monkeypatch.setattr(
+        metadata_module,
+        "domain_pack_validation_registries",
+        lambda: {"fixture.groups": registry},
+    )
+    return metadata_module.domain_envelope_metadata_catalog_by_agent(
+        {"fixture_extractor": {"curation": {"domain_pack_id": "fixture.groups"}}}
+    )
+
+
+def test_non_object_group_entry_raises(monkeypatch, tmp_path):
+    pack_text = FIELD_GROUP_PACK_TEXT.replace(
+        "        groups:\n          - id: provenance\n",
+        "        groups:\n          - just_a_string\n          - id: provenance\n",
+    )
+
+    with pytest.raises(FlowValidationAttachmentError) as exc_info:
+        _catalog_for_pack_text(monkeypatch, tmp_path, pack_text)
+
+    assert "workspace_display.groups[0] must be an object" in str(exc_info.value)
+
+
+def test_group_with_id_but_missing_label_raises(monkeypatch, tmp_path):
+    pack_text = FIELD_GROUP_PACK_TEXT.replace(
+        "          - id: subject\n            label: Subject\n",
+        "          - id: subject\n            label: '   '\n",
+    )
+
+    with pytest.raises(FlowValidationAttachmentError) as exc_info:
+        _catalog_for_pack_text(monkeypatch, tmp_path, pack_text)
+
+    assert "workspace_display.groups[1].label must be a non-empty string" in str(
+        exc_info.value
+    )
+
+
+def test_group_without_id_is_skipped(monkeypatch, tmp_path):
+    pack_text = FIELD_GROUP_PACK_TEXT.replace(
+        "          - id: subject\n            label: Subject\n",
+        "          - label: Subject\n",
+    )
+
+    payload = _catalog_for_pack_text(monkeypatch, tmp_path, pack_text)
+    annotation = _object_definition(payload["fixture_extractor"], "Annotation")
+
+    assert [group["id"] for group in annotation["field_groups"]] == [
+        "provenance",
+        "evidence",
     ]

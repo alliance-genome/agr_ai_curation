@@ -172,13 +172,20 @@ def _field_groups_payload(metadata: Mapping[str, Any]) -> list[dict[str, Any]]:
         return []
 
     field_groups: list[dict[str, Any]] = []
-    for raw_group in raw_groups:
+    for group_index, raw_group in enumerate(raw_groups):
         if not isinstance(raw_group, Mapping):
-            continue
+            raise FlowValidationAttachmentError(
+                f"workspace_display.groups[{group_index}] must be an object"
+            )
         group_id = _optional_string(raw_group.get("id"))
-        group_label = _optional_string(raw_group.get("label"))
-        if group_id is None or group_label is None:
+        if group_id is None:
             continue
+        group_label = _optional_string(raw_group.get("label"))
+        if group_label is None:
+            raise FlowValidationAttachmentError(
+                f"workspace_display.groups[{group_index}].label "
+                "must be a non-empty string"
+            )
         raw_fields = raw_group.get("fields")
         field_paths = (
             [
