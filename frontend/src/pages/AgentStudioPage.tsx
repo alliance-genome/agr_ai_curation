@@ -75,6 +75,11 @@ const Root = styled(Box)(({ theme }) => ({
 const PanelCard = styled(Box)(({ theme }) => ({
   display: 'flex',
   flexDirection: 'column',
+  // The Panel element is a flex row; without these the card is sized by its
+  // content and leaves the rest of the panel empty.
+  flex: '1 1 0%',
+  width: '100%',
+  minWidth: 0,
   minHeight: 0,
   height: '100%',
   backgroundColor: theme.palette.background.paper,
