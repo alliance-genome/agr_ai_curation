@@ -112,6 +112,13 @@ export function buildDomainEnvelopeMetadata(
             validation_attachments: [validationAttachment],
           },
         ],
+        field_groups: [
+          {
+            id: 'identity',
+            label: 'Identity',
+            field_paths: ['gene_symbol'],
+          },
+        ],
       },
     ],
     validation_summary: {
