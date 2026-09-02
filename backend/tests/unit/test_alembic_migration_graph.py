@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import ast
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+import pytest
 
 
 VERSIONS_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
@@ -43,6 +46,10 @@ def _load_revision_graph() -> tuple[dict[str, tuple[str, object]], dict[str, set
         if isinstance(down_revision, tuple):
             assert all(isinstance(parent, str) for parent in down_revision)
 
+        assert revision not in revisions, (
+            f"duplicate Alembic revision {revision!r}: "
+            f"{revisions[revision][0]} and {path.name}"
+        )
         revisions[revision] = (path.name, down_revision)
 
         if isinstance(down_revision, tuple):
@@ -59,4 +66,21 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["g4b5c6d7e8f9"]
+    assert heads == ["h5c6d7e8f9a0"]
+
+
+def test_alembic_revision_graph_rejects_duplicate_revision_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    for name in ("first.py", "second.py"):
+        (tmp_path / name).write_text(
+            'revision = "duplicate"\ndown_revision = None\n'
+        )
+    monkeypatch.setattr(sys.modules[__name__], "VERSIONS_DIR", tmp_path)
+
+    with pytest.raises(
+        AssertionError,
+        match=r"duplicate Alembic revision 'duplicate': .* and .*",
+    ):
+        _load_revision_graph()

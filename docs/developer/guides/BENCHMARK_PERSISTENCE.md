@@ -20,6 +20,23 @@ the same owner. Each rerun cell points to the matching source cell, and a
 database trigger requires that cell to belong to the job named by
 `rerun_of_job_id`.
 
+## Durable worker boundary
+
+The `benchmark_worker` Compose service is the only asynchronous execution
+process. It reads input bytes exclusively through
+`BenchmarkSnapshotRepository.read_verified`; it never invokes a remote input
+resolver or receives delegated source credentials. The worker polls and claims
+nothing unless both `BENCHMARK_WORKER_ENABLED` and
+`BENCHMARK_EXECUTION_ENABLED` are true. Both default to false, and the
+production Compose definition fixes both gates to false.
+
+Worker concurrency defaults to one. `BENCHMARK_WORKER_CONCURRENCY`,
+`BENCHMARK_WORKER_LEASE_SECONDS`, `BENCHMARK_WORKER_HEARTBEAT_SECONDS`, and
+`BENCHMARK_CELL_TIMEOUT_SECONDS` tune the isolated worker lifecycle. A provider
+call is checkpointed as a running invocation before dispatch. Every heartbeat,
+invocation update, cell result, and terminal job update requires the current
+lease owner and an unexpired lease.
+
 ## Lifecycle and deletion
 
 Jobs use `queued`, `running`, `completed`, `completed_with_failures`,
@@ -34,6 +51,12 @@ jobs may be hard-deleted. That deletion cascades to the job's cells, invocations
 and replay events; references from later reruns remain restrictive so lineage
 cannot be silently severed.
 
+An expired running cell is never requeued. Startup recovery locks the affected
+job and cell rows, fails any running invocation, and terminalizes the cell with
+`{"category":"interrupted_uncertain","retryable":false}` in one transaction.
+Queued sibling cells remain claimable. Repeating interrupted work requires a
+new linked rerun job.
+
 ## Results, paging, and replay
 
 Successful cell envelopes are JSONB and are accepted only when their serialized
@@ -43,6 +66,13 @@ trigger computes the authoritative size, so direct writes retain the default
 bound and cannot forge `envelope_size_bytes`.
 Job and cell list projections intentionally exclude envelope JSON; cell detail
 is the complete-result boundary.
+
+Successful cells also store canonical SHA-256 envelope and execution-result
+digests. Invocation rows preserve the frozen route slot, requested and actual
+provider/model, reasoning effort, routing attempt, sequence, wall-clock timing,
+latency, nullable token counts, failure status, and the provider-reported billed
+amount/unit/source tuple. Missing provider values remain null; exact billed cost
+is never estimated.
 
 Job, cell, invocation, and event reads use deterministic keyset/ordered
 pagination. `BENCHMARK_DEFAULT_PAGE_SIZE` defaults to 50 and requests are

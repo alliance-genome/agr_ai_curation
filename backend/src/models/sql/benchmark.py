@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,6 +17,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     String,
     UniqueConstraint,
     func,
@@ -280,6 +282,8 @@ class BenchmarkCell(Base):
     lease_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     generated_envelope: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     envelope_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    envelope_digest: Mapped[str | None] = mapped_column(String(71))
+    result_digest: Mapped[str | None] = mapped_column(String(71))
     failure: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     job: Mapped[BenchmarkJob] = relationship(back_populates="cells")
@@ -314,6 +318,11 @@ class BenchmarkCell(Base):
         CheckConstraint(
             "failure IS NULL OR jsonb_typeof(failure) = 'object'",
             name="ck_benchmark_cells_failure_object",
+        ),
+        CheckConstraint(
+            "(envelope_digest IS NULL OR envelope_digest ~ '^sha256:[0-9a-f]{64}$') "
+            "AND (result_digest IS NULL OR result_digest ~ '^sha256:[0-9a-f]{64}$')",
+            name="ck_benchmark_cells_result_digests",
         ),
         Index("ix_benchmark_cells_job_page", "job_id", "position", "id"),
         Index(
@@ -351,6 +360,20 @@ class BenchmarkInvocation(Base):
     route_slot: Mapped[str] = mapped_column(String(255), nullable=False)
     request_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     response_digest: Mapped[str | None] = mapped_column(String(71))
+    requested_provider: Mapped[str | None] = mapped_column(String(64))
+    requested_model: Mapped[str | None] = mapped_column(String(255))
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16))
+    actual_provider: Mapped[str | None] = mapped_column(String(64))
+    actual_model: Mapped[str | None] = mapped_column(String(255))
+    routing_attempt: Mapped[int | None] = mapped_column(Integer)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    billed_amount: Mapped[Decimal | None] = mapped_column(Numeric(), nullable=True)
+    billed_unit: Mapped[str | None] = mapped_column(String(32))
+    billed_source: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[BenchmarkInvocationStatus] = mapped_column(
         _status_enum(
             BenchmarkInvocationStatus, "ck_benchmark_invocations_status_values"
@@ -366,6 +389,21 @@ class BenchmarkInvocation(Base):
     __table_args__ = (
         UniqueConstraint("cell_id", "ordinal", name="uq_benchmark_invocations_cell_ordinal"),
         CheckConstraint("ordinal >= 0 AND attempt >= 1", name="ck_benchmark_invocations_order"),
+        CheckConstraint(
+            "sequence >= 1 AND (routing_attempt IS NULL OR routing_attempt >= 0) "
+            "AND (latency_ms IS NULL OR latency_ms >= 0) "
+            "AND (input_tokens IS NULL OR input_tokens >= 0) "
+            "AND (output_tokens IS NULL OR output_tokens >= 0) "
+            "AND (total_tokens IS NULL OR total_tokens >= 0) "
+            "AND (billed_amount IS NULL OR billed_amount >= 0)",
+            name="ck_benchmark_invocations_telemetry_values",
+        ),
+        CheckConstraint(
+            "(billed_amount IS NULL AND billed_unit IS NULL AND billed_source IS NULL) OR "
+            "(billed_amount IS NOT NULL AND billed_unit IS NOT NULL "
+            "AND billed_source IS NOT NULL)",
+            name="ck_benchmark_invocations_billed_cost",
+        ),
         CheckConstraint(
             "failure IS NULL OR jsonb_typeof(failure) = 'object'",
             name="ck_benchmark_invocations_failure_object",

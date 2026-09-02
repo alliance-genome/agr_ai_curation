@@ -64,6 +64,30 @@ def _load_test_compose() -> dict:
     return yaml.safe_load(TEST_COMPOSE_PATH.read_text(encoding="utf-8"))
 
 
+def test_benchmark_worker_is_isolated_and_production_dispatch_is_disabled():
+    production = _load_compose()["services"]["benchmark_worker"]
+    development = _load_dev_compose()["services"]["benchmark_worker"]
+    test_service = _load_test_compose()["services"]["benchmark-worker-test"]
+
+    assert production["command"] == "python -m src.lib.benchmarks.worker"
+    assert production["environment"]["BENCHMARK_WORKER_ENABLED"] == "false"
+    assert production["environment"]["BENCHMARK_EXECUTION_ENABLED"] == "false"
+    assert production["restart"] == "on-failure"
+    assert development["environment"]["BENCHMARK_WORKER_ENABLED"].endswith(
+        ":-false}"
+    )
+    assert development["environment"]["BENCHMARK_EXECUTION_ENABLED"].endswith(
+        ":-false}"
+    )
+    assert "DATABASE_URL" not in development["environment"]
+    assert development["restart"] == "on-failure"
+    assert test_service["command"] == "python -m src.lib.benchmarks.worker"
+    assert test_service["environment"]["POSTGRES_HOST"] == "postgres-test"
+    assert test_service["environment"]["POSTGRES_PASSWORD"].endswith(
+        ":-CHANGE_ME_TEST_DB_PASSWORD}"
+    )
+
+
 def _list_environment(entries: list[str]) -> dict[str, str]:
     return dict(entry.split("=", 1) for entry in entries)
 
