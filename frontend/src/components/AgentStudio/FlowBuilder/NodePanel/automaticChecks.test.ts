@@ -27,7 +27,7 @@ const locked = (id: string) => buildValidationAttachmentSelection({
   attachment_id: id,
   validator_binding_id: `${id}_binding`,
   curator_label: `Confirm ${id}`,
-  when_off: undefined,
+  when_off: null,
   allow_opt_out: false,
   blocking: true,
 })

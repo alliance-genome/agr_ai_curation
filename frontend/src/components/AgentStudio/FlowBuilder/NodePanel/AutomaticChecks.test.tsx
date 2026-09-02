@@ -25,7 +25,7 @@ const lockedCheck = buildValidationAttachmentSelection({
   attachment_id: 'term',
   validator_binding_id: 'term_binding',
   curator_label: 'Confirm the term against the ontology',
-  when_off: undefined,
+  when_off: null,
   allow_opt_out: false,
   blocking: true,
 })

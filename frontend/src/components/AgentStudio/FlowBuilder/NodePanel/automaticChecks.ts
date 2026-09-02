@@ -33,10 +33,10 @@ export interface CheckGroupView {
   /** Validator binding id shared by every attachment in the group. */
   key: string
   attachmentIds: string[]
-  /** The switch sentence, from the binding's curator_label. */
-  curatorLabel: string
+  /** The switch sentence, the binding's curator_label verbatim. */
+  curatorLabel: string | null
   description?: string
-  whenOff?: string
+  whenOff: string | null
   /** Every attachment in the group is enabled. */
   enabled: boolean
   /** Catalog id of the validator agent that runs the check, when the pack names one. */
@@ -149,9 +149,7 @@ export function buildAutomaticChecksView(
     optional.push({
       key,
       attachmentIds: live.map((member) => member.attachment_id),
-      // Shipped packs carry curator_label on every active binding (contract
-      // test); label is the API's required display name for the same binding.
-      curatorLabel: first.curator_label ?? first.label,
+      curatorLabel: first.curator_label,
       description: first.description,
       whenOff: first.when_off,
       enabled,
