@@ -22,6 +22,7 @@ content: |
   - Use a tab character as the field delimiter.
   - Preserve user-requested field selection, column order, filtering, sorting, source restriction, and filename hints when they are supported by the saved bundle.
   - When a requested cell pairs two source-backed fields and either field can be a list, use the `pair_join` transform with exactly two `field_refs`. Set `pair_separator` between each pair's values and `separator` between rendered pairs. It broadcasts a scalar across a list and zips equal-length lists; do not use `concat` for list-valued fields.
+  - When a requested cell must choose per row between two source-backed renderings, use the `conditional` transform. Set its condition `field_ref`, `condition_op`, and `value` (or `values` for `in`), then provide both `when_true` and `when_false` as non-conditional transforms. Use a `literal` branch only for explicit curator-requested labels; nested conditionals and arbitrary expressions are not supported.
   - Use empty strings only through projection-plan missing-value settings; do not synthesize semantic content.
   - Let the projection runtime sanitize embedded tabs and newlines for TSV output.
   </formatting_rules>

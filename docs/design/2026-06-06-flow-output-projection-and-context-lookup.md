@@ -363,6 +363,12 @@ Allowed transforms:
 - `pair_join`: pair exactly two fields, broadcasting a scalar across a list or
   zipping equal-length lists, then join each pair and the rendered pairs with
   configured separators. Incompatible multi-value lengths are rejected.
+- `conditional`: evaluate one validated filter condition over a saved field and
+  choose between required `when_true` and `when_false` transforms. Branches may
+  use existing transforms such as `literal`, `first_non_empty`, or `pair_join`;
+  nested conditionals and arbitrary expressions are rejected. The condition is
+  evaluated once per row against the whole field value, so a list-valued
+  condition selects one branch for the entire row.
 - `count`: count items at a list field.
 - `map_value`: map exact input values to labels with a default.
 - `boolean_label`: map boolean-ish values to configured labels.
@@ -511,7 +517,8 @@ Projection tests:
 - Pure unit: validation-finding row projection extracts findings deterministically from supported artifact shapes.
 - Pure unit: legacy `curatable_objects`/`items` payloads are classified safely and projected through explicitly tested mappings or rejected with a clear unsupported-row-source warning.
 - Pure unit: deterministic column order across heterogeneous rows.
-- Pure unit: column/key rename, omit, reorder, missing value, filter, sort, grouping, and derived transforms.
+- Pure unit: column/key rename, omit, reorder, missing value, filter, sort,
+  grouping, derived transforms, and bounded conditional branches.
 - Negative unit: reject unknown field refs, unsupported transforms, unsupported filters, overlarge `max_rows`, unsafe grouping requests, and invalid row sources.
 - Pure unit: empty artifact behavior and over-limit row behavior.
 - Executor: TSV terminal still saves without model-authored `data_json`.
