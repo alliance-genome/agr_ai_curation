@@ -37,6 +37,7 @@ data_sources:
       - "MOD reference IDs"
       - "titles"
       - "citation metadata"
+note: "Validation runs automatically. This check runs on the reference of every record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt."
 use_when:
   - "When you want a custom reference check: a changed prompt or a stricter or looser match against the Alliance literature database."
   - "When you have a PMID, DOI, Alliance reference ID, MOD reference ID, title, or citation text and want the matching Alliance literature record."

@@ -21,6 +21,7 @@ data_sources:
       - "R. norvegicus"
       - "S. cerevisiae"
     data_types: ["genes", "symbols", "synonyms", "cross-references"]
+note: "Validation runs automatically. This check runs on every gene an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
 use_when:
   - "When you want a custom gene check: a changed prompt, different tools, or a stricter or looser match than the automatic check."
   - "When you have a gene symbol, name, or ID and want to confirm it exists and get its Alliance identifier."

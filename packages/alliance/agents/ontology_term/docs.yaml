@@ -45,6 +45,7 @@ data_sources:
       - "anatomy terms"
       - "life-stage terms"
       - "GO terms"
+note: "Validation runs automatically. This check runs on every disease, anatomy, life stage, and other ontology term an extractor produces, so you do not need to add this agent to a flow. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
 use_when:
   - "When you want a custom ontology check: a changed prompt, a different ontology, or a stricter or looser match than the automatic check."
   - "When you have an exact ontology ID and want to confirm it is current, see its label, or browse its parent and child terms and obsolete history."

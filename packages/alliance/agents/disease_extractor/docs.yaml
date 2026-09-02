@@ -22,10 +22,7 @@ data_sources:
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content"]
-  - name: "Disease Validation Agent"
-    description: "The specialist validator that takes the proposed diseases and authoritatively confirms each one after extraction — matching the Disease Ontology term, the relationship vocabulary, and the data provider."
-    species_supported: null
-    data_types: ["Disease labels/CURIE hints", "Relation names", "Data-provider abbreviations", "Validator lookup results"]
+note: "The domain pack's validators run automatically on everything this agent extracts: the disease term, the subject gene, allele, or model, relation and evidence vocabulary, experimental conditions, data provider, and reference. You only need to add a validator to the flow if you want custom validation."
 use_when:
   - "When you upload a paper and want the diseases it links to genes, alleles, or models, with the evidence quote."
   - "At the start of a disease curation flow; the domain pack's validators then confirm each disease term automatically."

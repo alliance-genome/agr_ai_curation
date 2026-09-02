@@ -69,8 +69,6 @@ type TabValue = 'guide' | 'envelope' | 'prompts'
 
 interface AgentDetailsPanelProps {
   agent: PromptInfo | null
-  /** Catalog category of the selected agent (for example "Validation"). */
-  category?: string
   selectedGroupId: string | null
   onGroupSelect: (groupId: string | null) => void
   /**
@@ -99,7 +97,6 @@ Agent ID: ${agentId}`
 
 function AgentDetailsPanel({
   agent,
-  category,
   selectedGroupId,
   onGroupSelect,
   onDiscussWithClaude,
@@ -299,7 +296,6 @@ function AgentDetailsPanel({
         {activeTab === 'guide' && (
           <AgentGuideTab
             documentation={documentation}
-            category={category}
             tools={agent.tools}
             toolDescriptions={toolDescriptions}
             toolInventoryError={toolInventoryError}

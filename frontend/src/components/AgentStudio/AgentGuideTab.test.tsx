@@ -26,10 +26,16 @@ function richDocumentation(overrides: Partial<AgentDocumentation> = {}): AgentDo
         species_supported: ['species_a', 'species_b'],
         data_types: ['ontology'],
       },
+      {
+        name: 'PDF Document Search',
+        description: 'Search over uploaded papers.',
+        data_types: ['PDF text chunks'],
+      },
     ],
     limitations: ['Only queries Disease Ontology terms.', 'Prevalence statistics are not available.'],
     use_when: ['After any extractor that names a disease.', 'Before curation handoff so identifiers are settled.'],
     avoid_when: ['For gene to disease associations.'],
+    note: '',
     ...overrides,
   }
 }
@@ -42,17 +48,13 @@ const baseProps = {
 }
 
 describe('AgentGuideTab', () => {
-  it('renders stripes, reads, capabilities, limitations, and tools in order for rich documentation', () => {
+  it('renders stripes, capabilities, limitations, data sources, and tools in order for rich documentation', () => {
     render(<AgentGuideTab {...baseProps} documentation={richDocumentation()} />)
 
     const useStripe = screen.getByRole('region', { name: 'When to use it' })
     expect(within(useStripe).getAllByRole('listitem')).toHaveLength(2)
     const avoidStripe = screen.getByRole('region', { name: 'When not to use it' })
     expect(avoidStripe).toHaveTextContent('For gene to disease associations.')
-
-    const reads = screen.getByRole('region', { name: 'What it needs and returns' })
-    expect(within(reads).getByText('Reads')).toBeInTheDocument()
-    expect(reads).toHaveTextContent('Disease term records: Curated copy of the Disease Ontology. Species: species_a, species_b. Data types: ontology.')
 
     const capabilities = screen.getByRole('region', { name: 'Capabilities' })
     const rows = within(capabilities).getAllByRole('listitem')
@@ -70,49 +72,59 @@ describe('AgentGuideTab', () => {
     expect(headings).toEqual([
       'When to use it',
       'When not to use it',
-      'What it needs and returns',
       'Capabilities',
       'Limitations',
+      'Data sources',
       'Tools',
     ])
+    expect(screen.queryByText('What it needs and returns')).not.toBeInTheDocument()
     expect(screen.queryByText('No curator guide yet')).not.toBeInTheDocument()
   })
 
-  it('shows the automatic validation note above the stripes for a Validation agent', () => {
-    render(<AgentGuideTab {...baseProps} category="Validation" documentation={richDocumentation()} />)
+  it('lists data sources after limitations with a bold name, one description line, and species only when present', () => {
+    render(<AgentGuideTab {...baseProps} documentation={richDocumentation()} />)
 
-    const note = screen.getByTestId('automatic-validation-note')
-    expect(note).toHaveAttribute('role', 'alert')
-    expect(note).toHaveClass('MuiAlert-standardWarning')
-    expect(within(note).getByText('Validation runs automatically.').tagName).toBe('STRONG')
-    expect(note).toHaveTextContent(
-      'Every validator in the domain pack runs automatically on the objects an extractor produces. '
-      + 'Add this validator to a flow only when you want custom validation: a changed prompt, different tools, '
-      + 'or a check the pack does not include. Clone it in the Agent Workshop to customize it.'
-    )
+    const sources = screen.getByRole('region', { name: 'Data sources' })
+    const rows = within(sources).getAllByRole('listitem')
+    expect(rows).toHaveLength(2)
+
+    const name = within(rows[0]).getByText('Disease term records')
+    expect(name).toHaveStyle({ fontWeight: 600 })
+    expect(within(rows[0]).getByText('Curated copy of the Disease Ontology.')).toBeInTheDocument()
+    expect(within(rows[0]).getByText('Species: species_a, species_b')).toBeInTheDocument()
+
+    expect(within(rows[1]).getByText('PDF Document Search')).toBeInTheDocument()
+    expect(rows[1]).not.toHaveTextContent('Species:')
+
+    expect(sources).not.toHaveTextContent('Data types')
+    expect(sources).not.toHaveTextContent('ontology')
+    expect(sources).not.toHaveTextContent('PDF text chunks')
+
+    const limitations = screen.getByRole('region', { name: 'Limitations' })
+    expect(limitations.compareDocumentPosition(sources) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders a non-empty note verbatim in a warning alert above the use stripe', () => {
+    const note = 'Validation runs automatically. This check runs on every disease term an extractor produces.'
+    render(<AgentGuideTab {...baseProps} documentation={richDocumentation({ note })} />)
+
+    const alert = screen.getByTestId('guide-note')
+    expect(alert).toHaveAttribute('role', 'alert')
+    expect(alert).toHaveClass('MuiAlert-standardWarning')
+    expect(alert.textContent).toBe(note)
+
     const useStripe = screen.getByRole('region', { name: 'When to use it' })
-    expect(note.compareDocumentPosition(useStripe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(alert.compareDocumentPosition(useStripe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('shows the extractor wording for an Extraction agent, matching the category case-insensitively', () => {
-    render(<AgentGuideTab {...baseProps} category="extraction" documentation={richDocumentation()} />)
-
-    const note = screen.getByTestId('automatic-validation-note')
-    expect(within(note).getByText('Validation runs automatically.')).toBeInTheDocument()
-    expect(note).toHaveTextContent(
-      "The domain pack's validators run automatically on everything this agent extracts. "
-      + 'You do not need to add validators to the flow unless you want custom validation.'
-    )
-    expect(note).not.toHaveTextContent('Clone it in the Agent Workshop')
-  })
-
-  it('omits the note for other categories and when no category is known', () => {
-    const { unmount } = render(<AgentGuideTab {...baseProps} category="Output" documentation={richDocumentation()} />)
-    expect(screen.queryByTestId('automatic-validation-note')).not.toBeInTheDocument()
+  it('renders no note when the note is empty or whitespace', () => {
+    const { unmount } = render(<AgentGuideTab {...baseProps} documentation={richDocumentation({ note: '' })} />)
+    expect(screen.queryByTestId('guide-note')).not.toBeInTheDocument()
     unmount()
 
-    render(<AgentGuideTab {...baseProps} documentation={richDocumentation()} />)
-    expect(screen.queryByTestId('automatic-validation-note')).not.toBeInTheDocument()
+    render(<AgentGuideTab {...baseProps} documentation={richDocumentation({ note: '   ' })} />)
+    expect(screen.queryByTestId('guide-note')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('omits the stripes when use_when and avoid_when are absent and still lists limitations', () => {
@@ -135,13 +147,18 @@ describe('AgentGuideTab', () => {
     expect(screen.getByRole('region', { name: 'Capabilities' })).toBeInTheDocument()
   })
 
+  it('omits the data sources section when the list is empty', () => {
+    render(<AgentGuideTab {...baseProps} documentation={richDocumentation({ data_sources: [] })} />)
+    expect(screen.queryByRole('region', { name: 'Data sources' })).not.toBeInTheDocument()
+  })
+
   it('shows the honest empty block with a draft action for sparse documentation and keeps tools', () => {
     const onDraftGuide = vi.fn()
     render(
       <AgentGuideTab
         {...baseProps}
         onDraftGuide={onDraftGuide}
-        documentation={{ summary: '', capabilities: [], data_sources: [], limitations: [], use_when: [], avoid_when: [] }}
+        documentation={{ summary: '', capabilities: [], data_sources: [], limitations: [], use_when: [], avoid_when: [], note: '' }}
       />
     )
 

@@ -57,6 +57,10 @@ class AgentDocumentation(BaseModel):
         default_factory=list,
         description="Curator-voice situations where another agent is the right choice",
     )
+    note: str = Field(
+        default="",
+        description="Curator-voice note shown above the guidance, verbatim from docs.yaml",
+    )
 
 
 # ============================================================================

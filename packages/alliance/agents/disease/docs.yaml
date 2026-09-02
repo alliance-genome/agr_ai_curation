@@ -19,11 +19,10 @@ data_sources:
     species_supported: null
     data_types: ["disease terms", "DOIDs", "definitions", "synonyms"]
 use_when:
-  - "When you want a custom disease check: a changed prompt, extra tools, or a stricter or looser Disease Ontology match than the automatic check."
+  - "After any extractor that names a disease, on papers that assert a gene, allele, or model to disease link."
   - "When you have a disease name, synonym, or DOID and want the official term and its definition."
-  - "When you want to review how disease terms in extracted records are confirmed."
+  - "Before curation handoff, so disease IDs are settled."
 avoid_when:
-  - "To get disease terms validated; the domain pack already runs this check automatically on every disease an extractor names."
   - "For gene to disease associations; use the Gene Validation Agent."
   - "For parent or child disease terms and obsolete history; use the Ontology Term Resolver Agent."
   - "For disease vocabularies other than the Disease Ontology."

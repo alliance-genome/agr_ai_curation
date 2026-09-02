@@ -38,6 +38,7 @@ data_sources:
       - "abbreviations"
       - "synonyms"
       - "obsolete flags"
+note: "Validation runs automatically. This check runs on every pick-list value (relations, evidence codes, qualifiers, annotation types) an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list."
 use_when:
   - "When you want a custom pick-list check: a changed prompt, a different term list, or a stricter or looser match than the automatic check."
   - "When you have an abbreviation or synonym and want the official term name and its status."

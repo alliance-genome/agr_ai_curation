@@ -42,6 +42,7 @@ data_sources:
       - "provider names"
       - "NCBITaxon identifiers"
       - "provider-to-taxon relationships"
+note: "Validation runs automatically. This check runs on the data provider of every record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt."
 use_when:
   - "When you want a custom provider check: a changed prompt or a stricter or looser species match than the automatic check."
   - "When you have a provider abbreviation and want to confirm it is a recognized Alliance provider."

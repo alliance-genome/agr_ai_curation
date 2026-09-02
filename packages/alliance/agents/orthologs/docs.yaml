@@ -23,11 +23,10 @@ data_sources:
     species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "M. musculus (MGI)", "H. sapiens (HGNC)", "D. rerio (ZFIN)", "S. cerevisiae (SGD)", "R. norvegicus (RGD)"]
     data_types: ["ortholog relationships", "confidence scores", "prediction methods", "gene identifiers"]
 use_when:
-  - "When you build a custom validation step that needs a gene's matching genes in other species."
-  - "When you have a confirmed gene and want its orthologs, how confident each prediction is, and which methods agree."
+  - "When you have a confirmed gene and want its matching genes in other species."
+  - "When you need to know how confident an ortholog prediction is and which methods agree."
   - "When you want the best-scoring ortholog in a particular species."
 avoid_when:
-  - "To get a record validated; the domain pack's validators already run automatically and do not need this agent added to a flow."
   - "For paralogs (duplicated genes within one species), which the agent does not find."
   - "When you only have a gene symbol; confirm it with the Gene Validation Agent first."
   - "For GO annotations or disease links on the orthologs; use the Gene GO Annotations Agent or the Disease Ontology Agent."

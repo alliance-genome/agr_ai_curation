@@ -22,6 +22,7 @@ data_sources:
     description: "Comprehensive allele/variant data from all Model Organism Databases, including symbols, names, synonyms, obsolete status, and extinction status"
     species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
     data_types: ["allele symbols", "allele IDs (CURIEs)", "full names", "synonyms", "gene associations", "obsolete/extinct status"]
+note: "Validation runs automatically. This check runs on every allele an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
 use_when:
   - "When you want a custom allele check: a changed prompt, different tools, or a stricter or looser match than the automatic check."
   - "When you have an allele symbol or ID and want to confirm it exists and see the gene it belongs to."

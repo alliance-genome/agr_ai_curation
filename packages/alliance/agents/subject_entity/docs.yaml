@@ -46,10 +46,11 @@ data_sources:
       - "affected genomic models"
       - "entity labels"
       - "taxon context"
+note: "Validation runs automatically. This check runs on the subject of every disease and phenotype record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
 use_when:
   - "When you want a custom subject check: a changed prompt, different routing, or a stricter or looser match for gene, allele, or model subjects."
   - "When you want to review how an annotation's subject is sent to the gene, allele, or model check and keeps the identifier and label it arrived with."
-  - "When you clone it in the Agent Workshop and add the copy to a flow for a check the domain pack does not include."
+  - "When you clone it in the Agent Workshop to build a custom version for a check the domain pack does not include."
 avoid_when:
   - "To get subjects validated; the domain pack already runs this check automatically on every record that names its subject type."
   - "When the subject type is not stated; the agent does not guess it."

@@ -22,10 +22,7 @@ data_sources:
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content"]
-  - name: "Allele Validation Agent"
-    description: "The specialist validator that takes the proposed alleles and authoritatively confirms each one against the Alliance database after extraction, filling in the official allele ID, symbol, and species when it finds a match."
-    species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
-    data_types: ["Allele mention hints", "Associated-gene hints", "Taxon hints", "Validator lookup results"]
+note: "The domain pack's validators run automatically on everything this agent extracts: each allele and the paper reference. You only need to add a validator to the flow if you want custom validation."
 use_when:
   - "When you upload a paper and want the alleles and variants it studies, with the quote that supports each one."
   - "At the start of an allele curation flow; the domain pack's validators then confirm each allele automatically."
