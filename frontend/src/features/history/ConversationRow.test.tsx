@@ -73,7 +73,7 @@ describe('ConversationRow', () => {
     expect(screen.queryByText('Expanded panel')).not.toBeInTheDocument()
   })
 
-  it('toggles expansion with Enter or a click and selection with Space', async () => {
+  it('toggles expansion with Enter, Space, or a click and leaves selection to the checkbox', async () => {
     const user = userEvent.setup()
     const handlers = renderRow()
     const row = screen.getByRole('button', { name: 'TP53 evidence review' })
@@ -84,15 +84,15 @@ describe('ConversationRow', () => {
     expect(handlers.onSelectChange).not.toHaveBeenCalled()
 
     await user.keyboard(' ')
-    expect(handlers.onSelectChange).toHaveBeenCalledWith(true)
-    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(1)
+    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(2)
+    expect(handlers.onSelectChange).not.toHaveBeenCalled()
 
     await user.click(row)
-    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(2)
+    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(3)
 
     await user.click(screen.getByRole('checkbox', { name: 'Select TP53 evidence review' }))
     expect(handlers.onSelectChange).toHaveBeenLastCalledWith(true)
-    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(2)
+    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(3)
   })
 
   it('renders the expanded panel and the rotated chevron when expanded', () => {

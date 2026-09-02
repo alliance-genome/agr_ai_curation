@@ -17,6 +17,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import { safeGetItem, safeSetItem } from '@/lib/browserStorage'
 import {
   NODE_PANEL_DEFAULT_WIDTH,
+  NODE_PANEL_MAX_FRACTION,
   NODE_PANEL_MIN_WIDTH,
   NODE_PANEL_RAIL_WIDTH,
   NODE_PANEL_WIDTH_STORAGE_KEY,
@@ -52,6 +53,9 @@ export interface NodePanelDockProps {
 function NodePanelDock({ mode, collapsed, areaWidth, railLabel, onExpand, onClose, children }: NodePanelDockProps) {
   const [width, setWidth] = useState<number>(() => clampNodePanelWidth(readStoredWidth(), null))
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const maximumWidth = areaWidth === null || areaWidth <= 0
+    ? width
+    : Math.max(NODE_PANEL_MIN_WIDTH, Math.floor(areaWidth * NODE_PANEL_MAX_FRACTION))
 
   const applyWidth = useCallback((next: number) => {
     const clamped = clampNodePanelWidth(next, areaWidth)
@@ -189,6 +193,7 @@ function NodePanelDock({ mode, collapsed, areaWidth, railLabel, onExpand, onClos
         aria-orientation="vertical"
         aria-label="Resize step panel"
         aria-valuemin={NODE_PANEL_MIN_WIDTH}
+        aria-valuemax={maximumWidth}
         aria-valuenow={width}
         tabIndex={0}
         onPointerDown={handlePointerDown}

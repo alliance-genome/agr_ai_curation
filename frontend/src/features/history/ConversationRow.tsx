@@ -85,15 +85,9 @@ export default function ConversationRow({
   }
 
   const handleRowKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       onToggleExpand()
-      return
-    }
-
-    if (event.key === ' ') {
-      event.preventDefault()
-      onSelectChange(!isSelected)
     }
   }
 

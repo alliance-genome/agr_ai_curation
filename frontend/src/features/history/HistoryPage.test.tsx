@@ -613,16 +613,15 @@ describe('HistoryPage', () => {
     })
   })
 
-  it('selects rows with Space, clears them from the selection bar, and toggles all from the column header', async () => {
+  it('selects rows from their checkbox, clears them from the selection bar, and toggles all from the column header', async () => {
     const user = userEvent.setup()
 
     renderHistoryPage()
 
-    const row = screen.getByRole('button', { name: 'TP53 evidence review' })
-    row.focus()
-    await user.keyboard(' ')
+    const rowCheckbox = screen.getByRole('checkbox', { name: 'Select TP53 evidence review' })
+    await user.click(rowCheckbox)
 
-    expect(screen.getByRole('checkbox', { name: 'Select TP53 evidence review' })).toBeChecked()
+    expect(rowCheckbox).toBeChecked()
     expect(screen.getByRole('toolbar', { name: 'Selection actions' })).toHaveTextContent('1 selected of 2 shown')
 
     await user.click(screen.getByRole('button', { name: 'Clear' }))
