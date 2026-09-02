@@ -106,6 +106,17 @@ object definitions, and field definitions, then normalizes them into:
 - Agent Studio validation attachment options,
 - binding matches against envelope objects and fields.
 
+Each active binding under `validator_bindings.active` carries curator-facing
+text next to its `display_name`. `curator_label` is one imperative sentence
+naming what the check confirms and against what. `description` is one or two
+plain sentences on what the check does for the record. `when_off` states the
+consequence of turning the check off and is only allowed when the binding sets
+`allow_opt_out: true`. Developer detail (which package validator the binding
+routes through, alignment notes) belongs in `definition_notes`. The registry
+passes `curator_label` and `when_off` through to every attachment option, so
+the Agent Studio envelope metadata payload exposes them alongside `label` and
+`description`.
+
 `run_domain_envelope_structural_checks()` handles deterministic structural
 checks such as required fields and writes new `ValidationFinding` records back
 into the envelope. Under-development bindings are metadata visibility only; they
