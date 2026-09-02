@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Accordion,
   AccordionDetails,
@@ -47,52 +47,25 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 
 import type {
   PromptCatalog,
-  PromptInfo,
   CustomAgent,
-  CustomAgentVersion,
   AgentWorkshopContext,
   ModelOption,
-  ToolLibraryItem,
-  AgentTemplate,
-  GroupOption,
   ToolIdeaRequest,
   ToolIdeaConversationEntry,
   WorkshopPromptUpdateRequest,
 } from '@/types/promptExplorer'
-import {
-  createCustomAgent,
-  deleteCustomAgent,
-  fetchAgentTemplates,
-  fetchModelOptions,
-  fetchToolLibrary,
-  listToolIdeaRequests,
-  listCustomAgentVersions,
-  listCustomAgents,
-  revertCustomAgentVersion,
-  setCustomAgentVisibility,
-  submitToolIdeaRequest,
-  updateCustomAgent,
-} from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
-import { useAuth } from '@/contexts/AuthContext'
 import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
-
-const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
-const ALL_GROUPS_VALUE = '__all_groups__'
-
-function areStringRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
-  const leftKeys = Object.keys(left).sort()
-  const rightKeys = Object.keys(right).sort()
-  return leftKeys.length === rightKeys.length
-    && leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key])
-}
-
-function areStringArraysEqual(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) return false
-  const sortedLeft = [...left].sort()
-  const sortedRight = [...right].sort()
-  return sortedLeft.every((value, index) => value === sortedRight[index])
-}
+import { useWorkshopDraft } from './useWorkshopDraft'
+import {
+  ALL_GROUPS_VALUE,
+  buildDiscussDraftMessage,
+  buildDiscussPromptMessage,
+  buildModelAdviceMessage,
+  buildToolRequestMessage,
+  formatReasoningLabel,
+  type GettingStartedMode,
+} from './workshopDraftUtils'
 
 const Toolbar = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -244,51 +217,6 @@ function toolIdeaStatusColor(
   return 'default'
 }
 
-function normalizeReasoningValue(value?: string | null): string {
-  return (value || '').trim().toLowerCase()
-}
-
-function formatReasoningLabel(value: string): string {
-  const normalized = normalizeReasoningValue(value)
-  if (!normalized) return value
-  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
-}
-
-function resolveModelSelection(
-  modelOptions: ModelOption[],
-  fallbackModelId: string,
-  candidateModelId?: string | null
-): string {
-  const candidate = (candidateModelId || '').trim()
-  if (candidate && modelOptions.some((model) => model.model_id === candidate)) {
-    return candidate
-  }
-  return fallbackModelId
-}
-
-function resolveReasoningSelection(
-  modelOptions: ModelOption[],
-  modelId: string,
-  candidateReasoning?: string | null
-): string {
-  const model = modelOptions.find((entry) => entry.model_id === modelId)
-  if (!model || !model.supports_reasoning || model.reasoning_options.length === 0) {
-    return ''
-  }
-
-  const normalizedCandidate = normalizeReasoningValue(candidateReasoning)
-  if (normalizedCandidate && model.reasoning_options.includes(normalizedCandidate)) {
-    return normalizedCandidate
-  }
-
-  const defaultReasoning = normalizeReasoningValue(model.default_reasoning)
-  if (defaultReasoning && model.reasoning_options.includes(defaultReasoning)) {
-    return defaultReasoning
-  }
-
-  return model.reasoning_options[0] || ''
-}
-
 function buildModelHelpText(models: ModelOption[]): string {
   if (models.length === 0) return 'No curator-visible models are currently configured.'
 
@@ -310,25 +238,6 @@ const REASONING_HELP_TEXT = [
   '• high: slowest, use only for hard ambiguity',
 ].join('\n')
 
-function resolveUserGroupIds(userGroups: string[] | undefined, availableGroupIds: string[]): string[] {
-  if (!userGroups || userGroups.length === 0 || availableGroupIds.length === 0) return []
-  const available = new Set(availableGroupIds.map((group) => group.toUpperCase()))
-  const resolved: string[] = []
-  for (const rawGroup of userGroups) {
-    const normalized = rawGroup.trim().toUpperCase()
-    if (!normalized) continue
-    const direct = available.has(normalized) ? normalized : ''
-    const inferred = direct || availableGroupIds.find((groupId) => {
-      const loweredGroup = rawGroup.trim().toLowerCase()
-      return loweredGroup === groupId.toLowerCase() || loweredGroup.includes(groupId.toLowerCase())
-    })?.toUpperCase() || ''
-    if (inferred && !resolved.includes(inferred)) {
-      resolved.push(inferred)
-    }
-  }
-  return resolved
-}
-
 interface PromptWorkshopProps {
   catalog: PromptCatalog
   initialParentAgentId?: string | null
@@ -339,8 +248,6 @@ interface PromptWorkshopProps {
   incomingPromptUpdate?: WorkshopPromptUpdateRequest | null
 }
 
-type GettingStartedMode = 'template' | 'scratch' | 'clone'
-
 function PromptWorkshop({
   catalog,
   initialParentAgentId,
@@ -350,51 +257,100 @@ function PromptWorkshop({
   opusConversation = [],
   incomingPromptUpdate = null,
 }: PromptWorkshopProps) {
-  const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
-  const { user: authUser } = useAuth()
+  const { agents: agentMetadata } = useAgentMetadata()
+  const draft = useWorkshopDraft({
+    catalog,
+    initialParentAgentId,
+    initialCustomAgentId,
+    onContextChange,
+    incomingPromptUpdate,
+  })
+  const {
+    modelOptions,
+    toolLibrary,
+    templateOptions,
+    loading,
+    gettingStartedMode,
+    parentAgentId,
+    setParentAgentId,
+    parentAgent,
+    selectedTemplate,
+    customAgents,
+    selectedCustomAgentId,
+    selectedCustomAgent,
+    selectCustomAgent,
+    cloneSourceAgentId,
+    setCloneSourceAgentId,
+    selectedCloneSource,
+    name,
+    setName,
+    description,
+    setDescription,
+    icon,
+    setIcon,
+    iconOptions,
+    customPrompt,
+    setCustomPrompt,
+    groupPromptOverrides,
+    includeGroupRules,
+    setIncludeGroupRules,
+    selectedVisibility,
+    setSelectedVisibility,
+    selectedAllowedGroupIds,
+    setSelectedAllowedGroupIds,
+    selectedModelId,
+    handleModelChange,
+    selectedModelReasoning,
+    setSelectedModelReasoning,
+    selectedToolIds,
+    toggleTool,
+    removeTool,
+    groupId,
+    setGroupId,
+    availableGroupIds,
+    selectedGroupId,
+    selectedGroupPrompt,
+    hasSelectedGroupOverride,
+    handleSelectedGroupPromptChange,
+    handleResetSelectedGroupPrompt,
+    loggedInGroupIds,
+    loggedInAsLabel,
+    currentUserGroupIds,
+    inheritedAllowedGroupIds,
+    selectableGroupOptions,
+    parentCorePrompt,
+    parentGeneratedContract,
+    parentBasePrompt,
+    overlayStatus,
+    overlayWarning,
+    selectedModelOption,
+    selectedModelReasoningDescription,
+    domainEnvelopeAgentId,
+    toolIdeaRequests,
+    toolIdeasLoading,
+    submitToolIdea,
+    toolIdeaSubmitting,
+    versions,
+    saving,
+    status,
+    error,
+    setError,
+    setStatus,
+    handleNew,
+    startDraft,
+    handleSave,
+    handleDeleteById,
+    handleRevert,
+    selfExclusionPrompt,
+    confirmSelfExclusion,
+    cancelSelfExclusion,
+  } = draft
 
-  const [parentAgentId, setParentAgentId] = useState('')
   const [workshopSection, setWorkshopSection] = useState<'setup' | 'prompt' | 'tools' | 'reference'>('setup')
-  const [gettingStartedMode, setGettingStartedMode] = useState<GettingStartedMode>('template')
-  const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
-  const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
-  const [cloneSourceAgentId, setCloneSourceAgentId] = useState<string>('')
-  const [versions, setVersions] = useState<CustomAgentVersion[]>([])
-  const [loading, setLoading] = useState(false)
-  const [workshopOptionsLoaded, setWorkshopOptionsLoaded] = useState(false)
-  const [hydrationVersion, setHydrationVersion] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [status, setStatus] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [customPrompt, setCustomPrompt] = useState('')
-  const [debouncedPromptDraft, setDebouncedPromptDraft] = useState('')
-  const [groupPromptOverrides, setGroupPromptOverrides] = useState<Record<string, string>>({})
-  const [debouncedGroupPromptOverrides, setDebouncedGroupPromptOverrides] = useState<Record<string, string>>({})
-  const [includeGroupRules, setIncludeGroupRules] = useState(true)
-  const [selectedVisibility, setSelectedVisibility] = useState<'private' | 'project'>('private')
-  const [selectedAllowedGroupIds, setSelectedAllowedGroupIds] = useState<string[]>([])
-  const [selectedModelId, setSelectedModelId] = useState('')
-  const [selectedModelReasoning, setSelectedModelReasoning] = useState('')
-  const [selectedToolIds, setSelectedToolIds] = useState<string[]>([])
-  const [outputSchemaKey, setOutputSchemaKey] = useState('')
-  const [icon, setIcon] = useState('🔧')
   const [saveNotes, setSaveNotes] = useState('')
-  const [groupId, setGroupId] = useState('')
-
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
-  const [toolLibrary, setToolLibrary] = useState<ToolLibraryItem[]>([])
-  const [templateOptions, setTemplateOptions] = useState<AgentTemplate[]>([])
-  const [groupOptions, setGroupOptions] = useState<GroupOption[]>([])
-  const [toolIdeaRequests, setToolIdeaRequests] = useState<ToolIdeaRequest[]>([])
-  const [toolIdeasLoading, setToolIdeasLoading] = useState(false)
   const [toolIdeaDialogOpen, setToolIdeaDialogOpen] = useState(false)
-  const [toolIdeaSubmitting, setToolIdeaSubmitting] = useState(false)
   const [toolIdeaTitle, setToolIdeaTitle] = useState('')
   const [toolIdeaDescription, setToolIdeaDescription] = useState('')
-
   const [fileMenuAnchor, setFileMenuAnchor] = useState<HTMLElement | null>(null)
   const [openDialogOpen, setOpenDialogOpen] = useState(false)
   const [openSearchTerm, setOpenSearchTerm] = useState('')
@@ -405,162 +361,14 @@ function PromptWorkshop({
   const [saveAsDialogOpen, setSaveAsDialogOpen] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const [selfExclusionDialogOpen, setSelfExclusionDialogOpen] = useState(false)
-  const [pendingSaveOptions, setPendingSaveOptions] = useState<{ forceCreate?: boolean; nameOverride?: string }>()
   const [pendingDeleteAgent, setPendingDeleteAgent] = useState<CustomAgent | null>(null)
-  const appliedInitialCustomAgentId = useRef<string | null>(null)
-  const refreshAttemptedForInitialCustomAgentId = useRef<string | null>(null)
-  const appliedPromptUpdateId = useRef<number | null>(null)
-  const appliedPromptUpdateHydrationVersion = useRef<number>(-1)
-  const customAgentsLoadingRef = useRef(false)
 
-  const parentAgents = useMemo(() => {
-    const seen = new Set<string>()
-    const agents: PromptInfo[] = []
-    for (const category of catalog.categories) {
-      for (const agent of category.agents) {
-        if (agent.agent_id === 'task_input') continue
-        if (agent.agent_id.startsWith('ca_')) continue
-        if (seen.has(agent.agent_id)) continue
-        seen.add(agent.agent_id)
-        agents.push(agent)
-      }
-    }
-    return agents.sort((a, b) => a.agent_name.localeCompare(b.agent_name))
-  }, [catalog])
-
-  const parentAgent = useMemo(
-    () => parentAgents.find((agent) => agent.agent_id === parentAgentId),
-    [parentAgents, parentAgentId]
-  )
-  const selectedTemplate = useMemo(
-    () => templateOptions.find((template) => template.agent_id === parentAgentId),
-    [templateOptions, parentAgentId]
-  )
-
-  const selectedCustomAgent = useMemo(
-    () => customAgents.find((agent) => agent.id === selectedCustomAgentId),
-    [customAgents, selectedCustomAgentId]
-  )
-  const selectedCloneSource = useMemo(
-    () => customAgents.find((agent) => agent.id === cloneSourceAgentId),
-    [customAgents, cloneSourceAgentId]
-  )
-
-  const groupRuleSourceAgent = useMemo(() => {
-    if (selectedCustomAgent) {
-      if (!selectedCustomAgent.template_source) return null
-      return parentAgents.find((agent) => agent.agent_id === selectedCustomAgent.template_source) || null
-    }
-
-    if (gettingStartedMode === 'clone') {
-      if (!selectedCloneSource?.template_source) return null
-      return parentAgents.find((agent) => agent.agent_id === selectedCloneSource.template_source) || null
-    }
-
-    if (gettingStartedMode === 'template') {
-      if (!parentAgentId) return null
-      return parentAgents.find((agent) => agent.agent_id === parentAgentId) || null
-    }
-
-    return null
-  }, [
-    gettingStartedMode,
-    parentAgentId,
-    parentAgents,
-    selectedCloneSource?.template_source,
-    selectedCustomAgent,
-  ])
-
-  const availableGroupIds = useMemo(
-    () => Object.keys(groupRuleSourceAgent?.group_rules || {}).sort(),
-    [groupRuleSourceAgent]
-  )
-  const loggedInGroupIds = useMemo(
-    () => resolveUserGroupIds(
-      authUser?.groups?.length ? authUser.groups : authUser?.providerGroups,
-      availableGroupIds
-    ),
-    [authUser?.groups, authUser?.providerGroups, availableGroupIds]
-  )
-  const currentUserGroupIds = useMemo(
-    () => Array.from(new Set((authUser?.groups || []).map((group) => group.trim().toUpperCase()).filter(Boolean))),
-    [authUser?.groups]
-  )
-
-  const inheritedAllowedGroupIds = useMemo(() => {
-    if (selectedCustomAgent) {
-      return selectedCustomAgent.inherited_allowed_group_ids
-    }
-    if (gettingStartedMode === 'clone' && !selectedCustomAgent) {
-      return selectedCloneSource?.allowed_group_ids || []
-    }
-    return selectedTemplate?.allowed_group_ids || []
-  }, [gettingStartedMode, selectedCloneSource?.allowed_group_ids, selectedCustomAgent, selectedTemplate?.allowed_group_ids])
-
-  const selectableGroupOptions = useMemo(() => {
-    if (inheritedAllowedGroupIds.length === 0) return groupOptions
-    const inherited = new Set(inheritedAllowedGroupIds)
-    return groupOptions.filter((group) => inherited.has(group.group_id))
-  }, [groupOptions, inheritedAllowedGroupIds])
-
-  const selectedGroupId = useMemo(() => groupId.trim().toUpperCase(), [groupId])
-
-  const selectedGroupBasePrompt = useMemo(() => {
-    if (!selectedGroupId) return ''
-    return groupRuleSourceAgent?.group_rules[selectedGroupId]?.content || ''
-  }, [groupRuleSourceAgent, selectedGroupId])
-
-  const selectedGroupPrompt = useMemo(() => {
-    if (!selectedGroupId) return ''
-    if (Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)) {
-      return groupPromptOverrides[selectedGroupId]
-    }
-    return selectedGroupBasePrompt
-  }, [groupPromptOverrides, selectedGroupId, selectedGroupBasePrompt])
-
-  const selectedGroupPromptForContext = useMemo(() => {
-    if (!selectedGroupId) return undefined
-    if (Object.prototype.hasOwnProperty.call(debouncedGroupPromptOverrides, selectedGroupId)) {
-      return debouncedGroupPromptOverrides[selectedGroupId]
-    }
-    return groupRuleSourceAgent?.group_rules[selectedGroupId]?.content
-  }, [debouncedGroupPromptOverrides, groupRuleSourceAgent, selectedGroupId])
-
-  const parentPromptLayers = parentAgent?.prompt_layers || []
-  const parentCorePrompt = parentPromptLayers
-    .filter((layer) => layer.kind === 'core_static')
-    .map((layer) => layer.content)
-    .join('\n\n')
-  const parentGeneratedContract = parentPromptLayers
-    .filter((layer) => layer.kind === 'core_generated')
-    .map((layer) => layer.content)
-    .join('\n\n')
-  const parentBasePrompt = parentPromptLayers
-    .filter((layer) => layer.kind === 'base_prompt')
-    .map((layer) => layer.content)
-    .join('\n\n') || parentAgent?.base_prompt || ''
-  const overlayStatus = selectedCustomAgent?.custom_prompt_overlay_status
-  const overlayWarning = selectedCustomAgent?.custom_prompt_warning || ''
-  const loggedInAsLabel = authUser?.name || authUser?.email || authUser?.uid || 'the current user'
+  const selfExclusionDialogOpen = Boolean(selfExclusionPrompt)
   const loggedInGroupsLabel = loggedInGroupIds.length > 0 ? loggedInGroupIds.join(', ') : 'No matching group detected'
-
-  const hasSelectedGroupOverride = useMemo(
-    () => Boolean(selectedGroupId && Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)),
-    [groupPromptOverrides, selectedGroupId]
-  )
-
-  const hasAnyGroupOverrides = useMemo(
-    () => Object.keys(groupPromptOverrides).length > 0,
-    [groupPromptOverrides]
-  )
-
-  const iconOptions = useMemo(() => {
-    const discovered = Object.values(agentMetadata)
-      .map((agent) => agent.icon)
-      .filter((candidate): candidate is string => Boolean(candidate && candidate.trim()))
-    return Array.from(new Set([...FALLBACK_ICON_OPTIONS, ...discovered, icon || '🔧']))
-  }, [agentMetadata, icon])
+  const hasAnyGroupOverrides = Object.keys(groupPromptOverrides).length > 0
+  const domainEnvelopeMetadata = domainEnvelopeAgentId
+    ? agentMetadata[domainEnvelopeAgentId]?.domain_envelope
+    : undefined
 
   const filteredOpenAgents = useMemo(() => {
     if (!openSearchTerm.trim()) return customAgents
@@ -569,41 +377,6 @@ function PromptWorkshop({
       return agent.name.toLowerCase().includes(query) || (agent.description || '').toLowerCase().includes(query)
     })
   }, [customAgents, openSearchTerm])
-
-  const defaultModelId = useMemo(() => {
-    const explicitDefault = modelOptions.find((model) => model.default)
-    if (explicitDefault) return explicitDefault.model_id
-    if (modelOptions.length > 0) return modelOptions[0].model_id
-    return ''
-  }, [modelOptions])
-
-  const selectedModelOption = useMemo(
-    () => modelOptions.find((model) => model.model_id === selectedModelId) || null,
-    [modelOptions, selectedModelId]
-  )
-
-  const selectedModelReasoningDescription = useMemo(() => {
-    if (!selectedModelOption || !selectedModelReasoning) return ''
-    return selectedModelOption.reasoning_descriptions[selectedModelReasoning] || ''
-  }, [selectedModelOption, selectedModelReasoning])
-
-  const domainEnvelopeAgentId = useMemo(() => {
-    if (selectedCustomAgent?.template_source) return selectedCustomAgent.template_source
-    if (gettingStartedMode === 'clone' && selectedCloneSource?.template_source) {
-      return selectedCloneSource.template_source
-    }
-    if (gettingStartedMode === 'template') return parentAgentId
-    return ''
-  }, [
-    gettingStartedMode,
-    parentAgentId,
-    selectedCloneSource?.template_source,
-    selectedCustomAgent?.template_source,
-  ])
-
-  const domainEnvelopeMetadata = domainEnvelopeAgentId
-    ? agentMetadata[domainEnvelopeAgentId]?.domain_envelope
-    : undefined
 
   const toolCategories = useMemo(() => {
     const categories = Array.from(new Set(toolLibrary.map((tool) => tool.category).filter(Boolean)))
@@ -623,673 +396,13 @@ function PromptWorkshop({
     })
   }, [toolLibrary, toolLibraryCategory, toolLibrarySearch])
 
-  const toolPolicyByKey = useMemo(
-    () => new Map(toolLibrary.map((tool) => [tool.tool_key, tool])),
-    [toolLibrary]
-  )
-
-  useEffect(() => {
-    if (!initialParentAgentId) return
-    if (templateOptions.some((template) => template.agent_id === initialParentAgentId)) {
-      setParentAgentId(initialParentAgentId)
-    }
-  }, [initialParentAgentId, templateOptions])
-
-  useEffect(() => {
-    const targetId = (initialCustomAgentId || '').trim()
-    if (!targetId) return
-    if (appliedInitialCustomAgentId.current === targetId) return
-
-    const found = customAgents.find((agent) => agent.id === targetId)
-    if (!found) return
-
-    appliedInitialCustomAgentId.current = targetId
-    setSelectedCustomAgentId(found.id)
-    setCloneSourceAgentId(found.id)
-    setStatus(`Opened "${found.name}"`)
-  }, [customAgents, initialCustomAgentId])
-
-  useEffect(() => {
-    async function loadWorkshopOptions() {
-      setWorkshopOptionsLoaded(false)
-      try {
-        const [models, tools, workshopMetadata] = await Promise.all([
-          fetchModelOptions(),
-          fetchToolLibrary(),
-          fetchAgentTemplates(),
-        ])
-        setModelOptions(models)
-        setToolLibrary(tools)
-        setTemplateOptions(workshopMetadata.templates)
-        setGroupOptions(workshopMetadata.group_options)
-        if (models.length === 0) {
-          setError('No model options are configured. Add entries in config/models.yaml before creating agents.')
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load workshop options')
-      } finally {
-        setWorkshopOptionsLoaded(true)
-      }
-    }
-    void loadWorkshopOptions()
-  }, [])
-
-  useEffect(() => {
-    async function loadToolIdeaRequests() {
-      setToolIdeasLoading(true)
-      try {
-        const response = await listToolIdeaRequests()
-        setToolIdeaRequests(response.tool_ideas)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load tool idea requests')
-      } finally {
-        setToolIdeasLoading(false)
-      }
-    }
-    void loadToolIdeaRequests()
-  }, [])
-
-  useEffect(() => {
-    if (!parentAgentId && templateOptions.length > 0) {
-      setParentAgentId(templateOptions[0].agent_id)
-    }
-  }, [parentAgentId, templateOptions])
-
-  useEffect(() => {
-    if (!selectedModelId) return
-    const resolvedReasoning = resolveReasoningSelection(
-      modelOptions,
-      selectedModelId,
-      selectedModelReasoning
-    )
-    if (resolvedReasoning !== selectedModelReasoning) {
-      setSelectedModelReasoning(resolvedReasoning)
-    }
-  }, [modelOptions, selectedModelId, selectedModelReasoning])
-
-  const getTemplateAlignedAgentId = useCallback((agents: CustomAgent[]): string => {
-    if (!parentAgentId) return ''
-    return agents.find((agent) => agent.template_source === parentAgentId)?.id || ''
-  }, [parentAgentId])
-
-  const loadCustomAgents = useCallback(async (options?: { silent?: boolean }) => {
-    const silent = options?.silent ?? false
-    customAgentsLoadingRef.current = true
-    if (!silent) {
-      setLoading(true)
-      setError(null)
-      setStatus(null)
-    }
-
-    try {
-      const response = await listCustomAgents()
-      setCustomAgents(response.custom_agents)
-
-      const templateAlignedAgentId = getTemplateAlignedAgentId(response.custom_agents)
-
-      if (response.custom_agents.length > 0) {
-        setSelectedCustomAgentId((prev) => {
-          const existing = response.custom_agents.find((agent) => agent.id === prev)
-          if (!existing) return ''
-          if (parentAgentId && existing.template_source !== parentAgentId) {
-            return ''
-          }
-          return prev
-        })
-        setCloneSourceAgentId((prev) => {
-          const stillExists = response.custom_agents.some((agent) => agent.id === prev)
-          if (stillExists) return prev
-          return templateAlignedAgentId || response.custom_agents[0].id
-        })
-      } else {
-        setSelectedCustomAgentId('')
-        setCloneSourceAgentId('')
-        setVersions([])
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load custom agents')
-    } finally {
-      customAgentsLoadingRef.current = false
-      if (!silent) {
-        setLoading(false)
-      }
-    }
-  }, [getTemplateAlignedAgentId, parentAgentId])
-
-  useEffect(() => {
-    void loadCustomAgents()
-  }, [loadCustomAgents])
-
-  useEffect(() => {
-    const targetId = (initialCustomAgentId || '').trim()
-    if (!targetId) return
-    if (customAgents.some((agent) => agent.id === targetId)) return
-    if (refreshAttemptedForInitialCustomAgentId.current === targetId) return
-
-    refreshAttemptedForInitialCustomAgentId.current = targetId
-    // Clone-to-workshop can create a new agent after this component already loaded.
-    // Refresh once so the initial id can be resolved without requiring a full page reload.
-    void loadCustomAgents({ silent: true })
-  }, [customAgents, initialCustomAgentId, loadCustomAgents])
-
-  useEffect(() => {
-    async function loadVersions() {
-      if (!selectedCustomAgentId) {
-        setVersions([])
-        return
-      }
-      try {
-        const loaded = await listCustomAgentVersions(selectedCustomAgentId)
-        setVersions(loaded)
-      } catch {
-        setVersions([])
-      }
-    }
-    void loadVersions()
-  }, [selectedCustomAgentId])
-
-  useEffect(() => {
-    if (!selectedCustomAgent) {
-      if (gettingStartedMode === 'clone' && selectedCloneSource) {
-        const clonedName = selectedCloneSource.name.endsWith(' (Copy)')
-          ? selectedCloneSource.name
-          : `${selectedCloneSource.name} (Copy)`
-        setName(clonedName)
-        setDescription(selectedCloneSource.description || '')
-        setCustomPrompt(selectedCloneSource.custom_prompt)
-        setDebouncedPromptDraft(selectedCloneSource.custom_prompt)
-        setGroupPromptOverrides(selectedCloneSource.group_prompt_overrides || {})
-        setDebouncedGroupPromptOverrides(selectedCloneSource.group_prompt_overrides || {})
-        setIncludeGroupRules(selectedCloneSource.include_group_rules)
-        setSelectedAllowedGroupIds(selectedCloneSource.allowed_group_ids || [])
-        setSelectedVisibility('private')
-        const cloneModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCloneSource.model_id)
-        setSelectedModelId(cloneModelId)
-        setSelectedModelReasoning(
-          resolveReasoningSelection(modelOptions, cloneModelId, selectedCloneSource.model_reasoning)
-        )
-        setSelectedToolIds(selectedCloneSource.tool_ids || [])
-        setOutputSchemaKey(selectedCloneSource.output_schema_key || '')
-        setIcon(selectedCloneSource.icon || '🔧')
-        setHydrationVersion((prev) => prev + 1)
-        if (selectedCloneSource.template_source) {
-          setParentAgentId(selectedCloneSource.template_source)
-        }
-        return
-      }
-
-      if (gettingStartedMode === 'scratch') {
-        setName('')
-        setDescription('')
-        setCustomPrompt('')
-        setDebouncedPromptDraft('')
-        setGroupPromptOverrides({})
-        setDebouncedGroupPromptOverrides({})
-        setIncludeGroupRules(false)
-        setSelectedAllowedGroupIds([])
-        setSelectedVisibility('private')
-        setSelectedModelId(defaultModelId)
-        setSelectedModelReasoning(resolveReasoningSelection(modelOptions, defaultModelId))
-        setSelectedToolIds([])
-        setOutputSchemaKey('')
-        setIcon('🔧')
-        setHydrationVersion((prev) => prev + 1)
-        return
-      }
-
-      setName(parentAgent ? `${parentAgent.agent_name} (Custom)` : '')
-      setDescription('')
-      setCustomPrompt(parentBasePrompt)
-      setDebouncedPromptDraft(parentBasePrompt)
-      setGroupPromptOverrides({})
-      setDebouncedGroupPromptOverrides({})
-      setIncludeGroupRules(true)
-      setSelectedAllowedGroupIds(selectedTemplate?.allowed_group_ids || [])
-      setSelectedVisibility('private')
-      const templateModelId = resolveModelSelection(modelOptions, defaultModelId, selectedTemplate?.model_id)
-      setSelectedModelId(templateModelId)
-      setSelectedModelReasoning(resolveReasoningSelection(modelOptions, templateModelId))
-      setSelectedToolIds(selectedTemplate?.tool_ids || [])
-      setOutputSchemaKey(selectedTemplate?.output_schema_key || '')
-      setIcon('🔧')
-      setHydrationVersion((prev) => prev + 1)
-      return
-    }
-
-    setName(selectedCustomAgent.name)
-    setDescription(selectedCustomAgent.description || '')
-    const savedMainPrompt = selectedCustomAgent.custom_prompt || parentBasePrompt
-    setCustomPrompt(savedMainPrompt)
-    setDebouncedPromptDraft(savedMainPrompt)
-    setGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
-    setDebouncedGroupPromptOverrides(selectedCustomAgent.group_prompt_overrides || {})
-    setIncludeGroupRules(selectedCustomAgent.include_group_rules)
-    setSelectedAllowedGroupIds(selectedCustomAgent.allowed_group_ids || [])
-    setSelectedVisibility(selectedCustomAgent.visibility === 'project' ? 'project' : 'private')
-    const customModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCustomAgent.model_id)
-    setSelectedModelId(customModelId)
-    setSelectedModelReasoning(
-      resolveReasoningSelection(modelOptions, customModelId, selectedCustomAgent.model_reasoning)
-    )
-    setSelectedToolIds(selectedCustomAgent.tool_ids || [])
-    setOutputSchemaKey(selectedCustomAgent.output_schema_key || '')
-    setIcon(selectedCustomAgent.icon || '🔧')
-    setHydrationVersion((prev) => prev + 1)
-    if (selectedCustomAgent.template_source) {
-      setParentAgentId(selectedCustomAgent.template_source)
-    }
-  }, [
-    modelOptions,
-    defaultModelId,
-    gettingStartedMode,
-    parentAgent,
-    parentBasePrompt,
-    selectedCloneSource,
-    selectedCustomAgent,
-    selectedTemplate,
-  ])
-
-  useEffect(() => {
-    if (availableGroupIds.length === 0) {
-      if (groupId) setGroupId('')
-      return
-    }
-    if (groupId && availableGroupIds.includes(groupId)) {
-      return
-    }
-
-    const overrideGroup = Object.keys(groupPromptOverrides)
-      .map((group) => group.trim().toUpperCase())
-      .find((group) => availableGroupIds.includes(group))
-    if (overrideGroup) {
-      setGroupId(overrideGroup)
-      return
-    }
-
-    const loggedInGroup = loggedInGroupIds.find((group) => availableGroupIds.includes(group))
-    if (loggedInGroup) {
-      setGroupId(loggedInGroup)
-      return
-    }
-
-    if (groupId) {
-      setGroupId('')
-    }
-  }, [availableGroupIds, groupId, groupPromptOverrides, loggedInGroupIds])
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedPromptDraft(customPrompt)
-    }, 450)
-
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [customPrompt])
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedGroupPromptOverrides(groupPromptOverrides)
-    }, 450)
-
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [groupPromptOverrides])
-
-  useEffect(() => {
-    if (!onContextChange) return
-    const contextTemplateId = selectedCustomAgent?.template_source
-      || (gettingStartedMode === 'template' ? parentAgentId : undefined)
-    const contextTemplateName = contextTemplateId
-      ? (selectedTemplate?.name || parentAgent?.agent_name)
-      : undefined
-    const normalizedSelectedGroupOverrides = selectedCustomAgent?.group_prompt_overrides || {}
-    const draftIsDirty = selectedCustomAgent
-      ? customPrompt !== selectedCustomAgent.custom_prompt
-        || !areStringRecordsEqual(groupPromptOverrides, normalizedSelectedGroupOverrides)
-        || includeGroupRules !== selectedCustomAgent.include_group_rules
-        || !areStringArraysEqual(selectedAllowedGroupIds, selectedCustomAgent.allowed_group_ids || [])
-        || selectedModelId !== selectedCustomAgent.model_id
-        || (selectedModelReasoning || '') !== (selectedCustomAgent.model_reasoning || '')
-        || !areStringArraysEqual(selectedToolIds, selectedCustomAgent.tool_ids || [])
-        || (outputSchemaKey || '') !== (selectedCustomAgent.output_schema_key || '')
-      : Boolean(customPrompt.trim())
-    onContextChange({
-      template_source: contextTemplateId || undefined,
-      template_name: contextTemplateName,
-      custom_agent_id: selectedCustomAgent?.agent_id,
-      custom_agent_name: selectedCustomAgent?.name,
-      include_group_rules: includeGroupRules,
-      selected_group_id: selectedGroupId || undefined,
-      prompt_draft: debouncedPromptDraft,
-      selected_group_prompt_draft: selectedGroupPromptForContext,
-      draft_is_dirty: draftIsDirty,
-      custom_agent_updated_at: selectedCustomAgent?.updated_at,
-      group_prompt_override_count: Object.keys(debouncedGroupPromptOverrides).length,
-      has_group_prompt_overrides: Object.keys(debouncedGroupPromptOverrides).length > 0,
-      draft_tool_ids: selectedToolIds,
-      draft_model_id: selectedModelId || undefined,
-      draft_model_reasoning: selectedModelReasoning || undefined,
-    })
-  }, [
-    gettingStartedMode,
-    onContextChange,
-    parentAgentId,
-    parentAgent?.agent_name,
-    selectedTemplate?.name,
-    selectedCustomAgent?.agent_id,
-    selectedCustomAgent?.name,
-    selectedCustomAgent?.custom_prompt,
-    selectedCustomAgent?.group_prompt_overrides,
-    selectedCustomAgent?.include_group_rules,
-    selectedCustomAgent?.allowed_group_ids,
-    selectedCustomAgent?.model_id,
-    selectedCustomAgent?.model_reasoning,
-    selectedCustomAgent?.tool_ids,
-    selectedCustomAgent?.output_schema_key,
-    selectedCustomAgent?.updated_at,
-    selectedCustomAgent?.template_source,
-    includeGroupRules,
-    selectedGroupId,
-    customPrompt,
-    groupPromptOverrides,
-    debouncedPromptDraft,
-    selectedGroupPromptForContext,
-    debouncedGroupPromptOverrides,
-    selectedToolIds,
-    selectedAllowedGroupIds,
-    selectedModelId,
-    selectedModelReasoning,
-    outputSchemaKey,
-  ])
-
-  useEffect(() => {
-    if (!incomingPromptUpdate) return
-    if (!workshopOptionsLoaded) return
-    if (loading || customAgentsLoadingRef.current) return
-    if (gettingStartedMode === 'template' && !parentAgentId && !selectedCustomAgentId) return
-    if (gettingStartedMode === 'clone' && !selectedCustomAgentId && !selectedCloneSource && !cloneSourceAgentId) return
-    if (
-      appliedPromptUpdateId.current === incomingPromptUpdate.request_id
-      && appliedPromptUpdateHydrationVersion.current === hydrationVersion
-    ) {
-      return
-    }
-    appliedPromptUpdateId.current = incomingPromptUpdate.request_id
-    appliedPromptUpdateHydrationVersion.current = hydrationVersion
-
-    if (
-      incomingPromptUpdate.apply_mode
-      && incomingPromptUpdate.apply_mode !== 'replace'
-      && incomingPromptUpdate.apply_mode !== 'targeted_edit'
-    ) {
-      setError(`Unsupported prompt update mode: ${incomingPromptUpdate.apply_mode}`)
-      return
-    }
-    if (typeof incomingPromptUpdate.prompt !== 'string' || !incomingPromptUpdate.prompt.trim()) {
-      setError('Received an invalid prompt update payload')
-      return
-    }
-
-    const targetPrompt = incomingPromptUpdate.target_prompt === 'group' ? 'group' : 'main'
-    if (targetPrompt === 'group') {
-      const targetGroupId = (incomingPromptUpdate.target_group_id || selectedGroupId || '').trim().toUpperCase()
-      if (!targetGroupId) {
-        setError('Cannot apply group prompt update because no group is selected.')
-        return
-      }
-      if (availableGroupIds.length > 0 && !availableGroupIds.includes(targetGroupId)) {
-        setError(`Cannot apply group prompt update: ${targetGroupId} is not available for this template.`)
-        return
-      }
-
-      setGroupId(targetGroupId)
-      setGroupPromptOverrides((prev) => ({
-        ...prev,
-        [targetGroupId]: incomingPromptUpdate.prompt,
-      }))
-      setDebouncedGroupPromptOverrides((prev) => ({
-        ...prev,
-        [targetGroupId]: incomingPromptUpdate.prompt,
-      }))
-      setError(null)
-      setStatus(
-        incomingPromptUpdate.summary?.trim()
-          ? `Applied Claude group update (${targetGroupId}): ${incomingPromptUpdate.summary.trim()}`
-          : `Applied Claude prompt update to ${targetGroupId} group draft`
-      )
-      return
-    }
-
-    setCustomPrompt(incomingPromptUpdate.prompt)
-    setDebouncedPromptDraft(incomingPromptUpdate.prompt)
-    setError(null)
-    setStatus(
-      incomingPromptUpdate.summary?.trim()
-        ? `Applied Claude update: ${incomingPromptUpdate.summary.trim()}`
-        : 'Applied Claude prompt update to the draft'
-    )
-  }, [
-    incomingPromptUpdate,
-    availableGroupIds,
-    selectedGroupId,
-    workshopOptionsLoaded,
-    gettingStartedMode,
-    parentAgentId,
-    selectedCustomAgentId,
-    selectedCloneSource,
-    cloneSourceAgentId,
-    loading,
-    hydrationVersion,
-  ])
-
-  const handleNew = () => {
-    if (selectedCustomAgent) {
-      setCloneSourceAgentId(selectedCustomAgent.id)
-    }
-    setSelectedCustomAgentId('')
-    setSelectedVisibility('private')
-    setSelectedAllowedGroupIds([])
+  const saveWithNotes = async (options?: { forceCreate?: boolean; nameOverride?: string }) => {
+    await handleSave({ ...options, notes: saveNotes })
     setSaveNotes('')
-    setStatus('Creating a new custom agent draft')
   }
 
-  const reloadAfterSave = async (keepId?: string) => {
-    const response = await listCustomAgents()
-    setCustomAgents(response.custom_agents)
-    if (keepId) {
-      setSelectedCustomAgentId(keepId)
-      setCloneSourceAgentId(keepId)
-    } else if (response.custom_agents.length > 0) {
-      const templateAlignedAgentId = getTemplateAlignedAgentId(response.custom_agents)
-      setSelectedCustomAgentId(templateAlignedAgentId)
-      setCloneSourceAgentId(templateAlignedAgentId || response.custom_agents[0].id)
-    } else {
-      setSelectedCustomAgentId('')
-      setCloneSourceAgentId('')
-    }
-    await refreshAgentMetadata()
-  }
-
-  const handleSave = async (
-    options?: { forceCreate?: boolean; nameOverride?: string },
-    selfExclusionConfirmed = false
-  ) => {
-    const forceCreate = options?.forceCreate ?? false
-    const nameToSave = (options?.nameOverride ?? name).trim()
-
-    if (gettingStartedMode === 'template' && !parentAgentId && !selectedCustomAgentId) {
-      setError('Please select a template')
-      return
-    }
-    if (gettingStartedMode === 'clone' && !cloneSourceAgentId && !selectedCustomAgentId) {
-      setError('Please select an agent to clone')
-      return
-    }
-    if (!selectedModelId.trim()) {
-      setError('Please select a model')
-      return
-    }
-    if (!nameToSave) {
-      setError('Please enter a custom agent name')
-      return
-    }
-    if (!customPrompt.trim() && !parentAgentId) {
-      setError('Prompt text cannot be empty')
-      return
-    }
-    const updatingExistingAgent = !forceCreate && Boolean(selectedCustomAgentId)
-    const existingToolCount = selectedCustomAgent?.tool_ids?.length || 0
-    if (updatingExistingAgent && existingToolCount > 0 && selectedToolIds.length === 0) {
-      setError(
-        'Cannot save this agent with no tools selected because it previously had attached tools. '
-        + 'Re-attach at least one tool or use Save As to intentionally create a tool-free copy.'
-      )
-      return
-    }
-    const excludesCurrentUserGroups = selectedAllowedGroupIds.length > 0
-      && currentUserGroupIds.length > 0
-      && !currentUserGroupIds.some((groupId) => selectedAllowedGroupIds.includes(groupId))
-    if (excludesCurrentUserGroups && !selfExclusionConfirmed) {
-      setPendingSaveOptions(options)
-      setSelfExclusionDialogOpen(true)
-      return
-    }
-
-    setSaving(true)
-    setError(null)
-    setStatus(null)
-
-    try {
-      const shouldCreate = forceCreate || !selectedCustomAgentId
-      if (!shouldCreate && selectedCustomAgentId) {
-        let updated = await updateCustomAgent(selectedCustomAgentId, {
-          name: nameToSave,
-          description: description.trim() || undefined,
-          custom_prompt: customPrompt,
-          group_prompt_overrides: groupPromptOverrides,
-          include_group_rules: includeGroupRules,
-          model_id: selectedModelId,
-          model_reasoning: selectedModelReasoning || undefined,
-          tool_ids: selectedToolIds,
-          output_schema_key: outputSchemaKey || undefined,
-          icon: icon || undefined,
-          notes: saveNotes.trim() || undefined,
-          allowed_group_ids: selectedAllowedGroupIds,
-        })
-        const currentVisibility = updated.visibility === 'project' ? 'project' : 'private'
-        if (currentVisibility !== selectedVisibility) {
-          updated = await setCustomAgentVisibility(updated.agent_id, selectedVisibility)
-        }
-        await reloadAfterSave(updated.id)
-        setStatus(`Updated "${updated.name}"`)
-      } else {
-        const templateSource = selectedCustomAgent?.template_source
-          || (gettingStartedMode === 'template'
-            ? parentAgentId
-            : (gettingStartedMode === 'clone' ? selectedCloneSource?.template_source : undefined))
-        let created = await createCustomAgent({
-          template_source: templateSource || undefined,
-          name: nameToSave,
-          description: description.trim() || undefined,
-          custom_prompt: customPrompt,
-          group_prompt_overrides: groupPromptOverrides,
-          include_group_rules: includeGroupRules,
-          model_id: selectedModelId,
-          model_reasoning: selectedModelReasoning || undefined,
-          tool_ids: selectedToolIds,
-          output_schema_key: outputSchemaKey || undefined,
-          icon: icon || undefined,
-          allowed_group_ids: selectedAllowedGroupIds,
-        })
-        if (selectedVisibility === 'project') {
-          created = await setCustomAgentVisibility(created.agent_id, 'project')
-        }
-        await reloadAfterSave(created.id)
-        setStatus(forceCreate ? `Saved as "${created.name}"` : `Created "${created.name}"`)
-      }
-      setSaveNotes('')
-      if (forceCreate) {
-        setSaveAsName('')
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save custom agent')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleDeleteById = async (agent: CustomAgent) => {
-    setSaving(true)
-    setError(null)
-    try {
-      await deleteCustomAgent(agent.id)
-      await reloadAfterSave()
-      if (selectedCustomAgentId === agent.id) {
-        const hasRemaining = customAgents.some((candidate) => candidate.id !== agent.id)
-        if (!hasRemaining) handleNew()
-      }
-      setStatus(`Deleted "${agent.name}"`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete custom agent')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleRevert = async (version: number) => {
-    if (!selectedCustomAgentId) return
-    setSaving(true)
-    setError(null)
-    try {
-      const reverted = await revertCustomAgentVersion(selectedCustomAgentId, version, saveNotes || undefined)
-      await reloadAfterSave(reverted.id)
-      setStatus(`Reverted to version ${version}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to revert version')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleSelectedGroupPromptChange = (value: string) => {
-    if (!selectedGroupId) return
-    setGroupPromptOverrides((prev) => {
-      const next = { ...prev }
-      if (value === selectedGroupBasePrompt || (!value.trim() && !selectedGroupBasePrompt.trim())) {
-        delete next[selectedGroupId]
-      } else {
-        next[selectedGroupId] = value
-      }
-      return next
-    })
-  }
-
-  const handleResetSelectedGroupPrompt = () => {
-    if (!selectedGroupId) return
-    setGroupPromptOverrides((prev) => {
-      if (!Object.prototype.hasOwnProperty.call(prev, selectedGroupId)) return prev
-      const next = { ...prev }
-      delete next[selectedGroupId]
-      return next
-    })
-  }
-
-  const handleToggleTool = (toolKey: string) => {
-    const policy = toolPolicyByKey.get(toolKey)
-    if (policy && !policy.allow_attach) return
-
-    setSelectedToolIds((prev) => {
-      if (prev.includes(toolKey)) {
-        return prev.filter((existing) => existing !== toolKey)
-      }
-      return [...prev, toolKey]
-    })
-  }
-
-  const handleRemoveTool = (toolKey: string) => {
-    setSelectedToolIds((prev) => prev.filter((existing) => existing !== toolKey))
+  const handleRevertWithNotes = async (version: number) => {
+    await handleRevert(version)
   }
 
   const handleOpenToolLibrary = () => {
@@ -1302,17 +415,10 @@ function PromptWorkshop({
     setToolLibraryCategory('all')
   }
 
-  const refreshToolIdeas = async () => {
-    const response = await listToolIdeaRequests()
-    setToolIdeaRequests(response.tool_ideas)
-  }
-
   const handleAskClaudeForTool = () => {
     const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
     const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unsaved_draft'
-    const attachedTools = selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'
-    const message = `I need help designing a NEW tool request for Agent Workshop.\n\nContext:\n- Agent draft: ${targetName}\n- Agent ID: ${targetId}\n- Attached tools: ${attachedTools}\n\nPlease guide me with focused questions and help me produce:\n1. A concise request title\n2. Clear problem statement\n3. Required inputs\n4. Expected output format\n5. One concrete usage example\n\nWhen we finish, provide a final polished request that I can submit to developers.\n\n[Request ID: ${Date.now()}]`
-    onVerifyRequest?.(message)
+    onVerifyRequest?.(buildToolRequestMessage(targetName, targetId, selectedToolIds))
     setStatus('Opened tool-ideation discussion with Claude')
   }
 
@@ -1327,35 +433,8 @@ function PromptWorkshop({
   }
 
   const handleSubmitToolIdea = async () => {
-    if (!toolIdeaTitle.trim()) {
-      setError('Please enter a tool request title')
-      return
-    }
-    if (!toolIdeaDescription.trim()) {
-      setError('Please enter a tool request description')
-      return
-    }
-
-    setToolIdeaSubmitting(true)
-    setError(null)
-    try {
-      const ideationTranscript = opusConversation
-        .filter((entry) => Boolean(entry.content && entry.content.trim()))
-        .slice(-30)
-
-      const created = await submitToolIdeaRequest({
-        title: toolIdeaTitle.trim(),
-        description: toolIdeaDescription.trim(),
-        opus_conversation: ideationTranscript,
-      })
-      await refreshToolIdeas()
-      setStatus(`Submitted tool request "${created.title}"`)
-      handleCloseToolIdeaDialog()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit tool request')
-    } finally {
-      setToolIdeaSubmitting(false)
-    }
+    const submitted = await submitToolIdea(toolIdeaTitle, toolIdeaDescription, opusConversation)
+    if (submitted) handleCloseToolIdeaDialog()
   }
 
   const handleFileMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
@@ -1403,9 +482,9 @@ function PromptWorkshop({
       setError('Please enter a custom agent name')
       return
     }
-
     setSaveAsDialogOpen(false)
-    await handleSave({ forceCreate: true, nameOverride: trimmedName })
+    await saveWithNotes({ forceCreate: true, nameOverride: trimmedName })
+    setSaveAsName('')
   }
 
   const requestDelete = (agent?: CustomAgent) => {
@@ -1432,41 +511,19 @@ function PromptWorkshop({
   const handleDiscussWithClaude = () => {
     const targetName = selectedCustomAgent?.name || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
     const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
-    const groupPart = selectedGroupId ? `Selected Group: ${selectedGroupId}` : 'Selected Group: none'
-    const message = `Discuss my Agent Workshop draft for "${targetName}".\n\nPlease refresh the current draft and inspect current prompt/tool schemas before giving authoritative advice.\n\nPlease help with:\n1. Prompt quality and clarity issues\n2. Risky or ambiguous instructions\n3. Concrete edits to improve behavior\n4. Suggested flow-based validation tests\n5. Whether any PDF evidence instructions preserve search_document, read_chunk span IDs, and record_evidence(span_ids)\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
-
-    onVerifyRequest?.(message)
-  }
-
-  const handleModelChange = (modelId: string) => {
-    setSelectedModelId(modelId)
-    setSelectedModelReasoning(resolveReasoningSelection(modelOptions, modelId))
+    onVerifyRequest?.(buildDiscussDraftMessage(targetName, targetId, selectedGroupId))
   }
 
   const handleAskClaudeAboutModels = () => {
     const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
-    const modelLines = modelOptions
-      // modelOptions already comes from GET /models, which the backend filters to
-      // curator-visible models (config/models.yaml curator_visible), so no extra filter here.
-      .map((model) => {
-        const reasoning = model.reasoning_options.length > 0
-          ? `Reasoning: ${model.reasoning_options.join(', ')} (default: ${model.default_reasoning || 'none'})`
-          : 'Reasoning: n/a'
-        return `- ${model.name} [${model.model_id}] via ${model.provider}\n  Guidance: ${model.guidance || model.description || 'n/a'}\n  ${reasoning}`
-      }).join('\n')
-
-    const message = `Help me choose the best model settings for my Agent Workshop draft.\n\nAgent draft: ${targetName}\nCurrent model: ${selectedModelId || 'none'}\nCurrent reasoning: ${selectedModelReasoning || 'none'}\nAttached tools: ${selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'}\n\nAvailable models (authoritative configured choices):\n${modelLines}\n\nUse only the available models and their configured guidance above. Do not rely on historical model names or unlisted variants.\n\nPlease:\n1. Ask 1-3 focused questions to understand my use case\n2. Recommend a model and (if applicable) reasoning level\n3. Explain tradeoffs in plain curator-friendly language\n4. Give one backup model choice\n\n[Request ID: ${Date.now()}]`
-    onVerifyRequest?.(message)
+    onVerifyRequest?.(buildModelAdviceMessage(targetName, modelOptions, selectedModelId, selectedModelReasoning, selectedToolIds))
     setStatus('Opened model-selection discussion with Claude')
   }
 
   const handleDiscussPromptChangesWithClaude = () => {
     const targetName = selectedCustomAgent?.name || name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
     const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
-    const groupPart = selectedGroupId ? `Selected Group: ${selectedGroupId}` : 'Selected Group: none'
-    const message = `Help me improve the SYSTEM PROMPT for "${targetName}".\n\nPlease refresh the current draft and inspect current prompt/tool schemas before proposing edits.\n\nPlease:\n1. Identify unclear, conflicting, or risky instructions.\n2. Propose concrete edits focused on behavior and extraction quality.\n3. Explain why each suggested edit helps.\n4. Keep changes minimal unless a full rewrite is truly needed.\n5. Preserve span-backed PDF evidence guidance when document tools are attached: search_document for candidates, read_chunk for span IDs, and record_evidence(span_ids) for retained evidence.\n\nAgent ID: ${targetId}\n${groupPart}\n\n[Request ID: ${Date.now()}]`
-
-    onVerifyRequest?.(message)
+    onVerifyRequest?.(buildDiscussPromptMessage(targetName, targetId, selectedGroupId))
     setStatus('Opened system-prompt discussion with Claude')
   }
 
@@ -1496,7 +553,7 @@ function PromptWorkshop({
             <span>Manage Agents...</span>
           </StyledMenuItem>
           <Divider />
-          <StyledMenuItem onClick={() => void handleSave()} disabled={saving}>
+          <StyledMenuItem onClick={() => void saveWithNotes()} disabled={saving}>
             <span>{selectedCustomAgentId ? 'Save Agent' : 'Save New Agent'}</span>
           </StyledMenuItem>
           <StyledMenuItem onClick={handleSaveAsOpen} disabled={saving}>
@@ -1623,8 +680,7 @@ function PromptWorkshop({
                   value={gettingStartedMode}
                   onChange={(_event, value) => {
                     if (value !== null) {
-                      setGettingStartedMode(value as GettingStartedMode)
-                      setSelectedCustomAgentId('')
+                      startDraft(value as GettingStartedMode)
                     }
                   }}
                 >
@@ -2180,7 +1236,7 @@ function PromptWorkshop({
                             key={toolId}
                             size="small"
                             label={tool?.display_name || toolId}
-                            onDelete={() => handleRemoveTool(toolId)}
+                            onDelete={() => removeTool(toolId)}
                           />
                         )
                       })}
@@ -2303,7 +1359,7 @@ function PromptWorkshop({
                           <Button
                             size="small"
                             variant="text"
-                            onClick={() => handleRevert(version.version)}
+                            onClick={() => void handleRevertWithNotes(version.version)}
                             disabled={!selectedCustomAgentId || saving}
                           >
                             Revert
@@ -2362,9 +1418,8 @@ function PromptWorkshop({
                     <ListItem key={agent.id} disablePadding>
                       <ListItemButton
                         onClick={() => {
-                          setSelectedCustomAgentId(agent.id)
+                          selectCustomAgent(agent.id)
                           handleOpenDialogClose()
-                          setStatus(`Opened "${agent.name}"`)
                         }}
                         selected={agent.id === selectedCustomAgentId}
                         sx={{
@@ -2460,8 +1515,7 @@ function PromptWorkshop({
                           size="small"
                           variant="text"
                           onClick={() => {
-                            setSelectedCustomAgentId(agent.id)
-                            setStatus(`Opened "${agent.name}"`)
+                            selectCustomAgent(agent.id)
                           }}
                         >
                           Open
@@ -2593,7 +1647,7 @@ function PromptWorkshop({
                         <ListItemButton
                           onClick={() => {
                             if (!attachable) return
-                            handleToggleTool(tool.tool_key)
+                            toggleTool(tool.tool_key)
                           }}
                           selected={selected}
                           disabled={!attachable}
@@ -2693,7 +1747,7 @@ function PromptWorkshop({
 
         <Dialog
           open={selfExclusionDialogOpen}
-          onClose={() => setSelfExclusionDialogOpen(false)}
+          onClose={cancelSelfExclusion}
           maxWidth="xs"
           fullWidth
         >
@@ -2706,16 +1760,11 @@ function PromptWorkshop({
             </Alert>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setSelfExclusionDialogOpen(false)}>Go back</Button>
+            <Button onClick={cancelSelfExclusion}>Go back</Button>
             <Button
               variant="contained"
               color="warning"
-              onClick={() => {
-                setSelfExclusionDialogOpen(false)
-                const options = pendingSaveOptions
-                setPendingSaveOptions(undefined)
-                void handleSave(options, true)
-              }}
+              onClick={confirmSelfExclusion}
             >
               Save restriction
             </Button>
