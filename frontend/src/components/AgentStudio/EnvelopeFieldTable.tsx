@@ -17,12 +17,11 @@ import {
   Typography,
 } from '@mui/material'
 import { alpha } from '@mui/material/styles'
-import type { Theme } from '@mui/material/styles'
 
 import type { DomainEnvelopeFieldMetadata, ValidationAttachmentOption } from '@/services/agentStudioService'
 import type { EnvelopeFieldGroupView } from './envelopePresentation'
 import { fieldTypeLabel, sourceOfTruthWord, validatorPolicyBadge } from './envelopePresentation'
-import { MONO_FONT_FAMILY, StateDot } from './agentGuidePrimitives'
+import { MONO_FONT_FAMILY, StateDot, tableHeadCellSx as headCellSx } from './agentGuidePrimitives'
 
 interface EnvelopeFieldTableProps {
   groups: EnvelopeFieldGroupView[]
@@ -33,21 +32,6 @@ interface EnvelopeFieldTableProps {
   maxHeight?: number | string
 }
 
-const headCellSx = {
-  fontSize: 11,
-  letterSpacing: '0.06em',
-  textTransform: 'uppercase',
-  fontWeight: 500,
-  color: 'text.secondary',
-  py: 0.75,
-  backgroundColor: (theme: Theme) => (
-    theme.palette.mode === 'dark'
-      ? alpha(theme.palette.common.white, 0.06)
-      : alpha(theme.palette.primary.main, 0.06)
-  ),
-  borderBottom: 1,
-  borderColor: 'divider',
-} as const
 
 const bodyCellSx = {
   fontSize: 13,

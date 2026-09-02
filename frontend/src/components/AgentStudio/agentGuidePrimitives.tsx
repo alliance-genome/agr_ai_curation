@@ -7,6 +7,7 @@
 
 import type { ReactNode } from 'react'
 import { Box, Typography } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 import type { SxProps, Theme } from '@mui/material/styles'
 
 export const MONO_FONT_FAMILY = '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
@@ -25,6 +26,23 @@ export const sectionHeadingSx: SxProps<Theme> = {
   textTransform: 'uppercase',
   color: 'text.secondary',
 }
+
+/** Sticky-capable header cell style shared by the guide and envelope tables. */
+export const tableHeadCellSx = {
+  fontSize: 11,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  fontWeight: 500,
+  color: 'text.secondary',
+  py: 0.75,
+  borderBottom: 1,
+  borderColor: 'divider',
+  backgroundColor: (theme: Theme) => (
+    theme.palette.mode === 'dark'
+      ? alpha(theme.palette.common.white, 0.06)
+      : alpha(theme.palette.primary.main, 0.06)
+  ),
+} as const
 
 interface SectionHeadingProps {
   children: ReactNode
