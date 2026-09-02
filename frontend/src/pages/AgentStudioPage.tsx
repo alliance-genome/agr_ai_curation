@@ -42,7 +42,7 @@ import ClaudeDrawer from '@/components/AgentStudio/ClaudeDrawer'
 import { buildFlowVerificationPrompt } from '@/components/AgentStudio/flowVerificationPrompt'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
 import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
-import PromptWorkshop from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
+import PromptWorkshop, { type WorkshopLeaveGuard } from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
 import {
   useChatHistoryDetailQuery,
   useChatHistoryTranscriptQuery,
@@ -251,14 +251,34 @@ function AgentStudioPage() {
     return (stored === 'agents' || stored === 'flows' || stored === 'agent_workshop') ? stored : 'agents'
   })
 
+  const workshopLeaveGuardRef = useRef<WorkshopLeaveGuard | null>(null)
+
   // Persist tab changes
-  const handleTabChange = useCallback((_e: React.SyntheticEvent, newValue: TabValue) => {
+  const applyTab = useCallback((newValue: TabValue) => {
     setActiveTab(newValue)
     safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, newValue, {
       owner: 'preferences',
       key: AGENT_STUDIO_TAB_KEY,
     })
   }, [])
+
+  // Ask the Workshop before leaving it so unsaved edits are not dropped silently.
+  // The Workshop only mounts once the catalog is loaded; without it there is nothing to guard.
+  const confirmLeaveWorkshop = useCallback((): Promise<boolean> => {
+    const guard = workshopLeaveGuardRef.current
+    if (!guard) return Promise.resolve(true)
+    return guard.requestLeave()
+  }, [])
+
+  const handleTabChange = useCallback((_e: React.SyntheticEvent, newValue: TabValue) => {
+    if (activeTab === 'agent_workshop' && newValue !== 'agent_workshop') {
+      void confirmLeaveWorkshop().then((leave) => {
+        if (leave) applyTab(newValue)
+      })
+      return
+    }
+    applyTab(newValue)
+  }, [activeTab, applyTab, confirmLeaveWorkshop])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
@@ -694,14 +714,13 @@ Agent ID: ${agentId}`
   }, [showClaude])
 
   const handleWorkshopViewEnvelope = useCallback((agentId: string) => {
-    setSelectedAgentId(agentId)
-    setSelectedGroupId(null)
-    setActiveTab('agents')
-    safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agents', {
-      owner: 'preferences',
-      key: AGENT_STUDIO_TAB_KEY,
+    void confirmLeaveWorkshop().then((leave) => {
+      if (!leave) return
+      setSelectedAgentId(agentId)
+      setSelectedGroupId(null)
+      applyTab('agents')
     })
-  }, [])
+  }, [applyTab, confirmLeaveWorkshop])
 
   const handleApplyWorkshopPromptUpdate = useCallback((proposal: WorkshopPromptUpdateProposal) => {
     promptUpdateCounterRef.current += 1
@@ -898,6 +917,7 @@ Agent ID: ${agentId}`
                   opusConversation={opusConversation}
                   incomingPromptUpdate={workshopPromptUpdateRequest}
                   onViewEnvelope={handleWorkshopViewEnvelope}
+                  leaveGuardRef={workshopLeaveGuardRef}
                 />
               )}
             </TabContent>
