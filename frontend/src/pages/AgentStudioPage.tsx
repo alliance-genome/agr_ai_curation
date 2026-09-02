@@ -285,8 +285,15 @@ function AgentStudioPage() {
   // The panel reports its initial layout through onExpand/onCollapse during
   // mount. Those callbacks stay disarmed until the persisted flag is applied.
   const panelCallbacksArmedRef = useRef(false)
-  const assistantMessageCountRef = useRef(0)
+  // Assistant-message baseline for unread tracking. Null until OpusChat
+  // delivers its first snapshot, so a restored transcript never counts.
+  const assistantMessageCountRef = useRef<number | null>(null)
   const claudeHidden = isNarrow ? !drawerOpen : claudeCollapsed
+  const claudeHiddenRef = useRef(claudeHidden)
+
+  useEffect(() => {
+    claudeHiddenRef.current = claudeHidden
+  }, [claudeHidden])
 
   // Drop the pre-Layout-R saved split once so nobody keeps the 40/60 layout.
   useEffect(() => {
@@ -317,6 +324,11 @@ function AgentStudioPage() {
   }, [isNarrow, claudeCollapsed])
 
   const showClaude = useCallback(() => {
+    if (!claudeHiddenRef.current) {
+      // Already visible (for example a discuss request): just move focus.
+      chatInputRef.current?.focus()
+      return
+    }
     pendingFocusRef.current = 'input'
     if (isNarrow) {
       setDrawerOpen(true)
@@ -389,15 +401,20 @@ function AgentStudioPage() {
     }
   }, [claudeHidden, isNarrow])
 
-  // Unread tracking: assistant messages appended while Claude is hidden.
-  useEffect(() => {
-    const assistantCount = opusConversation.filter((message) => message.role === 'assistant').length
+  // Unread tracking: assistant messages appended while Claude is hidden. The
+  // first snapshot only sets the baseline; later growth while hidden counts.
+  const handleConversationSnapshotChange = useCallback((messages: ToolIdeaConversationEntry[]) => {
+    setOpusConversation(messages)
+    const assistantCount = messages.filter((message) => message.role === 'assistant').length
     const previousCount = assistantMessageCountRef.current
     assistantMessageCountRef.current = assistantCount
-    if (claudeHidden && assistantCount > previousCount) {
+    if (previousCount === null) {
+      return
+    }
+    if (claudeHiddenRef.current && assistantCount > previousCount) {
       setUnreadCount((current) => current + (assistantCount - previousCount))
     }
-  }, [opusConversation, claudeHidden])
+  }, [])
 
   useEffect(() => {
     if (!claudeHidden) {
@@ -610,13 +627,14 @@ function AgentStudioPage() {
   // Handle verify request - sends a message to Claude to validate the flow
   // Include timestamp to ensure each click triggers a new request
   const handleVerifyRequest = useCallback(() => {
+    showClaude()
     const message = buildFlowVerificationPrompt(
       `this curation flow "${flowState?.flowName || 'Untitled'}"`,
       Date.now(),
     )
 
     setVerifyMessage(message)
-  }, [flowState?.flowName])
+  }, [flowState?.flowName, showClaude])
 
   // Clear verify message after it's been sent
   const handleVerifyMessageSent = useCallback(() => {
@@ -625,6 +643,7 @@ function AgentStudioPage() {
 
   // Handle discuss request from AgentDetailsPanel
   const handleDiscussWithClaude = useCallback((agentId: string, agentName: string) => {
+    showClaude()
     const message = `I'd like to discuss the **${agentName}** agent. Help me understand:
 1. What this agent does and when it's used
 2. Its capabilities and limitations
@@ -636,7 +655,7 @@ Please inspect get_prompt, get_tool_inventory, and get_tool_details before givin
 Agent ID: ${agentId}`
 
     setDiscussMessage(message)
-  }, [])
+  }, [showClaude])
 
   const handleCloneToWorkshop = useCallback(async (agentId: string) => {
     try {
@@ -659,8 +678,9 @@ Agent ID: ${agentId}`
   }, [])
 
   const handleWorkshopVerifyRequest = useCallback((message: string) => {
+    showClaude()
     setVerifyMessage(message)
-  }, [])
+  }, [showClaude])
 
   const handleApplyWorkshopPromptUpdate = useCallback((proposal: WorkshopPromptUpdateProposal) => {
     promptUpdateCounterRef.current += 1
@@ -709,7 +729,7 @@ Agent ID: ${agentId}`
       discussMessage={discussMessage}
       onDiscussMessageSent={handleDiscussMessageSent}
       onDurableSessionIdChange={handleDurableSessionIdChange}
-      onConversationSnapshotChange={setOpusConversation}
+      onConversationSnapshotChange={handleConversationSnapshotChange}
       onApplyWorkshopPromptUpdate={handleApplyWorkshopPromptUpdate}
       variant={variant}
       panelId={panelId}

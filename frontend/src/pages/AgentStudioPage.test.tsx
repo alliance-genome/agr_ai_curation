@@ -18,8 +18,12 @@ const historyMocks = vi.hoisted(() => ({
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/features/history/useChatHistoryQuery', () => historyMocks)
 
-vi.mock('@/components/AgentStudio/OpusChat', () => ({
-  default: ({
+vi.mock('@/components/AgentStudio/OpusChat', async () => {
+  const React = await import('react')
+
+  type SnapshotMessage = { role: 'user' | 'assistant'; content: string }
+
+  function OpusChatMock({
     context,
     initialConversation,
     durableSessionId,
@@ -28,6 +32,7 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
     onDurableSessionIdChange,
     onConversationSnapshotChange,
     verifyMessage,
+    discussMessage,
     variant,
     panelId,
     onHide,
@@ -35,7 +40,7 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
     onStreamingChange,
   }: {
     context?: Record<string, unknown>
-    initialConversation?: Array<{ content: string }>
+    initialConversation?: SnapshotMessage[]
     durableSessionId?: string | null
     sourceSessionId?: string
     onApplyWorkshopPromptUpdate?: (
@@ -50,12 +55,36 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
       messages: Array<{ role: 'user' | 'assistant'; content: string }>
     ) => void
     verifyMessage?: string | null
+    discussMessage?: string | null
     variant?: 'panel' | 'drawer'
     panelId?: string
     onHide?: () => void
     inputRef?: Ref<HTMLTextAreaElement>
     onStreamingChange?: (isStreaming: boolean) => void
-  }) => (
+  }) {
+    // Mirror the real component: the current transcript is published on mount
+    // and whenever the seeded conversation changes.
+    const [snapshot, setSnapshot] = React.useState<SnapshotMessage[]>(initialConversation ?? [])
+    // Key on content, not identity: some tests build fresh transcript objects per render.
+    const seedKey = (initialConversation ?? []).map((message) => `${message.role}:${message.content}`).join('|')
+    const appliedSeedKeyRef = React.useRef(seedKey)
+    // The real component keeps the live transcript after it mints a session.
+    const preserveLiveConversationRef = React.useRef(false)
+    React.useEffect(() => {
+      if (appliedSeedKeyRef.current === seedKey) {
+        return
+      }
+      appliedSeedKeyRef.current = seedKey
+      if (preserveLiveConversationRef.current) {
+        return
+      }
+      setSnapshot(initialConversation ?? [])
+    }, [seedKey, initialConversation])
+    React.useEffect(() => {
+      onConversationSnapshotChange?.(snapshot)
+    }, [snapshot, onConversationSnapshotChange])
+
+    return (
     <div data-testid="opus-chat">
       Opus
       <div data-testid="opus-chat-variant">{variant ?? 'none'}</div>
@@ -72,6 +101,14 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
       <div data-testid="opus-chat-durable-session">{durableSessionId ?? 'none'}</div>
       <div data-testid="opus-chat-source-session">{sourceSessionId ?? 'none'}</div>
       <div data-testid="opus-chat-verify-message">{verifyMessage ?? 'none'}</div>
+      <div data-testid="opus-chat-discuss-message">{discussMessage ?? 'none'}</div>
+      <button
+        onClick={() =>
+          setSnapshot((current) => [...current, { role: 'assistant', content: 'Late reply' }])
+        }
+      >
+        append-assistant-reply
+      </button>
       <button
         onClick={() =>
           onApplyWorkshopPromptUpdate?.({
@@ -83,12 +120,17 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
       >
         apply-workshop-update
       </button>
-      <button onClick={() => onDurableSessionIdChange?.('agent-studio-session-999')}>
+      <button
+        onClick={() => {
+          preserveLiveConversationRef.current = true
+          onDurableSessionIdChange?.('agent-studio-session-999')
+        }}
+      >
         mint-durable-session
       </button>
       <button
         onClick={() =>
-          onConversationSnapshotChange?.([
+          setSnapshot([
             { role: 'user', content: 'Seeded question' },
             { role: 'assistant', content: 'Seeded answer' },
             { role: 'user', content: 'Fresh Opus follow-up' },
@@ -99,8 +141,11 @@ vi.mock('@/components/AgentStudio/OpusChat', () => ({
         simulate-live-conversation
       </button>
     </div>
-  ),
-}))
+    )
+  }
+
+  return { default: OpusChatMock }
+})
 
 vi.mock('@/components/AgentStudio/FlowBuilder', () => ({
   FlowBuilder: ({
@@ -142,8 +187,17 @@ vi.mock('@/components/AgentStudio/FlowBuilder', () => ({
 }))
 
 vi.mock('@/components/AgentStudio/AgentBrowser', () => ({
-  default: ({ onCloneToWorkshop }: { onCloneToWorkshop: (agentId: string) => void }) => (
-    <button onClick={() => onCloneToWorkshop('ca_source')}>clone-custom</button>
+  default: ({
+    onCloneToWorkshop,
+    onDiscussWithClaude,
+  }: {
+    onCloneToWorkshop: (agentId: string) => void
+    onDiscussWithClaude: (agentId: string, agentName: string) => void
+  }) => (
+    <>
+      <button onClick={() => onCloneToWorkshop('ca_source')}>clone-custom</button>
+      <button onClick={() => onDiscussWithClaude('gene', 'Gene Extractor')}>discuss-agent</button>
+    </>
   ),
 }))
 
@@ -949,6 +1003,89 @@ describe('AgentStudioPage', () => {
       await waitFor(() => {
         expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
       })
+    })
+    it('does not count a restored conversation as unread when Claude starts collapsed', async () => {
+      localStorage.setItem(COLLAPSED_KEY, 'true')
+      historyMocks.useChatHistoryDetailQuery.mockReturnValue(
+        buildSessionDetail('agent-studio-session-12345678', 'agent_studio')
+      )
+      historyMocks.useChatHistoryTranscriptQuery.mockReturnValue(
+        buildTranscript('agent-studio-session-12345678', 'agent_studio', [
+          {
+            message_id: 'message-1',
+            role: 'user',
+            message_type: 'text',
+            content: 'Restored question',
+            created_at: '2026-04-22T00:00:01Z',
+          },
+          {
+            message_id: 'message-2',
+            role: 'assistant',
+            message_type: 'text',
+            content: 'Restored answer',
+            created_at: '2026-04-22T00:00:02Z',
+          },
+        ])
+      )
+
+      await renderStudio(['/agent-studio?session_id=agent-studio-session-12345678'])
+
+      await waitFor(() => {
+        expect(screen.getByTestId('opus-chat-initial-conversation')).toHaveTextContent(
+          'Restored question|Restored answer'
+        )
+      })
+      const showButton = screen.getByRole('button', { name: 'Show Claude' })
+      expect(showButton).not.toHaveAccessibleDescription()
+
+      fireEvent.click(screen.getByText('append-assistant-reply'))
+      await waitFor(() => {
+        expect(showButton).toHaveAccessibleDescription('1 new message from Claude')
+      })
+    })
+
+    it('reveals a collapsed Claude and focuses the input when a discuss request arrives', async () => {
+      localStorage.setItem(COLLAPSED_KEY, 'true')
+      await renderStudio()
+      expect(screen.getByRole('button', { name: 'Show Claude' })).toBeInTheDocument()
+
+      fireEvent.click(screen.getByText('discuss-agent'))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: 'Hide Claude' })).toBeInTheDocument()
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Agent ID: gene')
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: 'Ask about prompts' })).toHaveFocus()
+      })
+    })
+
+    it('opens the drawer and focuses the input when a discuss request arrives at narrow width', async () => {
+      mockViewportWidth(1000)
+      await renderStudio()
+      expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByText('discuss-agent'))
+
+      expect(await screen.findByRole('dialog', { name: 'Claude' })).toBeInTheDocument()
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Agent ID: gene')
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: 'Ask about prompts' })).toHaveFocus()
+      })
+    })
+
+    it('reveals a collapsed Claude when Flow Builder requests verification', async () => {
+      localStorage.setItem(COLLAPSED_KEY, 'true')
+      await renderStudio()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      fireEvent.click(await screen.findByText('verify-flow'))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+      })
+      expect(screen.getByTestId('opus-chat-verify-message')).toHaveTextContent('get_current_flow() first')
     })
   })
 })
