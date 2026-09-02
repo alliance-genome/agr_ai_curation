@@ -456,7 +456,9 @@ export default function SetupSection(props: SetupSectionProps) {
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ width: 300 }}>
-            <InputLabel id="available-groups-label">Available to groups</InputLabel>
+            {/* The select shows "All groups" for an empty value (displayEmpty + renderValue),
+                so the label must stay shrunk or it overlaps that text. */}
+            <InputLabel id="available-groups-label" shrink>Available to groups</InputLabel>
             <Select
               labelId="available-groups-label"
               label="Available to groups"
