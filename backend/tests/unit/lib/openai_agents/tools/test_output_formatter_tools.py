@@ -266,6 +266,73 @@ async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
     assert capabilities["format"] == "csv"
     assert "pair_join" in capabilities["allowed_transform_types"]
     assert "broadcasts across a list" in capabilities["transform_rules"]["pair_join"]
+    assert "conditional" in capabilities["allowed_transform_types"]
+    assert "nested conditionals are rejected" in capabilities["transform_rules"]["conditional"]
+
+
+@pytest.mark.asyncio
+async def test_formatter_tools_validate_preview_and_finalize_conditional_plan():
+    saved = []
+
+    async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {
+            "file_id": "conditional-file",
+            "filename": f"{filename_hint}.{output_format}",
+            "format": output_format,
+            "size_bytes": 1,
+            "download_url": "/download/conditional-file",
+        }
+
+    tools = build_output_formatter_tools(
+        bundle=_bundle(),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=_fake_save,
+    )
+    plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {
+                "key": "display",
+                "transform": {
+                    "type": "conditional",
+                    "field_ref": "object.status",
+                    "condition_op": "eq",
+                    "value": "validated",
+                    "when_true": {"type": "literal", "value": "Ready"},
+                    "when_false": {
+                        "type": "first_non_empty",
+                        "field_refs": ["object.payload.symbol"],
+                    },
+                },
+            }
+        ],
+    }
+
+    validation = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(plan)},
+    )
+    assert validation["status"] == "ok"
+
+    preview = await _invoke(
+        _tool_by_name(tools, "preview_output_projection"),
+        {"plan_json": json.dumps(plan)},
+    )
+    assert [row["display"] for row in preview["preview"]["preview_rows"]] == [
+        "Ready",
+        "TP53",
+        "Ready",
+    ]
+
+    result = await _invoke(
+        _tool_by_name(tools, "finalize_and_save"),
+        {"plan_json": json.dumps(plan), "filename_hint": "conditional"},
+    )
+    assert result["status"] == "ok"
+    assert [row["display"] for row in saved[0].rows] == ["Ready", "TP53", "Ready"]
 
 
 @pytest.mark.asyncio
@@ -976,6 +1043,36 @@ async def test_invalid_raw_content_plans_and_impossible_requests_do_not_save():
     assert invalid["status"] == "invalid"
     assert "model-authored content key 'rows'" in invalid["errors"][0]
 
+    nested_raw_rows_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {
+                "key": "symbol",
+                "transform": {
+                    "type": "conditional",
+                    "field_ref": "object.status",
+                    "value": "validated",
+                    "when_true": {
+                        "type": "first_non_empty",
+                        "field_refs": ["object.payload.symbol"],
+                        "rows": [{"symbol": "model-authored"}],
+                    },
+                    "when_false": {
+                        "type": "first_non_empty",
+                        "field_refs": ["object.payload.symbol"],
+                    },
+                },
+            }
+        ],
+    }
+    nested_invalid = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(nested_raw_rows_plan)},
+    )
+    assert nested_invalid["status"] == "invalid"
+    assert "when_true contains unsupported key 'rows'" in nested_invalid["errors"][0]
+
     grouped_csv_plan = {
         "format": "csv",
         "row_source": "object",
@@ -1129,6 +1226,29 @@ async def test_transform_literals_cannot_smuggle_structured_replacement_content(
             },
         ],
     }
+    conditional_structured_literal_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {"key": "symbol", "field_ref": "object.payload.symbol"},
+            {
+                "key": "conditional_replacement",
+                "transform": {
+                    "type": "conditional",
+                    "field_ref": "object.status",
+                    "value": "validated",
+                    "when_true": {
+                        "type": "literal",
+                        "value": {"rows": [{"symbol": "model-authored"}]},
+                    },
+                    "when_false": {
+                        "type": "first_non_empty",
+                        "field_refs": ["object.payload.symbol"],
+                    },
+                },
+            },
+        ],
+    }
 
     structured = await _invoke(
         _tool_by_name(tools, "validate_output_projection"),
@@ -1146,6 +1266,13 @@ async def test_transform_literals_cannot_smuggle_structured_replacement_content(
     )
     assert encoded["status"] == "invalid"
     assert "encoded JSON objects or arrays" in encoded["errors"][0]
+
+    conditional = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(conditional_structured_literal_plan)},
+    )
+    assert conditional["status"] == "invalid"
+    assert "structured replacement data" in conditional["errors"][0]
     assert saved == []
 
 
