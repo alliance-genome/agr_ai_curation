@@ -46,14 +46,15 @@ data_sources:
       - "life-stage terms"
       - "GO terms"
 use_when:
-  - "After an extractor supplies anatomy, life stage, GO, or other ontology wording that needs an official term and ID."
-  - "When you have an exact ontology ID and want to confirm it is current and see its label."
-  - "When you need parent or child terms, or a term's obsolete history, for a disease or other ontology term."
+  - "When you want a custom ontology check: a changed prompt, a different ontology, or a stricter or looser match than the automatic check."
+  - "When you have an exact ontology ID and want to confirm it is current, see its label, or browse its parent and child terms and obsolete history."
+  - "When you want to review how anatomy, life stage, GO, and other ontology wording in extracted records gets its official ID."
 avoid_when:
+  - "To get ontology terms validated; the domain pack already runs this check automatically on every term an extractor supplies."
   - "For gene symbols; use the Gene Validation Agent."
   - "For chemicals; use the Chemical Ontology Agent."
   - "For fixed pick-list values such as evidence codes; use the Controlled Vocabulary Validation Agent."
-  - "To pull terms out of a paper; run an extractor first."
+  - "To pull terms out of a paper; that is an extractor's job."
 limitations:
   - "Cannot create new ontology terms; only resolves existing terms."
   - "Requires ontology_term_type for generic label or synonym lookup."

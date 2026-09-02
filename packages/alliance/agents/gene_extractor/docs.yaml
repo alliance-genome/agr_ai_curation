@@ -28,10 +28,10 @@ data_sources:
     data_types: ["Proposed gene IDs", "Proposed symbols", "Taxon/provider hints", "Validator lookup results"]
 use_when:
   - "When you upload a paper and want the genes it studies with experimental support, each with its evidence quote."
-  - "At the start of a gene curation flow, before the Gene Validation Agent confirms each gene."
+  - "At the start of a gene curation flow; the domain pack's validators then confirm each gene automatically."
   - "When a paper covers several species and you want each gene assigned to the right one."
 avoid_when:
-  - "To confirm a gene against the Alliance database; use the Gene Validation Agent."
+  - "To confirm a gene against the Alliance database; the domain pack's validators do that automatically on everything this agent extracts."
   - "For alleles, diseases, or phenotypes; use the matching extraction agent."
   - "When there is no uploaded paper, since it cannot work from chat text alone."
 limitations:

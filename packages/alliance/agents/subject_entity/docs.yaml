@@ -47,13 +47,14 @@ data_sources:
       - "entity labels"
       - "taxon context"
 use_when:
-  - "When an annotation names its subject and states whether that subject is a gene, an allele, or a model, and you want it sent to the right check."
-  - "In domain flows where a single record can carry gene, allele, and model subjects side by side."
-  - "Before curation handoff, so each subject is confirmed and keeps the identifier and label it arrived with."
+  - "When you want a custom subject check: a changed prompt, different routing, or a stricter or looser match for gene, allele, or model subjects."
+  - "When you want to review how an annotation's subject is sent to the gene, allele, or model check and keeps the identifier and label it arrived with."
+  - "When you clone it in the Agent Workshop and add the copy to a flow for a check the domain pack does not include."
 avoid_when:
+  - "To get subjects validated; the domain pack already runs this check automatically on every record that names its subject type."
   - "When the subject type is not stated; the agent does not guess it."
   - "For references, ontology terms, controlled vocabulary, or experimental conditions; use the matching validation agent."
-  - "When you already know the subject is a gene, allele, or model; go straight to that validation agent."
+  - "When you already know the subject is a gene, allele, or model; use that validation agent directly."
 limitations:
   - "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM."
   - "Ambiguous or missing type-specific lookup results still require curator review."

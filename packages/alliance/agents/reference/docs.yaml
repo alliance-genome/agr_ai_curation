@@ -38,10 +38,11 @@ data_sources:
       - "titles"
       - "citation metadata"
 use_when:
-  - "When a record cites a paper by PMID, DOI, Alliance reference ID, or MOD reference ID and you want the matching Alliance literature record."
-  - "When you only have a title or citation text and need the paper identified."
-  - "Before curation handoff, so every annotation points at a confirmed reference."
+  - "When you want a custom reference check: a changed prompt or a stricter or looser match against the Alliance literature database."
+  - "When you have a PMID, DOI, Alliance reference ID, MOD reference ID, title, or citation text and want the matching Alliance literature record."
+  - "When you want to review how annotations are tied to a confirmed reference."
 avoid_when:
+  - "To get references validated; the domain pack already runs this check automatically on every record an extractor produces."
   - "To read or summarize the paper's content; use the General PDF Extraction Agent."
   - "To confirm the genes, alleles, or diseases the paper reports; use the matching validation agent."
   - "To add a paper that is missing from the Alliance literature database."

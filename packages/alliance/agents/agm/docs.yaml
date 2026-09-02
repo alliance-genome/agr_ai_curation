@@ -46,13 +46,14 @@ data_sources:
       - "provider abbreviations"
       - "taxon context"
 use_when:
-  - "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record."
-  - "When a paper's subject is a model (a strain, genotype, or fish line) rather than a single gene or allele."
-  - "Before curation handoff, so each model subject carries a confirmed Alliance identifier."
+  - "When you want a custom model subject check: a changed prompt, extra tools, or a stricter or looser match than the automatic check."
+  - "When you want to review how strain, genotype, and other model subjects are confirmed against Alliance records."
+  - "When you clone it in the Agent Workshop and add the copy to a flow for a check the domain pack does not include."
 avoid_when:
+  - "To get model subjects validated; the domain pack already runs this check automatically on every record an extractor produces."
   - "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent."
   - "When the subject type is not yet known; use the Subject Entity Validation Agent to route it."
-  - "To pull model names out of a paper; run an extractor first and validate its output here."
+  - "To pull model names out of a paper; that is an extractor's job."
 limitations:
   - "Cannot infer an AGM from paper text; it validates values supplied by extraction output or domain-pack validation inputs."
   - "Ambiguous model labels require provider or taxon context for reliable resolution."

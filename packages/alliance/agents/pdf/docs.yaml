@@ -23,8 +23,8 @@ use_when:
   - "When you need a table or a specific section (methods, results) pulled out of the paper as text."
   - "As a general reading tool when no specialized extractor fits the question."
 avoid_when:
-  - "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent."
-  - "To confirm any identifier against a database; use a validation agent."
+  - "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent, and the domain pack's validators then confirm its output automatically."
+  - "To confirm an identifier against a database; this agent only reads the paper."
   - "For content inside figures beyond their captions."
 limitations:
   - "Document must be loaded in Weaviate before use"

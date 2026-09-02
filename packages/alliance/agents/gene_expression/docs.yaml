@@ -28,11 +28,11 @@ data_sources:
     data_types: ["Proposed expression relations", "Proposed data providers", "Evidence-backed expression observations"]
 use_when:
   - "When you upload a paper that reports where and when genes are expressed and want each pattern captured with its quote."
-  - "At the start of a gene expression curation flow, before the validators confirm genes, anatomy, and stage terms."
+  - "At the start of a gene expression curation flow; the domain pack's validators then confirm genes, anatomy, and stage terms automatically."
   - "When a paper uses reporters, in situ hybridization, or antibody staining to show baseline expression."
 avoid_when:
   - "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured."
-  - "To turn tissue or stage wording into official ontology IDs; use the Ontology Term Resolver Agent."
+  - "To turn tissue or stage wording into official ontology IDs; the domain pack's validators do that automatically on everything this agent extracts."
   - "To produce a downloadable file; add a File Formatter after this agent."
 limitations:
   - "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)"

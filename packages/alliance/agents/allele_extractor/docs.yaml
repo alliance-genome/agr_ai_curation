@@ -28,10 +28,10 @@ data_sources:
     data_types: ["Allele mention hints", "Associated-gene hints", "Taxon hints", "Validator lookup results"]
 use_when:
   - "When you upload a paper and want the alleles and variants it studies, with the quote that supports each one."
-  - "At the start of an allele curation flow, before the Allele Validation Agent confirms each allele."
+  - "At the start of an allele curation flow; the domain pack's validators then confirm each allele automatically."
   - "When a paper mixes alleles with strains, transgenes, and balancers and you want them sorted."
 avoid_when:
-  - "To confirm an allele against the Alliance database; use the Allele Validation Agent."
+  - "To confirm an allele against the Alliance database; the domain pack's validators do that automatically on everything this agent extracts."
   - "For genes, diseases, or phenotypes; use the matching extraction agent."
   - "When there is no uploaded paper, since it cannot work from chat text alone."
 limitations:

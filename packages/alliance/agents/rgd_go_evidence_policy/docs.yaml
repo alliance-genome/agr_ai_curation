@@ -10,9 +10,10 @@ data_sources:
     species_supported: ["R. norvegicus (RGD:)"]
     data_types: ["GO candidate", "evidence anchors", "rationale", "identity state"]
 use_when:
-  - "After the RGD GO Paper Curator proposes GO recommendations from a paper, to check each one against the RGD evidence policy."
-  - "When you are an RGD curator and want to know which recommendations rest on approved experimental evidence."
+  - "When you are an RGD curator and want a custom evidence policy check: a changed prompt or a stricter or looser reading of the approved evidence codes."
+  - "When you want to review how GO recommendations from the RGD GO Paper Curator are checked against the RGD evidence policy."
 avoid_when:
+  - "To get recommendations checked against the policy; the GO domain pack already runs this check automatically for RGD curators."
   - "For curators outside RGD; the check applies only to the RGD group."
   - "To look up gene identity or search the paper for evidence; use the RGD GO Paper Curator."
   - "To submit GO annotations; that step stays with you."

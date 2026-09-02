@@ -28,11 +28,11 @@ data_sources:
     data_types: ["Phenotype labels", "Provider/taxon hints", "Validator lookup results"]
 use_when:
   - "When you upload a paper and want the phenotypes it reports, linked to the genotype that shows them."
-  - "At the start of a phenotype curation flow, before the validators confirm the ontology terms."
+  - "At the start of a phenotype curation flow; the domain pack's validators then confirm the ontology terms automatically."
   - "When a paper describes mutant or knockdown traits and you want polarity and severity captured."
 avoid_when:
   - "For human diseases and clinical conditions; use the Disease Extraction Agent."
-  - "To confirm the official phenotype ontology term; that is the validators' job after extraction."
+  - "To confirm the official phenotype ontology term; the domain pack's validators do that automatically on everything this agent extracts."
   - "When there is no uploaded paper, since it cannot work from chat text alone."
 limitations:
   - "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone"

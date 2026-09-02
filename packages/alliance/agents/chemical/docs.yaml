@@ -23,10 +23,11 @@ data_sources:
     species_supported: null
     data_types: ["Chemical identifiers (ChEBI IDs)", "Molecular formulas", "InChI/SMILES structures", "Chemical definitions", "Ontology classifications", "Synonyms"]
 use_when:
-  - "After an extractor names a chemical, drug, or treatment compound that needs an official ChEBI term and ID."
+  - "When you want a custom chemical check: a changed prompt, extra tools, or a stricter or looser ChEBI match than the automatic check."
   - "When you have a compound name or synonym and want its ChEBI record, formula, and parent classes."
-  - "Before curation handoff, so chemical annotations and experimental conditions carry confirmed ChEBI IDs."
+  - "When you want to review how chemicals in annotations and experimental conditions get their ChEBI IDs."
 avoid_when:
+  - "To get chemicals validated; the domain pack already runs this check automatically on every chemical an extractor captures."
   - "For chemical to gene interactions, drug targets, or mechanisms of action, which ChEBI does not record."
   - "For pathway information, which ChEBI does not cover."
   - "For anatomy, life stage, or other non-chemical ontology terms; use the Ontology Term Resolver Agent."

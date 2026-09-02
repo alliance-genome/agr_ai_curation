@@ -39,10 +39,11 @@ data_sources:
       - "synonyms"
       - "obsolete flags"
 use_when:
-  - "When a curation field takes a fixed pick-list value (for example an evidence code, relation, or qualifier) and the term must match the Alliance list exactly."
-  - "After an extractor supplies an abbreviation or synonym and you want the official term name and its status."
-  - "Before curation handoff, so no submitted term is obsolete or misspelled."
+  - "When you want a custom pick-list check: a changed prompt, a different term list, or a stricter or looser match than the automatic check."
+  - "When you have an abbreviation or synonym and want the official term name and its status."
+  - "When you want to review how pick-list values (evidence codes, relations, qualifiers) are matched against the Alliance list."
 avoid_when:
+  - "To get pick-list values validated; the domain pack already runs this check automatically on every record an extractor produces."
   - "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent."
   - "For genes, alleles, or diseases; use the matching validation agent."
   - "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."

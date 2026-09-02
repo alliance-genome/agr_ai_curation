@@ -27,10 +27,11 @@ data_sources:
     species_supported: ["All species (GO is species-independent ontology)"]
     data_types: ["GO term definitions and metadata", "GO hierarchy relationships (is_a, part_of, regulates)", "GO term synonyms and secondary IDs", "Obsolete term status"]
 use_when:
+  - "When you build a custom validation step that needs GO term definitions, categories, or the broader and narrower terms around a term."
   - "When you have a GO term name, keyword, or ID and want its definition and category."
-  - "When you need the broader or narrower terms around a GO term to pick the right level of detail."
   - "When several GO terms need looking up at once."
 avoid_when:
+  - "To get a record's GO terms validated; the domain pack's validators already run automatically and do not need this agent added to a flow."
   - "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent."
   - "To find which genes carry a given GO term; use the Gene GO Annotations Agent."
   - "For GO enrichment analysis, which no agent performs."

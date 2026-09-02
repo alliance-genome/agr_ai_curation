@@ -19,10 +19,11 @@ data_sources:
     species_supported: ["C. elegans (WB:)", "D. melanogaster (FB:)", "D. rerio (ZFIN:)", "H. sapiens (HGNC:)", "M. musculus (MGI:)", "R. norvegicus (RGD:)", "S. cerevisiae (SGD:)"]
     data_types: ["GO annotations", "evidence and ECO identifiers", "references", "relations", "With/From", "qualifiers and negation", "providers", "product types", "source provenance"]
 use_when:
-  - "When you have a confirmed gene ID and want the GO annotations already recorded for it, with evidence codes and sources."
-  - "When you are comparing a paper's findings against what is already annotated for a gene."
+  - "When you build a custom validation step that compares a paper's findings against the GO annotations already recorded for a gene."
+  - "When you have a confirmed gene ID and want its existing GO annotations, with evidence codes and sources."
   - "When you need annotations split by molecular function, biological process, and cellular component."
 avoid_when:
+  - "To get a record validated; the domain pack's validators already run automatically and do not need this agent added to a flow."
   - "To search GO terms by name or keyword; use the GO Term Lookup Agent."
   - "To browse parent and child GO terms; use the GO Term Lookup Agent."
   - "To find which genes carry a given GO term; the agent starts from a gene, not a term."
