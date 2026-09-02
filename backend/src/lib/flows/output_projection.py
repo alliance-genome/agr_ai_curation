@@ -40,6 +40,7 @@ FlowOutputTransformType = Literal[
     "first_non_empty",
     "concat",
     "join_list",
+    "pair_join",
     "count",
     "map_value",
     "boolean_label",
@@ -236,6 +237,7 @@ class FlowOutputTransformSpec(BaseModel):
     value: Any = None
     values: list[Any] = Field(default_factory=list)
     separator: str = ""
+    pair_separator: str = ":"
     mapping: dict[str, Any] = Field(default_factory=dict)
     default: Any = None
     true_label: str = "Yes"
@@ -1836,6 +1838,47 @@ def _transform_refs(transform: FlowOutputTransformSpec) -> list[str]:
     return refs
 
 
+def _pair_join_value_groups(left: Any, right: Any) -> list[tuple[Any, Any]]:
+    """Return aligned value pairs, broadcasting a scalar across a list."""
+
+    left_is_list = isinstance(left, list)
+    right_is_list = isinstance(right, list)
+    left_values = list(left) if left_is_list else ([] if _is_empty(left) else [left])
+    right_values = list(right) if right_is_list else ([] if _is_empty(right) else [right])
+    if not left_values:
+        return [(None, value) for value in right_values]
+    if not right_values:
+        return [(value, None) for value in left_values]
+    if len(left_values) == len(right_values):
+        return list(zip(left_values, right_values))
+    if not left_is_list and len(left_values) == 1:
+        return [(left_values[0], value) for value in right_values]
+    if not right_is_list and len(right_values) == 1:
+        return [(value, right_values[0]) for value in left_values]
+    raise ValueError(
+        "pair_join cannot align list values with incompatible lengths "
+        f"{len(left_values)} and {len(right_values)}; use equal-length lists or a scalar value."
+    )
+
+
+def _pair_join_value(
+    row: Mapping[str, Any],
+    transform: FlowOutputTransformSpec,
+    *,
+    missing_value: str,
+) -> str:
+    if len(transform.field_refs) != 2:
+        raise ValueError("pair_join requires exactly two field_refs.")
+    left_ref, right_ref = transform.field_refs
+    pairs = _pair_join_value_groups(row.get(left_ref), row.get(right_ref))
+    rendered: list[str] = []
+    for left, right in pairs:
+        parts = [str(value) for value in (left, right) if not _is_empty(value)]
+        if parts:
+            rendered.append(transform.pair_separator.join(parts))
+    return transform.separator.join(rendered) if rendered else missing_value
+
+
 def projection_plan_allows_empty_bundle(plan: FlowOutputProjectionPlan) -> bool:
     """Return whether a projection plan can safely create one literal-only row."""
 
@@ -2069,6 +2112,16 @@ def validate_projection_plan(
                 context=f"Column '{column.key}'",
             )
         else:
+            if column.transform.type == "pair_join":
+                if column.transform.field_ref is not None or column.transform.values:
+                    errors.append(
+                        f"Column '{column.key}' pair_join uses field_refs only; "
+                        "field_ref and values are not supported."
+                    )
+                if len(column.transform.field_refs) != 2:
+                    errors.append(
+                        f"Column '{column.key}' pair_join requires exactly two field_refs."
+                    )
             for ref in _transform_refs(column.transform):
                 _validate_ref(
                     field_ref=ref,
@@ -2076,6 +2129,13 @@ def validate_projection_plan(
                     errors=errors,
                     context=f"Column '{column.key}' transform",
                 )
+            if column.transform.type == "pair_join" and len(column.transform.field_refs) == 2:
+                for row in rows:
+                    try:
+                        _pair_join_value(row, column.transform, missing_value=plan.missing_value)
+                    except ValueError as exc:
+                        errors.append(f"Column '{column.key}' {exc}")
+                        break
             if column.transform.type == "literal" and column.transform.value is None:
                 warnings.append(f"Column '{column.key}' literal transform has a null value.")
 
@@ -2225,6 +2285,8 @@ def _transform_value(
         if isinstance(value, list):
             return transform.separator.join(str(item) for item in value if not _is_empty(item))
         return missing_value if _is_empty(value) else str(value)
+    if transform.type == "pair_join":
+        return _pair_join_value(row, transform, missing_value=missing_value)
     if transform.type == "count":
         value = row.get(transform.field_ref or "")
         if isinstance(value, (list, tuple, set, dict)):

@@ -360,6 +360,9 @@ Allowed transforms:
 - `first_non_empty`: first non-empty value from a list of field refs.
 - `concat`: concatenate field refs/literals with a separator.
 - `join_list`: join list values with a separator.
+- `pair_join`: pair exactly two fields, broadcasting a scalar across a list or
+  zipping equal-length lists, then join each pair and the rendered pairs with
+  configured separators. Incompatible multi-value lengths are rejected.
 - `count`: count items at a list field.
 - `map_value`: map exact input values to labels with a default.
 - `boolean_label`: map boolean-ish values to configured labels.

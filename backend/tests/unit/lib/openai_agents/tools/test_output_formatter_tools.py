@@ -264,6 +264,8 @@ async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
     assert capabilities["status"] == "ok"
     assert "raw row arrays" in capabilities["invariant"]
     assert capabilities["format"] == "csv"
+    assert "pair_join" in capabilities["allowed_transform_types"]
+    assert "broadcasts across a list" in capabilities["transform_rules"]["pair_join"]
 
 
 @pytest.mark.asyncio

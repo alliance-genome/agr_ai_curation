@@ -294,6 +294,9 @@ def _transform_literal_payload_errors(
             continue
         errors.extend(_literal_value_errors(value, context=f"{context} values[{index}]"))
     errors.extend(_literal_value_errors(transform.separator, context=f"{context} separator"))
+    errors.extend(
+        _literal_value_errors(transform.pair_separator, context=f"{context} pair_separator")
+    )
     for mapping_key, mapping_value in transform.mapping.items():
         errors.extend(
             _literal_value_errors(
@@ -949,6 +952,13 @@ def _capabilities_payload(
         "allowed_filter_operators": list(get_args(FlowOutputFilterSpec.model_fields["op"].annotation)),
         "allowed_sort_directions": list(get_args(FlowOutputSortSpec.model_fields["direction"].annotation)),
         "allowed_transform_types": list(get_args(FlowOutputTransformSpec.model_fields["type"].annotation)),
+        "transform_rules": {
+            "pair_join": (
+                "Use exactly two field_refs. Values are joined with pair_separator; "
+                "pairs are joined with separator. A scalar broadcasts across a list, "
+                "equal-length lists zip, and incompatible list lengths are rejected."
+            ),
+        },
         "json_shapes": list(get_args(FlowOutputJsonShape)),
         "format_rules": {
             "csv": "Flat row export. group_by is not supported; use sort/filter/columns/transforms.",
