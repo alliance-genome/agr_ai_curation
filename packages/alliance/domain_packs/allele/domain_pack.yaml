@@ -450,7 +450,11 @@ metadata:
     active:
       - validator_id: allele_mention_reference_validation
         display_name: Allele mention lookup
-        description: Validate extracted allele mention text against Alliance allele rows and materialize allele identifier, symbol, and taxon fields through the active package-scoped allele validator binding.
+        curator_label: Confirm each allele mention in the Alliance records
+        description: Checks that each allele named in the paper matches an Alliance allele record and fills in the allele identifier, symbol, and species. A record cannot be submitted until its allele is confirmed.
+        definition_notes:
+          - Runs through the package-scoped allele validator binding, validating extracted allele mention text against Alliance allele rows and materializing allele identifier, symbol, and taxon fields.
+          - Blocking and required, with no curator opt-out.
     under_development:
       - validator_id: source_reference_validation
         display_name: Source reference validation
@@ -459,6 +463,11 @@ metadata:
     active:
       - binding_id: allele_mention_reference_validation
         display_name: Allele mention reference validation
+        curator_label: Confirm each allele mention in the Alliance records
+        description: Checks that each allele named in the paper matches an Alliance allele record and fills in the allele identifier, symbol, and species. A record cannot be submitted until its allele is confirmed.
+        definition_notes:
+          - Runs through the package-scoped allele validator binding, validating extracted allele mention text against Alliance allele rows and materializing allele identifier, symbol, and taxon fields.
+          - Blocking and required, with no curator opt-out.
         validator_agent:
           package_id: agr.alliance
           agent_id: allele_validation

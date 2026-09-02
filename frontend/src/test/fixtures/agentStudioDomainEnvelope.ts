@@ -19,6 +19,8 @@ export function buildValidationAttachmentOption(
     object_type: 'gene_mention_evidence',
     field_path: 'gene_symbol',
     label: 'Gene lookup',
+    curator_label: 'Confirm the gene symbol in the Alliance records',
+    when_off: 'The gene symbol stays as the extractor wrote it, and review rows show it unconfirmed.',
     required: false,
     blocking: true,
     default_enabled: true,
