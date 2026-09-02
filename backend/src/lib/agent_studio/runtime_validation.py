@@ -55,7 +55,7 @@ def _load_runtime_policy() -> Dict[str, Any]:
     return {
         "tool_bindings": catalog_service.TOOL_BINDINGS,
         "canonicalize_tool_id": catalog_service._canonicalize_tool_id,  # intentional internal reuse
-        "document_tool_ids": set(catalog_service._DOCUMENT_TOOL_IDS),
+        "document_tool_ids": set(catalog_service.DOCUMENT_TOOL_IDS),
         "package_required_tool_ids": package_required_tool_ids,
     }
 

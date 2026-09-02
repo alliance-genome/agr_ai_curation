@@ -22,12 +22,15 @@ data_sources:
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content"]
-  - name: "Gene Validation Agent"
-    description: "The specialist validator that takes the proposed genes and authoritatively confirms or rejects each one against the Alliance database after extraction."
-    species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
-    data_types: ["Proposed gene IDs", "Proposed symbols", "Taxon/provider hints", "Validator lookup results"]
+use_when:
+  - "When you upload a paper and want the genes it studies with experimental support, each with its evidence quote."
+  - "At the start of a gene curation flow; the domain pack's validators then confirm each gene automatically."
+  - "When a paper covers several species and you want each gene assigned to the right one."
+avoid_when:
+  - "To confirm a gene against the Alliance database; the domain pack's validators do that automatically on everything this agent extracts."
+  - "For alleles, diseases, or phenotypes; use the matching extraction agent."
+  - "When there is no uploaded paper, since it cannot work from chat text alone."
 limitations:
   - "Requires an uploaded PDF document — cannot extract genes from chat text alone"
   - "Genes mentioned only in references without experimental data in this paper are excluded"
   - "When a gene could belong to more than one species, it uses clues in the text; cases it can't settle are flagged for curator review."
-  - "Confirming each gene against the Alliance database is the Gene Validation Agent's job; any unconfirmed or conflicting genes stay visible to you as validator findings."

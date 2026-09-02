@@ -39,6 +39,92 @@ def test_prompt_key_and_documentation_conversion_branches(monkeypatch):
     assert doc.capabilities[0].name == "cap"
     assert doc.data_sources[0].name == "AGR"
     assert doc.limitations == ["limit-1"]
+    assert doc.use_when == []
+    assert doc.avoid_when == []
+    assert doc.note == ""
+
+
+def test_convert_documentation_parses_use_when_and_avoid_when():
+    doc = catalog_service._convert_documentation(
+        {
+            "summary": "Summary",
+            "use_when": ["After an extractor names a disease."],
+            "avoid_when": ["For gene to disease links; use the Gene Specialist."],
+            "limitations": ["Does not walk the disease hierarchy."],
+        }
+    )
+    assert doc is not None
+    assert doc.use_when == ["After an extractor names a disease."]
+    assert doc.avoid_when == ["For gene to disease links; use the Gene Specialist."]
+    assert doc.limitations == ["Does not walk the disease hierarchy."]
+
+
+def test_convert_documentation_with_only_use_when():
+    doc = catalog_service._convert_documentation(
+        {"summary": "Summary", "use_when": ["Before curation handoff."]}
+    )
+    assert doc is not None
+    assert doc.use_when == ["Before curation handoff."]
+    assert doc.avoid_when == []
+
+
+def test_convert_documentation_payload_shape_includes_guidance_keys():
+    doc = catalog_service._convert_documentation(
+        {
+            "summary": "Summary",
+            "use_when": ["When a paper names a chemical."],
+            "avoid_when": ["For drug targets."],
+        }
+    )
+    assert doc is not None
+    payload = doc.model_dump()
+    assert payload == {
+        "summary": "Summary",
+        "capabilities": [],
+        "data_sources": [],
+        "limitations": [],
+        "use_when": ["When a paper names a chemical."],
+        "avoid_when": ["For drug targets."],
+        "note": "",
+    }
+
+
+@pytest.mark.parametrize("key", ["use_when", "avoid_when"])
+def test_convert_documentation_rejects_non_list_guidance(key):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        catalog_service._convert_documentation(
+            {"summary": "Summary", key: "not a list"}
+        )
+
+
+def test_convert_documentation_parses_note_verbatim():
+    doc = catalog_service._convert_documentation(
+        {
+            "summary": "Summary",
+            "note": "Validation runs automatically. This check runs on every gene an extractor produces.",
+        }
+    )
+    assert doc is not None
+    assert doc.note == (
+        "Validation runs automatically. This check runs on every gene an extractor produces."
+    )
+    assert doc.model_dump()["note"] == doc.note
+
+
+def test_convert_documentation_note_defaults_to_empty_string():
+    doc = catalog_service._convert_documentation({"summary": "Summary"})
+    assert doc is not None
+    assert doc.note == ""
+
+
+@pytest.mark.parametrize("bad_note", [["a list"], {"text": "a mapping"}, 7])
+def test_convert_documentation_rejects_non_string_note(bad_note):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        catalog_service._convert_documentation({"summary": "Summary", "note": bad_note})
 
 
 def test_get_tool_registry_propagates_package_tool_instantiation_errors(monkeypatch):
@@ -198,6 +284,9 @@ def test_tool_lookup_and_expansion_helpers(monkeypatch):
     assert catalog_service._canonical_tool_ids(["search_genes", "agr_curation_query"]) == ["agr_curation_query"]
     assert catalog_service._uses_document_tools(["search_document"]) is True
     assert catalog_service._uses_document_tools(["agr_curation_query"]) is False
+    assert catalog_service.tool_requires_document("search_document") is True
+    assert catalog_service.tool_requires_document("  read_chunk ") is True
+    assert catalog_service.tool_requires_document("agr_curation_query") is False
 
     expanded = catalog_service.expand_tools_for_agent("gene", ["agr_curation_query", "unknown_tool"])
     assert expanded == ["search_genes", "unknown_tool"]

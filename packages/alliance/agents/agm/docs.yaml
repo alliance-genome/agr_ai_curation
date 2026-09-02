@@ -45,9 +45,17 @@ data_sources:
       - "model labels"
       - "provider abbreviations"
       - "taxon context"
+note: "Models in disease records are confirmed automatically by the subject entity check. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
+use_when:
+  - "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record."
+  - "When a paper's subject is a model (a strain, genotype, or fish line) rather than a single gene or allele."
+  - "Before curation handoff, so each model subject carries a confirmed Alliance identifier."
+avoid_when:
+  - "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent."
+  - "When the subject type is not yet known; use the Subject Entity Validation Agent to route it."
+  - "To pull model names out of a paper; run an extractor first and validate its output here."
 limitations:
   - "Cannot infer an AGM from paper text; it validates values supplied by extraction output or domain-pack validation inputs."
   - "Ambiguous model labels require provider or taxon context for reliable resolution."
-  - "Does not validate gene or allele subjects; use Subject Entity Validation Agent or the type-specific validation agent instead."
   - "Cannot create missing model records or assign new provider identifiers."
   - "Only reports lookup evidence available from Alliance curation data."

@@ -10,6 +10,7 @@ from typing import Any, Optional
 import yaml
 from sqlalchemy.orm import Session
 
+from src.lib.agent_studio.catalog_service import DOCUMENT_TOOL_IDS
 from src.lib.config.agent_loader import (
     AgentDefinition,
     canonical_system_agent_key,
@@ -30,9 +31,6 @@ _AUTO_ATTACHED_EXTRACTION_TOOL_IDS = (
     "detach_evidence_from_object",
     "discard_recorded_evidence",
     "update_recorded_evidence_metadata",
-)
-_DOCUMENT_EXTRACTION_TOOL_IDS = frozenset(
-    {"search_document", "read_chunk", "read_section", "read_subsection"}
 )
 
 
@@ -120,7 +118,7 @@ def _is_document_extraction_agent(agent: AgentDefinition) -> bool:
         return False
     if not str(agent.output_schema or "").strip():
         return False
-    return bool(set(agent.tools) & _DOCUMENT_EXTRACTION_TOOL_IDS)
+    return bool(set(agent.tools) & DOCUMENT_TOOL_IDS)
 
 
 def sync_system_agents(

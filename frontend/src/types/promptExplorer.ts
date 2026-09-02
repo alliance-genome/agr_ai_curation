@@ -29,6 +29,12 @@ export interface AgentDocumentation {
   capabilities: AgentCapability[]
   data_sources: DataSourceInfo[]
   limitations: string[]
+  // Curator-voice guidance: when this agent is the right choice
+  use_when: string[]
+  // Curator-voice guidance: when another agent is the right choice
+  avoid_when: string[]
+  // Curator-voice note shown above the guidance, verbatim from docs.yaml; empty when none
+  note: string
 }
 
 // ============================================================================
@@ -148,6 +154,12 @@ export interface ModelOption {
   avoid_for: string[]
 }
 
+/** Tool policy config; `requires_document` is derived by the backend from the tool registry. */
+export interface ToolLibraryConfig {
+  requires_document: boolean
+  [key: string]: unknown
+}
+
 export interface ToolLibraryItem {
   tool_key: string
   display_name: string
@@ -156,7 +168,7 @@ export interface ToolLibraryItem {
   curator_visible: boolean
   allow_attach: boolean
   allow_execute: boolean
-  config: Record<string, unknown>
+  config: ToolLibraryConfig
 }
 
 export interface AgentTemplate {

@@ -5,7 +5,7 @@
  * Includes tool support for suggestion submission.
  */
 
-import { useState, useRef, useEffect, useCallback, useMemo, type SetStateAction } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type Ref, type SetStateAction } from 'react'
 import {
   Box,
   Typography,
@@ -25,6 +25,10 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
 import SendIcon from '@mui/icons-material/Send'
@@ -34,6 +38,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import BuildIcon from '@mui/icons-material/Build'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import CloseIcon from '@mui/icons-material/Close'
 import {
   createAgentStudioSession,
   streamOpusChat,
@@ -60,27 +66,41 @@ const ChatContainer = styled(Box)(({ theme }) => ({
 }))
 
 const ChatHeader = styled(Box)(({ theme }) => ({
-  padding: theme.spacing(2),
+  height: 40,
+  flex: 'none',
+  padding: theme.spacing(0, 0.75, 0, 1.5),
   borderBottom: `1px solid ${theme.palette.divider}`,
   display: 'flex',
   alignItems: 'center',
   gap: theme.spacing(1),
+  minWidth: 0,
+}))
+
+const HeaderIconButton = styled(IconButton)(({ theme }) => ({
+  width: 28,
+  height: 28,
+  borderRadius: 6,
+  color: theme.palette.text.secondary,
+  '&:focus-visible': {
+    outline: `2px solid ${theme.palette.primary.main}`,
+    outlineOffset: 1,
+  },
 }))
 
 const MessagesContainer = styled(Box)(({ theme }) => ({
   flex: 1,
   overflow: 'auto',
-  padding: theme.spacing(2),
+  padding: theme.spacing(1.5),
   display: 'flex',
   flexDirection: 'column',
-  gap: theme.spacing(2),
+  gap: theme.spacing(1.5),
 }))
 
 const MessageBubble = styled(Paper, {
   shouldForwardProp: (prop) => prop !== 'isUser' && prop !== 'isSystem',
 })<{ isUser?: boolean; isSystem?: boolean }>(({ theme, isUser, isSystem }) => ({
-  padding: theme.spacing(1.5, 2),
-  maxWidth: '85%',
+  padding: theme.spacing(1, 1.5),
+  maxWidth: '88%',
   alignSelf: isUser ? 'flex-end' : isSystem ? 'center' : 'flex-start',
   backgroundColor: isUser
     ? theme.palette.primary.main
@@ -88,9 +108,9 @@ const MessageBubble = styled(Paper, {
     ? alpha(theme.palette.success.main, 0.1)
     : alpha(theme.palette.background.default, 0.6),
   color: isUser ? theme.palette.primary.contrastText : theme.palette.text.primary,
-  borderRadius: theme.spacing(2),
-  borderBottomRightRadius: isUser ? theme.spacing(0.5) : theme.spacing(2),
-  borderBottomLeftRadius: isUser ? theme.spacing(2) : isSystem ? theme.spacing(2) : theme.spacing(0.5),
+  borderRadius: theme.spacing(1.5),
+  borderBottomRightRadius: isUser ? theme.spacing(0.5) : theme.spacing(1.5),
+  borderBottomLeftRadius: isUser ? theme.spacing(1.5) : isSystem ? theme.spacing(1.5) : theme.spacing(0.5),
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
   ...(isSystem && {
@@ -99,10 +119,11 @@ const MessageBubble = styled(Paper, {
 }))
 
 const InputContainer = styled(Box)(({ theme }) => ({
-  padding: theme.spacing(2),
+  padding: theme.spacing(1),
   borderTop: `1px solid ${theme.palette.divider}`,
   display: 'flex',
-  gap: theme.spacing(1),
+  alignItems: 'flex-end',
+  gap: theme.spacing(0.75),
 }))
 
 const ToolCallBox = styled(Box)(({ theme }) => ({
@@ -427,6 +448,16 @@ interface OpusChatProps {
   onConversationSnapshotChange?: (messages: ToolIdeaConversationEntry[]) => void
   /** Apply an approved prompt replacement into the Agent Workshop editor */
   onApplyWorkshopPromptUpdate?: (proposal: WorkshopPromptUpdateProposal) => void
+  /** Shell placement: side panel (hide control) or narrow-width drawer (close control) */
+  variant?: 'panel' | 'drawer'
+  /** DOM id of the shell container the hide/close control toggles (aria-controls) */
+  panelId?: string
+  /** Hide or close the chat shell; renders the header control only when provided */
+  onHide?: () => void
+  /** Ref to the chat input so the shell can move focus into the chat */
+  inputRef?: Ref<HTMLTextAreaElement>
+  /** Notify the shell when a Claude turn starts or finishes streaming */
+  onStreamingChange?: (isStreaming: boolean) => void
 }
 
 interface PromptLineDiff {
@@ -515,6 +546,11 @@ function OpusChat({
   onDurableSessionIdChange,
   onConversationSnapshotChange,
   onApplyWorkshopPromptUpdate,
+  variant = 'panel',
+  panelId,
+  onHide,
+  inputRef,
+  onStreamingChange,
 }: OpusChatProps) {
   const conversationKey = useMemo(
     () => resolveOpusConversationKey(context, durableSessionIdProp, sourceSessionId),
@@ -530,6 +566,7 @@ function OpusChat({
   const [toolCallsExpanded, setToolCallsExpanded] = useState<{ [key: number]: boolean }>({})  // Track expanded state per message
   const [suggestionDialogOpen, setSuggestionDialogOpen] = useState(false)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
+  const [feedbackMenuAnchor, setFeedbackMenuAnchor] = useState<HTMLElement | null>(null)
   const [feedbackComment, setFeedbackComment] = useState('')
   const [isSubmittingDirect, setIsSubmittingDirect] = useState(false)
   const [submissionSent, setSubmissionSent] = useState(false)
@@ -636,6 +673,10 @@ function OpusChat({
       return buildDisplayMessages(initialConversation)
     })
   }, [initialConversation, sourceSessionId])
+
+  useEffect(() => {
+    onStreamingChange?.(isStreaming)
+  }, [isStreaming, onStreamingChange])
 
   // Publish normalized conversation snapshot for features that need transcript context.
   useEffect(() => {
@@ -1204,57 +1245,104 @@ function OpusChat({
     setInput(prompt)
   }
 
+  const feedbackDisabled = messages.length === 0 || isStreaming || isSubmittingDirect
+  const feedbackMenuOpen = Boolean(feedbackMenuAnchor)
+  const closeFeedbackMenu = () => setFeedbackMenuAnchor(null)
+  const hideLabel = variant === 'drawer' ? 'Close Claude' : 'Hide Claude'
+
   return (
     <ChatContainer>
       <ChatHeader>
-        <AutoAwesomeIcon sx={{ color: 'primary.main', fontSize: 20 }} />
-        <Typography variant="subtitle1" sx={{ fontWeight: 500, whiteSpace: 'nowrap' }}>
-          Chat with Claude
+        <AutoAwesomeIcon sx={{ color: 'primary.main', fontSize: 18 }} />
+        <Typography
+          component="h2"
+          variant="subtitle2"
+          sx={{ fontWeight: 600, fontSize: '0.85rem', whiteSpace: 'nowrap', lineHeight: 1 }}
+        >
+          Claude
         </Typography>
-        {selectedChipLabel && (
-          <Chip
-            size="small"
-            label={selectedChipLabel}
-            sx={{ ml: 0.5, maxWidth: 150 }}
-          />
-        )}
-        {durableSeedLabel && (
+        {durableSeedLabel ? (
           <Chip
             color="info"
             size="small"
             variant="outlined"
             label={durableSeedLabel}
-            sx={{ ml: 0.5, maxWidth: 280 }}
+            sx={{ height: 20, fontSize: '0.7rem', maxWidth: 220 }}
           />
-        )}
-        <Box sx={{ ml: 'auto', display: 'flex', gap: 0.5, alignItems: 'center', flexShrink: 0 }}>
-          <Typography variant="caption" sx={{ color: 'text.secondary', mr: 0.5, whiteSpace: 'nowrap' }}>
-            Contact Devs:
-          </Typography>
-          <Tooltip title="Have Claude analyze your conversation and submit feedback to developers">
-            <Button
-              variant="outlined"
+        ) : selectedChipLabel ? (
+          <Chip
+            size="small"
+            label={selectedChipLabel}
+            sx={{
+              height: 20,
+              fontSize: '0.7rem',
+              maxWidth: 150,
+              bgcolor: (theme) => alpha(theme.palette.primary.main, 0.12),
+              color: (theme) => (theme.palette.mode === 'light' ? theme.palette.primary.dark : theme.palette.primary.light),
+            }}
+          />
+        ) : null}
+        <Box sx={{ ml: 'auto', display: 'flex', gap: 0.25, alignItems: 'center', flexShrink: 0 }}>
+          <Tooltip title="Send feedback to the developers">
+            <HeaderIconButton
               size="small"
-              startIcon={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
-              onClick={() => setConfirmDialogOpen(true)}
-              disabled={messages.length === 0 || isStreaming || isSubmittingDirect}
-              sx={{ fontSize: '0.75rem', py: 0.5, px: 1, minWidth: 'auto' }}
+              aria-label="Send feedback"
+              aria-haspopup="menu"
+              aria-expanded={feedbackMenuOpen}
+              aria-controls={feedbackMenuOpen ? 'opus-chat-feedback-menu' : undefined}
+              onClick={(event) => setFeedbackMenuAnchor(event.currentTarget)}
             >
-              {isSubmittingDirect ? '...' : 'AI-Assisted'}
-            </Button>
+              {isSubmittingDirect ? <CircularProgress size={14} /> : <LightbulbIcon sx={{ fontSize: 18 }} />}
+            </HeaderIconButton>
           </Tooltip>
-          <Tooltip title="Open a form to write and submit your feedback directly">
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<LightbulbIcon sx={{ fontSize: 16 }} />}
-              onClick={() => setSuggestionDialogOpen(true)}
-              disabled={messages.length === 0 || isStreaming || isSubmittingDirect}
-              sx={{ fontSize: '0.75rem', py: 0.5, px: 1, minWidth: 'auto' }}
+          <Menu
+            id="opus-chat-feedback-menu"
+            anchorEl={feedbackMenuAnchor}
+            open={feedbackMenuOpen}
+            onClose={closeFeedbackMenu}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          >
+            <MenuItem
+              disabled={feedbackDisabled}
+              onClick={() => {
+                closeFeedbackMenu()
+                setConfirmDialogOpen(true)
+              }}
             >
-              Manual
-            </Button>
-          </Tooltip>
+              <ListItemIcon>
+                <AutoAwesomeIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="AI-assisted" />
+            </MenuItem>
+            <MenuItem
+              disabled={feedbackDisabled}
+              onClick={() => {
+                closeFeedbackMenu()
+                setSuggestionDialogOpen(true)
+              }}
+            >
+              <ListItemIcon>
+                <LightbulbIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="Manual" />
+            </MenuItem>
+          </Menu>
+          {onHide && (
+            <Tooltip title={`${hideLabel} (Ctrl+.)`}>
+              <HeaderIconButton
+                size="small"
+                aria-label={hideLabel}
+                aria-expanded="true"
+                aria-controls={panelId}
+                onClick={onHide}
+              >
+                {variant === 'drawer'
+                  ? <CloseIcon sx={{ fontSize: 18 }} />
+                  : <ChevronRightIcon sx={{ fontSize: 20 }} />}
+              </HeaderIconButton>
+            </Tooltip>
+          )}
         </Box>
       </ChatHeader>
 
@@ -1476,6 +1564,7 @@ Claude is responding...
           onKeyDown={handleKeyPress}
           disabled={isStreaming}
           size="small"
+          inputRef={inputRef}
           sx={{
             '& .MuiOutlinedInput-root': {
               borderRadius: 2,

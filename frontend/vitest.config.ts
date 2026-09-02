@@ -33,8 +33,11 @@ export default defineConfig({
     exclude: ['node_modules', 'dist'],
   },
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+    alias: [{ find: '@', replacement: path.resolve(__dirname, './src') }],
+    // Vitest defaults to Node's export conditions even under jsdom, so a
+    // package that ships a separate server build (react-resizable-panels:
+    // panels never register, collapse/expand, autosave and getSize() are
+    // inert) resolves to it. Ask for the `browser` export instead.
+    conditions: ['browser'],
   },
 });

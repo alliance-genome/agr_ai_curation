@@ -19,6 +19,8 @@ export function buildValidationAttachmentOption(
     object_type: 'gene_mention_evidence',
     field_path: 'gene_symbol',
     label: 'Gene lookup',
+    curator_label: 'Confirm the gene symbol in the Alliance records',
+    when_off: 'The gene symbol stays as the extractor wrote it, and review rows show it unconfirmed.',
     required: false,
     blocking: true,
     default_enabled: true,
@@ -110,6 +112,13 @@ export function buildDomainEnvelopeMetadata(
             source_of_truth: 'alliance_linkml',
             validation_policy: null,
             validation_attachments: [validationAttachment],
+          },
+        ],
+        field_groups: [
+          {
+            id: 'identity',
+            label: 'Identity',
+            field_paths: ['gene_symbol'],
           },
         ],
       },

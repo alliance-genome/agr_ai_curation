@@ -1,10 +1,9 @@
 /**
  * AgentBrowser Component
  *
- * Displays agents organized by subcategory (matching Flow Builder palette) with:
- * - Search/filter box for finding agents
- * - Collapsible subcategory sections
- * - Agent selection via AgentDetailsPanel
+ * A fixed-width agent list (All/Shared/Templates, search, category
+ * accordions with counts) beside the agent detail panel. Below the narrow
+ * threshold the list is hidden and the detail shows a Back to Agents control.
  *
  * Categories mirror Flow Builder:
  * - System (Supervisor only - not in Flow Builder)
@@ -37,78 +36,59 @@ import { styled } from '@mui/material/styles'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import SearchIcon from '@mui/icons-material/Search'
 import ClearIcon from '@mui/icons-material/Clear'
-import SettingsIcon from '@mui/icons-material/Settings'
-import InputIcon from '@mui/icons-material/Input'
-import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
-import FactCheckIcon from '@mui/icons-material/FactCheck'
-import OutputIcon from '@mui/icons-material/Output'
-import ScienceIcon from '@mui/icons-material/Science'
 
 import AgentDetailsPanel from './AgentDetailsPanel'
+import type { AgentDetailsRequest } from './agentBrowserRequest'
 import type { PromptCatalog, PromptInfo } from '@/types/promptExplorer'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
+import { CountPill, NARROW_BROWSER_WIDTH } from './agentGuidePrimitives'
+import { useContainerWidth } from './useContainerWidth'
 
 // Define the display order for subcategories (matching Flow Builder)
 // System is added for Supervisor (not shown in Flow Builder)
 const SUBCATEGORY_ORDER = ['System', 'Input', 'PDF Extraction', 'Data Validation', 'Output', 'My Custom Agents', 'Shared Agents']
 
-// Map subcategories to their display icons
-const SubcategoryIcon: Record<string, JSX.Element> = {
-  System: <SettingsIcon fontSize="small" />,
-  Input: <InputIcon fontSize="small" />,
-  'PDF Extraction': <PictureAsPdfIcon fontSize="small" />,
-  'Data Validation': <FactCheckIcon fontSize="small" />,
-  Output: <OutputIcon fontSize="small" />,
-  'My Custom Agents': <ScienceIcon fontSize="small" />,
-  'Shared Agents': <ScienceIcon fontSize="small" />,
-}
+const LIST_WIDTH = 260
 
 const BrowserContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
-  flexDirection: 'column',
   height: '100%',
+  minWidth: 0,
+  minHeight: 0,
   backgroundColor: theme.palette.background.paper,
   borderRadius: theme.shape.borderRadius,
   overflow: 'hidden',
 }))
 
-const BrowserHeader = styled(Box)(({ theme }) => ({
-  padding: theme.spacing(2),
-  borderBottom: `1px solid ${theme.palette.divider}`,
+const AgentListContainer = styled(Box)(({ theme }) => ({
+  width: LIST_WIDTH,
+  flex: 'none',
+  borderRight: `1px solid ${theme.palette.divider}`,
   display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-}))
-
-const ContentArea = styled(Box)(() => ({
-  flex: 1,
-  display: 'flex',
+  flexDirection: 'column',
   minHeight: 0,
   overflow: 'hidden',
 }))
 
-const AgentListContainer = styled(Box)(({ theme }) => ({
-  width: 280,
-  borderRight: `1px solid ${theme.palette.divider}`,
+const ListTop = styled(Box)(({ theme }) => ({
+  padding: theme.spacing(1.25, 1.5, 1),
   display: 'flex',
   flexDirection: 'column',
-  overflow: 'hidden',
-}))
-
-const SearchBox = styled(Box)(({ theme }) => ({
-  padding: theme.spacing(1.5),
+  gap: theme.spacing(1),
   borderBottom: `1px solid ${theme.palette.divider}`,
 }))
 
-const AgentList = styled(Box)(() => ({
+const AgentList = styled(Box)(({ theme }) => ({
   flex: 1,
   overflow: 'auto',
+  padding: theme.spacing(0.75, 0),
 }))
 
 const DetailsContainer = styled(Box)(() => ({
   flex: 1,
   overflow: 'hidden',
   minWidth: 0,
+  minHeight: 0,
 }))
 
 interface AgentBrowserProps {
@@ -117,11 +97,14 @@ interface AgentBrowserProps {
   selectedGroupId: string | null
   onAgentSelect: (agentId: string) => void
   onGroupSelect: (groupId: string | null) => void
-  onDiscussWithClaude?: (agentId: string, agentName: string) => void
+  onDiscussWithClaude?: (agentId: string, agentName: string, prompt?: string) => void
   onCloneToWorkshop?: (agentId: string) => void
+  /** Deep link: open the selected agent on a tab, optionally on one envelope field. */
+  detailsRequest?: AgentDetailsRequest | null
 }
 
 type BrowserFilter = 'all' | 'shared' | 'templates'
+type NarrowView = 'list' | 'detail'
 
 function AgentBrowser({
   catalog,
@@ -131,11 +114,15 @@ function AgentBrowser({
   onGroupSelect,
   onDiscussWithClaude,
   onCloneToWorkshop,
+  detailsRequest = null,
 }: AgentBrowserProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const [expandedCategories, setExpandedCategories] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [browserFilter, setBrowserFilter] = useState<BrowserFilter>('all')
+  const [narrowView, setNarrowView] = useState<NarrowView>('detail')
+  const [containerRef, containerWidth] = useContainerWidth<HTMLDivElement>()
+  const narrow = containerWidth !== null && containerWidth > 0 && containerWidth < NARROW_BROWSER_WIDTH
 
   // Flatten all agents from catalog
   const allAgents = useMemo(() => {
@@ -174,11 +161,9 @@ function AgentBrowser({
 
     const query = searchQuery.toLowerCase()
     return tabFilteredAgents.filter((agent) => {
-      // Match against name, description, tools, and documentation
       const matchesName = agent.agent_name.toLowerCase().includes(query)
       const matchesDescription = agent.description.toLowerCase().includes(query)
       const matchesTools = agent.tools.some((t) => t.toLowerCase().includes(query))
-      // Also check documentation if available
       const matchesDocSummary = agent.documentation?.summary?.toLowerCase().includes(query) || false
 
       return matchesName || matchesDescription || matchesTools || matchesDocSummary
@@ -189,12 +174,10 @@ function AgentBrowser({
   const agentsBySubcategory = useMemo(() => {
     const grouped: Record<string, PromptInfo[]> = {}
 
-    // Initialize with empty arrays for known subcategories
     SUBCATEGORY_ORDER.forEach((sub) => {
       grouped[sub] = []
     })
 
-    // Group agents by subcategory
     filteredAgents.forEach((agent) => {
       const subcategory = agent.subcategory || 'Other'
       if (!grouped[subcategory]) {
@@ -203,18 +186,14 @@ function AgentBrowser({
       grouped[subcategory].push(agent)
     })
 
-    // Return only non-empty subcategories in order
     return Object.entries(grouped)
       .filter(([, agents]) => agents.length > 0)
       .sort(([a], [b]) => {
         const orderA = SUBCATEGORY_ORDER.indexOf(a)
         const orderB = SUBCATEGORY_ORDER.indexOf(b)
-        // If both are in order array, use that order
         if (orderA !== -1 && orderB !== -1) return orderA - orderB
-        // Known subcategories come first
         if (orderA !== -1) return -1
         if (orderB !== -1) return 1
-        // Otherwise alphabetical
         return a.localeCompare(b)
       })
   }, [filteredAgents])
@@ -234,69 +213,88 @@ function AgentBrowser({
     }
   }, [selectedAgentId, allAgents])
 
-  // Toggle category expansion
+  // A deep link lands on the detail view even at narrow width.
+  useEffect(() => {
+    if (detailsRequest) setNarrowView('detail')
+  }, [detailsRequest])
+
   const handleCategoryToggle = (category: string) => {
     setExpandedCategories((prev) =>
       prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category]
     )
   }
 
-  // Clear search
+  const handleAgentSelect = (agentId: string) => {
+    setNarrowView('detail')
+    onAgentSelect(agentId)
+  }
+
   const handleClearSearch = () => {
     setSearchQuery('')
   }
 
-  return (
-    <BrowserContainer>
-      <BrowserHeader>
-        <Typography variant="h6" sx={{ fontWeight: 500 }}>
-          Agent Browser
-        </Typography>
-        <Chip
-          size="small"
-          label={`${filteredAgents.length}${searchQuery ? ` / ${tabFilteredAgents.length}` : ''} agents`}
-          variant="outlined"
-        />
-      </BrowserHeader>
+  const showList = !narrow || narrowView === 'list' || !selectedAgent
+  const showDetail = !narrow || !showList
 
-      <ContentArea>
-        {/* Agent List with Search */}
-        <AgentListContainer>
-          <Box sx={{ px: 1, borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
+  return (
+    <BrowserContainer ref={containerRef} data-narrow={narrow ? 'true' : undefined}>
+      {showList && (
+        <AgentListContainer sx={narrow ? { width: '100%', borderRight: 0 } : undefined}>
+          <ListTop>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography component="h2" sx={{ m: 0, fontSize: 15, fontWeight: 600 }}>
+                Agents
+              </Typography>
+              <CountPill label={`${filteredAgents.length} agents shown`}>
+                {filteredAgents.length}{searchQuery ? ` / ${tabFilteredAgents.length}` : ''}
+              </CountPill>
+            </Box>
             <Tabs
               value={browserFilter}
               onChange={(_event, nextValue) => setBrowserFilter(nextValue as BrowserFilter)}
-              variant="fullWidth"
-              sx={{ minHeight: 34 }}
+              aria-label="Agent list filter"
+              sx={{ minHeight: 26, '& .MuiTabs-indicator': { height: 2 } }}
             >
-              <Tab value="all" label={`All (${filterCounts.all})`} sx={{ minHeight: 34, textTransform: 'none' }} />
-              <Tab value="shared" label={`Shared (${filterCounts.shared})`} sx={{ minHeight: 34, textTransform: 'none' }} />
-              <Tab value="templates" label={`Templates (${filterCounts.templates})`} sx={{ minHeight: 34, textTransform: 'none' }} />
+              {([
+                ['all', `All (${filterCounts.all})`],
+                ['shared', `Shared (${filterCounts.shared})`],
+                ['templates', `Templates (${filterCounts.templates})`],
+              ] as const).map(([value, label]) => (
+                <Tab
+                  key={value}
+                  value={value}
+                  label={label}
+                  sx={{ minHeight: 26, minWidth: 0, px: 0.75, py: 0.25, fontSize: 12, textTransform: 'none' }}
+                />
+              ))}
             </Tabs>
-          </Box>
-          <SearchBox>
             <TextField
               fullWidth
               size="small"
               placeholder="Search agents..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              inputProps={{ 'aria-label': 'Search agents' }}
+              sx={{
+                '& .MuiInputBase-root': { height: 30, fontSize: 12.5, backgroundColor: 'background.default' },
+                '& .MuiInputBase-input': { py: 0 },
+              }}
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">
-                    <SearchIcon fontSize="small" color="action" />
+                    <SearchIcon sx={{ fontSize: 16 }} color="action" />
                   </InputAdornment>
                 ),
                 endAdornment: searchQuery && (
                   <InputAdornment position="end">
-                    <IconButton size="small" onClick={handleClearSearch} edge="end">
-                      <ClearIcon fontSize="small" />
+                    <IconButton size="small" onClick={handleClearSearch} edge="end" aria-label="Clear search">
+                      <ClearIcon sx={{ fontSize: 16 }} />
                     </IconButton>
                   </InputAdornment>
                 ),
               }}
             />
-          </SearchBox>
+          </ListTop>
           <AgentList>
             {agentsBySubcategory.map(([subcategory, subcategoryAgents]) => (
               <Accordion
@@ -311,26 +309,38 @@ function AgentBrowser({
                 }}
               >
                 <AccordionSummary
-                  expandIcon={<ExpandMoreIcon />}
+                  expandIcon={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
                   sx={{
-                    minHeight: 40,
-                    '& .MuiAccordionSummary-content': { my: 0.5 },
+                    minHeight: 30,
+                    px: 1.5,
+                    flexDirection: 'row-reverse',
+                    gap: 0.75,
+                    '& .MuiAccordionSummary-content': { my: 0.5, minWidth: 0 },
+                    '& .MuiAccordionSummary-expandIconWrapper': { transform: 'rotate(-90deg)' },
+                    '& .MuiAccordionSummary-expandIconWrapper.Mui-expanded': { transform: 'rotate(0deg)' },
                   }}
                 >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    {SubcategoryIcon[subcategory] || <FactCheckIcon fontSize="small" />}
-                    <Typography variant="subtitle2">{subcategory}</Typography>
-                    <Chip size="small" label={subcategoryAgents.length} sx={{ height: 18 }} />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+                    <Typography
+                      component="span"
+                      sx={{
+                        fontSize: 11,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                        color: 'text.secondary',
+                        fontWeight: 500,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {subcategory}
+                    </Typography>
+                    <CountPill>{subcategoryAgents.length}</CountPill>
                     {subcategory === 'System' && (
                       <Tooltip title="Works behind the scenes - not available in Flow Builder">
                         <Chip
                           size="small"
                           label="internal"
-                          sx={{
-                            height: 16,
-                            fontSize: '0.6rem',
-                            backgroundColor: 'action.selected',
-                          }}
+                          sx={{ height: 16, fontSize: 10, backgroundColor: 'action.selected' }}
                         />
                       </Tooltip>
                     )}
@@ -338,35 +348,65 @@ function AgentBrowser({
                 </AccordionSummary>
                 <AccordionDetails sx={{ p: 0 }}>
                   <List dense disablePadding>
-                    {subcategoryAgents.map((agent) => (
-                      <ListItemButton
-                        key={agent.agent_id}
-                        selected={selectedAgentId === agent.agent_id}
-                        onClick={() => onAgentSelect(agent.agent_id)}
-                        sx={{ pl: 4 }}
-                      >
-                        <ListItemText
-                          primary={(
-                            <Stack direction="row" spacing={0.75} alignItems="center">
-                              <span>{agent.agent_name}</span>
-                              {(agentMetadata[agent.agent_id]?.allowed_group_ids?.length || 0) > 0 && (
-                                <Chip
-                                  size="small"
-                                  color="warning"
-                                  variant="outlined"
-                                  label={`Restricted: ${agentMetadata[agent.agent_id]?.allowed_group_ids?.join(', ')}`}
-                                  aria-label={`${agent.agent_name} restricted to ${agentMetadata[agent.agent_id]?.allowed_group_ids?.join(', ')}`}
-                                  sx={{ height: 18, fontSize: '0.65rem' }}
-                                />
-                              )}
-                            </Stack>
-                          )}
-                          secondary={agent.has_group_rules ? 'Has group rules' : undefined}
-                          primaryTypographyProps={{ variant: 'body2' }}
-                          secondaryTypographyProps={{ variant: 'caption' }}
-                        />
-                      </ListItemButton>
-                    ))}
+                    {subcategoryAgents.map((agent) => {
+                      const restrictedTo = agentMetadata[agent.agent_id]?.allowed_group_ids || []
+                      const selected = selectedAgentId === agent.agent_id
+                      return (
+                        <ListItemButton
+                          key={agent.agent_id}
+                          selected={selected}
+                          onClick={() => handleAgentSelect(agent.agent_id)}
+                          sx={{
+                            pl: 2.5,
+                            pr: 1.5,
+                            py: 0.75,
+                            minHeight: 0,
+                            '&.Mui-selected': {
+                              backgroundColor: 'action.selected',
+                              boxShadow: (theme) => `inset 3px 0 0 ${theme.palette.primary.main}`,
+                            },
+                          }}
+                        >
+                          <ListItemText
+                            disableTypography
+                            primary={(
+                              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+                                <Box
+                                  component="span"
+                                  title={agent.agent_name}
+                                  sx={{
+                                    fontSize: 13,
+                                    fontWeight: selected ? 500 : 400,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                    minWidth: 0,
+                                  }}
+                                >
+                                  {agent.agent_name}
+                                </Box>
+                                {restrictedTo.length > 0 && (
+                                  <Chip
+                                    size="small"
+                                    color="warning"
+                                    variant="outlined"
+                                    label={`Restricted: ${restrictedTo.join(', ')}`}
+                                    aria-label={`${agent.agent_name} restricted to ${restrictedTo.join(', ')}`}
+                                    sx={{ height: 18, fontSize: '0.65rem', flex: 'none' }}
+                                  />
+                                )}
+                              </Stack>
+                            )}
+                            secondary={agent.has_group_rules ? (
+                              <Box component="span" sx={{ display: 'block', fontSize: 11, color: 'text.secondary' }}>
+                                Has group rules
+                              </Box>
+                            ) : undefined}
+                            sx={{ m: 0, minWidth: 0 }}
+                          />
+                        </ListItemButton>
+                      )
+                    })}
                   </List>
                 </AccordionDetails>
               </Accordion>
@@ -380,8 +420,9 @@ function AgentBrowser({
             )}
           </AgentList>
         </AgentListContainer>
+      )}
 
-        {/* Agent Details Panel */}
+      {showDetail && (
         <DetailsContainer>
           <AgentDetailsPanel
             agent={selectedAgent}
@@ -389,9 +430,12 @@ function AgentBrowser({
             onGroupSelect={onGroupSelect}
             onDiscussWithClaude={onDiscussWithClaude}
             onCloneToWorkshop={onCloneToWorkshop}
+            onBack={narrow ? () => setNarrowView('list') : undefined}
+            narrow={narrow}
+            request={detailsRequest}
           />
         </DetailsContainer>
-      </ContentArea>
+      )}
     </BrowserContainer>
   )
 }

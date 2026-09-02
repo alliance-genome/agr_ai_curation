@@ -22,8 +22,16 @@ data_sources:
     description: "Public REST API providing DIOPT-aggregated orthology predictions from multiple algorithms"
     species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "M. musculus (MGI)", "H. sapiens (HGNC)", "D. rerio (ZFIN)", "S. cerevisiae (SGD)", "R. norvegicus (RGD)"]
     data_types: ["ortholog relationships", "confidence scores", "prediction methods", "gene identifiers"]
+note: "This lookup does not run automatically; add it to a flow or ask for it in chat when you need it."
+use_when:
+  - "When you have a confirmed gene and want its matching genes in other species."
+  - "When you need to know how confident an ortholog prediction is and which methods agree."
+  - "When you want the best-scoring ortholog in a particular species."
+avoid_when:
+  - "For paralogs (duplicated genes within one species), which the agent does not find."
+  - "When you only have a gene symbol; confirm it with the Gene Validation Agent first."
+  - "For GO annotations or disease links on the orthologs; use the Gene GO Annotations Agent or the Disease Ontology Agent."
 limitations:
   - "Gene ID must be in Alliance format with prefix (e.g., WB:WBGene00000898, not just WBGene00000898)"
   - "Needs a confirmed gene ID, not just a symbol — run the gene through the Gene Validation Agent first."
-  - "Does not find paralogs (within-species gene duplications)"
   - "Some genes have no orthologs in certain species (this is valid biological data, not an error)"

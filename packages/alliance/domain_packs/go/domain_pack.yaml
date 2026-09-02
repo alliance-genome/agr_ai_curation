@@ -223,12 +223,20 @@ metadata:
     active:
       - validator_id: rgd_go_evidence_policy_validation
         display_name: RGD GO evidence policy validation
-        description: Validate RGD specialist GO proposals against the approved experimental-evidence, aspect, With/From, qualifier, negation, and abstention policy.
+        curator_label: Confirm each proposed GO annotation against the RGD evidence policy
+        description: Checks each proposed GO annotation against the RGD curation policy, covering experimental evidence codes, the GO aspect, With/From entries, qualifiers, negation, and when to abstain. A proposal cannot be submitted until it passes.
+        definition_notes:
+          - Runs through the RGD GO evidence policy package validator binding on one complete GO candidate without changing generic GO or disease behavior.
+          - Blocking and required, with no curator opt-out.
   validator_bindings:
     active:
       - binding_id: rgd_go_evidence_policy_validation
         display_name: RGD GO evidence policy validation
-        description: Apply the approved RGD specialist policy to one complete GO candidate without changing generic GO or disease behavior.
+        curator_label: Confirm each proposed GO annotation against the RGD evidence policy
+        description: Checks each proposed GO annotation against the RGD curation policy, covering experimental evidence codes, the GO aspect, With/From entries, qualifiers, negation, and when to abstain. A proposal cannot be submitted until it passes.
+        definition_notes:
+          - Runs through the RGD GO evidence policy package validator binding on one complete GO candidate without changing generic GO or disease behavior.
+          - Blocking and required, with no curator opt-out.
         validator_agent:
           package_id: agr.alliance
           agent_id: rgd_go_evidence_policy_validation

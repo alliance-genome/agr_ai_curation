@@ -9,6 +9,15 @@ data_sources:
     description: "Exact evidence quote bundles already attached to the GO domain envelope."
     species_supported: ["R. norvegicus (RGD:)"]
     data_types: ["GO candidate", "evidence anchors", "rationale", "identity state"]
+note: "Validation runs automatically. For RGD curators, this check runs on every GO recommendation the RGD GO Paper Curator produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt."
+use_when:
+  - "When you are an RGD curator and want a custom evidence policy check: a changed prompt or a stricter or looser reading of the approved evidence codes."
+  - "When you want to review how GO recommendations from the RGD GO Paper Curator are checked against the RGD evidence policy."
+avoid_when:
+  - "To get recommendations checked against the policy; the GO domain pack already runs this check automatically for RGD curators."
+  - "For curators outside RGD; the check applies only to the RGD group."
+  - "To look up gene identity or search the paper for evidence; use the RGD GO Paper Curator."
+  - "To submit GO annotations; that step stays with you."
 limitations:
   - "Runs automatically only for authenticated RGD group context through the GO domain-pack binding."
   - "Does not resolve gene-product identity, search for evidence, alter disease curation, or submit annotations."

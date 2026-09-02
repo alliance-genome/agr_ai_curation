@@ -71,6 +71,14 @@ export interface ValidationAttachmentOption {
   label: string
   target_label?: string
   description?: string
+  /**
+   * Curator-voice switch sentence naming what the check confirms and against
+   * what. The backend always emits the key: a string on every active binding
+   * (enforced by the pack contract test), null on under-development ones.
+   */
+  curator_label: string | null
+  /** Curator-voice consequence of turning the check off. A string only when allow_opt_out is true, otherwise null. */
+  when_off: string | null
   definition_state?: string
   reason?: string
   state_explanation?: string
@@ -122,6 +130,16 @@ export interface DomainEnvelopeFieldMetadata {
   validation_attachments: ValidationAttachmentOption[]
 }
 
+/**
+ * Ordered field grouping declared by the domain pack's workspace_display.
+ * Field paths may name fields absent from `fields`; consumers ignore unknown paths.
+ */
+export interface DomainEnvelopeFieldGroup {
+  id: string
+  label: string
+  field_paths: string[]
+}
+
 export interface DomainEnvelopeObjectMetadata {
   object_type: string
   display_name: string
@@ -134,6 +152,7 @@ export interface DomainEnvelopeObjectMetadata {
   provider_refs: Record<string, unknown>
   validation_attachments: ValidationAttachmentOption[]
   fields: DomainEnvelopeFieldMetadata[]
+  field_groups: DomainEnvelopeFieldGroup[]
 }
 
 export interface DomainEnvelopeValidationSummary {

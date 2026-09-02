@@ -22,12 +22,15 @@ data_sources:
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content"]
-  - name: "Allele Validation Agent"
-    description: "The specialist validator that takes the proposed alleles and authoritatively confirms each one against the Alliance database after extraction, filling in the official allele ID, symbol, and species when it finds a match."
-    species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
-    data_types: ["Allele mention hints", "Associated-gene hints", "Taxon hints", "Validator lookup results"]
+use_when:
+  - "When you upload a paper and want the alleles and variants it studies, with the quote that supports each one."
+  - "At the start of an allele curation flow; the domain pack's validators then confirm each allele automatically."
+  - "When a paper mixes alleles with strains, transgenes, and balancers and you want them sorted."
+avoid_when:
+  - "To confirm an allele against the Alliance database; the domain pack's validators do that automatically on everything this agent extracts."
+  - "For genes, diseases, or phenotypes; use the matching extraction agent."
+  - "When there is no uploaded paper, since it cannot work from chat text alone."
 limitations:
   - "Requires an uploaded PDF document — cannot extract alleles from chat text alone"
   - "Transgene handling follows organism-specific rules: MGI retains stable inherited Cre-driver, reporter, and other transgenic lines as alleles, while transient expression and unlinked construct/reagent mentions are excluded"
   - "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles"
-  - "Confirming each allele against the Alliance database is the Allele Validation Agent's job; any unconfirmed or conflicting alleles stay visible to you as validator findings."

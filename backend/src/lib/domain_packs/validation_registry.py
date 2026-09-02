@@ -79,6 +79,7 @@ class ValidatorMetadataEntry:
     state: ValidationBindingState
     display_name: str | None = None
     description: str = ""
+    curator_label: str | None = None
     definition_state: DefinitionState = DefinitionState.STABLE
     blocked_by: str | None = None
     reason: str | None = None
@@ -123,6 +124,8 @@ class ValidatorBinding:
     validator_agent: ValidatorAgentRef | None = None
     definition_state: DefinitionState = DefinitionState.STABLE
     reason: str | None = None
+    curator_label: str | None = None
+    when_off: str | None = None
     blocking: bool = False
     required: bool = False
     allow_opt_out: bool = False
@@ -241,6 +244,8 @@ class ValidationAttachmentOption:
     label: str = ""
     target_label: str | None = None
     description: str = ""
+    curator_label: str | None = None
+    when_off: str | None = None
     definition_state: DefinitionState = DefinitionState.STABLE
     blocked_by: str | None = None
     reason: str | None = None
@@ -274,6 +279,8 @@ class ValidationAttachmentOption:
             "label": self.label,
             "target_label": self.target_label,
             "description": self.description,
+            "curator_label": self.curator_label,
+            "when_off": self.when_off,
             "definition_state": self.definition_state.value,
             "blocked_by": self.blocked_by,
             "reason": self.reason,
@@ -950,6 +957,7 @@ def _collect_validator_metadata(
                 state=state,
                 display_name=_optional_string(raw_item.get("display_name")),
                 description=_optional_string(raw_item.get("description")),
+                curator_label=_optional_string(raw_item.get("curator_label")),
                 definition_state=_definition_state(raw_item),
                 blocked_by=_optional_string(raw_item.get("blocked_by")),
                 reason=_optional_string(raw_item.get("reason")),
@@ -1015,6 +1023,12 @@ def _collect_validator_bindings(
         else:
             display_name = _optional_string(raw_item.get("display_name"))
             reason = _optional_string(raw_item.get("description"))
+        curator_label = (
+            _optional_string(raw_item.get("curator_label")) if active else None
+        )
+        when_off = (
+            _optional_string(raw_item.get("when_off")) if allow_opt_out else None
+        )
 
         bindings.append(
             ValidatorBinding(
@@ -1029,6 +1043,8 @@ def _collect_validator_bindings(
                 validator_agent=_validator_agent_ref(raw_item),
                 definition_state=_definition_state(raw_item),
                 reason=reason,
+                curator_label=curator_label,
+                when_off=when_off,
                 blocking=blocking,
                 required=required,
                 allow_opt_out=allow_opt_out,
@@ -1671,6 +1687,7 @@ def _metadata_attachment_option(
             entry.display_name or entry.validator_id, None
         ),
         description=entry.description,
+        curator_label=entry.curator_label,
         definition_state=entry.definition_state,
         blocked_by=entry.blocked_by,
         reason=entry.reason,
@@ -1780,6 +1797,8 @@ def _binding_attachment_option(
             if binding.state is ValidationBindingState.UNDER_DEVELOPMENT
             else (binding.reason if binding.reason is not None else "")
         ),
+        curator_label=binding.curator_label if active else None,
+        when_off=binding.when_off if allow_opt_out else None,
         definition_state=binding.definition_state,
         reason=binding.reason,
         state_explanation=(

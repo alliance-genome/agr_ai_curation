@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
@@ -178,9 +178,12 @@ function createMutationResult<TVariables>(mutateAsync: (variables: TVariables) =
   }
 }
 
+let listQueryOverride: Record<string, unknown> | null = null
+
 describe('HistoryPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    listQueryOverride = null
 
     const sessions: ChatHistorySessionSummary[] = [
       buildSession(),
@@ -199,6 +202,10 @@ describe('HistoryPage', () => {
     hookMocks.useChatHistoryListQuery.mockImplementation((
       request?: { chatKind?: string; query?: string | null },
     ) => {
+      if (listQueryOverride) {
+        return listQueryOverride
+      }
+
       const requestedKind = request?.chatKind ?? 'all'
       const normalizedQuery = request?.query?.toLowerCase() ?? null
       const visibleSessions = sessions
@@ -250,24 +257,56 @@ describe('HistoryPage', () => {
     )
   })
 
-  it('renders mixed-kind conversation cards and expands transcripts inline', async () => {
+  it('renders the compact header, toolbar, and mixed-kind rows without dominating metadata', () => {
+    renderHistoryPage()
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Chat History' })).toBeInTheDocument()
+    expect(screen.getByText('2 conversations')).toBeInTheDocument()
+    expect(screen.getByText('Showing 2 of 2')).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Chat kind filter' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All', pressed: true })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Assistant', pressed: false })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Studio', pressed: false })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Search titles' })).toBeInTheDocument()
+
+    expect(screen.getByText('Conversation')).toBeInTheDocument()
+    expect(screen.getByText('Activity')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Select all conversations' })).not.toBeChecked()
+
+    const rows = screen.getAllByRole('listitem')
+    expect(rows).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'TP53 evidence review' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Agent workflow prototype' })).toBeInTheDocument()
+    expect(screen.getByText('Assistant', { selector: 'span' })).toBeInTheDocument()
+    expect(screen.getByText('Studio', { selector: 'span' })).toBeInTheDocument()
+
+    expect(screen.queryByText('session-1')).not.toBeInTheDocument()
+    expect(screen.queryByRole('toolbar', { name: 'Selection actions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Delete/ })).not.toBeInTheDocument()
+  })
+
+  it('expands a transcript under its row with the row button and the chevron', async () => {
     const user = userEvent.setup()
 
     renderHistoryPage()
 
-    expect(screen.getByText('TP53 evidence review')).toBeInTheDocument()
-    expect(screen.getByText('Agent workflow prototype')).toBeInTheDocument()
-    expect(screen.getAllByText('AI assistant chat')).not.toHaveLength(0)
-    expect(screen.getAllByText('Agent Studio chat')).not.toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'TP53 evidence review' }))
 
-    await user.click(screen.getAllByRole('button', { name: 'Show transcript' })[0])
-
-    expect(screen.getByText('Active document')).toBeInTheDocument()
-    expect(screen.getByText('paper.pdf')).toBeInTheDocument()
+    const panel = screen.getByRole('region', { name: 'Transcript for TP53 evidence review' })
+    expect(panel).toBeInTheDocument()
+    expect(screen.getByText('paper.pdf · 42 chunks · 84 vectors')).toBeInTheDocument()
+    expect(screen.getByText('session-1')).toBeInTheDocument()
     expect(screen.getByTestId('transcript-message-user')).toBeInTheDocument()
     expect(screen.getByTestId('transcript-message-assistant')).toBeInTheDocument()
     expect(screen.getByText('Summarize TP53 findings.')).toBeInTheDocument()
     expect(screen.getByText('TP53 increased in treated samples.')).toBeInTheDocument()
+    expect(hookMocks.useChatHistoryDetailQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1' }),
+      { enabled: true },
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Hide transcript' }))
+    expect(screen.queryByRole('region', { name: 'Transcript for TP53 evidence review' })).not.toBeInTheDocument()
   })
 
   it('syncs the selected kind filter through the URL across all three modes', async () => {
@@ -286,7 +325,7 @@ describe('HistoryPage', () => {
     })
     expect(screen.getByTestId('current-location')).toHaveTextContent('/history?kind=all')
 
-    await user.click(screen.getByRole('tab', { name: 'AI assistant chat' }))
+    await user.click(screen.getByRole('button', { name: 'Assistant', pressed: false }))
 
     await waitFor(() => {
       expect(hookMocks.useChatHistoryListQuery).toHaveBeenLastCalledWith(
@@ -298,8 +337,9 @@ describe('HistoryPage', () => {
       )
     })
     expect(screen.getByTestId('current-location')).toHaveTextContent('/history?kind=assistant_chat')
+    expect(screen.getByRole('button', { name: 'Assistant', pressed: true })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('tab', { name: 'Agent Studio chat' }))
+    await user.click(screen.getByRole('button', { name: 'Studio', pressed: false }))
 
     await waitFor(() => {
       expect(hookMocks.useChatHistoryListQuery).toHaveBeenLastCalledWith(
@@ -326,21 +366,21 @@ describe('HistoryPage', () => {
       )
     })
 
-    expect(screen.getByLabelText('Search chat history')).toHaveValue('workflow')
-    expect(screen.getByText('Agent workflow prototype')).toBeInTheDocument()
-    expect(screen.queryByText('TP53 evidence review')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Search titles' })).toHaveValue('workflow')
+    expect(screen.getByRole('button', { name: 'Agent workflow prototype' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'TP53 evidence review' })).not.toBeInTheDocument()
     expect(screen.getByTestId('current-location')).toHaveTextContent(
       '/history?kind=agent_studio&q=workflow',
     )
   })
 
-  it('passes the selected kind into title searches', async () => {
+  it('passes the selected kind into title searches and clears the search from the field', async () => {
     const user = userEvent.setup()
 
     renderHistoryPage()
 
-    await user.click(screen.getByRole('tab', { name: 'Agent Studio chat' }))
-    fireEvent.change(screen.getByLabelText('Search chat history'), {
+    await user.click(screen.getByRole('button', { name: 'Studio', pressed: false }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search titles' }), {
       target: { value: '  workflow  ' },
     })
 
@@ -354,11 +394,87 @@ describe('HistoryPage', () => {
       )
     })
 
-    expect(screen.getByText('Agent workflow prototype')).toBeInTheDocument()
-    expect(screen.queryByText('TP53 evidence review')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Agent workflow prototype' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'TP53 evidence review' })).not.toBeInTheDocument()
     expect(screen.getByTestId('current-location')).toHaveTextContent(
       '/history?kind=agent_studio&q=workflow',
     )
+
+    await user.click(screen.getByRole('button', { name: 'Clear search text' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-location')).toHaveTextContent('/history?kind=agent_studio')
+    })
+    expect(screen.getByRole('textbox', { name: 'Search titles' })).toHaveValue('')
+  })
+
+  it('shows the empty search state with a Clear search action', async () => {
+    const user = userEvent.setup()
+
+    renderHistoryPage('/history?kind=all&q=zebrafish')
+
+    expect(await screen.findByText('No conversations match "zebrafish"')).toBeInTheDocument()
+    expect(screen.getByText('Showing 0 of 0')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Clear search' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'TP53 evidence review' })).toBeInTheDocument()
+    })
+  })
+
+  it('shows the empty history state when nothing is stored', () => {
+    listQueryOverride = {
+      data: buildListResponse([]),
+      error: null,
+      isLoading: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    }
+
+    renderHistoryPage()
+
+    expect(screen.getByText('No stored conversations yet')).toBeInTheDocument()
+    expect(screen.getByText('0 conversations')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clear search' })).not.toBeInTheDocument()
+  })
+
+  it('renders skeleton rows and a progress bar during the first load', () => {
+    listQueryOverride = {
+      data: undefined,
+      error: null,
+      isLoading: true,
+      isFetching: true,
+      refetch: vi.fn(),
+    }
+
+    renderHistoryPage()
+
+    expect(screen.getByRole('status', { name: 'Loading conversations' })).toBeInTheDocument()
+    expect(screen.getByRole('progressbar')).toBeInTheDocument()
+    expect(screen.getByText('Loading…')).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Conversations' })).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Select all conversations' })).toBeDisabled()
+  })
+
+  it('shows an inline load error with Retry', async () => {
+    const user = userEvent.setup()
+    const refetch = vi.fn()
+    listQueryOverride = {
+      data: undefined,
+      error: new Error('the server returned 502'),
+      isLoading: false,
+      isFetching: false,
+      refetch,
+    }
+
+    renderHistoryPage()
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load chat history: the server returned 502')
+    expect(screen.queryByRole('list', { name: 'Conversations' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(refetch).toHaveBeenCalledTimes(1)
   })
 
   it('routes assistant chat restores back to the home page session param', async () => {
@@ -387,7 +503,23 @@ describe('HistoryPage', () => {
     })
   })
 
-  it('supports renaming a conversation from the list', async () => {
+  it('resumes from the expanded panel footer', async () => {
+    const user = userEvent.setup()
+
+    renderHistoryPage()
+
+    await user.click(screen.getByRole('button', { name: 'Agent workflow prototype' }))
+    const panel = screen.getByRole('region', { name: 'Transcript for Agent workflow prototype' })
+    await user.click(within(panel).getByRole('button', { name: 'Open in Agent Studio' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-location')).toHaveTextContent(
+        '/agent-studio?session_id=session-2',
+      )
+    })
+  })
+
+  it('supports renaming a conversation from the overflow menu', async () => {
     const user = userEvent.setup()
     const mutateAsync = vi.fn().mockResolvedValue(undefined)
 
@@ -397,7 +529,8 @@ describe('HistoryPage', () => {
 
     renderHistoryPage()
 
-    await user.click(screen.getAllByRole('button', { name: 'Rename' })[0])
+    await user.click(screen.getByRole('button', { name: 'More actions for TP53 evidence review' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }))
     fireEvent.change(screen.getByLabelText('Conversation title'), {
       target: { value: '  Renamed transcript  ' },
     })
@@ -409,7 +542,19 @@ describe('HistoryPage', () => {
     })
   }, 10000)
 
-  it('supports deleting an individual conversation', async () => {
+  it('copies the session ID from the overflow menu and confirms it', async () => {
+    const user = userEvent.setup()
+
+    renderHistoryPage()
+
+    await user.click(screen.getByRole('button', { name: 'More actions for Agent workflow prototype' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Copy session ID' }))
+
+    expect(await screen.findByText('Session ID copied')).toBeInTheDocument()
+    expect(await navigator.clipboard.readText()).toBe('session-2')
+  })
+
+  it('supports deleting an individual conversation after confirmation', async () => {
     const user = userEvent.setup()
     const mutateAsync = vi.fn().mockResolvedValue(undefined)
 
@@ -419,7 +564,12 @@ describe('HistoryPage', () => {
 
     renderHistoryPage()
 
-    await user.click(screen.getAllByRole('button', { name: 'Delete' })[0])
+    await user.click(screen.getByRole('button', { name: 'More actions for TP53 evidence review' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+
+    expect(screen.getByRole('dialog', { name: 'Delete conversation?' })).toHaveTextContent('TP53 evidence review')
+    expect(mutateAsync).not.toHaveBeenCalled()
+
     await user.click(screen.getByRole('button', { name: 'Delete conversation' }))
 
     expect(mutateAsync).toHaveBeenCalledWith({
@@ -427,7 +577,7 @@ describe('HistoryPage', () => {
     })
   })
 
-  it('supports selecting all visible conversations and bulk deleting them', async () => {
+  it('shows the selection bar only with a selection and bulk deletes the selected rows', async () => {
     const user = userEvent.setup()
     const mutateAsync = vi.fn().mockResolvedValue(undefined)
 
@@ -437,12 +587,51 @@ describe('HistoryPage', () => {
 
     renderHistoryPage()
 
-    await user.click(screen.getByLabelText('Select all visible conversations'))
-    await user.click(screen.getByRole('button', { name: 'Delete selected' }))
-    await user.click(screen.getByRole('button', { name: 'Delete selected conversations' }))
+    expect(screen.queryByRole('toolbar', { name: 'Selection actions' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select TP53 evidence review' }))
+
+    const selectionBar = screen.getByRole('toolbar', { name: 'Selection actions' })
+    expect(selectionBar).toHaveTextContent('1 selected of 2 shown')
+    expect(within(selectionBar).getByRole('checkbox', { name: 'Select all shown conversations' })).toBePartiallyChecked()
+
+    await user.click(within(selectionBar).getByRole('button', { name: 'Select all 2' }))
+
+    expect(selectionBar).toHaveTextContent('2 selected of 2 shown')
+    expect(screen.getByRole('checkbox', { name: 'Select all conversations' })).toBeChecked()
+    expect(within(selectionBar).queryByRole('button', { name: /^Select all/ })).not.toBeInTheDocument()
+
+    await user.click(within(selectionBar).getByRole('button', { name: 'Delete 2' }))
+    expect(screen.getByRole('dialog', { name: 'Delete 2 conversations?' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Delete 2 conversations' }))
 
     expect(mutateAsync).toHaveBeenCalledWith({
       sessionIds: ['session-1', 'session-2'],
     })
+    await waitFor(() => {
+      expect(screen.queryByRole('toolbar', { name: 'Selection actions' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('selects rows from their checkbox, clears them from the selection bar, and toggles all from the column header', async () => {
+    const user = userEvent.setup()
+
+    renderHistoryPage()
+
+    const rowCheckbox = screen.getByRole('checkbox', { name: 'Select TP53 evidence review' })
+    await user.click(rowCheckbox)
+
+    expect(rowCheckbox).toBeChecked()
+    expect(screen.getByRole('toolbar', { name: 'Selection actions' })).toHaveTextContent('1 selected of 2 shown')
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(screen.queryByRole('toolbar', { name: 'Selection actions' })).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Select TP53 evidence review' })).not.toBeChecked()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select all conversations' }))
+    expect(screen.getByRole('toolbar', { name: 'Selection actions' })).toHaveTextContent('2 selected of 2 shown')
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select all conversations' }))
+    expect(screen.queryByRole('toolbar', { name: 'Selection actions' })).not.toBeInTheDocument()
   })
 })

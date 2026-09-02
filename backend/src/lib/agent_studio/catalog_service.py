@@ -416,6 +416,9 @@ def _convert_documentation(doc_dict: Optional[Dict[str, Any]]) -> Optional[Agent
         capabilities=capabilities,
         data_sources=data_sources,
         limitations=doc_dict.get("limitations", []),
+        use_when=doc_dict.get("use_when", []),
+        avoid_when=doc_dict.get("avoid_when", []),
+        note=doc_dict.get("note", ""),
     )
 
 
@@ -1071,7 +1074,11 @@ def resolve_tools(tool_ids: List[str], execution_context: ToolExecutionContext) 
     return resolved_tools
 
 
-_DOCUMENT_TOOL_IDS = {"search_document", "read_chunk", "read_section", "read_subsection"}
+# The single definition of the tools that only work against an uploaded
+# document. Every "requires document" decision (custom-agent runtime info,
+# startup validation, system-agent sync, the Workshop tool library badge)
+# reads this set.
+DOCUMENT_TOOL_IDS = frozenset({"search_document", "read_chunk", "read_section", "read_subsection"})
 
 
 def _canonical_tool_ids(tool_ids: List[str]) -> List[str]:
@@ -1099,7 +1106,12 @@ def _required_context_for_tool_ids(tool_ids: List[str]) -> List[str]:
 
 def _uses_document_tools(tool_ids: List[str]) -> bool:
     """Whether a tool set requires document-scoped context."""
-    return bool(set(_canonical_tool_ids(tool_ids)) & _DOCUMENT_TOOL_IDS)
+    return bool(set(_canonical_tool_ids(tool_ids)) & DOCUMENT_TOOL_IDS)
+
+
+def tool_requires_document(tool_id: str) -> bool:
+    """Whether a single tool only works with an uploaded document."""
+    return _canonicalize_tool_id(str(tool_id).strip()) in DOCUMENT_TOOL_IDS
 
 
 def _required_package_tool_call_specs(tool_ids: List[str]) -> List[Dict[str, Any]]:
@@ -1652,7 +1664,7 @@ def _build_runtime_context(
 
     document_name = runtime_kwargs.get("document_name")
     if document_name:
-        if tool_id_set & _DOCUMENT_TOOL_IDS:
+        if tool_id_set & DOCUMENT_TOOL_IDS:
             preamble_lines.append(
                 f'You are helping the user with the document: "{document_name}"'
             )
@@ -1668,7 +1680,7 @@ def _build_runtime_context(
     if preamble_lines:
         parts.append("\n".join(preamble_lines))
 
-    if bool(tool_id_set & _DOCUMENT_TOOL_IDS):
+    if bool(tool_id_set & DOCUMENT_TOOL_IDS):
         context_text, _structure_info = format_document_context_for_prompt(
             hierarchy=runtime_kwargs.get("hierarchy"),
             sections=runtime_kwargs.get("sections"),
@@ -1811,7 +1823,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     output_guardrails: List[Any] = []
     if requested_tool_ids:
         tool_tracker: Optional[ToolCallTracker] = None
-        has_document_tools = bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS)
+        has_document_tools = bool(set(canonical_tool_ids) & DOCUMENT_TOOL_IDS)
         required_package_specs = _required_package_tool_call_specs(canonical_tool_ids)
 
         if has_document_tools or required_package_specs:
@@ -1892,7 +1904,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         tool_choice="auto" if tools else None,
         parallel_tool_calls=not uses_runtime_formatter_tools,
         verbosity="low"
-        if (output_schema is None and bool(canonical_tool_id_set & _DOCUMENT_TOOL_IDS))
+        if (output_schema is None and bool(canonical_tool_id_set & DOCUMENT_TOOL_IDS))
         else None,
         provider_override=model_provider,
     )

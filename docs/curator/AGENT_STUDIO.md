@@ -8,11 +8,20 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. All tabs include a chat panel where you can talk with Claude Opus.
+Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. The tabs sit on the left. The Claude chat sits in a panel on the right, and it is available from every tab.
 
-### Opus Chat (Left Panel)
+### Claude Chat (Right Panel)
 
-On both tabs, the left panel is your chat with Claude Opus. You can ask Opus about whatever you're viewing on the right - agent prompts or flows.
+The panel on the right is your chat with Claude Opus. You can ask Opus about whatever you are viewing on the left - agent prompts, flows, or your workshop draft.
+
+You can make more room for your work:
+
+- Click **Hide Claude** in the chat header to shrink the panel to a narrow strip on the right edge. Click **Show Claude** on that strip to bring it back. A small orange dot on the strip means Claude answered while the panel was hidden.
+- Press **Ctrl+.** (or **Cmd+.** on a Mac) to hide or show Claude from anywhere in Agent Studio.
+- Drag the divider between the tabs and the chat to change how much space each side gets. Your choice is remembered.
+- On a narrow browser window, the panel is replaced by a **Claude** button at the right end of the tab bar. Click it to open the chat as a slide-out sheet. Press **Escape**, click outside the sheet, or click **Close Claude** to put it away.
+
+When you click **Discuss with Claude** on an agent or **Verify with Claude** in a flow, the chat opens by itself if it was hidden.
 
 When your question is about how the application itself works, Opus can inspect the live repository in read-only mode to verify whether a feature, restriction, or code path exists before answering.
 
@@ -26,7 +35,7 @@ findings, and domain-pack policy.
 
 Browse the instructions given to each AI agent and chat with Opus about them.
 
-**Agent Browser (Right Panel)**
+**Agent Browser (Left Panel)**
 
 See all agent prompts organized by subcategory:
 - **System** - Supervisor Agent that routes your queries to specialists (internal, not available in Flow Builder)
@@ -93,14 +102,14 @@ This helps you understand exactly what capabilities each agent has and how they 
 
 Build visual curation workflows and chat with Opus about them. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide to building flows.
 
-**Flow Builder (Right Panel)**
+**Flow Builder (Left Panel)**
 
 Create workflows by dragging agents onto a canvas and connecting them:
 - 15 available agents from extraction to file output
 - Save, load, and reuse flows
 - Generate downloadable CSV, TSV, or JSON files
-- Inspect which domain-envelope objects an extraction node will produce
-- Inspect automatic validators attached from domain-pack metadata
+- Adjust, per flow, which optional automatic checks run on an extraction step
+- Reach each agent's guide, envelope, and prompts from the step panel's "About this agent" row
 
 **Verify with Claude (Important!)**
 
@@ -112,20 +121,20 @@ Before running a flow, click the **"Verify with Claude"** button. Claude will:
 
 This is especially valuable when building new flows or troubleshooting ones that aren't working as expected.
 
-**Automatic Validation Attachments**
+**Automatic Checks**
 
-When an extraction agent declares domain-pack validation metadata, Flow Builder
-attaches the default active validators to the extraction node. Active validators
-are enabled by default. Curators can skip an active default validator only when
-flow configuration replaces or supplements it with explicit validation for the
-same field or object. Validators explicitly marked by the domain pack as not
-allowing flow replacement stay locked on.
-Under-development validators remain visible metadata only and do not run.
+When an extraction agent declares domain-pack validation metadata, its automatic
+checks run after extraction. Select the node to see them in the step panel: a
+summary of how many checks run, how many always run, and one switch per check
+you may turn off for this flow. Blocking checks and checks the domain pack locks
+on are counted, not listed. The info circle beside each switch explains what the
+check does, which fields it checks, and what happens if it is off, in the same
+words the Agents tab uses. Under-development checks do not run and are not shown.
 
 To add a custom validation step, place a data-validation agent after the
 extractor and use its steering prompt to name the envelope object, field path, or
 curation concern you want checked. Custom validation agents are saved as regular
-flow nodes; automatic validation remains controlled by the extraction agent's
+flow nodes; automatic checks remain controlled by the extraction agent's
 domain-pack metadata.
 
 **Ask Opus about flows:**
@@ -145,93 +154,74 @@ Create and test custom versions of agent prompts without affecting the live syst
 
 **What is a Custom Agent?**
 
-A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, add per-group overrides, and use it in flows — all without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
+A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, add per-group overrides, and use it in flows without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
 
-If you clone a domain-pack extraction agent, Agent Workshop keeps the inherited
-domain-envelope metadata visible. Editing the prompt does not edit the domain
-pack schema, field paths, validators, export policy, or submission policy.
-Those remain controlled by the installed package metadata.
+If you clone a domain-pack extraction agent, the Workshop shows what the agent produces on one line under "What it produces", with a count of automatic checks and a **View envelope** link to the full envelope in the Agents tab. Editing the prompt does not edit the domain pack schema, field paths, validators, export policy, or submission policy. Those remain controlled by the installed package metadata.
 
-**Getting Started**
+**The Workshop Layout**
 
-1. **Choose a Getting Started mode** - Select **Template**, **Scratch**, or **Clone**
-2. **Set your base configuration** - Pick template/clone source (if applicable), model, and tools
-3. **Edit the prompt** - Modify instructions and optional per-group overrides
-4. **Choose an icon** - Pick an emoji icon from the icon picker to identify your agent
-5. **Save** - Use **File → Save Agent**. Each save creates a version you can revert to later.
+- **Header** - Shows the agent's icon, name, and where it came from ("Template: ...", "Cloned from ...", or "From scratch"), plus a status pill: Unsaved changes, Saving, Saved, or Save failed. The header holds the **Open**, **New**, and **Save** buttons and a **More** menu with **Save as**, **Manage agents**, and **Delete agent**.
+- **Navigation** - Four sections: **Setup**, **Prompt**, **Tools**, and **Versions**. An orange dot marks a section with unsaved edits. Tools shows how many tools are attached and Versions shows how many versions exist. The **Help** group has **Ask Claude**, which opens a discussion of your draft in the right-panel chat.
+
+**Starting a New Agent**
+
+Click **New** (or open the Workshop for the first time) to see the start screen with three choices:
+
+- **From a template** - Start from a package agent and adjust its prompt
+- **From scratch** - Write the prompt yourself; built-in instructions still apply
+- **Clone one of yours** - Copy an agent you already saved
+
+Choosing one lands you on Setup with the origin selected. You can change the starting point later on Setup.
 
 You can also get here quickly from the Agents tab: click "Clone to Workshop" on any agent's detail panel.
 
-**File Menu**
+**Setup**
 
-The Workshop toolbar provides these operations:
+1. **Starting point** - Template, Scratch, or Clone, with the template or clone source picker beside it. A note under the picker explains any group restriction the template carries.
+2. **Identity** - Pick an icon, name the agent, and add a short description.
+3. **What it produces** - One line showing the envelope, the number of automatic checks, and the **View envelope** link.
+4. **Model** - Choose the model and, when the model supports it, a reasoning level. Higher levels are slower but better for difficult tasks. Open **Model guidance** to read the description, recommendations, and what to avoid. Not sure which to pick? Click **Ask Claude which model fits**.
+5. **Sharing** - **Visibility** sets who can see the agent (Private, or Shared with project). **Available to groups** restricts who can run it. If the template or clone source already limits groups, a locked note says you can narrow that list but not widen it.
 
-- **New Agent** - Start a new custom agent draft
-- **Open Agent...** - Search and open a previously saved custom agent
-- **Manage Agents...** - Open or delete saved custom agents
-- **Save Agent** / **Save New Agent** - Save your current work (creates a new version)
-- **Delete Agent** - Remove the current custom agent
+**Prompt**
+
+The layer strip at the top shows what your prompt builds on: **Built-in**, **Output structure**, **Template**, and **Your prompt**, each with its length. The first three are read-only and marked with a lock. Click one to read it in the editor pane. **Your prompt** is the layer you edit; it replaces the template prompt. **Reset to template** puts the template text back.
+
+Under **Group-specific instructions**, click a group button to see or edit that group's instructions. A group with your own text shows an "edited" badge. **Reset to template** removes your override for that group. The **Add group instructions at runtime** switch controls whether group instructions are included when the agent runs. Click **Discuss prompt changes with Claude** to get feedback on the prompt.
+
+**Tools**
+
+Attached tools appear in a table with each tool's purpose and any policy note. Click the remove button on a row to detach a tool.
+
+1. Click **Add tools** to open the tool library
+2. Search or filter by category, then check the tools you want
+3. Click **Attach N tools**
+
+Tools listed as "Disabled by policy for custom agents" appear with the reason but cannot be selected.
+
+If you need a tool that does not exist yet, click **New request**, describe it, and click **Send request**. Your requests to developers appear below with their status (New, Reviewed, In progress, Shipped, or Declined). Click **Ask Claude to draft a request** if you want help writing one.
+
+**Versions**
+
+Every save creates a new version. The Versions table lists each version with its note and date; the current version is marked. Click **Revert** on an older version to create a new version from it. Nothing is deleted.
+
+**Saving**
+
+- **Save** opens a small dialog that names the version it creates, lists which sections changed, and lets you add an optional note. The Save button is enabled only when there is something to save.
+- **Save as** (in the More menu) saves a copy under a new name and leaves the original unchanged.
+- If you click **New**, open another agent, or switch to the **Agents** or **Flows** tab while you have unsaved edits, the Workshop asks whether to discard them or keep editing. Closing the browser tab also warns you.
 
 **Icon Picker**
 
-When creating or editing a custom agent, select an emoji icon to help identify your agent in the palette and flow canvas. Available icons include 🔧, 🧬, 📄, 🔍, 🧪, 📊, 🧠, ⚙️, ✨, 📝, 📚, 🧩, and more.
-
-**Per-Group Prompt Overrides**
-
-Customize how your agent behaves for different curator groups:
-
-1. Check **"Include group rules at runtime"** to apply group-specific rules when your custom agent runs
-2. **Select a group** from the dropdown (e.g., WormBase, FlyBase, MGI)
-3. **Edit the override** - Write group-specific instructions in the text area
-4. **Reset to Template** - Revert a group override back to the template version
-
-The Workshop shows which groups have custom overrides and a total override count.
-
-**Version History**
-
-Every save creates a new version. You can add optional save notes to describe your changes. Revert to any previous version if an edit doesn't work out.
-
-**Tool Library**
-
-Attach tools to your custom agent from the available tool library:
-
-1. In the **Advanced Settings** section, expand the **Tools** accordion
-2. Click **"Manage Tools"** to open the Tool Library dialog
-3. Browse or search tools by name or category (Database, API, Document, Output)
-4. Check the tools you want to attach and click **"Done"**
-
-Some tools may be marked as "Not attachable by policy" -- these are reserved for specific system agents.
-
-**Tool Requests**
-
-If you need a new tool that does not exist yet:
-
-1. Click **"Need a new tool? Ask Claude"** to draft a request with Claude's help
-2. When ready, click **"Send to Developers"** to submit a formal tool request
-3. Track the status of your requests in the **Tool Requests** accordion (pending, reviewed, in progress, completed, or declined)
-
-**Visibility**
-
-Control who can see your custom agent:
-
-- **Private** - Only you can see and use this agent (default)
-- **Shared with Project** - Other users in your project can see and use this agent in their flows
-
-**Model Selection**
-
-Choose the AI model that powers your custom agent:
-
-1. Select a model from the **Model** dropdown (the Workshop shows model descriptions and recommendations)
-2. If the model supports reasoning levels, choose a level (low, medium, high, xhigh) -- higher levels are slower but better for difficult tasks
-3. Not sure which model to pick? Click **"Confused about models? Chat with Claude"** for guidance
+When creating or editing a custom agent, select an icon on Setup to help identify your agent in the palette and flow canvas.
 
 **Using Custom Agents in Flows**
 
 Custom agents appear in the Flow Builder palette under "My Custom Agents". You can drag them into flows just like system agents.
 
-**Discuss with Claude**
+**Ask Claude**
 
-Click the **"Discuss with Claude"** button in the Workshop toolbar to send your current draft prompt to Opus for review. When the Agent Workshop tab is active, the left-panel chat is aware of your workshop context — your selected template source, draft prompt, and group settings. You can ask Claude to:
+Click **Ask Claude** in the Workshop navigation to send your current draft to Opus for review. When the Agent Workshop tab is active, the right-panel chat is aware of your workshop context: your selected template source, draft prompt, and group settings. You can ask Claude to:
 - "Critique this draft and suggest concrete edits"
 - "Help me restructure this prompt for clarity"
 - "What would happen if I changed this instruction?"
@@ -294,7 +284,7 @@ Your domain expertise is invaluable for improving the AI. Agent Studio provides 
 
 ### AI-Assisted Suggestions
 
-Click the **"AI-Assisted"** button in the chat header. Opus will:
+Click **Send feedback** (the light bulb) in the chat header, then choose **AI-assisted**. Opus will:
 - Review your conversation
 - Summarize the issue you've discussed
 - Draft a concrete improvement suggestion
@@ -304,7 +294,7 @@ Click the **"AI-Assisted"** button in the chat header. Opus will:
 
 ### Manual Suggestions
 
-Click the **"Manual"** button to fill out a suggestion form yourself:
+Click **Send feedback** in the chat header, then choose **Manual** to fill out a suggestion form yourself:
 
 - **Suggestion Type:**
   - *Improvement* - General enhancement

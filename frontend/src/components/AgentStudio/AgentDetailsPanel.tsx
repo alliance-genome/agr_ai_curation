@@ -1,142 +1,59 @@
 /**
  * AgentDetailsPanel Component
  *
- * Displays detailed information about a selected agent with 3 tabs:
- * - Overview: Summary, capabilities with examples, data sources
- * - Guidance: Limitations, best practices, common issues
- * - Prompts: Base prompt viewer, group selector, combined view
- *
- * Also includes a "Discuss with Claude" button for context-aware help.
+ * Detail view for the agent selected in Agent Browser: a compact header
+ * (name, summary, Discuss with Claude, Clone to Workshop) and three tabs:
+ * - Guide: when to use it, what it reads, capabilities, limitations, tools
+ * - Envelope: the domain pack's objects, fields, and automatic checks
+ *   (only when the agent declares a domain pack)
+ * - Prompts: one prompt layer at a time with an effective view
  */
 
-import { useState, useEffect } from 'react'
-import {
-  Box,
-  Typography,
-  Tabs,
-  Tab,
-  Paper,
-  Chip,
-  Button,
-  Select,
-  MenuItem,
-  FormControl,
-  InputLabel,
-  IconButton,
-  Tooltip,
-  Stack,
-  List,
-  ListItem,
-  ListItemIcon,
-  ListItemText,
-  Card,
-  CardContent,
-  Alert,
-} from '@mui/material'
-import { styled, alpha } from '@mui/material/styles'
-import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import { useCallback, useEffect, useState } from 'react'
+import { Alert, Box, Button, Tab, Tabs, Typography } from '@mui/material'
+import { styled } from '@mui/material/styles'
 import ChatIcon from '@mui/icons-material/Chat'
 import ScienceIcon from '@mui/icons-material/Science'
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
-import StorageIcon from '@mui/icons-material/Storage'
-import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
-import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 
-import { fetchCombinedPrompt } from '@/services/agentStudioService'
-import type { PromptInfo, PromptLayerInfo } from '@/types/promptExplorer'
+import { fetchAllTools, fetchCombinedPrompt } from '@/services/agentStudioService'
+import type { CombinedPromptResponse, PromptInfo } from '@/types/promptExplorer'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import ToolDetailsDialog from './ToolDetailsDialog'
-import DomainEnvelopeMetadataPanel from './DomainEnvelopeMetadataPanel'
+import AgentGuideTab from './AgentGuideTab'
+import type { AgentBrowserFocus, AgentDetailsRequest } from './agentBrowserRequest'
+import EnvelopeTab from './EnvelopeTab'
+import AgentPromptsTab from './AgentPromptsTab'
 
-// Styled components
 const PanelContainer = styled(Box)(() => ({
   display: 'flex',
   flexDirection: 'column',
   height: '100%',
+  minWidth: 0,
   overflow: 'hidden',
-}))
-
-const PanelHeader = styled(Box)(({ theme }) => ({
-  padding: theme.spacing(2),
-  borderBottom: `1px solid ${theme.palette.divider}`,
-}))
-
-const HeaderContent = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: theme.spacing(2),
 }))
 
 const StyledTabs = styled(Tabs)(() => ({
   minHeight: 36,
-  '& .MuiTabs-indicator': {
-    height: 2,
-  },
+  '& .MuiTabs-indicator': { height: 2 },
 }))
 
 const StyledTab = styled(Tab)(({ theme }) => ({
   minHeight: 36,
+  minWidth: 0,
   textTransform: 'none',
   fontWeight: 500,
-  fontSize: '0.8rem',
-  padding: theme.spacing(0.5, 2),
+  fontSize: 13,
+  padding: theme.spacing(0.75, 1.25, 1),
 }))
 
 const TabContent = styled(Box)(({ theme }) => ({
   flex: 1,
+  minHeight: 0,
   overflow: 'auto',
-  padding: theme.spacing(2),
-}))
-
-const CapabilityCard = styled(Card)(({ theme }) => ({
-  marginBottom: theme.spacing(1.5),
-  backgroundColor: alpha(theme.palette.background.default, 0.5),
-  '&:hover': {
-    backgroundColor: alpha(theme.palette.primary.main, 0.05),
-  },
-}))
-
-const ExampleBox = styled(Box)(({ theme }) => ({
-  backgroundColor: alpha(theme.palette.info.main, 0.08),
-  borderRadius: theme.shape.borderRadius,
-  padding: theme.spacing(1),
-  marginTop: theme.spacing(0.5),
-  fontFamily: 'monospace',
-  fontSize: '0.8rem',
-}))
-
-const DataSourceCard = styled(Card)(({ theme }) => ({
-  marginBottom: theme.spacing(1),
-  backgroundColor: alpha(theme.palette.success.main, 0.05),
-}))
-
-const LimitationItem = styled(ListItem)(() => ({
-  paddingLeft: 0,
-  alignItems: 'flex-start',
-}))
-
-const PromptContent = styled(Paper)(({ theme }) => ({
-  padding: theme.spacing(2),
-  backgroundColor: alpha(theme.palette.background.default, 0.5),
-  fontFamily: 'monospace',
-  fontSize: '0.8rem',
-  lineHeight: 1.6,
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
-  flex: 1,
-  overflow: 'auto',
-}))
-
-const SectionTitle = styled(Typography)(({ theme }) => ({
-  fontWeight: 600,
-  fontSize: '0.9rem',
-  marginBottom: theme.spacing(1.5),
-  display: 'flex',
-  alignItems: 'center',
-  gap: theme.spacing(1),
+  padding: theme.spacing(2, 2.5, 3),
 }))
 
 const EmptyState = styled(Box)(({ theme }) => ({
@@ -149,14 +66,36 @@ const EmptyState = styled(Box)(({ theme }) => ({
   textAlign: 'center',
 }))
 
-type TabValue = 'overview' | 'guidance' | 'envelope' | 'prompts'
+type TabValue = 'guide' | 'envelope' | 'prompts'
 
 interface AgentDetailsPanelProps {
   agent: PromptInfo | null
   selectedGroupId: string | null
   onGroupSelect: (groupId: string | null) => void
-  onDiscussWithClaude?: (agentId: string, agentName: string) => void
+  /**
+   * Discuss-with-Claude handoff. The optional third argument carries a
+   * drafting prompt when the curator asks Claude to draft a guide.
+   */
+  onDiscussWithClaude?: (agentId: string, agentName: string, prompt?: string) => void
   onCloneToWorkshop?: (agentId: string) => void
+  /** Rendered as a "Back to Agents" control at narrow widths. */
+  onBack?: () => void
+  /** True when the browser is below the narrow-width threshold. */
+  narrow?: boolean
+  /** Deep link: switch to a tab, and focus one envelope field, when a new request arrives. */
+  request?: AgentDetailsRequest | null
+}
+
+function draftGuidePrompt(agentId: string, agentName: string): string {
+  return `Draft a curator guide for the **${agentName}** agent. Write, in curator voice:
+1. A one-sentence summary of what it does
+2. When to use it and when not to use it
+3. Its capabilities, each with one example query and result
+4. Its limitations
+
+Inspect get_prompt, get_tool_inventory, and get_tool_details first and base every statement on what you find. Do not invent behavior the prompts and tools do not show.
+
+Agent ID: ${agentId}`
 }
 
 function AgentDetailsPanel({
@@ -165,12 +104,20 @@ function AgentDetailsPanel({
   onGroupSelect,
   onDiscussWithClaude,
   onCloneToWorkshop,
+  onBack,
+  narrow = false,
+  request = null,
 }: AgentDetailsPanelProps) {
   const { agents: agentMetadata } = useAgentMetadata()
-  const [activeTab, setActiveTab] = useState<TabValue>('overview')
-  const [combinedPrompt, setCombinedPrompt] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<TabValue>('guide')
+  const [envelopeFocus, setEnvelopeFocus] = useState<AgentBrowserFocus | null>(null)
+  const [combinedPrompt, setCombinedPrompt] = useState<CombinedPromptResponse | null>(null)
   const [loadingCombined, setLoadingCombined] = useState(false)
   const [selectedTool, setSelectedTool] = useState<string | null>(null)
+  const [toolDescriptions, setToolDescriptions] = useState<Record<string, string>>({})
+  const [toolInventoryError, setToolInventoryError] = useState<string | null>(null)
+  const [toolInventoryAttempt, setToolInventoryAttempt] = useState(0)
+
   const domainEnvelopeMetadata = agent
     ? agentMetadata[agent.agent_id]?.domain_envelope
     : undefined
@@ -178,7 +125,33 @@ function AgentDetailsPanel({
     ? agentMetadata[agent.agent_id]?.allowed_group_ids || []
     : []
 
-  // Load combined prompt when needed
+  // Tool purposes for the tools table. Reloads when the curator retries.
+  useEffect(() => {
+    let cancelled = false
+    setToolInventoryError(null)
+    fetchAllTools()
+      .then((tools) => {
+        if (cancelled) return
+        setToolDescriptions(
+          Object.fromEntries(
+            Object.entries(tools).map(([toolId, info]) => [toolId, info.description])
+          )
+        )
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setToolInventoryError(err instanceof Error ? err.message : 'Failed to load tool inventory')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [toolInventoryAttempt])
+
+  const handleRetryToolInventory = useCallback(() => {
+    setToolInventoryAttempt((attempt) => attempt + 1)
+  }, [])
+
+  // Load the combined prompt for the selected group.
   useEffect(() => {
     if (agent?.custom_prompt_overlay_status === 'needs_review') {
       setCombinedPrompt(null)
@@ -188,7 +161,7 @@ function AgentDetailsPanel({
     if (agent && selectedGroupId && agent.has_group_rules) {
       setLoadingCombined(true)
       fetchCombinedPrompt(agent.agent_id, selectedGroupId)
-        .then((result) => setCombinedPrompt(result.combined_prompt))
+        .then((result) => setCombinedPrompt(result))
         .catch((err) => {
           console.error('Failed to fetch combined prompt:', err)
           setCombinedPrompt(null)
@@ -201,38 +174,30 @@ function AgentDetailsPanel({
 
   useEffect(() => {
     if (activeTab === 'envelope' && !domainEnvelopeMetadata) {
-      setActiveTab('overview')
+      setActiveTab('guide')
     }
   }, [activeTab, domainEnvelopeMetadata])
 
-  // Handle tab change
+  // Each request carries a fresh token, so the same tab can be asked for twice.
+  useEffect(() => {
+    if (!request || request.agentId !== agent?.agent_id) return
+    setActiveTab(request.tab)
+    setEnvelopeFocus(request.focus ?? null)
+  }, [request, agent?.agent_id])
+
   const handleTabChange = (_: React.SyntheticEvent, newValue: TabValue) => {
     setActiveTab(newValue)
   }
 
-  const overlayNeedsReview = agent?.custom_prompt_overlay_status === 'needs_review'
-  const getPromptLayerPreview = (): string => {
-    return agent?.prompt_layers && agent.prompt_layers.length > 0
-      ? agent.prompt_layers.map((layer) => layer.content).filter(Boolean).join('\n\n')
-      : ''
-  }
-
-  // Copy prompt to clipboard
-  const handleCopy = () => {
-    const layerPreview = getPromptLayerPreview()
-    const reviewMessage = 'Curator overlay needs coordinator review before it can be included in the effective prompt.'
-    const content = agent && selectedGroupId && agent.has_group_rules
-      ? (combinedPrompt || layerPreview || (overlayNeedsReview ? reviewMessage : agent.base_prompt))
-      : (layerPreview || (overlayNeedsReview ? reviewMessage : agent?.base_prompt || ''))
-    navigator.clipboard.writeText(content).catch((err) => {
-      console.error('Failed to copy:', err)
-    })
-  }
-
-  // Handle discuss with Claude
   const handleDiscuss = () => {
     if (agent && onDiscussWithClaude) {
       onDiscussWithClaude(agent.agent_id, agent.agent_name)
+    }
+  }
+
+  const handleDraftGuide = () => {
+    if (agent && onDiscussWithClaude) {
+      onDiscussWithClaude(agent.agent_id, agent.agent_name, draftGuidePrompt(agent.agent_id, agent.agent_name))
     }
   }
 
@@ -242,7 +207,6 @@ function AgentDetailsPanel({
     }
   }
 
-  // Empty state when no agent selected
   if (!agent) {
     return (
       <EmptyState>
@@ -261,154 +225,78 @@ function AgentDetailsPanel({
 
   const { documentation } = agent
   const canCloneToWorkshop = agent.agent_id !== 'task_input'
-  const promptLayers = agent.prompt_layers || []
-  const layersByKind = promptLayers.reduce<Record<string, PromptLayerInfo[]>>((acc, layer) => {
-    acc[layer.kind] = [...(acc[layer.kind] || []), layer]
-    return acc
-  }, {})
-  const coreLayers = layersByKind.core_static || []
-  const generatedLayers = layersByKind.core_generated || []
-  const baseLayers = layersByKind.base_prompt || []
-  const overlayLayers = layersByKind.curator_overlay || []
-  const layerPreview = getPromptLayerPreview()
-  const selectedGroupRule = selectedGroupId ? agent.group_rules[selectedGroupId] : undefined
-  const overlayReviewMessage = agent.custom_prompt_warning
-    || 'Curator overlay needs coordinator review before it can be included in the effective prompt.'
-  const promptLayerError = agent.prompt_layer_error
-  const effectivePromptPreview = selectedGroupId && agent.has_group_rules
-    ? (combinedPrompt || (loadingCombined
-      ? 'Loading effective prompt preview...'
-      : (layerPreview || (overlayNeedsReview ? overlayReviewMessage : agent.base_prompt))))
-    : (overlayNeedsReview
-      ? (layerPreview || overlayReviewMessage)
-      : promptLayers.length > 0
-      ? promptLayers.map((layer) => layer.content).filter(Boolean).join('\n\n')
-      : agent.base_prompt)
-
-  const renderLayerSection = (
-    title: string,
-    layers: PromptLayerInfo[],
-    displayContent = '',
-    options: { locked?: boolean; editable?: boolean; emptyText?: string } = {}
-  ) => {
-    const hasLayers = layers.length > 0
-    const locked = options.locked ?? (hasLayers ? layers.every((layer) => layer.locked) : false)
-    const editable = options.editable ?? (hasLayers ? layers.some((layer) => layer.editable) : false)
-    const content = hasLayers
-      ? layers.map((layer) => layer.content).filter(Boolean).join('\n\n')
-      : displayContent
-    const source = hasLayers
-      ? layers.map((layer) => layer.provenance).filter(Boolean).join(', ')
-      : agent.source_file
-
-    return (
-      <Box>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-            {title}
-          </Typography>
-          <Chip
-            size="small"
-            icon={locked ? <LockOutlinedIcon /> : <EditOutlinedIcon />}
-            label={locked ? 'Read-only' : (editable ? 'Editable' : 'Context')}
-            color={locked ? 'default' : 'primary'}
-            variant="outlined"
-            sx={{ height: 22, fontSize: '0.7rem' }}
-          />
-        </Stack>
-        <PromptContent elevation={0}>
-          {content || options.emptyText || 'No content for this layer.'}
-        </PromptContent>
-        {source && (
-          <Typography variant="caption" color="text.secondary">
-            Source: {source}
-          </Typography>
-        )}
-      </Box>
-    )
-  }
+  const summary = documentation?.summary || agent.description
 
   return (
     <PanelContainer>
-      {/* Header */}
-      <PanelHeader>
-        <HeaderContent>
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+      <Box sx={{ px: 2.5, pt: 1.75, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flexWrap: 'wrap' }}>
+          {onBack && (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<ArrowBackIcon />}
+              onClick={onBack}
+              aria-label="Back to Agents"
+              sx={{ textTransform: 'none', flex: 'none', height: 26, fontSize: 12, px: 1.125 }}
+            >
+              Agents
+            </Button>
+          )}
+          <Box sx={{ flex: '1 1 320px', minWidth: 0 }}>
+            <Typography
+              component="h2"
+              sx={{ m: 0, fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.3, overflowWrap: 'anywhere' }}
+            >
               {agent.agent_name}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {documentation?.summary || agent.description}
-            </Typography>
-            {allowedGroupIds.length > 0 && (
-              <Alert
-                severity="info"
-                icon={<LockOutlinedIcon fontSize="inherit" />}
-                sx={{ mt: 1.5 }}
-              >
-                Available to groups: {allowedGroupIds.join(', ')}.
-                {!agent.agent_id.startsWith('ca_')
-                  ? ' This package-owned system restriction is read-only.'
-                  : ' Sharing and group-specific instructions do not widen this access restriction.'}
-              </Alert>
+            {summary && (
+              <Typography sx={{ mt: 0.25, fontSize: 13.5, color: 'text.secondary', maxWidth: '66ch' }}>
+                {summary}
+              </Typography>
             )}
           </Box>
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 1, flex: 'none', flexWrap: 'wrap' }}>
+            <Button
+              variant="contained"
+              size="small"
+              disableElevation
+              startIcon={<ChatIcon />}
+              onClick={handleDiscuss}
+              sx={{ whiteSpace: 'nowrap', textTransform: 'none' }}
+            >
+              Discuss with Claude
+            </Button>
             {canCloneToWorkshop && (
               <Button
                 variant="outlined"
                 size="small"
                 startIcon={<ScienceIcon />}
                 onClick={handleCloneToWorkshop}
-                sx={{ whiteSpace: 'nowrap' }}
+                sx={{ whiteSpace: 'nowrap', textTransform: 'none' }}
               >
                 Clone to Workshop
               </Button>
             )}
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<ChatIcon />}
-              onClick={handleDiscuss}
-              sx={{ whiteSpace: 'nowrap' }}
-            >
-              Discuss with Claude
-            </Button>
           </Box>
-        </HeaderContent>
-
-        {/* Tools chips - clickable for details */}
-        {agent.tools.length > 0 && (
-          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 1.5 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5, alignSelf: 'center' }}>
-              Tools:
-            </Typography>
-            {agent.tools.map((tool) => (
-              <Tooltip key={tool} title="Click to view tool details">
-                <Chip
-                  label={tool}
-                  size="small"
-                  variant="outlined"
-                  onClick={() => setSelectedTool(tool)}
-                  sx={{
-                    cursor: 'pointer',
-                    '&:hover': {
-                      backgroundColor: 'action.hover',
-                      borderColor: 'primary.main',
-                    },
-                  }}
-                />
-              </Tooltip>
-            ))}
-          </Box>
+        </Box>
+        {allowedGroupIds.length > 0 && (
+          <Alert
+            severity="info"
+            icon={<LockOutlinedIcon fontSize="inherit" />}
+            sx={{ py: 0.25, '& .MuiAlert-message': { fontSize: 12.5 } }}
+          >
+            Available to groups: {allowedGroupIds.join(', ')}.
+            {!agent.agent_id.startsWith('ca_')
+              ? ' This package-owned system restriction is read-only.'
+              : ' Sharing and group-specific instructions do not widen this access restriction.'}
+          </Alert>
         )}
-      </PanelHeader>
+      </Box>
 
-      {/* Tabs */}
-      <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}>
-        <StyledTabs value={activeTab} onChange={handleTabChange}>
-          <StyledTab label="Overview" value="overview" />
-          <StyledTab label="Guidance" value="guidance" />
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2.5, pt: 0.75 }}>
+        <StyledTabs value={activeTab} onChange={handleTabChange} aria-label="Agent detail sections">
+          <StyledTab label="Guide" value="guide" />
           {domainEnvelopeMetadata && (
             <StyledTab label="Envelope" value="envelope" />
           )}
@@ -416,259 +304,35 @@ function AgentDetailsPanel({
         </StyledTabs>
       </Box>
 
-      {/* Tab Content */}
       <TabContent>
-        {/* Overview Tab */}
-        {activeTab === 'overview' && (
-          <Box>
-            {/* Capabilities */}
-            {documentation?.capabilities && documentation.capabilities.length > 0 && (
-              <Box sx={{ mb: 3 }}>
-                <SectionTitle>
-                  <CheckCircleOutlineIcon fontSize="small" color="success" />
-                  Capabilities
-                </SectionTitle>
-                {documentation.capabilities.map((cap, idx) => (
-                  <CapabilityCard key={idx} variant="outlined">
-                    <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                        {cap.name}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                        {cap.description}
-                      </Typography>
-                      {(cap.example_query || cap.example_result) && (
-                        <ExampleBox>
-                          {cap.example_query && (
-                            <Box>
-                              <Typography variant="caption" color="text.secondary">
-                                Example query:
-                              </Typography>
-                              <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                {cap.example_query}
-                              </Typography>
-                            </Box>
-                          )}
-                          {cap.example_result && (
-                            <Box sx={{ mt: 0.5 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                Result:
-                              </Typography>
-                              <Typography variant="body2" sx={{ color: 'success.main' }}>
-                                → {cap.example_result}
-                              </Typography>
-                            </Box>
-                          )}
-                        </ExampleBox>
-                      )}
-                    </CardContent>
-                  </CapabilityCard>
-                ))}
-              </Box>
-            )}
-
-            {/* Data Sources */}
-            {documentation?.data_sources && documentation.data_sources.length > 0 && (
-              <Box sx={{ mb: 3 }}>
-                <SectionTitle>
-                  <StorageIcon fontSize="small" color="primary" />
-                  Data Sources
-                </SectionTitle>
-                {documentation.data_sources.map((source, idx) => (
-                  <DataSourceCard key={idx} variant="outlined">
-                    <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                        {source.name}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                        {source.description}
-                      </Typography>
-                      {source.species_supported && source.species_supported.length > 0 && (
-                        <Box sx={{ mt: 1, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                          <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
-                            Species:
-                          </Typography>
-                          {source.species_supported.map((sp) => (
-                            <Chip key={sp} label={sp} size="small" variant="filled" color="primary" sx={{ height: 20, fontSize: '0.7rem' }} />
-                          ))}
-                        </Box>
-                      )}
-                      {source.data_types && source.data_types.length > 0 && (
-                        <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                          <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
-                            Data types:
-                          </Typography>
-                          {source.data_types.map((dt) => (
-                            <Chip key={dt} label={dt} size="small" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
-                          ))}
-                        </Box>
-                      )}
-                    </CardContent>
-                  </DataSourceCard>
-                ))}
-              </Box>
-            )}
-
-            {/* Empty state for Overview */}
-            {(!documentation?.capabilities || documentation.capabilities.length === 0) &&
-             (!documentation?.data_sources || documentation.data_sources.length === 0) && (
-              <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
-                <Typography variant="body2">
-                  No detailed documentation available for this agent yet.
-                </Typography>
-                <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
-                  Check the Prompts tab to view the agent prompt instructions.
-                </Typography>
-              </Box>
-            )}
-          </Box>
-        )}
-
-        {/* Guidance Tab */}
-        {activeTab === 'guidance' && (
-          <Box>
-            {/* Limitations */}
-            {documentation?.limitations && documentation.limitations.length > 0 && (
-              <Box sx={{ mb: 3 }}>
-                <SectionTitle>
-                  <WarningAmberIcon fontSize="small" color="warning" />
-                  Known Limitations
-                </SectionTitle>
-                <List dense disablePadding>
-                  {documentation.limitations.map((limitation, idx) => (
-                    <LimitationItem key={idx}>
-                      <ListItemIcon sx={{ minWidth: 28, mt: 0.5 }}>
-                        <WarningAmberIcon fontSize="small" sx={{ color: 'warning.main', fontSize: '1rem' }} />
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={limitation}
-                        primaryTypographyProps={{ variant: 'body2' }}
-                      />
-                    </LimitationItem>
-                  ))}
-                </List>
-              </Box>
-            )}
-
-            {/* Empty state for Guidance */}
-            {(!documentation?.limitations || documentation.limitations.length === 0) && (
-              <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
-                <Typography variant="body2">
-                  No specific limitations documented for this agent.
-                </Typography>
-              </Box>
-            )}
-          </Box>
-        )}
-
-        {activeTab === 'envelope' && domainEnvelopeMetadata && (
-          <DomainEnvelopeMetadataPanel
-            metadata={domainEnvelopeMetadata}
-            title="Envelope & Validation"
-            validationModeNote="Automatic validation is projected from domain-pack metadata. Flow Builder persists allowed opt-outs, custom validation attachments, and validation-agent steering prompts in the flow definition."
+        {activeTab === 'guide' && (
+          <AgentGuideTab
+            documentation={documentation}
+            tools={agent.tools}
+            toolDescriptions={toolDescriptions}
+            toolInventoryError={toolInventoryError}
+            onRetryToolInventory={handleRetryToolInventory}
+            narrow={narrow}
+            onShowToolDetails={setSelectedTool}
+            onDraftGuide={handleDraftGuide}
           />
         )}
 
-        {/* Prompts Tab */}
+        {activeTab === 'envelope' && domainEnvelopeMetadata && (
+          <EnvelopeTab metadata={domainEnvelopeMetadata} narrow={narrow} focus={envelopeFocus} />
+        )}
+
         {activeTab === 'prompts' && (
-          <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 2 }}>
-            {/* Group selector and copy control */}
-            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-              {agent.has_group_rules && (
-                <>
-                  <FormControl size="small" sx={{ minWidth: 120 }}>
-                    <InputLabel>Group</InputLabel>
-                    <Select
-                      value={selectedGroupId || ''}
-                      label="Group"
-                      onChange={(e) => onGroupSelect(e.target.value || null)}
-                    >
-                      <MenuItem value="">
-                        <em>None</em>
-                      </MenuItem>
-                      {Object.keys(agent.group_rules).map((groupId) => (
-                        <MenuItem key={groupId} value={groupId}>
-                          {groupId}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </>
-              )}
-
-              <Box sx={{ ml: 'auto' }}>
-                <Tooltip title="Copy effective prompt preview">
-                  <IconButton onClick={handleCopy} size="small">
-                    <ContentCopyIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              </Box>
-            </Box>
-
-            {promptLayerError && (
-              <Alert severity="error" variant="outlined">
-                {promptLayerError}
-              </Alert>
-            )}
-            {renderLayerSection('Core Prompt', coreLayers, '', {
-              locked: true,
-              editable: false,
-              emptyText: 'No backend-owned core prompt layer was returned for this agent.',
-            })}
-            {renderLayerSection('Generated Contract', generatedLayers, '', {
-              locked: true,
-              editable: false,
-              emptyText: 'No generated runtime contract layer is required for this agent.',
-            })}
-            {renderLayerSection('Base Prompt', baseLayers, agent.base_prompt, {
-              locked: false,
-              editable: true,
-            })}
-            {renderLayerSection(
-              'Group Rules',
-              [],
-              selectedGroupRule?.content || '',
-              {
-                locked: false,
-                editable: Boolean(selectedGroupRule),
-                emptyText: selectedGroupId
-                  ? `No group rules were returned for ${selectedGroupId}.`
-                  : 'Select a group to view group rules.',
-              }
-            )}
-            {overlayNeedsReview && (
-              <Alert severity="warning" variant="outlined">
-                {overlayReviewMessage}
-              </Alert>
-            )}
-            {renderLayerSection('Main Prompt Override', overlayNeedsReview ? [] : overlayLayers, overlayNeedsReview ? agent.base_prompt : '', {
-              locked: false,
-              editable: !overlayNeedsReview,
-              emptyText: 'No main prompt override is applied.',
-            })}
-            <Box>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                  Effective Prompt Preview
-                </Typography>
-                {agent.effective_prompt_hash && (
-                  <Chip
-                    size="small"
-                    label={agent.effective_prompt_hash.slice(0, 12)}
-                    variant="outlined"
-                    sx={{ height: 22, fontSize: '0.7rem' }}
-                  />
-                )}
-              </Stack>
-              <PromptContent elevation={0}>
-                {effectivePromptPreview}
-              </PromptContent>
-            </Box>
-          </Box>
+          <AgentPromptsTab
+            agent={agent}
+            selectedGroupId={selectedGroupId}
+            onGroupSelect={onGroupSelect}
+            combinedPrompt={combinedPrompt}
+            loadingCombined={loadingCombined}
+          />
         )}
       </TabContent>
 
-      {/* Tool Details Dialog */}
       <ToolDetailsDialog
         open={selectedTool !== null}
         onClose={() => setSelectedTool(null)}
