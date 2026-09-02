@@ -161,7 +161,7 @@ If you clone a domain-pack extraction agent, the Workshop shows what the agent p
 **The Workshop Layout**
 
 - **Header** - Shows the agent's icon, name, and where it came from ("Template: ...", "Cloned from ...", or "From scratch"), plus a status pill: Unsaved changes, Saving, Saved, or Save failed. The header holds the **Open**, **New**, and **Save** buttons and a **More** menu with **Save as**, **Manage agents**, and **Delete agent**.
-- **Navigation** - Four sections: **Setup**, **Prompt**, **Tools**, and **Versions**. An orange dot marks a section with unsaved edits. Tools shows how many tools are attached and Versions shows how many versions exist. The **Help** group has **Ask Claude**, which opens a discussion of your draft in the left-panel chat.
+- **Navigation** - Four sections: **Setup**, **Prompt**, **Tools**, and **Versions**. An orange dot marks a section with unsaved edits. Tools shows how many tools are attached and Versions shows how many versions exist. The **Help** group has **Ask Claude**, which opens a discussion of your draft in the right-panel chat.
 
 **Starting a New Agent**
 
