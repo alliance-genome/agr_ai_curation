@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, beforeEach, expect, it, vi } from 'vitest'
+import { createRef } from 'react'
 
-import PromptWorkshop from './PromptWorkshop'
+import PromptWorkshop, { type WorkshopLeaveGuard } from './PromptWorkshop'
 import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
 import type {
   PromptCatalog,
@@ -812,6 +813,49 @@ describe('PromptWorkshop', () => {
     const guardThird = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
     fireEvent.click(within(guardThird).getByRole('button', { name: 'Discard' }))
     expect(await screen.findByRole('group', { name: 'Start a new agent' })).toBeInTheDocument()
+  }, 15000)
+
+  it('lets the page leave a clean draft at once through the leave guard', async () => {
+    const existing = buildCustomAgent({ name: 'Saved One' })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    const guardRef = createRef<WorkshopLeaveGuard>()
+
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} leaveGuardRef={guardRef} />)
+    await waitForHeaderName('Saved One')
+
+    await expect(guardRef.current!.requestLeave()).resolves.toBe(true)
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
+  }, 15000)
+
+  it('asks before the page leaves a dirty draft and answers with the curator choice', async () => {
+    const existing = buildCustomAgent({ name: 'Saved One' })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    const guardRef = createRef<WorkshopLeaveGuard>()
+
+    const { container } = render(
+      <PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} leaveGuardRef={guardRef} />
+    )
+    await waitForHeaderName('Saved One')
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'edited' } })
+
+    let keepEditing: Promise<boolean> | undefined
+    act(() => {
+      keepEditing = guardRef.current!.requestLeave()
+    })
+    const guard = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    fireEvent.click(within(guard).getByRole('button', { name: 'Keep editing' }))
+    await expect(keepEditing).resolves.toBe(false)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('Description')).toHaveValue('edited')
+    expect(container.contains(document.activeElement)).toBe(true)
+
+    let discard: Promise<boolean> | undefined
+    act(() => {
+      discard = guardRef.current!.requestLeave()
+    })
+    const guardAgain = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    fireEvent.click(within(guardAgain).getByRole('button', { name: 'Discard' }))
+    await expect(discard).resolves.toBe(true)
   }, 15000)
 
   it('blocks page close only while the draft has unsaved edits', async () => {
