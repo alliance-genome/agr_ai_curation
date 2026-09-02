@@ -1333,14 +1333,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     // Cast to our AgentNode type (React Flow types are generic)
     const next = node as AgentNode
     setNodePanelCollapsed(false)
-    setSelectedNode((current) => {
-      if (!current || current.id === next.id) return next
-      void confirmLeaveNode().then((leave) => {
-        if (leave) setSelectedNode(next)
-      })
-      return current
+    if (!selectedNode || selectedNode.id === next.id) {
+      setSelectedNode(next)
+      return
+    }
+    void confirmLeaveNode().then((leave) => {
+      if (leave) setSelectedNode(next)
     })
-  }, [confirmLeaveNode])
+  }, [confirmLeaveNode, selectedNode])
 
   // Handle canvas click (deselect), through the same guard.
   const onPaneClick = useCallback(() => {
