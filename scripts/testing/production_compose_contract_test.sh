@@ -91,6 +91,9 @@ publish_workflow="${repo_root}/.github/workflows/publish-images.yml"
 grep -Fq 'Verify frontend compiled mode artifact' "${publish_workflow}"
 grep -Fq '/usr/share/nginx/html/build-metadata.json' "${publish_workflow}"
 grep -Fq '.vite_dev_mode == false' "${publish_workflow}"
+grep -Fq 'Verify TraceReview runtime provenance' "${publish_workflow}"
+grep -Fq 'TRACE_REVIEW_BUILD_REF=${{ needs.prepare.outputs.published_image_tag }}' "${publish_workflow}"
+grep -Fq '.trace_extractor_sha256 == $trace_extractor_sha256' "${publish_workflow}"
 
 docker compose --env-file "${default_env_file}" -f "${compose_file}" \
   config --format json >"${default_rendered_file}"

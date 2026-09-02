@@ -201,6 +201,14 @@ resolution or an explicit pinned tag.
 When you run the installer from a Git checkout, Stage 2 rewrites those image tags to the matching published release tag or `sha-<shortsha>` for that checkout unless you pass `--image-tag`.
 Tagged releases publish a pinned `env.standalone-vX.Y.Z` companion asset so standalone installs can consume exact versioned image tags without editing the template by hand.
 
+After deployment, TraceReview's `/health` and `/health/langfuse` responses
+report a non-secret `runtime` object containing `build_ref`, `git_sha`,
+`langfuse_sdk_version`, and the `trace_extractor_sha256` source checksum. For a
+release deployment, verify that `build_ref` is the exact deployed `vX.Y.Z` tag,
+that `git_sha` matches the release manifest, and that the SDK version and source
+checksum match the tagged checkout. The image publishing workflow performs the
+same checks against the built image before recording its digest.
+
 ## Rerank provider selection
 
 Standalone reranking is controlled by the same runtime sources used in local

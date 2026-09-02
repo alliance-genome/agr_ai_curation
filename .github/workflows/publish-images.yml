@@ -25,6 +25,7 @@ jobs:
       final_artifact_name: ${{ steps.prepare.outputs.final_artifact_name }}
       manifest_name: ${{ steps.prepare.outputs.manifest_name }}
       publish_lane: ${{ steps.prepare.outputs.publish_lane }}
+      published_image_tag: ${{ steps.prepare.outputs.published_image_tag }}
       ref_name: ${{ steps.prepare.outputs.ref_name }}
       release_tag: ${{ steps.prepare.outputs.release_tag }}
       short_sha: ${{ steps.prepare.outputs.short_sha }}
@@ -46,6 +47,7 @@ jobs:
           artifact_label="skip-${short_sha}"
           manifest_name=""
           release_tag=""
+          published_image_tag=""
 
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             publish_lane="pr"
@@ -56,11 +58,13 @@ jobs:
             artifact_label="${REF_NAME}"
             manifest_name="release-manifest-${REF_NAME}.json"
             release_tag="${REF_NAME}"
+            published_image_tag="${REF_NAME}"
           elif [[ "${REF_TYPE}" == "branch" && "${REF_NAME}" == "main" ]]; then
             publish_lane="main"
             should_publish="true"
             artifact_label="main-sha-${short_sha}"
             manifest_name="publish-manifest-main-sha-${short_sha}.json"
+            published_image_tag="sha-${short_sha}"
           fi
 
           {
@@ -69,6 +73,7 @@ jobs:
             echo "final_artifact_name=published-runtime-bundle-${artifact_label}"
             echo "manifest_name=${manifest_name}"
             echo "publish_lane=${publish_lane}"
+            echo "published_image_tag=${published_image_tag}"
             echo "ref_name=${REF_NAME}"
             echo "release_tag=${release_tag}"
             echo "short_sha=${short_sha}"
@@ -117,7 +122,9 @@ jobs:
             manifest_key: frontend
             repository: public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend
           - artifact_id: trace-review-backend
-            build_args: ""
+            build_args: |
+              TRACE_REVIEW_BUILD_REF=${{ needs.prepare.outputs.published_image_tag }}
+              TRACE_REVIEW_GIT_SHA=${{ github.sha }}
             context: trace_review/backend
             display_name: trace-review-backend
             dockerfile: trace_review/backend/Dockerfile.prod
@@ -244,6 +251,39 @@ jobs:
           index_html="$(docker run --rm --network=none --entrypoint cat "${image_ref}" \
             /usr/share/nginx/html/index.html)"
           grep -Fq '<script src="/runtime-config.js"></script>' <<<"${index_html}"
+
+      - name: Verify TraceReview runtime provenance
+        if: matrix.artifact_id == 'trace-review-backend'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_BUILD_REF: ${{ needs.prepare.outputs.published_image_tag }}
+          EXPECTED_GIT_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ matrix.repository }}
+        run: |
+          image_ref="${REPOSITORY}@${DIGEST}"
+          expected_langfuse_version="$(sed -n 's/^langfuse==//p' trace_review/backend/requirements.txt)"
+          expected_trace_extractor_sha256="$(sha256sum trace_review/backend/src/services/trace_extractor.py | cut -d ' ' -f 1)"
+          docker pull "${image_ref}"
+          labels="$(docker image inspect "${image_ref}" --format '{{json .Config.Labels}}')"
+          jq -e \
+            --arg build_ref "${EXPECTED_BUILD_REF}" \
+            --arg git_sha "${EXPECTED_GIT_SHA}" \
+            '."org.opencontainers.image.version" == $build_ref
+              and ."org.opencontainers.image.revision" == $git_sha' \
+            <<<"${labels}"
+          runtime_provenance="$(docker run --rm --network=none --entrypoint python "${image_ref}" \
+            -c 'import json; from src.runtime_provenance import get_runtime_provenance; print(json.dumps(get_runtime_provenance()))')"
+          jq -e \
+            --arg build_ref "${EXPECTED_BUILD_REF}" \
+            --arg git_sha "${EXPECTED_GIT_SHA}" \
+            --arg langfuse_sdk_version "${expected_langfuse_version}" \
+            --arg trace_extractor_sha256 "${expected_trace_extractor_sha256}" \
+            '.build_ref == $build_ref
+              and .git_sha == $git_sha
+              and .langfuse_sdk_version == $langfuse_sdk_version
+              and .trace_extractor_sha256 == $trace_extractor_sha256' \
+            <<<"${runtime_provenance}"
 
       - name: Write image metadata
         shell: bash

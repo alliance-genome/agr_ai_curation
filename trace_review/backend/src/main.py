@@ -11,9 +11,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .logging_config import configure_logging, create_request_context_middleware
-from .services.cache_manager import CacheManager
 from .config import get_trace_review_preflight_diagnostics, validate_trace_source
+from .logging_config import configure_logging, create_request_context_middleware
+from .runtime_provenance import get_runtime_provenance
+from .services.cache_manager import CacheManager
 
 configure_logging()
 
@@ -30,11 +31,13 @@ def _allowed_origins() -> list[str]:
 
 def _health_payload(app: FastAPI) -> tuple[dict, int]:
     cache_manager = getattr(app.state, "cache_manager", None)
+    runtime = get_runtime_provenance()
     if cache_manager is None:
         return {
             "status": "starting",
             "message": "Trace Review API is still initializing",
             "cache_stats": None,
+            "runtime": runtime,
         }, 503
 
     return {
@@ -43,7 +46,8 @@ def _health_payload(app: FastAPI) -> tuple[dict, int]:
         "cache_stats": {
             "size": len(cache_manager.cache),
             "ttl_hours": cache_manager.ttl_hours
-        }
+        },
+        "runtime": runtime,
     }, 200
 
 
@@ -195,6 +199,7 @@ async def langfuse_health(source: str = "remote"):
     return {
         "status": "ok" if results[source]["reachable"] and results[source]["ready"] else "degraded",
         "selected_source": source,
+        "runtime": get_runtime_provenance(),
         "langfuse": results,
         "troubleshooting": {
             "remote_unreachable": "Check VPN connection to EC2",
@@ -205,7 +210,7 @@ async def langfuse_health(source: str = "remote"):
 
 
 # Import and include routers
-from .api import auth, traces, claude
+from .api import auth, traces, claude  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(traces.router, prefix="/api/traces", tags=["Traces"])
