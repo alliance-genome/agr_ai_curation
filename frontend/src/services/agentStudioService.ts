@@ -71,6 +71,10 @@ export interface ValidationAttachmentOption {
   label: string
   target_label?: string
   description?: string
+  /** Curator-voice switch sentence naming what the check confirms and against what. */
+  curator_label?: string
+  /** Curator-voice consequence of turning the check off; present only when allow_opt_out is true. */
+  when_off?: string
   definition_state?: string
   reason?: string
   state_explanation?: string

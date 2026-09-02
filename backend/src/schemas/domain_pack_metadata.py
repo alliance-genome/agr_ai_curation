@@ -447,6 +447,21 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     binding_id: str
     display_name: Optional[str] = None
     description: str = ""
+    curator_label: Optional[str] = Field(
+        default=None,
+        description=(
+            "One curator-voice sentence naming what the check confirms and "
+            "against what; shown as the switch sentence in flow configuration"
+        ),
+    )
+    when_off: Optional[str] = Field(
+        default=None,
+        description=(
+            "One curator-voice sentence on the consequence of turning the check "
+            "off; only allowed on bindings that set allow_opt_out"
+        ),
+    )
+    definition_notes: list[str] = Field(default_factory=list)
     validator_agent: DomainPackValidatorAgentRef
     applies_to: DomainPackValidatorAppliesTo
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
@@ -477,6 +492,33 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     def _validate_binding_id(cls, value: str) -> str:
         return _validate_symbolic_name(value, "validator_bindings.binding_id")
 
+    @field_validator("curator_label", "when_off")
+    @classmethod
+    def _validate_curator_text(cls, value: Optional[str], info) -> Optional[str]:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError(
+                f"validator_bindings.active {info.field_name} must not be empty"
+            )
+        if value != value.strip():
+            raise ValueError(
+                f"validator_bindings.active {info.field_name} must not include "
+                "surrounding whitespace"
+            )
+        return value
+
+    @field_validator("definition_notes")
+    @classmethod
+    def _validate_definition_notes(cls, value: list[str]) -> list[str]:
+        for note in value:
+            if not note.strip():
+                raise ValueError(
+                    "validator_bindings.active definition_notes must not contain "
+                    "empty entries"
+                )
+        return value
+
     @model_validator(mode="after")
     def validate_blocking_policy(self) -> "DomainPackActiveValidatorBinding":
         """Require blocking validator policy to also be required."""
@@ -485,6 +527,17 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
             raise ValueError(
                 "validator_bindings.active entries cannot set blocking: true "
                 "unless required: true"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_when_off_policy(self) -> "DomainPackActiveValidatorBinding":
+        """Only bindings a curator may turn off can describe that consequence."""
+
+        if self.when_off is not None and not self.allow_opt_out:
+            raise ValueError(
+                "validator_bindings.active entries cannot set when_off "
+                "unless allow_opt_out: true"
             )
         return self
 
