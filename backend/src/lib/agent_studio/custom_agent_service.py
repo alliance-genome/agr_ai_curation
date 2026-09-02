@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.agent_service import get_agent_by_key, get_project_ids_for_user
 from src.lib.agent_studio.agent_identity import require_canonical_agent_identity
+from src.lib.agent_studio.catalog_service import DOCUMENT_TOOL_IDS, has_tool_binding
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.agent_access import (
     normalize_allowed_group_ids,
@@ -25,7 +26,6 @@ from src.models.sql.database import SessionLocal
 
 
 CUSTOM_AGENT_PREFIX = "ca_"
-_DOCUMENT_TOOL_IDS = {"search_document", "read_chunk", "read_section", "read_subsection"}
 _SYSTEM_MANAGED_INHERITED_TOOL_IDS = {
     "get_agent_contract",
     "record_evidence",
@@ -452,8 +452,6 @@ def _validate_requested_tool_ids(
     )
     if disallowed:
         raise ValueError(f"Tool(s) are not attachable: {', '.join(disallowed)}")
-
-    from src.lib.agent_studio.catalog_service import has_tool_binding
 
     unbound = sorted({
         tool_id
@@ -1232,7 +1230,7 @@ def get_custom_agent_runtime_info(
             return None
 
         tool_ids = list(custom_agent.tool_ids or [])
-        requires_document = bool(set(tool_ids) & _DOCUMENT_TOOL_IDS)
+        requires_document = bool(set(tool_ids) & DOCUMENT_TOOL_IDS)
         try:
             main_prompt = custom_main_prompt_for_parent(
                 custom_agent.template_source,
