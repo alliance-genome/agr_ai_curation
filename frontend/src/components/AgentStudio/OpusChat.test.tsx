@@ -13,6 +13,7 @@ const DISEASE_VALIDATOR: PromptInfo = {
   source_file: 'database',
   has_group_rules: false,
   group_rules: {},
+  tools: [],
 }
 
 const serviceMocks = vi.hoisted(() => ({
