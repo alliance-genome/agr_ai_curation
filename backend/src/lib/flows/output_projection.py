@@ -40,6 +40,7 @@ FlowOutputTransformType = Literal[
     "first_non_empty",
     "concat",
     "join_list",
+    "pair_values",
     "count",
     "map_value",
     "boolean_label",
@@ -236,6 +237,7 @@ class FlowOutputTransformSpec(BaseModel):
     value: Any = None
     values: list[Any] = Field(default_factory=list)
     separator: str = ""
+    list_separator: str = ""
     mapping: dict[str, Any] = Field(default_factory=dict)
     default: Any = None
     true_label: str = "Yes"
@@ -1836,6 +1838,28 @@ def _transform_refs(transform: FlowOutputTransformSpec) -> list[str]:
     return refs
 
 
+def _paired_transform_values(
+    row: Mapping[str, Any],
+    transform: FlowOutputTransformSpec,
+) -> list[tuple[Any, Any]]:
+    left = row.get(transform.field_refs[0])
+    right = row.get(transform.field_refs[1])
+    left_is_list = isinstance(left, list)
+    right_is_list = isinstance(right, list)
+
+    if left_is_list and right_is_list:
+        if len(left) != len(right):
+            raise ValueError(
+                f"incompatible list lengths {len(left)} and {len(right)}"
+            )
+        return list(zip(left, right))
+    if left_is_list:
+        return [(item, right) for item in left]
+    if right_is_list:
+        return [(left, item) for item in right]
+    return [(left, right)]
+
+
 def projection_plan_allows_empty_bundle(plan: FlowOutputProjectionPlan) -> bool:
     """Return whether a projection plan can safely create one literal-only row."""
 
@@ -2078,6 +2102,22 @@ def validate_projection_plan(
                 )
             if column.transform.type == "literal" and column.transform.value is None:
                 warnings.append(f"Column '{column.key}' literal transform has a null value.")
+            if column.transform.type == "pair_values":
+                if len(column.transform.field_refs) != 2:
+                    errors.append(
+                        f"Column '{column.key}' pair_values transform requires exactly "
+                        "two field_refs."
+                    )
+                else:
+                    for row_index, row in enumerate(rows, start=1):
+                        try:
+                            _paired_transform_values(row, column.transform)
+                        except ValueError as exc:
+                            errors.append(
+                                f"Column '{column.key}' pair_values transform has {exc} "
+                                f"at row {row_index}."
+                            )
+                            break
 
     for filter_spec in plan.filters:
         _validate_ref(
@@ -2225,6 +2265,13 @@ def _transform_value(
         if isinstance(value, list):
             return transform.separator.join(str(item) for item in value if not _is_empty(item))
         return missing_value if _is_empty(value) else str(value)
+    if transform.type == "pair_values":
+        pairs = _paired_transform_values(row, transform)
+        return transform.list_separator.join(
+            transform.separator.join((_string_value(left), _string_value(right)))
+            for left, right in pairs
+            if not _is_empty(left) and not _is_empty(right)
+        )
     if transform.type == "count":
         value = row.get(transform.field_ref or "")
         if isinstance(value, (list, tuple, set, dict)):

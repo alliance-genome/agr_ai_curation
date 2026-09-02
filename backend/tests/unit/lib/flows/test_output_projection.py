@@ -1257,6 +1257,163 @@ def test_projection_safe_derived_transforms_cover_supported_surface():
     ]
 
 
+@pytest.mark.parametrize(
+    ("source", "source_identifier", "expected"),
+    [
+        ("BDSC", "RRID:BDSC_31612", "BDSC:RRID:BDSC_31612"),
+        (
+            "BDSC",
+            ["RRID:BDSC_31612", "RRID:BDSC_35446"],
+            "BDSC:RRID:BDSC_31612|BDSC:RRID:BDSC_35446",
+        ),
+        (
+            ["BDSC", "VDRC"],
+            "RRID:COMMON",
+            "BDSC:RRID:COMMON|VDRC:RRID:COMMON",
+        ),
+        (
+            ["BDSC", "VDRC"],
+            ["RRID:BDSC_31612", "RRID:VDRC_106432"],
+            "BDSC:RRID:BDSC_31612|VDRC:RRID:VDRC_106432",
+        ),
+    ],
+)
+def test_pair_values_transform_pairs_scalar_and_list_fields(
+    source,
+    source_identifier,
+    expected,
+):
+    step = _completed_generic_pdf_step()
+    payload = step["candidate"].payload_json["extracted_objects"][0]["payload"]
+    payload["attributes"] = {
+        "source": source,
+        "source_identifier": source_identifier,
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="PDF Projection Flow",
+        output_format="tsv",
+    )
+    result = apply_projection_plan(
+        bundle,
+        FlowOutputProjectionPlan(
+            format="tsv",
+            row_source="object",
+            row_strategy="wide_union",
+            columns=[
+                FlowOutputColumnSpec(
+                    key="source_identifier",
+                    transform=FlowOutputTransformSpec(
+                        type="pair_values",
+                        field_refs=[
+                            "object.attribute.source",
+                            "object.attribute.source_identifier",
+                        ],
+                        separator=":",
+                        list_separator="|",
+                    ),
+                )
+            ],
+        ),
+    )
+
+    assert result.rows[0]["source_identifier"] == expected
+
+
+def test_pair_values_transform_has_identical_tsv_and_chat_projection_semantics():
+    step = _completed_generic_pdf_step()
+    payload = step["candidate"].payload_json["extracted_objects"][0]["payload"]
+    payload["attributes"] = {
+        "source": "BDSC",
+        "source_identifier": ["RRID:BDSC_31612", "RRID:BDSC_35446"],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="PDF Projection Flow",
+        output_format="tsv",
+    )
+
+    def project(output_format):
+        return apply_projection_plan(
+            bundle,
+            FlowOutputProjectionPlan(
+                format=output_format,
+                row_source="object",
+                row_strategy="wide_union",
+                columns=[
+                    FlowOutputColumnSpec(
+                        key="source_identifier",
+                        header="Source Identifier",
+                        transform=FlowOutputTransformSpec(
+                            type="pair_values",
+                            field_refs=[
+                                "object.attribute.source",
+                                "object.attribute.source_identifier",
+                            ],
+                            separator=":",
+                            list_separator="|",
+                        ),
+                    )
+                ],
+            ),
+        )
+
+    expected = "BDSC:RRID:BDSC_31612|BDSC:RRID:BDSC_35446"
+    tsv_result = project("tsv")
+    chat_result = project("chat")
+
+    assert tsv_result.rows[0]["source_identifier"] == expected
+    assert chat_result.rows[0]["source_identifier"] == expected
+    assert chat_result.chat_output is not None
+    assert expected.replace("|", "\\|") in chat_result.chat_output
+
+
+def test_pair_values_transform_rejects_incompatible_list_lengths():
+    step = _completed_generic_pdf_step()
+    payload = step["candidate"].payload_json["extracted_objects"][0]["payload"]
+    payload["attributes"] = {
+        "source": ["BDSC", "VDRC"],
+        "source_identifier": [
+            "RRID:BDSC_31612",
+            "RRID:VDRC_106432",
+            "RRID:VDRC_106431",
+        ],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step],
+        flow_name="PDF Projection Flow",
+        output_format="tsv",
+    )
+    preview = preview_output_projection(
+        bundle,
+        FlowOutputProjectionPlan(
+            format="tsv",
+            row_source="object",
+            row_strategy="wide_union",
+            columns=[
+                FlowOutputColumnSpec(
+                    key="source_identifier",
+                    transform=FlowOutputTransformSpec(
+                        type="pair_values",
+                        field_refs=[
+                            "object.attribute.source",
+                            "object.attribute.source_identifier",
+                        ],
+                        separator=":",
+                        list_separator="|",
+                    ),
+                )
+            ],
+        ),
+    )
+
+    assert preview.status == "invalid"
+    assert preview.errors == [
+        "Column 'source_identifier' pair_values transform has incompatible list lengths "
+        "2 and 3 at row 1."
+    ]
+
+
 def test_projection_membership_emptiness_contains_filters_and_sort_are_applied():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_domain_step()],

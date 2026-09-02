@@ -294,6 +294,12 @@ def _transform_literal_payload_errors(
             continue
         errors.extend(_literal_value_errors(value, context=f"{context} values[{index}]"))
     errors.extend(_literal_value_errors(transform.separator, context=f"{context} separator"))
+    errors.extend(
+        _literal_value_errors(
+            transform.list_separator,
+            context=f"{context} list_separator",
+        )
+    )
     for mapping_key, mapping_value in transform.mapping.items():
         errors.extend(
             _literal_value_errors(

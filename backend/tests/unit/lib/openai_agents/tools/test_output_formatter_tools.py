@@ -1199,6 +1199,24 @@ async def test_output_labels_separators_and_missing_values_cannot_smuggle_file_c
             },
         ],
     }
+    encoded_list_separator_plan = {
+        "format": "csv",
+        "row_source": "object",
+        "columns": [
+            {
+                "key": "display",
+                "transform": {
+                    "type": "pair_values",
+                    "field_refs": [
+                        "object.payload.symbol",
+                        "object.payload.primary_external_id",
+                    ],
+                    "separator": ":",
+                    "list_separator": '[{"symbol":"model-authored"}]',
+                },
+            },
+        ],
+    }
     missing_value_plan = {
         "format": "csv",
         "row_source": "object",
@@ -1224,6 +1242,13 @@ async def test_output_labels_separators_and_missing_values_cannot_smuggle_file_c
     )
     assert encoded_separator["status"] == "invalid"
     assert "encoded JSON objects or arrays" in encoded_separator["errors"][0]
+
+    encoded_list_separator = await _invoke(
+        _tool_by_name(tools, "validate_output_projection"),
+        {"plan_json": json.dumps(encoded_list_separator_plan)},
+    )
+    assert encoded_list_separator["status"] == "invalid"
+    assert "encoded JSON objects or arrays" in encoded_list_separator["errors"][0]
 
     missing_value = await _invoke(
         _tool_by_name(tools, "finalize_and_save"),
