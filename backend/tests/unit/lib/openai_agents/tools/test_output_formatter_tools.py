@@ -286,12 +286,12 @@ async def test_formatter_tools_validate_preview_and_finalize_conditional_plan():
 
     tools = build_output_formatter_tools(
         bundle=_bundle(),
-        output_format="csv",
-        formatter_agent_id="csv_formatter",
+        output_format="tsv",
+        formatter_agent_id="tsv_formatter",
         save_projected_output=_fake_save,
     )
     plan = {
-        "format": "csv",
+        "format": "tsv",
         "row_source": "object",
         "columns": [
             {

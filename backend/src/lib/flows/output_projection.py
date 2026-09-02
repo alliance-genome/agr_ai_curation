@@ -1879,8 +1879,10 @@ def _transform_specs(transform: FlowOutputTransformSpec) -> list[FlowOutputTrans
 
 
 def _conditional_filter(transform: FlowOutputTransformSpec) -> FlowOutputFilterSpec:
+    if transform.type != "conditional" or not transform.field_ref:
+        raise ValueError("conditional requires a condition field_ref.")
     return FlowOutputFilterSpec(
-        field_ref=transform.field_ref or "",
+        field_ref=transform.field_ref,
         op=transform.condition_op,
         value=transform.value,
         values=transform.values,
@@ -2201,10 +2203,12 @@ def validate_projection_plan(
                     errors=errors,
                     context=f"Column '{column.key}' transform",
                 )
-            for transform, transform_rows in _transform_specs_with_rows(
-                column.transform,
-                rows,
-            ):
+            try:
+                transforms_with_rows = _transform_specs_with_rows(column.transform, rows)
+            except ValueError as exc:
+                errors.append(f"Column '{column.key}' conditional condition is invalid: {exc}")
+                transforms_with_rows = []
+            for transform, transform_rows in transforms_with_rows:
                 if transform.type == "pair_join" and len(transform.field_refs) == 2:
                     for row in transform_rows:
                         try:
@@ -2212,8 +2216,9 @@ def validate_projection_plan(
                         except ValueError as exc:
                             errors.append(f"Column '{column.key}' {exc}")
                             break
-            if column.transform.type == "literal" and column.transform.value is None:
-                warnings.append(f"Column '{column.key}' literal transform has a null value.")
+            for transform in _transform_specs(column.transform):
+                if transform.type == "literal" and transform.value is None:
+                    warnings.append(f"Column '{column.key}' literal transform has a null value.")
 
     for filter_spec in plan.filters:
         _validate_ref(
@@ -2367,7 +2372,7 @@ def _transform_value(
         condition = _conditional_filter(transform)
         branch = transform.when_true if _row_matches_filter(row, condition) else transform.when_false
         if branch is None:
-            return missing_value
+            raise ValueError("conditional selected an undefined branch.")
         return _transform_value(row, branch, missing_value=missing_value)
     if transform.type == "count":
         value = row.get(transform.field_ref or "")
