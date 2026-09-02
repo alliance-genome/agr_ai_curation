@@ -114,7 +114,9 @@ function NodePanelDock({ mode, collapsed, areaWidth, railLabel, onExpand, onClos
         data-testid="node-panel-rail"
         sx={{
           width: NODE_PANEL_RAIL_WIDTH,
-          flex: 'none',
+          flex: `0 0 ${NODE_PANEL_RAIL_WIDTH}px`,
+          height: '100%',
+          minHeight: 0,
           borderLeft: 1,
           borderColor: 'divider',
           backgroundColor: 'background.paper',
@@ -154,7 +156,8 @@ function NodePanelDock({ mode, collapsed, areaWidth, railLabel, onExpand, onClos
       data-testid="node-panel-dock"
       sx={{
         width,
-        flex: 'none',
+        flex: `0 0 ${width}px`,
+        height: '100%',
         position: 'relative',
         borderLeft: 1,
         borderColor: 'divider',

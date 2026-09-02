@@ -251,6 +251,14 @@ function expectedPrimaryShortcutLabel() {
 }
 
 describe('FlowBuilder', () => {
+  it('gives the canvas row an explicit flex basis so React Flow gets a width inside the Panel', async () => {
+    render(<FlowBuilder />)
+    const split = await screen.findByTestId('flow-canvas-split')
+    expect(split).toHaveStyle({ display: 'flex', flex: '1 1 0%', width: '100%', height: '100%', minWidth: '0', minHeight: '0' })
+    const canvas = screen.getByRole('region', { name: 'Flow canvas' })
+    expect(canvas).toHaveStyle({ flex: '1 1 0%', minWidth: '0' })
+  })
+
   beforeEach(() => {
     serviceMocks.createFlow.mockReset()
     serviceMocks.updateFlow.mockReset()

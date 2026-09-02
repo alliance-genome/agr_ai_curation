@@ -516,7 +516,9 @@ const BuilderContent = styled(Box)(() => ({
 }))
 
 const CanvasArea = styled(Box)(({ theme }) => ({
-  flex: 1,
+  flex: '1 1 0%',
+  minWidth: 0,
+  minHeight: 0,
   position: 'relative',
   backgroundColor: alpha(theme.palette.background.default, 0.5),
   '&:focus-visible': {
@@ -544,11 +546,20 @@ const CanvasArea = styled(Box)(({ theme }) => ({
 }))
 
 // Canvas plus the docked node panel; the panel takes width from the canvas.
-const CanvasSplit = styled(Box)(() => ({
+// The parent Panel is a flex row, so without an explicit basis this row would
+// shrink to its content, and React Flow has no intrinsic width (ALL-1014 hit
+// the same collapse with PanelCard).
+const CANVAS_SPLIT_FILL_STYLE = {
   display: 'flex',
+  flex: '1 1 0%',
+  width: '100%',
   height: '100%',
   minWidth: 0,
   minHeight: 0,
+} as const
+
+const CanvasSplit = styled(Box)(() => ({
+  ...CANVAS_SPLIT_FILL_STYLE,
 }))
 
 const SidePanel = styled(Box)(({ theme }) => ({
@@ -2040,7 +2051,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           <ResizeHandle />
 
           <Panel defaultSize={72} minSize={60}>
-            <CanvasSplit ref={canvasSplitRef}>
+            <CanvasSplit ref={canvasSplitRef} data-testid="flow-canvas-split">
             <CanvasArea
               ref={reactFlowWrapper}
               role="region"

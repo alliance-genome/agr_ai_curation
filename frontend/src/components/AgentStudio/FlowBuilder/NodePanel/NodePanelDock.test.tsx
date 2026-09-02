@@ -33,7 +33,7 @@ describe('NodePanelDock', () => {
     renderDock()
 
     const dock = screen.getByTestId('node-panel-dock')
-    expect(dock).toHaveStyle({ width: '440px' })
+    expect(dock).toHaveStyle({ width: '440px', flex: '0 0 440px', height: '100%' })
     const handle = screen.getByRole('separator', { name: 'Resize step panel' })
     expect(handle).toHaveAttribute('aria-valuenow', '440')
 
@@ -63,6 +63,7 @@ describe('NodePanelDock', () => {
 
     expect(screen.queryByText('panel body')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-panel-rail')).toHaveTextContent('Gene Extractor')
+    expect(screen.getByTestId('node-panel-rail')).toHaveStyle({ flex: '0 0 44px', height: '100%' })
     await user.click(screen.getByRole('button', { name: 'Show panel' }))
     expect(onExpand).toHaveBeenCalledTimes(1)
   })
