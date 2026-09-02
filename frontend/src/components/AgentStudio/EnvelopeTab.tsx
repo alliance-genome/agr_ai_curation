@@ -12,6 +12,7 @@ import type { ReactNode } from 'react'
 import { Box, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
 
 import type { DomainEnvelopeMetadata } from '@/services/agentStudioService'
+import type { AgentBrowserFocus } from './agentBrowserRequest'
 import {
   createProviderWordResolver,
   envelopeCounts,
@@ -28,6 +29,8 @@ import { MONO_FONT_FAMILY, SectionHeading, StateDot } from './agentGuidePrimitiv
 interface EnvelopeTabProps {
   metadata: DomainEnvelopeMetadata
   narrow?: boolean
+  /** Selects the object that holds this field and highlights the field row. */
+  focus?: AgentBrowserFocus | null
 }
 
 function Stat({ children }: { children: ReactNode }) {
@@ -42,7 +45,7 @@ function Strong({ children }: { children: ReactNode }) {
   return <Box component="b" sx={{ fontWeight: 500, color: 'text.primary' }}>{children}</Box>
 }
 
-function EnvelopeTab({ metadata, narrow = false }: EnvelopeTabProps) {
+function EnvelopeTab({ metadata, narrow = false, focus = null }: EnvelopeTabProps) {
   const choices = useMemo(() => envelopeObjectChoices(metadata), [metadata])
   const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(choices[0]?.id ?? null)
   const validatorsHeadingId = useId()
@@ -53,6 +56,13 @@ function EnvelopeTab({ metadata, narrow = false }: EnvelopeTabProps) {
       setSelectedChoiceId(choices[0]?.id ?? null)
     }
   }, [choices, selectedChoiceId])
+
+  // A focus request picks the object choice that holds the focused object.
+  useEffect(() => {
+    if (!focus) return
+    const choice = choices.find((candidate) => candidate.objects.some((object) => object.object_type === focus.objectType))
+    if (choice) setSelectedChoiceId(choice.id)
+  }, [focus, choices])
 
   const selectedChoice = choices.find((choice) => choice.id === selectedChoiceId) ?? choices[0]
   const counts = envelopeCounts(metadata)
@@ -153,6 +163,7 @@ function EnvelopeTab({ metadata, narrow = false }: EnvelopeTabProps) {
         ariaLabel={`${selectedChoice.label} fields`}
         providerWord={providerWord}
         narrow={narrow}
+        highlightFieldPath={focus?.fieldPath}
       />
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>

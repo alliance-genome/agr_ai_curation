@@ -60,6 +60,9 @@ class MockResizeObserver implements ResizeObserver {
 
 globalThis.ResizeObserver = MockResizeObserver as typeof ResizeObserver
 
+// jsdom does not implement scrollIntoView; components call it to reveal a focused row.
+Element.prototype.scrollIntoView = vi.fn()
+
 // Mock fetch
 global.fetch = vi.fn();
 
