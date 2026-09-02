@@ -101,7 +101,8 @@ describe('NodePanel', () => {
     const { onApply } = renderPanel(buildNode())
 
     expect(screen.getByRole('heading', { name: 'Gene Extractor' })).toBeInTheDocument()
-    expect(screen.getByText('Step 2 of 4 · gene_extractor v1')).toBeInTheDocument()
+    expect(screen.getByTestId('node-panel-step-line')).toHaveTextContent('Step 2 of 4 · gene_extractor v1')
+    expect(screen.getByRole('heading', { name: 'Gene Extractor' })).not.toHaveStyle({ whiteSpace: 'nowrap' })
     expect(screen.getByText('Extraction step')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
     expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
@@ -109,7 +110,10 @@ describe('NodePanel', () => {
     await user.click(screen.getByRole('button', { name: 'Adjust optional checks (1)' }))
     await user.click(screen.getByRole('switch'))
 
-    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+    // The status pill sits on the kind-label row, beside Cancel and Apply.
+    const pill = screen.getByText('Unsaved changes')
+    expect(pill.parentElement).toContainElement(screen.getByText('Extraction step'))
+    expect(pill.parentElement).toContainElement(screen.getByRole('button', { name: 'Apply' }))
     expect(screen.getByText('1 check runs on what this step extracts, 1 turned off for this flow.')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Apply' }))
@@ -141,7 +145,7 @@ describe('NodePanel', () => {
     const node = buildNode({ agent_id: 'task_input', agent_display_name: 'Initial Instructions', output_key: 'task_input', task_instructions: '', validation_attachments: undefined }, 'task_input')
     const { onApply, onTaskInstructionsAuthored } = renderPanel(node, { stepNumber: 1 })
 
-    expect(screen.getByText('Step 1 of 4 · task input')).toBeInTheDocument()
+    expect(screen.getByTestId('node-panel-step-line')).toHaveTextContent('Step 1 of 4 · task input')
     expect(screen.getByText('Task input')).toBeInTheDocument()
     expect(screen.queryByText('About this agent')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()

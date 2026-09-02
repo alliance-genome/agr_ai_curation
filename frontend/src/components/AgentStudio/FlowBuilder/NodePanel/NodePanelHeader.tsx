@@ -1,7 +1,8 @@
 /**
- * Pinned header of the node panel: icon, name, "Step N of M", a status pill,
- * then the step-kind label with Cancel and Apply and an overflow menu that
- * holds Delete step. A configuration error pins under the header.
+ * Pinned header of the node panel: icon, name (wraps to two lines), an
+ * overflow menu that holds Delete step, and Hide; "Step N of M · agent_id"
+ * on its own line; then the step-kind label, the status pill, Cancel, and
+ * Apply. A configuration error pins under the header.
  */
 
 import { useState } from 'react'
@@ -19,8 +20,10 @@ export type NodePanelStatus = 'clean' | 'dirty' | 'error'
 interface NodePanelHeaderProps {
   icon: string
   name: string
-  /** "Step 2 of 4 · disease_extractor v1" */
-  subtitle: string
+  /** "Step 2 of 4" */
+  stepLabel: string
+  /** "disease_extractor v1" or "task input"; the only part that may ellipsize. */
+  stepDetail: string
   kindLabel: string
   status: NodePanelStatus
   errorMessage?: string
@@ -41,7 +44,8 @@ const STATUS_PILL: Record<Exclude<NodePanelStatus, 'clean'>, { label: string; to
 function NodePanelHeader({
   icon,
   name,
-  subtitle,
+  stepLabel,
+  stepDetail,
   kindLabel,
   status,
   errorMessage,
@@ -61,7 +65,7 @@ function NodePanelHeader({
   return (
     <Box component="header" sx={{ flex: 'none', borderBottom: 1, borderColor: 'divider' }}>
       <Box sx={{ px: 1.75, pt: 1.25, display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25 }}>
           <Box
             aria-hidden="true"
             sx={{
@@ -77,38 +81,26 @@ function NodePanelHeader({
           >
             {icon}
           </Box>
-          <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography
-              component="h2"
-              sx={{ m: 0, fontSize: 14.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-              title={name}
-            >
-              {name}
-            </Typography>
-            <Typography sx={{ fontSize: 12, color: 'text.secondary', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {subtitle}
-            </Typography>
-          </Box>
-          {pill && (
-            <Box
-              component="span"
-              sx={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 0.5,
-                fontSize: 11.5,
-                px: 0.875,
-                py: '2px',
-                borderRadius: 999,
-                flex: 'none',
-                color: `${pill.tone}.dark`,
-                backgroundColor: (theme) => alpha(theme.palette[pill.tone].main, theme.palette.mode === 'dark' ? 0.16 : 0.12),
-              }}
-            >
-              {pill.tone === 'error' && <ErrorOutlineIcon sx={{ fontSize: 14 }} />}
-              {pill.label}
-            </Box>
-          )}
+          <Typography
+            component="h2"
+            sx={{
+              m: 0,
+              minWidth: 0,
+              flex: 1,
+              fontSize: 14.5,
+              fontWeight: 600,
+              lineHeight: 1.3,
+              overflowWrap: 'anywhere',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+              pt: '5px',
+            }}
+            title={name}
+          >
+            {name}
+          </Typography>
           {onDelete && (
             <>
               <IconButton size="small" aria-label="More step actions" aria-haspopup="menu" onClick={openMenu}>
@@ -135,8 +127,40 @@ function NodePanelHeader({
           </Tooltip>
         </Box>
 
+        <Typography
+          component="p"
+          data-testid="node-panel-step-line"
+          sx={{ m: 0, display: 'flex', minWidth: 0, fontSize: 12, color: 'text.secondary' }}
+        >
+          <Box component="span" sx={{ flex: 'none' }}>{stepLabel}</Box>
+          <Box component="span" sx={{ flex: 'none', whiteSpace: 'pre' }}>{' · '}</Box>
+          <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={stepDetail}>
+            {stepDetail}
+          </Box>
+        </Typography>
+
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, pb: 1 }}>
-          <Typography sx={{ fontSize: 12, color: 'text.secondary', flex: 1 }}>{kindLabel}</Typography>
+          <Typography sx={{ fontSize: 12, color: 'text.secondary', flex: 1, minWidth: 0 }}>{kindLabel}</Typography>
+          {pill && (
+            <Box
+              component="span"
+              sx={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 0.5,
+                fontSize: 11.5,
+                px: 0.875,
+                py: '2px',
+                borderRadius: 999,
+                flex: 'none',
+                color: `${pill.tone}.dark`,
+                backgroundColor: (theme) => alpha(theme.palette[pill.tone].main, theme.palette.mode === 'dark' ? 0.16 : 0.12),
+              }}
+            >
+              {pill.tone === 'error' && <ErrorOutlineIcon sx={{ fontSize: 14 }} />}
+              {pill.label}
+            </Box>
+          )}
           <Button size="small" variant="outlined" onClick={onCancel} sx={{ textTransform: 'none', height: 26, fontSize: 12 }}>
             Cancel
           </Button>

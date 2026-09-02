@@ -193,9 +193,10 @@ function NodePanel({
   }, [onOpenAgent, requestLeave])
 
   const status: NodePanelStatus = node.data.hasError ? 'error' : draft.dirty ? 'dirty' : 'clean'
-  const subtitle = isTaskInput
-    ? `Step ${stepNumber} of ${stepCount} · task input`
-    : `Step ${stepNumber} of ${stepCount} · ${agentId}${node.data.prompt_version ? ` v${node.data.prompt_version}` : ''}`
+  const stepLabel = `Step ${stepNumber} of ${stepCount}`
+  const stepDetail = isTaskInput
+    ? 'task input'
+    : `${agentId}${node.data.prompt_version ? ` v${node.data.prompt_version}` : ''}`
 
   const fileExtension = outputFileExtension(agentId)
   const filenamePreviewPrefix = draft.values.outputFilenameMode === 'source_pdf'
@@ -221,7 +222,8 @@ function NodePanel({
       <NodePanelHeader
         icon={icon}
         name={node.data.agent_display_name}
-        subtitle={subtitle}
+        stepLabel={stepLabel}
+        stepDetail={stepDetail}
         kindLabel={KIND_LABEL[kind]}
         status={status}
         errorMessage={node.data.errorMessage}

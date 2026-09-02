@@ -1,9 +1,10 @@
 /**
  * Geometry of the docked node panel.
  *
- * Docked and resizable inside the canvas area: 440px by default, 380 minimum
- * while half the canvas area allows it, never wider than half the canvas
- * area. It collapses to a 44px rail. Docked is the normal desktop mode; only
+ * Docked and resizable inside the canvas area: 440px by default, never
+ * narrower than 380, and no wider than half the canvas area while that half
+ * is at least 380; below that the dock holds 380 and the canvas takes the
+ * rest. It collapses to a 44px rail. Docked is the normal desktop mode; only
  * below 760px of builder width (palette, canvas, and dock together) does it
  * become a full-height drawer inside the builder instead.
  */
@@ -27,14 +28,14 @@ export function nodePanelMode(builderWidth: number | null): NodePanelMode {
 
 /**
  * Clamp a requested panel width to the allowed range for a canvas area.
- * Half the area is the hard cap, so a narrow builder still keeps a usable
- * canvas beside the docked panel; the 380 minimum applies below that cap.
+ * The 380 minimum wins: the half-area cap applies only while half the area
+ * is at least 380, so the panel content never squeezes below its minimum.
  */
 export function clampNodePanelWidth(width: number, areaWidth: number | null): number {
   const rounded = Math.round(width)
   if (areaWidth === null || areaWidth <= 0) {
     return Math.max(NODE_PANEL_MIN_WIDTH, rounded)
   }
-  const max = Math.floor(areaWidth * NODE_PANEL_MAX_FRACTION)
+  const max = Math.max(NODE_PANEL_MIN_WIDTH, Math.floor(areaWidth * NODE_PANEL_MAX_FRACTION))
   return Math.min(max, Math.max(NODE_PANEL_MIN_WIDTH, rounded))
 }

@@ -34,9 +34,10 @@ describe('clampNodePanelWidth', () => {
     expect(clampNodePanelWidth(440, 800)).toBe(400)
   })
 
-  it('caps at half the area even below the minimum so the canvas stays usable', () => {
-    expect(clampNodePanelWidth(440, 600)).toBe(300)
-    expect(clampNodePanelWidth(380, 480)).toBe(240)
+  it('holds the 380 minimum when half the area is smaller than it', () => {
+    expect(clampNodePanelWidth(440, 600)).toBe(NODE_PANEL_MIN_WIDTH)
+    expect(clampNodePanelWidth(440, 700)).toBe(NODE_PANEL_MIN_WIDTH)
+    expect(clampNodePanelWidth(380, 480)).toBe(NODE_PANEL_MIN_WIDTH)
   })
 
   it('only applies the minimum before the area is measured', () => {
