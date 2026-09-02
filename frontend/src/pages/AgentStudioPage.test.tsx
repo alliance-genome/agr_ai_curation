@@ -192,11 +192,14 @@ vi.mock('@/components/AgentStudio/AgentBrowser', () => ({
     onDiscussWithClaude,
   }: {
     onCloneToWorkshop: (agentId: string) => void
-    onDiscussWithClaude: (agentId: string, agentName: string) => void
+    onDiscussWithClaude: (agentId: string, agentName: string, prompt?: string) => void
   }) => (
     <>
       <button onClick={() => onCloneToWorkshop('ca_source')}>clone-custom</button>
       <button onClick={() => onDiscussWithClaude('gene', 'Gene Extractor')}>discuss-agent</button>
+      <button onClick={() => onDiscussWithClaude('gene', 'Gene Extractor', 'Draft a curator guide for Gene Extractor')}>
+        discuss-draft
+      </button>
     </>
   ),
 }))
@@ -1144,6 +1147,23 @@ describe('AgentStudioPage', () => {
         expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
       })
       expect(screen.getByTestId('opus-chat-verify-message')).toHaveTextContent('get_current_flow() first')
+    })
+
+    it('sends the drafting prompt when one is supplied and the generic message otherwise', async () => {
+      await renderStudio()
+
+      fireEvent.click(await screen.findByText('discuss-draft'))
+      await waitFor(() => {
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Draft a curator guide for Gene Extractor')
+      })
+      expect(screen.getByTestId('opus-chat-discuss-message')).not.toHaveTextContent("I'd like to discuss")
+
+      fireEvent.click(screen.getByText('discuss-agent'))
+      await waitFor(() => {
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent("I'd like to discuss the **Gene Extractor** agent")
+      })
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Agent ID: gene')
+      expect(screen.getByTestId('opus-chat-discuss-message')).not.toHaveTextContent('Draft a curator guide')
     })
   })
 })
