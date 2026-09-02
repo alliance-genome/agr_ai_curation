@@ -183,6 +183,20 @@ export interface WorkshopDraft {
   cancelSelfExclusion: () => void
 }
 
+/**
+ * Keep the same object while the record's id and updated_at are unchanged, so a
+ * background list refresh does not re-hydrate the draft and discard unsaved edits.
+ */
+function useStableAgentRecord(candidate: CustomAgent | undefined): CustomAgent | undefined {
+  const ref = useRef<CustomAgent | undefined>(undefined)
+  if (!candidate) {
+    ref.current = undefined
+  } else if (!ref.current || ref.current.id !== candidate.id || ref.current.updated_at !== candidate.updated_at) {
+    ref.current = candidate
+  }
+  return ref.current
+}
+
 export function useWorkshopDraft({
   catalog,
   initialParentAgentId,
@@ -263,13 +277,11 @@ export function useWorkshopDraft({
     () => templateOptions.find((template) => template.agent_id === parentAgentId),
     [templateOptions, parentAgentId]
   )
-  const selectedCustomAgent = useMemo(
-    () => customAgents.find((agent) => agent.id === selectedCustomAgentId),
-    [customAgents, selectedCustomAgentId]
+  const selectedCustomAgent = useStableAgentRecord(
+    customAgents.find((agent) => agent.id === selectedCustomAgentId)
   )
-  const selectedCloneSource = useMemo(
-    () => customAgents.find((agent) => agent.id === cloneSourceAgentId),
-    [customAgents, cloneSourceAgentId]
+  const selectedCloneSource = useStableAgentRecord(
+    customAgents.find((agent) => agent.id === cloneSourceAgentId)
   )
   const templateMissing = useMemo(() => {
     const source = selectedCustomAgent?.template_source
@@ -545,14 +557,9 @@ export function useWorkshopDraft({
       const templateAlignedAgentId = getTemplateAlignedAgentId(response.custom_agents)
 
       if (response.custom_agents.length > 0) {
-        setSelectedCustomAgentId((prev) => {
-          const existing = response.custom_agents.find((agent) => agent.id === prev)
-          if (!existing) return ''
-          if (parentAgentId && existing.template_source !== parentAgentId) {
-            return ''
-          }
-          return prev
-        })
+        setSelectedCustomAgentId((prev) => (
+          response.custom_agents.some((agent) => agent.id === prev) ? prev : ''
+        ))
         setCloneSourceAgentId((prev) => {
           const stillExists = response.custom_agents.some((agent) => agent.id === prev)
           if (stillExists) return prev
@@ -571,7 +578,7 @@ export function useWorkshopDraft({
         setLoading(false)
       }
     }
-  }, [getTemplateAlignedAgentId, parentAgentId])
+  }, [getTemplateAlignedAgentId])
 
   useEffect(() => {
     void loadCustomAgents()
@@ -606,6 +613,9 @@ export function useWorkshopDraft({
   }, [selectedCustomAgentId])
 
   useEffect(() => {
+    // Hydrate only once model and template options are known, so the draft is
+    // built once and a later options arrival cannot overwrite curator edits.
+    if (!workshopOptionsLoaded) return
     if (!selectedCustomAgent) {
       if (gettingStartedMode === 'clone' && selectedCloneSource) {
         const cloneModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCloneSource.model_id)
@@ -685,6 +695,7 @@ export function useWorkshopDraft({
     }
   }, [
     applyDraft,
+    workshopOptionsLoaded,
     modelOptions,
     defaultModelId,
     gettingStartedMode,
