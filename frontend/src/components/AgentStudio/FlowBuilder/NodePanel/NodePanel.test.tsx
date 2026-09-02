@@ -207,6 +207,24 @@ describe('NodePanel', () => {
     expect(onHide).toHaveBeenCalledTimes(1)
   })
 
+  it('asks before hiding the panel while edits are unapplied', async () => {
+    const user = userEvent.setup()
+    const { onHide, onApply } = renderPanel(buildNode({ custom_instructions: '' }))
+
+    await user.type(screen.getByRole('textbox', { name: 'Instructions for this step' }), 'Only the results section.')
+    await user.click(screen.getByRole('button', { name: 'Hide panel' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Apply changes to step 2?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
+    expect(onHide).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Hide panel' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Apply' }))
+    expect(onApply).toHaveBeenCalledTimes(1)
+    expect(onHide).toHaveBeenCalledTimes(1)
+  })
+
   it('pins a configuration error under the header', () => {
     renderPanel(buildNode({ hasError: true, errorMessage: 'This step is not connected to the entry path.' }))
     expect(screen.getByText('Configuration error')).toBeInTheDocument()

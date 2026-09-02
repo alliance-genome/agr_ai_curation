@@ -178,6 +178,13 @@ function NodePanel({
 
   useImperativeHandle(leaveGuardRef, () => ({ requestLeave }), [requestLeave])
 
+  // Hiding the panel unmounts it, draft included, so it goes through the same guard.
+  const guardedHide = useCallback(() => {
+    void requestLeave().then((leave) => {
+      if (leave) onHide()
+    })
+  }, [onHide, requestLeave])
+
   const guardedOpenAgent = useCallback((request: AgentBrowserRequest) => {
     if (!onOpenAgent) return
     void requestLeave().then((leave) => {
@@ -223,7 +230,7 @@ function NodePanel({
         onApply={() => { applyDraft() }}
         onCancel={draft.reset}
         onDelete={() => onDelete(node.id)}
-        onHide={onHide}
+        onHide={guardedHide}
       />
 
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 1.75, display: 'flex', flexDirection: 'column', gap: 2 }}>
