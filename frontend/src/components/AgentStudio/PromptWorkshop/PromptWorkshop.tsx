@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
 import { Alert, Box } from '@mui/material'
 
 import type {
@@ -42,6 +42,21 @@ import {
   UnsavedChangesDialog,
 } from './dialogs/ConfirmDialogs'
 
+/** Lets the page ask the Workshop whether it may leave (tab switch, programmatic navigation). */
+export interface WorkshopLeaveGuard {
+  /**
+   * Resolves true when the page may leave. A clean draft resolves at once; a dirty
+   * draft opens the unsaved-changes dialog and resolves with the curator's choice
+   * (Discard = true, Keep editing = false).
+   */
+  requestLeave: () => Promise<boolean>
+}
+
+interface GuardedAction {
+  proceed: () => void
+  cancel?: () => void
+}
+
 interface PromptWorkshopProps {
   catalog: PromptCatalog
   initialParentAgentId?: string | null
@@ -52,6 +67,8 @@ interface PromptWorkshopProps {
   incomingPromptUpdate?: WorkshopPromptUpdateRequest | null
   /** Open the given system agent in the Agents tab with its Envelope view. */
   onViewEnvelope?: (agentId: string) => void
+  /** Receives the leave guard so the page can confirm before navigating away. */
+  leaveGuardRef?: Ref<WorkshopLeaveGuard>
 }
 
 function summarizeEnvelope(metadata: AgentMetadata | undefined): EnvelopeSummary | null {
@@ -81,6 +98,7 @@ function PromptWorkshop({
   opusConversation = [],
   incomingPromptUpdate = null,
   onViewEnvelope,
+  leaveGuardRef,
 }: PromptWorkshopProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const draft = useWorkshopDraft({
@@ -104,7 +122,9 @@ function PromptWorkshop({
   const [toolRequestOpen, setToolRequestOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<CustomAgent | null>(null)
   const [pendingRevert, setPendingRevert] = useState<number | null>(null)
-  const [pendingGuardedAction, setPendingGuardedAction] = useState<(() => void) | null>(null)
+  const [pendingGuardedAction, setPendingGuardedAction] = useState<GuardedAction | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [returnFocusToken, setReturnFocusToken] = useState(0)
 
   const {
     selectedCustomAgent,
@@ -130,11 +150,34 @@ function PromptWorkshop({
 
   const guard = useCallback((action: () => void) => {
     if (dirty.any) {
-      setPendingGuardedAction(() => action)
+      setPendingGuardedAction({ proceed: action })
       return
     }
     action()
   }, [dirty.any])
+
+  const requestLeave = useCallback((): Promise<boolean> => {
+    if (!dirty.any) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      setPendingGuardedAction({
+        proceed: () => resolve(true),
+        cancel: () => {
+          setReturnFocusToken((token) => token + 1)
+          resolve(false)
+        },
+      })
+    })
+  }, [dirty.any])
+
+  useImperativeHandle(leaveGuardRef, () => ({ requestLeave }), [requestLeave])
+
+  // After "Keep editing" on a leave request, the dialog hands focus back to the
+  // element that opened it (a page tab). Bring it back into the Workshop instead.
+  // This effect runs after the dialog's own focus restore in the same commit.
+  useEffect(() => {
+    if (returnFocusToken === 0) return
+    rootRef.current?.focus()
+  }, [returnFocusToken])
 
   const envelope = useMemo(
     () => summarizeEnvelope(draft.domainEnvelopeAgentId ? agentMetadata[draft.domainEnvelopeAgentId] : undefined),
@@ -260,6 +303,8 @@ function PromptWorkshop({
 
   return (
     <Box
+      ref={rootRef}
+      tabIndex={-1}
       sx={{
         height: '100%',
         display: 'flex',
@@ -510,9 +555,13 @@ function PromptWorkshop({
         onDiscard={() => {
           const action = pendingGuardedAction
           setPendingGuardedAction(null)
-          action?.()
+          action?.proceed()
         }}
-        onKeepEditing={() => setPendingGuardedAction(null)}
+        onKeepEditing={() => {
+          const action = pendingGuardedAction
+          setPendingGuardedAction(null)
+          action?.cancel?.()
+        }}
       />
     </Box>
   )

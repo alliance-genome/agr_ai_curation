@@ -15,6 +15,8 @@ const historyMocks = vi.hoisted(() => ({
   useChatHistoryTranscriptQuery: vi.fn(),
 }))
 
+const workshopMockState = vi.hoisted(() => ({ dirty: false }))
+
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/features/history/useChatHistoryQuery', () => historyMocks)
 
@@ -204,23 +206,53 @@ vi.mock('@/components/AgentStudio/AgentBrowser', () => ({
   ),
 }))
 
-vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', () => ({
-  default: ({
+vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
+  const React = await import('react')
+  const { UnsavedChangesDialog } = await import('@/components/AgentStudio/PromptWorkshop/dialogs/ConfirmDialogs')
+
+  function PromptWorkshopMock({
     initialCustomAgentId,
     initialParentAgentId,
     incomingPromptUpdate,
     opusConversation,
+    onViewEnvelope,
+    leaveGuardRef,
   }: {
     initialCustomAgentId?: string | null
     initialParentAgentId?: string | null
     incomingPromptUpdate?: { prompt?: string } | null
     opusConversation?: Array<{ content: string }>
-  }) => (
-    <div data-testid="prompt-workshop">
-      custom:{initialCustomAgentId || 'none'} parent:{initialParentAgentId || 'none'} incoming:{incomingPromptUpdate?.prompt || 'none'} conversation:{(opusConversation ?? []).map((message) => message.content).join('|') || 'none'}
-    </div>
-  ),
-}))
+    onViewEnvelope?: (agentId: string) => void
+    leaveGuardRef?: Ref<{ requestLeave: () => Promise<boolean> }>
+  }) {
+    const [pendingLeave, setPendingLeave] = React.useState<((leave: boolean) => void) | null>(null)
+    React.useImperativeHandle(leaveGuardRef, () => ({
+      requestLeave: () => {
+        if (!workshopMockState.dirty) return Promise.resolve(true)
+        return new Promise<boolean>((resolve) => setPendingLeave(() => resolve))
+      },
+    }))
+    return (
+      <div data-testid="prompt-workshop">
+        custom:{initialCustomAgentId || 'none'} parent:{initialParentAgentId || 'none'} incoming:{incomingPromptUpdate?.prompt || 'none'} conversation:{(opusConversation ?? []).map((message) => message.content).join('|') || 'none'}
+        <button type="button" onClick={() => onViewEnvelope?.('gene')}>view-envelope</button>
+        <UnsavedChangesDialog
+          open={Boolean(pendingLeave)}
+          onDiscard={() => {
+            pendingLeave?.(true)
+            setPendingLeave(null)
+          }}
+          onKeepEditing={() => {
+            pendingLeave?.(false)
+            setPendingLeave(null)
+          }}
+        />
+      </div>
+    )
+  }
+
+  return { default: PromptWorkshopMock }
+})
 
 function LocationProbe() {
   const location = useLocation()
@@ -337,6 +369,7 @@ describe('AgentStudioPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    workshopMockState.dirty = false
     mockViewportWidth(1440)
     serviceMocks.fetchPromptCatalog.mockResolvedValue(EMPTY_CATALOG)
     serviceMocks.cloneAgentToWorkshop.mockResolvedValue({
@@ -418,6 +451,84 @@ describe('AgentStudioPage', () => {
       expect(screen.getByTestId('prompt-workshop')).toHaveTextContent(
         'custom:11111111-1111-1111-1111-111111111111 parent:gene incoming:none'
       )
+    })
+  })
+
+  describe('workshop leave guard', () => {
+    async function renderOnWorkshop() {
+      localStorage.setItem('agent-studio-tab', 'agent_workshop')
+      render(
+        <MemoryRouter>
+          <AgentStudioPage />
+        </MemoryRouter>
+      )
+      await screen.findByTestId('prompt-workshop')
+      expect(screen.getByRole('tab', { name: 'Agent Workshop' })).toHaveAttribute('aria-selected', 'true')
+    }
+
+    it('switches tabs at once when the Workshop draft is clean', async () => {
+      await renderOnWorkshop()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true')
+      })
+      expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('prompt-workshop')).not.toBeInTheDocument()
+      expect(localStorage.getItem('agent-studio-tab')).toBe('agents')
+    })
+
+    it('stays on the Workshop after Keep editing', async () => {
+      workshopMockState.dirty = true
+      await renderOnWorkshop()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
+      })
+      expect(screen.getByRole('tab', { name: 'Agent Workshop' })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByTestId('prompt-workshop')).toBeInTheDocument()
+      expect(localStorage.getItem('agent-studio-tab')).toBe('agent_workshop')
+    })
+
+    it('switches tabs and drops the Workshop after Discard', async () => {
+      workshopMockState.dirty = true
+      await renderOnWorkshop()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true')
+      })
+      expect(screen.queryByTestId('prompt-workshop')).not.toBeInTheDocument()
+      expect(localStorage.getItem('agent-studio-tab')).toBe('agents')
+    })
+
+    it('guards the programmatic switch to the Agents envelope view', async () => {
+      workshopMockState.dirty = true
+      await renderOnWorkshop()
+
+      fireEvent.click(screen.getByRole('button', { name: 'view-envelope' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
+      })
+      expect(screen.getByRole('tab', { name: 'Agent Workshop' })).toHaveAttribute('aria-selected', 'true')
+
+      fireEvent.click(screen.getByRole('button', { name: 'view-envelope' }))
+      const dialogAgain = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+      fireEvent.click(within(dialogAgain).getByRole('button', { name: 'Discard' }))
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true')
+      })
+      expect(screen.queryByTestId('prompt-workshop')).not.toBeInTheDocument()
     })
   })
 
