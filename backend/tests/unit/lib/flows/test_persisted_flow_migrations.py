@@ -140,8 +140,42 @@ def test_migration_rejects_unexpected_binding_and_dependent_graph_references():
     edged["edges"] = [
         {
             "id": "retired-edge",
+            "source": "extract_1",
             "satisfies_binding_id": BINDING_ID,
         }
     ]
     with pytest.raises(PersistedFlowMigrationError, match="validation group or edge"):
         migrate_persisted_flow_definition(edged, migrations=(MIGRATION,))
+
+
+def test_binding_references_on_unrelated_agents_do_not_block_targeted_migration():
+    definition = _definition()
+    definition["nodes"].append(
+        {
+            "id": "other",
+            "type": "agent",
+            "data": {
+                "agent_id": "other_extractor",
+                "validation_attachments": [],
+                "validation_groups": [{"binding_id": BINDING_ID}],
+            },
+        }
+    )
+    definition["edges"] = [
+        {
+            "id": "other-binding-edge",
+            "source": "other",
+            "satisfies_binding_id": BINDING_ID,
+        }
+    ]
+
+    result = migrate_persisted_flow_definition(
+        definition,
+        migrations=(MIGRATION,),
+    )
+
+    assert result.changed is True
+    assert result.definition["nodes"][1]["data"]["validation_groups"] == [
+        {"binding_id": BINDING_ID}
+    ]
+    assert result.definition["edges"] == definition["edges"]

@@ -27,12 +27,14 @@ depends_on: str | Sequence[str] | None = None
 FLOW_MIGRATION_ID = "2026-09-03.remove-allele-pending-envelope-validator"
 
 
-def _flow_migration() -> PersistedFlowMigration:
+def _flow_migration() -> PersistedFlowMigration | None:
     matches = tuple(
         migration
         for migration in load_persisted_flow_migration_catalog().migrations
         if migration.migration_id == FLOW_MIGRATION_ID
     )
+    if not matches:
+        return None
     if len(matches) != 1:
         raise RuntimeError(
             f"Expected exactly one package declaration for {FLOW_MIGRATION_ID}; "
@@ -44,8 +46,11 @@ def _flow_migration() -> PersistedFlowMigration:
 def upgrade() -> None:
     """Apply the reviewed forward-only saved-flow repair."""
 
-    bind = op.get_bind()
     flow_migration = _flow_migration()
+    if flow_migration is None:
+        return
+
+    bind = op.get_bind()
     retired_attachment_ids = sorted(
         attachment.attachment_id for attachment in flow_migration.retired_attachments
     )

@@ -34,6 +34,7 @@ class PersistedFlowMigrationResult:
 def _retired_reference_in_validation_groups(
     nodes: list[Any],
     *,
+    agent_id: str,
     binding_id: str,
     attachment_ids: frozenset[str],
 ) -> bool:
@@ -46,12 +47,13 @@ def _retired_reference_in_validation_groups(
         groups = data.get("validation_groups")
         if not isinstance(groups, list):
             continue
+        is_target_agent = data.get("agent_id") == agent_id
         for group in groups:
             if not isinstance(group, Mapping):
                 continue
-            if group.get("binding_id") == binding_id:
+            if is_target_agent and group.get("binding_id") == binding_id:
                 return True
-            if group.get("validator_binding_id") == binding_id:
+            if is_target_agent and group.get("validator_binding_id") == binding_id:
                 return True
             if group.get("attachment_id") in attachment_ids:
                 return True
@@ -63,6 +65,7 @@ def _retired_reference_in_validation_groups(
 def _retired_reference_in_edges(
     edges: Any,
     *,
+    target_node_ids: frozenset[str],
     binding_id: str,
     attachment_ids: frozenset[str],
 ) -> bool:
@@ -71,7 +74,10 @@ def _retired_reference_in_edges(
     for edge in edges:
         if not isinstance(edge, Mapping):
             continue
-        if edge.get("satisfies_binding_id") == binding_id:
+        if (
+            edge.get("source") in target_node_ids
+            and edge.get("satisfies_binding_id") == binding_id
+        ):
             return True
         if edge.get("replaces_attachment_id") in attachment_ids:
             return True
@@ -124,12 +130,22 @@ def migrate_persisted_flow_definition(
             for attachment in migration.retired_attachments
         }
         attachment_ids = frozenset(expected_bindings)
+        target_node_ids = frozenset(
+            node.get("id")
+            for node in nodes
+            if isinstance(node, Mapping)
+            and isinstance(node.get("data"), Mapping)
+            and node["data"].get("agent_id") == migration.agent_id
+            and isinstance(node.get("id"), str)
+        )
         if _retired_reference_in_validation_groups(
             nodes,
+            agent_id=migration.agent_id,
             binding_id=migration.retired_binding_id,
             attachment_ids=attachment_ids,
         ) or _retired_reference_in_edges(
             migrated.get("edges"),
+            target_node_ids=target_node_ids,
             binding_id=migration.retired_binding_id,
             attachment_ids=attachment_ids,
         ):

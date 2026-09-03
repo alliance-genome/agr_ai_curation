@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 from src.lib.packages.persisted_flow_migration_loader import (
@@ -106,3 +107,18 @@ def test_upgrade_uses_guarded_idempotent_definition_update(monkeypatch):
     assert update["updated_definition"]["nodes"][0]["data"][
         "validation_attachments"
     ] == [{"attachment_id": "current"}]
+
+
+def test_upgrade_is_noop_when_active_packages_do_not_declare_repair(monkeypatch):
+    monkeypatch.setattr(
+        migration,
+        "load_persisted_flow_migration_catalog",
+        lambda: SimpleNamespace(migrations=()),
+    )
+    monkeypatch.setattr(
+        migration.op,
+        "get_bind",
+        lambda: (_ for _ in ()).throw(AssertionError("database should not be touched")),
+    )
+
+    migration.upgrade()
