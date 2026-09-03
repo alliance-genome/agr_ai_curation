@@ -131,12 +131,12 @@ def migrate_persisted_flow_definition(
         }
         attachment_ids = frozenset(expected_bindings)
         target_node_ids = frozenset(
-            node.get("id")
+            node_id
             for node in nodes
             if isinstance(node, Mapping)
             and isinstance(node.get("data"), Mapping)
             and node["data"].get("agent_id") == migration.agent_id
-            and isinstance(node.get("id"), str)
+            and isinstance((node_id := node.get("id")), str)
         )
         if _retired_reference_in_validation_groups(
             nodes,
