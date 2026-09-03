@@ -11,6 +11,10 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from src.schemas.flows import FlowDefinition
+from src.lib.flows.persisted_flow_migrations import (
+    RETIRED_ALLELE_PENDING_VALIDATOR_ATTACHMENT_IDS,
+    RETIRED_ALLELE_PENDING_VALIDATOR_BINDING_ID,
+)
 
 flows = importlib.import_module("src.api.flows")
 
@@ -598,6 +602,112 @@ def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
     assert response.validation_warnings[0].type == "CRITICAL"
     assert "references unavailable agent" in response.validation_warnings[0].message
     assert "fixture_agent_without_pack" in response.validation_warnings[0].message
+
+
+def _retired_allele_attachment(attachment_id: str) -> dict:
+    metadata_only = ":metadata:" in attachment_id
+    return {
+        "attachment_id": attachment_id,
+        "domain_pack_id": "agr.alliance.allele",
+        "validator_id": "agr.alliance:allele_validation",
+        "validator_binding_id": (
+            None if metadata_only else RETIRED_ALLELE_PENDING_VALIDATOR_BINDING_ID
+        ),
+        "state": "under_development",
+        "scope": "pack" if metadata_only else "object",
+        "enabled": False,
+    }
+
+
+def _legacy_allele_flow_definition_payload() -> dict:
+    payload = _minimal_flow_definition_payload()
+    payload["nodes"][1]["data"].update(
+        {
+            "agent_id": "allele_extractor",
+            "agent_display_name": "Allele Extractor",
+            "validation_attachments": [
+                *[
+                    _retired_allele_attachment(attachment_id)
+                    for attachment_id in sorted(
+                        RETIRED_ALLELE_PENDING_VALIDATOR_ATTACHMENT_IDS
+                    )
+                ],
+                {
+                    "attachment_id": "fixture:current",
+                    "domain_pack_id": "fixture",
+                    "validator_id": "current",
+                    "validator_binding_id": "current",
+                    "state": "under_development",
+                    "scope": "pack",
+                    "enabled": False,
+                },
+            ],
+        }
+    )
+    return payload
+
+
+def test_flow_response_repairs_retired_allele_selections_on_read(monkeypatch):
+    now = datetime.now(timezone.utc)
+    stored_flow = SimpleNamespace(
+        id=uuid4(),
+        user_id=7,
+        name="Legacy allele flow",
+        description=None,
+        flow_definition=_legacy_allele_flow_definition_payload(),
+        execution_count=0,
+        last_executed_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition, **_kwargs: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {"category": "Extraction"},
+    )
+
+    response = flows._flow_to_response(stored_flow)
+
+    attachment_ids = {
+        attachment.attachment_id
+        for attachment in response.flow_definition.nodes[1].data.validation_attachments
+    }
+    assert attachment_ids == {"fixture:current"}
+    assert response.has_critical_issues is False
+    assert response.validation_warnings[0].type == "WARNING"
+    assert "retired validation selections" in response.validation_warnings[0].message
+    assert len(stored_flow.flow_definition["nodes"][1]["data"]["validation_attachments"]) == 7
+
+
+def test_create_validation_does_not_apply_persisted_flow_migrations(monkeypatch):
+    def _reject_unknown(flow_definition, **_kwargs):
+        attachment_ids = {
+            attachment.attachment_id
+            for attachment in flow_definition.nodes[1].data.validation_attachments
+        }
+        assert attachment_ids.intersection(
+            RETIRED_ALLELE_PENDING_VALIDATOR_ATTACHMENT_IDS
+        )
+        raise flows.FlowValidationAttachmentError("Unknown validation attachment selections")
+
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        _reject_unknown,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(_legacy_allele_flow_definition_payload())
+        )
+
+    assert exc.value.status_code == 422
+    assert "Unknown validation attachment selections" in str(exc.value.detail)
 
 
 def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(
