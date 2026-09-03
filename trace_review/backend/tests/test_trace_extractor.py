@@ -1,10 +1,13 @@
+import json
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from src.services.trace_extractor import (
     OBSERVATION_FIELDS,
     SESSION_OBSERVATION_FIELDS,
+    TRACE_LIST_OBSERVATION_FIELDS,
     TraceExtractor,
 )
 
@@ -29,6 +32,7 @@ class TraceExtractorTests(unittest.TestCase):
         observations = [{
             "id": "root-1",
             "trace_id": "trace-12345678",
+            "project_id": "project-1",
             "type": "GENERATION",
             "name": "OpenAI response",
             "trace_name": "trace name",
@@ -54,6 +58,11 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertEqual(data["scores"], scores)
         self.assertEqual(data["metadata"]["total_tokens"], 12)
         self.assertEqual(data["metadata"]["total_cost"], 0.75)
+        self.assertEqual(data["metadata"]["duration_seconds"], 1.25)
+        self.assertEqual(
+            data["raw_trace"]["htmlPath"],
+            "/project/project-1/traces/trace-12345678",
+        )
         self.assertEqual(data["metadata"]["observation_count"], 1)
         self.assertEqual(data["metadata"]["score_count"], 1)
 
@@ -109,7 +118,10 @@ class TraceExtractorTests(unittest.TestCase):
                 meta=SimpleNamespace(cursor="next-cursor"),
             ),
             SimpleNamespace(
-                data=[{"id": "obs-1"}, {"id": "obs-2", "name": "second"}],
+                data=[
+                    {"id": "obs-1", "trace_id": "trace-1"},
+                    {"id": "obs-2", "name": "second", "trace_id": "trace-1"},
+                ],
                 meta=SimpleNamespace(cursor=None),
             ),
         ]
@@ -142,66 +154,422 @@ class TraceExtractorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no v2 observations"):
             TraceExtractor.get_trace_details("trace-1", [])
 
-    def test_list_traces_uses_metadata_filters(self):
+    def test_get_observations_rejects_missing_or_mismatched_trace_identity(self):
+        for returned_trace_id in (None, "other-trace"):
+            with self.subTest(returned_trace_id=returned_trace_id):
+                extractor = self._make_extractor()
+                observation = {"id": "obs-1"}
+                if returned_trace_id is not None:
+                    observation["trace_id"] = returned_trace_id
+                extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+                    data=[observation],
+                    meta=SimpleNamespace(cursor=None),
+                )
+
+                with self.assertRaisesRegex(RuntimeError, "outside requested trace"):
+                    extractor.get_observations("trace-1")
+
+    @patch("src.services.trace_extractor.get_langfuse_request_timeout_seconds", return_value=9)
+    @patch("src.services.trace_extractor.get_langfuse_observation_page_limit", return_value=2)
+    @patch("src.services.trace_extractor.get_langfuse_search_observation_limit", return_value=10)
+    def test_list_traces_uses_v2_filters_pagination_and_deduplication(
+        self,
+        _search_limit: Mock,
+        _page_limit: Mock,
+        _timeout: Mock,
+    ):
         extractor = self._make_extractor()
-        extractor.client.api.trace.list.return_value = SimpleNamespace(
-            data=[SimpleNamespace(dict=lambda: {"id": "trace-1", "name": "run"})],
-            meta=SimpleNamespace(dict=lambda: {"page": 1, "totalPages": 1}),
-        )
+        extractor.client.api.observations.get_many.side_effect = [
+            SimpleNamespace(
+                data=[
+                    {
+                        "id": "obs-2",
+                        "trace_id": "trace-1",
+                        "parent_observation_id": "obs-1",
+                        "project_id": "project-1",
+                        "trace_name": "run",
+                        "session_id": "session-1",
+                        "user_id": "user-1",
+                        "start_time": "2026-09-03T19:00:01Z",
+                        "end_time": "2026-09-03T19:00:03Z",
+                        "cost_details": {"total": 0.02},
+                        "metadata": {"document_id": "doc-1", "run_id": "run-1"},
+                    },
+                    {
+                        "id": "wrong-session",
+                        "trace_id": "wrong-trace",
+                        "trace_name": "run",
+                        "session_id": "other-session",
+                        "user_id": "user-1",
+                        "metadata": {"document_id": "doc-1", "run_id": "run-1"},
+                    },
+                ],
+                meta=SimpleNamespace(cursor="next-cursor"),
+            ),
+            SimpleNamespace(
+                data=[
+                    {
+                        "id": "obs-1",
+                        "trace_id": "trace-1",
+                        "project_id": "project-1",
+                        "trace_name": "run",
+                        "session_id": "session-1",
+                        "user_id": "user-1",
+                        "start_time": "2026-09-03T19:00:00Z",
+                        "end_time": "2026-09-03T19:00:05Z",
+                        "cost_details": {"total": 0.01},
+                        "metadata": {"document_id": "doc-1", "run_id": "run-1"},
+                    },
+                    {
+                        "id": "obs-3",
+                        "trace_id": "trace-2",
+                        "project_id": "project-1",
+                        "trace_name": "run",
+                        "session_id": "session-1",
+                        "user_id": "user-1",
+                        "start_time": "2026-09-03T18:00:00Z",
+                        "end_time": "2026-09-03T18:00:02Z",
+                        "cost_details": {"total": 0.04},
+                        "metadata": {"document_id": "doc-1", "run_id": "run-1"},
+                    },
+                ],
+                meta=SimpleNamespace(cursor=None),
+            ),
+        ]
+        extractor._get_observations_bounded = Mock(side_effect=[
+            ([
+                {
+                    "id": "obs-2",
+                    "traceId": "trace-1",
+                    "parentObservationId": "obs-1",
+                    "projectId": "project-1",
+                    "trace_name": "run",
+                    "session_id": "session-1",
+                    "user_id": "user-1",
+                    "startTime": "2026-09-03T19:00:01Z",
+                    "endTime": "2026-09-03T19:00:03Z",
+                    "costDetails": {"total": 0.02},
+                    "metadata": {"document_id": "doc-1", "run_id": "run-1"},
+                },
+                {
+                    "id": "obs-1",
+                    "traceId": "trace-1",
+                    "projectId": "project-1",
+                    "trace_name": "run",
+                    "session_id": "session-1",
+                    "user_id": "user-1",
+                    "startTime": "2026-09-03T19:00:00Z",
+                    "endTime": "2026-09-03T19:00:05Z",
+                    "costDetails": {"total": 0.01},
+                    "metadata": {"document_id": "doc-1", "run_id": "run-1"},
+                },
+            ], 1, True),
+            ([{
+                "id": "obs-3",
+                "traceId": "trace-2",
+                "projectId": "project-1",
+                "trace_name": "run",
+                "session_id": "session-1",
+                "user_id": "user-1",
+                "startTime": "2026-09-03T18:00:00Z",
+                "endTime": "2026-09-03T18:00:02Z",
+                "costDetails": {"total": 0.04},
+                "metadata": {"document_id": "doc-1", "run_id": "run-1"},
+            }], 1, True),
+        ])
 
         result = extractor.list_traces(
             session_id="session-1",
+            user_id="user-1",
+            name="run",
             document_id="doc-1",
             run_id="run-1",
             limit=10,
         )
 
         self.assertEqual(result["source"], "remote")
-        self.assertEqual(result["traces"], [{"id": "trace-1", "name": "run"}])
-        call = extractor.client.api.trace.list.call_args
-        self.assertEqual(call.kwargs["session_id"], "session-1")
-        self.assertEqual(call.kwargs["limit"], 10)
-        self.assertEqual(call.kwargs["order_by"], "timestamp.asc")
-        self.assertIn('"key": "document_id"', call.kwargs["filter"])
-        self.assertIn('"value": "doc-1"', call.kwargs["filter"])
-        self.assertIn('"key": "run_id"', call.kwargs["filter"])
+        self.assertEqual([trace["id"] for trace in result["traces"]], ["trace-2", "trace-1"])
+        self.assertEqual(result["traces"][0]["latency"], 2.0)
+        self.assertEqual(result["traces"][0]["totalCost"], 0.04)
+        self.assertEqual(
+            result["traces"][0]["htmlPath"],
+            "/project/project-1/traces/trace-2",
+        )
+        self.assertEqual(result["traces"][1]["latency"], 5.0)
+        self.assertAlmostEqual(result["traces"][1]["totalCost"], 0.03)
+        self.assertEqual(result["meta"]["observationsRejected"], 1)
+        self.assertTrue(result["source_exhausted"])
+        self.assertFalse(result["scan_truncated"])
+        calls = extractor.client.api.observations.get_many.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].kwargs["fields"], TRACE_LIST_OBSERVATION_FIELDS)
+        self.assertEqual(calls[0].kwargs["cursor"], None)
+        self.assertEqual(calls[1].kwargs["cursor"], "next-cursor")
+        self.assertNotIn("user_id", calls[0].kwargs)
+        self.assertNotIn("from_start_time", calls[0].kwargs)
+        self.assertNotIn("to_start_time", calls[0].kwargs)
+        self.assertEqual(calls[0].kwargs["request_options"], {"timeout_in_seconds": 9})
+        self.assertIn('"column": "sessionId"', calls[0].kwargs["filter"])
+        self.assertIn('"column": "userId"', calls[0].kwargs["filter"])
+        self.assertIn('"column": "traceName"', calls[0].kwargs["filter"])
+        self.assertIn('"key": "document_id"', calls[0].kwargs["filter"])
+        extractor.client.api.trace.list.assert_not_called()
 
-    @patch("src.services.trace_extractor.get_agent_studio_trace_search_max_limit", return_value=100)
-    def test_list_traces_offset_uses_stable_source_page_size(self, _search_max: Mock):
+    @patch("src.services.trace_extractor.get_langfuse_observation_page_limit", return_value=100)
+    @patch("src.services.trace_extractor.get_langfuse_search_observation_limit", return_value=150)
+    def test_list_traces_offset_uses_unique_trace_order(self, _search_limit: Mock, _page_limit: Mock):
         extractor = self._make_extractor()
-        extractor.client.api.trace.list.side_effect = [
-            SimpleNamespace(
-                data=[{"id": f"trace-{index}"} for index in range(100)],
-                meta={"page": 1, "totalPages": 2, "totalItems": 150},
-            ),
-            SimpleNamespace(
-                data=[{"id": f"trace-{index}"} for index in range(100, 150)],
-                meta={"page": 2, "totalPages": 2, "totalItems": 150},
-            ),
-        ]
+        extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+            data=[
+                {
+                    "id": f"obs-{index}",
+                    "trace_id": f"trace-{index}",
+                    "start_time": f"2026-09-03T18:{index:02d}:00Z",
+                }
+                for index in range(20)
+            ],
+            meta=SimpleNamespace(cursor=None),
+        )
 
-        result = extractor.list_traces(offset=110, limit=10)
+        result = extractor.list_traces(offset=10, limit=5)
 
         self.assertEqual(
             [trace["id"] for trace in result["traces"]],
-            [f"trace-{index}" for index in range(110, 120)],
+            [f"trace-{index}" for index in range(10, 15)],
         )
-        self.assertEqual(result["total_items"], 150)
+        self.assertEqual(result["total_items"], 20)
         self.assertTrue(result["source_exhausted"])
-        self.assertEqual(
-            [call.kwargs["limit"] for call in extractor.client.api.trace.list.call_args_list],
-            [100, 100],
+
+    @patch("src.services.trace_extractor.get_langfuse_request_timeout_seconds", return_value=9)
+    @patch("src.services.trace_extractor.get_langfuse_observation_page_limit", return_value=10)
+    @patch("src.services.trace_extractor.get_langfuse_search_observation_limit", return_value=10)
+    def test_list_traces_composes_and_rechecks_user_and_time_filters(
+        self,
+        _search_limit: Mock,
+        _page_limit: Mock,
+        _timeout: Mock,
+    ):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+            data=[
+                {
+                    "id": "matching-child",
+                    "trace_id": "trace-1",
+                    "parent_observation_id": "root-1",
+                    "trace_name": "run",
+                    "user_id": "user-1",
+                    "start_time": "2026-09-03T12:30:00Z",
+                },
+                {
+                    "id": "outside-window",
+                    "trace_id": "trace-outside",
+                    "trace_name": "run",
+                    "user_id": "user-1",
+                    "start_time": "2026-09-03T14:00:00Z",
+                },
+            ],
+            meta=SimpleNamespace(cursor=None),
         )
+        extractor._get_observations_bounded = Mock(return_value=([{
+            "id": "root-1",
+            "traceId": "trace-1",
+            "projectId": "project-1",
+            "trace_name": "run",
+            "user_id": "user-1",
+            "startTime": "2026-09-03T12:00:00Z",
+            "endTime": "2026-09-03T12:45:00Z",
+        }], 1, True))
+        start = datetime.fromisoformat("2026-09-03T12:00:00+00:00")
+        end = datetime.fromisoformat("2026-09-03T13:00:00+00:00")
+
+        result = extractor.list_traces(
+            user_id="user-1",
+            name="run",
+            from_timestamp=start,
+            to_timestamp=end,
+            limit=10,
+        )
+
+        call = extractor.client.api.observations.get_many.call_args
+        filters = json.loads(call.kwargs["filter"])
+        self.assertIn(
+            {"type": "string", "column": "userId", "operator": "=", "value": "user-1"},
+            filters,
+        )
+        self.assertIn(
+            {
+                "type": "datetime",
+                "column": "startTime",
+                "operator": ">=",
+                "value": start.isoformat(),
+            },
+            filters,
+        )
+        self.assertIn(
+            {
+                "type": "datetime",
+                "column": "startTime",
+                "operator": "<",
+                "value": end.isoformat(),
+            },
+            filters,
+        )
+        self.assertNotIn("user_id", call.kwargs)
+        self.assertNotIn("from_start_time", call.kwargs)
+        self.assertNotIn("to_start_time", call.kwargs)
+        self.assertEqual([trace["id"] for trace in result["traces"]], ["trace-1"])
+        self.assertEqual(result["meta"]["observationsRejected"], 1)
+
+    @patch("src.services.trace_extractor.get_langfuse_observation_page_limit", return_value=10)
+    @patch("src.services.trace_extractor.get_langfuse_search_observation_limit", return_value=10)
+    def test_list_traces_rejects_child_match_when_root_timestamp_is_outside_window(
+        self,
+        _search_limit: Mock,
+        _page_limit: Mock,
+    ):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+            data=[{
+                "id": "matching-child",
+                "trace_id": "trace-1",
+                "parent_observation_id": "root-1",
+                "start_time": "2026-09-03T12:30:00Z",
+            }],
+            meta=SimpleNamespace(cursor=None),
+        )
+        extractor._get_observations_bounded = Mock(return_value=([
+            {
+                "id": "root-1",
+                "traceId": "trace-1",
+                "startTime": "2026-09-03T10:00:00Z",
+                "endTime": "2026-09-03T10:30:00Z",
+            },
+            {
+                "id": "matching-child",
+                "traceId": "trace-1",
+                "parentObservationId": "root-1",
+                "startTime": "2026-09-03T12:30:00Z",
+            },
+        ], 1, True))
+
+        result = extractor.list_traces(
+            from_timestamp=datetime.fromisoformat("2026-09-03T12:00:00+00:00"),
+            to_timestamp=datetime.fromisoformat("2026-09-03T13:00:00+00:00"),
+            limit=10,
+        )
+
+        self.assertEqual(result["traces"], [])
+        self.assertEqual(result["meta"]["tracesRejected"], 1)
+
+    @patch("src.services.trace_extractor.get_langfuse_observation_page_limit", return_value=2)
+    @patch("src.services.trace_extractor.get_langfuse_search_observation_limit", return_value=2)
+    def test_list_traces_surfaces_provider_scan_truncation(self, _search_limit: Mock, _page_limit: Mock):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+            data=[
+                {"id": "obs-1", "trace_id": "trace-1"},
+                {"id": "obs-2", "trace_id": "trace-1"},
+            ],
+            meta=SimpleNamespace(cursor="more"),
+        )
+        extractor._get_observations_bounded = Mock(return_value=([
+            {"id": "obs-1", "traceId": "trace-1", "startTime": "2026-09-03T18:00:00Z"},
+            {
+                "id": "obs-2",
+                "traceId": "trace-1",
+                "parentObservationId": "obs-1",
+                "startTime": "2026-09-03T18:00:01Z",
+            },
+        ], 1, True))
+
+        result = extractor.list_traces(limit=2)
+
+        self.assertTrue(result["scan_truncated"])
+        self.assertFalse(result["source_exhausted"])
+        self.assertTrue(result["meta"]["scanTruncated"])
+
+    @patch("src.services.trace_extractor.get_langfuse_search_request_limit", return_value=3)
+    @patch("src.services.trace_extractor.get_langfuse_observation_page_limit", return_value=10)
+    @patch("src.services.trace_extractor.get_langfuse_search_observation_limit", return_value=100)
+    def test_list_traces_caps_discovery_and_hydration_requests(
+        self,
+        _search_limit: Mock,
+        _page_limit: Mock,
+        _request_limit: Mock,
+    ):
+        extractor = self._make_extractor()
+
+        def get_many(**kwargs):
+            trace_id = kwargs.get("trace_id")
+            if trace_id:
+                return SimpleNamespace(
+                    data=[{
+                        "id": f"root-{trace_id}",
+                        "trace_id": trace_id,
+                        "start_time": "2026-09-03T18:00:00Z",
+                    }],
+                    meta=SimpleNamespace(cursor=None),
+                )
+            return SimpleNamespace(
+                data=[
+                    {
+                        "id": f"child-{index}",
+                        "trace_id": f"trace-{index}",
+                        "parent_observation_id": f"root-trace-{index}",
+                        "start_time": f"2026-09-03T18:00:0{index}Z",
+                    }
+                    for index in range(4)
+                ],
+                meta=SimpleNamespace(cursor=None),
+            )
+
+        extractor.client.api.observations.get_many.side_effect = get_many
+
+        result = extractor.list_traces(limit=4)
+
+        self.assertEqual(extractor.client.api.observations.get_many.call_count, 3)
+        self.assertEqual(result["meta"]["requestsMade"], 3)
+        self.assertEqual(result["meta"]["requestLimit"], 3)
+        self.assertTrue(result["meta"]["hydrationTruncated"])
+        self.assertTrue(result["scan_truncated"])
+        self.assertIsNone(result["total_items"])
+        self.assertEqual(result["local_result_count"], 2)
+
+    def test_list_traces_rejects_empty_page_with_cursor(self):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+            data=[],
+            meta=SimpleNamespace(cursor="unexpected-continuation"),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "empty trace-search page"):
+            extractor.list_traces(limit=1)
+
+    def test_probe_v4_capabilities_detects_widened_session_filter(self):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.side_effect = [
+            SimpleNamespace(data=[], meta=SimpleNamespace(cursor=None)),
+            SimpleNamespace(
+                data=[{"trace_id": "trace-1", "session_id": "some-real-session"}],
+                meta=SimpleNamespace(cursor=None),
+            ),
+        ]
+
+        result = extractor.probe_v4_capabilities()
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["checks"]["explicit_trace"]["status"], "ok")
+        self.assertTrue(result["checks"]["session_discovery"]["filter_widened"])
 
     def test_get_observations_rejects_repeated_cursor(self):
         extractor = self._make_extractor()
         extractor.client.api.observations.get_many.side_effect = [
             SimpleNamespace(
-                data=[{"id": "obs-1"}],
+                data=[{"id": "obs-1", "trace_id": "trace-1"}],
                 meta=SimpleNamespace(cursor="next-cursor"),
             ),
             SimpleNamespace(
-                data=[{"id": "obs-1"}],
+                data=[{"id": "obs-1", "trace_id": "trace-1"}],
                 meta=SimpleNamespace(cursor="next-cursor"),
             ),
         ]
@@ -306,6 +674,20 @@ class TraceExtractorTests(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(RuntimeError, "repeated session observation cursor"):
+            extractor.list_session_traces("session-1")
+
+    def test_list_session_traces_fails_closed_when_provider_ignores_filter(self):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+            data=[{
+                "id": "obs-1",
+                "trace_id": "trace-1",
+                "session_id": "different-session",
+            }],
+            meta=SimpleNamespace(cursor=None),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "another session"):
             extractor.list_session_traces("session-1")
 
     def test_list_session_traces_error_message_omits_credentials(self):
