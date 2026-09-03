@@ -37,7 +37,6 @@ class PersistedFlowMigration(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
     migration_id: str = Field(min_length=1)
-    agent_id: str = Field(min_length=1)
     retired_binding_id: str = Field(min_length=1)
     retired_attachments: tuple[RetiredFlowAttachment, ...] = Field(min_length=1)
 
@@ -46,7 +45,7 @@ class PersistedFlowMigration(BaseModel):
     def _freeze_retired_attachments(cls, value: object) -> object:
         return tuple(value) if isinstance(value, list) else value
 
-    @field_validator("migration_id", "agent_id", "retired_binding_id")
+    @field_validator("migration_id", "retired_binding_id")
     @classmethod
     def _reject_surrounding_whitespace(cls, value: str) -> str:
         if value != value.strip():

@@ -296,8 +296,8 @@ floor and may select a non-empty subset, but cannot clear or broaden it.
 ### Persisted flow migrations
 
 Packages that retire catalog selections can export a strict versioned
-`persisted_flow_migrations` YAML contract. The package declares exact agent,
-binding, attachment, and expected-binding values; the generic runtime applies
+`persisted_flow_migrations` YAML contract. The package declares exact binding,
+attachment, and expected-binding values; the generic runtime applies
 those repairs only when reading or executing older saved flows. Startup rejects
 malformed exports and cross-package migration or attachment collisions. A
 profile with no such export performs no saved-flow repairs.

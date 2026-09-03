@@ -59,7 +59,6 @@ def _manifest(migration_id: str, attachment_id: str) -> str:
 persisted_flow_migrations_api_version: 1.0.0
 migrations:
   - migration_id: {migration_id}
-    agent_id: record_extractor
     retired_binding_id: retired_validator
     retired_attachments:
       - attachment_id: {attachment_id}

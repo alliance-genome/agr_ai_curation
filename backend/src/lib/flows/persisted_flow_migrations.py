@@ -34,7 +34,6 @@ class PersistedFlowMigrationResult:
 def _retired_reference_in_validation_groups(
     nodes: list[Any],
     *,
-    agent_id: str,
     binding_id: str,
     attachment_ids: frozenset[str],
 ) -> bool:
@@ -47,19 +46,33 @@ def _retired_reference_in_validation_groups(
         groups = data.get("validation_groups")
         if not isinstance(groups, list):
             continue
-        is_target_agent = data.get("agent_id") == agent_id
+        is_target_node = _node_has_retired_attachment(data, attachment_ids)
         for group in groups:
             if not isinstance(group, Mapping):
                 continue
-            if is_target_agent and group.get("binding_id") == binding_id:
+            if is_target_node and group.get("binding_id") == binding_id:
                 return True
-            if is_target_agent and group.get("validator_binding_id") == binding_id:
+            if is_target_node and group.get("validator_binding_id") == binding_id:
                 return True
             if group.get("attachment_id") in attachment_ids:
                 return True
             if group.get("replaces_attachment_id") in attachment_ids:
                 return True
     return False
+
+
+def _node_has_retired_attachment(
+    data: Mapping[str, Any],
+    attachment_ids: frozenset[str],
+) -> bool:
+    attachments = data.get("validation_attachments")
+    if not isinstance(attachments, list):
+        return False
+    return any(
+        isinstance(attachment, Mapping)
+        and attachment.get("attachment_id") in attachment_ids
+        for attachment in attachments
+    )
 
 
 def _retired_reference_in_edges(
@@ -135,12 +148,11 @@ def migrate_persisted_flow_definition(
             for node in nodes
             if isinstance(node, Mapping)
             and isinstance(node.get("data"), Mapping)
-            and node["data"].get("agent_id") == migration.agent_id
+            and _node_has_retired_attachment(node["data"], attachment_ids)
             and isinstance((node_id := node.get("id")), str)
         )
         if _retired_reference_in_validation_groups(
             nodes,
-            agent_id=migration.agent_id,
             binding_id=migration.retired_binding_id,
             attachment_ids=attachment_ids,
         ) or _retired_reference_in_edges(
@@ -159,7 +171,7 @@ def migrate_persisted_flow_definition(
             if not isinstance(node, dict):
                 continue
             data = node.get("data")
-            if not isinstance(data, dict) or data.get("agent_id") != migration.agent_id:
+            if not isinstance(data, dict):
                 continue
             attachments = data.get("validation_attachments")
             if not isinstance(attachments, list):
