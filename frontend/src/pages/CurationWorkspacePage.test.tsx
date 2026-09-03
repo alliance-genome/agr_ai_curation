@@ -594,7 +594,21 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByRole('region', { name: /review work pane/i })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /envelope object table panel/i })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Horizontally scrollable curation grid' })).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-work-pane-content')).toBeInTheDocument()
+    const workPaneContent = screen.getByTestId('workspace-shell-work-pane-content')
+    const gridWorkPane = screen.getByTestId('curation-grid-work-pane')
+    expect(workPaneContent).toHaveStyle({
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: '0',
+      overflow: 'hidden',
+    })
+    expect(gridWorkPane.parentElement).toBe(workPaneContent)
+    expect(gridWorkPane).toHaveStyle({
+      flex: '1 1 0%',
+      minHeight: '0',
+      minWidth: '0',
+      overflow: 'hidden',
+    })
     expect(within(screen.getByTestId('workspace-shell-header'))
       .getByTestId('work-pane-toolbar')).toBeInTheDocument()
     expect(within(screen.getByTestId('workspace-shell-work-pane-content'))
