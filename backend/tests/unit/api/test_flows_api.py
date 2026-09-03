@@ -11,12 +11,15 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from src.schemas.flows import FlowDefinition
-from src.lib.flows.persisted_flow_migrations import (
-    RETIRED_ALLELE_PENDING_VALIDATOR_ATTACHMENT_IDS,
-    RETIRED_ALLELE_PENDING_VALIDATOR_BINDING_ID,
+from src.lib.packages.persisted_flow_migration_loader import (
+    load_persisted_flow_migration_catalog,
 )
 
 flows = importlib.import_module("src.api.flows")
+SHIPPED_MIGRATION = load_persisted_flow_migration_catalog().migrations[0]
+RETIRED_ATTACHMENT_IDS = frozenset(
+    attachment.attachment_id for attachment in SHIPPED_MIGRATION.retired_attachments
+)
 
 
 class _DummyQuery:
@@ -611,7 +614,7 @@ def _retired_allele_attachment(attachment_id: str) -> dict:
         "domain_pack_id": "agr.alliance.allele",
         "validator_id": "agr.alliance:allele_validation",
         "validator_binding_id": (
-            None if metadata_only else RETIRED_ALLELE_PENDING_VALIDATOR_BINDING_ID
+            None if metadata_only else SHIPPED_MIGRATION.retired_binding_id
         ),
         "state": "under_development",
         "scope": "pack" if metadata_only else "object",
@@ -629,7 +632,7 @@ def _legacy_allele_flow_definition_payload() -> dict:
                 *[
                     _retired_allele_attachment(attachment_id)
                     for attachment_id in sorted(
-                        RETIRED_ALLELE_PENDING_VALIDATOR_ATTACHMENT_IDS
+                        RETIRED_ATTACHMENT_IDS
                     )
                 ],
                 {
@@ -691,7 +694,7 @@ def test_create_validation_does_not_apply_persisted_flow_migrations(monkeypatch)
             for attachment in flow_definition.nodes[1].data.validation_attachments
         }
         assert attachment_ids.intersection(
-            RETIRED_ALLELE_PENDING_VALIDATOR_ATTACHMENT_IDS
+            RETIRED_ATTACHMENT_IDS
         )
         raise flows.FlowValidationAttachmentError("Unknown validation attachment selections")
 

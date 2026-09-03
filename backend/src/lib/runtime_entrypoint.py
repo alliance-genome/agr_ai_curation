@@ -26,6 +26,7 @@ from src.lib.packages import (
     build_flow_recipe_catalog,
     build_identifier_prefix_provider_catalog,
     build_package_health_report,
+    build_persisted_flow_migration_catalog,
     get_file_output_dir,
     get_identifier_prefix_file_path,
     get_identifier_prefix_state_dir,
@@ -137,6 +138,7 @@ def validate_runtime_packages() -> PackageRegistry:
     )
     document_source_provider_catalog = build_document_source_provider_catalog(registry)
     flow_recipe_catalog = build_flow_recipe_catalog(registry)
+    persisted_flow_migration_catalog = build_persisted_flow_migration_catalog(registry)
     identifier_prefix_provider_catalog = build_identifier_prefix_provider_catalog(registry)
     # Agent eligibility is package-configured and must be resolved only after
     # the package registry has passed structural validation.
@@ -165,7 +167,7 @@ def validate_runtime_packages() -> PackageRegistry:
         output_schema_resolver=build_package_scoped_output_schema_resolver(packages_dir),
     )
     logger.info(
-        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s document_source_providers=%s identifier_prefix_providers=%s domain_packs=%s flow_recipes=%s/%s-compatible agent_studio_prompt=%s:%s",
+        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s document_source_providers=%s identifier_prefix_providers=%s domain_packs=%s flow_recipes=%s/%s-compatible persisted_flow_migrations=%s agent_studio_prompt=%s:%s",
         len(registry.loaded_packages),
         len(registry.failed_packages),
         report["status"],
@@ -175,6 +177,7 @@ def validate_runtime_packages() -> PackageRegistry:
         len(domain_pack_registry.loaded_packs),
         len(flow_recipe_catalog.recipes),
         compatible_flow_recipe_count,
+        len(persisted_flow_migration_catalog.migrations),
         agent_studio_prompt.source.package_id,
         agent_studio_prompt.source.export_name,
     )

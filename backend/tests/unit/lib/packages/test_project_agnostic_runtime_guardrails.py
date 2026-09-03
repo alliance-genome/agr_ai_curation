@@ -77,6 +77,8 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/openai_agents/runner.py"),
     Path("backend/src/lib/openai_agents/streaming_tools.py"),
     Path("backend/src/lib/packages/flow_recipes.py"),
+    Path("backend/src/lib/packages/persisted_flow_migration_loader.py"),
+    Path("backend/src/lib/flows/persisted_flow_migrations.py"),
     Path("backend/src/lib/packages/document_source_provider_loader.py"),
     Path("backend/src/lib/packages/identifier_prefix_provider_loader.py"),
     Path("backend/src/lib/pdf_jobs/upload_intake_service.py"),
@@ -171,8 +173,6 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/packages/test_package_runner.py"),
     Path("backend/tests/unit/lib/packages/test_registry.py"),
     Path("backend/tests/unit/lib/packages/test_tool_registry.py"),
-    # Persisted-flow migration fixtures exercise shipped Alliance validator IDs.
-    Path("backend/tests/unit/lib/flows/test_persisted_flow_migrations.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_helpers.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_provider_config.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_query_paths.py"),

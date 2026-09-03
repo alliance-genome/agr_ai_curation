@@ -6,9 +6,8 @@ import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
-from src.lib.flows.persisted_flow_migrations import (
-    RETIRED_ALLELE_PENDING_VALIDATOR_ATTACHMENT_IDS,
-    RETIRED_ALLELE_PENDING_VALIDATOR_BINDING_ID,
+from src.lib.packages.persisted_flow_migration_loader import (
+    load_persisted_flow_migration_catalog,
 )
 
 
@@ -25,10 +24,18 @@ _SPEC = importlib.util.spec_from_file_location(
 assert _SPEC and _SPEC.loader
 migration = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(migration)
+SHIPPED_MIGRATION = next(
+    item
+    for item in load_persisted_flow_migration_catalog().migrations
+    if item.migration_id == migration.FLOW_MIGRATION_ID
+)
+RETIRED_ATTACHMENT_IDS = {
+    attachment.attachment_id for attachment in SHIPPED_MIGRATION.retired_attachments
+}
 
 
 def _definition() -> dict:
-    attachment_id = sorted(RETIRED_ALLELE_PENDING_VALIDATOR_ATTACHMENT_IDS)[0]
+    attachment_id = sorted(RETIRED_ATTACHMENT_IDS)[0]
     return {
         "nodes": [
             {
@@ -38,7 +45,7 @@ def _definition() -> dict:
                     "validation_attachments": [
                         {
                             "attachment_id": attachment_id,
-                            "validator_binding_id": RETIRED_ALLELE_PENDING_VALIDATOR_BINDING_ID,
+                            "validator_binding_id": SHIPPED_MIGRATION.retired_binding_id,
                         },
                         {"attachment_id": "current"},
                     ],
