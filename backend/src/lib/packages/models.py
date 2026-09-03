@@ -125,6 +125,7 @@ class ExportKind(str, Enum):
     DOCUMENT_SOURCE_PROVIDER = "document_source_provider"
     FLOW_RECIPES = "flow_recipes"
     AGENT_STUDIO_PROMPT = "agent_studio_prompt"
+    PERSISTED_FLOW_MIGRATIONS = "persisted_flow_migrations"
 
 
 class ToolBindingType(str, Enum):

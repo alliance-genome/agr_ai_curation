@@ -1,0 +1,18 @@
+persisted_flow_migrations_api_version: 1.0.0
+migrations:
+  - migration_id: 2026-09-03.remove-allele-pending-envelope-validator
+    agent_id: allele_extractor
+    retired_binding_id: allele_pending_envelope_validator
+    retired_attachments:
+      - attachment_id: agr.alliance.allele:binding:allele_pending_envelope_validator:object:Allele:*
+        validator_binding_id: allele_pending_envelope_validator
+      - attachment_id: agr.alliance.allele:binding:allele_pending_envelope_validator:object:AlleleMention:*
+        validator_binding_id: allele_pending_envelope_validator
+      - attachment_id: agr.alliance.allele:binding:allele_pending_envelope_validator:object:AllelePaperEvidenceAssociation:*
+        validator_binding_id: allele_pending_envelope_validator
+      - attachment_id: agr.alliance.allele:binding:allele_pending_envelope_validator:object:EvidenceQuote:*
+        validator_binding_id: allele_pending_envelope_validator
+      - attachment_id: agr.alliance.allele:binding:allele_pending_envelope_validator:object:Reference:*
+        validator_binding_id: allele_pending_envelope_validator
+      - attachment_id: agr.alliance.allele:metadata:allele_pending_envelope_validator:pack:*:*
+        validator_binding_id: null
