@@ -299,7 +299,9 @@ export default function HorizontalCurationGrid({
       data-testid="horizontal-curation-grid"
       sx={{
         position: 'relative',
+        flex: 1,
         minHeight: 0,
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',

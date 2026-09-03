@@ -77,6 +77,8 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/openai_agents/runner.py"),
     Path("backend/src/lib/openai_agents/streaming_tools.py"),
     Path("backend/src/lib/packages/flow_recipes.py"),
+    Path("backend/src/lib/packages/persisted_flow_migration_loader.py"),
+    Path("backend/src/lib/flows/persisted_flow_migrations.py"),
     Path("backend/src/lib/packages/document_source_provider_loader.py"),
     Path("backend/src/lib/packages/identifier_prefix_provider_loader.py"),
     Path("backend/src/lib/pdf_jobs/upload_intake_service.py"),

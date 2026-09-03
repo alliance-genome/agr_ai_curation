@@ -158,6 +158,46 @@ def test_create_feedback_payload_persists_pending_report(monkeypatch):
     assert _status_value(report.processing_status) == "pending"
     assert report.trace_ids == ["trace-1", "trace-2"]
     assert report.conversation_transcript == {"messages": [{"role": "user", "content": "hello"}]}
+    assert report.trace_data["capture_status"] == "pending"
+    assert report.trace_data["association"] == {"status": "submitted"}
+
+
+def test_create_feedback_payload_recovers_trace_ids_from_structured_transcript(monkeypatch):
+    db = MagicMock()
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    monkeypatch.setattr("src.lib.feedback.service.uuid.uuid4", lambda: "uuid-123")
+
+    service = _feedback_service_module().FeedbackService(db=db)
+    service._maybe_capture_conversation_transcript = MagicMock(
+        return_value={
+            "messages": [
+                {
+                    "role": "flow",
+                    "content": "Rendered prose does not need to be parsed.",
+                    "trace_id": "trace-from-column",
+                    "payload_json": {"trace_id": "trace-from-column"},
+                },
+                {
+                    "role": "assistant",
+                    "content": "Another turn",
+                    "payload_json": {"trace_id": "trace-from-payload"},
+                },
+            ]
+        }
+    )
+
+    service.create_feedback_payload(
+        session_id="session-1",
+        curator_id="curator@example.org",
+        feedback_text="Looks good",
+        trace_ids=[],
+        user_auth_sub="auth-sub-1",
+        authenticated_curator_email="curator@example.org",
+    )
+
+    report = db.add.call_args[0][0]
+    assert report.trace_ids == ["trace-from-column", "trace-from-payload"]
+    assert report.trace_data["association"] == {"status": "recovered_from_transcript"}
 
 
 def test_create_feedback_payload_looks_up_transcript_when_curator_id_matches_authenticated_email(
@@ -343,7 +383,9 @@ def test_process_feedback_report_marks_completed_on_success(monkeypatch):
     monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
     service = _feedback_service_module().FeedbackService(db=db)
     service.notifier = MagicMock()
-    service._capture_feedback_trace_snapshot = MagicMock(return_value=None)
+    service._capture_feedback_trace_snapshot = MagicMock(
+        return_value={"schema_version": 1, "capture_status": "success"}
+    )
 
     service.process_feedback_report(report.id)
 
@@ -353,9 +395,32 @@ def test_process_feedback_report_marks_completed_on_success(monkeypatch):
     assert report.processing_started_at is not None
     assert report.email_sent_at is not None
     assert report.processing_completed_at is not None
-    assert report.trace_data is None
+    assert report.trace_data == {"schema_version": 1, "capture_status": "success"}
     assert report.error_details is None
     assert db.commit.call_count == 2
+
+
+def test_process_feedback_report_records_degraded_no_trace_status(monkeypatch):
+    report = _report()
+    report.trace_ids = []
+    report.trace_data = {
+        "association": {"status": "no_structured_trace_ids"},
+    }
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = _feedback_service_module().FeedbackService(db=db)
+    service.notifier = MagicMock()
+
+    service.process_feedback_report(report.id)
+
+    assert _status_value(report.processing_status) == "completed"
+    assert report.trace_data["capture_status"] == "degraded"
+    assert report.trace_data["association"] == {"status": "no_structured_trace_ids"}
+    assert report.trace_data["error_summary"]["reason"] == "no_structured_trace_ids"
+    assert report.error_details == (
+        "Trace capture degraded. See trace_data.error_summary for details."
+    )
 
 
 def test_process_feedback_report_persists_redacted_trace_snapshot(monkeypatch):

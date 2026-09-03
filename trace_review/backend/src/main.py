@@ -13,11 +13,20 @@ from fastapi.responses import JSONResponse
 
 from .logging_config import configure_logging, create_request_context_middleware
 from .services.cache_manager import CacheManager
+from .services.trace_extractor import TraceExtractor
 from .config import get_trace_review_preflight_diagnostics, validate_trace_source
 
 configure_logging()
 
 logger = logging.getLogger(__name__)
+
+
+def _runtime_identity() -> dict[str, str]:
+    """Return non-secret image/source identity embedded at build time."""
+    return {
+        "image_version": os.getenv("TRACE_REVIEW_RUNTIME_VERSION", "unknown"),
+        "source_revision": os.getenv("TRACE_REVIEW_SOURCE_REVISION", "unknown"),
+    }
 
 
 def _allowed_origins() -> list[str]:
@@ -40,6 +49,7 @@ def _health_payload(app: FastAPI) -> tuple[dict, int]:
     return {
         "status": "ok",
         "message": "Trace Review API is running",
+        "runtime": _runtime_identity(),
         "cache_stats": {
             "size": len(cache_manager.cache),
             "ttl_hours": cache_manager.ttl_hours
@@ -55,6 +65,7 @@ def _preflight_payload(app: FastAPI, source: str) -> tuple[dict, int]:
     status = "ok"
     status_code = health_status
     next_actions = []
+    capabilities = None
 
     if not source_selection["valid"]:
         status = "config_error"
@@ -66,6 +77,22 @@ def _preflight_payload(app: FastAPI, source: str) -> tuple[dict, int]:
         selected = source_selection["selected"]
         missing = diagnostics["langfuse_sources"][selected]["missing_env"]
         next_actions.append(f"Set required Langfuse configuration for source '{selected}': {', '.join(missing)}.")
+    else:
+        try:
+            capabilities = TraceExtractor(source=source).probe_v4_capabilities()
+        except Exception as exc:
+            capabilities = {
+                "status": "degraded",
+                "query_surface": "observations_v2",
+                "error_type": exc.__class__.__name__,
+            }
+        if capabilities.get("status") != "ok":
+            status = "degraded"
+            status_code = 503
+            next_actions.append(
+                "Verify Langfuse v4 observations access for exact-trace detail "
+                "and indexed session discovery."
+            )
 
     if health_status != 200:
         if status == "ok":
@@ -77,6 +104,8 @@ def _preflight_payload(app: FastAPI, source: str) -> tuple[dict, int]:
         "service": "trace_review_backend",
         "message": "TraceReview preflight diagnostics are report-only; no services or production resources were mutated.",
         "backend": health_payload,
+        "runtime": _runtime_identity(),
+        "langfuse_capabilities": capabilities,
         "diagnostics": diagnostics,
         "next_actions": next_actions,
     }, status_code
@@ -192,9 +221,35 @@ async def langfuse_health(source: str = "remote"):
             results[trace_source]["health_check"] = f"ERROR: {str(e)}"
             results[trace_source]["reachable"] = False
 
+        if results[trace_source]["reachable"] and results[trace_source]["ready"]:
+            try:
+                results[trace_source]["capabilities"] = (
+                    TraceExtractor(source=trace_source).probe_v4_capabilities()
+                )
+            except Exception as exc:
+                results[trace_source]["capabilities"] = {
+                    "status": "degraded",
+                    "query_surface": "observations_v2",
+                    "error_type": exc.__class__.__name__,
+                }
+        else:
+            results[trace_source]["capabilities"] = {
+                "status": "not_checked",
+                "query_surface": "observations_v2",
+            }
+
     return {
-        "status": "ok" if results[source]["reachable"] and results[source]["ready"] else "degraded",
+        "status": (
+            "ok"
+            if (
+                results[source]["reachable"]
+                and results[source]["ready"]
+                and results[source]["capabilities"].get("status") == "ok"
+            )
+            else "degraded"
+        ),
         "selected_source": source,
+        "runtime": _runtime_identity(),
         "langfuse": results,
         "troubleshooting": {
             "remote_unreachable": "Check VPN connection to EC2",
@@ -205,7 +260,7 @@ async def langfuse_health(source: str = "remote"):
 
 
 # Import and include routers
-from .api import auth, traces, claude
+from .api import auth, traces, claude  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(traces.router, prefix="/api/traces", tags=["Traces"])

@@ -32,6 +32,13 @@ if [[ "${TRACE_REVIEW_CURL_STUB_MODE:-healthy}" == "down" ]]; then
 fi
 
 case "$url" in
+  */health/langfuse*)
+    if [[ "${TRACE_REVIEW_CURL_STUB_MODE:-healthy}" == "capability-degraded" ]]; then
+      printf '{"status":"degraded","runtime":{"image_version":"v0.9.4","source_revision":"abc123"}}\n'
+    else
+      printf '{"status":"ok","runtime":{"image_version":"v0.9.4","source_revision":"abc123"}}\n'
+    fi
+    ;;
   */health/preflight*)
     if [[ "${TRACE_REVIEW_CURL_STUB_MODE:-healthy}" == "missing-preflight" ]]; then
       echo "not found" >&2
@@ -345,10 +352,45 @@ test_healthy_preflight_reports_selected_source_and_ssh_tcp() {
 
   assert_contains "Selected trace source: local" "$output_file"
   assert_contains "TraceReview backend health OK at http://127.0.0.1:8901/health" "$output_file"
+  assert_contains "TraceReview exact-trace and session-discovery capability probes passed" "$output_file"
+  assert_contains "TraceReview runtime identity: image_version=v0.9.4 source_revision=abc123" "$output_file"
   assert_contains "Langfuse local health OK" "$output_file"
   assert_contains "Production SSH TCP reachable at prod.example:22." "$output_file"
   assert_contains "TraceReview preflight passed with 0 warning" "$output_file"
   assert_contains "nc_args=-z -w 1 prod.example 22" "$stub_log"
+}
+
+test_degraded_v4_capabilities_are_a_health_failure() {
+  local temp_root temp_home stub_dir output_file stub_log rc
+  temp_root="$(mktemp -d)"
+  temp_home="${temp_root}/home"
+  stub_dir="${temp_root}/stubbin"
+  output_file="${temp_root}/output.log"
+  stub_log="${temp_root}/stub.log"
+  mkdir -p "$temp_home"
+  trap 'rm -rf "$temp_root"' RETURN
+
+  make_stub_tools "$stub_dir"
+
+  rc="$(
+    TRACE_REVIEW_CURL_STUB_MODE="capability-degraded" \
+    TRACE_REVIEW_STUB_LOG="$stub_log" \
+    LANGFUSE_HOST="http://remote.example:3000" \
+    LANGFUSE_PUBLIC_KEY="pk-lf-test" \
+    LANGFUSE_SECRET_KEY="sk-lf-test" \
+    LANGFUSE_LOCAL_HOST="http://local.example:3000" \
+    LANGFUSE_LOCAL_PUBLIC_KEY="pk-lf-local" \
+    LANGFUSE_LOCAL_SECRET_KEY="sk-lf-local" \
+    run_preflight "$temp_home" "$stub_dir" "$output_file" --backend-url http://127.0.0.1:8901 --source remote
+  )"
+
+  if [[ "$rc" -ne 20 ]]; then
+    echo "Expected degraded capability preflight to exit 20, got $rc" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "Langfuse v4 capability probes are 'degraded'" "$output_file"
 }
 
 test_rejects_invalid_source() {
@@ -391,6 +433,7 @@ test_default_backend_url_uses_canonical_trace_review_host_port
 test_distinguishes_backend_down_and_missing_langfuse_config
 test_detects_port_proxy_confusion
 test_healthy_preflight_reports_selected_source_and_ssh_tcp
+test_degraded_v4_capabilities_are_a_health_failure
 test_rejects_invalid_source
 
 echo "trace_review_preflight tests passed"

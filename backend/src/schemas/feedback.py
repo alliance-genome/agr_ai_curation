@@ -156,7 +156,7 @@ class FeedbackTraceDataDebug(BaseModel):
         ...,
         description=(
             "Explicit trace-data status: not_requested, missing, stale, success, partial, "
-            "error, or capture_status_missing"
+            "degraded, error, pending, or capture_status_missing"
         ),
     )
     stale: bool = Field(
@@ -182,6 +182,10 @@ class FeedbackTraceDataDebug(BaseModel):
     source_extractor: Optional[str] = Field(
         default=None,
         description="Trace-data extractor identifier when available",
+    )
+    association_status: Optional[str] = Field(
+        default=None,
+        description="How canonical trace IDs were associated with the feedback report",
     )
     expected_trace_ids: List[str] = Field(
         default_factory=list,
