@@ -110,14 +110,10 @@ def upgrade() -> None:
             CROSS JOIN LATERAL jsonb_array_elements(
                 COALESCE(nodes.node #> '{data,validation_attachments}', '[]'::jsonb)
             ) AS attachments(attachment)
-            WHERE nodes.node #>> '{data,agent_id}' = :agent_id
-              AND attachments.attachment ->> 'attachment_id' = ANY(:retired_attachment_ids)
+            WHERE attachments.attachment ->> 'attachment_id' = ANY(:retired_attachment_ids)
             """
         ),
-        {
-            "agent_id": flow_migration.agent_id,
-            "retired_attachment_ids": retired_attachment_ids,
-        },
+        {"retired_attachment_ids": retired_attachment_ids},
     ).scalar_one()
     if remaining:
         raise RuntimeError(

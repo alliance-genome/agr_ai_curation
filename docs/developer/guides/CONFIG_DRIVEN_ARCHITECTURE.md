@@ -238,8 +238,8 @@ exports:
 ```
 
 The exported YAML uses `persisted_flow_migrations_api_version: 1.0.0`. Each
-migration supplies a unique `migration_id`, the affected `agent_id`, one
-`retired_binding_id`, and exact `retired_attachments` with their expected
+migration supplies a unique `migration_id`, one `retired_binding_id`, and exact
+`retired_attachments` with their expected
 `validator_binding_id` (or `null` for metadata-only selections). References
 from validation groups or edges fail closed instead of being silently removed.
 

@@ -26,7 +26,6 @@ ATTACHMENT_IDS = frozenset(
 )
 MIGRATION = PersistedFlowMigration(
     migration_id=MIGRATION_ID,
-    agent_id="record_extractor",
     retired_binding_id=BINDING_ID,
     retired_attachments=tuple(
         RetiredFlowAttachment(
@@ -81,7 +80,7 @@ def _definition(*, agent_id: str = "record_extractor") -> dict:
     }
 
 
-def test_removes_only_exact_retired_allele_selections_without_mutating_input():
+def test_removes_only_exact_retired_selections_without_mutating_input():
     original = _definition()
     before = deepcopy(original)
 
@@ -100,22 +99,30 @@ def test_removes_only_exact_retired_allele_selections_without_mutating_input():
     assert result.definition["user_extension"] == {"preserve": True}
 
 
-def test_migration_is_idempotent_and_does_not_strip_other_agents():
+def test_migration_is_idempotent_and_exact_ids_apply_to_custom_agents():
     first = migrate_persisted_flow_definition(_definition(), migrations=(MIGRATION,))
     second = migrate_persisted_flow_definition(
         first.definition,
         migrations=(MIGRATION,),
     )
-    unrelated = migrate_persisted_flow_definition(
-        _definition(agent_id="custom_extractor"),
+    custom_agent = migrate_persisted_flow_definition(
+        _definition(agent_id="ca_example"),
         migrations=(MIGRATION,),
     )
 
     assert first.changed is True
     assert second.changed is False
     assert second.definition == first.definition
-    assert unrelated.changed is False
-    assert len(unrelated.definition["nodes"][0]["data"]["validation_attachments"]) == 3
+    assert custom_agent.changed is True
+    assert custom_agent.definition["nodes"][0]["data"][
+        "validation_attachments"
+    ] == [
+        {
+            "attachment_id": "org.example.records:binding:current",
+            "validator_binding_id": "current",
+            "enabled": False,
+        }
+    ]
 
 
 def test_migration_rejects_unexpected_binding_and_dependent_graph_references():

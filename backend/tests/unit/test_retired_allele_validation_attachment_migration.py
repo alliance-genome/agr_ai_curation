@@ -35,14 +35,14 @@ RETIRED_ATTACHMENT_IDS = {
 }
 
 
-def _definition() -> dict:
+def _definition(*, agent_id: str = "allele_extractor") -> dict:
     attachment_id = sorted(RETIRED_ATTACHMENT_IDS)[0]
     return {
         "nodes": [
             {
                 "id": "extract",
                 "data": {
-                    "agent_id": "allele_extractor",
+                    "agent_id": agent_id,
                     "validation_attachments": [
                         {
                             "attachment_id": attachment_id,
@@ -78,9 +78,11 @@ class _Connection:
         self.flow_id = flow_id
         self.definition = definition
         self.updates = []
+        self.calls = []
 
     def execute(self, statement, parameters=None):
         sql = str(statement)
+        self.calls.append((sql, parameters))
         if "SELECT id, flow_definition" in sql:
             return _Result(rows=[{"id": self.flow_id, "flow_definition": self.definition}])
         if "UPDATE curation_flows" in sql:
@@ -93,7 +95,7 @@ class _Connection:
 
 def test_upgrade_uses_guarded_idempotent_definition_update(monkeypatch):
     flow_id = uuid4()
-    definition = _definition()
+    definition = _definition(agent_id="ca_alliance_allele")
     connection = _Connection(flow_id, definition)
     monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
 
@@ -107,6 +109,11 @@ def test_upgrade_uses_guarded_idempotent_definition_update(monkeypatch):
     assert update["updated_definition"]["nodes"][0]["data"][
         "validation_attachments"
     ] == [{"attachment_id": "current"}]
+    verification_sql, verification_parameters = next(
+        call for call in connection.calls if "SELECT count(*)" in call[0]
+    )
+    assert "data,agent_id" not in verification_sql
+    assert set(verification_parameters) == {"retired_attachment_ids"}
 
 
 def test_upgrade_is_noop_when_active_packages_do_not_declare_repair(monkeypatch):
