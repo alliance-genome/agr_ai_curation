@@ -627,7 +627,17 @@ function CurationWorkspacePageContent({
           />
         )}
         workPaneSlot={(
-          <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+          <Box
+            data-testid="curation-grid-work-pane"
+            sx={{
+              display: 'flex',
+              flex: 1,
+              flexDirection: 'column',
+              minHeight: 0,
+              minWidth: 0,
+              overflow: 'hidden',
+            }}
+          >
             {activeEnvelopeValidationSummaries
               .filter((summary) => summary.findings.some(envelopeFindingRequiresAttention))
               .map((summary) => (
