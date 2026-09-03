@@ -595,6 +595,14 @@ describe('CurationWorkspacePage', () => {
     expect(screen.queryByRole('region', { name: /envelope object table panel/i })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Horizontally scrollable curation grid' })).toBeInTheDocument()
     expect(screen.getByTestId('workspace-shell-work-pane-content')).toBeInTheDocument()
+    expect(screen.getByTestId('curation-grid-work-pane')).toHaveStyle({
+      flex: '1 1 0%',
+      minHeight: '0',
+      minWidth: '0',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    })
     expect(within(screen.getByTestId('workspace-shell-header'))
       .getByTestId('work-pane-toolbar')).toBeInTheDocument()
     expect(within(screen.getByTestId('workspace-shell-work-pane-content'))

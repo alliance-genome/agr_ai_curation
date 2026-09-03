@@ -298,8 +298,10 @@ export default function HorizontalCurationGrid({
       data-theme-mode={theme.palette.mode}
       data-testid="horizontal-curation-grid"
       sx={{
+        flex: 1,
         position: 'relative',
         minHeight: 0,
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',

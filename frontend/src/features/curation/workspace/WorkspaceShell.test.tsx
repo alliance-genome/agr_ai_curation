@@ -20,7 +20,14 @@ describe('WorkspaceShell', () => {
     expect(screen.getByText('Horizontal grid slot')).toBeInTheDocument()
 
     expect(screen.getByTestId('workspace-shell-work-pane')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-shell-work-pane-content')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-shell-work-pane-content')).toHaveStyle({
+      flex: '1 1 0%',
+      minHeight: '0',
+      minWidth: '0',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    })
     expect(screen.queryByTestId('workspace-shell-selector')).not.toBeInTheDocument()
     expect(screen.queryByTestId('workspace-shell-field-editor')).not.toBeInTheDocument()
   })
