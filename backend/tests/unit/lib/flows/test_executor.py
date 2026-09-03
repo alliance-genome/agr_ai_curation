@@ -4,6 +4,7 @@ from dataclasses import replace
 import importlib
 import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 import pytest
@@ -346,6 +347,52 @@ def test_flow_executor_rejects_retired_validator_alias(retired_alias, monkeypatc
         get_active_visible_agent_metadata,
     )
     assert _executor_module()._resolve_flow_agent_entry(retired_alias) is None
+
+
+def test_execution_uses_same_retired_selection_normalization_as_load(monkeypatch):
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "flows"
+        / "pre_catalog_change_allele_flow.json"
+    )
+    persisted = json.loads(fixture_path.read_text())
+    flow = SimpleNamespace(
+        id="11111111-1111-1111-1111-111111111111",
+        user_id=7,
+        name="Pre-catalog allele flow",
+        description=None,
+        flow_definition=persisted,
+        execution_count=0,
+        last_executed_at=None,
+        created_at=None,
+        updated_at=None,
+        is_active=True,
+    )
+    monkeypatch.setattr(
+        _executor_module(),
+        "_resolve_flow_agent_entry",
+        lambda *_args, **_kwargs: {
+            "curation": {"domain_pack_id": "agr.alliance.allele"}
+        },
+    )
+    monkeypatch.setattr(
+        _executor_module(),
+        "apply_flow_validation_attachment_defaults",
+        lambda definition, **_kwargs: definition,
+    )
+
+    runtime_flow = _executor_module()._normalized_flow_for_execution(
+        flow,
+        db_user_id=7,
+    )
+
+    runtime_data = runtime_flow.flow_definition["nodes"][1]["data"]
+    assert [
+        item["validator_binding_id"]
+        for item in runtime_data["validation_attachments"]
+    ] == ["allele_mention_reference_validation"]
+    assert flow.flow_definition == persisted
 
 
 def test_terminal_formatter_bundle_filters_all_and_only_bound_sources(monkeypatch):
@@ -7147,6 +7194,8 @@ class TestExecuteFlowTermination:
             source_node_id="pdf",
             output_node_id=["chat-a", "chat-b"],
         )
+        flow.flow_definition["nodes"][2]["data"]["output_key"] = "chat_a_out"
+        flow.flow_definition["nodes"][3]["data"]["output_key"] = "chat_b_out"
         pdf_step = {
             "step": 1,
             "node_id": "pdf",

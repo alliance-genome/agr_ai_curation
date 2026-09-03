@@ -1,0 +1,78 @@
+{
+  "version": "1.1",
+  "entry_node_id": "task_1",
+  "nodes": [
+    {
+      "id": "task_1",
+      "type": "task_input",
+      "position": {"x": 0, "y": 0},
+      "data": {
+        "agent_id": "task_input",
+        "agent_display_name": "Task Input",
+        "task_instructions": "Preserve these curator-authored instructions.",
+        "output_key": "task_input"
+      }
+    },
+    {
+      "id": "extract_1",
+      "type": "agent",
+      "position": {"x": 280, "y": 0},
+      "data": {
+        "agent_id": "allele_extractor",
+        "agent_display_name": "Allele Extractor",
+        "custom_instructions": "Preserve this user customization.",
+        "output_key": "alleles",
+        "validation_attachments": [
+          {
+            "attachment_id": "agr.alliance.allele:binding:allele_mention_reference_validation:field:AlleleMention:mention.text",
+            "domain_pack_id": "agr.alliance.allele",
+            "validator_id": "agr.alliance:allele_validation",
+            "validator_binding_id": "allele_mention_reference_validation",
+            "state": "active",
+            "scope": "field",
+            "required": true,
+            "blocking": true,
+            "export_blocking": true,
+            "default_enabled": true,
+            "enabled": true
+          },
+          {
+            "attachment_id": "agr.alliance.allele:binding:allele_pending_envelope_validator:object:Allele:*",
+            "domain_pack_id": "agr.alliance.allele",
+            "validator_id": "agr.alliance:allele_validation",
+            "validator_binding_id": "allele_pending_envelope_validator",
+            "state": "under_development",
+            "scope": "object",
+            "enabled": false
+          },
+          {
+            "attachment_id": "agr.alliance.allele:metadata:allele_pending_envelope_validator:pack:*:*",
+            "domain_pack_id": "agr.alliance.allele",
+            "validator_id": "allele_pending_envelope_validator",
+            "state": "under_development",
+            "scope": "pack",
+            "enabled": false
+          }
+        ],
+        "validation_groups": [
+          {
+            "group_id": "agr.alliance.allele:binding:allele_mention_reference_validation:field:AlleleMention:mention.text",
+            "attachment_id": "agr.alliance.allele:binding:allele_mention_reference_validation:field:AlleleMention:mention.text",
+            "binding_id": "allele_mention_reference_validation",
+            "state": "automatic",
+            "required": true,
+            "blocking": true
+          },
+          {
+            "group_id": "agr.alliance.allele:metadata:allele_pending_envelope_validator:pack:*:*",
+            "attachment_id": "agr.alliance.allele:metadata:allele_pending_envelope_validator:pack:*:*",
+            "state": "skipped"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {"id": "edge_1", "source": "task_1", "target": "extract_1", "role": "control_flow"}
+  ]
+}

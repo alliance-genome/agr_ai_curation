@@ -32,6 +32,10 @@ from ..lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
     apply_flow_validation_attachment_defaults,
 )
+from ..lib.flows.persisted_definition_migrations import (
+    PersistedFlowDefinitionMigrationError,
+    migrate_persisted_flow_definition,
+)
 from ..lib.agent_studio.catalog_service import (
     AGENT_REGISTRY,
     get_active_visible_agent_metadata,
@@ -493,18 +497,26 @@ def _flow_to_response(
 ) -> FlowResponse:
     """Convert a stored flow to an API response with validation defaults hydrated."""
 
-    flow_definition = _validated_flow_definition(
-        FlowDefinition.model_validate(flow.flow_definition),
-        db_user_id=flow.user_id,
-        active_group_ids=active_group_ids,
-        tolerate_unresolvable_custom_agent_attachments=True,
-    )
+    try:
+        migration = migrate_persisted_flow_definition(flow.flow_definition)
+        flow_definition = _validated_flow_definition(
+            FlowDefinition.model_validate(migration.definition),
+            db_user_id=flow.user_id,
+            active_group_ids=active_group_ids,
+            tolerate_unresolvable_custom_agent_attachments=True,
+        )
+    except PersistedFlowDefinitionMigrationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     missing_references = _missing_flow_agent_reference_messages(
         flow_definition,
         db_user_id=flow.user_id,
         active_group_ids=active_group_ids,
     )
-    validation_warnings = (
+    validation_warnings = [
+        FlowValidationWarning(type="WARNING", message=message)
+        for message in migration.warnings
+    ]
+    validation_warnings.extend(
         [
             FlowValidationWarning(
                 type="CRITICAL",

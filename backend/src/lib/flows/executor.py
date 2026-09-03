@@ -108,10 +108,17 @@ from src.lib.flow_edge_roles import (
     SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
     agent_can_source_output_attachment,
 )
-from src.lib.flows.validation_attachments import validation_schedule_from_node_data
+from src.lib.flows.persisted_definition_migrations import (
+    migrate_persisted_flow_definition,
+)
+from src.lib.flows.validation_attachments import (
+    apply_flow_validation_attachment_defaults,
+    validation_schedule_from_node_data,
+)
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
+from src.schemas.flows import FlowDefinition
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
     get_active_visible_agent_metadata as get_agent_metadata,
@@ -4245,6 +4252,45 @@ def _flow_incomplete_error_event(
     )
 
 
+def _normalized_flow_for_execution(
+    flow: CurationFlow,
+    *,
+    db_user_id: int | None,
+) -> CurationFlow:
+    """Return a detached runtime view using the persisted-flow read contract."""
+
+    migration = migrate_persisted_flow_definition(flow.flow_definition or {})
+    definition = FlowDefinition.model_validate(migration.definition)
+    agent_registry: dict[str, dict[str, Any]] = {}
+    for node in definition.nodes:
+        agent_id = str(node.data.agent_id or "").strip()
+        if not agent_id or agent_id == "task_input":
+            continue
+        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        if entry is not None:
+            agent_registry[agent_id] = entry
+    validated = apply_flow_validation_attachment_defaults(
+        definition,
+        agent_registry=agent_registry,
+    )
+
+    return cast(
+        CurationFlow,
+        SimpleNamespace(
+            id=flow.id,
+            user_id=flow.user_id,
+            name=flow.name,
+            description=flow.description,
+            flow_definition=validated.model_dump(),
+            execution_count=flow.execution_count,
+            last_executed_at=flow.last_executed_at,
+            created_at=flow.created_at,
+            updated_at=flow.updated_at,
+            is_active=flow.is_active,
+        ),
+    )
+
+
 async def execute_flow(
     flow: CurationFlow,
     user_id: str,
@@ -4289,6 +4335,7 @@ async def execute_flow(
         dict: Streaming events - FLOW_STARTED, then all regular chat events
               (RUN_STARTED, SUPERVISOR_START, TOOL_START, etc.), then FLOW_FINISHED
     """
+    flow = _normalized_flow_for_execution(flow, db_user_id=db_user_id)
     logger.info(
         f"[Flow Executor] Starting flow: '{flow.name}', "
         f"user_id={user_id}, session_id={session_id}"

@@ -2,7 +2,9 @@
 
 import asyncio
 import importlib
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -13,6 +15,13 @@ from pydantic import ValidationError
 from src.schemas.flows import FlowDefinition
 
 flows = importlib.import_module("src.api.flows")
+
+_PRE_CATALOG_ALLELE_FLOW = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "flows"
+    / "pre_catalog_change_allele_flow.json"
+)
 
 
 class _DummyQuery:
@@ -184,6 +193,50 @@ def test_flow_response_defaults_legacy_saved_edge_roles(monkeypatch):
     assert response.flow_definition.edges[0].role == "control_flow"
     assert response.validation_warnings == []
     assert response.has_critical_issues is False
+
+
+def test_flow_response_normalizes_retired_saved_selections_with_warning(monkeypatch):
+    payload = json.loads(_PRE_CATALOG_ALLELE_FLOW.read_text())
+    now = datetime.now(timezone.utc)
+    stored_flow = SimpleNamespace(
+        id=uuid4(),
+        user_id=7,
+        name="Pre-catalog allele flow",
+        description=None,
+        flow_definition=payload,
+        execution_count=0,
+        last_executed_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    monkeypatch.setattr(
+        flows,
+        "apply_flow_validation_attachment_defaults",
+        lambda flow_definition, **_kwargs: flow_definition,
+    )
+    monkeypatch.setattr(
+        flows,
+        "_flow_agent_policy_entry",
+        lambda *_args, **_kwargs: {
+            "name": "Allele Extractor",
+            "category": "Extraction",
+            "curation": {"domain_pack_id": "agr.alliance.allele"},
+        },
+    )
+
+    response = flows._flow_to_response(stored_flow)
+
+    data = response.flow_definition.nodes[1].data
+    assert [item.validator_binding_id for item in data.validation_attachments] == [
+        "allele_mention_reference_validation"
+    ]
+    assert data.custom_instructions == "Preserve this user customization."
+    assert response.has_critical_issues is False
+    assert [warning.type for warning in response.validation_warnings] == ["WARNING"]
+    assert "save the flow" in response.validation_warnings[0].message
+    assert flows._validated_flow_definition_payload(response.flow_definition) == (
+        response.flow_definition.model_dump()
+    )
 
 
 def test_flow_response_rejects_legacy_formatter_control_step(
