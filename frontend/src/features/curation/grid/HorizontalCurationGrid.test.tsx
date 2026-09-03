@@ -276,6 +276,25 @@ describe('HorizontalCurationGrid', () => {
     expect(dataCells.at(-1)).toHaveAttribute('data-sticky', 'right')
   })
 
+  it('keeps an overflowing row set inside the grid scroll region', () => {
+    const overflowingRows = Array.from({ length: 30 }, (_, index) => row(`candidate-${index + 1}`))
+
+    renderGrid(model(overflowingRows))
+
+    expect(screen.getByTestId('horizontal-curation-grid')).toHaveStyle({
+      flex: '1 1 0%',
+      minHeight: '0',
+      minWidth: '0',
+      overflow: 'hidden',
+    })
+    expect(screen.getByTestId('horizontal-grid-scroll-region')).toHaveStyle({
+      flex: '1 1 0%',
+      minHeight: '0',
+      overflow: 'auto',
+    })
+    expect(screen.getByTestId('horizontal-grid-table').querySelectorAll('tbody tr')).toHaveLength(30)
+  })
+
   it('pins columns in interaction order and supports keyboard activation', async () => {
     const user = userEvent.setup()
     renderGrid()

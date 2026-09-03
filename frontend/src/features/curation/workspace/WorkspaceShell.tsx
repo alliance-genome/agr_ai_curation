@@ -75,7 +75,14 @@ export default function WorkspaceShell({
         <WorkspacePane label="Review work pane" testId="workspace-shell-work-pane">
           {workPaneSlot ? (
             <Box
-              sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                minWidth: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+              }}
               data-testid="workspace-shell-work-pane-content"
             >
               {workPaneSlot}
