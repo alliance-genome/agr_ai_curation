@@ -75,7 +75,12 @@ def _load_feedback_report(feedback_id: str) -> FeedbackReport:
         db.close()
 
 
-def _seed_durable_chat_session(session_id: str, *, user_auth_sub: str) -> None:
+def _seed_durable_chat_session(
+    session_id: str,
+    *,
+    user_auth_sub: str,
+    structured_trace_id: str | None = None,
+) -> None:
     from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatHistoryRepository
 
     db = SessionLocal()
@@ -91,6 +96,11 @@ def _seed_durable_chat_session(session_id: str, *, user_auth_sub: str) -> None:
             created_at=created_at,
         )
         for index, (role, content) in enumerate(TRANSCRIPT_MESSAGES, start=1):
+            trace_id = (
+                structured_trace_id
+                if structured_trace_id and index == len(TRANSCRIPT_MESSAGES)
+                else None
+            )
             repository.append_message(
                 session_id=session_id,
                 user_auth_sub=user_auth_sub,
@@ -98,6 +108,8 @@ def _seed_durable_chat_session(session_id: str, *, user_auth_sub: str) -> None:
                 role=role,
                 content=content,
                 turn_id=f"{session_id}-turn-{index}",
+                trace_id=trace_id,
+                payload_json={"trace_id": trace_id} if trace_id else None,
                 created_at=created_at + timedelta(minutes=index),
             )
         db.commit()
@@ -280,6 +292,60 @@ def test_feedback_submission_captures_transcript_and_includes_email_excerpt(
     assert "traces" not in debug_payload["trace_data"]
     assert "prompt_preview" not in str(debug_payload)
     assert "super-secret" not in str(debug_payload)
+
+
+def test_feedback_submission_recovers_empty_trace_ids_from_durable_metadata(
+    client,
+    curator1_user,
+    captured_email_messages,
+    monkeypatch,
+):
+    session_id = f"{SESSION_PREFIX}structured-trace-recovery"
+    trace_id = "433d0a45d057350770cc828e08f3e0df"
+    _seed_durable_chat_session(
+        session_id,
+        user_auth_sub=curator1_user["sub"],
+        structured_trace_id=trace_id,
+    )
+
+    async def _get_trace_context(recovered_trace_id):
+        assert recovered_trace_id == trace_id
+        return SimpleNamespace(
+            trace_id=trace_id,
+            session_id=session_id,
+            timestamp=datetime(2026, 9, 3, 19, 37, tzinfo=timezone.utc),
+            user_query="Run flow",
+            final_response_preview="Flow complete",
+            prompts_executed=[],
+            routing_decisions=[],
+            tool_calls=[],
+            total_duration_ms=100,
+            total_tokens=10,
+            agent_count=1,
+        )
+
+    from src.lib.feedback import service as feedback_service
+
+    monkeypatch.setattr(feedback_service, "get_trace_context_for_explorer", _get_trace_context)
+
+    response = client.post(
+        "/api/feedback/submit",
+        json={
+            "session_id": session_id,
+            "curator_id": curator1_user["email"],
+            "feedback_text": "Recover the structured trace association.",
+            "trace_ids": [],
+        },
+    )
+
+    assert response.status_code == 200
+    report = _load_feedback_report(response.json()["feedback_id"])
+    assert report.trace_ids == [trace_id]
+    assert report.trace_data["capture_status"] == "success"
+    assert report.trace_data["association"] == {"status": "recovered_from_transcript"}
+    assert report.trace_data["feedback"]["trace_ids"] == [trace_id]
+    assert report.trace_data["traces"][0]["trace_id"] == trace_id
+    assert len(captured_email_messages) == 1
 
 
 def test_feedback_debug_detail_denies_cross_curator_access(

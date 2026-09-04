@@ -1008,7 +1008,9 @@ def _search_response_data(
     limit: int,
     total_items: Optional[int],
     source_exhausted: bool,
+    local_result_count: Optional[int],
     item_start: int,
+    provider_scan: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Fit a stable search page, including exact chunks for one oversized record."""
     references = [_listed_trace_reference(trace) for trace in traces]
@@ -1020,6 +1022,9 @@ def _search_response_data(
     safe_offset = max(0, offset)
     safe_item_start = max(0, item_start)
     authoritative_total = max(0, total_items) if total_items is not None else None
+    locally_available = (
+        max(0, local_result_count) if local_result_count is not None else None
+    )
 
     def next_arguments(next_offset: int, next_item_start: int = 0) -> Dict[str, Any]:
         return {
@@ -1032,6 +1037,8 @@ def _search_response_data(
     def is_complete(next_offset: int) -> bool:
         if authoritative_total is not None:
             return next_offset >= authoritative_total
+        if locally_available is not None and next_offset >= locally_available:
+            return True
         return source_exhausted and next_offset >= safe_offset + len(references)
 
     base = {
@@ -1039,6 +1046,7 @@ def _search_response_data(
         "query": filters,
         "total_items": authoritative_total,
         "total_is_authoritative": authoritative_total is not None,
+        **({"provider_scan": dict(provider_scan)} if provider_scan is not None else {}),
     }
 
     def build_page(items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1206,6 +1214,7 @@ def _ensure_search_provider_headroom(
             limit=limit,
             total_items=1,
             source_exhausted=True,
+            local_result_count=1,
             item_start=0,
         )
     except HTTPException as exc:
@@ -1516,11 +1525,41 @@ async def search_traces(
         limit=limit,
         total_items=listing.get("total_items"),
         source_exhausted=bool(listing.get("source_exhausted")),
+        local_result_count=listing.get("local_result_count"),
         item_start=item_start,
+        provider_scan={
+            "status": (
+                "partial"
+                if listing.get("scan_truncated")
+                or int(listing["meta"].get("observationsRejected") or 0)
+                or int(listing["meta"].get("tracesRejected") or 0)
+                else "complete"
+            ),
+            "scan_truncated": bool(listing.get("scan_truncated")),
+            "hydration_truncated": bool(
+                listing["meta"].get("hydrationTruncated")
+            ),
+            "requests_made": int(listing["meta"].get("requestsMade") or 0),
+            "request_limit": int(listing["meta"].get("requestLimit") or 0),
+            "mismatched_observation_count": int(
+                listing["meta"].get("observationsRejected") or 0
+            ),
+            "mismatched_trace_count": int(
+                listing["meta"].get("tracesRejected") or 0
+            ),
+        },
+    )
+    rejected_count = (
+        int(listing["meta"].get("observationsRejected") or 0)
+        + int(listing["meta"].get("tracesRejected") or 0)
     )
     token_info = _aggregate_token_info(response_data)
     return ClaudeTraceResponse(
-        status="success",
+        status=(
+            "partial"
+            if listing.get("scan_truncated") or rejected_count
+            else "success"
+        ),
         data=response_data,
         token_info=TokenInfo(**token_info),
     )

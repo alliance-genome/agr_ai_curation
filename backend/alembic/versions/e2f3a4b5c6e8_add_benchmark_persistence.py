@@ -1,7 +1,7 @@
 """Add durable PostgreSQL benchmark persistence.
 
-Revision ID: e2f3a4b5c6d7
-Revises: d1e2f3a4b5c6
+Revision ID: e2f3a4b5c6e8
+Revises: e2f3a4b5c6d7
 """
 
 from typing import Sequence
@@ -11,15 +11,36 @@ from alembic import op  # pyright: ignore[reportAttributeAccessIssue]
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 
-revision: str = "e2f3a4b5c6d7"
-down_revision: str | Sequence[str] | None = "d1e2f3a4b5c6"
+revision: str = "e2f3a4b5c6e8"
+down_revision: str | Sequence[str] | None = "e2f3a4b5c6d7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _DIGEST_CHECK = "{column} ~ '^sha256:[0-9a-f]{{64}}$'"
+_BASE_TABLES = frozenset(
+    {"benchmark_jobs", "benchmark_cells", "benchmark_invocations", "benchmark_events"}
+)
+
+
+def _existing_benchmark_schema_is_complete() -> bool:
+    """Recognize only the complete schema created under the former revision ID."""
+
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    present_tables = {name for name in _BASE_TABLES if inspector.has_table(name)}
+    if not present_tables:
+        return False
+    if present_tables != _BASE_TABLES:
+        raise RuntimeError(
+            "Partial benchmark persistence schema found during revision reconciliation"
+        )
+    return True
 
 
 def upgrade() -> None:
+    if _existing_benchmark_schema_is_complete():
+        return
+
     op.create_table(
         "benchmark_jobs",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),

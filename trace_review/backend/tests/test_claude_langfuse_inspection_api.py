@@ -165,6 +165,69 @@ async def test_claude_search_traces_requires_scope_and_returns_references(extrac
 
 @pytest.mark.asyncio
 @patch("src.api.claude.TraceExtractor")
+async def test_search_traces_partial_window_pagination_terminates(extractor_cls: Mock):
+    records = _large_search_references(2)
+
+    def partial_listing(**kwargs):
+        offset = kwargs["offset"]
+        limit = kwargs["limit"]
+        return {
+            "traces": records[offset:offset + limit],
+            "query": {"session_id": "session-1", "offset": offset, "limit": limit},
+            "meta": {
+                "observationsRejected": 0,
+                "tracesRejected": 0,
+                "scanTruncated": True,
+                "hydrationTruncated": True,
+                "requestsMade": 3,
+                "requestLimit": 3,
+            },
+            "total_items": None,
+            "local_result_count": len(records),
+            "source_exhausted": False,
+            "scan_truncated": True,
+        }
+
+    extractor_cls.return_value.list_traces.side_effect = partial_listing
+    arguments = {
+        "source": "local",
+        "session_id": "session-1",
+        "name": None,
+        "document_id": None,
+        "run_id": None,
+        "extraction_id": None,
+        "from_timestamp": None,
+        "to_timestamp": None,
+        "offset": 0,
+        "limit": 1,
+        "item_start": 0,
+        "user": {"sub": "user-1"},
+    }
+
+    first = await claude.search_traces(**arguments)
+    assert first.data["pagination"]["next_offset"] == 1
+    second = await claude.search_traces(
+        source="local",
+        name=None,
+        document_id=None,
+        run_id=None,
+        extraction_id=None,
+        from_timestamp=None,
+        to_timestamp=None,
+        item_start=0,
+        user={"sub": "user-1"},
+        **first.data["pagination"]["next_call"],
+    )
+
+    assert second.status == "partial"
+    assert second.data["pagination"]["complete"] is True
+    assert second.data["pagination"]["next_offset"] is None
+    assert second.data["pagination"]["next_call"] is None
+    assert second.data["provider_scan"]["status"] == "partial"
+
+
+@pytest.mark.asyncio
+@patch("src.api.claude.TraceExtractor")
 async def test_exact_trace_authorization_allows_owner_and_hides_other_user(extractor_cls: Mock):
     extractor_cls.return_value.extract_complete_trace.return_value = {
         "raw_trace": {"id": "trace-1", "userId": "curator-1"},

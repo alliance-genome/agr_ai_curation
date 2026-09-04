@@ -80,6 +80,7 @@ from src.lib.domain_packs.validation_registry import (
     ValidationBindingState,
     ValidatorBindingMatch,
 )
+from src.lib.flows.persisted_flow_migrations import migrate_persisted_flow_definition
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorDispatchJob,
@@ -4289,6 +4290,24 @@ async def execute_flow(
         dict: Streaming events - FLOW_STARTED, then all regular chat events
               (RUN_STARTED, SUPERVISOR_START, TOOL_START, etc.), then FLOW_FINISHED
     """
+    persisted_migration = migrate_persisted_flow_definition(
+        flow.flow_definition or {}
+    )
+    if persisted_migration.changed:
+        logger.info(
+            "Applying persisted flow migration in memory for execution: flow_id=%s, "
+            "removed_attachment_count=%s",
+            flow.id,
+            len(persisted_migration.removed_attachment_ids),
+        )
+        flow = cast(
+            CurationFlow,
+            SimpleNamespace(
+                id=flow.id,
+                name=flow.name,
+                flow_definition=persisted_migration.definition,
+            ),
+        )
     logger.info(
         f"[Flow Executor] Starting flow: '{flow.name}', "
         f"user_id={user_id}, session_id={session_id}"
