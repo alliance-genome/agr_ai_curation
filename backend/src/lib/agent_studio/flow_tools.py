@@ -1,30 +1,31 @@
 """
-Flow tools for Agent Studio AI Chat to create and manage curation flows.
+Flow tools for Agent Studio AI Chat to inspect and propose curation flows.
 
 Section 7 of the Curation Flows implementation.
 Provides tools for AI Chat to help users create curation flows:
 
-1. create_flow - Create a flow from simplified step input
-2. validate_flow - Validate agent IDs and flow structure
+1. propose_flow_draft_update - Compile a transient curator-reviewed proposal
+2. validate_flow - Validate agent IDs and exact flow structure
 3. get_flow_templates - Return common flow patterns and available agents
 
 Tools are registered with the DiagnosticToolRegistry and appear in
 AI Chat's available tools via _get_all_opus_tools() in agent_studio.py.
 
 User Context:
-    The create_flow tool requires user context (user_id) to save flows.
-    This is provided via contextvars set by the API layer before tool execution.
+    Proposal compilation requires request-scoped user and exact draft context.
+    It never writes to the database.
     See set_workflow_user_context() and get_current_user_id().
 """
 
 import hashlib
 import json
 import logging
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
-from uuid import uuid4
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
 from src.lib.flow_edge_roles import (
@@ -50,6 +51,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_max_steps,
     get_agent_studio_flow_name_max_chars,
     get_agent_studio_flow_output_filename_template_max_chars,
+    get_agent_studio_flow_proposal_max_operations,
     get_agent_studio_flow_inspection_chunk_max_chars,
     get_agent_studio_flow_inspection_page_limit,
     get_agent_studio_flow_step_goal_max_chars,
@@ -117,6 +119,10 @@ _current_active_group_ids: ContextVar[tuple[str, ...]] = ContextVar(
     "current_active_group_ids",
     default=(),
 )
+_current_flow_proposal: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "current_flow_proposal",
+    default=None,
+)
 
 # Context variable for storing the current flow being edited in the UI
 # This allows tools to access the flow state without it being embedded in the system prompt
@@ -147,6 +153,7 @@ def clear_workflow_user_context() -> None:
     _current_user_id.set(None)
     _current_user_email.set(None)
     _current_active_group_ids.set(())
+    _current_flow_proposal.set(None)
 
 
 def get_current_user_id() -> Optional[int]:
@@ -180,6 +187,7 @@ def set_current_flow_context(flow_context: Optional[Dict[str, Any]]) -> None:
         flow_context: Dict with flow_name, nodes, edges, entry_node_id
     """
     _current_flow_context.set(flow_context)
+    _current_flow_proposal.set(None)
     if flow_context:
         logger.debug('Set flow context: %s', flow_context.get('flow_name', 'Unnamed'))
 
@@ -196,6 +204,7 @@ def get_current_flow_context() -> Optional[Dict[str, Any]]:
 def clear_current_flow_context() -> None:
     """Clear the current flow context after request processing."""
     _current_flow_context.set(None)
+    _current_flow_proposal.set(None)
 
 
 # =============================================================================
@@ -481,11 +490,13 @@ def _simplified_flow_metadata_errors(
                 f"{get_agent_studio_flow_name_max_chars()} characters"
             )
 
-    if require_description:
-        if not isinstance(description, str) or not description.strip():
-            errors.append(
-                "Flow description is required (used as task instructions)"
-            )
+    if require_description and (
+        not isinstance(description, str) or not description.strip()
+    ):
+        errors.append("Flow description is required (used as task instructions)")
+    elif description is not None:
+        if not isinstance(description, str):
+            errors.append("Flow description must be a string")
         elif len(description) > get_agent_studio_flow_description_max_chars():
             errors.append(
                 "Flow description exceeds "
@@ -1054,177 +1065,6 @@ def _build_package_suggestions(
 # Tool Handlers
 # =============================================================================
 
-def _create_flow_handler():
-    """Create handler for the create_flow tool.
-
-    Converts simplified step input to FlowDefinition format and saves to database.
-    Requires user context to be set via set_workflow_user_context().
-    """
-    def handler(
-        name: str,
-        description: str,
-        steps: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Create a new curation flow.
-
-        Args:
-            name: Flow name (must be unique per user)
-            description: What this flow does (REQUIRED - used as task instructions
-                for the flow's Initial Instructions node)
-            steps: List of step configs with agent_id, step_goal, custom_instructions,
-                and source_steps for each output formatter
-
-        Returns:
-            Dict with success status, flow_id (if created), and message
-
-        Note:
-            The description parameter is mandatory and cannot be empty. It becomes
-            the task_instructions for the auto-generated task_input node, which
-            tells the flow supervisor what task to perform.
-        """
-        # Import here to avoid circular dependencies
-        from src.models.sql import get_db, CurationFlow
-
-        # Get user context
-        user_id = get_current_user_id()
-        if not user_id:
-            return {
-                "success": False,
-                "error": "User not authenticated. Cannot save flow without user context.",
-                "help": "This tool requires authentication. Ensure you're logged in."
-            }
-
-        metadata_errors = _simplified_flow_metadata_errors(
-            name=name,
-            description=description,
-            require_description=True,
-        )
-        if metadata_errors:
-            recovery_help = "Provide a valid flow name and description"
-            if (
-                " exceeds " in metadata_errors[0]
-                and metadata_errors[0].endswith(" characters")
-            ):
-                recovery_help = _simplified_flow_recovery_help(metadata_errors)
-            return {
-                "success": False,
-                "error": metadata_errors[0],
-                "help": recovery_help,
-            }
-
-        accessible_agents = _accessible_flow_agents()
-        accessible_agent_ids = set(accessible_agents)
-        if isinstance(steps, list) and any(
-            isinstance(step, dict)
-            and str(step.get("agent_id") or "").strip()
-            not in accessible_agent_ids
-            for step in steps
-        ):
-            return {
-                "success": False,
-                "error": "Flow references unavailable agents",
-                "help": "Re-select agents from get_available_agents before saving.",
-            }
-        try:
-            validated_flow_def = _build_simplified_flow_definition(
-                steps=steps,
-                task_instructions=description,
-                flow_agent_ids=sorted(accessible_agent_ids),
-                agent_registry=accessible_agents,
-            )
-        except _SimplifiedFlowValidationError as exc:
-            return {
-                "success": False,
-                "error": exc.errors[0],
-                "help": _simplified_flow_recovery_help(exc.errors),
-            }
-
-        try:
-            canonical_result = _validate_exact_flow_for_current_user(
-                validated_flow_def,
-                phase="save",
-            )
-        except Exception:
-            report_authoring_validation_engine_failure(
-                artifact_kind="flow",
-                phase="save",
-            )
-            return {
-                "success": False,
-                "error": "Flow validation is temporarily unavailable",
-                "help": "Try again. If the problem persists, contact support.",
-            }
-        if not canonical_result.valid:
-            first = canonical_result.errors[0]
-            return {
-                "success": False,
-                "error": first.message,
-                "findings": [finding.to_dict() for finding in canonical_result.findings],
-                "help": first.fix_hint or "Correct the exact flow draft and try again.",
-            }
-
-        validated_candidate = canonical_result.candidate
-        if validated_candidate is None:
-            report_authoring_validation_engine_failure(
-                artifact_kind="flow",
-                phase="save",
-            )
-            return {
-                "success": False,
-                "error": "Flow validation is temporarily unavailable",
-                "help": "Try again. If the problem persists, contact support.",
-            }
-        flow_definition = validated_candidate.model_dump()
-
-        # Save to database
-        try:
-            db = next(get_db())
-            try:
-                flow = CurationFlow(
-                    id=uuid4(),
-                    user_id=user_id,
-                    name=name,
-                    description=description,
-                    flow_definition=flow_definition
-                )
-                db.add(flow)
-                db.commit()
-                db.refresh(flow)
-
-                logger.info("Created flow '%s' (id=%s) for user %s", name, flow.id, user_id)
-
-                return {
-                    "success": True,
-                    "flow_id": str(flow.id),
-                    "message": f"Flow '{name}' created with {len(steps)} steps",
-                    "steps_summary": [
-                        {"step": i+1, "agent": step["agent_id"]}
-                        for i, step in enumerate(steps)
-                    ]
-                }
-            finally:
-                db.close()
-
-        except Exception as e:
-            logger.error('Failed to create flow: %s', e, exc_info=True)
-            # Check for unique constraint violation
-            error_str = str(e).lower()
-            if "uq_user_flow_name_active" in error_str or "unique constraint" in error_str:
-                return {
-                    "success": False,
-                    "error": f"A flow named '{name}' already exists. Choose a different name.",
-                    "help": "Flow names must be unique per user"
-                }
-            # Sanitize error message - don't expose internal DB details
-            return {
-                "success": False,
-                "error": "Failed to save flow due to a database error",
-                "help": "Please try again or contact support if this persists"
-            }
-
-    return handler
-
-
 def _validate_flow_handler():
     """Create handler for the validate_flow tool.
 
@@ -1288,6 +1128,721 @@ def _validate_flow_handler():
         payload["node_count"] = len(flow_definition.get("nodes", []))
         payload["edge_count"] = len(flow_definition.get("edges", []))
         return payload
+
+    return handler
+
+
+class _FlowProposalCompileError(ValueError):
+    """Curator-safe semantic compiler error."""
+
+
+def _flow_context_definition(flow_context: Mapping[str, Any]) -> Dict[str, Any]:
+    """Convert the exact flat chat snapshot to the persisted nested shape."""
+
+    nodes: list[Dict[str, Any]] = []
+    for raw_node in flow_context.get("nodes", []):
+        if not isinstance(raw_node, Mapping):
+            continue
+        data = raw_node.get("data")
+        if isinstance(data, Mapping):
+            node_data = deepcopy(dict(data))
+        else:
+            node_data = {
+                key: deepcopy(value)
+                for key, value in raw_node.items()
+                if key not in {"id", "type", "node_type", "position", "data"}
+                and value is not None
+            }
+        nodes.append(
+            {
+                "id": str(raw_node.get("id") or ""),
+                "type": str(
+                    raw_node.get("type") or raw_node.get("node_type") or "agent"
+                ),
+                "position": deepcopy(raw_node.get("position") or {"x": 0, "y": 0}),
+                "data": node_data,
+            }
+        )
+    return {
+        "version": "1.1",
+        "task_instructions_default_only": bool(
+            flow_context.get("task_instructions_default_only", False)
+        ),
+        "nodes": nodes,
+        "edges": deepcopy(list(flow_context.get("edges", []))),
+        "entry_node_id": str(
+            flow_context.get("entry_node_id")
+            or next(
+                (
+                    node["id"]
+                    for node in nodes
+                    if node["type"] == "task_input"
+                    or node["data"].get("agent_id") == "task_input"
+                ),
+                "",
+            )
+        ),
+    }
+
+
+def _flow_candidate_fingerprint(
+    *,
+    flow_context: Mapping[str, Any],
+    name: str,
+    description: str,
+    definition: Mapping[str, Any],
+) -> str:
+    """Fingerprint a compiled candidate with the original saved baseline identity."""
+
+    from src.lib.agent_studio.authoring_context import flow_draft_fingerprint
+    from src.lib.agent_studio.models import ChatContext, FlowContextDefinition
+
+    flat_nodes = []
+    for node in definition.get("nodes", []):
+        data = node.get("data", {})
+        flat_nodes.append(
+            {
+                "id": node.get("id"),
+                "node_type": node.get("type", "agent"),
+                "position": node.get("position", {}),
+                **data,
+            }
+        )
+    candidate_context = ChatContext.model_validate(
+        {
+            "flow_id": flow_context.get("flow_id"),
+            "flow_name": name,
+            "flow_description": description,
+            "flow_updated_at": flow_context.get("flow_updated_at"),
+            "flow_definition": FlowContextDefinition.model_validate(
+                {
+                    "version": definition.get("version", "1.1"),
+                    "task_instructions_default_only": definition.get(
+                        "task_instructions_default_only"
+                    ),
+                    "entry_node_id": definition.get("entry_node_id"),
+                    "nodes": flat_nodes,
+                    "edges": definition.get("edges", []),
+                }
+            ),
+        }
+    )
+    return flow_draft_fingerprint(candidate_context)
+
+
+def _next_mechanical_id(prefix: str, used: set[str]) -> str:
+    index = 1
+    while f"{prefix}_{index}" in used:
+        index += 1
+    value = f"{prefix}_{index}"
+    used.add(value)
+    return value
+
+
+def _next_output_key(agent_id: str, used: set[str]) -> str:
+    base = re.sub(r"[^A-Za-z0-9_]", "_", agent_id).strip("_") or "step"
+    if base[0].isdigit():
+        base = f"step_{base}"
+    base = f"{base[:42]}_output"
+    candidate = base[:50]
+    index = 2
+    while candidate in used:
+        suffix = f"_{index}"
+        candidate = f"{base[: 50 - len(suffix)]}{suffix}"
+        index += 1
+    used.add(candidate)
+    return candidate
+
+
+def _exact_flow_diff(before: Any, after: Any, path: str = "") -> list[Dict[str, Any]]:
+    """Return deterministic leaf-level additions, removals, and replacements."""
+
+    if isinstance(before, Mapping) and isinstance(after, Mapping):
+        changes: list[Dict[str, Any]] = []
+        for key in sorted(set(before) | set(after)):
+            child = f"{path}.{key}" if path else str(key)
+            if key not in before:
+                changes.append({"kind": "added", "path": child, "after": after[key]})
+            elif key not in after:
+                changes.append(
+                    {"kind": "removed", "path": child, "before": before[key]}
+                )
+            else:
+                changes.extend(_exact_flow_diff(before[key], after[key], child))
+        return changes
+    if (
+        isinstance(before, list)
+        and isinstance(after, list)
+        and all(
+            isinstance(item, Mapping) and item.get("id") for item in [*before, *after]
+        )
+    ):
+        before_by_id = {str(item["id"]): item for item in before}
+        after_by_id = {str(item["id"]): item for item in after}
+        changes = []
+        for item_id in sorted(set(before_by_id) | set(after_by_id)):
+            child = f"{path}.{item_id}" if path else item_id
+            if item_id not in before_by_id:
+                changes.append(
+                    {"kind": "added", "path": child, "after": after_by_id[item_id]}
+                )
+            elif item_id not in after_by_id:
+                changes.append(
+                    {"kind": "removed", "path": child, "before": before_by_id[item_id]}
+                )
+            else:
+                changes.extend(
+                    _exact_flow_diff(before_by_id[item_id], after_by_id[item_id], child)
+                )
+        return changes
+    if before == after:
+        return []
+    return [{"kind": "changed", "path": path, "before": before, "after": after}]
+
+
+def _save_equivalent_flow_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project a raw or validated definition like the Flow Builder save adapter."""
+
+    payload = deepcopy(dict(payload))
+    if payload.get("task_instructions_default_only") is not True:
+        payload.pop("task_instructions_default_only", None)
+    for node in payload.get("nodes", []):
+        data = node.get("data")
+        if isinstance(data, dict):
+            # Runtime validation groups are derived from canonical attachment
+            # edges and are intentionally not part of Flow Builder persistence.
+            data.pop("validation_groups", None)
+    return payload
+
+
+def _proposal_candidate_payload(candidate: "FlowDefinition") -> Dict[str, Any]:
+    """Serialize a validated candidate in save-equivalent transport form."""
+
+    return _save_equivalent_flow_payload(
+        candidate.model_dump(exclude_none=True, exclude_unset=True)
+    )
+
+
+def _compile_flow_operations(
+    *,
+    candidate: Dict[str, Any],
+    metadata: Dict[str, str],
+    operations: Sequence[Mapping[str, Any]],
+    accessible_agents: Mapping[str, Mapping[str, Any]],
+    semantic_refs: Dict[str, str],
+) -> None:
+    """Apply semantic operations while owning all graph mechanics in application code."""
+
+    nodes = candidate["nodes"]
+    edges = candidate["edges"]
+    def resolve_node_ref(value: Any) -> str:
+        requested = str(value or "").strip()
+        return semantic_refs.get(requested, requested)
+
+    def node_by_id(node_id: str) -> Dict[str, Any]:
+        node_id = resolve_node_ref(node_id)
+        match = next((node for node in nodes if node.get("id") == node_id), None)
+        if match is None:
+            raise _FlowProposalCompileError(f"Unknown flow step '{node_id}'.")
+        return match
+
+    for operation in operations:
+        op = str(operation.get("operation") or "").strip()
+        if op == "update_flow":
+            if "name" in operation:
+                metadata["name"] = str(operation.get("name") or "").strip()
+            if "description" in operation:
+                metadata["description"] = str(
+                    operation.get("description") or ""
+                ).strip()
+            if "task_instructions" in operation:
+                task_node = next(
+                    (node for node in nodes if node.get("type") == "task_input"),
+                    None,
+                )
+                if task_node is None:
+                    raise _FlowProposalCompileError(
+                        "The draft has no Initial Instructions step."
+                    )
+                task_node["data"]["task_instructions"] = str(
+                    operation.get("task_instructions") or ""
+                ).strip()
+            continue
+
+        if op == "add_agent_step":
+            agent_id = str(operation.get("agent_id") or "").strip()
+            agent = accessible_agents.get(agent_id)
+            if agent is None:
+                raise _FlowProposalCompileError(
+                    f"Agent '{agent_id}' is not available to the current curator."
+                )
+            used_node_ids = {str(node.get("id")) for node in nodes}
+            used_output_keys = {
+                str(node.get("data", {}).get("output_key")) for node in nodes
+            }
+            node_id = _next_mechanical_id("node", used_node_ids)
+            step_ref = str(operation.get("step_ref") or "").strip()
+            if step_ref:
+                if step_ref in semantic_refs or any(
+                    str(node.get("id")) == step_ref for node in nodes
+                ):
+                    raise _FlowProposalCompileError(
+                        f"Proposal-local step reference '{step_ref}' is already in use."
+                    )
+                semantic_refs[step_ref] = node_id
+            is_output = _is_output_agent_id(agent_id)
+            max_y = max(
+                (float(node.get("position", {}).get("y", 0)) for node in nodes),
+                default=0,
+            )
+            data: Dict[str, Any] = {
+                "agent_id": agent_id,
+                "agent_display_name": str(agent.get("name") or agent_id),
+                "agent_description": str(agent.get("description") or ""),
+                "step_goal": operation.get("step_goal"),
+                "custom_instructions": operation.get("custom_instructions"),
+                "output_key": _next_output_key(agent_id, used_output_keys),
+                "validation_attachments": [],
+                "validation_groups": [],
+            }
+            if is_output:
+                data["include_evidence"] = bool(operation.get("include_evidence", True))
+                if operation.get("output_filename_template"):
+                    data["output_filename_template"] = operation[
+                        "output_filename_template"
+                    ]
+            nodes.append(
+                {
+                    "id": node_id,
+                    "type": "output" if is_output else "agent",
+                    "position": {"x": 600 if is_output else 250, "y": max_y + 180},
+                    "data": data,
+                }
+            )
+            sources = operation.get("source_refs", operation.get("source_node_ids"))
+            if is_output:
+                if not isinstance(sources, list) or not sources:
+                    raise _FlowProposalCompileError(
+                        "An output step requires source_refs naming its input steps."
+                    )
+                for source in sources:
+                    source_id = resolve_node_ref(source)
+                    node_by_id(source_id)
+                    edge_id = _next_mechanical_id(
+                        "edge", {str(edge.get("id")) for edge in edges}
+                    )
+                    edges.append(
+                        {
+                            "id": edge_id,
+                            "source": source_id,
+                            "target": node_id,
+                            "role": "output_attachment",
+                        }
+                    )
+            else:
+                requested_after = operation.get(
+                    "after_ref", operation.get("after_node_id")
+                )
+                if requested_after:
+                    after_id = resolve_node_ref(requested_after)
+                else:
+                    control_sources = {
+                        str(edge.get("source"))
+                        for edge in edges
+                        if edge.get("role", "control_flow") == "control_flow"
+                    }
+                    terminal_ids = [
+                        str(node.get("id"))
+                        for node in nodes
+                        if node.get("type") != "output"
+                        and str(node.get("id")) != node_id
+                        and str(node.get("id")) not in control_sources
+                    ]
+                    after_id = terminal_ids[0] if len(terminal_ids) == 1 else str(
+                        candidate["entry_node_id"]
+                    )
+                node_by_id(after_id)
+                displaced = next(
+                    (
+                        edge
+                        for edge in edges
+                        if edge.get("role", "control_flow") == "control_flow"
+                        and edge.get("source") == after_id
+                    ),
+                    None,
+                )
+                if displaced is not None:
+                    displaced["source"] = node_id
+                edge_id = _next_mechanical_id(
+                    "edge", {str(edge.get("id")) for edge in edges}
+                )
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "source": after_id,
+                        "target": node_id,
+                        "role": "control_flow",
+                    }
+                )
+            continue
+
+        node_id = resolve_node_ref(
+            operation.get("node_ref", operation.get("node_id"))
+        )
+        if op == "remove_step":
+            target = node_by_id(node_id)
+            if target.get("type") == "task_input":
+                raise _FlowProposalCompileError(
+                    "Initial Instructions cannot be removed."
+                )
+            incoming = [
+                edge
+                for edge in edges
+                if edge.get("target") == node_id
+                and edge.get("role", "control_flow") == "control_flow"
+            ]
+            outgoing = [
+                edge
+                for edge in edges
+                if edge.get("source") == node_id
+                and edge.get("role", "control_flow") == "control_flow"
+            ]
+            edges[:] = [
+                edge
+                for edge in edges
+                if edge.get("source") != node_id and edge.get("target") != node_id
+            ]
+            if len(incoming) == 1 and len(outgoing) == 1:
+                edges.append(
+                    {
+                        "id": _next_mechanical_id(
+                            "edge", {str(edge.get("id")) for edge in edges}
+                        ),
+                        "source": incoming[0]["source"],
+                        "target": outgoing[0]["target"],
+                        "role": "control_flow",
+                    }
+                )
+            nodes.remove(target)
+            semantic_refs_copy = dict(semantic_refs)
+            semantic_refs.clear()
+            semantic_refs.update(
+                {
+                    ref: referenced_id
+                    for ref, referenced_id in semantic_refs_copy.items()
+                    if referenced_id != node_id
+                }
+            )
+            continue
+
+        if op == "update_step":
+            target = node_by_id(node_id)
+            allowed = {
+                "step_goal",
+                "custom_instructions",
+                "task_instructions",
+                "prompt_version",
+                "include_evidence",
+                "output_filename_template",
+                "projection_plan",
+            }
+            for key in allowed.intersection(operation):
+                target["data"][key] = deepcopy(operation[key])
+            continue
+
+        if op in {"connect_steps", "disconnect_steps"}:
+            source = resolve_node_ref(
+                operation.get("source_ref", operation.get("source_node_id"))
+            )
+            target_id = resolve_node_ref(
+                operation.get("target_ref", operation.get("target_node_id"))
+            )
+            node_by_id(source)
+            node_by_id(target_id)
+            role = str(operation.get("role") or "control_flow")
+            if op == "disconnect_steps":
+                edges[:] = [
+                    edge
+                    for edge in edges
+                    if not (
+                        edge.get("source") == source
+                        and edge.get("target") == target_id
+                        and edge.get("role", "control_flow") == role
+                    )
+                ]
+            elif not any(
+                edge.get("source") == source
+                and edge.get("target") == target_id
+                and edge.get("role", "control_flow") == role
+                for edge in edges
+            ):
+                edge: Dict[str, Any] = {
+                    "id": _next_mechanical_id(
+                        "edge", {str(item.get("id")) for item in edges}
+                    ),
+                    "source": source,
+                    "target": target_id,
+                    "role": role,
+                }
+                for key in (
+                    "satisfies_binding_id",
+                    "replaces_attachment_id",
+                    "condition",
+                ):
+                    if operation.get(key) is not None:
+                        edge[key] = deepcopy(operation[key])
+                edges.append(edge)
+            continue
+
+        if op == "reorder_control_steps":
+            ordered_values = operation.get(
+                "ordered_refs", operation.get("ordered_node_ids", [])
+            )
+            ordered = [resolve_node_ref(value) for value in ordered_values]
+            if not ordered or len(ordered) != len(set(ordered)):
+                raise _FlowProposalCompileError(
+                    "ordered_node_ids must be a non-empty unique list."
+                )
+            for ordered_id in ordered:
+                ordered_node = node_by_id(ordered_id)
+                if ordered_node.get("type") in {"task_input", "output"}:
+                    raise _FlowProposalCompileError(
+                        "Only ordinary agent steps belong in ordered_node_ids."
+                    )
+            expected = {
+                str(node.get("id"))
+                for node in nodes
+                if node.get("type") not in {"task_input", "output"}
+            }
+            if set(ordered) != expected:
+                raise _FlowProposalCompileError(
+                    "ordered_node_ids must name every ordinary agent step exactly once."
+                )
+            edges[:] = [
+                edge
+                for edge in edges
+                if edge.get("role", "control_flow") != "control_flow"
+            ]
+            chain = [candidate["entry_node_id"], *ordered]
+            used_edge_ids = {str(edge.get("id")) for edge in edges}
+            for index, (source, target_id) in enumerate(zip(chain, chain[1:])):
+                edges.append(
+                    {
+                        "id": _next_mechanical_id("edge", used_edge_ids),
+                        "source": source,
+                        "target": target_id,
+                        "role": "control_flow",
+                    }
+                )
+                node_by_id(target_id)["position"] = {"x": 250, "y": 280 + index * 180}
+            continue
+
+        if op == "configure_validation_attachments":
+            target = node_by_id(node_id)
+            enabled_ids = {
+                str(value) for value in operation.get("enabled_attachment_ids", [])
+            }
+            selections = target["data"].get("validation_attachments", [])
+            available_ids = {
+                str(selection.get("attachment_id")) for selection in selections
+            }
+            unknown = enabled_ids - available_ids
+            if unknown:
+                raise _FlowProposalCompileError(
+                    "Unknown validation attachment IDs: " + ", ".join(sorted(unknown))
+                )
+            for selection in selections:
+                selection["enabled"] = (
+                    str(selection.get("attachment_id")) in enabled_ids
+                )
+            continue
+
+        if op == "apply_template":
+            template_name = str(operation.get("template_name") or "").strip()
+            try:
+                template = next(
+                    item
+                    for item in _filter_flow_templates(
+                        set(accessible_agents),
+                        active_group_ids=get_current_active_group_ids(),
+                    )
+                    if item["name"] == template_name
+                )
+            except (StopIteration, FlowRecipeLoadError) as exc:
+                raise _FlowProposalCompileError(
+                    f"Flow template '{template_name}' is not available."
+                ) from exc
+            recipe_steps = template["steps"]
+            replacement = _build_simplified_flow_definition(
+                steps=recipe_steps,
+                task_instructions=str(
+                    operation.get("task_instructions")
+                    or metadata.get("description")
+                    or template["description"]
+                ),
+                flow_agent_ids=sorted(accessible_agents),
+                agent_registry={
+                    agent_id: dict(entry)
+                    for agent_id, entry in accessible_agents.items()
+                },
+            ).model_dump()
+            nodes[:] = replacement["nodes"]
+            edges[:] = replacement["edges"]
+            semantic_refs.clear()
+            candidate["version"] = replacement["version"]
+            candidate["task_instructions_default_only"] = replacement[
+                "task_instructions_default_only"
+            ]
+            candidate["entry_node_id"] = replacement["entry_node_id"]
+            continue
+
+        raise _FlowProposalCompileError(f"Unsupported flow proposal operation '{op}'.")
+
+
+def _propose_flow_draft_update_handler():
+    """Create the pure, request-local semantic Flow Builder proposal handler."""
+
+    def handler(
+        base_draft_fingerprint: str,
+        operations: List[Dict[str, Any]],
+        change_summary: str,
+        reset_candidate: bool = False,
+    ) -> Dict[str, Any]:
+        flow_context = get_current_flow_context()
+        if not flow_context:
+            return {
+                "success": False,
+                "error": "No exact Flow Builder draft is available.",
+                "help": "Open or create a flow draft, then ask again.",
+            }
+        current_fingerprint = str(flow_context.get("flow_draft_fingerprint") or "")
+        if not current_fingerprint or base_draft_fingerprint != current_fingerprint:
+            return {
+                "success": False,
+                "error": "The Flow Builder draft changed before proposal compilation.",
+                "code": "stale_draft_fingerprint",
+                "help": "Use the current draft fingerprint and compile a new proposal.",
+            }
+        maximum = get_agent_studio_flow_proposal_max_operations()
+        if not isinstance(operations, list) or not operations:
+            return {
+                "success": False,
+                "error": "At least one semantic operation is required.",
+            }
+        if len(operations) > maximum:
+            return {
+                "success": False,
+                "error": f"A proposal may contain at most {maximum} semantic operations.",
+            }
+
+        original = _flow_context_definition(flow_context)
+        proposal_state = _current_flow_proposal.get()
+        if (
+            reset_candidate
+            or not proposal_state
+            or proposal_state.get("base_draft_fingerprint") != base_draft_fingerprint
+        ):
+            proposal_state = {
+                "base_draft_fingerprint": base_draft_fingerprint,
+                "candidate": deepcopy(original),
+                "metadata": {
+                    "name": str(flow_context.get("flow_name") or "Untitled Flow"),
+                    "description": str(flow_context.get("flow_description") or ""),
+                },
+                "semantic_refs": {},
+            }
+        candidate = deepcopy(proposal_state["candidate"])
+        metadata = deepcopy(proposal_state["metadata"])
+        semantic_refs = deepcopy(proposal_state.get("semantic_refs", {}))
+        try:
+            _compile_flow_operations(
+                candidate=candidate,
+                metadata=metadata,
+                operations=operations,
+                accessible_agents=_accessible_flow_agents(),
+                semantic_refs=semantic_refs,
+            )
+        except (_FlowProposalCompileError, _SimplifiedFlowValidationError) as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "help": "Inspect the current flow and live catalog, then repair the semantic operations.",
+            }
+
+        metadata_errors = _simplified_flow_metadata_errors(
+            name=metadata["name"],
+            description=metadata["description"],
+        )
+        if metadata_errors:
+            return {
+                "success": False,
+                "error": metadata_errors[0],
+                "help": "Correct the flow metadata and compile the proposal again.",
+            }
+
+        try:
+            validation = _validate_exact_flow_for_current_user(
+                candidate, phase="proposal"
+            )
+        except Exception:
+            report_authoring_validation_engine_failure(
+                artifact_kind="flow", phase="proposal"
+            )
+            return {
+                "success": False,
+                "error": "Flow validation is temporarily unavailable.",
+                "help": "Try the proposal again. If the problem persists, contact support.",
+            }
+        if validation.candidate is not None:
+            candidate = _proposal_candidate_payload(validation.candidate)
+        proposal_state["candidate"] = deepcopy(candidate)
+        proposal_state["metadata"] = deepcopy(metadata)
+        proposal_state["semantic_refs"] = deepcopy(semantic_refs)
+        _current_flow_proposal.set(proposal_state)
+
+        normalized_original = _save_equivalent_flow_payload(original)
+        base_payload = {
+            "name": str(flow_context.get("flow_name") or "Untitled Flow"),
+            "description": str(flow_context.get("flow_description") or ""),
+            "flow_definition": normalized_original,
+        }
+        candidate_payload = {
+            "name": metadata["name"],
+            "description": metadata["description"],
+            "flow_definition": candidate,
+        }
+        candidate_fingerprint = _flow_candidate_fingerprint(
+            flow_context=flow_context,
+            name=metadata["name"],
+            description=metadata["description"],
+            definition=candidate,
+        )
+        findings = [finding.to_dict() for finding in validation.findings]
+        valid = validation.valid
+        logger.info(
+            "Compiled transient flow proposal: valid=%s operations=%s findings=%s",
+            valid,
+            len(operations),
+            len(findings),
+        )
+        return {
+            "contract_version": "flow_authoring_proposal.v1",
+            "success": valid,
+            "valid": valid,
+            "pending_user_approval": valid,
+            "approval_status": "pending" if valid else "repair_required",
+            "base_draft_fingerprint": base_draft_fingerprint,
+            "candidate_draft_fingerprint": candidate_fingerprint,
+            "change_summary": str(change_summary).strip(),
+            "diff": _exact_flow_diff(base_payload, candidate_payload),
+            "findings": findings,
+            "candidate": candidate_payload,
+            "message": (
+                "Flow proposal is ready for curator review."
+                if valid
+                else "Flow proposal needs repair before curator review."
+            ),
+        }
 
     return handler
 
@@ -1561,7 +2116,7 @@ def _get_flow_templates_handler():
             message = (
                 f"Found {len(matched_templates)} compatible templates and {total_count} matching agents "
                 f"(showing {len(template_page)} templates and {len(page)} agents). "
-                "Use validate_flow to check a custom workflow, or create_flow to save one."
+                "Use validate_flow to check a custom workflow, or prepare a curator-reviewed proposal."
             )
 
         def continuation_call(
@@ -2725,7 +3280,9 @@ def register_flow_tools() -> None:
     Called on module import to make flow tools available to AI Chat.
     """
     registry = get_diagnostic_tools_registry()
-    simplified_steps_schema = _simplified_flow_steps_schema()
+    # Forward-only safety: remove the legacy model-facing direct database writer
+    # if a long-lived process registered it before this tool surface was refreshed.
+    registry.unregister("create_flow")
     from src.schemas.flows import FlowDefinition
 
     exact_flow_definition_schema = FlowDefinition.model_json_schema()
@@ -2733,53 +3290,137 @@ def register_flow_tools() -> None:
     logger.info("Registering flow tools...")
 
     # -------------------------------------------------------------------------
-    # create_flow - Generate flow from natural language
+    # propose_flow_draft_update - Compile a transient curator-reviewed proposal
     # -------------------------------------------------------------------------
     registry.register(
-        name="create_flow",
-        description="""Create a new curation flow from a specification.
+        name="propose_flow_draft_update",
+        description="""Compile semantic Flow Builder changes for curator review.
 
-Use this tool when the user wants to create a workflow that chains multiple
-agents together. Accepts a flow name, description, and list of steps.
+Use this tool for a clear request to build, fix, or revise the exact current
+Flow Builder draft. Do not ask for preliminary permission when the requested
+outcome is clear. The application resolves authorized agents and generates node
+IDs, edge IDs, output keys, positions, defaults, and the exact graph. Never ask
+the curator or model to supply those mechanics.
 
-Each step specifies which agent to use and optionally includes a goal
-description and custom instructions to guide that agent's behavior.
-
-Output formatters are branches, not sequential steps. Every Output agent must
-include source_steps, an ordered list of one or more 1-based indexes of earlier
-Extraction or typed Validation agents. Multiple formatters may point to the same
-sources, and ordinary control-flow steps may continue after a formatter branch.
-
-Returns the created flow's ID for reference. This tool compiles the steps into
-the exact graph and runs canonical validation before writing. `validate_flow`
-is for validating an already-compiled exact canvas draft, not these simplified
-steps.
-
-NOTE: This tool saves the flow to the database.""",
+The tool is side-effect free: it never creates, updates, or saves a flow. It
+returns a canonically validated full candidate and exact diff for an explicit
+Apply or Cancel decision. Save remains a separate curator action. A failed
+candidate remains request-local so a later tool call can repair it; set
+reset_candidate only to restart from the captured base draft. Give newly added
+steps short proposal-local `step_ref` names and use the corresponding `*_ref`
+fields to connect, configure, or attach later operations without predicting the
+application-generated node IDs.""",
         input_schema={
             "type": "object",
             "properties": {
-                "name": {
+                "base_draft_fingerprint": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "description": "Exact fingerprint from the current Flow Builder context.",
+                },
+                "change_summary": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": get_agent_studio_flow_name_max_chars(),
-                    "description": "Flow name (must be unique per user)"
+                    "description": "Short curator-facing summary of the requested outcome.",
                 },
-                "description": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": get_agent_studio_flow_description_max_chars(),
-                    "description": "What this flow does - describe the overall goal"
+                "reset_candidate": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Restart compilation from the captured base draft.",
                 },
-                "steps": simplified_steps_schema,
+                "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": get_agent_studio_flow_proposal_max_operations(),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {
+                                "type": "string",
+                                "enum": [
+                                    "update_flow",
+                                    "add_agent_step",
+                                    "remove_step",
+                                    "update_step",
+                                    "connect_steps",
+                                    "disconnect_steps",
+                                    "reorder_control_steps",
+                                    "configure_validation_attachments",
+                                    "apply_template",
+                                ],
+                            },
+                            "name": {"type": "string"},
+                            "description": {
+                                "type": "string",
+                                "maxLength": get_agent_studio_flow_description_max_chars(),
+                            },
+                            "task_instructions": {"type": "string"},
+                            "agent_id": {"type": "string"},
+                            "step_ref": {
+                                "type": "string",
+                                "description": "Proposal-local semantic name for a newly added step.",
+                            },
+                            "node_id": {"type": "string"},
+                            "node_ref": {"type": "string"},
+                            "after_node_id": {"type": "string"},
+                            "after_ref": {"type": "string"},
+                            "source_node_id": {"type": "string"},
+                            "source_ref": {"type": "string"},
+                            "target_node_id": {"type": "string"},
+                            "target_ref": {"type": "string"},
+                            "source_node_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "source_refs": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "ordered_node_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "ordered_refs": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Complete control-step order using existing IDs or proposal-local step refs.",
+                            },
+                            "role": {
+                                "type": "string",
+                                "enum": [
+                                    "control_flow",
+                                    "output_attachment",
+                                    "validation_attachment",
+                                ],
+                            },
+                            "step_goal": {"type": ["string", "null"]},
+                            "custom_instructions": {"type": ["string", "null"]},
+                            "prompt_version": {"type": ["integer", "null"]},
+                            "include_evidence": {"type": "boolean"},
+                            "output_filename_template": {"type": ["string", "null"]},
+                            "projection_plan": {"type": ["object", "null"]},
+                            "enabled_attachment_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "satisfies_binding_id": {"type": "string"},
+                            "replaces_attachment_id": {"type": "string"},
+                            "condition": {"type": "object"},
+                            "template_name": {"type": "string"},
+                        },
+                        "required": ["operation"],
+                        "additionalProperties": False,
+                    },
+                },
             },
-            "required": ["name", "description", "steps"]
+            "required": ["base_draft_fingerprint", "operations", "change_summary"],
+            "additionalProperties": False,
         },
-        handler=_create_flow_handler(),
+        handler=_propose_flow_draft_update_handler(),
         category="flows",
-        tags=["flow", "creation", "workflow"]
+        tags=["flow", "authoring", "proposal", "workflow"],
     )
-    logger.debug("Registered: create_flow")
+    logger.debug("Registered: propose_flow_draft_update")
 
     # -------------------------------------------------------------------------
     # validate_flow - Check flow for issues
@@ -2789,8 +3430,8 @@ NOTE: This tool saves the flow to the database.""",
         description="""Validate an exact complete flow definition.
 
 Use this tool to check an already-compiled exact canvas draft before applying or
-saving that draft. Do not manufacture a separate graph before `create_flow`;
-`create_flow` compiles and canonically validates its own simplified steps.
+saving that draft. For authoring requests, use `propose_flow_draft_update` so
+application code owns graph mechanics and the curator receives a reviewable diff.
 Pass the full save-equivalent canvas draft, including nodes, edges, positions,
 configuration, attachment metadata, prompt revision references, and output settings.
 The same structured rules are used for proposals, pre-apply checks, post-apply

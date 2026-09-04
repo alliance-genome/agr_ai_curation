@@ -1411,8 +1411,15 @@ def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
     if tool_name in _WORKSHOP_TOOLS:
         return "workshop_prompt", "Agent Workshop prompt inspection and curator-approved proposals"
     if tool_name in _FLOW_TOOLS:
-        if tool_name in {"create_flow", "validate_flow", "get_flow_templates"}:
-            return "flow_authoring", "Flow creation, templates, and validation"
+        if tool_name in {
+            "propose_flow_draft_update",
+            "validate_flow",
+            "get_flow_templates",
+        }:
+            return (
+                "flow_authoring",
+                "Curator-reviewed flow proposals, templates, and validation",
+            )
         return "flow_inspection", "Focused inspection of the active flow draft"
     if tool_name in _TRACE_TOOLS:
         if tool_name in {
@@ -2214,6 +2221,34 @@ def _provider_tool_result_content(
             "change_summary": tool_result.get("change_summary"),
             "message": tool_result.get("message"),
             "instruction": instruction,
+        }
+    elif (
+        tool_name == "propose_flow_draft_update"
+        and isinstance(tool_result, dict)
+        and tool_result.get("contract_version") == "flow_authoring_proposal.v1"
+    ):
+        # The full candidate and exact diff are transient UI state. Keep them out
+        # of provider continuation and durable conversation records.
+        provider_tool_result = {
+            "contract_version": "flow_authoring_proposal_ack.v1",
+            "success": tool_result.get("success") is True,
+            "valid": tool_result.get("valid") is True,
+            "pending_user_approval": tool_result.get("pending_user_approval") is True,
+            "approval_status": tool_result.get("approval_status"),
+            "base_draft_fingerprint": tool_result.get("base_draft_fingerprint"),
+            "candidate_draft_fingerprint": tool_result.get(
+                "candidate_draft_fingerprint"
+            ),
+            "change_summary": tool_result.get("change_summary"),
+            "finding_count": len(tool_result.get("findings") or []),
+            "findings": tool_result.get("findings") or [],
+            "diff_count": len(tool_result.get("diff") or []),
+            "message": tool_result.get("message"),
+            "instruction": (
+                "Tell the curator the flow proposal is ready for review; do not claim it was applied or saved."
+                if tool_result.get("valid") is True
+                else "Repair the listed findings with another semantic proposal call; the request-local candidate is retained."
+            ),
         }
 
     raw_content = _serialize_provider_tool_result(provider_tool_result)

@@ -18,6 +18,7 @@ import {
   streamOpusChat,
   updateCustomAgent,
   updateFlow,
+  validateFlowDraft,
 } from './agentStudioService'
 import { logger } from './logger'
 
@@ -501,6 +502,31 @@ describe('agentStudioService', () => {
       })
     )
     expect(result).toEqual(updatedFlow)
+  })
+
+  it('validates a proposal draft without calling a persistence endpoint', async () => {
+    const flowDefinition = {
+      version: '1.1' as const,
+      entry_node_id: 'node_0',
+      nodes: [],
+      edges: [],
+    }
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ artifact_kind: 'flow', phase: 'post_apply', valid: true, findings: [] }),
+    })
+
+    await expect(validateFlowDraft(
+      flowDefinition,
+      'post_apply',
+      `sha256:${'a'.repeat(64)}`,
+      `sha256:${'a'.repeat(64)}`,
+    )).resolves.toEqual(expect.objectContaining({ valid: true, phase: 'post_apply' }))
+    expect(mockFetch).toHaveBeenCalledWith('/api/flows/validate-draft', expect.objectContaining({
+      method: 'POST',
+      credentials: 'include',
+    }))
+    expect(mockFetch).not.toHaveBeenCalledWith('/api/flows', expect.anything())
   })
 
   it('parses the complete provider-neutral Agent Studio SSE contract', async () => {

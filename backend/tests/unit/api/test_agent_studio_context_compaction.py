@@ -173,6 +173,52 @@ def test_workshop_proposal_provider_projection_excludes_full_prompt(monkeypatch)
     assert len(content) < 12000
 
 
+def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    candidate = {
+        "name": "Large candidate",
+        "description": "Transient only",
+        "flow_definition": {
+            "version": "1.1",
+            "entry_node_id": "task",
+            "nodes": [
+                {"id": f"node-{index}", "payload": "x" * 1000} for index in range(20)
+            ],
+            "edges": [],
+        },
+    }
+    tool_result = {
+        "contract_version": "flow_authoring_proposal.v1",
+        "success": True,
+        "valid": True,
+        "pending_user_approval": True,
+        "approval_status": "pending",
+        "base_draft_fingerprint": f"sha256:{'a' * 64}",
+        "candidate_draft_fingerprint": f"sha256:{'b' * 64}",
+        "change_summary": "Add extraction steps.",
+        "findings": [],
+        "diff": [{"kind": "added", "path": f"nodes.{index}"} for index in range(20)],
+        "candidate": candidate,
+        "message": "Flow proposal is ready for curator review.",
+    }
+
+    content = api_module._provider_tool_result_content(
+        tool_name="propose_flow_draft_update",
+        tool_input={"operations": [{"operation": "add_agent_step"}]},
+        tool_result=tool_result,
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-1",
+    )
+    provider_result = json.loads(content)
+
+    assert provider_result["contract_version"] == "flow_authoring_proposal_ack.v1"
+    assert provider_result["diff_count"] == 20
+    assert "candidate" not in provider_result
+    assert "diff" not in provider_result
+    assert "Transient only" not in content
+    assert "do not claim it was applied or saved" in provider_result["instruction"]
+
+
 def test_targeted_edit_provider_projection_describes_retained_edits(monkeypatch):
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     proposed_prompt = "Server-derived proposal text.\n" * 1200

@@ -1323,7 +1323,7 @@ TRACE_TOOLS = {
     "get_service_logs",
 }
 FLOW_TOOLS = {
-    "create_flow",
+    "propose_flow_draft_update",
     "validate_flow",
     "get_flow_templates",
     "get_current_flow",
@@ -1336,7 +1336,7 @@ FLOW_TOOLS = {
     "get_available_agents",
 }
 FLOW_CREATION_TOOLS = {
-    "create_flow",
+    "propose_flow_draft_update",
     "validate_flow",
     "get_flow_templates",
     "get_available_agents",

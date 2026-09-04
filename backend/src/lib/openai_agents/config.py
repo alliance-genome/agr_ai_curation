@@ -2349,6 +2349,18 @@ def get_agent_studio_flow_inspection_page_limit() -> int:
     )
 
 
+def get_agent_studio_flow_proposal_max_operations() -> int:
+    """Maximum semantic operations accepted by one flow proposal tool call."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_FLOW_PROPOSAL_MAX_OPERATIONS",
+            30,
+        ),
+    )
+
+
 def get_agent_studio_flow_inspection_chunk_max_chars() -> int:
     """Maximum exact text characters returned by one flow detail call."""
 

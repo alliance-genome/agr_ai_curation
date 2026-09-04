@@ -57,6 +57,7 @@ import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
 import CheckIcon from '@mui/icons-material/Check'
 import CloseIcon from '@mui/icons-material/Close'
+import UndoIcon from '@mui/icons-material/Undo'
 
 import FlowNode from './FlowNode'
 import DeletableEdge from './DeletableEdge'
@@ -80,13 +81,16 @@ import type {
   OutputBindingView,
   ValidationAttachmentGroup,
   ValidationAttachmentSelection,
+  FlowProposalApplyResult,
 } from './types'
+import type { ChatContext, FlowAuthoringProposal, FlowContextDefinition } from '@/types/promptExplorer'
 import {
   getFlow,
   createFlow,
   updateFlow,
   listFlows,
   deleteFlow,
+  validateFlowDraft,
 } from '@/services/agentStudioService'
 import type { FlowSummaryResponse } from './types'
 import logger from '@/services/logger'
@@ -99,7 +103,7 @@ import {
   isValidationAgentFromMetadata,
 } from './agentMetadataUtils'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
-import { canonicalAuthoringJson } from '../authoringContext'
+import { canonicalAuthoringJson, fingerprintFlowDraft } from '../authoringContext'
 
 /**
  * Helper to create initial task_input node for new flows.
@@ -212,10 +216,74 @@ interface FlowDraftBaseline {
   definition: FlowDefinition
 }
 
+interface FlowProposalUndo {
+  draft: FlowDraftBaseline
+  appliedCanonical: string
+}
+
 const initialFlowDraftBaseline = (): FlowDraftBaseline => ({
   name: 'New Flow',
   description: '',
   definition: buildFlowDefinition([createInitialTaskInputNode()], [], false),
+})
+
+const flowStateDefinition = (state: FlowState): FlowDefinition => ({
+  version: state.version,
+  ...(state.task_instructions_default_only ? { task_instructions_default_only: true } : {}),
+  entry_node_id: state.entry_node_id ?? '',
+  nodes: state.nodes.map((node) => ({
+    id: node.id,
+    type: node.type,
+    position: { ...node.position },
+    data: {
+      agent_id: node.agent_id,
+      agent_display_name: node.agent_display_name,
+      ...(node.agent_description !== undefined ? { agent_description: node.agent_description } : {}),
+      ...(node.task_instructions !== undefined ? { task_instructions: node.task_instructions } : {}),
+      ...(node.step_goal !== undefined ? { step_goal: node.step_goal } : {}),
+      ...(node.custom_instructions !== undefined ? { custom_instructions: node.custom_instructions } : {}),
+      ...(node.prompt_version !== undefined ? { prompt_version: node.prompt_version } : {}),
+      ...(node.include_evidence !== undefined ? { include_evidence: node.include_evidence } : {}),
+      ...(node.output_filename_template !== undefined
+        ? { output_filename_template: node.output_filename_template }
+        : {}),
+      ...(node.projection_plan !== undefined ? { projection_plan: node.projection_plan } : {}),
+      output_key: node.output_key,
+      ...(node.validation_attachments !== undefined
+        ? { validation_attachments: node.validation_attachments }
+        : {}),
+      ...(node.validation_groups !== undefined ? { validation_groups: node.validation_groups } : {}),
+    },
+  })),
+  edges: state.edges.map((edge) => ({ ...edge })),
+})
+
+const flowDefinitionContext = (definition: FlowDefinition): FlowContextDefinition => ({
+  version: definition.version,
+  task_instructions_default_only: definition.task_instructions_default_only,
+  entry_node_id: definition.entry_node_id,
+  nodes: definition.nodes.map((node) => ({
+    id: node.id,
+    node_type: node.type,
+    position: { ...node.position },
+    ...node.data,
+    validation_attachments: node.data.validation_attachments?.map((attachment) => ({ ...attachment })),
+    validation_groups: node.data.validation_groups?.map((group) => ({ ...group })),
+  })),
+  edges: definition.edges.map((edge) => ({ ...edge })),
+})
+
+const flowFingerprintContext = (
+  state: Pick<FlowState, 'flowId' | 'flowUpdatedAt'>,
+  name: string,
+  description: string,
+  definition: FlowDefinition,
+): ChatContext => ({
+  flow_id: state.flowId,
+  flow_name: name,
+  flow_description: description,
+  flow_updated_at: state.flowUpdatedAt,
+  flow_definition: flowDefinitionContext(definition),
 })
 
 const activeValidationBindingOptions = (
@@ -873,6 +941,7 @@ function FlowBuilderInner({
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(flowId || null)
   const [flowUpdatedAt, setFlowUpdatedAt] = useState<string | null>(null)
   const [savedBaseline, setSavedBaseline] = useState<FlowDraftBaseline>(initialFlowDraftBaseline)
+  const [proposalUndo, setProposalUndo] = useState<FlowProposalUndo | null>(null)
   const initialBaselineCapturedRef = useRef(Boolean(flowId))
   const [pendingFlowReplacement, setPendingFlowReplacement] = useState<{
     label: string
@@ -883,13 +952,27 @@ function FlowBuilderInner({
     () => buildFlowDefinition(nodes as AgentNode[], edges as FlowEdge[], taskInstructionsDefaultOnly),
     [edges, nodes, taskInstructionsDefaultOnly]
   )
-  const appliedFlowIsDirty = useMemo(
+  const currentDraftCanonical = useMemo(
     () => canonicalAuthoringJson({
       name: flowName,
       description: flowDescription,
       definition: currentFlowDefinition,
-    }) !== canonicalAuthoringJson(savedBaseline),
-    [currentFlowDefinition, flowDescription, flowName, savedBaseline]
+    }),
+    [currentFlowDefinition, flowDescription, flowName]
+  )
+  const currentEditorDraftRef = useRef<FlowDraftBaseline>({
+    name: flowName,
+    description: flowDescription,
+    definition: currentFlowDefinition,
+  })
+  currentEditorDraftRef.current = {
+    name: flowName,
+    description: flowDescription,
+    definition: currentFlowDefinition,
+  }
+  const appliedFlowIsDirty = useMemo(
+    () => currentDraftCanonical !== canonicalAuthoringJson(savedBaseline),
+    [currentDraftCanonical, savedBaseline]
   )
   const flowIsDirty = appliedFlowIsDirty || nodePanelDraftDirty
   const appliedFlowIsDirtyRef = useRef(appliedFlowIsDirty)
@@ -1041,42 +1124,42 @@ function FlowBuilderInner({
         : node
     ))
     return {
-        flowId: currentFlowId || undefined,
-        flowName,
-        flowDescription,
-        flowUpdatedAt: flowUpdatedAt || undefined,
-        isDirty: flowIsDirty,
-        version: '1.1',
-        task_instructions_default_only: taskInstructionsDefaultOnly || undefined,
-        entry_node_id: nodes.find(node => node.data.agent_id === 'task_input')?.id,
-        nodes: capturedNodes.map((n) => ({
-          id: n.id,
-          type: (n.type ?? 'agent') as NodeType,
-          position: { ...n.position },
-          agent_id: n.data.agent_id,
-          agent_display_name: n.data.agent_display_name,
-          agent_description: n.data.agent_description,
-          task_instructions: n.data.task_instructions,
-          step_goal: n.data.step_goal,
-          custom_instructions: n.data.custom_instructions,
-          prompt_version: n.data.prompt_version,
-          include_evidence: n.data.include_evidence,
-          output_filename_template: n.data.output_filename_template,
-          projection_plan: n.data.projection_plan,
-          output_key: n.data.output_key,
-          validation_attachments: n.data.validation_attachments,
-          validation_groups: n.data.validation_groups,
-        })),
-        edges: edges.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-          role: edgeRole(e as FlowEdge),
-          satisfies_binding_id: e.data?.satisfies_binding_id,
-          replaces_attachment_id: e.data?.replaces_attachment_id,
-          condition: e.data?.condition,
-        })),
-      }
+      flowId: currentFlowId || undefined,
+      flowName,
+      flowDescription,
+      flowUpdatedAt: flowUpdatedAt || undefined,
+      isDirty: flowIsDirty,
+      version: '1.1',
+      task_instructions_default_only: taskInstructionsDefaultOnly || undefined,
+      entry_node_id: nodes.find(node => node.data.agent_id === 'task_input')?.id,
+      nodes: capturedNodes.map((n) => ({
+        id: n.id,
+        type: (n.type ?? 'agent') as NodeType,
+        position: { ...n.position },
+        agent_id: n.data.agent_id,
+        agent_display_name: n.data.agent_display_name,
+        agent_description: n.data.agent_description,
+        task_instructions: n.data.task_instructions,
+        step_goal: n.data.step_goal,
+        custom_instructions: n.data.custom_instructions,
+        prompt_version: n.data.prompt_version,
+        include_evidence: n.data.include_evidence,
+        output_filename_template: n.data.output_filename_template,
+        projection_plan: n.data.projection_plan,
+        output_key: n.data.output_key,
+        validation_attachments: n.data.validation_attachments,
+        validation_groups: n.data.validation_groups,
+      })),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        role: edgeRole(e as FlowEdge),
+        satisfies_binding_id: e.data?.satisfies_binding_id,
+        replaces_attachment_id: e.data?.replaces_attachment_id,
+        condition: e.data?.condition,
+      })),
+    }
   }, [
         currentFlowId,
         edges,
@@ -1085,13 +1168,261 @@ function FlowBuilderInner({
         flowName,
         flowUpdatedAt,
         nodes,
-        taskInstructionsDefaultOnly,
+    taskInstructionsDefaultOnly,
   ])
+
+  const applyDefinitionToEditor = useCallback((draft: FlowDraftBaseline) => {
+    const nextNodes: AgentNode[] = draft.definition.nodes.map((node) => ({
+      id: node.id,
+      type: node.type === 'task_input'
+        ? 'task_input'
+        : node.type === 'output'
+          || isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
+          ? 'output'
+          : 'agent',
+      position: { ...node.position },
+      data: { ...node.data },
+    }))
+    const nextEdges: FlowEdge[] = draft.definition.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'deletable',
+      animated: isAnimatedEdgeRole(edge.role ?? 'control_flow'),
+      data: {
+        role: edge.role ?? 'control_flow',
+        satisfies_binding_id: edge.satisfies_binding_id,
+        replaces_attachment_id: edge.replaces_attachment_id,
+        condition: edge.condition,
+      },
+    }))
+    const appliedDraft: FlowDraftBaseline = {
+      name: draft.name,
+      description: draft.description,
+      definition: buildFlowDefinition(
+        nextNodes,
+        nextEdges,
+        draft.definition.task_instructions_default_only === true,
+      ),
+    }
+    currentEditorDraftRef.current = appliedDraft
+    setFlowName(draft.name)
+    setFlowDescription(draft.description)
+    setTaskInstructionsDefaultOnly(draft.definition.task_instructions_default_only === true)
+    setNodes(nextNodes)
+    setEdges(nextEdges)
+    setSelectedNode(null)
+    setNodePanelDraftDirty(false)
+    nodePanelGuardRef.current = null
+    const maxId = Math.max(
+      ...nextNodes.map((node) => Number.parseInt(node.id.replace('node_', ''), 10) || 0),
+      0,
+    )
+    nodeIdRef.current = maxId + 1
+  }, [agentMetadata, setEdges, setNodes])
+
+  const applyAuthoringProposal = useCallback(async (
+    proposal: FlowAuthoringProposal,
+  ): Promise<FlowProposalApplyResult> => {
+    if (proposal.contract_version !== 'flow_authoring_proposal.v1') {
+      return { applied: false, reason: 'invalid', message: 'This flow proposal format is not supported.' }
+    }
+    const captured = captureAuthoringContext()
+    const capturedDefinition = flowStateDefinition(captured)
+    const currentFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
+      captured,
+      captured.flowName,
+      captured.flowDescription,
+      capturedDefinition,
+    ))
+    if (currentFingerprint !== proposal.base_draft_fingerprint) {
+      logger.info('Rejected stale transient flow proposal', {
+        component: 'FlowBuilder',
+        action: 'apply_flow_authoring_proposal',
+        metadata: { outcome: 'stale' },
+      })
+      return {
+        applied: false,
+        reason: 'stale',
+        message: 'The flow changed after this proposal was prepared. Ask AI Chat to refresh it.',
+      }
+    }
+
+    const candidateFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
+      captured,
+      proposal.candidate.name,
+      proposal.candidate.description,
+      proposal.candidate.flow_definition,
+    ))
+    if (candidateFingerprint !== proposal.candidate_draft_fingerprint) {
+      logger.error('Rejected invalid transient flow proposal', new Error('Flow proposal fingerprint mismatch'), {
+        component: 'FlowBuilder',
+        action: 'apply_flow_authoring_proposal',
+        metadata: { outcome: 'invalid_candidate' },
+      })
+      return {
+        applied: false,
+        reason: 'invalid',
+        message: 'The proposal could not be verified. Ask AI Chat to prepare it again.',
+      }
+    }
+
+    let canonicalPreApply
+    try {
+      canonicalPreApply = await validateFlowDraft(
+        proposal.candidate.flow_definition,
+        'pre_apply',
+        proposal.base_draft_fingerprint,
+        currentFingerprint,
+      )
+    } catch (error) {
+      logger.error('Flow proposal pre-apply validation failed', error as Error, {
+        component: 'FlowBuilder',
+        action: 'apply_flow_authoring_proposal',
+      })
+      return {
+        applied: false,
+        reason: 'unavailable',
+        message: 'Canonical validation is temporarily unavailable; the draft was not changed.',
+      }
+    }
+    if (!canonicalPreApply.valid) {
+      return {
+        applied: false,
+        reason: canonicalPreApply.findings.some((finding) => finding.code === 'stale_draft_fingerprint')
+          ? 'stale'
+          : 'invalid',
+        message: canonicalPreApply.findings[0]?.message ?? 'The proposal is no longer valid.',
+      }
+    }
+
+    const candidateNodes = proposal.candidate.flow_definition.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: node.position,
+      data: node.data,
+    })) as AgentNode[]
+    const candidateEdges = proposal.candidate.flow_definition.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      data: { role: edge.role ?? 'control_flow' },
+    })) as FlowEdge[]
+    const localFindings = computeValidationErrors(candidateNodes, candidateEdges)
+    if (localFindings.length > 0) {
+      return { applied: false, reason: 'invalid', message: localFindings[0].message }
+    }
+
+    const undoDraft = {
+      name: captured.flowName,
+      description: captured.flowDescription,
+      definition: capturedDefinition,
+    }
+    const requestedDraft = {
+      name: proposal.candidate.name,
+      description: proposal.candidate.description,
+      definition: proposal.candidate.flow_definition,
+    }
+    applyDefinitionToEditor(requestedDraft)
+    const actualAppliedDraft = currentEditorDraftRef.current
+    setProposalUndo({
+      draft: undoDraft,
+      appliedCanonical: canonicalAuthoringJson(actualAppliedDraft),
+    })
+    try {
+      const actualAppliedFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
+        captured,
+        actualAppliedDraft.name,
+        actualAppliedDraft.description,
+        actualAppliedDraft.definition,
+      ))
+      const canonicalPostApply = await validateFlowDraft(
+        actualAppliedDraft.definition,
+        'post_apply',
+        proposal.candidate_draft_fingerprint,
+        actualAppliedFingerprint,
+      )
+      if (!canonicalPostApply.valid) {
+        applyDefinitionToEditor(undoDraft)
+        setProposalUndo(null)
+        return {
+          applied: false,
+          reason: 'invalid',
+          message: canonicalPostApply.findings[0]?.message ?? 'Post-apply validation failed; the draft was restored.',
+        }
+      }
+    } catch (error) {
+      applyDefinitionToEditor(undoDraft)
+      setProposalUndo(null)
+      logger.error('Flow proposal post-apply validation failed', error as Error, {
+        component: 'FlowBuilder',
+        action: 'apply_flow_authoring_proposal',
+      })
+      return {
+        applied: false,
+        reason: 'unavailable',
+        message: 'Post-apply validation was unavailable; the original draft was restored.',
+      }
+    }
+    setSnackbar({
+      message: 'AI Chat proposal applied to the draft. Review it, then Save when ready.',
+      severity: 'success',
+    })
+    logger.info('Applied transient flow proposal to editor draft', {
+      component: 'FlowBuilder',
+      action: 'apply_flow_authoring_proposal',
+      metadata: {
+        outcome: 'applied',
+        nodeCount: proposal.candidate.flow_definition.nodes.length,
+        edgeCount: proposal.candidate.flow_definition.edges.length,
+      },
+    })
+    return { applied: true, message: 'Proposal applied to the draft. Save remains manual.' }
+  }, [applyDefinitionToEditor, captureAuthoringContext])
+
+  const undoAuthoringProposal = useCallback(() => {
+    if (!proposalUndo) return
+    const pendingNodeDraft = nodePanelGuardRef.current?.captureAuthoringDraft?.()
+    const currentCanonical = canonicalAuthoringJson(currentEditorDraftRef.current)
+    if (pendingNodeDraft?.dirty || currentCanonical !== proposalUndo.appliedCanonical) {
+      setProposalUndo(null)
+      setSnackbar({
+        message: 'Undo expired because the draft changed after the AI proposal.',
+        severity: 'warning',
+      })
+      return
+    }
+    applyDefinitionToEditor(proposalUndo.draft)
+    setProposalUndo(null)
+    setSnackbar({ message: 'AI Chat proposal undone.', severity: 'success' })
+    logger.info('Undid transient flow proposal in editor draft', {
+      component: 'FlowBuilder',
+      action: 'undo_flow_authoring_proposal',
+      metadata: { outcome: 'undone' },
+    })
+  }, [applyDefinitionToEditor, proposalUndo])
+
+  useEffect(() => {
+    if (
+      proposalUndo
+      && (nodePanelDraftDirty || currentDraftCanonical !== proposalUndo.appliedCanonical)
+    ) {
+      logger.info('Expired transient flow proposal undo after a later draft edit', {
+        component: 'FlowBuilder',
+        action: 'expire_flow_authoring_proposal_undo',
+        metadata: {
+          outcome: 'expired',
+          reason: nodePanelDraftDirty ? 'node_panel_draft_changed' : 'editor_draft_changed',
+        },
+      })
+      setProposalUndo(null)
+    }
+  }, [currentDraftCanonical, nodePanelDraftDirty, proposalUndo])
 
   useImperativeHandle(
     authoringContextRef,
-    () => ({ captureAuthoringContext }),
-    [captureAuthoringContext]
+    () => ({ captureAuthoringContext, applyAuthoringProposal }),
+    [applyAuthoringProposal, captureAuthoringContext]
   )
 
   // Report flow state changes to parent for passive UI context. AI Chat uses
@@ -2092,6 +2423,9 @@ function FlowBuilderInner({
             </Typography>
             <Shortcut>Del</Shortcut>
           </StyledMenuItem>
+          <StyledMenuItem onClick={undoAuthoringProposal} disabled={!proposalUndo}>
+            <span>Undo AI Chat Proposal</span>
+          </StyledMenuItem>
         </StyledMenu>
 
         <FileActionStrip role="toolbar" aria-label="File actions">
@@ -2153,6 +2487,18 @@ function FlowBuilderInner({
             </span>
           </Tooltip>
         </FileActionStrip>
+
+        {proposalUndo && (
+          <Button
+            onClick={undoAuthoringProposal}
+            size="small"
+            startIcon={<UndoIcon sx={{ fontSize: 14 }} />}
+            aria-label="Undo AI Chat flow proposal"
+            sx={{ ml: 1, textTransform: 'none', fontSize: '0.75rem' }}
+          >
+            Undo AI proposal
+          </Button>
+        )}
 
         {/* Verify with AI Chat button */}
         {onVerifyRequest && nodes.length > 0 && (

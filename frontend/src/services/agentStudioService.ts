@@ -1024,6 +1024,7 @@ import type {
   FlowListResponse,
   CreateFlowRequest,
   UpdateFlowRequest,
+  FlowDefinition,
 } from '@/components/AgentStudio/FlowBuilder/types'
 
 export type {
@@ -1137,6 +1138,43 @@ export async function updateFlow(
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
     throw new Error(extractErrorMessage(error, `Failed to update flow: ${response.status}`))
+  }
+  return response.json()
+}
+
+export interface FlowDraftValidationResponse {
+  artifact_kind: 'flow'
+  phase: 'pre_apply' | 'post_apply'
+  valid: boolean
+  findings: Array<{
+    code: string
+    severity: 'error' | 'warning' | 'info'
+    path: string
+    message: string
+    fix_hint?: string
+  }>
+}
+
+/** Canonically validate a transient proposal candidate without writing it. */
+export async function validateFlowDraft(
+  flowDefinition: FlowDefinition,
+  phase: 'pre_apply' | 'post_apply',
+  expectedDraftFingerprint: string,
+  currentDraftFingerprint: string,
+): Promise<FlowDraftValidationResponse> {
+  const response = await fetch(`${FLOWS_URL}/validate-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      flow_definition: flowDefinition,
+      phase,
+      expected_draft_fingerprint: expectedDraftFingerprint,
+      current_draft_fingerprint: currentDraftFingerprint,
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to validate flow proposal: ${response.status}`)
   }
   return response.json()
 }

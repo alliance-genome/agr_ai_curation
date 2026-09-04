@@ -8,7 +8,7 @@ Flow ownership is enforced - users can only access their own flows.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +17,7 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
+from pydantic import BaseModel, Field
 
 from .auth import get_auth_dependency
 from ..lib.http_errors import raise_sanitized_http_exception
@@ -50,6 +51,7 @@ from ..lib.config.schema_discovery import resolve_output_schema
 from ..lib.openai_agents.config import get_flow_list_page_size_default
 from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
+from ..models.sql.user import User
 from ..schemas.flows import (
     CreateFlowRequest,
     FlowDefinition,
@@ -74,6 +76,15 @@ DEFAULT_FLOW_LIST_PAGE_SIZE = get_flow_list_page_size_default()
 
 class _FlowDatabaseError(RuntimeError):
     """Sanitized flow database failure safe for logs and Sentry."""
+
+
+class FlowDraftValidationRequest(BaseModel):
+    """Exact, side-effect-free validation request used by proposal Apply."""
+
+    flow_definition: FlowDefinition
+    phase: Literal["pre_apply", "post_apply"]
+    expected_draft_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    current_draft_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 def _sanitized_flow_db_error(orig_type_name: str, *, operation: str) -> _FlowDatabaseError:
@@ -645,6 +656,69 @@ async def export_flow_evidence(
             "Content-Disposition": f'attachment; filename="{safe_filename}"',
         },
     )
+
+
+@router.post("/validate-draft")
+async def validate_flow_draft(
+    request: FlowDraftValidationRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Canonically validate a proposal candidate without persisting or applying it."""
+
+    auth_sub = str(user.get("sub") or "").strip()
+    db_user = db.query(User).filter(User.auth_sub == auth_sub).one_or_none()
+    active_group_ids = get_groups_from_provider_groups(user.get("cognito:groups", []))
+    context = AuthoringValidationContext.from_values(
+        db_user_id=getattr(db_user, "id", None),
+        active_group_ids=active_group_ids,
+        expected_draft_fingerprint=request.expected_draft_fingerprint,
+        current_draft_fingerprint=request.current_draft_fingerprint,
+    )
+
+    def _apply_defaults(candidate: FlowDefinition) -> FlowDefinition:
+        agent_registry, _ = _validation_attachment_agent_registry(
+            candidate,
+            db_user_id=context.db_user_id,
+            active_group_ids=active_group_ids,
+        )
+        return apply_flow_validation_attachment_defaults(
+            candidate,
+            **(
+                {"agent_registry": agent_registry} if agent_registry is not None else {}
+            ),
+        )
+
+    try:
+        result = validate_flow_authoring_draft(
+            request.flow_definition,
+            context=context,
+            resolve_agent=lambda agent_id, auth: _flow_agent_policy_entry(
+                agent_id,
+                db_user_id=auth.db_user_id,
+                active_group_ids=list(auth.active_group_ids),
+            ),
+            apply_attachment_defaults=_apply_defaults,
+            phase=request.phase,
+            enforce_agent_references=True,
+            enforce_agent_step_policy=True,
+        )
+    except Exception:
+        report_authoring_validation_engine_failure(
+            artifact_kind="flow",
+            phase=request.phase,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Flow validation is temporarily unavailable",
+        ) from None
+    logger.info(
+        "Validated transient Flow Builder draft: phase=%s valid=%s findings=%s",
+        request.phase,
+        result.valid,
+        len(result.findings),
+    )
+    return result.to_dict()
 
 
 @router.get("/{flow_id}", response_model=FlowResponse)

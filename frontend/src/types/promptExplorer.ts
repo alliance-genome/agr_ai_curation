@@ -360,6 +360,37 @@ export interface WorkshopPromptUpdateRequest extends WorkshopPromptUpdateProposa
   request_id: number
 }
 
+export interface FlowAuthoringFinding {
+  code: string
+  severity: 'error' | 'warning' | 'info'
+  path: string
+  message: string
+  fix_hint?: string
+  node_id?: string
+  edge_id?: string
+}
+
+export interface FlowAuthoringDiffEntry {
+  kind: 'added' | 'removed' | 'changed'
+  path: string
+  before?: unknown
+  after?: unknown
+}
+
+export interface FlowAuthoringProposal {
+  contract_version: 'flow_authoring_proposal.v1'
+  base_draft_fingerprint: string
+  candidate_draft_fingerprint: string
+  change_summary: string
+  diff: FlowAuthoringDiffEntry[]
+  findings: FlowAuthoringFinding[]
+  candidate: {
+    name: string
+    description: string
+    flow_definition: import('@/components/AgentStudio/FlowBuilder/types').FlowDefinition
+  }
+}
+
 // Context passed to Agent Studio AI Chat
 export interface ChatContext {
   selected_agent_id?: string

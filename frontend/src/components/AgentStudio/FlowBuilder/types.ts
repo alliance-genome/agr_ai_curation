@@ -7,6 +7,7 @@ import type { Node, Edge } from 'reactflow'
 import type { Ref } from 'react'
 import type { ValidationAttachmentOption } from '@/services/agentStudioService'
 import type { AgentBrowserRequest } from '../agentBrowserRequest'
+import type { FlowAuthoringProposal } from '@/types/promptExplorer'
 
 export type { AgentBrowserRequest, AgentBrowserTab, AgentBrowserFocus } from '../agentBrowserRequest'
 
@@ -283,6 +284,13 @@ export interface FlowBuilderProps {
 
 export interface FlowAuthoringContextHandle {
   captureAuthoringContext: () => FlowState
+  applyAuthoringProposal: (proposal: FlowAuthoringProposal) => Promise<FlowProposalApplyResult>
+}
+
+export interface FlowProposalApplyResult {
+  applied: boolean
+  reason?: 'stale' | 'invalid' | 'unavailable'
+  message: string
 }
 
 export interface AgentPaletteProps {

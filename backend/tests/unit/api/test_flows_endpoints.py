@@ -333,6 +333,60 @@ async def test_create_flow_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_validate_flow_draft_is_side_effect_free_and_preserves_phase(monkeypatch):
+    class _Query:
+        def filter(self, *_args):
+            return self
+
+        def one_or_none(self):
+            return SimpleNamespace(id=17)
+
+    class _DB:
+        def query(self, *_args):
+            return _Query()
+
+        def add(self, _obj):
+            raise AssertionError("validation must not write")
+
+        def commit(self):
+            raise AssertionError("validation must not commit")
+
+    captured = {}
+
+    def _validate(candidate, **kwargs):
+        captured["candidate"] = candidate
+        captured.update(kwargs)
+        return SimpleNamespace(
+            valid=True,
+            findings=(),
+            to_dict=lambda: {
+                "artifact_kind": "flow",
+                "phase": kwargs["phase"],
+                "valid": True,
+                "findings": [],
+            },
+        )
+
+    monkeypatch.setattr(flows, "validate_flow_authoring_draft", _validate)
+    request = flows.FlowDraftValidationRequest(
+        flow_definition=_flow_definition(),
+        phase="post_apply",
+        expected_draft_fingerprint=f"sha256:{'a' * 64}",
+        current_draft_fingerprint=f"sha256:{'a' * 64}",
+    )
+
+    response = await flows.validate_flow_draft(
+        request=request,
+        user={"sub": "u1", "cognito:groups": []},
+        db=_DB(),
+    )
+
+    assert response["valid"] is True
+    assert response["phase"] == "post_apply"
+    assert captured["context"].expected_draft_fingerprint == f"sha256:{'a' * 64}"
+
+
+@pytest.mark.asyncio
 async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch):
     class _DB:
         def __init__(self):

@@ -785,6 +785,76 @@ describe('OpusChat', () => {
     expect(screen.getByText('Line B')).toBeInTheDocument()
   })
 
+  it('requires explicit review before applying a transient flow proposal', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+    const proposal = {
+      contract_version: 'flow_authoring_proposal.v1',
+      success: true,
+      valid: true,
+      pending_user_approval: true,
+      base_draft_fingerprint: `sha256:${'a'.repeat(64)}`,
+      candidate_draft_fingerprint: `sha256:${'b'.repeat(64)}`,
+      change_summary: 'Add gene extraction after Initial Instructions.',
+      diff: [{
+        kind: 'changed',
+        path: 'flow_definition.nodes.node_0.data.task_instructions',
+        before: 'Old instructions',
+        after: 'Extract genes.',
+      }],
+      findings: [],
+      candidate: {
+        name: 'Gene flow',
+        description: 'Extract genes.',
+        flow_definition: {
+          version: '1.1',
+          entry_node_id: 'node_0',
+          nodes: [{
+            id: 'node_0',
+            type: 'task_input',
+            position: { x: 0, y: 0 },
+            data: {
+              agent_id: 'task_input',
+              agent_display_name: 'Initial Instructions',
+              task_instructions: 'Extract genes.',
+              output_key: 'task_input',
+            },
+          }],
+          edges: [],
+        },
+      },
+    }
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TOOL_RESULT', tool_name: 'propose_flow_draft_update', result: proposal }
+      yield { type: 'DONE' }
+    })
+    const onApplyFlowProposal = vi.fn().mockResolvedValue({
+      applied: true,
+      message: 'Proposal applied to the draft. Save remains manual.',
+    })
+    render(<OpusChat context={{ active_tab: 'flows' }} onApplyFlowProposal={onApplyFlowProposal} />)
+
+    const input = screen.getByPlaceholderText('Ask about flows...')
+    fireEvent.change(input, { target: { value: 'Build a gene flow.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    expect(await screen.findByRole('dialog', { name: 'Review Flow Builder Proposal' })).toBeInTheDocument()
+    expect(screen.getByText('Add gene extraction after Initial Instructions.')).toBeInTheDocument()
+    expect(screen.getByText('flow_definition.nodes.node_0.data.task_instructions')).toBeInTheDocument()
+    expect(screen.getByText('Old instructions')).toBeInTheDocument()
+    expect(screen.getAllByText('Extract genes.')).not.toHaveLength(0)
+    expect(onApplyFlowProposal).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }))
+    await waitFor(() => expect(onApplyFlowProposal).toHaveBeenCalledWith(expect.objectContaining({
+      contract_version: 'flow_authoring_proposal.v1',
+    })))
+    expect(await screen.findByText(/has not been saved/)).toBeInTheDocument()
+  })
+
   it('renders the compact header with one context chip, a feedback menu, and a hide control', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,

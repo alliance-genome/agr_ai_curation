@@ -892,7 +892,13 @@ class TestAgentWorkshopSystemPrompt:
 
         empty_tools = api_module._get_all_opus_tools(ChatContext(active_tab="flows"))
         empty_tool_names = {tool.get("name") for tool in empty_tools}
-        assert {"create_flow", "validate_flow", "get_flow_templates", "get_available_agents"} <= empty_tool_names
+        assert {
+            "propose_flow_draft_update",
+            "validate_flow",
+            "get_flow_templates",
+            "get_available_agents",
+        } <= empty_tool_names
+        assert "create_flow" not in empty_tool_names
         assert "get_current_flow" not in empty_tool_names
 
         tools = api_module._get_all_opus_tools(

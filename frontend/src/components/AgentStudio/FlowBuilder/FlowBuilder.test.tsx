@@ -1,10 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
+import { webcrypto } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import FlowBuilder, { rebuildValidationGroupsFromEdges } from './FlowBuilder'
 import type { FlowAuthoringContextHandle, FlowResponse } from './types'
+import type { ChatContext, FlowAuthoringProposal } from '@/types/promptExplorer'
+import { fingerprintFlowDraft } from '../authoringContext'
 
 const serviceMocks = vi.hoisted(() => ({
   createFlow: vi.fn(),
@@ -12,6 +15,7 @@ const serviceMocks = vi.hoisted(() => ({
   listFlows: vi.fn(),
   getFlow: vi.fn(),
   deleteFlow: vi.fn(),
+  validateFlowDraft: vi.fn(),
 }))
 
 const invalidationMocks = vi.hoisted(() => ({
@@ -46,6 +50,7 @@ vi.mock('@/services/agentStudioService', () => ({
   listFlows: serviceMocks.listFlows,
   getFlow: serviceMocks.getFlow,
   deleteFlow: serviceMocks.deleteFlow,
+  validateFlowDraft: serviceMocks.validateFlowDraft,
 }))
 
 vi.mock('@/features/flows/flowListInvalidation', () => ({
@@ -315,11 +320,22 @@ describe('FlowBuilder', () => {
   })
 
   beforeEach(() => {
+    Object.defineProperty(globalThis, 'crypto', {
+      configurable: true,
+      value: webcrypto,
+    })
     serviceMocks.createFlow.mockReset()
     serviceMocks.updateFlow.mockReset()
     serviceMocks.listFlows.mockReset()
     serviceMocks.getFlow.mockReset()
     serviceMocks.deleteFlow.mockReset()
+    serviceMocks.validateFlowDraft.mockReset()
+    serviceMocks.validateFlowDraft.mockImplementation((_, phase) => Promise.resolve({
+      artifact_kind: 'flow',
+      phase,
+      valid: true,
+      findings: [],
+    }))
     invalidationMocks.notifyFlowListInvalidated.mockReset()
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
@@ -513,6 +529,196 @@ describe('FlowBuilder', () => {
     const dirtyEvent = new Event('beforeunload', { cancelable: true })
     window.dispatchEvent(dirtyEvent)
     expect(dirtyEvent.defaultPrevented).toBe(true)
+  })
+
+  it('atomically applies an exact flow proposal without saving and offers one-step undo', async () => {
+    const user = userEvent.setup()
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+    const captured = authoringRef.current!.captureAuthoringContext()
+    const toContext = (definition: FlowAuthoringProposal['candidate']['flow_definition']): ChatContext => ({
+      flow_id: captured.flowId,
+      flow_name: definition.nodes.length > 1 ? 'Gene flow' : captured.flowName,
+      flow_description: definition.nodes.length > 1 ? 'Extract genes.' : captured.flowDescription,
+      flow_updated_at: captured.flowUpdatedAt,
+      flow_definition: {
+        version: definition.version,
+        task_instructions_default_only: definition.task_instructions_default_only,
+        entry_node_id: definition.entry_node_id,
+        nodes: definition.nodes.map((node) => ({
+          id: node.id,
+          node_type: node.type,
+          position: node.position,
+          ...node.data,
+          validation_attachments: node.data.validation_attachments?.map((item) => ({ ...item })),
+          validation_groups: node.data.validation_groups?.map((item) => ({ ...item })),
+        })),
+        edges: definition.edges,
+      },
+    })
+    const baseDefinition: FlowAuthoringProposal['candidate']['flow_definition'] = {
+      version: '1.1',
+      entry_node_id: 'node_0',
+      nodes: [{
+        id: 'node_0',
+        type: 'task_input',
+        position: captured.nodes[0].position,
+        data: {
+          agent_id: 'task_input',
+          agent_display_name: 'Initial Instructions',
+          agent_description: 'Define the task for this flow',
+          task_instructions: '',
+          custom_instructions: '',
+          output_key: 'task_input',
+        },
+      }],
+      edges: [],
+    }
+    const candidateDefinition: FlowAuthoringProposal['candidate']['flow_definition'] = {
+      version: '1.1',
+      entry_node_id: 'node_0',
+      nodes: [
+        {
+          ...baseDefinition.nodes[0],
+          data: { ...baseDefinition.nodes[0].data, task_instructions: 'Extract genes.' },
+        },
+        {
+          id: 'node_1',
+          type: 'agent',
+          position: { x: 250, y: 280 },
+          data: {
+            agent_id: 'gene_extractor',
+            agent_display_name: 'Gene Extractor',
+            output_key: 'gene_extractor_output',
+          },
+        },
+      ],
+      edges: [{ id: 'edge_1', source: 'node_0', target: 'node_1', role: 'control_flow' }],
+    }
+    const proposal: FlowAuthoringProposal = {
+      contract_version: 'flow_authoring_proposal.v1',
+      base_draft_fingerprint: await fingerprintFlowDraft({
+        flow_id: captured.flowId,
+        flow_name: captured.flowName,
+        flow_description: captured.flowDescription,
+        flow_updated_at: captured.flowUpdatedAt,
+        flow_definition: {
+          version: captured.version,
+          task_instructions_default_only: captured.task_instructions_default_only,
+          entry_node_id: captured.entry_node_id,
+          nodes: captured.nodes.map((node) => ({
+            id: node.id,
+            node_type: node.type,
+            position: node.position,
+            agent_id: node.agent_id,
+            agent_display_name: node.agent_display_name,
+            agent_description: node.agent_description,
+            task_instructions: node.task_instructions,
+            step_goal: node.step_goal,
+            custom_instructions: node.custom_instructions,
+            prompt_version: node.prompt_version,
+            include_evidence: node.include_evidence,
+            output_filename_template: node.output_filename_template,
+            projection_plan: node.projection_plan,
+            output_key: node.output_key,
+            validation_attachments: node.validation_attachments?.map((item) => ({ ...item })),
+            validation_groups: node.validation_groups?.map((item) => ({ ...item })),
+          })),
+          edges: captured.edges,
+        },
+      }),
+      candidate_draft_fingerprint: await fingerprintFlowDraft(toContext(candidateDefinition)),
+      change_summary: 'Add gene extraction.',
+      diff: [{ kind: 'added', path: 'flow_definition.nodes.node_1' }],
+      findings: [],
+      candidate: { name: 'Gene flow', description: 'Extract genes.', flow_definition: candidateDefinition },
+    }
+
+    let result
+    await act(async () => {
+      result = await authoringRef.current!.applyAuthoringProposal({
+        ...proposal,
+        base_draft_fingerprint: `sha256:${'0'.repeat(64)}`,
+      })
+    })
+    expect(result).toEqual(expect.objectContaining({ applied: false, reason: 'stale' }))
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+    expect(serviceMocks.validateFlowDraft).not.toHaveBeenCalled()
+
+    await act(async () => {
+      result = await authoringRef.current!.applyAuthoringProposal(proposal)
+    })
+    expect(result).toEqual(expect.objectContaining({ applied: true }))
+    await screen.findByText('2 steps')
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.validateFlowDraft).toHaveBeenNthCalledWith(
+      1,
+      candidateDefinition,
+      'pre_apply',
+      proposal.base_draft_fingerprint,
+      proposal.base_draft_fingerprint,
+    )
+    expect(serviceMocks.validateFlowDraft).toHaveBeenNthCalledWith(
+      2,
+      candidateDefinition,
+      'post_apply',
+      proposal.candidate_draft_fingerprint,
+      proposal.candidate_draft_fingerprint,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Undo AI Chat flow proposal' }))
+    await screen.findByText('1 step')
+
+    serviceMocks.validateFlowDraft
+      .mockResolvedValueOnce({
+        artifact_kind: 'flow',
+        phase: 'pre_apply',
+        valid: true,
+        findings: [],
+      })
+      .mockResolvedValueOnce({
+        artifact_kind: 'flow',
+        phase: 'post_apply',
+        valid: false,
+        findings: [{
+          code: 'invalid_after_apply',
+          severity: 'error',
+          path: 'flow_definition',
+          message: 'Candidate failed post-apply validation.',
+        }],
+      })
+    await act(async () => {
+      result = await authoringRef.current!.applyAuthoringProposal(proposal)
+    })
+    expect(result).toEqual(expect.objectContaining({ applied: false, reason: 'invalid' }))
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Undo AI Chat flow proposal' })).not.toBeInTheDocument()
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+
+    serviceMocks.validateFlowDraft.mockImplementation((_, phase) => Promise.resolve({
+      artifact_kind: 'flow',
+      phase,
+      valid: true,
+      findings: [],
+    }))
+    await act(async () => {
+      result = await authoringRef.current!.applyAuthoringProposal(proposal)
+    })
+    await screen.findByText('2 steps')
+    act(() => {
+      reactFlowMocks.onNodeClick?.(
+        {} as never,
+        reactFlowMocks.nodes.find((node) => node.id === 'node_1') as never,
+      )
+    })
+    await screen.findByTestId('node-panel-dock')
+    act(() => nodePanelMocks.reportDirty?.(true))
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Undo AI Chat flow proposal' })).not.toBeInTheDocument()
+    })
   })
 
   it('keeps an applied NodePanel draft dirty while deciding flow replacement', async () => {

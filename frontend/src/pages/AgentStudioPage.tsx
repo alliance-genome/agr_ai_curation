@@ -71,6 +71,7 @@ import type {
   ToolIdeaConversationEntry,
   WorkshopPromptUpdateProposal,
   WorkshopPromptUpdateRequest,
+  FlowAuthoringProposal,
 } from '@/types/promptExplorer'
 
 const Root = styled(Box)(({ theme }) => ({
@@ -854,6 +855,26 @@ Agent ID: ${agentId}`
     })
   }, [])
 
+  const handleApplyFlowProposal = useCallback(async (proposal: FlowAuthoringProposal) => {
+    const builder = flowAuthoringContextRef.current
+    if (!builder) {
+      return {
+        applied: false,
+        reason: 'unavailable' as const,
+        message: 'Open the Flow Builder before applying this proposal.',
+      }
+    }
+    const result = await builder.applyAuthoringProposal(proposal)
+    if (result.applied) {
+      setActiveTab('flows')
+      safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'flows', {
+        owner: 'preferences',
+        key: AGENT_STUDIO_TAB_KEY,
+      })
+    }
+    return result
+  }, [])
+
   // Clear discuss message after it's been sent
   const handleDiscussMessageSent = useCallback(() => {
     setDiscussMessage(null)
@@ -887,6 +908,7 @@ Agent ID: ${agentId}`
       onDurableSessionIdChange={handleDurableSessionIdChange}
       onConversationSnapshotChange={handleConversationSnapshotChange}
       onApplyWorkshopPromptUpdate={handleApplyWorkshopPromptUpdate}
+      onApplyFlowProposal={handleApplyFlowProposal}
       variant={variant}
       panelId={panelId}
       onHide={hideClaude}

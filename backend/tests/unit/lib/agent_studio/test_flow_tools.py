@@ -506,31 +506,9 @@ def test_all_twelve_alliance_recipes_appear_when_required_agents_are_flow_eligib
     ]
 
 
-def test_rgd_recipe_discovery_instantiates_saved_flow_and_denies_non_rgd_creation(
+def test_rgd_recipe_discovery_compiles_without_persistence_and_denies_non_rgd_access(
     monkeypatch,
 ):
-    class _FakeFlow:
-        def __init__(self, **kwargs):
-            self.__dict__.update(kwargs)
-            self.is_active = True
-
-    class _FakeDB:
-        def __init__(self):
-            self.added: Any | None = None
-            self.closed = False
-
-        def add(self, flow):
-            self.added = flow
-
-        def commit(self):
-            return None
-
-        def refresh(self, _flow):
-            return None
-
-        def close(self):
-            self.closed = True
-
     available_agent_ids = {
         "rgd_go_paper_curator",
         "disease_extractor",
@@ -575,46 +553,15 @@ def test_rgd_recipe_discovery_instantiates_saved_flow_and_denies_non_rgd_creatio
     }
     combined = templates["RGD GO and Disease Paper Review"]
 
-    import src.models.sql as sql_module
-
-    db = _FakeDB()
-
-    def _get_db():
-        yield db
-
-    monkeypatch.setattr(sql_module, "get_db", _get_db)
-    monkeypatch.setattr(sql_module, "CurationFlow", _FakeFlow)
-    created = flow_tools._create_flow_handler()(
-        name=combined["name"],
-        description=combined["description"],
+    definition = flow_tools.build_flow_definition_from_recipe(
         steps=combined["steps"],
+        task_instructions=combined["description"],
     )
-
-    assert created["success"] is True, created
-    saved_flow = db.added
-    assert saved_flow is not None
-    assert created["flow_id"] == str(saved_flow.id)
-    assert saved_flow.user_id == 42
-    assert saved_flow.is_active is True
-    assert saved_flow.name == "RGD GO and Disease Paper Review"
-    assert "recipe" not in saved_flow.flow_definition
     assert [
-        node["data"]["agent_id"]
-        for node in saved_flow.flow_definition["nodes"]
-        if node["data"].get("agent_id") not in {None, "task_input"}
+        node.data.agent_id
+        for node in definition.nodes
+        if node.data.agent_id != "task_input"
     ] == ["rgd_go_paper_curator", "disease_extractor", "chat_output"]
-
-    flow_tools.set_workflow_user_context(42, active_group_ids=["MGI"])
-    rejected = flow_tools._create_flow_handler()(
-        name="Unavailable RGD Review",
-        description=combined["description"],
-        steps=combined["steps"],
-    )
-    assert rejected == {
-        "success": False,
-        "error": "Flow references unavailable agents",
-        "help": "Re-select agents from get_available_agents before saving.",
-    }
 
 
 def test_advertised_alliance_recipes_pass_the_create_compiler_contract():
@@ -1445,191 +1392,185 @@ def test_manifest_exposes_compact_domain_pack_link_without_aggregate_analysis(
     extract = next(node for node in manifest["nodes"] if node["node_id"] == "extract")
     assert extract["domain_pack_id"] == "alliance_gene"
     assert "domain_envelope_analysis" not in manifest
-def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
-    create = flow_tools._create_flow_handler()
-    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: None)
-    unauth = create("Flow A", "desc", [{"agent_id": "pdf_extraction"}])
-    assert unauth["success"] is False
-    assert "User not authenticated" in unauth["error"]
-
-    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
-
-    missing_desc = create("Flow A", "   ", [{"agent_id": "pdf_extraction"}])
-    assert missing_desc["success"] is False
-    assert "description is required" in missing_desc["error"]
-
-    no_steps = create("Flow A", "desc", [])
-    assert no_steps["success"] is False
-    assert "at least one step" in no_steps["error"]
-
-    unknown_agent = create("Flow A", "desc", [{"agent_id": "nope"}])
-    assert unknown_agent["success"] is False
-    assert unknown_agent["error"] == "Flow references unavailable agents"
-    assert unknown_agent["help"] == (
-        "Re-select agents from get_available_agents before saving."
-    )
-
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "4")
-    long_name = create(
-        "Flow A",
-        "desc",
-        [{"agent_id": "pdf_extraction"}],
-    )
-    assert "Flow name exceeds 4 characters" in long_name["error"]
-    assert long_name["help"] == (
-        "Shorten the named field to the configured maximum"
-    )
-
-
-def test_create_flow_handler_success_and_db_errors(monkeypatch):
-    class _FakeFlow:
-        def __init__(self, **kwargs):
-            self.__dict__.update(kwargs)
-
-    class _FakeDB:
-        def __init__(self, commit_side_effect=None):
-            self._commit_side_effect = commit_side_effect
-            self.added = None
-            self.closed = False
-
-        def add(self, flow):
-            self.added = flow
-
-        def commit(self):
-            if self._commit_side_effect:
-                raise self._commit_side_effect
-
-        def refresh(self, _flow):
-            return None
-
-        def close(self):
-            self.closed = True
-
-    def _gen_db(db):
-        def _factory():
-            yield db
-
-        return _factory
-
-    create = flow_tools._create_flow_handler()
-
-    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 123)
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["pdf_extraction", "gene", "csv_formatter"],
-    )
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
+def test_flow_proposal_compiles_semantic_operations_without_database_writes(
+    monkeypatch,
+):
+    base_fingerprint = f"sha256:{'a' * 64}"
+    flow_tools.set_workflow_user_context(123)
+    flow_tools.set_current_flow_context(
         {
-            "pdf_extraction": {
-                "name": "PDF Specialist",
-                "category": "Extraction",
-            },
-            "gene": {
-                "name": "Gene Specialist",
-                "category": "Validation",
-                "output_schema_key": "GeneResultEnvelope",
-            },
-            "csv_formatter": {
-                "name": "CSV Formatter",
-                "category": "Output",
-            },
+            "flow_name": "New Flow",
+            "flow_description": "",
+            "flow_draft_fingerprint": base_fingerprint,
+            "version": "1.1",
+            "entry_node_id": "node_0",
+            "nodes": [
+                {
+                    "id": "node_0",
+                    "type": "task_input",
+                    "position": {"x": 250, "y": 100},
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "",
+                        "output_key": "task_input",
+                        "validation_groups": [],
+                    },
+                }
+            ],
+            "edges": [],
+        }
+    )
+    accessible = {
+        "gene_extractor": {
+            "name": "Gene Extractor",
+            "description": "Extract genes",
+            "category": "Extraction",
+            "produces_flow_artifacts": True,
         },
+        "chat_output": {
+            "name": "Chat Output",
+            "description": "Display results",
+            "category": "Output",
+        },
+    }
+    monkeypatch.setattr(flow_tools, "_accessible_flow_agents", lambda: accessible)
+    monkeypatch.setattr(
+        flow_tools,
+        "resolve_live_flow_agent",
+        lambda agent_id, _context: accessible.get(agent_id),
     )
 
-    import src.models.sql as sql_module
-
-    success_db = _FakeDB()
-    monkeypatch.setattr(sql_module, "get_db", _gen_db(success_db))
-    monkeypatch.setattr(sql_module, "CurationFlow", _FakeFlow)
-
-    result = create(
-        name="Good Flow",
-        description="Extract then validate",
-        steps=[
-            {"agent_id": "pdf_extraction", "step_goal": "extract"},
-            {"agent_id": "gene", "step_goal": "validate"},
-        ],
-    )
-    assert result["success"] is True
-    assert "flow_id" in result
-    assert success_db.closed is True
-    assert success_db.added is not None
-    assert success_db.added.flow_definition["version"] == "1.1"
-
-    branch_db = _FakeDB()
-    monkeypatch.setattr(sql_module, "get_db", _gen_db(branch_db))
-    branch_result = create(
-        name="Branched Output Flow",
-        description="Extract and export while retaining the control chain",
-        steps=[
-            {"agent_id": "pdf_extraction", "step_goal": "extract"},
-            {"agent_id": "gene", "step_goal": "validate"},
+    propose = flow_tools._propose_flow_draft_update_handler()
+    result = propose(
+        base_draft_fingerprint=base_fingerprint,
+        change_summary="Build a gene extraction flow.",
+        operations=[
             {
-                "agent_id": "csv_formatter",
-                "source_steps": [1, 2],
-                "output_filename_template": (
-                    "{{input_filename_stem}}-{{timestamp}}.csv"
-                ),
+                "operation": "update_flow",
+                "name": "Gene flow",
+                "description": "Extract genes",
+                "task_instructions": "Extract every gene mentioned in the paper.",
+            },
+            {
+                "operation": "add_agent_step",
+                "agent_id": "gene_extractor",
+                "step_ref": "extractor",
+                "step_goal": "Extract genes",
+            },
+            {
+                "operation": "add_agent_step",
+                "agent_id": "gene_extractor",
+                "step_ref": "reviewer",
+                "step_goal": "Review extracted genes",
             },
         ],
     )
-    assert branch_result["success"] is True, branch_result
-    assert branch_db.added is not None
-    assert branch_db.added.flow_definition["version"] == "1.1"
-    assert [node["type"] for node in branch_db.added.flow_definition["nodes"]] == [
-        "task_input",
-        "agent",
-        "agent",
-        "output",
+
+    assert result["success"] is True, result
+    assert result["pending_user_approval"] is True
+    assert result["base_draft_fingerprint"] == base_fingerprint
+    assert result["candidate_draft_fingerprint"].startswith("sha256:")
+    assert result["candidate"]["name"] == "Gene flow"
+    assert "null" not in json.dumps(result["candidate"])
+    assert "task_instructions_default_only" not in result["candidate"][
+        "flow_definition"
     ]
-    assert branch_db.added.flow_definition["edges"][1]["source"] == "step_1"
-    assert branch_db.added.flow_definition["edges"][1]["target"] == "step_2"
-    assert branch_db.added.flow_definition["edges"][2] == {
-        "id": "output_edge_3_1",
-        "source": "step_1",
-        "target": "step_3",
-        "role": "output_attachment",
-        "satisfies_binding_id": None,
-        "replaces_attachment_id": None,
-        "condition": None,
-    }
-    assert branch_db.added.flow_definition["edges"][3] == {
-        "id": "output_edge_3_2",
-        "source": "step_2",
-        "target": "step_3",
-        "role": "output_attachment",
-        "satisfies_binding_id": None,
-        "replaces_attachment_id": None,
-        "condition": None,
-    }
-    assert branch_db.added.flow_definition["nodes"][3]["data"][
-        "output_filename_template"
-    ] == "{{input_filename_stem}}-{{timestamp}}.csv"
-
-    dup_db = _FakeDB(commit_side_effect=Exception("uq_user_flow_name_active"))
-    monkeypatch.setattr(sql_module, "get_db", _gen_db(dup_db))
-    dup = create(
-        name="Good Flow",
-        description="Extract then validate",
-        steps=[{"agent_id": "pdf_extraction"}],
+    assert all(
+        "validation_groups" not in node["data"]
+        for node in result["candidate"]["flow_definition"]["nodes"]
     )
-    assert dup["success"] is False
-    assert "already exists" in dup["error"]
-    assert dup_db.closed is True
-
-    generic_db = _FakeDB(commit_side_effect=Exception("db timeout"))
-    monkeypatch.setattr(sql_module, "get_db", _gen_db(generic_db))
-    generic = create(
-        name="Good Flow",
-        description="Extract then validate",
-        steps=[{"agent_id": "pdf_extraction"}],
+    assert result["candidate"]["flow_definition"]["nodes"][1]["id"] == "node_1"
+    assert result["candidate"]["flow_definition"]["edges"][0] == {
+        "id": "edge_1",
+        "source": "node_0",
+        "target": "node_1",
+        "role": "control_flow",
+    }
+    assert result["candidate"]["flow_definition"]["edges"][1]["source"] == "node_1"
+    assert result["candidate"]["flow_definition"]["edges"][1]["target"] == "node_2"
+    assert result["diff"]
+    assert not any(
+        entry["path"].endswith("task_instructions_default_only")
+        or entry["path"].endswith("validation_groups")
+        for entry in result["diff"]
     )
-    assert generic["success"] is False
-    assert "database error" in generic["error"]
+
+    follow_up = propose(
+        base_draft_fingerprint=base_fingerprint,
+        change_summary="Refine the proposed extraction step.",
+        operations=[
+            {
+                "operation": "update_step",
+                "node_ref": "extractor",
+                "custom_instructions": "Keep exact evidence references.",
+            },
+            {
+                "operation": "reorder_control_steps",
+                "ordered_refs": ["reviewer", "extractor"],
+            },
+            {
+                "operation": "add_agent_step",
+                "agent_id": "chat_output",
+                "step_ref": "result",
+                "source_refs": ["extractor", "reviewer"],
+            },
+        ],
+    )
+    assert follow_up["success"] is True, follow_up
+    assert len(follow_up["candidate"]["flow_definition"]["nodes"]) == 4
+    assert follow_up["candidate"]["flow_definition"]["nodes"][1]["data"][
+        "custom_instructions"
+    ] == "Keep exact evidence references."
+    assert follow_up["candidate"]["flow_definition"]["edges"][0]["source"] == "node_0"
+    assert follow_up["candidate"]["flow_definition"]["edges"][0]["target"] == "node_2"
+    assert follow_up["candidate"]["flow_definition"]["edges"][1]["source"] == "node_2"
+    assert follow_up["candidate"]["flow_definition"]["edges"][1]["target"] == "node_1"
+    assert follow_up["candidate"]["flow_definition"]["edges"][-2]["source"] == "node_1"
+    assert follow_up["candidate"]["flow_definition"]["edges"][-2]["target"] == "node_3"
+    assert follow_up["candidate"]["flow_definition"]["edges"][-1]["source"] == "node_2"
+    assert follow_up["candidate"]["flow_definition"]["edges"][-1]["target"] == "node_3"
+
+
+def test_flow_proposal_rejects_stale_or_unavailable_references(monkeypatch):
+    current = f"sha256:{'b' * 64}"
+    flow_tools.set_current_flow_context(
+        {
+            "flow_name": "Flow",
+            "flow_draft_fingerprint": current,
+            "version": "1.1",
+            "entry_node_id": "task",
+            "nodes": [],
+            "edges": [],
+        }
+    )
+    handler = flow_tools._propose_flow_draft_update_handler()
+    stale = handler(
+        base_draft_fingerprint=f"sha256:{'c' * 64}",
+        operations=[{"operation": "update_flow", "name": "Other"}],
+        change_summary="Rename",
+    )
+    assert stale["code"] == "stale_draft_fingerprint"
+
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_DESCRIPTION_MAX_CHARS", "4")
+    oversized_description = handler(
+        base_draft_fingerprint=current,
+        operations=[
+            {"operation": "update_flow", "description": "too long"}
+        ],
+        change_summary="Update description",
+    )
+    assert oversized_description["success"] is False
+    assert "description exceeds 4" in oversized_description["error"]
+
+    monkeypatch.setattr(flow_tools, "_accessible_flow_agents", lambda: {})
+    unavailable = handler(
+        base_draft_fingerprint=current,
+        operations=[{"operation": "add_agent_step", "agent_id": "private_agent"}],
+        change_summary="Add an unavailable step",
+    )
+    assert unavailable["success"] is False
+    assert "not available" in unavailable["error"]
 
 
 def _multi_agent_registry():
@@ -2054,18 +1995,25 @@ def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeyp
     registrations = []
 
     class _Registry:
+        def unregister(self, _name):
+            return False
+
         def register(self, **kwargs):
             registrations.append(kwargs)
 
-    monkeypatch.setattr(flow_tools, "get_diagnostic_tools_registry", lambda: _Registry())
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene", "chat_output"])
+    monkeypatch.setattr(
+        flow_tools, "get_diagnostic_tools_registry", lambda: _Registry()
+    )
+    monkeypatch.setattr(
+        flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene", "chat_output"]
+    )
     monkeypatch.delenv("AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS", raising=False)
 
     flow_tools.register_flow_tools()
 
     names = [entry["name"] for entry in registrations]
     assert names == [
-        "create_flow",
+        "propose_flow_draft_update",
         "validate_flow",
         "get_flow_templates",
         "get_current_flow",
@@ -2087,17 +2035,19 @@ def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeyp
         "detail_max_chars",
     }.issubset(flow_catalog_schema)
     assert flow_catalog_schema["detail_max_chars"]["maximum"] == 6_000
-    create_flow_schema = registrations[0]["input_schema"]
-    create_steps_schema = create_flow_schema["properties"]["steps"]
-    step_properties = create_steps_schema["items"][
-        "properties"
+    proposal_schema = registrations[0]["input_schema"]
+    assert proposal_schema["required"] == [
+        "base_draft_fingerprint",
+        "operations",
+        "change_summary",
     ]
-    assert "source_steps" in step_properties
-    assert "source_step" not in step_properties
-    assert step_properties["source_steps"]["minItems"] == 1
-    assert step_properties["source_steps"]["uniqueItems"] is True
-    assert "output_filename_template" in step_properties
-    assert step_properties["step_goal"]["maxLength"] == 500
+    assert proposal_schema["properties"]["operations"]["maxItems"] == 30
+    assert (
+        "add_agent_step"
+        in proposal_schema["properties"]["operations"]["items"]["properties"][
+            "operation"
+        ]["enum"]
+    )
     validate_flow_schema = registrations[1]["input_schema"]
     assert "steps" not in validate_flow_schema["properties"]
     assert validate_flow_schema["required"] == ["flow_definition"]
@@ -2109,10 +2059,15 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
     registrations = []
 
     class _Registry:
+        def unregister(self, _name):
+            return False
+
         def register(self, **kwargs):
             registrations.append(kwargs)
 
-    monkeypatch.setattr(flow_tools, "get_diagnostic_tools_registry", lambda: _Registry())
+    monkeypatch.setattr(
+        flow_tools, "get_diagnostic_tools_registry", lambda: _Registry()
+    )
     monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction"])
     monkeypatch.setenv("AGENT_STUDIO_FLOW_MAX_STEPS", "4")
     monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "40")
@@ -2125,33 +2080,31 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
     )
     monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_PAGE_LIMIT", "6")
     monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "900")
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_PROPOSAL_MAX_OPERATIONS", "7")
     monkeypatch.setenv("TOOL_PAGE_DEFAULT_LIMIT", "17")
     monkeypatch.setenv("TOOL_PAGE_MAX_LIMIT", "13")
 
     flow_tools.register_flow_tools()
 
-    create_schema = registrations[0]["input_schema"]
+    proposal_schema = registrations[0]["input_schema"]
     validate_schema = registrations[1]["input_schema"]
-    steps_schema = create_schema["properties"]["steps"]
-    step_properties = steps_schema["items"]["properties"]
     assert "steps" not in validate_schema["properties"]
     assert validate_schema["required"] == ["flow_definition"]
-    assert steps_schema["maxItems"] == 4
-    assert step_properties["source_steps"]["maxItems"] == 3
-    assert step_properties["source_steps"]["items"]["maximum"] == 3
-    assert step_properties["step_goal"]["maxLength"] == 50
-    assert step_properties["custom_instructions"]["maxLength"] == 300
-    assert step_properties["output_filename_template"]["maxLength"] == 60
-    assert create_schema["properties"]["name"]["maxLength"] == 40
+    assert proposal_schema["properties"]["operations"]["maxItems"] == 7
     assert validate_schema["properties"]["name"]["maxLength"] == 40
-    assert create_schema["properties"]["description"]["maxLength"] == 400
     by_name = {registration["name"]: registration for registration in registrations}
-    assert by_name["get_current_flow_topology"]["input_schema"]["properties"][
-        "limit"
-    ]["maximum"] == 6
-    assert by_name["get_current_flow_instructions"]["input_schema"]["properties"][
-        "limit"
-    ]["maximum"] == 900
+    assert (
+        by_name["get_current_flow_topology"]["input_schema"]["properties"]["limit"][
+            "maximum"
+        ]
+        == 6
+    )
+    assert (
+        by_name["get_current_flow_instructions"]["input_schema"]["properties"]["limit"][
+            "maximum"
+        ]
+        == 900
+    )
     available_agents_description = by_name["get_available_agents"]["description"]
     available_agents_properties = by_name["get_available_agents"]["input_schema"][
         "properties"
@@ -2169,4 +2122,6 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
         available_agents_description
     )
     assert "terminal control nodes" in available_agents_description
-    assert "flow ends with an appropriate output agent" not in available_agents_description
+    assert (
+        "flow ends with an appropriate output agent" not in available_agents_description
+    )
