@@ -2087,6 +2087,22 @@ metadata:
         curator_override:
           allowed: false
       - binding_id: subject_gene_validation
+        custom_profile_reuse:
+          enabled: true
+          inputs:
+            gene_id: {value_schema: {kind: string}, nullable: true}
+            gene_symbol: {value_schema: {kind: string}, nullable: true}
+            data_provider: {value_schema: {kind: string}, nullable: true, allow_constant: true}
+          required_any_inputs: [[gene_id, gene_symbol]]
+          outputs:
+            primary_external_id: {value_schema: {kind: string}, result_path: primary_external_id}
+            gene_symbol: {value_schema: {kind: string}, result_path: gene_symbol}
+          policy:
+            unresolved_default: requires_curator_review
+            unresolved_allowed: [informational, requires_curator_review]
+            readiness_default: false
+            readiness_allowed: [false]
+          supports_element_fanout: true
         display_name: Subject gene validation
         curator_label: Confirm the subject gene in the Alliance records
         description: Checks that the gene the annotation is about matches an Alliance gene record, by identifier or symbol, and fills in the confirmed identifier and symbol.
@@ -2129,6 +2145,29 @@ metadata:
           enabled: false
           family: gene_expression_subject_gene_validation
       - binding_id: source_reference_validation
+        custom_profile_reuse:
+          enabled: true
+          inputs:
+            reference_id: {value_schema: {kind: string}, nullable: true}
+            curie: {value_schema: {kind: string}, nullable: true}
+            pmid: {value_schema: {kind: string}, nullable: true}
+            doi: {value_schema: {kind: string}, nullable: true}
+            title: {value_schema: {kind: string}, nullable: true}
+            source_document_id:
+              value_schema: {kind: string}
+              nullable: true
+              allow_field: false
+              context_selector: {source: envelope_metadata, path: document_id, required: false, context_only: true}
+          required_any_inputs: [[reference_id, curie, pmid, doi, title, source_document_id]]
+          outputs:
+            curie: {value_schema: {kind: string}, result_path: curie}
+            title: {value_schema: {kind: string}, result_path: title}
+          policy:
+            unresolved_default: requires_curator_review
+            unresolved_allowed: [informational, requires_curator_review]
+            readiness_default: false
+            readiness_allowed: [false]
+          supports_element_fanout: true
         display_name: Source reference validation
         curator_label: Confirm the source paper in the Alliance literature records
         description: Checks that the paper the annotation comes from matches an Alliance reference record, by identifier, CURIE, or title.

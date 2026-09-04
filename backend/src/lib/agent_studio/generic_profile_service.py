@@ -6,6 +6,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.profile_compatibility import profile_compatibility
+from src.lib.agent_studio.profile_mapping_service import validate_profile_mappings, persist_capability_references
 from src.lib.openai_agents.config import get_generic_profile_list_page_size
 from src.models.sql.generic_extraction_profile import (
     GenericExtractionProfile as Profile,
@@ -134,8 +135,10 @@ def create_profile(
     *,
     visibility: str = "private",
     project_id: UUID | None = None,
+    active_group_ids=(),
 ) -> tuple[Profile, Revision]:
     parsed = normalize_profile_contract(contract)
+    capabilities = validate_profile_mappings(parsed, active_group_ids=active_group_ids)
     row = Profile(
         owner_id=user_id,
         name=parsed.name,
@@ -156,6 +159,7 @@ def create_profile(
     )
     db.add(revision)
     db.flush()
+    persist_capability_references(db, revision, capabilities)
     return row, revision
 
 
@@ -166,8 +170,10 @@ def revise_profile(
     contract,
     *,
     expected_revision: int,
+    active_group_ids=(),
 ) -> tuple[Profile, Revision, list[dict]]:
     parsed = normalize_profile_contract(contract)
+    capabilities = validate_profile_mappings(parsed, active_group_ids=active_group_ids)
     row = get_profile(db, profile_id, user_id, for_update=True)
     if row.owner_id != user_id:
         raise ProfileNotFoundError(
@@ -190,6 +196,7 @@ def revise_profile(
     )
     db.add(revision)
     db.flush()
+    persist_capability_references(db, revision, capabilities)
     row.head_revision = revision.revision
     row.name, row.description, row.semantic_class = (
         parsed.name,
@@ -207,12 +214,13 @@ def clone_profile(
     user_id: int,
     *,
     name: str,
+    active_group_ids=(),
 ) -> tuple[Profile, Revision]:
     source = get_profile_revision(
         db, profile_id, revision, user_id, include_archived=True
     )
     contract = {**source.contract, "name": name}
-    return create_profile(db, user_id, contract)
+    return create_profile(db, user_id, contract, active_group_ids=active_group_ids)
 
 
 def archive_profile(

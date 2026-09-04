@@ -102,6 +102,9 @@ def profile_compatibility(
 
     for attr in ("name", "description", "semantic_class", "validator_mappings"):
         before, after = getattr(old, attr), getattr(new, attr)
+        if attr == "validator_mappings":
+            before = [mapping.model_dump(mode="json") for mapping in before]
+            after = [mapping.model_dump(mode="json") for mapping in after]
         if before != after:
             add(attr, f"{attr}_changed", attr == "semantic_class", before, after)
     fields_diff(old.fields, new.fields, "attributes")

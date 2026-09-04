@@ -8,6 +8,7 @@ from .chat_session import ChatSession
 from .chat_route_preference import ChatRoutePreference
 from .custom_agent import CustomAgentVersion
 from .generic_extraction_profile import GenericExtractionProfile, GenericExtractionProfileRevision
+from .profile_validator_capability import ProfileValidatorCapability, ProfileValidatorCapabilityReference
 from .curation_flow import CurationFlow
 from .database import Base, SessionLocal, engine, get_db
 from .file_output import FileOutput, FileType
@@ -39,6 +40,8 @@ __all__ = [
     "CustomAgentVersion",
     "GenericExtractionProfile",
     "GenericExtractionProfileRevision",
+    "ProfileValidatorCapability",
+    "ProfileValidatorCapabilityReference",
     "CurationFlow",
     "FileOutput",
     "FileType",

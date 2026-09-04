@@ -121,6 +121,37 @@ def test_validation_is_a_non_persisting_draft_operation(client):
     db.add.assert_not_called()
 
 
+def test_mapping_validation_errors_remain_machine_readable(client, monkeypatch):
+    client, db, _ = client
+    issues = [{"path": "validator_mappings[0].inputs.gene", "code": "path", "message": "Use a declared field"}]
+    monkeypatch.setattr(api, "validate_profile_mappings", MagicMock(side_effect=api.ProfileMappingError(issues)))
+    response = client.post("/api/agent-studio/generic-profiles/validate", json=contract())
+    assert response.status_code == 422
+    assert response.json()["detail"]["issues"] == issues
+    db.commit.assert_not_called()
+
+
+def test_capability_static_route_not_parsed_as_profile_uuid(client, monkeypatch):
+    client, _, _ = client
+    monkeypatch.setattr(api, "capability_catalog", lambda **kwargs: [])
+    result = client.get("/api/agent-studio/generic-profiles/validator-capabilities")
+    assert result.status_code == 200
+    assert result.json() == {"capabilities": [], "next_cursor": None}
+
+
+def test_exact_revision_mapping_inspection_is_honestly_unmapped(client, monkeypatch):
+    client, _, _ = client
+    profile, revision = rows()
+    get = MagicMock(return_value=revision)
+    monkeypatch.setattr(api.service, "get_profile_revision", get)
+    result = client.get(f"/api/agent-studio/generic-profiles/{profile.id}/revisions/1/validator-mappings")
+    assert result.status_code == 200
+    assert result.json()["state"] == "unmapped"
+    assert result.json()["semantic_execution"] == "not_executed"
+    assert result.json()["fingerprint"] == revision.fingerprint
+    assert get.call_args.args[1:4] == (profile.id, 1, 7)
+
+
 def test_stale_save_reports_conflict_and_rolls_back(client, monkeypatch):
     client, db, _ = client
     monkeypatch.setattr(

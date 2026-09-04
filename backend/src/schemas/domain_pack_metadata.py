@@ -10,6 +10,8 @@ from typing import Any, ClassVar, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .generic_extraction_profile import ValueSchema
+
 from .domain_envelope import (
     DefinitionState,
     DomainEnvelope,
@@ -356,6 +358,66 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
         return self
 
 
+class ReusableValidatorInput(DomainPackMetadataBaseModel):
+    """Typed input; context selectors stay package-owned and immutable."""
+
+    value_schema: ValueSchema
+    nullable: bool = False
+    required: bool = False
+    allow_field: bool = True
+    allow_constant: bool = False
+    context_selector: Optional[DomainPackInputSelector] = None
+
+
+class ReusableValidatorOutput(DomainPackMetadataBaseModel):
+    value_schema: ValueSchema
+    nullable: bool = False
+    result_path: str
+
+    @field_validator("result_path")
+    @classmethod
+    def valid_result_path(cls, value: str) -> str:
+        return validate_field_path_syntax(value)
+
+
+class ReusableValidatorPolicy(DomainPackMetadataBaseModel):
+    unresolved_default: Literal["informational", "requires_curator_review", "error"]
+    unresolved_allowed: list[Literal["informational", "requires_curator_review", "error"]]
+    readiness_default: bool
+    readiness_allowed: list[bool]
+
+    @model_validator(mode="after")
+    def valid_defaults(self):
+        if self.unresolved_default not in self.unresolved_allowed:
+            raise ValueError("Unresolved default must be allowed")
+        if self.readiness_default not in self.readiness_allowed:
+            raise ValueError("Readiness default must be allowed")
+        return self
+
+
+class CustomProfileValidatorReuse(DomainPackMetadataBaseModel):
+    """Explicit opt-in; existing binding identity/implementation remains authoritative."""
+
+    enabled: bool = False
+    inputs: dict[str, ReusableValidatorInput]
+    required_any_inputs: list[list[str]] = Field(default_factory=list)
+    outputs: dict[str, ReusableValidatorOutput]
+    policy: ReusableValidatorPolicy
+    supports_whole_array: bool = False
+    supports_element_fanout: bool = False
+    requires_evidence: bool = False
+    # Map existing scoped provider paths to named input slots, never drop them.
+    provider_input_slots: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def valid_provider_slots(self):
+        if not set(self.provider_input_slots.values()) <= self.inputs.keys():
+            raise ValueError("Provider paths must identify declared input slots")
+        if any(not group or not set(group) <= self.inputs.keys() for group in self.required_any_inputs):
+            raise ValueError("Required alternative input groups must identify declared slots")
+        return self
+
+
 class DomainPackValidatorBatchConfig(DomainPackMetadataBaseModel):
     """Optional active-validator batch dispatch opt-in."""
 
@@ -445,6 +507,7 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     """Executable package-scoped validator binding metadata."""
 
     binding_id: str
+    custom_profile_reuse: Optional[CustomProfileValidatorReuse] = None
     display_name: Optional[str] = None
     description: str = ""
     curator_label: Optional[str] = Field(
@@ -546,6 +609,7 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     """Informational validator capability that must not affect runtime policy."""
 
     binding_id: str
+    custom_profile_reuse: Optional[CustomProfileValidatorReuse] = None
     display_name: str = Field(min_length=1)
     description: str = ""
     state_explanation: str = Field(min_length=1)

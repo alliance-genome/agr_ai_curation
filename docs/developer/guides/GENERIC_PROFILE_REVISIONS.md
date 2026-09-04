@@ -19,9 +19,9 @@ Normalized order, labels, types, and constraints participate in the SHA-256
 fingerprint. Compatibility findings identify field paths and breaking changes.
 
 Depth, field count, contract bytes, and listing page size are configured under
-Operational limits in `.env.example`. Nonempty `validator_mappings` are rejected
-until the separate mapping contract is implemented; no executable expressions
-or arbitrary JSON Schema are accepted.
+Operational limits in `.env.example`. Optional `validator_mappings` use the typed
+package capability contract below; no executable expressions or arbitrary JSON
+Schema are accepted.
 
 ## Persistence and authorization
 
@@ -108,6 +108,54 @@ The branch does not use LiteLLM or a Bedrock agent driver. Groq's existing
 response-format compatibility mode is unnecessary for builder agents because their
 model `output_type` is intentionally `None`. Tests inspect the final SDK parameters
 after adapter/rebinding steps; this is distinct from live-provider smoke evidence.
+
+## Optional semantic validator mappings
+
+`validator_mappings` is a typed immutable part of a profile revision, not an
+agent-level validator list. Each mapping names the exact composite package,
+package version, domain pack, domain-pack version and binding ID, plus the
+capability fingerprint returned by inspection. Mapping IDs, canonical input and
+output paths, mode and selected policy participate in the profile fingerprint
+and revision comparison. Structural conformance is still always on.
+
+Packages opt individual existing bindings in through `custom_profile_reuse`.
+It declares recursive input/output value schemas, nullable/required inputs,
+required alternative slot groups, permitted constant/context sources, explicit
+whole-array/per-element support, evidence needs and allowed policy choices.
+Existing selectors, implementation identity, batching and `group_scope` remain
+authoritative. Fixed/context selectors cannot be replaced by curator-provided
+selectors. Scoped provider paths must be mapped explicitly to bounded provider
+inputs; unsupported scope combinations stay inspectable but not selectable.
+
+Mappings use `inputs: {slot: {source: field, field_path: attributes.key}}`;
+`source: constant` supplies `value` only when permitted, and `source: context`
+selects only the package-owned selector. Outputs are `{slot: attributes.key}`
+and must have separately declared compatible destinations. Nested paths traverse
+declared objects; `[]` denotes explicit per-element fan-out over one shared array
+domain. Whole-array inputs require package opt-in. There is no implicit indexing,
+coercion, alias inference or composition of overlapping write destinations.
+
+Save and clone reauthorize capabilities against authenticated groups and reject
+invalid mappings with bounded path-addressed issues. Capabilities are derived
+from the existing validation registry, not a parallel implementation catalog.
+The initial Alliance opt-ins are the existing gene-expression subject-gene and
+source-reference bindings; neither implies submission readiness.
+
+`GET /api/agent-studio/generic-profiles/validator-capabilities` lists versioned
+slots/policy, selectable status and diagnostics with the existing profile page
+limit. `POST .../validate` validates a complete unsaved draft without writes.
+`GET .../{profile_id}/revisions/{revision}/validator-mappings` inspects the exact
+saved revision and retained capability snapshots, reporting compatible,
+unsupported or unmapped without executing validators or asserting readiness.
+
+Migration `h5c6d7e8f9a0` adds immutable capability audit snapshots and normalized
+foreign-key references. A deferred constraint rejects a saved profile mapping
+without its matching capability receipt. A package cannot reuse the same
+composite version for different capability bytes after it has been referenced.
+Historical revisions remain readable if a package disappears; snapshots never
+authorize executing an unavailable package. ALL-1036 owns reauthorization,
+compilation and semantic execution through the existing dispatcher, followed by
+transactional complete-record conformance.
 
 ## API and migration
 

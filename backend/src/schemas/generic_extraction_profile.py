@@ -14,6 +14,8 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.schemas.profile_validator_mapping import ProfileValidatorMapping
+
 from src.lib.openai_agents.config import (
     get_generic_profile_max_contract_bytes,
     get_generic_profile_max_depth,
@@ -158,7 +160,7 @@ class GenericProfileContract(ClosedModel):
     description: str = ""
     semantic_class: str
     fields: list[ProfileField]
-    validator_mappings: list[dict[str, Any]] = Field(default_factory=list)
+    validator_mappings: list[ProfileValidatorMapping] = Field(default_factory=list)
 
     @field_validator("name", "semantic_class")
     @classmethod
@@ -215,10 +217,9 @@ class GenericProfileContract(ClosedModel):
 
     @model_validator(mode="after")
     def validate_contract(self) -> GenericProfileContract:
-        # ALL-1037 supplies typed mappings; accepting partial JSON now would
-        # create unvalidated immutable semantics that later code must guess at.
-        if self.validator_mappings:
-            raise ValueError("validator_mappings: semantic mappings are not enabled")
+        mapping_ids = [mapping.mapping_id for mapping in self.validator_mappings]
+        if len(set(mapping_ids)) != len(mapping_ids):
+            raise ValueError("validator_mappings: mapping IDs must be unique")
         for path, fields in _object_fields(self.fields):
             names = {field.key for field in fields}
             if len(names) != len(fields):

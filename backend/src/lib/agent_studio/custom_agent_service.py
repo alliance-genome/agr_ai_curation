@@ -779,6 +779,7 @@ def _selected_output_schema(output_contract, new_generic_profile, schema, schema
 def _record_execution_save(
     db, agent, *, expected_revision_id, output_contract=None, new_generic_profile=None,
     previous_output=None, previous_snapshot=None, schema_provided=False, notes=None,
+    active_group_ids=(),
 ):
     from src.lib.agent_studio.execution_revision_service import append_execution_revision
     from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
@@ -788,6 +789,7 @@ def _record_execution_save(
         profile, revision = create_profile(
             db, agent.user_id, new_generic_profile,
             visibility=agent.visibility, project_id=agent.project_id,
+            active_group_ids=active_group_ids,
         )
         selected = AgentOutputContract(
             output_state="structured_extraction", output_mode="profile_bound_generic",
@@ -1035,6 +1037,7 @@ def create_custom_agent(
     _record_execution_save(
         db, custom_agent, expected_revision_id=None,
         output_contract=output_contract, new_generic_profile=new_generic_profile,
+        active_group_ids=active_group_ids,
     )
 
     return custom_agent
@@ -1537,6 +1540,7 @@ def update_custom_agent(
         output_contract=output_contract, new_generic_profile=new_generic_profile,
         previous_output=previous_output, previous_snapshot=previous_snapshot, notes=notes,
         schema_provided=output_schema_key_provided or output_schema_key is not None,
+        active_group_ids=active_group_ids,
     )
     return custom_agent
 

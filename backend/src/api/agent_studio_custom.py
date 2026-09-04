@@ -40,6 +40,7 @@ from src.lib.agent_studio.custom_agent_service import (
     update_custom_agent,
 )
 from src.lib.agent_studio.authoring_validation import AuthoringValidationError
+from src.lib.agent_studio.profile_mapping_service import ProfileMappingError
 from src.lib.agent_studio.models import AgentWorkshopContext
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.group_rules import get_groups_from_provider_groups
@@ -545,6 +546,8 @@ async def create_custom_agent_endpoint(
             detail=(
                 exc.result.to_dict()
                 if isinstance(exc, AuthoringValidationError)
+                else {"code": "profile_mapping_invalid", "issues": exc.issues}
+                if isinstance(exc, ProfileMappingError)
                 else str(exc) or "Custom agent request is invalid"
             ),
             log_message="Failed to create custom agent",
@@ -696,6 +699,8 @@ async def update_custom_agent_endpoint(
             detail=(
                 exc.result.to_dict()
                 if isinstance(exc, AuthoringValidationError)
+                else {"code": "profile_mapping_invalid", "issues": exc.issues}
+                if isinstance(exc, ProfileMappingError)
                 else str(exc) or "Custom agent update is invalid"
             ),
             log_message=f"Failed to update custom agent '{custom_agent_id}'",

@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
 from src.lib.agent_studio import generic_profile_service as service
+from src.lib.agent_studio.profile_mapping_service import (
+    ProfileMappingError, capability_catalog, capability_issues, validate_profile_mappings,
+)
+from src.lib.group_rules import get_groups_from_provider_groups
 from src.models.sql import get_db
 from src.schemas.generic_extraction_profile import GenericProfileContract
 from src.services.user_service import set_global_user_from_cognito
@@ -100,6 +104,9 @@ def _profile_errors(db: Session):
     except service.ProfileConflictError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ProfileMappingError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail={"code": "profile_mapping_invalid", "issues": exc.issues}) from exc
     except IntegrityError as exc:
         db.rollback()
         # Never expose SQL parameters/contract bodies through database errors.
@@ -134,6 +141,7 @@ def create_profile(
             request.contract,
             visibility=request.visibility,
             project_id=request.project_id,
+            active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
         )
         db.commit()
         return _detail(profile, revision)
@@ -160,9 +168,62 @@ def validate_profile(
     user: dict[str, Any] = get_auth_dependency(),
 ):
     """Validate a local draft without persisting it or creating a revision."""
+    try:
+        validate_profile_mappings(contract, active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])))
+    except ProfileMappingError as exc:
+        raise HTTPException(status_code=422, detail={"code": "profile_mapping_invalid", "issues": exc.issues}) from exc
     return ValidatedProfileResponse(
         contract=contract, fingerprint=contract.fingerprint()
     )
+
+
+@router.get("/validator-capabilities")
+def list_validator_capabilities(
+    after: str | None = None,
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """Stable package-owned slots/policies, including honest unavailable states."""
+    from src.lib.openai_agents.config import get_generic_profile_list_page_size
+    groups = get_groups_from_provider_groups(user.get("cognito:groups", []))
+    capabilities = capability_catalog(active_group_ids=groups)
+    if after is not None:
+        capabilities = [cap for cap in capabilities if cap.key() > after]
+    size = get_generic_profile_list_page_size()
+    page = capabilities[:size]
+    return {"capabilities": [{"capability_ref": cap.ref.model_dump(mode="json"),
+        "fingerprint": cap.fingerprint(), "state": cap.binding.state.value,
+        "selectable": not capability_issues(cap, groups), "diagnostics": capability_issues(cap, groups),
+        "metadata": cap.binding.identity_details()} for cap in page],
+        "next_cursor": page[-1].key() if len(capabilities) > size else None}
+
+
+@router.get("/{profile_id}/revisions/{revision}/validator-mappings")
+def inspect_validator_mappings(
+    profile_id: UUID,
+    revision: int = Path(ge=1),
+    user: dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+):
+    with _profile_errors(db):
+        user_id = set_global_user_from_cognito(db, user).id
+        saved = service.get_profile_revision(db, profile_id, revision, user_id, include_archived=True)
+        groups = get_groups_from_provider_groups(user.get("cognito:groups", []))
+        issues = []
+        try:
+            validate_profile_mappings(saved.contract, active_group_ids=groups)
+        except ProfileMappingError as exc:
+            issues = exc.issues
+        mappings = saved.contract.get("validator_mappings", [])
+        from sqlalchemy import select
+        from src.models.sql.profile_validator_capability import ProfileValidatorCapability as Capability, ProfileValidatorCapabilityReference as Reference
+        audit = list(db.execute(select(Capability.snapshot).join(Reference,
+            Reference.capability_fingerprint == Capability.fingerprint).where(
+                Reference.profile_revision_id == saved.id).order_by(Reference.mapping_id)).scalars()) if mappings else []
+        return {"profile_revision_id": saved.id, "fingerprint": saved.fingerprint,
+            "validator_mappings": mappings, "diagnostics": issues,
+            "capability_snapshots": audit,
+            "state": "unmapped" if not mappings else "unsupported" if issues else "compatible",
+            "semantic_execution": "not_executed", "submission_readiness": "not_asserted"}
 
 
 @router.get("/{profile_id}/revisions", response_model=ProfileRevisionListResponse)
@@ -235,6 +296,7 @@ def revise_profile(
             user_id,
             request.contract,
             expected_revision=request.expected_revision,
+            active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
         )
         db.commit()
         return _detail(profile, revision, compatibility)
@@ -252,7 +314,8 @@ def clone_profile(
     with _profile_errors(db):
         user_id = set_global_user_from_cognito(db, user).id
         profile, revision = service.clone_profile(
-            db, profile_id, request.revision, user_id, name=request.name
+            db, profile_id, request.revision, user_id, name=request.name,
+            active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
         )
         db.commit()
         return _detail(profile, revision)

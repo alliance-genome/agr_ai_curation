@@ -45,6 +45,12 @@ def profile_db(monkeypatch):
         spec.loader.exec_module(migration)
         with Operations.context(MigrationContext.configure(connection)):
             migration.upgrade()
+        mapping_spec = importlib.util.spec_from_file_location("profile_mapping_migration",
+            migration_path.with_name("h5c6d7e8f9a0_add_profile_validator_references.py"))
+        mapping_migration = importlib.util.module_from_spec(mapping_spec)
+        mapping_spec.loader.exec_module(mapping_migration)
+        with Operations.context(MigrationContext.configure(connection)):
+            mapping_migration.upgrade()
         monkeypatch.setattr(
             service,
             "_project_ids",
@@ -77,6 +83,78 @@ def profile_contract():
             }
         ],
     }
+
+
+def mapped_contract(monkeypatch):
+    from src.lib.agent_studio import profile_mapping_service as mapping_service
+    from src.lib.domain_packs.validation_registry import ValidatorBinding, ValidationBindingState
+    from src.schemas.domain_pack_metadata import CustomProfileValidatorReuse
+    from src.schemas.profile_validator_mapping import ValidatorCapabilityRef
+
+    reuse = CustomProfileValidatorReuse.model_validate({"enabled": True, "inputs": {}, "outputs": {},
+        "policy": {"unresolved_default": "requires_curator_review", "unresolved_allowed": ["requires_curator_review"],
+                   "readiness_default": False, "readiness_allowed": [False]}})
+    cap = mapping_service.ReusableCapability(ValidatorCapabilityRef(package_id="test", package_version="1.0.0",
+        domain_pack_id="test", domain_pack_version="1.0.0", binding_id="lookup"),
+        ValidatorBinding(binding_id="lookup", source_scope="object", state=ValidationBindingState.ACTIVE,
+            custom_profile_reuse=reuse, raw={"custom_profile_reuse": reuse.model_dump(mode="json")}))
+    monkeypatch.setattr(mapping_service, "capability_catalog", lambda **kwargs: [cap])
+    raw = profile_contract()
+    raw["validator_mappings"] = [{"mapping_id": "lookup", "capability_ref": cap.ref.model_dump(),
+        "capability_fingerprint": cap.fingerprint(), "inputs": {}, "outputs": {},
+        "policy": {"unresolved": "requires_curator_review", "blocks_readiness": False}}]
+    return raw, cap
+
+
+def test_mapping_capability_history_is_immutable_and_referenced(profile_db, monkeypatch):
+    from src.models.sql.profile_validator_capability import ProfileValidatorCapability, ProfileValidatorCapabilityReference
+    db, _ = profile_db
+    raw, cap = mapped_contract(monkeypatch)
+    row, revision = service.create_profile(db, 1, raw)
+    db.execute(sa.text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert db.get(ProfileValidatorCapability, cap.fingerprint()).snapshot == cap.snapshot()
+    assert db.get(ProfileValidatorCapabilityReference, (revision.id, "lookup")) is not None
+    db.execute(sa.text("SET CONSTRAINTS ALL DEFERRED"))
+    clone, _ = service.clone_profile(db, row.id, 1, 1, name="clone")
+    assert clone.id != row.id
+    assert db.query(ProfileValidatorCapability).count() == 1
+    for table in ("profile_validator_capabilities", "profile_validator_capability_references"):
+        with pytest.raises(DBAPIError), db.begin_nested():
+            db.execute(sa.text(f"DELETE FROM {table}"))
+    service.archive_profile(db, row.id, 1, expected_revision=1)
+    assert service.get_profile_revision(db, row.id, 1, 1, include_archived=True).contract == revision.contract
+
+
+def test_direct_revision_insert_cannot_omit_capability_reference(profile_db, monkeypatch):
+    from src.models.sql.generic_extraction_profile import GenericExtractionProfileRevision
+    from src.schemas.generic_extraction_profile import normalize_profile_contract
+    db, _ = profile_db
+    row, _ = service.create_profile(db, 1, profile_contract())
+    raw, _ = mapped_contract(monkeypatch)
+    parsed = normalize_profile_contract(raw)
+    with pytest.raises(DBAPIError, match="immutable capability reference"), db.begin_nested():
+        db.add(GenericExtractionProfileRevision(profile_id=row.id, revision=2, fingerprint=parsed.fingerprint(),
+            contract=parsed.model_dump(mode="json"), creator_id=1))
+        db.flush()
+        db.execute(sa.text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+def test_capability_version_cannot_change_and_old_profile_stays_readable(profile_db, monkeypatch):
+    from dataclasses import replace
+    from src.lib.agent_studio import profile_mapping_service as mapping_service
+    db, _ = profile_db
+    raw, cap = mapped_contract(monkeypatch)
+    row, first = service.create_profile(db, 1, raw)
+    changed_cap = replace(cap, binding=replace(cap.binding, raw={**cap.binding.raw, "description": "Changed semantics"}))
+    monkeypatch.setattr(mapping_service, "capability_catalog", lambda **kwargs: [changed_cap])
+    changed = deepcopy(raw)
+    changed["validator_mappings"][0]["capability_fingerprint"] = changed_cap.fingerprint()
+    with pytest.raises(mapping_service.ProfileMappingError, match="incompatible"), db.begin_nested():
+        service.revise_profile(db, row.id, 1, changed, expected_revision=1)
+    monkeypatch.setattr(mapping_service, "capability_catalog", lambda **kwargs: [])
+    assert service.get_profile_revision(db, row.id, 1, 1).fingerprint == first.fingerprint
+    with pytest.raises(mapping_service.ProfileMappingError), db.begin_nested():
+        service.clone_profile(db, row.id, 1, 1, name="Cannot execute removed capability")
 
 
 def test_create_revise_clone_archive_preserves_history(profile_db):
