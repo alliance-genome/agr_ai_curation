@@ -22,7 +22,6 @@ An AI-powered curation assistant for the [Alliance of Genome Resources](https://
 
 - Docker and Docker Compose
 - OpenAI API key (for embeddings and GPT models)
-- Optional: Anthropic API key (when using Anthropic models)
 - Optional: Groq API key, Gemini API key (additional LLM providers)
 
 ### Standalone Install
@@ -248,7 +247,7 @@ All runtime configuration is done through environment variables. See `.env.examp
 
 | Section | Variables | Description |
 |---------|-----------|-------------|
-| API Keys | `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY` | LLM provider credentials; OpenRouter is opt-in |
+| API Keys | `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY` | LLM provider credentials; OpenRouter is opt-in |
 | Database | `DATABASE_URL` | PostgreSQL connection |
 | Weaviate | `WEAVIATE_HOST`, `WEAVIATE_PORT` | Vector store connection |
 | LLM Settings | `DEFAULT_AGENT_MODEL`, `DEFAULT_AGENT_REASONING` | Global model defaults |
@@ -281,6 +280,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [Alliance of Genome Resources](https://www.alliancegenome.org/)
 - [OpenAI](https://openai.com/) for GPT models
-- [Anthropic](https://www.anthropic.com/) for Claude
 - [Groq](https://groq.com/) for high-throughput inference
 - [Weaviate](https://weaviate.io/) for vector storage

@@ -432,7 +432,7 @@ def supports_reasoning(model: str) -> bool:
     - minimal/low -> "low" thinking level
     - medium/high/xhigh -> "high" thinking level
 
-    Future: Anthropic Claude models may be added here.
+    Additional catalog-backed providers may be added here.
     """
     model_def = _get_model_definition(model)
     return bool(model_def.supports_reasoning)
@@ -627,7 +627,7 @@ def build_model_settings(
     Build ModelSettings with appropriate reasoning and temperature for the model.
 
     This is a shared helper function for all agents to ensure consistent
-    behavior across OpenAI and Gemini models (and potentially Anthropic in future).
+    behavior across OpenAI and Gemini models.
 
     Reasoning is supported on:
     - GPT-5.6 Sol/Terra models
@@ -1777,7 +1777,7 @@ def get_agent_studio_trace_tool_timeout_seconds() -> float:
 
 
 def get_agent_studio_endpoint_timeout_seconds() -> float:
-    """Default HTTP timeout for Agent Studio Claude-endpoint calls (AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS).
+    """Default HTTP timeout for Agent Studio endpoint calls (AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS).
 
     Applies to trace tools that do not override it. Default 30.
     """
@@ -1820,38 +1820,6 @@ def get_agent_studio_tool_search_max_candidates() -> int:
     return max(
         1,
         _get_env_int_with_fallback("AGENT_STUDIO_TOOL_SEARCH_MAX_CANDIDATES", 128),
-    )
-
-
-def get_agent_studio_opus_context_editing_trigger_tokens() -> int:
-    """Input-token threshold for Anthropic tool context editing.
-
-    Agent Studio Opus asks Anthropic to clear stale tool uses/results after the
-    live request context crosses this threshold. Default 140000, approximately
-    70% of the 200K-token Opus context budget used by Agent Studio.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_OPUS_CONTEXT_EDITING_TRIGGER_TOKENS",
-            140_000,
-        ),
-    )
-
-
-def get_agent_studio_opus_context_editing_keep_tool_uses() -> int:
-    """Recent tool-use count Anthropic should keep when context editing triggers.
-
-    Keeping a small tail preserves local tool-loop continuity while older tool
-    results can be rehydrated through durable chat/TraceReview recall tools.
-    Default 3.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_OPUS_CONTEXT_EDITING_KEEP_TOOL_USES",
-            3,
-        ),
     )
 
 

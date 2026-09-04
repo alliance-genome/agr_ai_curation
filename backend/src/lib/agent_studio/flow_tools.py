@@ -1,15 +1,15 @@
 """
-Flow Tools for Opus AI to create and manage curation flows.
+Flow tools for Agent Studio AI Chat to create and manage curation flows.
 
 Section 7 of the Curation Flows implementation.
-Provides three tools for Opus to help users create curation flows:
+Provides tools for AI Chat to help users create curation flows:
 
 1. create_flow - Create a flow from simplified step input
 2. validate_flow - Validate agent IDs and flow structure
 3. get_flow_templates - Return common flow patterns and available agents
 
 Tools are registered with the DiagnosticToolRegistry and appear in
-Opus's available tools via _get_all_opus_tools() in agent_studio.py.
+AI Chat's available tools via _get_all_opus_tools() in agent_studio.py.
 
 User Context:
     The create_flow tool requires user context (user_id) to save flows.
@@ -1588,7 +1588,7 @@ def _get_available_agents_handler():
     """Create handler for the get_available_agents tool.
 
     Returns all available agents organized by category with metadata.
-    This helps Claude understand agent types and purposes for flow verification.
+    This helps AI Chat understand agent types and purposes for flow verification.
     """
     def handler(
         query: Optional[str] = None,
@@ -2620,7 +2620,7 @@ def _get_current_flow_validation_schedule_handler():
 def register_flow_tools() -> None:
     """Register all flow tools with the DiagnosticToolRegistry.
 
-    Called on module import to make flow tools available to Opus.
+    Called on module import to make flow tools available to AI Chat.
     """
     registry = get_diagnostic_tools_registry()
     simplified_steps_schema = _simplified_flow_steps_schema()

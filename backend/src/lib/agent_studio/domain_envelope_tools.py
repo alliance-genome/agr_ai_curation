@@ -1,4 +1,4 @@
-"""Read-only domain-envelope inspection tools for Agent Studio Opus chat."""
+"""Read-only domain-envelope inspection tools for Agent Studio AI Chat."""
 
 from __future__ import annotations
 

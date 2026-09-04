@@ -144,7 +144,7 @@ async def notify_tool_failure(
     source_description = (
         "infrastructure (backend exception handler)"
         if source == "infrastructure"
-        else "opus_report (Claude detected and reported)"
+        else "opus_report (AI Chat detected and reported)"
     )
 
     lines = [

@@ -1,4 +1,7 @@
-"""Opus tool definitions and tab-scoping helpers for Agent Studio."""
+"""AI Chat tool definitions and tab-scoping helpers for Agent Studio.
+
+The module name remains a compatibility identifier for the shared hotfix.
+"""
 
 from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional
@@ -86,8 +89,8 @@ _AGGREGATE_PAGE_PROPERTIES = {
     },
 }
 
-# Convert tool definition to Anthropic format
-ANTHROPIC_SUGGESTION_TOOL = {
+# Keep the public tool schema independent of the provider runtime.
+SUGGESTION_TOOL = {
     "name": SUBMIT_SUGGESTION_TOOL["name"],
     "description": SUBMIT_SUGGESTION_TOOL["description"],
     "input_schema": SUBMIT_SUGGESTION_TOOL["input_schema"],
@@ -176,8 +179,6 @@ legacy quote-generation guidance.
     },
 }
 
-ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = UPDATE_WORKSHOP_PROMPT_TOOL
-
 REFRESH_WORKSHOP_PROMPT_TOOL = {
     "name": "refresh_workshop_prompt",
     "description": """Inspect the exact current Agent Workshop prompt before reviewing it.
@@ -223,8 +224,6 @@ document/evidence tool instructions.
     },
 }
 
-ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL = REFRESH_WORKSHOP_PROMPT_TOOL
-
 REPORT_TOOL_FAILURE_TOOL = {
     "name": "report_tool_failure",
     "description": """Report a tool failure to the development team.
@@ -265,8 +264,6 @@ Do NOT use this for user input errors (e.g., invalid gene names, malformed IDs).
         "required": ["tool_name", "error_message", "error_type"],
     },
 }
-
-ANTHROPIC_REPORT_TOOL_FAILURE_TOOL = REPORT_TOOL_FAILURE_TOOL
 
 CHAT_HISTORY_TOOL_CHAT_KINDS = [
     ASSISTANT_CHAT_KIND,
@@ -1283,10 +1280,10 @@ AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
 }
 
 _BUILTIN_OPUS_TOOLS = (
-    ANTHROPIC_SUGGESTION_TOOL,
-    ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL,
-    ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
-    ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
+    SUGGESTION_TOOL,
+    REFRESH_WORKSHOP_PROMPT_TOOL,
+    UPDATE_WORKSHOP_PROMPT_TOOL,
+    REPORT_TOOL_FAILURE_TOOL,
     LIST_RECENT_CHATS_TOOL,
     SEARCH_CHAT_HISTORY_TOOL,
     GET_CHAT_CONVERSATION_TOOL,
@@ -1419,7 +1416,7 @@ def get_all_opus_tools(
     is_allowed: Callable[[str, Optional[ChatContext]], bool] = is_tool_allowed_for_context,
 ) -> List[dict]:
     """
-    Get all tools available to Opus in Anthropic format.
+    Get all tools available to Agent Studio AI Chat.
 
     Combines the suggestion tool, workflow analysis tools, and diagnostic tools.
     """
@@ -1444,6 +1441,6 @@ def get_all_opus_tools(
             }
         )
     tools.extend(diagnostic_tools)
-    logger.debug("Loaded %s diagnostic tools for Opus", len(diagnostic_tools))
+    logger.debug("Loaded %s diagnostic tools for Agent Studio AI Chat", len(diagnostic_tools))
 
     return tools

@@ -163,7 +163,7 @@ The 0.7.0 domain-envelope gates are recorded in
 - materialization,
 - validation findings and curator review flows,
 - export/submission readiness,
-- Agent Studio/Opus tool contracts,
+- Agent Studio AI Chat tool contracts,
 - TraceReview support.
 
 The offline provider-agnostic release gate uses:
@@ -285,7 +285,7 @@ Domain-envelope tests should cover the implemented contract, not design notes:
   fields, and stale revision rejection.
 - Materialized review rows as projections over persisted envelope objects.
 - Export/submission readiness blockers and expected envelope revision checks.
-- Agent Studio/Opus validation inspection: domain-envelope state, domain-pack
+- Agent Studio AI Chat validation inspection: domain-envelope state, domain-pack
   validation plans, validator-agent prompt inspection, review rows, and
   export/submission readiness should stay covered by prompt/tool policy tests.
 

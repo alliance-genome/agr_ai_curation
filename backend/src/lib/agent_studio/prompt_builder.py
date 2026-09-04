@@ -1,12 +1,10 @@
-"""Prompt and model helpers for Agent Studio Opus interactions."""
+"""Prompt helpers for provider-neutral Agent Studio AI Chat interactions."""
 
-import json
 import os
 import re
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from src.lib.agent_studio.models import ChatContext
-from src.lib.agent_studio.trace_agent_metadata import get_trace_agent_patterns
 from src.lib.openai_agents.config import (
     get_agent_studio_workshop_context_group_prompt_max_chars,
     get_agent_studio_workshop_context_prompt_max_chars,
@@ -54,72 +52,6 @@ between layers are not owned by either layer.
 <combined_prompt agent="{bundle.agent_id}" selected_group="{selected_group}">
 {combined_prompt}
 </combined_prompt>"""
-
-
-def list_anthropic_catalog_models(
-    *,
-    list_model_definitions: Callable[[], Iterable[Any]],
-    logger: Any,
-) -> List[Any]:
-    """Return Anthropic models from catalog, sorted with defaults first."""
-
-    try:
-        models = list_model_definitions()
-    except Exception as exc:
-        logger.warning("Failed to load model catalog while resolving prompt explorer model: %s", exc)
-        return []
-
-    # Agent Studio coaching intentionally uses Claude for the current product;
-    # keep its model filtering coordinated with the Messages API contract, and
-    # revisit provider neutrality only as an explicit product/runtime redesign.
-    anthropic_models = [
-        model
-        for model in models
-        if str(getattr(model, "provider", "") or "").strip().lower() == "anthropic"
-    ]
-    anthropic_models.sort(
-        key=lambda model: (
-            not bool(getattr(model, "default", False)),
-            str(getattr(model, "name", "") or "").lower(),
-        )
-    )
-    return anthropic_models
-
-
-def resolve_prompt_explorer_model(
-    *,
-    configured_model_id: str,
-    catalog_models: Sequence[Any],
-) -> tuple[str, str]:
-    """
-    Resolve the model id/name for Agent Studio chat and suggestion submission.
-
-    Resolution order is controlled by the caller:
-    1. PROMPT_EXPLORER_MODEL_ID env override
-    2. Anthropic model from config/models.yaml (default first)
-    """
-
-    catalog_name_by_id = {
-        str(getattr(model, "model_id", "")).strip(): str(getattr(model, "name", "")).strip()
-        for model in catalog_models
-        if str(getattr(model, "model_id", "")).strip()
-    }
-
-    if configured_model_id:
-        configured_name = catalog_name_by_id.get(configured_model_id) or configured_model_id
-        return configured_model_id, configured_name
-
-    if catalog_models:
-        selected = catalog_models[0]
-        selected_id = str(getattr(selected, "model_id", "")).strip()
-        selected_name = str(getattr(selected, "name", "")).strip() or selected_id
-        if selected_id:
-            return selected_id, selected_name
-
-    raise ValueError(
-        "No Agent Studio Anthropic model configured. Set PROMPT_EXPLORER_MODEL_ID "
-        "or add an anthropic model to config/models.yaml."
-    )
 
 
 def build_package_diagnostic_tools_prompt() -> str:
@@ -190,7 +122,7 @@ def format_conversation_context(messages: Optional[List[dict]]) -> Optional[str]
         # Format role label
         role_label = {
             "user": "Curator",
-            "assistant": "Opus",
+            "assistant": "AI Chat",
         }.get(role, role.title())
 
         lines.append(f"{role_label}: {content}")
@@ -373,115 +305,6 @@ def apply_targeted_workshop_edits(
     }
 
 
-def fetch_trace_for_opus(trace_id: str, *, logger: Any) -> Optional[str]:
-    """
-    Fetch trace data from Langfuse and format it for Opus's context.
-
-    Returns a formatted string with the trace summary, or None if fetch fails.
-    """
-
-    try:
-        from langfuse import Langfuse
-
-        client = Langfuse()
-
-        # Fetch trace details
-        trace = client.api.trace.get(trace_id)
-        if not trace:
-            logger.warning("Trace not found: %s", trace_id)
-            return None
-
-        # Fetch observations
-        obs_response = client.api.observations.get_many(trace_id=trace_id)
-        observations = list(obs_response.data) if hasattr(obs_response, "data") else []
-
-        # Build the trace summary
-        lines = []
-
-        # Basic info
-        lines.append(f"**Trace ID:** {trace_id}")
-        if hasattr(trace, "input") and trace.input:
-            user_input = trace.input
-            if isinstance(user_input, dict):
-                user_input = user_input.get("message", user_input.get("query", str(user_input)))
-            lines.append(f"**User Query:** {user_input}")
-
-        if hasattr(trace, "output") and trace.output:
-            output = trace.output
-            if isinstance(output, dict):
-                output = output.get("response", output.get("content", str(output)))
-            # Truncate very long outputs
-            if len(str(output)) > 2000:
-                output = str(output)[:2000] + "... [truncated]"
-            lines.append(f"**Final Response:** {output}")
-
-        # Extract agents used and tool calls
-        agents_used = set()
-        tool_calls = []
-        trace_agent_patterns = get_trace_agent_patterns()
-
-        for obs in observations:
-            obs_type = getattr(obs, "type", None)
-            obs_name = getattr(obs, "name", "")
-
-            # Identify agents from generation observations
-            if obs_type == "GENERATION":
-                # Try to identify the agent
-                for agent_pattern, agent_id in trace_agent_patterns.items():
-                    if agent_pattern in obs_name.lower():
-                        agents_used.add(agent_id)
-                        break
-
-            # Capture tool calls from spans
-            if obs_type == "SPAN" and not obs_name.startswith("transfer_to_"):
-                if obs_name not in ["supervisor", "agent_run", ""]:
-                    tool_input = getattr(obs, "input", None)
-                    tool_output = getattr(obs, "output", None)
-
-                    # Format input
-                    input_str = ""
-                    if tool_input:
-                        if isinstance(tool_input, dict):
-                            input_str = json.dumps(tool_input, indent=2)[:500]
-                        else:
-                            input_str = str(tool_input)[:500]
-
-                    # Format output (truncate)
-                    output_str = ""
-                    if tool_output:
-                        if isinstance(tool_output, str):
-                            output_str = tool_output[:300]
-                        else:
-                            output_str = str(tool_output)[:300]
-
-                    tool_calls.append({
-                        "name": obs_name,
-                        "input": input_str,
-                        "output": output_str + ("..." if len(str(tool_output or "")) > 300 else ""),
-                    })
-
-        if agents_used:
-            lines.append(f"**Agents Involved:** {', '.join(sorted(agents_used))}")
-
-        if tool_calls:
-            lines.append("\n**Tool Calls:**")
-            for i, tc in enumerate(tool_calls[:15], 1):
-                lines.append(f"\n{i}. **{tc['name']}**")
-                if tc["input"]:
-                    lines.append(f"   Input: {tc['input']}")
-                if tc["output"]:
-                    lines.append(f"   Output: {tc['output']}")
-
-            if len(tool_calls) > 15:
-                lines.append(f"\n... and {len(tool_calls) - 15} more tool calls")
-
-        return "\n".join(lines)
-
-    except Exception as exc:
-        logger.error("Failed to fetch trace for Opus: %s", exc, exc_info=True)
-        return None
-
-
 def build_opus_system_prompt(
     context: Optional[ChatContext],
     user_name: Optional[str] = None,
@@ -492,7 +315,7 @@ def build_opus_system_prompt(
     get_prompt_catalog: Callable[[], Any],
     prepare_trace_context: Callable[[str], Optional[str]],
 ) -> str:
-    """Build the system prompt for Opus based on UI context and user identity."""
+    """Build the AI Chat system prompt from UI context and user identity."""
 
     # Check if this user is a developer (configured in .env for security)
     developer_emails = os.getenv("PROMPT_EXPLORER_DEVELOPER_EMAILS", "").lower().split(",")

@@ -1,8 +1,7 @@
 """
 Workflow Analysis Context Preparation
 
-Provides lightweight trace context for Opus system prompt.
-Replaces the heavy _fetch_trace_for_opus() which sent entire traces.
+Provides lightweight trace context for the Agent Studio AI Chat system prompt.
 """
 
 from typing import Optional
@@ -10,17 +9,17 @@ from typing import Optional
 
 def prepare_trace_context(trace_id: Optional[str]) -> str:
     """
-    Prepare lightweight trace context for Opus system prompt.
+    Prepare lightweight trace context for the AI Chat system prompt.
 
     Instead of fetching and formatting the entire trace (2000+ chars),
     this function simply provides the trace_id and instructions for
-    Opus to use the token-aware trace tools to fetch specific views.
+    the assistant to use token-aware trace tools to fetch specific views.
 
     Args:
         trace_id: Langfuse trace ID, or None if no trace context
 
     Returns:
-        String to inject into Opus system prompt with tool usage instructions
+        String to inject into the AI Chat system prompt with tool usage instructions
     """
     if not trace_id:
         return ""

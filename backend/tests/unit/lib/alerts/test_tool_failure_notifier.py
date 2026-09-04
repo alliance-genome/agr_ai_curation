@@ -105,7 +105,7 @@ def test_notify_tool_failure_publishes_expected_payload(monkeypatch, direct_to_t
     assert "[Tool Failure] TimeoutError: get_trace_summary" in call["Subject"]
 
     message = call["Message"]
-    assert "Source:         opus_report (Claude detected and reported)" in message
+    assert "Source:         opus_report (AI Chat detected and reported)" in message
     assert "Error Type:     TimeoutError" in message
     assert "Error Message:  TraceReview service timeout (30s exceeded)" in message
     assert "Tool:           get_trace_summary" in message

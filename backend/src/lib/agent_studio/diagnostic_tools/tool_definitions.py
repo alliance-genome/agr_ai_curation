@@ -1,7 +1,7 @@
 """
 Tool Definitions for Prompt Explorer Diagnostic Tools.
 
-This module registers all diagnostic tools available to Opus.
+This module registers all diagnostic tools available to Agent Studio AI Chat.
 Package-owned tools opt in through their installed binding metadata, giving the
 diagnostic assistant the same capabilities for trace troubleshooting.
 

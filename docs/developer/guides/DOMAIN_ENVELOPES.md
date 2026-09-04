@@ -335,7 +335,7 @@ Custom validation agents are regular flow steps. Their steering prompts are
 stored as normal node configuration and should target envelope objects, field
 paths, or curator questions.
 
-When Agent Studio Opus answers validation questions, it should use the live tool
+When Agent Studio AI Chat answers validation questions, it should use the live tool
 chain instead of static prompt memory:
 
 1. `get_domain_envelope_state` for saved envelope objects, validation findings,

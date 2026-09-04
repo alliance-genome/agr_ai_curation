@@ -363,10 +363,9 @@ print_stage_intro() {
   printf "    2. OpenAI API key      (${red}REQUIRED${reset} - used for embeddings and default models)\n"
   echo "    3. OpenRouter API key  (optional - enables explicitly selected OpenRouter routes)"
   echo "    4. Groq API key        (optional - adds Groq as an LLM provider)"
-  echo "    5. Anthropic API key   (recommended - powers the in-app Claude help agent)"
-  echo "    6. Gemini API key      (optional - adds Google Gemini models)"
-  echo "    7. Rerank provider     (bedrock_cohere, local_transformers, or none)"
-  echo "    8. Provider companion  (Bedrock model ARN or the configured reranker URL when needed)"
+  echo "    5. Gemini API key      (optional - adds Google Gemini models)"
+  echo "    6. Rerank provider     (bedrock_cohere, local_transformers, or none)"
+  echo "    7. Provider companion  (Bedrock model ARN or the configured reranker URL when needed)"
   echo
   echo "  Everything else (database passwords, encryption keys, Langfuse tokens)"
   echo "  is generated automatically. You don't need to prepare anything for those."
@@ -503,13 +502,11 @@ main() {
   local openai_api_key
   local openrouter_api_key
   local groq_api_key
-  local anthropic_api_key
   local gemini_api_key
 
   openai_api_key="$(prompt_required_value "OpenAI API key (required)")"
   openrouter_api_key="$(prompt_optional_value "OpenRouter API key")"
   groq_api_key="$(prompt_optional_value "Groq API key")"
-  anthropic_api_key="$(prompt_optional_value "Anthropic API key")"
   gemini_api_key="$(prompt_optional_value "Gemini API key")"
   rerank_provider="$(resolve_rerank_provider "$default_rerank_provider")"
   bedrock_rerank_model_arn="$default_bedrock_rerank_model_arn"
@@ -561,7 +558,6 @@ main() {
   upsert_env_var "$env_output_path" "OPENAI_API_KEY" "$openai_api_key"
   upsert_env_var "$env_output_path" "OPENROUTER_API_KEY" "$openrouter_api_key"
   upsert_env_var "$env_output_path" "GROQ_API_KEY" "$groq_api_key"
-  upsert_env_var "$env_output_path" "ANTHROPIC_API_KEY" "$anthropic_api_key"
   upsert_env_var "$env_output_path" "GEMINI_API_KEY" "$gemini_api_key"
 
   upsert_env_var "$env_output_path" "POSTGRES_PASSWORD" "$postgres_password"

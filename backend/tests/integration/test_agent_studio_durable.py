@@ -18,56 +18,6 @@ from tests.integration.evidence_test_support import collect_sse_events
 pytest_plugins = ["tests.integration.evidence_test_support"]
 
 
-class _FakeSuccessfulStream:
-    def __init__(self, events: list[object], final_message: object):
-        self._events = list(events)
-        self._final_message = final_message
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._events:
-            raise StopAsyncIteration
-        return self._events.pop(0)
-
-    async def get_final_message(self):
-        return self._final_message
-
-
-class _FakeMessagesApi:
-    def __init__(self, scenarios: list[tuple[list[object], object]], calls: list[dict]):
-        self._scenarios = list(scenarios)
-        self._calls = calls
-
-    def stream(self, **kwargs):
-        self._calls.append(kwargs)
-        if not self._scenarios:
-            raise AssertionError("Anthropic should not stream again for this test")
-        events, final_message = self._scenarios.pop(0)
-        return _FakeSuccessfulStream(events, final_message)
-
-
-class _FakeAnthropicClient:
-    def __init__(self, scenarios: list[tuple[list[object], object]], calls: list[dict]):
-        self.beta = SimpleNamespace(messages=_FakeMessagesApi(scenarios, calls))
-
-
-class _UnexpectedAnthropicClient:
-    class _Messages:
-        def stream(self, **_kwargs):
-            raise AssertionError("Anthropic should not be called for durable replay")
-
-    def __init__(self):
-        self.beta = SimpleNamespace(messages=self._Messages())
-
-
 def _configure_agent_studio_chat(monkeypatch, *, scenarios, tool_result=None, stream_calls=None):
     from src.api import agent_studio as api_module
 

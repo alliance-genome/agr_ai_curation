@@ -202,7 +202,7 @@ def test_process_suggestion_background_uses_openai_agents_sdk_contract(monkeypat
     request = captured["request"]
     assert request["instructions"] == "system"
     assert request["input_items"] == [{"role": "user", "content": "hello"}]
-    assert request["tool_definition"] == api_module.ANTHROPIC_SUGGESTION_TOOL
+    assert request["tool_definition"] == api_module.SUGGESTION_TOOL
     assert request["max_turns"] == api_module.get_agent_studio_suggestion_max_turns()
     assert request["max_output_tokens"] == api_module.get_agent_studio_suggestion_max_output_tokens()
     assert request["user_id"] == "auth-sub-1"

@@ -9,7 +9,7 @@ from src.lib.agent_studio import ChatContext, ChatMessage, PromptCatalog
 
 
 class ChatRequest(BaseModel):
-    """Request to send a message to Opus."""
+    """Request to send a message to Agent Studio AI Chat."""
 
     messages: List[ChatMessage]
     context: Optional[ChatContext] = None
@@ -206,7 +206,7 @@ class ShareAgentRequest(BaseModel):
 
 
 class ToolIdeaConversationEntry(BaseModel):
-    """Single Opus ideation conversation turn."""
+    """Single AI Chat ideation conversation turn."""
 
     role: Literal["user", "assistant", "system"]
     content: str = Field(..., min_length=1)
@@ -247,7 +247,7 @@ class ToolIdeaListResponse(BaseModel):
 
 
 class DirectSubmissionRequest(BaseModel):
-    """Request to directly trigger suggestion submission via Opus (bypassing chat UI)."""
+    """Request to directly trigger AI Chat suggestion submission (bypassing chat UI)."""
 
     context: Optional[ChatContext] = None
     messages: Optional[List[ChatMessage]] = None

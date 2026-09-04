@@ -1,84 +1,48 @@
-"""Unit tests for Agent Studio Anthropic model resolution."""
+"""Unit tests for canonical Agent Studio model resolution."""
 
 from types import SimpleNamespace
 
 import pytest
 
-
-def test_list_anthropic_catalog_models_filters_and_sorts(monkeypatch):
-    import src.api.agent_studio as api_module
-
-    monkeypatch.setattr(
-        api_module,
-        "list_model_definitions",
-        lambda: [
-            SimpleNamespace(model_id="gpt-5.5", name="GPT-5.5", provider="openai", default=True),
-            SimpleNamespace(model_id="claude-z", name="Claude Z", provider="anthropic", default=False),
-            SimpleNamespace(model_id="claude-a", name="Claude A", provider="anthropic", default=True),
-        ],
-    )
-
-    models = api_module._list_anthropic_catalog_models()
-    assert [model.model_id for model in models] == ["claude-a", "claude-z"]
+from src.lib.agent_studio import openai_runtime
 
 
-def test_resolve_prompt_explorer_model_uses_env_override(monkeypatch):
-    import src.api.agent_studio as api_module
+def test_agent_studio_defaults_resolve_from_canonical_model_catalog():
+    model = openai_runtime.get_default_catalog_model()
 
-    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-env-primary")
-    monkeypatch.setattr(
-        api_module,
-        "_list_anthropic_catalog_models",
-        lambda: [
-            SimpleNamespace(model_id="claude-env-primary", name="Claude Env Primary"),
-        ],
-    )
-
-    model_id, model_name = api_module._resolve_prompt_explorer_model()
-    assert model_id == "claude-env-primary"
-    assert model_name == "Claude Env Primary"
+    assert model is not None
+    assert model.model_id == "gpt-5.6-sol"
+    assert model.provider == "openai"
+    assert model.default_reasoning == "medium"
+    assert openai_runtime.resolve_agent_studio_model() == ("gpt-5.6-sol", "medium")
+    assert openai_runtime.AGENT_STUDIO_OPENAI_MODEL == model.model_id
+    assert openai_runtime.AGENT_STUDIO_REASONING_EFFORT == model.default_reasoning
 
 
-def test_resolve_prompt_explorer_model_ignores_retired_env_and_falls_back_to_catalog(
-    monkeypatch,
-):
-    import src.api.agent_studio as api_module
+@pytest.mark.parametrize(
+    ("model", "expected_message"),
+    [
+        (None, "requires a default model"),
+        (
+            SimpleNamespace(
+                model_id="other-model",
+                provider="other-provider",
+                default_reasoning="medium",
+            ),
+            "requires the default model catalog entry to use OpenAI",
+        ),
+        (
+            SimpleNamespace(
+                model_id="gpt-test",
+                provider="openai",
+                default_reasoning=None,
+            ),
+            "requires a valid default_reasoning",
+        ),
+    ],
+)
+def test_agent_studio_model_resolution_fails_closed(monkeypatch, model, expected_message):
+    monkeypatch.setattr(openai_runtime, "get_default_catalog_model", lambda: model)
 
-    monkeypatch.delenv("PROMPT_EXPLORER_MODEL_ID", raising=False)
-    monkeypatch.setenv("ANTHROPIC_" + "OPUS_MODEL", "claude-retired")
-    monkeypatch.setattr(
-        api_module,
-        "_list_anthropic_catalog_models",
-        lambda: [SimpleNamespace(model_id="claude-catalog", name="Claude Catalog")],
-    )
-
-    model_id, model_name = api_module._resolve_prompt_explorer_model()
-    assert model_id == "claude-catalog"
-    assert model_name == "Claude Catalog"
-
-
-def test_resolve_prompt_explorer_model_uses_raw_env_id_when_not_in_catalog(monkeypatch):
-    import src.api.agent_studio as api_module
-
-    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-unlisted")
-    monkeypatch.setattr(
-        api_module,
-        "_list_anthropic_catalog_models",
-        lambda: [SimpleNamespace(model_id="claude-catalog", name="Claude Catalog")],
-    )
-
-    model_id, model_name = api_module._resolve_prompt_explorer_model()
-    assert model_id == "claude-unlisted"
-    assert model_name == "claude-unlisted"
-
-
-def test_resolve_prompt_explorer_model_raises_when_unconfigured(monkeypatch):
-    import src.api.agent_studio as api_module
-
-    monkeypatch.delenv("PROMPT_EXPLORER_MODEL_ID", raising=False)
-    monkeypatch.setattr(api_module, "_list_anthropic_catalog_models", lambda: [])
-
-    with pytest.raises(ValueError) as exc_info:
-        api_module._resolve_prompt_explorer_model()
-
-    assert "No Agent Studio Anthropic model configured" in str(exc_info.value)
+    with pytest.raises(ValueError, match=expected_message):
+        openai_runtime.resolve_agent_studio_model()

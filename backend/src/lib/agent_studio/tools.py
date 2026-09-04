@@ -1,10 +1,10 @@
 """
 Workflow Analysis Tools
 
-Provides tool functions for Opus to dynamically query trace data and Loki-backed service logs.
+Provides tool functions for AI Chat to query trace data and Loki-backed service logs.
 Used in the Workflow Analysis feature (formerly Prompt Explorer).
 
-Token-Aware Tools (Claude-Specific Endpoints):
+Token-aware tools use stable TraceReview compatibility endpoints:
 - get_trace_summary: Lightweight overview (~500 tokens)
 - get_tool_calls_summary: Paginated call summaries
 - get_tool_calls_page: Paginated call metadata and exact-field references
@@ -160,11 +160,11 @@ def validate_view(view: str) -> None:
 
 
 # ============================================================================
-# Token-Aware Tool Functions (Claude-Specific Endpoints)
+# Token-aware tool functions (stable TraceReview compatibility endpoints)
 # ============================================================================
 
 def _get_claude_api_url() -> str:
-    """Get the Claude-specific TraceReview API base URL."""
+    """Get the stable compatibility route for the TraceReview API."""
     base = get_trace_review_url()
     return f"{base}/api/claude/traces"
 
@@ -1352,7 +1352,7 @@ async def get_service_logs(
     """
     Retrieve Loki-backed service logs for troubleshooting.
 
-    Allows Opus to access internal service logs through `/api/logs/{container}`
+    Allows AI Chat to access internal service logs through `/api/logs/{container}`
     when helping curators debug issues.
 
     Args:

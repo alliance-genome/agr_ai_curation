@@ -33,7 +33,7 @@ AGENT_STUDIO_HIDDEN_MESSAGE_TYPES = frozenset({CHAT_CONTEXT_COMPACTION_MESSAGE_T
 
 @dataclass(frozen=True)
 class PreparedAgentStudioTurn:
-    """Persisted Agent Studio turn metadata used by the Opus streaming path."""
+    """Persisted Agent Studio turn metadata used by the AI Chat streaming path."""
 
     session_id: str
     turn_id: str
@@ -844,17 +844,6 @@ def assistant_tool_calls_from_payload(payload_json: Any) -> List[Dict[str, Any]]
             continue
         tool_calls.append(dict(tool_call))
     return tool_calls
-
-
-def extract_opus_text_content(content_blocks: List[Any]) -> str:
-    text_parts: List[str] = []
-    for block in content_blocks:
-        if getattr(block, "type", None) != "text":
-            continue
-        text_value = getattr(block, "text", None)
-        if isinstance(text_value, str):
-            text_parts.append(text_value)
-    return "".join(text_parts)
 
 
 def build_agent_studio_assistant_payload(

@@ -1,4 +1,4 @@
-"""Unit coverage for Agent Studio domain-envelope Opus tools."""
+"""Unit coverage for Agent Studio domain-envelope AI Chat tools."""
 
 from __future__ import annotations
 

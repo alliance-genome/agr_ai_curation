@@ -10,7 +10,6 @@ required_env_keys=(
   OPENAI_API_KEY
   OPENROUTER_API_KEY
   GROQ_API_KEY
-  ANTHROPIC_API_KEY
   GEMINI_API_KEY
   AUTH_PROVIDER
   DEV_MODE
@@ -92,6 +91,11 @@ for key in "${required_env_keys[@]}"; do
     exit 1
   fi
 done
+
+if grep -Eq '^(ANTHROPIC_API_KEY|PROMPT_EXPLORER_MODEL_ID)=' "$env_template"; then
+  echo "Retired Agent Studio provider configuration remains in standalone template" >&2
+  exit 1
+fi
 
 while IFS='|' read -r category key default services; do
   if [[ -z "${category}" || "${category}" == \#* ]]; then

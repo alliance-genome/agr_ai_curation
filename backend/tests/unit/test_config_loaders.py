@@ -630,7 +630,7 @@ class TestSupervisorToolAlignment:
 # =============================================================================
 # KANBAN-1002: Comprehensive Test Coverage
 # =============================================================================
-# Tests below address gaps identified by opus sub-agent code review.
+# Tests below address gaps identified during independent code review.
 # =============================================================================
 
 

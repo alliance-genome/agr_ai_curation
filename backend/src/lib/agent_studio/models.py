@@ -4,7 +4,7 @@ Pydantic models for Prompt Explorer feature.
 Defines data structures for:
 - Agent prompt metadata (base prompts, group rules)
 - Agent documentation (capabilities, data sources, limitations, usage guidance)
-- Chat messages for Opus conversations
+- Chat messages for Agent Studio AI Chat conversations
 - Trace context for execution history
 """
 
@@ -198,11 +198,11 @@ class PromptCatalog(BaseModel):
 
 
 # ============================================================================
-# Chat Models (for Opus conversations)
+# Chat models for Agent Studio AI Chat conversations
 # ============================================================================
 
 class ChatMessage(BaseModel):
-    """A single message in the Opus conversation."""
+    """A single message in an AI Chat conversation."""
     role: str = Field(..., description="Message role: 'user' or 'assistant'")
     content: str = Field(..., description="Message content")
     timestamp: Optional[datetime] = Field(None, description="When the message was sent")
@@ -245,7 +245,7 @@ class FlowContextDefinition(BaseModel):
 
 
 class AgentWorkshopContext(BaseModel):
-    """Agent Workshop context passed to Opus chat."""
+    """Agent Workshop context passed to AI Chat."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -267,7 +267,7 @@ class AgentWorkshopContext(BaseModel):
 
 
 class ChatContext(BaseModel):
-    """Context for the Opus chat session."""
+    """Context for the AI Chat session."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -311,13 +311,13 @@ class ChatContext(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """Request to send a message to Opus."""
+    """Request to send a message to AI Chat."""
     messages: List[ChatMessage] = Field(..., description="Conversation history")
     context: Optional[ChatContext] = Field(None, description="Current UI context")
 
 
 class ChatResponse(BaseModel):
-    """Non-streaming response from Opus (for error cases)."""
+    """Non-streaming AI Chat response for error cases."""
     content: str = Field(..., description="Response content")
     error: Optional[str] = Field(None, description="Error message if any")
 

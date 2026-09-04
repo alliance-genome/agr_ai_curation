@@ -183,10 +183,14 @@ replacement/skip policy, workspace display, and export/submission behavior.
 Shared runtime code must stay provider-agnostic; Alliance LinkML, curation DB
 projections, and package-specific adapters belong in `packages/alliance/`.
 
-For Agent Studio validation questions, Opus should inspect the domain-envelope
+For Agent Studio validation questions, AI Chat should inspect the domain-envelope
 state, domain-pack validation plan, validator-agent prompt via `get_prompt` when
 the plan supplies an agent ID, review rows, and export/submission readiness
 instead of inferring behavior from static docs or legacy projection payloads.
+
+Agent Studio AI Chat resolves the default OpenAI model and reasoning policy from
+the canonical model catalog. The shipped catalog selects `gpt-5.6-sol` with
+`medium` reasoning; do not add a second Agent Studio model override.
 
 See [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) for the full contract.
 

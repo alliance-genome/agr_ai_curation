@@ -69,7 +69,7 @@ class TestBuildConfigDefaults:
     def test_returns_multiple_non_default_values(self):
         """When multiple values differ, include all of them."""
         config = ModelConfig(
-            model="claude-3-opus",
+            model="gpt-5.6-sol",
             temperature=0.5,
             reasoning="low",
         )
@@ -77,7 +77,7 @@ class TestBuildConfigDefaults:
         result = _build_config_defaults(config)
 
         assert result == {
-            "model": "claude-3-opus",
+            "model": "gpt-5.6-sol",
             "temperature": 0.5,
             "reasoning": "low",
         }

@@ -24,43 +24,6 @@ def _consume_sse_events(stream_response) -> list[dict]:
     return events
 
 
-class _FakeSuccessfulStream:
-    def __init__(self, events: list[object], final_message: object):
-        self._events = events
-        self._final_message = final_message
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._events:
-            raise StopAsyncIteration
-        return self._events.pop(0)
-
-    async def get_final_message(self):
-        return self._final_message
-
-
-class _FakeMessagesApi:
-    def __init__(self, events: list[object], final_message: object):
-        self._events = events
-        self._final_message = final_message
-
-    def stream(self, **_kwargs):
-        return _FakeSuccessfulStream(list(self._events), self._final_message)
-
-
-class _FakeAnthropicClient:
-    def __init__(self, events: list[object], final_message: object):
-        self.beta = SimpleNamespace(messages=_FakeMessagesApi(events, final_message))
-
-
 def test_chat_context_model_round_trips_session_id():
     context = api_module.ChatContext.model_validate(
         {

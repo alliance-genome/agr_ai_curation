@@ -27,54 +27,6 @@ def _consume_sse_events(stream_response) -> list[dict]:
     return events
 
 
-class _FakeSuccessfulStream:
-    def __init__(self, events: list[object], final_message: object):
-        self._events = list(events)
-        self._final_message = final_message
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._events:
-            raise StopAsyncIteration
-        return self._events.pop(0)
-
-    async def get_final_message(self):
-        return self._final_message
-
-
-class _FakeMessagesApi:
-    def __init__(self, captured: dict[str, Any]):
-        self._captured = captured
-
-    def stream(self, **kwargs):
-        self._captured["tools"] = kwargs["tools"]
-        return _FakeSuccessfulStream(
-            events=[
-                SimpleNamespace(
-                    type="content_block_delta",
-                    delta=SimpleNamespace(text="History tools ready"),
-                )
-            ],
-            final_message=SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="History tools ready")],
-                stop_reason="end_turn",
-            ),
-        )
-
-
-class _FakeAnthropicClient:
-    def __init__(self, captured: dict[str, Any]):
-        self.beta = SimpleNamespace(messages=_FakeMessagesApi(captured))
-
-
 def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
     contract_client,
     chat_contract_auth_headers,

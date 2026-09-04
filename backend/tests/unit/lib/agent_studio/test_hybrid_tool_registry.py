@@ -302,7 +302,7 @@ def test_core_only_diagnostic_registry_excludes_alliance_content(monkeypatch):
     )
 
     registry = get_diagnostic_tools_registry()
-    serialized_registry = repr(registry.get_anthropic_tools())
+    serialized_registry = repr(registry.get_tool_definitions())
 
     forbidden_patterns = (
         r"\bagr_curation_query\b",

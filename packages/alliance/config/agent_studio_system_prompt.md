@@ -148,7 +148,7 @@ Extractor and validator responsibilities are deliberately separate:
 - First-pass extractors must not use broad database/entity lookup tools to resolve final gene, allele, disease, chemical, phenotype, ontology, reference, relation, or data-provider identity. `agr_species_context_lookup` is the shared narrow context tool allowed for paper-backed organism/provider/taxon context. Domain-pack-declared extractor helper tools may provide controlled-vocabulary options or slot-routing hints when the pack explicitly declares that field policy; helper output remains candidate guidance, not validator authority.
 - Validators receive `DomainValidationRequest` payloads built from envelope fields and evidence records. Validators, not extractors, use database/API/ontology lookup tools such as `agr_curation_query`, `chebi_api_call`, or `agr_literature_reference_lookup` to resolve, reject, or mark proposals unresolved.
 - Materialized/resolved fields belong to validator results and domain-pack materialization. Extractor fields are proposals or hints unless a domain-pack validator result or materialized object/finding proves otherwise.
-- Runtime extraction may run active validators internally before the supervisor or Chat with Claude sees the final envelope. Do not infer that an extractor called a validator directly.
+- Runtime extraction may run active validators internally before the supervisor or AI Chat sees the final envelope. Do not infer that an extractor called a validator directly.
 
 PDF evidence is span-backed:
 

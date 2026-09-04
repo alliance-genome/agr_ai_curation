@@ -181,8 +181,8 @@ If Okta isn't configured and `DEV_MODE=false`, protected endpoints return `401` 
 | Feedback | POST | `/api/feedback/submit` | Two-phase handler (fast ack + background Langfuse enrichment). |
 | Users/Auth | GET/POST | `/api/users/me`, `/api/auth/login|logout|callback` | Identity & tokens. |
 | PDF viewer | GET | `/api/pdf-viewer/documents*` | Metadata + signed viewer URLs (no auth in current build). |
-| Trace Review (Claude) | GET | `/api/claude/traces/{id}/*` | Token-aware trace analysis for Opus/Claude (runs on port 8001). |
-| Workflow Analysis | POST | `/api/workflow-analysis/stream` | Opus streaming trace analysis with SSE. |
+| Trace Review compatibility API | GET | `/api/claude/traces/{id}/*` | Token-aware trace analysis through the stable internal route (runs on port 8001). |
+| Workflow Analysis | POST | `/api/workflow-analysis/stream` | Streaming trace analysis with SSE. |
 | CLI | python module | `backend/cli/ontology.py` | Only supported path for ontology loading/inspection today. |
 
 The sections below detail each group with payloads and SSE formats.
@@ -596,7 +596,7 @@ does not grant access.
 
 **Base URL**: `http://localhost:8001/api/claude/traces` (TraceReview service on port 8001)
 
-Provider-boundary-aware endpoints designed for Claude/Opus workflow analysis. All responses include serialized-character metadata plus an advisory token estimate. These endpoints are used by the Workflow Analysis feature.
+Provider-boundary-aware endpoints exposed through a stable compatibility route. All responses include serialized-character metadata plus an advisory token estimate. These endpoints are used by the Workflow Analysis feature.
 
 ### Provider Result Budget Strategy
 
@@ -624,8 +624,8 @@ All endpoints return:
 
 ### Langfuse-First Inspection Endpoints
 
-These token-aware Claude endpoints mirror TraceReview's newer Langfuse-first
-inspection API and are the preferred drill-down surface for Chat with Claude:
+These token-aware compatibility endpoints mirror TraceReview's newer Langfuse-first
+inspection API and are the preferred drill-down surface for AI Chat:
 
 | Endpoint | Use |
 |----------|-----|
@@ -872,7 +872,7 @@ curl -s "http://localhost:8001/api/claude/traces/$TRACE_ID/conversation?field=as
 
 **Base URL**: `http://localhost:8000/api/workflow-analysis`
 
-The Workflow Analysis feature uses Claude Opus to analyze Langfuse traces and identify issues in AI agent behavior. It streams responses via Server-Sent Events (SSE).
+The Workflow Analysis feature analyzes Langfuse traces to identify issues in AI agent behavior. It streams responses via Server-Sent Events (SSE).
 
 ### Stream Analysis
 
@@ -894,8 +894,8 @@ Response: Server-Sent Events stream with these event types:
 | Event Type | Description |
 |------------|-------------|
 | `ANALYSIS_STARTED` | Analysis initiated, includes session info |
-| `TEXT_DELTA` | Streaming text chunks from Opus |
-| `TOOL_USE` | Opus is calling a trace analysis tool |
+| `TEXT_DELTA` | Streaming text chunks from the assistant |
+| `TOOL_USE` | The assistant is calling a trace analysis tool |
 | `TOOL_RESULT` | Result from trace analysis tool |
 | `CONTEXT_OVERFLOW` | Token limit reached, includes recovery suggestions |
 | `ANALYSIS_COMPLETE` | Final response, includes full text |
@@ -903,7 +903,7 @@ Response: Server-Sent Events stream with these event types:
 
 ### Available Analysis Tools
 
-Opus has access to these token-aware tools during analysis:
+The assistant has access to these token-aware tools during analysis:
 
 | Tool | Token Cost | Description |
 |------|------------|-------------|
@@ -925,11 +925,11 @@ Opus has access to these token-aware tools during analysis:
 | `get_trace_conversation` | chunked | One exact user-query or assistant-response field chunk |
 | `get_trace_view` | bounded | Summary/inventory, then one paged specialized-view section |
 | `get_service_logs` | bounded | Log-page summary plus inclusive timestamp/offset and exact character continuation |
-| `submit_anthropic_suggestion` | N/A | Submit system prompt improvements |
+| `submit_prompt_suggestion` | N/A | Submit system prompt improvements |
 
 ### Context Overflow Handling
 
-If Opus hits its 200K token limit, the stream emits a `CONTEXT_OVERFLOW` event:
+If the assistant exceeds its configured context limit, the stream emits a `CONTEXT_OVERFLOW` event:
 
 ```json
 {
@@ -953,7 +953,7 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
   -d '{"message": "What alleles are in the paper?", "session_id": null}'
 # Note the trace_id from TEXT_MESSAGE events
 
-# 2. Analyze the trace with Opus
+# 2. Analyze the trace with the configured assistant
 TRACE_ID="<trace_id from step 1>"
 curl -N -X POST http://localhost:8000/api/workflow-analysis/stream \
   -H 'Content-Type: application/json' \

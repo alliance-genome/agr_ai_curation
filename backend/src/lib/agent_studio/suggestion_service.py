@@ -3,7 +3,7 @@ Prompt Suggestion Service.
 
 Handles submission of prompt improvement suggestions via SNS,
 similar to the feedback system. Suggestions can be submitted
-manually by users or triggered by Opus when it detects
+manually by users or triggered by AI Chat when it detects
 actionable improvements during conversation.
 """
 
@@ -266,7 +266,7 @@ async def submit_suggestion_sns(
         }
 
 
-# Tool definition for Opus
+# Tool definition for AI Chat
 SUBMIT_SUGGESTION_TOOL = {
     "name": "submit_prompt_suggestion",
     "description": """Submit a prompt improvement suggestion to the development team.
