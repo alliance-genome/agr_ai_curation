@@ -1044,6 +1044,12 @@ function OpusChat({
   // Auto-send a discussion message from an Agent Details AI Chat action.
   // Uses ref to prevent duplicate sends when isStreaming briefly toggles
   useEffect(() => {
+    // Clearing the consumed action rearms it for an explicit later request,
+    // including retrying a canceled Flow continuation for the same saved agent.
+    if (!discussMessage) {
+      discussMessageSentRef.current = null
+      return
+    }
     if (
       discussMessage &&
       discussMessage !== discussMessageSentRef.current &&

@@ -1095,6 +1095,7 @@ export function useWorkshopDraft({
         // Only a fresh authorized catalog can emit an actionable saved identity.
         status: savedIdentity ? 'ready' : 'catalog_unavailable',
         saved_agent_id: savedIdentity,
+        saved_custom_agent_id: savedIdentity ? persistedAgent.id : undefined,
         origin: continuationOrigin,
       })
     } catch (err) {

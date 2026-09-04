@@ -493,6 +493,19 @@ describe('PromptWorkshop', () => {
 
   // ── Saving ──
 
+  it('does not publish a Flow handoff or persist when Save is canceled', async () => {
+    const onSavedHandoff = vi.fn()
+    render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(onSavedHandoff).not.toHaveBeenCalled()
+    await waitForHeaderName('Gene Specialist (Custom)')
+  })
+
   it('saves new agents with template_source payload (no parent_agent_id)', async () => {
     const onSavedHandoff = vi.fn()
     const origin = { flow_id: 'flow-1', flow_draft_fingerprint: 'sha256:original-flow' }
@@ -523,7 +536,8 @@ describe('PromptWorkshop', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Saved just now')
     expect(screen.getByText('Template: Gene Specialist')).toBeInTheDocument()
     expect(onSavedHandoff).toHaveBeenCalledWith({
-      status: 'ready', saved_agent_id: buildCustomAgent().agent_id, origin,
+      status: 'ready', saved_agent_id: buildCustomAgent().agent_id,
+      saved_custom_agent_id: buildCustomAgent().id, origin,
     })
   }, 15000)
 
@@ -594,11 +608,12 @@ describe('PromptWorkshop', () => {
   }, 20000)
 
   it('shows the save-failed pill and keeps edits when the update rejects', async () => {
+    const onSavedHandoff = vi.fn()
     const existing = buildCustomAgent()
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
     serviceMocks.updateCustomAgent.mockRejectedValue(new Error('409: another curator saved version 3'))
 
-    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} onSavedHandoff={onSavedHandoff} />)
     await waitForHeaderName('My Agent')
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Changed description' } })
     await saveFromHeader()
@@ -607,6 +622,7 @@ describe('PromptWorkshop', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Could not save. 409: another curator saved version 3 Your edits are still here.')
     expect(screen.getByLabelText('Description')).toHaveValue('Changed description')
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+    expect(onSavedHandoff).not.toHaveBeenCalled()
   }, 15000)
 
   it('uses canonical group options and warns before saving a restriction that excludes the owner', async () => {

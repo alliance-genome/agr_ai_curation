@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { webcrypto } from 'node:crypto'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Ref } from 'react'
@@ -8,6 +9,7 @@ import AgentStudioPage from './AgentStudioPage'
 const serviceMocks = vi.hoisted(() => ({
   fetchPromptCatalog: vi.fn(),
   cloneAgentToWorkshop: vi.fn(),
+  getWorkshopSavedReference: vi.fn(),
 }))
 
 const historyMocks = vi.hoisted(() => ({
@@ -146,7 +148,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
   return { default: OpusChatMock }
 })
 
-const flowBuilderInstances = vi.hoisted(() => ({ count: 0 }))
+const flowBuilderInstances = vi.hoisted(() => ({ count: 0, draft: undefined as Record<string, any> | undefined }))
 
 vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
   const react = await import('react')
@@ -155,26 +157,33 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
     onFlowChange,
     onVerifyRequest,
     active,
+    authoringContextRef,
   }: {
     onFlowChange?: (flow: Record<string, unknown>) => void
     onVerifyRequest?: () => void
     active?: boolean
+    authoringContextRef?: Ref<any>
   }) => {
     // One id per mounted instance, so a test can prove the builder was not remounted.
     const [instance] = react.useState(() => {
       flowBuilderInstances.count += 1
       return flowBuilderInstances.count
     })
+    react.useImperativeHandle(authoringContextRef, () => ({
+      captureAuthoringContext: () => flowBuilderInstances.draft,
+    }))
     return (
     <div data-testid="flow-builder" data-instance={instance} data-active={String(active ?? true)}>
       Flow
       <button
-        onClick={() => onFlowChange?.({
+        onClick={() => {
+          const draft = {
           flowName: 'Propagation Flow',
           version: '1.1',
           entry_node_id: 'extract',
           nodes: [{
             id: 'extract',
+            position: { x: 250, y: 280 },
             type: 'agent',
             agent_id: 'gene_extractor',
             agent_display_name: 'Gene Extractor',
@@ -188,7 +197,10 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
             ],
           }],
           edges: [],
-        })}
+          }
+          flowBuilderInstances.draft = draft
+          onFlowChange?.(draft)
+        }}
       >
         emit-flow-context
       </button>
@@ -222,6 +234,8 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
   const { UnsavedChangesDialog } = await import('@/components/AgentStudio/PromptWorkshop/dialogs/ConfirmDialogs')
 
   function PromptWorkshopMock({
+    onSavedHandoff,
+    continuationOrigin,
     initialCustomAgentId,
     initialParentAgentId,
     authoringContextRef,
@@ -229,6 +243,8 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
     onViewEnvelope,
     leaveGuardRef,
   }: {
+    onSavedHandoff?: (handoff: import('@/types/promptExplorer').WorkshopSavedHandoff) => void
+    continuationOrigin?: import('@/types/promptExplorer').WorkshopContinuationOrigin
     initialCustomAgentId?: string | null
     initialParentAgentId?: string | null
     authoringContextRef?: Ref<import('@/components/AgentStudio/PromptWorkshop/PromptWorkshop').WorkshopAuthoringContextHandle>
@@ -238,7 +254,10 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
   }) {
     const [incomingPrompt, setIncomingPrompt] = React.useState('')
     React.useImperativeHandle(authoringContextRef, () => ({
-      captureAuthoringContext: () => ({ prompt_draft: incomingPrompt }),
+      captureAuthoringContext: () => ({
+        prompt_draft: incomingPrompt, custom_agent_id: 'ca_integration_saved',
+        draft_is_dirty: workshopMockState.dirty,
+      }),
       applyAuthoringProposal: async (proposal) => {
         setIncomingPrompt(proposal.candidate.prompt_draft ?? '')
         return { applied: true, message: 'Applied' }
@@ -253,6 +272,11 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
     }))
     return (
       <div data-testid="prompt-workshop">
+        <div data-testid="continuation-origin">{continuationOrigin?.flow_draft_fingerprint}</div>
+        <button onClick={() => onSavedHandoff?.({
+          status: 'ready', saved_agent_id: 'ca_integration_saved',
+          saved_custom_agent_id: 'saved-uuid', origin: continuationOrigin,
+        })}>emit-confirmed-save</button>
         custom:{initialCustomAgentId || 'none'} parent:{initialParentAgentId || 'none'} incoming:{incomingPrompt || 'none'} conversation:{(opusConversation ?? []).map((message) => message.content).join('|') || 'none'}
         <button type="button" onClick={() => onViewEnvelope?.('gene')}>view-envelope</button>
         <UnsavedChangesDialog
@@ -389,6 +413,9 @@ describe('AgentStudioPage', () => {
     vi.clearAllMocks()
     localStorage.clear()
     workshopMockState.dirty = false
+    flowBuilderInstances.draft = undefined
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto })
+    serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: 'ca_integration_saved' })
     mockViewportWidth(1440)
     serviceMocks.fetchPromptCatalog.mockResolvedValue(EMPTY_CATALOG)
     serviceMocks.cloneAgentToWorkshop.mockResolvedValue({
@@ -398,6 +425,54 @@ describe('AgentStudioPage', () => {
     historyMocks.useChatHistoryDetailQuery.mockReturnValue(buildEmptyHistoryQueryResult())
     historyMocks.useChatHistoryTranscriptQuery.mockReturnValue(buildEmptyHistoryQueryResult())
   })
+
+  it.each(['ready', 'revoked', 'wrong_identity', 'flow_changed', 'workshop_changed', 'edit_during_lookup'])(
+    'integrates Workshop Save with reviewed Flow continuation: %s', async (outcome) => {
+      render(<MemoryRouter><AgentStudioPage /></MemoryRouter>)
+      await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalled())
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      fireEvent.click(await screen.findByText('emit-flow-context'))
+      const original = JSON.stringify(flowBuilderInstances.draft)
+      const instance = screen.getByTestId('flow-builder').getAttribute('data-instance')
+      fireEvent.click(screen.getByRole('tab', { name: 'Agent Workshop' }))
+      await waitFor(() => expect(screen.getByTestId('continuation-origin')).toHaveTextContent('sha256:'))
+      expect(screen.queryByRole('button', { name: 'Review in Flow' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByText('emit-confirmed-save'))
+      const review = await screen.findByRole('button', { name: 'Review in Flow' })
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('none')
+      if (outcome === 'revoked') serviceMocks.getWorkshopSavedReference.mockRejectedValue(new Error('Not available'))
+      if (outcome === 'wrong_identity') serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: 'ca_other' })
+      if (outcome === 'flow_changed') flowBuilderInstances.draft!.nodes[0].step_goal = 'Manual edit'
+      if (outcome === 'workshop_changed') workshopMockState.dirty = true
+      let completeLookup: ((value: { agent_id: string }) => void) | undefined
+      if (outcome === 'edit_during_lookup') {
+        serviceMocks.getWorkshopSavedReference.mockImplementation(() => new Promise((resolve) => { completeLookup = resolve }))
+      }
+      fireEvent.click(review)
+      if (outcome === 'edit_during_lookup') {
+        await waitFor(() => expect(completeLookup).toBeDefined())
+        expect(screen.getByRole('button', { name: 'Checking…' })).toBeDisabled()
+        flowBuilderInstances.draft!.nodes[0].step_goal = 'Manual edit'
+        await act(async () => completeLookup!({ agent_id: 'ca_integration_saved' }))
+      }
+      if (outcome === 'ready') {
+        await waitFor(() => expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-active', 'true'))
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('ca_integration_saved')
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('propose_flow_draft_update')
+        expect(serviceMocks.getWorkshopSavedReference).toHaveBeenCalledWith('saved-uuid')
+      } else {
+        await screen.findByText('The agent handoff needs a fresh catalog or flow review before continuation.')
+        expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-active', 'false')
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('none')
+      }
+      expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-instance', instance)
+      if (!['flow_changed', 'edit_during_lookup'].includes(outcome)) {
+        expect(JSON.stringify(flowBuilderInstances.draft)).toBe(original)
+      } else {
+        expect(flowBuilderInstances.draft!.nodes[0].step_goal).toBe('Manual edit')
+      }
+    },
+  )
 
   it('maps verification fields from FlowBuilder state into chat context', async () => {
     render(

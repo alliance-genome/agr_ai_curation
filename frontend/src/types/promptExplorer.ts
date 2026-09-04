@@ -369,6 +369,7 @@ export interface WorkshopContinuationOrigin {
 export interface WorkshopSavedHandoff {
   status: 'ready' | 'stale_origin' | 'catalog_unavailable'
   saved_agent_id?: string
+  saved_custom_agent_id?: string
   origin?: WorkshopContinuationOrigin
 }
 

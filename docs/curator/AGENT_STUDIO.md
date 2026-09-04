@@ -230,6 +230,16 @@ Click **Ask AI Chat** in the Workshop navigation to send your current draft to A
 - "Which automatic validators will run for this agent?"
 - "Does this custom extractor still keep proposed fields separate from validator-materialized fields?"
 
+### Returning a Saved Workshop Agent to Your Flow
+
+If you opened Workshop from a Flow, save the agent explicitly, then choose
+**Review in Flow** in the saved-agent notice. Agent Studio checks that the saved
+agent is still available and that neither draft changed, returns to your
+preserved Flow, and asks AI Chat for an insertion proposal. Review that proposal
+and choose **Apply** or **Cancel**; saving the Flow remains a separate action.
+Changed drafts or unavailable agents require a fresh review instead of automatic
+insertion.
+
 ## Discussing a Chat Response
 
 If you want to talk about the results from a conversation you're having in the main chat, you can bring that into Agent Studio:

@@ -71,6 +71,31 @@ describe('OpusChat', () => {
     })
   })
 
+  it('sends an explicit Flow continuation with current context and permits a later retry', async () => {
+    serviceMocks.streamOpusChat.mockImplementation(async function* () { yield { type: 'DONE' } })
+    const context: ChatContext = { active_tab: 'flows', flow_name: 'Preserved Flow' }
+    const captureContext = vi.fn().mockResolvedValue(context)
+    const message = 'Propose adding saved agent ca_saved to this Flow; review before Apply.'
+    function Harness() {
+      const [request, setRequest] = useState<string | null>(null)
+      return <>
+        <button onClick={() => setRequest(message)}>Review in Flow</button>
+        <OpusChat context={context} captureContext={captureContext} discussMessage={request}
+          onDiscussMessageSent={() => setRequest(null)} />
+      </>
+    }
+    render(<Harness />)
+    fireEvent.click(screen.getByText('Review in Flow'))
+    await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.streamOpusChat.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ role: 'user', content: message }),
+    ])
+    expect(serviceMocks.streamOpusChat.mock.calls[0][1]).toEqual(context)
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask about flows...')).not.toBeDisabled())
+    fireEvent.click(screen.getByText('Review in Flow'))
+    await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2))
+  })
+
   it('loads the complete targeted flow verification contract from the quick action', () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
@@ -547,7 +572,7 @@ describe('OpusChat', () => {
     expect(JSON.stringify(snapshot.mock.calls)).not.toContain('Private candidate instructions')
   })
 
-  it('requires explicit review before applying a transient flow proposal', async () => {
+  it.each(['Apply changes', 'Cancel'])('requires explicit review of a transient flow proposal: %s', async (decision) => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -610,7 +635,12 @@ describe('OpusChat', () => {
     expect(screen.getAllByText('Extract genes.')).not.toHaveLength(0)
     expect(onApplyFlowProposal).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }))
+    fireEvent.click(screen.getByRole('button', { name: decision }))
+    if (decision === 'Cancel') {
+      expect(onApplyFlowProposal).not.toHaveBeenCalled()
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Review Flow Builder Proposal' })).not.toBeInTheDocument())
+      return
+    }
     await waitFor(() => expect(onApplyFlowProposal).toHaveBeenCalledWith(expect.objectContaining({
       contract_version: 'flow_authoring_proposal.v1',
     })))

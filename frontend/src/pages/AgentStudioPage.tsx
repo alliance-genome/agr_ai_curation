@@ -51,12 +51,12 @@ import PromptWorkshop, {
   type WorkshopAuthoringContextHandle,
   type WorkshopLeaveGuard,
 } from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
-import { fingerprintAuthoringContext } from '@/components/AgentStudio/authoringContext'
+import { canonicalAuthoringJson, fingerprintAuthoringContext } from '@/components/AgentStudio/authoringContext'
 import {
   useChatHistoryDetailQuery,
   useChatHistoryTranscriptQuery,
 } from '@/features/history/useChatHistoryQuery'
-import { cloneAgentToWorkshop, fetchPromptCatalog } from '@/services/agentStudioService'
+import { cloneAgentToWorkshop, fetchPromptCatalog, getWorkshopSavedReference } from '@/services/agentStudioService'
 import {
   AGENT_STUDIO_CHAT_HISTORY_KIND,
   buildRestorableChatMessages,
@@ -268,6 +268,13 @@ function AgentStudioPage() {
   const flowAuthoringContextRef = useRef<FlowAuthoringContextHandle | null>(null)
   const [workshopContinuationOrigin, setWorkshopContinuationOrigin] = useState<WorkshopContinuationOrigin>()
   const [workshopSavedHandoff, setWorkshopSavedHandoff] = useState<WorkshopSavedHandoff>()
+  const [continuingToFlow, setContinuingToFlow] = useState(false)
+  const continuationBusyRef = useRef(false)
+  const continuationMountedRef = useRef(true)
+  useEffect(() => {
+    continuationMountedRef.current = true
+    return () => { continuationMountedRef.current = false }
+  }, [])
   const previousAuthoringTabRef = useRef(activeTab)
 
   useEffect(() => {
@@ -768,6 +775,63 @@ function AgentStudioPage() {
     }).catch(() => setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' }))
   }, [captureChatContext])
 
+  const continuationLiveRef = useRef({ activeTab, workshopSavedHandoff, isClaudeStreaming })
+  continuationLiveRef.current = { activeTab, workshopSavedHandoff, isClaudeStreaming }
+
+  const handleContinueInFlow = async () => {
+    const handoff = workshopSavedHandoff
+    if (continuationBusyRef.current || isClaudeStreaming || handoff?.status !== 'ready'
+      || !handoff.origin || !handoff.saved_agent_id || !handoff.saved_custom_agent_id) return
+    const captureDrafts = () => ({
+      flow: flowAuthoringContextRef.current?.captureAuthoringContext(),
+      workshop: workshopAuthoringContextRef.current?.captureAuthoringContext(),
+    })
+    const before = captureDrafts()
+    if (!before.flow || !before.workshop || before.workshop.draft_is_dirty
+      || before.workshop.custom_agent_id !== handoff.saved_agent_id) {
+      setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
+      return
+    }
+    const beforeKey = canonicalAuthoringJson(before)
+    continuationBusyRef.current = true
+    setContinuingToFlow(true)
+    try {
+      const context = await captureChatContext()
+      if (!continuationMountedRef.current || continuationLiveRef.current.activeTab !== 'agent_workshop'
+        || continuationLiveRef.current.workshopSavedHandoff !== handoff) return
+      if (context.flow_draft_fingerprint !== handoff.origin.flow_draft_fingerprint) {
+        setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
+        return
+      }
+      const reference = await getWorkshopSavedReference(handoff.saved_custom_agent_id)
+      const live = continuationLiveRef.current
+      if (!continuationMountedRef.current || live.activeTab !== 'agent_workshop'
+        || live.workshopSavedHandoff !== handoff) return
+      if (live.isClaudeStreaming || canonicalAuthoringJson(captureDrafts()) !== beforeKey) {
+        setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
+        return
+      }
+      if (reference.agent_id !== handoff.saved_agent_id) {
+        setWorkshopSavedHandoff({ ...handoff, status: 'catalog_unavailable' })
+        return
+      }
+      setActiveTab('flows')
+      safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'flows', {
+        owner: 'preferences', key: AGENT_STUDIO_TAB_KEY,
+      })
+      showClaude()
+      setDiscussMessage(`Propose adding the saved agent ${reference.agent_id} to my current Flow draft. Recheck its current authenticated catalog entry, preserve unrelated steps and settings, and use propose_flow_draft_update to show me the exact change for review. Do not save or execute the flow. Ask only if the insertion point is materially ambiguous.`)
+      setWorkshopSavedHandoff(undefined)
+    } catch {
+      if (continuationMountedRef.current && continuationLiveRef.current.workshopSavedHandoff === handoff) {
+        setWorkshopSavedHandoff({ ...handoff, status: 'catalog_unavailable' })
+      }
+    } finally {
+      continuationBusyRef.current = false
+      if (continuationMountedRef.current) setContinuingToFlow(false)
+    }
+  }
+
   const selectedAgentForChat =
     catalog && effectiveSelectedAgentId
       ? catalog.categories
@@ -1079,7 +1143,13 @@ Agent ID: ${agentId}`
               {activeTab === 'agent_workshop' && catalog && (
                 <>
                 {workshopSavedHandoff && (
-                  <Alert severity={workshopSavedHandoff.status === 'ready' ? 'success' : 'warning'} role="status">
+                  <Alert severity={workshopSavedHandoff.status === 'ready' ? 'success' : 'warning'} role="status"
+                    action={workshopSavedHandoff.status === 'ready' && workshopSavedHandoff.origin ? (
+                      <Button color="inherit" disabled={continuingToFlow || isClaudeStreaming}
+                        onClick={() => void handleContinueInFlow()}>
+                        {continuingToFlow ? 'Checking…' : 'Review in Flow'}
+                      </Button>
+                    ) : undefined}>
                     {workshopSavedHandoff.status === 'ready'
                       ? `Saved agent ${workshopSavedHandoff.saved_agent_id} is available in the refreshed catalog.`
                       : 'The agent handoff needs a fresh catalog or flow review before continuation.'}
