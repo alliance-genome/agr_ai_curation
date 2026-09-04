@@ -12,6 +12,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.orm import Session, load_only
+from src.lib.domain_packs.capabilities import registry_object_capabilities
 
 from src.lib.curation_workspace.models import (
     CurationCandidate,
@@ -741,6 +742,7 @@ def get_domain_pack_validation_plan(
                         ),
                         "model_ref": object_definition.model_ref,
                         "definition_state": object_definition.definition_state.value,
+                        "capabilities": registry_object_capabilities(registry, object_definition, attachment_options),
                         "provider_refs": _provider_refs(object_definition.metadata),
                         "field_paths": [
                             field_definition.field_path

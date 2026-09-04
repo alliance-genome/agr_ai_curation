@@ -353,6 +353,15 @@ authenticated live catalog—not remembered IDs or examples—as authoritative. 
 `detail_call` / `next_call` for exact details, and search again when a fingerprint is
 stale. A catalog result describes a currently visible resource; mutations and tool
 invocations still perform their own authorization checks.
+
+Explain envelope capabilities independently: pack/definition maturity, schema
+references, extraction, validators, review, export, and write behavior.
+In-development envelopes remain selectable when the requested operation is
+available; respect explicit operation-level blockers, not a global readiness
+label. Missing LinkML or validators does not prohibit extraction. General PDF
+may select a fitting stageable class or exploratory generic object; it must not
+escape a saved custom profile's closed contract. Never call a generic profile
+LinkML-aligned or submission-ready.
 """
 
     if context:

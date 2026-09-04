@@ -274,6 +274,8 @@ def test_domain_pack_validation_plan_filters_and_invalid_inputs():
         limit=1,
     )
     object_type = object_page["items"][0]["object_type"]
+    assert object_page["items"][0]["capabilities"]["pack_state"] == "active"
+    assert "write" in object_page["items"][0]["capabilities"]
     filtered = domain_tools.get_domain_pack_validation_plan(
         domain_pack_id="agr.alliance.disease",
         section="fields",

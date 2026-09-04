@@ -94,6 +94,43 @@ AGR curation database projections, and submission adapters belong in
 `packages/alliance/domain_packs/`, Alliance package Python modules, and package
 metadata. Do not add Alliance-only assumptions to the core envelope schema.
 
+## Advisory capability inventory
+
+Catalog entries and Agent Studio object metadata expose the same derived
+`capabilities` summary. It is descriptive, not authorization or a global
+selection gate. Source facts remain available alongside the summary:
+
+| Dimension | Authoritative source | Interpretation |
+| --- | --- | --- |
+| Pack lifecycle | Domain-pack `status` | Independent of object maturity and operation availability |
+| Model/object/field maturity | Each definition's `definition_state` and notes | A stable object can belong to an in-development pack |
+| Schema | Object `schema_ref`, otherwise its referenced model's schema | A reference does not prove full conformance or submission readiness |
+| Generic extraction | Object `metadata.generic_extraction.stageable` | Explicit eligibility for generic staging, not every extraction route |
+| Other extraction/builders | Installed agent `agent.yaml` tools and their registered runtime implementations | Not inferred from pack lifecycle; inspect the live agent/tool catalog |
+| Validation | Matching pack/object/field validator bindings and their states | Active and under-development binding counts remain distinct |
+| Review | Object `metadata.workspace_display` and installed workspace adapters | Display configuration alone does not prove adapter operations |
+| Export | Object `metadata.export_behavior` plus exporter readiness checks | Preserve explicit blockers and declared behavior |
+| Write/submission | Object `metadata.write_behavior` plus submission services | Absence of a declaration is not permission to write |
+
+The summary uses `unspecified` when the source cannot establish a capability.
+Its `extract` dimension reports **generic staging only**. Builder availability,
+authorization, and operation-level readiness still require their own live
+checks. Validator counts deduplicate matching binding IDs; they do not promise
+that credentials or runtime dependencies are healthy.
+
+In the Alliance package, the generic reagent candidate remains stable and
+generic-stageable despite its in-development pack and absent schema/validators.
+Gene mention evidence likewise combines an in-development pack with a stable,
+schema-referenced, stageable, validator-backed, export-ready definition.
+Neither example grants submission permission. Disease/gene-expression and
+allele/phenotype/GO facts must be read independently from their own metadata.
+No metadata maturity corrections were justified by this audit.
+
+General PDF continues to inspect the class catalog and choose a specific class
+only when its declared fields fit. Unmatched exploratory shapes can use
+`generic:generic_object`; repeatable custom shapes belong in a separate
+profile-bound agent. Advisory capabilities cannot widen a saved profile.
+
 ## Validation
 
 Automatic validation is metadata-driven. `DomainPackValidationRegistry` reads

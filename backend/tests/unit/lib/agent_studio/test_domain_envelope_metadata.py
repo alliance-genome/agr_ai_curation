@@ -171,6 +171,7 @@ def test_field_groups_do_not_change_other_object_keys(monkeypatch, tmp_path):
     annotation = _object_definition(payload, "Annotation")
 
     assert set(annotation) == {
+        "capabilities",
         "object_type",
         "display_name",
         "description",

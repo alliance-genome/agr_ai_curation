@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+from src.lib.domain_packs.capabilities import registry_object_capabilities
 
 from src.lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
@@ -134,6 +135,7 @@ def _object_definition_payload(
 
     return {
         "object_type": object_definition.object_type,
+        "capabilities": registry_object_capabilities(registry, object_definition, validation_attachments),
         "display_name": object_definition.display_name,
         "description": object_definition.description,
         "object_role": _optional_string(object_definition.metadata.get("object_role")),
