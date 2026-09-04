@@ -11,6 +11,7 @@ from .logs import (
     ALLOWED_LOG_LEVELS as LOGS_API_ALLOWED_LOG_LEVELS,
 )
 from src.lib.agent_studio import ChatContext, SUBMIT_SUGGESTION_TOOL
+from src.lib.agent_studio.capability_catalog import CAPABILITY_KINDS
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.flow_tools import register_flow_tools
 from src.lib.chat_history_repository import (
@@ -22,6 +23,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_chat_history_page_size,
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
+    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_service_log_max_lines,
     get_agent_studio_service_log_max_lookback_minutes,
@@ -36,6 +38,8 @@ from src.lib.openai_agents.config import (
     get_domain_pack_validation_plan_max_limit,
     get_domain_runtime_inspection_default_limit,
     get_domain_runtime_inspection_max_limit,
+    get_tool_page_default_limit,
+    get_tool_page_max_limit,
 )
 
 
@@ -94,6 +98,62 @@ SUGGESTION_TOOL = {
     "name": SUBMIT_SUGGESTION_TOOL["name"],
     "description": SUBMIT_SUGGESTION_TOOL["description"],
     "input_schema": SUBMIT_SUGGESTION_TOOL["input_schema"],
+}
+
+SEARCH_STUDIO_CAPABILITIES_TOOL = {
+    "name": "search_studio_capabilities",
+    "description": (
+        "Search the live, authenticated Agent Studio catalog before selecting "
+        "agents, models, tools, output contracts, flow templates, or groups. "
+        "Results use stable IDs and include an exact-detail continuation call."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Optional text search."},
+            "kinds": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(CAPABILITY_KINDS)},
+                "description": "Optional capability kinds to include.",
+            },
+            "cursor": {"type": "string", "description": "Paging cursor from next_call."},
+            "catalog_fingerprint": {
+                "type": "string",
+                "description": "Fingerprint from the first page; required by continuation calls.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": get_tool_page_max_limit(),
+                "default": min(get_tool_page_default_limit(), get_tool_page_max_limit()),
+            },
+        },
+        "required": [],
+    },
+}
+
+GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
+    "name": "get_studio_capability_detail",
+    "description": (
+        "Reauthorize one catalog result and retrieve its exact hash-addressed "
+        "detail in bounded chunks. Follow the returned next_call exactly."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": list(CAPABILITY_KINDS)},
+            "resource_id": {"type": "string"},
+            "catalog_fingerprint": {"type": "string"},
+            "detail_hash": {"type": "string"},
+            "start": {"type": "integer", "minimum": 0},
+            "max_chars": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": get_agent_studio_provider_tool_result_inline_max_chars(),
+            },
+        },
+        "required": ["kind", "resource_id", "catalog_fingerprint"],
+    },
 }
 
 UPDATE_WORKSHOP_PROMPT_TOOL = {
@@ -1275,13 +1335,25 @@ FLOW_TOOLS = {
     "get_current_flow_validation_schedule",
     "get_available_agents",
 }
+FLOW_CREATION_TOOLS = {
+    "create_flow",
+    "validate_flow",
+    "get_flow_templates",
+    "get_available_agents",
+}
 AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
     "search_codebase",
     "read_source_file",
 }
+CAPABILITY_CATALOG_TOOLS = {
+    "search_studio_capabilities",
+    "get_studio_capability_detail",
+}
 
 _BUILTIN_OPUS_TOOLS = (
     SUGGESTION_TOOL,
+    SEARCH_STUDIO_CAPABILITIES_TOOL,
+    GET_STUDIO_CAPABILITY_DETAIL_TOOL,
     REFRESH_WORKSHOP_PROMPT_TOOL,
     UPDATE_WORKSHOP_PROMPT_TOOL,
     REPORT_TOOL_FAILURE_TOOL,
@@ -1373,6 +1445,9 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
     if tool_name in COMMON_TOOLS:
         return True
 
+    if tool_name in CAPABILITY_CATALOG_TOOLS:
+        return active_tab in {"agents", "flows", "agent_workshop"}
+
     if tool_name in DOMAIN_ENVELOPE_TOOLS:
         return active_tab in {"agents", "flows", "agent_workshop"}
 
@@ -1380,7 +1455,13 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
         return active_tab == "agent_workshop" and bool(context and context.agent_workshop)
 
     if tool_name in FLOW_TOOLS:
-        return active_tab == "flows"
+        return bool(
+            active_tab == "flows"
+            and (
+                tool_name in FLOW_CREATION_TOOLS
+                or bool(context and context.flow_definition)
+            )
+        )
 
     if tool_name in AGENTS_ONLY_DIAGNOSTIC_TOOLS or tool_name in _package_agent_only_diagnostic_tools():
         return active_tab == "agents"

@@ -343,6 +343,17 @@ def build_opus_system_prompt(
         "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         build_package_diagnostic_tools_prompt(),
     )
+    base_prompt += """
+
+## Live authoring capabilities
+
+Before recommending or selecting an agent, model, runtime tool, output contract,
+flow template, or Workshop group, call `search_studio_capabilities`. Treat that
+authenticated live catalog—not remembered IDs or examples—as authoritative. Follow
+`detail_call` / `next_call` for exact details, and search again when a fingerprint is
+stale. A catalog result describes a currently visible resource; mutations and tool
+invocations still perform their own authorization checks.
+"""
 
     if context:
         additions = []

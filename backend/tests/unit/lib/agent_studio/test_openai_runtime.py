@@ -150,6 +150,38 @@ def test_tools_use_one_hosted_search_surface_and_keep_forced_tool_eager():
     }
 
 
+def test_capability_search_can_be_eager_without_eager_detail_catalog():
+    state = runtime.AgentStudioRunState(trace_id="trace-catalog")
+
+    async def execute(_name, _arguments, _call_id):
+        raise AssertionError("tool should not execute while constructing the surface")
+
+    tools, metrics = runtime.build_agent_studio_tools(
+        [
+            _tool_definition("search_studio_capabilities"),
+            _tool_definition("get_studio_capability_detail"),
+        ],
+        executor=execute,
+        state=state,
+        namespace_for_tool=lambda _name: (
+            "studio_capabilities",
+            "Authenticated catalog",
+        ),
+        eager_tool_names=frozenset({"search_studio_capabilities"}),
+    )
+
+    function_tools = [tool for tool in tools if isinstance(tool, FunctionTool)]
+    assert next(
+        tool for tool in function_tools if tool.name == "search_studio_capabilities"
+    ).defer_loading is False
+    detail = next(
+        tool for tool in function_tools if "get_studio_capability_detail" in tool.name
+    )
+    assert detail.defer_loading is True
+    assert metrics["eager_count"] == 1
+    assert metrics["deferred_count"] == 1
+
+
 def test_function_tool_preserves_full_output_but_returns_bounded_provider_output():
     state = runtime.AgentStudioRunState(trace_id="trace-1")
 

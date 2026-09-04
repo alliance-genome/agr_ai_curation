@@ -42,15 +42,26 @@ def _isolate_flow_tool_state(monkeypatch):
 
     def _available_agents(*, db_user_id=None, authenticated_groups=None):
         assert db_user_id is not None
-        return [
-            {"agent_id": agent_id}
-            for agent_id, entry in flow_tools.AGENT_REGISTRY.items()
-            if is_resource_access_allowed(
+        available = []
+        for agent_id in flow_tools.FLOW_AGENT_IDS:
+            if agent_id not in flow_tools.AGENT_REGISTRY:
+                continue
+            entry = flow_tools.AGENT_REGISTRY.get(agent_id, {})
+            if not is_resource_access_allowed(
                 visibility_allowed=True,
                 allowed_group_ids=list(entry.get("allowed_group_ids") or []),
                 active_group_ids=list(authenticated_groups or []),
-            )
-        ]
+            ):
+                continue
+            visible_entry = {
+                "agent_id": agent_id,
+                "display_name": entry.get("name", agent_id),
+                **entry,
+            }
+            if entry.get("category") == "Validation":
+                visible_entry["supervisor"] = {"enabled": True}
+            available.append(visible_entry)
+        return available
 
     monkeypatch.setattr(catalog_service, "list_available_agents", _available_agents)
     # Flow-tool tests run with explicit server-derived user/group context unless
@@ -1203,6 +1214,62 @@ def test_get_available_agents_handler_groups_categories(monkeypatch):
     assert "gene" in result["validation_agents"]
 
 
+def test_flow_catalog_accepts_visible_custom_agent_without_static_enum(monkeypatch):
+    custom_id = "ca_1234567890abcdef"
+    assert custom_id not in flow_tools.FLOW_AGENT_IDS
+    monkeypatch.setattr(
+        catalog_service,
+        "list_available_agents",
+        lambda **_kwargs: [
+            {
+                "agent_id": custom_id,
+                "display_name": "My extraction agent",
+                "description": "A saved custom agent",
+                "category": "Extraction",
+                "requires_document": True,
+                "frontend": {"show_in_palette": True},
+                "supervisor": {"enabled": False},
+            }
+        ],
+    )
+
+    result = flow_tools._get_available_agents_handler()()
+    assert result["extraction_agents"] == [custom_id]
+    assert result["categories"]["Extraction"][0]["agent_id"] == custom_id
+    assert "enum" not in flow_tools._simplified_flow_steps_schema()["items"][
+        "properties"
+    ]["agent_id"]
+
+
+def test_flow_catalog_excludes_hidden_and_runtime_unsupported_custom_output(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        catalog_service,
+        "list_available_agents",
+        lambda **_kwargs: [
+            {
+                "agent_id": "ca_hidden",
+                "display_name": "Hidden extraction",
+                "category": "Extraction",
+                "frontend": {"show_in_palette": False},
+                "supervisor": {"enabled": False},
+            },
+            {
+                "agent_id": "ca_custom_output",
+                "display_name": "Custom output",
+                "category": "Output",
+                "frontend": {"show_in_palette": True},
+                "supervisor": {"enabled": False},
+            },
+        ],
+    )
+
+    result = flow_tools._get_available_agents_handler()()
+    assert result["total_agents"] == 0
+    assert result["output_agents"] == []
+
+
 def test_get_available_agents_filters_restricted_agents_by_authenticated_groups(monkeypatch):
     monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["open", "rgd_only"])
     monkeypatch.setattr(
@@ -1766,8 +1833,10 @@ def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
 
     unknown_agent = create("Flow A", "desc", [{"agent_id": "nope"}])
     assert unknown_agent["success"] is False
-    assert "unknown agent_id" in unknown_agent["error"]
-    assert unknown_agent["help"].startswith("Valid agent IDs:")
+    assert unknown_agent["error"] == "Flow references unavailable agents"
+    assert unknown_agent["help"] == (
+        "Re-select agents from get_available_agents before saving."
+    )
 
     monkeypatch.setenv("AGENT_STUDIO_FLOW_NAME_MAX_CHARS", "4")
     long_name = create(

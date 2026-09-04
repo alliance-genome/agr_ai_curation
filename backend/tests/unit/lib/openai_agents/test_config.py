@@ -16,6 +16,7 @@ from src.lib.openai_agents.config import (
     get_agent_config,
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
+    get_agent_studio_capability_catalog_max_records,
     get_agent_studio_flow_custom_instructions_max_chars,
     get_agent_studio_flow_description_max_chars,
     get_agent_studio_flow_inspection_chunk_max_chars,
@@ -122,6 +123,11 @@ def test_sentry_log_event_level_is_bounded_and_environment_configurable(
             "AGENT_STUDIO_TOOL_SEARCH_MAX_CANDIDATES",
             get_agent_studio_tool_search_max_candidates,
             128,
+        ),
+        (
+            "AGENT_STUDIO_CAPABILITY_CATALOG_MAX_RECORDS",
+            get_agent_studio_capability_catalog_max_records,
+            1_000,
         ),
     ],
 )

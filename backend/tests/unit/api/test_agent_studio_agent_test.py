@@ -849,6 +849,25 @@ class TestAgentWorkshopSystemPrompt:
 
         assert "update_workshop_prompt_draft" in tool_names
 
+    def test_live_capability_catalog_is_available_across_authoring_tabs(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext
+
+        for active_tab in ("agents", "flows", "agent_workshop"):
+            tools = api_module._get_all_opus_tools(ChatContext(active_tab=active_tab))
+            tool_names = {tool.get("name") for tool in tools}
+            assert {
+                "search_studio_capabilities",
+                "get_studio_capability_detail",
+            } <= tool_names
+
+        namespaces: dict[str, set[str]] = {}
+        for tool in api_module._get_all_opus_tools(ChatContext(active_tab="agents")):
+            name = str(tool.get("name") or "")
+            namespace, _ = api_module._agent_studio_tool_namespace(name)
+            namespaces.setdefault(namespace, set()).add(name)
+        assert max(map(len, namespaces.values())) < 10
+
     def test_get_all_opus_tools_excludes_flow_tools_outside_flows_tab(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext
@@ -869,9 +888,38 @@ class TestAgentWorkshopSystemPrompt:
 
     def test_get_all_opus_tools_includes_flow_tools_on_flows_tab(self):
         from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext
+        from src.lib.agent_studio.models import ChatContext, FlowContextDefinition
 
-        tools = api_module._get_all_opus_tools(ChatContext(active_tab="flows"))
+        empty_tools = api_module._get_all_opus_tools(ChatContext(active_tab="flows"))
+        empty_tool_names = {tool.get("name") for tool in empty_tools}
+        assert {"create_flow", "validate_flow", "get_flow_templates", "get_available_agents"} <= empty_tool_names
+        assert "get_current_flow" not in empty_tool_names
+
+        tools = api_module._get_all_opus_tools(
+            ChatContext(
+                active_tab="flows",
+                flow_definition=FlowContextDefinition.model_validate(
+                    {
+                        "version": "1.1",
+                        "entry_node_id": "task",
+                        "nodes": [
+                            {
+                                "id": "task",
+                                "node_type": "task_input",
+                                "position": {"x": 0, "y": 0},
+                                "agent_id": "task_input",
+                                "agent_display_name": "Initial Instructions",
+                                "task_instructions": "Test",
+                                "output_key": "task_input",
+                                "validation_attachments": [],
+                                "validation_groups": [],
+                            }
+                        ],
+                        "edges": [],
+                    }
+                ),
+            )
+        )
         tool_names = {tool.get("name") for tool in tools}
 
         assert {

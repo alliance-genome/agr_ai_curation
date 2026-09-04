@@ -1823,6 +1823,18 @@ def get_agent_studio_tool_search_max_candidates() -> int:
     )
 
 
+def get_agent_studio_capability_catalog_max_records() -> int:
+    """Maximum authorized non-callable resources compiled for one Studio request."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_CAPABILITY_CATALOG_MAX_RECORDS",
+            1_000,
+        ),
+    )
+
+
 def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
     """Max raw tool-result JSON chars replayed to provider continuation.
 

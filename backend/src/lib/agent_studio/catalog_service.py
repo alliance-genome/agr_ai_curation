@@ -2284,12 +2284,12 @@ def list_available_agents(
 
     db = SessionLocal()
     try:
-        keys = [
+        keys = sorted(
             row[0]
             for row in db.query(AgentRecord.agent_key).filter(
                 AgentRecord.is_active == True  # noqa: E712
             ).all()
-        ]
+        )
     finally:
         db.close()
 

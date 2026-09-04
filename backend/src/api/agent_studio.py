@@ -70,6 +70,19 @@ from src.lib.agent_studio import (
 )
 from src.lib.agent_studio import catalog_service
 from src.lib.agent_studio.catalog_service import get_prompt_catalog
+from src.lib.agent_studio.capability_catalog import (
+    CapabilityCatalogContext,
+    CapabilityCatalogRequestError,
+    CapabilityCatalogUnavailable,
+    get_capability_detail,
+    search_capabilities,
+)
+from src.lib.agent_studio.tool_search_authorization import (
+    AuthorizedToolUniverse,
+    ToolSearchAuthorizationError,
+    compile_authorized_tool_universe,
+    is_tool_authorized_at_invocation,
+)
 import src.lib.agent_studio.chat_session as agent_studio_chat_session
 import src.lib.agent_studio.domain_envelope_tools as agent_studio_domain_envelope_tools
 import src.lib.agent_studio.prompt_builder as prompt_builder
@@ -146,7 +159,6 @@ from src.lib.openai_agents.config import (
     get_agent_studio_service_log_default_lines,
     get_agent_studio_suggestion_max_output_tokens,
     get_agent_studio_suggestion_max_turns,
-    get_agent_studio_tool_search_max_candidates,
     get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
@@ -1353,6 +1365,7 @@ _WORKSHOP_TOOLS = opus_tools.WORKSHOP_TOOLS
 _TRACE_TOOLS = opus_tools.TRACE_TOOLS
 _FLOW_TOOLS = opus_tools.FLOW_TOOLS
 _AGENTS_ONLY_DIAGNOSTIC_TOOLS = opus_tools.AGENTS_ONLY_DIAGNOSTIC_TOOLS
+_CAPABILITY_CATALOG_TOOLS = opus_tools.CAPABILITY_CATALOG_TOOLS
 
 
 def _get_active_tab(context: Optional[ChatContext]) -> str:
@@ -1391,6 +1404,8 @@ def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
 
     if tool_name in _COMMON_TOOLS:
         return "studio_history", "Conversation recall, feedback, and failure reporting"
+    if tool_name in _CAPABILITY_CATALOG_TOOLS:
+        return "studio_capabilities", "Live authenticated Agent Studio resource discovery"
     if tool_name in _DOMAIN_ENVELOPE_TOOLS:
         return "domain_review", "Domain envelope, validation, and export-readiness inspection"
     if tool_name in _WORKSHOP_TOOLS:
@@ -1409,6 +1424,13 @@ def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
             return "trace_overview", "Trace discovery, summaries, conversation, and cost"
         if tool_name.startswith("get_tool_call") or tool_name == "get_service_logs":
             return "trace_tools", "Tool-call and service-log diagnostics"
+        if tool_name in {
+            "get_trace_payloads",
+            "get_trace_payload",
+            "get_trace_reconstruction",
+            "get_trace_model_live_context",
+        }:
+            return "trace_payload", "Exact trace payload and reconstruction inspection"
         return "trace_evidence", "Detailed extraction trace, payload, and evidence reconstruction"
     if tool_name in _AGENTS_ONLY_DIAGNOSTIC_TOOLS:
         return "source_diagnostics", "Bounded source-code diagnostics for Agent Studio"
@@ -1419,17 +1441,32 @@ def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
 
 def _get_openai_authorized_tool_definitions(
     context: Optional[ChatContext],
-) -> List[dict[str, Any]]:
+    *,
+    user_id: int,
+    active_group_ids: List[str],
+) -> AuthorizedToolUniverse:
     """Return the request-local, context-authorized hosted-search universe."""
 
     definitions = _get_all_opus_tools(context)
-    candidate_limit = get_agent_studio_tool_search_max_candidates()
-    if len(definitions) > candidate_limit:
-        raise RuntimeError(
-            "Agent Studio authorized tool catalog exceeds "
-            f"AGENT_STUDIO_TOOL_SEARCH_MAX_CANDIDATES={candidate_limit}"
-        )
-    return definitions
+    db = SessionLocal()
+    try:
+        try:
+            return compile_authorized_tool_universe(
+                db=db,
+                definitions=definitions,
+                user_id=user_id,
+                active_group_ids=active_group_ids,
+            )
+        except ToolSearchAuthorizationError:
+            raise
+        except Exception as exc:
+            raise ToolSearchAuthorizationError(
+                "Agent Studio callable authorization source is unavailable",
+                candidate_count=len(definitions),
+                bound=len(definitions),
+            ) from exc
+    finally:
+        db.close()
 
 
 def _report_agent_studio_exception_once(
@@ -2756,6 +2793,7 @@ async def _handle_tool_call(
     user_auth_sub: str,
     messages: Optional[List[dict]] = None,
     user_db_id: int | None = None,
+    active_group_ids: Optional[List[str]] = None,
 ) -> dict:
     """
     Handle a tool call from Agent Studio AI Chat.
@@ -2789,6 +2827,89 @@ async def _handle_tool_call(
         caller_sub=user_auth_sub,
         caller_email=user_email,
     )
+
+    if tool_name in _CAPABILITY_CATALOG_TOOLS:
+        if user_db_id is None:
+            return {
+                "success": False,
+                "error": "Authenticated catalog access is unavailable.",
+                "code": "catalog_identity_unavailable",
+            }
+        catalog_context = CapabilityCatalogContext(
+            user_id=user_db_id,
+            active_group_ids=tuple(active_group_ids or []),
+            active_tab=_get_active_tab(context),
+            artifact_kind="flow" if _get_active_tab(context) == "flows" else "agent",
+        )
+        db = SessionLocal()
+        try:
+            if tool_name == "search_studio_capabilities":
+                return search_capabilities(
+                    db=db,
+                    context=catalog_context,
+                    query=tool_input.get("query"),
+                    kinds=tool_input.get("kinds"),
+                    cursor=tool_input.get("cursor"),
+                    limit=tool_input.get("limit"),
+                    catalog_fingerprint=tool_input.get("catalog_fingerprint"),
+                )
+            return get_capability_detail(
+                db=db,
+                context=catalog_context,
+                kind=tool_input.get("kind", ""),
+                resource_id=tool_input.get("resource_id", ""),
+                catalog_fingerprint=tool_input.get("catalog_fingerprint", ""),
+                detail_hash=tool_input.get("detail_hash"),
+                start=tool_input.get("start"),
+                max_chars=tool_input.get("max_chars"),
+            )
+        except CapabilityCatalogRequestError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "code": "catalog_request_invalid",
+            }
+        except CapabilityCatalogUnavailable as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="capability_catalog_unavailable",
+                phase=exc.phase,
+                context=exc.sanitized_context(),
+            )
+            logger.error(
+                "Agent Studio capability catalog unavailable during %s",
+                exc.phase,
+                extra={"sentry_skip_event": True, **exc.sanitized_context()},
+            )
+            return {
+                "success": False,
+                "error": "The authenticated capability catalog is temporarily unavailable.",
+                "code": "catalog_unavailable",
+            }
+        except Exception as exc:
+            sanitized_context = {
+                "authorization_phase": "catalog_build",
+                "active_tab": catalog_context.active_tab,
+                "artifact_kind": catalog_context.artifact_kind,
+            }
+            _report_agent_studio_exception_once(
+                exc,
+                operation="capability_catalog_unavailable",
+                phase="catalog_build",
+                context=sanitized_context,
+            )
+            logger.error(
+                "Agent Studio capability catalog source failed",
+                exc_info=True,
+                extra={"sentry_skip_event": True, **sanitized_context},
+            )
+            return {
+                "success": False,
+                "error": "The authenticated capability catalog is temporarily unavailable.",
+                "code": "catalog_unavailable",
+            }
+        finally:
+            db.close()
 
     # ==========================================================================
     # Token-Aware Trace Analysis Tools (recommended)
@@ -4048,11 +4169,12 @@ async def chat_with_opus(
         logger.error("OpenAI API key is not configured")
         raise HTTPException(status_code=500, detail="Chat service not properly configured")
 
+    active_group_ids = _authenticated_group_ids(user)
     if db_user_id is not None:
         set_workflow_user_context(
             user_id=db_user_id,
             user_email=user_email,
-            active_group_ids=_authenticated_group_ids(user),
+            active_group_ids=active_group_ids,
         )
 
     # Keep the most recently visited Flow Builder draft callable while the curator
@@ -4116,13 +4238,24 @@ async def chat_with_opus(
         for index, message in enumerate(request.messages)
     ]
     try:
-        tool_definitions = _get_openai_authorized_tool_definitions(request.context)
-    except RuntimeError as exc:
+        if db_user_id is None:
+            raise ToolSearchAuthorizationError(
+                "Authenticated database identity is required for tool declaration",
+                candidate_count=0,
+                bound=0,
+            )
+        authorized_tools = _get_openai_authorized_tool_definitions(
+            request.context,
+            user_id=db_user_id,
+            active_group_ids=active_group_ids,
+        )
+        tool_definitions = list(authorized_tools.definitions)
+    except ToolSearchAuthorizationError as exc:
         _report_agent_studio_exception_once(
             exc,
             operation="tool_search_catalog_rejected",
             phase="tool_surface",
-            context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            context={"model": AGENT_STUDIO_OPENAI_MODEL, **exc.sanitized_context()},
         )
         logger.error(
             "Agent Studio tool-search catalog rejected: %s",
@@ -4144,7 +4277,23 @@ async def chat_with_opus(
             tool_input: dict[str, Any],
             call_id: str | None,
         ) -> ToolExecutionResult:
-            if not _is_tool_allowed_for_context(tool_name, request.context):
+            invocation_db = SessionLocal()
+            try:
+                invocation_authorized = is_tool_authorized_at_invocation(
+                    db=invocation_db,
+                    tool_name=tool_name,
+                    declared_names=authorized_tools.authorized_names,
+                    active_group_ids=active_group_ids,
+                )
+            finally:
+                invocation_db.close()
+            if not invocation_authorized:
+                tool_result = {
+                    "success": False,
+                    "error": "This capability is no longer authorized for the current request.",
+                    "code": "capability_not_authorized",
+                }
+            elif not _is_tool_allowed_for_context(tool_name, request.context):
                 tool_result = _tool_scope_error(tool_name, request.context)
             else:
                 try:
@@ -4156,6 +4305,7 @@ async def chat_with_opus(
                         user_auth_sub=user_id,
                         messages=input_items,
                         user_db_id=db_user_id,
+                        active_group_ids=active_group_ids,
                     )
                 except Exception as exc:
                     _report_agent_studio_exception_once(
@@ -4204,6 +4354,7 @@ async def chat_with_opus(
                 state=run_state,
                 namespace_for_tool=_agent_studio_tool_namespace,
                 forced_tool_name=forced_tool_name,
+                eager_tool_names=frozenset({"search_studio_capabilities"}),
             )
         except Exception as exc:
             _report_agent_studio_exception_once(
@@ -4236,6 +4387,8 @@ async def chat_with_opus(
                 "turn_id": prepared_turn.turn_id,
                 "provider": "openai",
                 "model": AGENT_STUDIO_OPENAI_MODEL,
+                "authorization_fingerprint": authorized_tools.fingerprint,
+                "authorization_filtered_count": authorized_tools.filtered_count,
             },
         )
 
@@ -4251,6 +4404,8 @@ async def chat_with_opus(
                     "tools": tool_definitions,
                     "tool_search": {
                         "forced_tool_name": forced_tool_name,
+                        "authorization_fingerprint": authorized_tools.fingerprint,
+                        "authorization_filtered_count": authorized_tools.filtered_count,
                         **tool_counts,
                     },
                 },

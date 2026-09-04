@@ -12,6 +12,7 @@ import pytest
 
 import src.api.agent_studio as api_module
 from src.lib.agent_studio.authoring_context import workshop_draft_fingerprint
+import src.lib.agent_studio.tool_search_authorization as tool_search_authorization
 from src.lib.agent_studio.models import AgentWorkshopContext, ChatContext
 from src.lib.chat_history_repository import AGENT_STUDIO_CHAT_KIND
 
@@ -264,7 +265,6 @@ async def test_refresh_workshop_prompt_returns_error_when_saved_agent_is_inacces
     custom_agent_uuid = uuid4()
 
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
-
     def _raise_access_error(*_args):
         raise api_module.CustomAgentAccessError("permission denied")
 
@@ -460,6 +460,11 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     )
     monkeypatch.setattr(api_module, "get_db", lambda: iter([SimpleNamespace(close=lambda: None)]))
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(
+        tool_search_authorization,
+        "get_tool_policy_cache",
+        lambda: SimpleNamespace(refresh=lambda _db: []),
+    )
     monkeypatch.setattr(
         api_module,
         "get_custom_agent_visible_to_user",

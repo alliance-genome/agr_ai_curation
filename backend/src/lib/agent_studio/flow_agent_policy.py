@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+
 
 INTERNAL_FLOW_AGENT_IDS = frozenset({"supervisor", "task_input"})
 
@@ -49,7 +51,15 @@ def flow_palette_show_in_palette(
     if isinstance(frontend, Mapping):
         configured_visible = frontend.get("show_in_palette", True) is not False
 
-    return configured_visible and agent_allows_ordinary_flow_step(agent_id, entry)
+    category = str(entry.get("category") or "").casefold()
+    runtime_compatible_output = (
+        category != "output" or agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+    )
+    return bool(
+        configured_visible
+        and runtime_compatible_output
+        and agent_allows_ordinary_flow_step(agent_id, entry)
+    )
 
 
 def attachment_only_validator_reason(agent_name: str) -> str:

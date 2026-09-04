@@ -579,10 +579,65 @@ def test_chat_preflight_sizes_instructions_messages_and_authorized_tool_schemas(
         {"role": "user", "content": "Please help"}
     ]
     assert captured["payload"]["tools"] == [tool_definition]
-    assert captured["payload"]["tool_search"] == {
+    assert {
+        key: value
+        for key, value in captured["payload"]["tool_search"].items()
+        if not key.startswith("authorization_")
+    } == {
         "forced_tool_name": None,
         "candidate_count": 1,
         "eager_count": 0,
         "deferred_count": 1,
         "namespace_count": 1,
     }
+    assert captured["payload"]["tool_search"]["authorization_fingerprint"].startswith(
+        "sha256:"
+    )
+    assert captured["payload"]["tool_search"]["authorization_filtered_count"] == 0
+
+
+def test_capability_catalog_dependency_failure_is_reported_without_resource_leak(
+    monkeypatch,
+):
+    reports = []
+    monkeypatch.setattr(
+        api_module,
+        "SessionLocal",
+        lambda: SimpleNamespace(close=lambda: None),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "search_capabilities",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("secret agent ca_not_authorized")
+        ),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "_report_agent_studio_exception_once",
+        lambda exc, **kwargs: reports.append((exc, kwargs)) or True,
+    )
+
+    result = asyncio.run(
+        api_module._handle_tool_call(
+            tool_name="search_studio_capabilities",
+            tool_input={},
+            context=None,
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub",
+            user_db_id=7,
+            active_group_ids=[],
+        )
+    )
+
+    assert result == {
+        "success": False,
+        "error": "The authenticated capability catalog is temporarily unavailable.",
+        "code": "catalog_unavailable",
+    }
+    assert reports[0][1]["context"] == {
+        "authorization_phase": "catalog_build",
+        "active_tab": "agents",
+        "artifact_kind": "agent",
+    }
+    assert "ca_not_authorized" not in str(result)

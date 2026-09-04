@@ -215,6 +215,7 @@ def build_agent_studio_tools(
     state: AgentStudioRunState,
     namespace_for_tool: Callable[[str], tuple[str, str]],
     forced_tool_name: str | None = None,
+    eager_tool_names: frozenset[str] = frozenset(),
 ) -> tuple[list[Any], dict[str, int]]:
     """Build one hosted-search surface from an already authorized tool universe."""
 
@@ -223,13 +224,14 @@ def build_agent_studio_tools(
     for definition in definitions:
         name = str(definition.get("name") or "").strip()
         is_forced = bool(forced_tool_name and name == forced_tool_name)
+        is_eager = is_forced or name in eager_tool_names
         tool = _build_function_tool(
             definition,
             executor=executor,
             state=state,
-            defer_loading=not is_forced,
+            defer_loading=not is_eager,
         )
-        if is_forced:
+        if is_eager:
             eager.append(tool)
             continue
         namespace = namespace_for_tool(name)
