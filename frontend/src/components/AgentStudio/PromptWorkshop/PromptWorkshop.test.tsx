@@ -527,14 +527,16 @@ describe('PromptWorkshop', () => {
     })
   }, 15000)
 
-  it('retains a saved identity when catalog refresh fails without emitting an actionable handoff', async () => {
+  it.each(['failure', 'unavailable'])('retains a saved identity when catalog refresh reports %s without emitting an actionable handoff', async (outcome) => {
     const onSavedHandoff = vi.fn()
     serviceMocks.listCustomAgents
       .mockResolvedValue({ custom_agents: [], total: 0 })
     render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
-    serviceMocks.listCustomAgents.mockRejectedValue(new Error('Private server payload'))
+    if (outcome === 'failure') {
+      serviceMocks.listCustomAgents.mockRejectedValue(new Error('Private server payload'))
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))

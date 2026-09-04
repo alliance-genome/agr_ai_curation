@@ -981,6 +981,9 @@ export function useWorkshopDraft({
     }
     await refreshAgentMetadata()
     const saved = response.custom_agents.find((agent) => agent.id === keepId && agent.is_active)
+    if (keepId && !saved) {
+      throw new Error('The saved agent is not available in the refreshed catalog.')
+    }
     if (!saved) return undefined
     const reference = await getWorkshopSavedReference(saved.id)
     return reference.agent_id === saved.agent_id ? saved : undefined
