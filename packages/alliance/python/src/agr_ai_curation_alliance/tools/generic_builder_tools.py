@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from agents import function_tool
@@ -468,6 +469,8 @@ def _stage_generic_object_impl(
     _emit_generic_builder_event(
         "generic_builder.stage_requested", action="stage", input_summary=attempted_query
     )
+    workspace = get_active_extraction_builder_workspace()
+    profile = getattr(workspace, "generic_profile", None)
     try:
         stage_input = GenericStageInput(
             class_key=class_key,
@@ -480,11 +483,17 @@ def _stage_generic_object_impl(
             confidence=confidence,
             semantic_class=semantic_class,
             payload=payload or {},
-            attributes=attributes or {},
+            attributes=attributes if attributes is not None else {},
         )
-        normalized_attributes, attribute_issues = normalize_generic_attributes(
-            stage_input.attributes
-        )
+        if profile is not None:
+            normalized_attributes = deepcopy(stage_input.attributes)
+            attribute_issues = profile.validate_candidate({
+                "class_key": stage_input.class_key, "object_type": "generic_object",
+                "semantic_class": stage_input.semantic_class, "attributes": normalized_attributes,
+                "payload": stage_input.payload,
+            })
+        else:
+            normalized_attributes, attribute_issues = normalize_generic_attributes(stage_input.attributes)
         if attribute_issues:
             return _generic_validation_result(
                 message="stage_generic_object rejected invalid generic attributes.",
@@ -534,9 +543,8 @@ def _stage_generic_object_impl(
             attempted_query=attempted_query,
         )
 
-    workspace = get_active_extraction_builder_workspace()
     candidate_id = _generic_candidate_id(workspace, stage_input.pending_ref_id)
-    notices = _generic_attribute_key_notices(
+    notices = [] if profile is not None else _generic_attribute_key_notices(
         workspace,
         candidate_id=candidate_id,
         stage_input=stage_input,
@@ -605,8 +613,12 @@ def _patch_generic_object_impl(
 ) -> AgrQueryResult:
     """Patch allowed fields on one staged generic candidate."""
 
+    workspace = get_active_extraction_builder_workspace()
+    profile = getattr(workspace, "generic_profile", None)
     attempted_query = _attempt_query(
-        "patch_generic_object", candidate_id=candidate_id, updates=list(updates or [])
+        "patch_generic_object", candidate_id=candidate_id,
+        updates=([{ "field_path": update.get("field_path") } for update in updates or [] if isinstance(update, Mapping)]
+                 if profile is not None else list(updates or [])),
     )
     _emit_generic_builder_event(
         "generic_builder.patch_requested", action="patch", input_summary=attempted_query
@@ -623,7 +635,6 @@ def _patch_generic_object_impl(
             attempted_query=attempted_query,
         )
 
-    workspace = get_active_extraction_builder_workspace()
     try:
         candidate = workspace.get_candidate(patch_input.candidate_id)
     except KeyError as exc:
@@ -640,9 +651,10 @@ def _patch_generic_object_impl(
             attempted_query=attempted_query,
         )
 
-    staged_payload = dict(candidate.staged_fields)
+    staged_payload = deepcopy(dict(candidate.staged_fields))
     evidence_ids = list(candidate.evidence_record_ids)
     pending_ref_ids = list(candidate.pending_ref_ids)
+    profile_attribute_updates = []
     for update in patch_input.updates:
         if update.field_path == "evidence_record_ids":
             new_ids = [
@@ -665,8 +677,32 @@ def _patch_generic_object_impl(
                 )
             evidence_ids = new_ids
             continue
-        _set_nested_patch_value(staged_payload, update.field_path, update.value)
+        if profile is not None:
+            if update.field_path == "attributes" or update.field_path.startswith("attributes."):
+                profile_attribute_updates.append({"field_path": update.field_path, "value": update.value})
+            elif update.field_path in {"label", "classification_notes"}:
+                staged_payload[update.field_path] = update.value
+            else:
+                return _generic_validation_result(
+                    message="Profile-bound patches cannot change contract identity or undeclared fields.",
+                    issues=[{"field_path": update.field_path, "reason": "profile_patch_forbidden",
+                             "message": "Patch a canonical attribute, label, classification notes or evidence."}],
+                    method="patch_generic_object", attempted_query=attempted_query,
+                )
+        else:
+            _set_nested_patch_value(staged_payload, update.field_path, update.value)
 
+    if profile is not None and profile_attribute_updates:
+        try:
+            staged_payload["attributes"] = profile.patch_attributes(
+                staged_payload.get("attributes", {}), profile_attribute_updates,
+                candidate_id=patch_input.candidate_id,
+            )
+        except ValueError as exc:
+            return _generic_validation_result(
+                message=str(exc), issues=exc.issues, method="patch_generic_object",
+                attempted_query=attempted_query,
+            )
     raw_attributes = staged_payload.get("attributes")
     if raw_attributes not in (None, "", []) and not isinstance(raw_attributes, Mapping):
         return _generic_validation_result(
@@ -681,9 +717,13 @@ def _patch_generic_object_impl(
             method="patch_generic_object",
             attempted_query=attempted_query,
         )
-    normalized_attributes, attribute_issues = normalize_generic_attributes(
-        raw_attributes if isinstance(raw_attributes, Mapping) else {}
-    )
+    if profile is not None:
+        normalized_attributes = deepcopy(raw_attributes)
+        attribute_issues = profile.validate_candidate(staged_payload, candidate_id=patch_input.candidate_id)
+    else:
+        normalized_attributes, attribute_issues = normalize_generic_attributes(
+            raw_attributes if isinstance(raw_attributes, Mapping) else {}
+        )
     if attribute_issues:
         return _generic_validation_result(
             message="patch_generic_object rejected invalid generic attributes.",

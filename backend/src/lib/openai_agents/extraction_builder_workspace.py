@@ -125,11 +125,15 @@ class ExtractionBuilderWorkspace:
         domain_pack_id: str | None = None,
         agent_id: str | None = None,
         builder_invocation_id: str | None = None,
+        generic_profile: Any = None,
+        execution_receipt: dict[str, Any] | None = None,
     ) -> None:
         self.run_id = _optional_string(run_id) or _new_builder_run_id()
         self.document_id = _optional_string(document_id)
         self.domain_pack_id = _optional_string(domain_pack_id)
         self.agent_id = _optional_string(agent_id)
+        self.generic_profile = generic_profile
+        self.execution_receipt = deepcopy(execution_receipt)
         self.builder_invocation_id = (
             _optional_string(builder_invocation_id) or f"builder-invocation-{uuid4()}"
         )
@@ -153,6 +157,12 @@ class ExtractionBuilderWorkspace:
     ) -> ExtractionBuilderCandidate:
         self._ensure_mutable()
         normalized_candidate_id = _required_string(candidate_id, "candidate_id")
+        if self.generic_profile is not None:
+            if "curatable_objects" in staged_fields:
+                self.generic_profile.require_envelope(dict(staged_fields),
+                    execution_receipt=self.execution_receipt, agent_key=self.agent_id)
+            else:
+                self.generic_profile.require_candidate(dict(staged_fields), candidate_id=normalized_candidate_id)
         candidate = self.candidates.get(normalized_candidate_id)
         now = _now_iso()
         if candidate is None:
@@ -320,6 +330,9 @@ class ExtractionBuilderWorkspace:
 
         selected = [self._candidate(candidate_id) for candidate_id in normalized_candidate_ids]
         payload = _assemble_payload(selected)
+        if self.generic_profile is not None:
+            self.generic_profile.require_envelope(payload,
+                execution_receipt=self.execution_receipt, agent_key=self.agent_id)
         evidence_record_ids = _unique_strings(
             evidence_id
             for candidate in selected
@@ -389,6 +402,8 @@ class ExtractionBuilderWorkspace:
             "document_id": self.document_id,
             "domain_pack_id": self.domain_pack_id,
             "agent_id": self.agent_id,
+            "generic_profile_ref": self.generic_profile.receipt if self.generic_profile is not None else None,
+            "execution_receipt": deepcopy(self.execution_receipt),
             "builder_invocation_id": self.builder_invocation_id,
             "state": self.state,
             "candidate_count": len(self.candidates),
@@ -548,6 +563,7 @@ def build_internal_extraction_result_event(
     tool_name: str,
     specialist_name: str,
     finalization: ExtractionBuilderFinalization,
+    agent_key: str | None = None,
     extraction_result_id: str | None = None,
     result_ref: str | None = None,
     persistence_status: Mapping[str, Any] | None = None,
@@ -569,6 +585,9 @@ def build_internal_extraction_result_event(
         "builder_finalization": finalization.summary(),
         "output_length": len(canonical_output),
     }
+    if agent_key is not None:
+        details["agent_key"] = agent_key
+        internal["agent_key"] = agent_key
     if extraction_result_id:
         details["extraction_result_id"] = extraction_result_id
         internal["extraction_result_id"] = extraction_result_id

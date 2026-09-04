@@ -76,6 +76,11 @@ def materialize_generic_builder_state(
     """Build canonical generic DomainEnvelopeExtractionResult output from builder state."""
 
     del resolver_entry_lookup
+    profile = getattr(workspace, "generic_profile", None)
+    if profile is not None:
+        produced_by = workspace.agent_id
+        if not produced_by:
+            raise ValueError("Profile-bound materialization requires canonical agent identity")
     catalog = load_generic_class_catalog()
     normalized_candidate_ids = tuple(
         value.strip()
@@ -114,6 +119,11 @@ def materialize_generic_builder_state(
     for index, candidate in enumerate(candidates, start=1):
         staged_fields = copy.deepcopy(dict(getattr(candidate, "staged_fields", {}) or {}))
         candidate_id = str(getattr(candidate, "candidate_id", "") or "")
+        if profile is not None:
+            profile_issues = profile.validate_candidate(staged_fields, candidate_id=candidate_id)
+            if profile_issues:
+                issues.extend(profile_issues)
+                continue
         class_key = _clean_text(staged_fields.get("class_key"))
         label = _clean_text(staged_fields.get("label"))
         if class_key is None:
@@ -218,9 +228,12 @@ def materialize_generic_builder_state(
                 )
             )
             continue
-        normalized_attributes, attribute_issues = normalize_generic_attributes(
-            raw_attributes if isinstance(raw_attributes, Mapping) else {}
-        )
+        if profile is not None:
+            normalized_attributes, attribute_issues = copy.deepcopy(raw_attributes or {}), []
+        else:
+            normalized_attributes, attribute_issues = normalize_generic_attributes(
+                raw_attributes if isinstance(raw_attributes, Mapping) else {}
+            )
         if attribute_issues:
             for issue in attribute_issues:
                 issues.append(
@@ -325,6 +338,7 @@ def materialize_generic_builder_state(
                 evidence_record_ids=list(evidence_ids),
                 metadata_refs=metadata_refs,
                 metadata={
+                    **({"generic_profile_ref": profile.receipt} if profile is not None else {}),
                     "generic_extraction": {
                         "class_key": entry.class_key,
                         "label": label,
@@ -338,6 +352,10 @@ def materialize_generic_builder_state(
         )
 
     provenance = {
+        **({"execution_receipt": copy.deepcopy(workspace.execution_receipt)}
+           if getattr(workspace, "execution_receipt", None) is not None else {}),
+        **({"generic_profile_ref": profile.receipt, "profile_conformance": "passed"}
+           if profile is not None and not issues else {}),
         "source": GENERIC_MATERIALIZER_ID,
         "produced_by": produced_by,
         "builder_run_id": getattr(workspace, "run_id", None),

@@ -144,7 +144,8 @@ class TestCustomAgentTestEndpoint:
 
         async def _fake_run_agent_streamed(**kwargs):
             run_kwargs.update(kwargs)
-            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123",
+                "execution_receipt": {"agent_key": "ca_pinned", "revision": 4}}}
             yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "hello"}}
             yield {
                 "type": "RUN_FINISHED",
@@ -178,6 +179,7 @@ class TestCustomAgentTestEndpoint:
         assert '"delta": "hello"' in stream_text
         assert '"type": "DONE"' in stream_text
         assert '"trace_id": "trace-123"' in stream_text
+        assert '"execution_receipt": {"agent_key": "ca_pinned", "revision": 4}' in stream_text
         assert run_kwargs["active_groups"] == ["WB"]
         assert agent_kwargs["active_groups"] == ["WB"]
         assert agent_kwargs["authenticated_groups"] == ["RGD"]

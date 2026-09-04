@@ -53,6 +53,8 @@ def capture_execution_snapshot(
     curation = catalog_service._curation_metadata_from_definition(curation_definition)
     if output.output_state == "none":
         curation = None
+    elif output.output_mode in {"profile_bound_generic", "unprofiled_generic"}:
+        curation = {"adapter_key": "generic", "domain_pack_id": "generic", "launchable": True}
     finalization = None
     if (
         definition is not None
@@ -69,7 +71,7 @@ def capture_execution_snapshot(
             tools=tools,
             output_schema=output.output_schema_key,
             structured_finalization=finalization,
-            curation=definition.curation if curation is not None else CurationConfig(),
+            curation=CurationConfig(**curation) if curation is not None else CurationConfig(),
         )
         if definition
         else AgentDefinition(
@@ -78,6 +80,7 @@ def capture_execution_snapshot(
             name=agent.name,
             tools=tools,
             output_schema=output.output_schema_key,
+            curation=CurationConfig(**curation) if curation is not None else CurationConfig(),
         )
     )
     layers = [

@@ -2766,6 +2766,21 @@ def get_generic_profile_max_contract_bytes() -> int:
     return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_CONTRACT_BYTES", 262144))
 
 
+def get_generic_profile_max_record_bytes() -> int:
+    """Maximum UTF-8 JSON attributes size for one profile-bound record."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_RECORD_BYTES", 262144))
+
+
+def get_generic_profile_max_record_values() -> int:
+    """Maximum visited values in one profile-bound record, including array items."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_RECORD_VALUES", 10000))
+
+
+def get_generic_profile_max_issues() -> int:
+    """Maximum field-addressed conformance issues returned for one candidate."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_ISSUES", 50))
+
+
 # --- Flow output projection tooling ---
 
 def get_flow_projection_max_text_chars() -> int:

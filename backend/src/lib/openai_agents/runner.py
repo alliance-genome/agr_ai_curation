@@ -84,6 +84,7 @@ from .extraction_builder_workspace import (
     reset_active_extraction_builder_workspace,
     set_active_extraction_builder_workspace,
     stage_extraction_payload,
+    build_internal_extraction_result_event,
 )
 from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer, file_ready_event_details
@@ -117,6 +118,8 @@ from .streaming_tools import (
     _structured_specialist_finalization_tool_name,
     _tool_output_payload_for_finalization,
     _output_type_name,
+    _bind_run_state_into_tools,
+    _agent_runtime_canonical_agent_key,
 )
 from .curation_context_registry import clear_current_turn_curation_context
 
@@ -1152,6 +1155,8 @@ async def _run_agent_with_owned_resources(
     pending_tool_calls: deque[Dict[str, Any]] = deque()
     tool_calls_count = 0
     current_agent = agent.name
+    canonical_agent_key = _agent_runtime_canonical_agent_key(agent) or current_agent
+    generic_profile = getattr(agent, "generic_profile", None)
     agents_used = [agent.name]
     custom_tool_display_names = _build_custom_tool_display_names(agent)
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
@@ -1186,7 +1191,9 @@ async def _run_agent_with_owned_resources(
     builder_workspace = ExtractionBuilderWorkspace(
         run_id=trace_id,
         document_id=document_id,
-        agent_id=current_agent,
+        agent_id=canonical_agent_key,
+        generic_profile=generic_profile,
+        execution_receipt=getattr(agent, "execution_receipt", None),
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
     evidence_summary_tool_names: List[str] = []
@@ -1206,7 +1213,7 @@ async def _run_agent_with_owned_resources(
         required=_structured_specialist_finalization_required(
             agent,
             expected_output_type=expected_output_type,
-            builder_materializer_agent=False,
+            builder_materializer_agent=generic_profile is not None,
             finalization_config=finalization_config,
         ),
         tool_name=finalization_tool_name or "finalize_structured_result",
@@ -1273,7 +1280,7 @@ async def _run_agent_with_owned_resources(
             model=str(getattr(agent, "model", "") or ""),
             conversation_id=sentry_conversation_id,
             workflow=effective_sentry_workflow,
-            agent_key=str(getattr(agent, "name", "") or current_agent),
+            agent_key=canonical_agent_key,
             agent_source="runtime",
             trace_id=trace_id or getattr(current_trace_run, "trace_id", None),
             document_id=document_id,
@@ -1300,7 +1307,7 @@ async def _run_agent_with_owned_resources(
                 model=str(getattr(agent, "model", "") or ""),
                 conversation_id=sentry_conversation_id,
                 workflow=f"{effective_sentry_workflow}_post_stream",
-                agent_key=str(getattr(agent, "name", "") or current_agent),
+                agent_key=canonical_agent_key,
                 agent_source="runtime",
                 trace_id=trace_id or getattr(current_trace_run, "trace_id", None),
                 document_id=document_id,
@@ -1329,6 +1336,17 @@ async def _run_agent_with_owned_resources(
             ):
                 pass
     try:
+        if generic_profile is not None:
+            from .resolver_call_ledger import ResolverCallLedger
+            from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
+
+            agent = _bind_run_state_into_tools(
+                agent, evidence_records=evidence_records, builder_workspace=builder_workspace,
+                resolver_ledger=ResolverCallLedger(trace_id=trace_id),
+            )
+            for tool in agent.tools:
+                if hasattr(tool, "profile_bound_schema"):
+                    assert_profile_tool_contract(tool)
         result = Runner.run_streamed(
             agent,
             input=input_items,
@@ -1941,7 +1959,20 @@ async def _run_agent_with_owned_resources(
             conversation_context_manager.__exit__(None, None, None)
 
     # Get final output if not captured from streaming
-    if hasattr(result, "final_output"):
+    if generic_profile is not None:
+        finalization = builder_workspace.finalization
+        if finalization is None:
+            yield {"type": "RUN_ERROR", "data": {
+                "message": "The profile extraction did not finalize its backend builder output.",
+                "error_type": "BuilderFinalizationMissing", "trace_id": trace_id,
+            }}
+            return
+        generic_profile.require_envelope(finalization.payload,
+            execution_receipt=builder_workspace.execution_receipt, agent_key=canonical_agent_key)
+        structured_result = finalization.payload
+        if not full_response:
+            full_response = str(getattr(result, "final_output", "") or "Extraction finalized.")
+    elif hasattr(result, "final_output"):
         final_output = result.final_output
         if final_output:
             if hasattr(final_output, "model_dump"):
@@ -2039,7 +2070,7 @@ async def _run_agent_with_owned_resources(
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
     if structured_result is not None:
         expected_output_type = getattr(agent, "output_type", None)
-        if _looks_like_curation_shaped_payload(structured_result):
+        if generic_profile is None and _looks_like_curation_shaped_payload(structured_result):
             output_type_name = _output_type_name(expected_output_type)
             logger.warning(
                 "Top-level agent produced curation-shaped structured output; "
@@ -2129,10 +2160,17 @@ async def _run_agent_with_owned_resources(
                 structured_evidence_records,
             )
 
-        finalization = builder_workspace.finalize(
+        finalization = builder_workspace.finalization if generic_profile is not None else builder_workspace.finalize(
             candidate_ids=["runner_structured_result"],
         )
+        assert finalization is not None  # Profile runs returned above if finalization was absent.
         structured_result = finalization.payload
+        if generic_profile is not None:
+            yield build_internal_extraction_result_event(
+                tool_name=canonical_agent_key, specialist_name=current_agent,
+                finalization=finalization,
+                agent_key=canonical_agent_key,
+            )
 
         try:
             parsed_answer = Answer.model_validate(structured_result)
@@ -2539,6 +2577,7 @@ async def run_agent_streamed(
                     "data": {
                         "agent": agent.name,
                         "model": agent.model,
+                        "execution_receipt": getattr(agent, "execution_receipt", None),
                         "document_id": document_id,
                         "trace_id": trace_id
                     }
@@ -2827,6 +2866,7 @@ async def run_agent_streamed(
                 "data": {
                     "agent": agent.name,
                     "model": agent.model,
+                    "execution_receipt": getattr(agent, "execution_receipt", None),
                     "document_id": document_id,
                     "trace_id": fallback_trace_id
                 }
@@ -2888,6 +2928,7 @@ async def run_agent_streamed(
             "data": {
                 "agent": agent.name,
                 "model": agent.model,
+                "execution_receipt": getattr(agent, "execution_receipt", None),
                 "document_id": document_id,
                 "trace_id": fallback_trace_id
             }

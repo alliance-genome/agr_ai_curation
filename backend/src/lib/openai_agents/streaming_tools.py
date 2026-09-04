@@ -1062,6 +1062,9 @@ def _adapt_tools_with_provider_adapter(tools: List[Any], adapter_key: str) -> Li
             adapted.append(tool)
             continue
 
+        if hasattr(tool, "profile_bound_schema"):
+            raise ValueError("This provider adapter cannot preserve the profile-specific tool contract")
+
         adapted.append(adapter_factory())
     return adapted
 
@@ -3272,6 +3275,9 @@ def _build_run_state_bound_tool(
             reset_active_extraction_builder_workspace(bw_token)
             reset_active_evidence_records(ev_token)
 
+    if hasattr(existing_tool, "profile_bound_schema"):
+        from src.lib.agent_studio.profile_tools import preserve_profile_tool_contract
+        return preserve_profile_tool_contract(_run_state_bound, existing_tool)
     return _run_state_bound
 
 
@@ -3294,7 +3300,7 @@ def _bind_run_state_into_tools(
         if impl_path is None:
             rebuilt.append(tool)
             continue
-        raw_func = _import_callable(impl_path)
+        raw_func = getattr(tool, "profile_bound_raw_func", None) or _import_callable(impl_path)
         rebuilt.append(
             _build_run_state_bound_tool(
                 raw_func,
@@ -4653,7 +4659,9 @@ async def run_specialist_with_events(
             if parent_builder_workspace is not None
             else None
         ),
-        agent_id=specialist_name,
+        agent_id=runtime_canonical_agent_key or specialist_name,
+        generic_profile=getattr(runtime_agent, "generic_profile", None),
+        execution_receipt=getattr(runtime_agent, "execution_receipt", None),
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
     resolver_call_ledger = ResolverCallLedger(trace_id=builder_workspace.run_id)
@@ -4685,6 +4693,13 @@ async def run_specialist_with_events(
         builder_workspace=builder_workspace,
         resolver_ledger=resolver_call_ledger,
     )
+
+    # Validate the actual post-adapter, post-rebinding schema sent to the SDK.
+    from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
+
+    for runtime_tool in runtime_agent.tools:
+        if hasattr(runtime_tool, "profile_bound_schema"):
+            assert_profile_tool_contract(runtime_tool)
 
     # Run with streaming to capture internal events
     runner_create_started_at = time.monotonic()
@@ -6171,6 +6186,7 @@ async def run_specialist_with_events(
                     specialist_name=specialist_name,
                     finalization=builder_finalization,
                     extraction_result_id=inline_persistence.extraction_result_id,
+                    agent_key=runtime_canonical_agent_key,
                     result_ref=inline_persistence.result_ref,
                     persistence_status={
                         "phase": "inline_validated_extraction",
@@ -6193,6 +6209,7 @@ async def run_specialist_with_events(
                     specialist_name=specialist_name,
                     finalization=builder_finalization,
                     timestamp=datetime.now(timezone.utc).isoformat(),
+                    agent_key=runtime_canonical_agent_key,
                 )
             )
     elif (

@@ -148,11 +148,27 @@ def test_incomplete_turn_without_pinned_route_remains_invalid():
         )
 
 
-def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(monkeypatch):
+@pytest.mark.parametrize("agent_key", ["gene_validation", "ca_00000000-0000-4000-8000-000000000001"])
+def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(monkeypatch, agent_key):
+    from src.lib.agent_studio import execution_revision_service
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt, AgentOutputContract
+
+    receipt = AgentExecutionReceipt(
+        agent_id=uuid4(), agent_key=agent_key, agent_revision_id=uuid4(), revision=1,
+        fingerprint="sha256:" + "a" * 64,
+        output_contract=AgentOutputContract(output_state="none"),
+    )
+    monkeypatch.setattr(execution_revision_service, "current_execution_receipt", lambda *args, **kwargs: receipt)
+    authorization_calls = []
+    def authorize(_db, raw_receipt, user_id, *, active_group_ids):
+        authorization_calls.append((raw_receipt, user_id, active_group_ids))
+        return AgentExecutionReceipt.model_validate(raw_receipt)
+    monkeypatch.setattr(execution_revision_service, "authorize_execution_receipt", authorize)
+    expected_receipt = receipt.model_dump(mode="json") if agent_key.startswith("ca_") else None
     repository = _TurnRepository()
     db = SimpleNamespace(commit=lambda: None)
     target = ChatRouteTarget(
-        id="gene_validation",
+        id=agent_key,
         kind="agent",
         display_name="Gene Validation",
         description=None,
@@ -188,14 +204,16 @@ def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(mon
     )
     assert first.route == ResolvedChatRoute(
         mode="agent",
-        target_id="gene_validation",
+        target_id=agent_key,
         target_display_name="Gene Validation",
+        execution_receipt=expected_receipt,
     )
     assert repository.appended_payload == {
         "chat_route": {
             "mode": "agent",
-            "target_id": "gene_validation",
+            "target_id": agent_key,
             "target_display_name": "Gene Validation",
+            **({"execution_receipt": expected_receipt} if expected_receipt is not None else {}),
         }
     }
 
@@ -204,6 +222,8 @@ def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(mon
         "get_chat_route_preference",
         lambda *_args, **_kwargs: pytest.fail("retry must not read the newer preference"),
     )
+    monkeypatch.setattr(execution_revision_service, "current_execution_receipt",
+                        lambda *args, **kwargs: pytest.fail("retry must not resolve a newer executable head"))
     retried = chat_common._prepare_chat_stream_turn(
         repository=repository,
         db=db,
@@ -217,6 +237,8 @@ def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(mon
     )
     assert preference_reads == 1
     assert retried.route == first.route
+    if agent_key.startswith("ca_"):
+        assert authorization_calls == [(expected_receipt, 7, ["MOD"])] * 2
     assert retried.effective_user_message == "For MOD:619738, assess GO:0005515."
 
 
@@ -228,6 +250,7 @@ def test_prepare_turn_pins_agent_route_and_reuses_it_after_preference_change(mon
 async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, agent_id):
     captured: dict = {}
     runtime_agent = SimpleNamespace(name="Gene Validation")
+    receipt = {"agent_revision_id": str(uuid4())} if agent_id.startswith("ca_") else None
 
     def _get_agent(agent_id: str, **kwargs):
         captured["agent_id"] = agent_id
@@ -248,6 +271,7 @@ async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, ag
                 mode="agent",
                 target_id=agent_id,
                 target_display_name="Gene Validation",
+                execution_receipt=receipt,
             ),
             db=SimpleNamespace(),
             db_user_id=7,
@@ -267,6 +291,9 @@ async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, ag
         )
     ]
     assert captured["agent_id"] == agent_id
+    if receipt is not None:
+        assert captured["agent_kwargs"]["execution_receipt"] == receipt
+        assert captured["agent_kwargs"]["execution_revision_id"] == receipt["agent_revision_id"]
     overrides = {key: value for key, value in captured["agent_kwargs"].items() if key.endswith("_override")}
     assert overrides == ({} if agent_id.startswith("ca_") else {
         "model_id_override": "chat-model-override",

@@ -134,3 +134,15 @@ def test_pinned_catalog_build_uses_saved_settings_not_live_template(monkeypatch)
         catalog_service._create_db_agent(
             identity, execution_snapshot=saved, model_id_override="new-model"
         )
+
+
+def test_explicit_generic_output_captures_generic_curation_for_scratch_agent(monkeypatch):
+    from src.lib.agent_studio import custom_agent_service, catalog_service
+
+    monkeypatch.setattr(custom_agent_service, "_system_managed_tool_ids", lambda *_: [])
+    monkeypatch.setattr(catalog_service, "_inherited_curation_definition_for_db_agent", lambda _: None)
+    saved = capture_execution_snapshot(None, agent(), AgentOutputContract(
+        output_state="structured_extraction", output_mode="unprofiled_generic",
+    ))
+    assert saved.curation == {"adapter_key": "generic", "domain_pack_id": "generic", "launchable": True}
+    assert saved.structured_finalization is None

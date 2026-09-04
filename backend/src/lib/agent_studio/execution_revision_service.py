@@ -10,7 +10,7 @@ from src.lib.agent_studio.agent_service import get_project_ids_for_user
 from src.lib.agent_studio.generic_profile_service import get_profile_revision, ProfileNotFoundError
 from src.models.sql.agent import Agent
 from src.models.sql.agent_execution_revision import AgentExecutionRevision
-from src.schemas.agent_execution_revision import AgentExecutionSnapshot
+from src.schemas.agent_execution_revision import AgentExecutionSnapshot, AgentExecutionReceipt
 
 
 class ExecutionRevisionNotFoundError(ValueError):
@@ -19,6 +19,42 @@ class ExecutionRevisionNotFoundError(ValueError):
 
 class ExecutionRevisionConflictError(ValueError):
     pass
+
+
+def current_execution_receipt(
+    db: Session, agent_key: str, user_id: int, *, active_group_ids: list[str],
+) -> AgentExecutionReceipt:
+    """Pin an authorized head before durable turn creation; never build a model."""
+    head = db.execute(select(Agent).where(Agent.agent_key == agent_key)).scalar_one_or_none()
+    if head is None or not head.is_active or head.execution_revision_id is None:
+        raise ExecutionRevisionNotFoundError("Executable agent revision not found")
+    revision, saved = get_execution_revision(
+        db, head.id, head.execution_revision_id, user_id, active_group_ids=active_group_ids,
+    )
+    return AgentExecutionReceipt(
+        agent_id=head.id, agent_key=head.agent_key, agent_revision_id=revision.id,
+        revision=revision.revision, fingerprint=revision.fingerprint,
+        output_contract=saved.output_contract,
+    )
+
+
+def authorize_execution_receipt(
+    db: Session, receipt: dict | None, user_id: int, *, active_group_ids: list[str],
+) -> AgentExecutionReceipt:
+    """Reauthorize a durable pin without consulting today's executable head."""
+    expected = AgentExecutionReceipt.model_validate(receipt)
+    head = _get_visible_agent(db, expected.agent_id, user_id)
+    revision, saved = get_execution_revision(
+        db, head.id, expected.agent_revision_id, user_id, active_group_ids=active_group_ids,
+    )
+    actual = AgentExecutionReceipt(
+        agent_id=head.id, agent_key=head.agent_key, agent_revision_id=revision.id,
+        revision=revision.revision, fingerprint=revision.fingerprint,
+        output_contract=saved.output_contract,
+    )
+    if actual != expected:
+        raise ValueError("Executable agent receipt does not match the authorized revision")
+    return actual
 
 
 def baseline_current_execution_heads(db: Session) -> int:

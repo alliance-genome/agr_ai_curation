@@ -72,6 +72,43 @@ it does not restore display name, description, or icon. Exact cloning copies the
 saved configuration and profile reference, without a second editable profile.
 Explicit clone edits create a subsequent revision and preserve inherited bounds.
 
+## Profile-bound execution and conformance
+
+Saved profile execution resolves and authorizes the exact agent/profile revision
+before constructing tools. `AgentExecutionReceipt` contains canonical agent UUID
+and key, executable revision UUID/number/fingerprint, and the output contract with
+its full profile pin. Ordinary preferred-agent chat persists this receipt in the
+initial user turn; an incomplete retry reauthorizes that pin instead of selecting
+today's head. A historical custom-agent turn without a receipt is rejected, not
+silently upgraded. Both isolated test endpoints resolve the same saved runtime
+and stream its receipt in `RUN_STARTED`.
+
+`ResolvedGenericProfile` in `lib/agent_studio/profile_conformance.py` owns one
+non-coercing recursive contract. Use `require_candidate` for builder drafts and
+`require_envelope` for materialized/edited envelopes; pass the expected execution
+receipt and canonical agent key when available. `validate_attributes` returns
+bounded candidate/path/type/repair issues. `patch_attributes` applies canonical
+whole-subtree replacements or existing array-index updates to a copy and validates
+the complete result. A tool's entire patch list is atomic. Aliases are recognition
+text only; no unknown-key bag, implicit deletion, coercion, or invented values is
+supported. Record bytes, visited values and issue count have environment-backed
+limits documented in `.env.example`.
+
+Profile mode narrows the already-authorized generic stage/patch tools and removes
+catalog/class selection. It does not add tool capabilities. Optional fields remain
+optional in a non-strict provider schema; backend conformance is still mandatory.
+Run-state rebinding preserves the closed callable/schema pair. Both specialist and
+direct runs retain canonical identity and consume finalized backend envelopes,
+including empty extractions; model-authored replacement output is not accepted.
+Internal events and materialized provenance carry identities, not full contracts.
+
+Provider serialization tests cover the configured native OpenAI Responses driver
+and direct OpenAI-compatible Chat Completions drivers (Gemini, Groq, OpenRouter).
+The branch does not use LiteLLM or a Bedrock agent driver. Groq's existing
+response-format compatibility mode is unnecessary for builder agents because their
+model `output_type` is intentionally `None`. Tests inspect the final SDK parameters
+after adapter/rebinding steps; this is distinct from live-provider smoke evidence.
+
 ## API and migration
 
 Profile lifecycle endpoints live under `/api/agent-studio/generic-profiles`.

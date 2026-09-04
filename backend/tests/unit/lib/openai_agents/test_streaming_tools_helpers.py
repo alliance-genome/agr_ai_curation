@@ -144,6 +144,7 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
 
     def _run_streamed(_agent, *args, **kwargs):
         captured["run_config"] = kwargs["run_config"]
+        captured["builder_workspace"] = streaming_tools._active_builder_workspace_or_none()
         return _FakeRunResult(events=[], final_output="specialist output", new_items=[])
 
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
@@ -168,6 +169,9 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
     )
     agent = SimpleNamespace(
         name="Plain Text Specialist",
+        agent_key="ca_pinned_specialist",
+        generic_profile=SimpleNamespace(receipt={"revision": 7}),
+        execution_receipt={"agent_key": "ca_pinned_specialist", "revision": 3},
         tools=[],
         output_type=None,
         instructions="",
@@ -190,6 +194,11 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
     )
 
     assert result == "specialist output"
+    workspace = captured["builder_workspace"]
+    assert workspace.agent_id == "ca_pinned_specialist"
+    assert workspace.generic_profile is agent.generic_profile
+    assert workspace.execution_receipt == agent.execution_receipt
+    assert workspace.execution_receipt is not agent.execution_receipt
     assert captured["run_config"].tracing_disabled is False
     assert captured["run_config"].trace_include_sensitive_data is True
     assert captured["run_config"].workflow_name == "parent workflow"

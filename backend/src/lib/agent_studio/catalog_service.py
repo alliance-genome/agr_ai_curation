@@ -1751,7 +1751,7 @@ def validate_active_agent_output_schemas(db: Any) -> None:
         )
 
 
-def _create_db_agent(db_agent: Any, *, execution_snapshot=None, **kwargs: Any) -> Optional[Agent]:
+def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile=None, **kwargs: Any) -> Optional[Agent]:
     """Create an agent from a row in the unified agents table."""
     if execution_snapshot is not None:
         from src.schemas.agent_execution_revision import AgentExecutionSnapshot
@@ -1764,6 +1764,8 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, **kwargs: Any) -
             for key in (
                 "model_id_override", "model_temperature_override",
                 "model_reasoning_override", "model_provider_override",
+                "tool_ids", "tool_ids_override", "output_schema_key", "output_schema_override",
+                "output_contract", "class_key", "generic_profile_ref", "profile_id",
             )
         ):
             raise ValueError("Pinned execution settings cannot be overridden")
@@ -1891,12 +1893,22 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, **kwargs: Any) -
     if execution_snapshot is not None:
         from src.lib.agent_studio.execution_snapshot import saved_runtime_prompt_bundle
 
+        runtime_context = _build_runtime_context(
+            runtime_kwargs=runtime_kwargs, canonical_tool_ids=canonical_tool_ids
+        )
+        if execution_snapshot.output_contract.output_mode == "profile_bound_generic":
+            from src.lib.agent_studio.profile_tools import configure_profile_tools, profile_runtime_instruction
+
+            if resolved_profile is None:
+                raise ValueError("Profile-bound execution requires its authorized immutable profile")
+            resolved_profile.require_receipt(execution_snapshot.output_contract.generic_profile_ref.model_dump(mode="json"))
+            tools = configure_profile_tools(tools, resolved_profile)
+            runtime_context += "\n\n" + profile_runtime_instruction(resolved_profile)
+
         prompt_bundle = saved_runtime_prompt_bundle(
             execution_snapshot,
             active_groups=runtime_kwargs.get("active_groups", []) or [],
-            runtime_context=_build_runtime_context(
-                runtime_kwargs=runtime_kwargs, canonical_tool_ids=canonical_tool_ids
-            ),
+            runtime_context=runtime_context,
         )
     else:
         prompt_bundle = _build_runtime_instructions(
@@ -1953,6 +1965,7 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, **kwargs: Any) -
         output_guardrails=output_guardrails,
     )
     runtime_agent.agent_key = str(db_agent.agent_key)
+    runtime_agent.generic_profile = resolved_profile
     runtime_agent.group_tool_exposure = group_tool_audit
     runtime_agent.authenticated_groups = tuple(
         group_tool_resolution.active_group_ids
@@ -2097,7 +2110,9 @@ def _get_pinned_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
     from src.models.sql.tool_policy import ToolPolicy
     from src.models.sql.database import SessionLocal
     from src.lib.agent_studio.execution_revision_service import get_execution_revision
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
+    expected_receipt = kwargs.pop("execution_receipt", None)
     has_explicit_pin = "execution_revision_id" in kwargs
     revision_id = UUID(str(kwargs.pop("execution_revision_id"))) if has_explicit_pin else None
     user_id = _coerce_db_user_id(kwargs.get("db_user_id"))
@@ -2119,6 +2134,13 @@ def _get_pinned_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
             db, head.id, revision_id, user_id,
             active_group_ids=list(kwargs.get("authenticated_groups", []) or []),
         )
+        receipt = AgentExecutionReceipt(
+            agent_id=head.id, agent_key=head.agent_key, agent_revision_id=revision.id,
+            revision=revision.revision, fingerprint=revision.fingerprint,
+            output_contract=saved.output_contract,
+        )
+        if expected_receipt is not None and AgentExecutionReceipt.model_validate(expected_receipt) != receipt:
+            raise ValueError("Executable agent receipt does not match the authorized revision")
         selected_tools = resolve_group_tool_policy(
             saved.tool_ids, saved.group_tool_policy,
             kwargs.get("authenticated_groups"),
@@ -2130,11 +2152,21 @@ def _get_pinned_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
             executable = {policy.tool_key for policy in policies if policy.allow_execute}
             if set(selected_tools) - executable:
                 raise ValueError("A saved tool is no longer available for execution")
-        built = _create_db_agent(head, execution_snapshot=saved, **kwargs)
+        resolved_profile = None
+        if saved.output_contract.generic_profile_ref is not None:
+            from src.lib.agent_studio.generic_profile_service import get_profile_revision
+            from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
+            from src.schemas.generic_extraction_profile import normalize_profile_contract
+
+            pin = saved.output_contract.generic_profile_ref
+            profile_revision = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+            resolved_profile = ResolvedGenericProfile(pin, normalize_profile_contract(profile_revision.contract))
+        built = _create_db_agent(head, execution_snapshot=saved, resolved_profile=resolved_profile, **kwargs)
         if built is None:
             raise ValueError("Executable agent revision could not be built")
         built.execution_revision_id = str(revision.id)
         built.execution_revision = revision.revision
+        built.execution_receipt = receipt.model_dump(mode="json")
         return built
 
 

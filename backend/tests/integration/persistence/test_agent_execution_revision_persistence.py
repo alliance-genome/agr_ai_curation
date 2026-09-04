@@ -205,6 +205,17 @@ def test_catalog_pin_checks_saved_access_and_current_tool_policy(execution_db, m
     built = catalog_service.get_agent_by_id(head.agent_key, **args)
     assert built.saved.model_id == "test-model"
     assert built.execution_revision_id == str(revision.id)
+    from src.lib.agent_studio.execution_revision_service import current_execution_receipt
+
+    receipt = current_execution_receipt(db, head.agent_key, 1, active_group_ids=["FB"])
+    assert built.execution_receipt == receipt.model_dump(mode="json")
+
+    replay_args = {**args, "execution_revision_id": str(revision.id),
+                   "execution_receipt": receipt.model_dump(mode="json")}
+    assert catalog_service.get_agent_by_id(head.agent_key, **replay_args).execution_receipt == built.execution_receipt
+    replay_args["execution_receipt"]["fingerprint"] = "sha256:" + "f" * 64
+    with pytest.raises(ValueError, match="receipt does not match"):
+        catalog_service.get_agent_by_id(head.agent_key, **replay_args)
     from src.lib.agent_studio.custom_agent_service import get_custom_agent_runtime_info
     head.tool_ids = ["search_document"]
     db.flush()
@@ -232,6 +243,99 @@ def test_catalog_pin_checks_saved_access_and_current_tool_policy(execution_db, m
         db.flush()
         with pytest.raises(ValueError, match="no saved executable configuration"):
             catalog_service.get_agent_by_id(head.agent_key, **args)
+
+
+def test_durable_receipt_executes_original_revision_after_head_edit(execution_db, monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from src.lib.agent_studio import catalog_service
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision, current_execution_receipt
+    from src.models.sql import database
+    from src.schemas.agent_execution_revision import AgentOutputContract
+
+    db, agent_id, _, _ = execution_db
+    head = db.get(Agent, agent_id)
+    saved = capture_execution_snapshot(db, head, AgentOutputContract(output_state="none"))
+    first = append_execution_revision(db, head, saved, user_id=1, expected_revision_id=None)
+    receipt = current_execution_receipt(db, head.agent_key, 1, active_group_ids=[])
+    head.instructions = "New instructions must not affect the interrupted turn"
+    changed = capture_execution_snapshot(db, head, AgentOutputContract(output_state="none"))
+    second = append_execution_revision(db, head, changed, user_id=1, expected_revision_id=first.id)
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(db))
+    monkeypatch.setattr(catalog_service, "_create_db_agent",
+                        lambda _head, *, execution_snapshot, **kwargs: SimpleNamespace(saved=execution_snapshot))
+    built = catalog_service.get_agent_by_id(
+        head.agent_key, db_user_id=1, authenticated_groups=[],
+        execution_revision_id=str(receipt.agent_revision_id), execution_receipt=receipt.model_dump(mode="json"),
+    )
+    assert head.execution_revision_id == second.id
+    assert built.execution_revision_id == str(first.id)
+    assert built.saved.instructions == saved.instructions
+    assert built.execution_receipt == receipt.model_dump(mode="json")
+
+    from src.api.chat_common import _authorize_chat_route
+    from src.api.chat_models import ResolvedChatRoute
+    from src.lib.agent_studio.execution_revision_service import ExecutionRevisionNotFoundError
+
+    head.is_active = False
+    head.allowed_group_ids = ["WB"]
+    db.flush()
+    route = ResolvedChatRoute(mode="agent", target_id=head.agent_key,
+                              execution_receipt=receipt.model_dump(mode="json"))
+    assert _authorize_chat_route(db=db, db_user_id=1, active_groups=[], route=route) == route
+    with pytest.raises(ExecutionRevisionNotFoundError):
+        _authorize_chat_route(db=db, db_user_id=2, active_groups=[], route=route)
+
+
+def test_saved_profile_builds_real_closed_agent_from_postgres(execution_db, monkeypatch):
+    from contextlib import nullcontext
+    from src.lib.agent_studio import catalog_service
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision
+    from src.lib.openai_agents import langfuse_client
+    from src.models.sql import database
+    from src.models.sql.tool_policy import ToolPolicy
+    from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin
+
+    db, agent_id, _, profile_revision = execution_db
+    ToolPolicy.__table__.create(db.connection())
+    head = db.get(Agent, agent_id)
+    head.model_id = "gpt-5.6-sol"
+    head.tool_ids = ["stage_generic_object", "patch_generic_object",
+                     "finalize_generic_extraction", "list_generic_object_classes"]
+    for tool_key in head.tool_ids:
+        db.add(ToolPolicy(tool_key=tool_key, display_name=tool_key, description="Test",
+                          category="Test", curator_visible=True, allow_attach=True, allow_execute=True))
+    pin = GenericProfilePin(profile_id=profile_revision.profile_id,
+        profile_revision_id=profile_revision.id, revision=profile_revision.revision,
+        fingerprint=profile_revision.fingerprint)
+    saved = capture_execution_snapshot(db, head, AgentOutputContract(
+        output_state="structured_extraction", output_mode="profile_bound_generic", generic_profile_ref=pin))
+    revision = append_execution_revision(db, head, saved, user_id=1, expected_revision_id=None)
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(db))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-a-credential")
+    monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **kwargs: None)
+    built = catalog_service.get_agent_by_id(head.agent_key, db_user_id=1, authenticated_groups=[])
+    assert built.execution_revision_id == str(revision.id)
+    assert built.generic_profile.receipt == pin.model_dump(mode="json")
+    assert built.execution_receipt["output_contract"]["generic_profile_ref"] == pin.model_dump(mode="json")
+    assert built.agent_key == head.agent_key and built.output_type is None
+    assert "list_generic_object_classes" not in [tool.name for tool in built.tools]
+    stage = next(tool for tool in built.tools if tool.name == "stage_generic_object")
+    assert stage.params_json_schema["properties"]["attributes"]["additionalProperties"] is False
+    assert "class_key" not in stage.params_json_schema["properties"]
+    assert built.curation_metadata["adapter_key"] == "generic"
+    for override in (
+        {"model_id_override": "other"}, {"model_temperature_override": 0.5},
+        {"model_reasoning_override": "high"}, {"model_provider_override": "groq"},
+        {"tool_ids_override": []}, {"output_schema_key": "OtherOutput"},
+        {"class_key": "generic:generic_reagent_candidate"},
+        {"generic_profile_ref": pin.model_dump(mode="json")},
+    ):
+        with pytest.raises(ValueError, match="cannot be overridden"):
+            catalog_service.get_agent_by_id(head.agent_key, db_user_id=1,
+                                           authenticated_groups=[], **override)
 
 
 def test_restore_appends_complete_snapshot_and_checks_expected_head(execution_db):

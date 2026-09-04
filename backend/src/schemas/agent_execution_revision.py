@@ -79,6 +79,17 @@ class AgentOutputContract(RevisionContractModel):
         return self
 
 
+class AgentExecutionReceipt(RevisionContractModel):
+    """Durable invocation identity, reused unchanged by incomplete-turn retries."""
+
+    agent_id: UUID
+    agent_key: str
+    agent_revision_id: UUID
+    revision: int = Field(ge=1)
+    fingerprint: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    output_contract: AgentOutputContract
+
+
 class AgentExecutionSnapshot(RevisionContractModel):
     """Saved runtime settings; per-run document context is deliberately absent.
 
