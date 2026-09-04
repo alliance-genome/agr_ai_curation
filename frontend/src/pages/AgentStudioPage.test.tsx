@@ -30,7 +30,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     initialConversation,
     durableSessionId,
     sourceSessionId,
-    onApplyWorkshopPromptUpdate,
+    onApplyWorkshopProposal,
     onDurableSessionIdChange,
     onConversationSnapshotChange,
     verifyMessage,
@@ -45,13 +45,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     initialConversation?: SnapshotMessage[]
     durableSessionId?: string | null
     sourceSessionId?: string
-    onApplyWorkshopPromptUpdate?: (
-      proposal: {
-        prompt: string
-        summary?: string
-        apply_mode?: 'replace' | 'targeted_edit'
-      }
-    ) => void
+    onApplyWorkshopProposal?: (proposal: import('@/types/promptExplorer').WorkshopAuthoringProposal) => Promise<unknown>
     onDurableSessionIdChange?: (sessionId: string) => void
     onConversationSnapshotChange?: (
       messages: Array<{ role: 'user' | 'assistant'; content: string }>
@@ -113,10 +107,13 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
       </button>
       <button
         onClick={() =>
-          onApplyWorkshopPromptUpdate?.({
-            prompt: 'Prompt from Opus',
-            summary: 'Updated from chat',
-            apply_mode: 'replace',
+          onApplyWorkshopProposal?.({
+            contract_version: 'workshop_authoring_proposal.v1',
+            candidate: { prompt_draft: 'Prompt from Opus' },
+            base_draft_fingerprint: 'base',
+            candidate_draft_fingerprint: 'candidate',
+            change_summary: 'Updated from chat',
+            diff: [], findings: [],
           })
         }
       >
@@ -227,18 +224,26 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
   function PromptWorkshopMock({
     initialCustomAgentId,
     initialParentAgentId,
-    incomingPromptUpdate,
+    authoringContextRef,
     opusConversation,
     onViewEnvelope,
     leaveGuardRef,
   }: {
     initialCustomAgentId?: string | null
     initialParentAgentId?: string | null
-    incomingPromptUpdate?: { prompt?: string } | null
+    authoringContextRef?: Ref<import('@/components/AgentStudio/PromptWorkshop/PromptWorkshop').WorkshopAuthoringContextHandle>
     opusConversation?: Array<{ content: string }>
     onViewEnvelope?: (agentId: string) => void
     leaveGuardRef?: Ref<{ requestLeave: () => Promise<boolean> }>
   }) {
+    const [incomingPrompt, setIncomingPrompt] = React.useState('')
+    React.useImperativeHandle(authoringContextRef, () => ({
+      captureAuthoringContext: () => ({ prompt_draft: incomingPrompt }),
+      applyAuthoringProposal: async (proposal) => {
+        setIncomingPrompt(proposal.candidate.prompt_draft ?? '')
+        return { applied: true, message: 'Applied' }
+      },
+    }))
     const [pendingLeave, setPendingLeave] = React.useState<((leave: boolean) => void) | null>(null)
     React.useImperativeHandle(leaveGuardRef, () => ({
       requestLeave: () => {
@@ -248,7 +253,7 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
     }))
     return (
       <div data-testid="prompt-workshop">
-        custom:{initialCustomAgentId || 'none'} parent:{initialParentAgentId || 'none'} incoming:{incomingPromptUpdate?.prompt || 'none'} conversation:{(opusConversation ?? []).map((message) => message.content).join('|') || 'none'}
+        custom:{initialCustomAgentId || 'none'} parent:{initialParentAgentId || 'none'} incoming:{incomingPrompt || 'none'} conversation:{(opusConversation ?? []).map((message) => message.content).join('|') || 'none'}
         <button type="button" onClick={() => onViewEnvelope?.('gene')}>view-envelope</button>
         <UnsavedChangesDialog
           open={Boolean(pendingLeave)}

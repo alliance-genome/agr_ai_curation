@@ -497,292 +497,54 @@ describe('OpusChat', () => {
     expect(screen.queryByText(/"gene_id"/)).not.toBeInTheDocument()
   })
 
-  it('applies an approved workshop prompt update proposed by AI Chat tool call', async () => {
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-      writable: true,
-    })
-
-    const longProposedPrompt = 'Evidence line.\n'.repeat(2600)
-
+  it.each(['Apply changes', 'Cancel', 'Escape', 'failure', 'invalid'])('requires complete Workshop review before %s', async (action) => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+    const proposal = {
+      contract_version: 'workshop_authoring_proposal.v1',
+      success: action !== 'invalid', valid: action !== 'invalid', pending_user_approval: action !== 'invalid',
+      base_draft_fingerprint: 'sha256:base', candidate_draft_fingerprint: 'sha256:candidate',
+      change_summary: 'Rename the reader',
+      findings: action === 'invalid'
+        ? [{ code: 'unavailable_tool', severity: 'error', path: 'custom_agent.tool_ids', message: 'Choose an authorized tool.' }] : [],
+      diff: [{ kind: 'changed', path: 'custom_agent.name', before: 'Original', after: 'Revised' }],
+      candidate: { draft_name: 'Revised', prompt_draft: 'Private candidate instructions' },
+    }
     serviceMocks.streamOpusChat.mockImplementation(async function* () {
-      yield {
-        type: 'TOOL_RESULT',
-        tool_name: 'update_workshop_prompt_draft',
-        result: {
-          success: true,
-          pending_user_approval: true,
-          apply_mode: 'replace',
-          proposed_prompt: longProposedPrompt,
-          prompt_length: longProposedPrompt.length,
-          prompt_hash: 'sha256-for-full-ui-proposal',
-          change_summary: 'Rewrote instructions for stronger evidence grounding.',
-        },
-      }
+      yield { type: 'TOOL_RESULT', tool_name: 'propose_workshop_draft_update', result: proposal }
+      if (action === 'failure') yield { type: 'ERROR', message: 'Turn failed after proposal' }
       yield { type: 'DONE' }
     })
-
-    const onApplyWorkshopPromptUpdate = vi.fn()
-    const context: ChatContext = {
-      active_tab: 'agent_workshop',
-    }
-
-    render(
-      <OpusChat
-        context={context}
-        onApplyWorkshopPromptUpdate={onApplyWorkshopPromptUpdate}
-      />
-    )
-
+    const onApplyWorkshopProposal = vi.fn().mockResolvedValue({ applied: true, message: 'Applied without saving.' })
+    const snapshot = vi.fn()
+    render(<OpusChat context={{ active_tab: 'agent_workshop' }}
+      onApplyWorkshopProposal={onApplyWorkshopProposal} onConversationSnapshotChange={snapshot} />)
     const input = screen.getByPlaceholderText('Ask about your workshop draft...')
-    fireEvent.change(input, { target: { value: 'Please rewrite my prompt.' } })
+    fireEvent.change(input, { target: { value: 'Rename this agent.' } })
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
-
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
-
-    await waitFor(() => {
-      expect(onApplyWorkshopPromptUpdate).toHaveBeenCalledWith({
-        prompt: longProposedPrompt,
-        summary: 'Rewrote instructions for stronger evidence grounding.',
-        apply_mode: 'replace',
-        target_prompt: 'main',
-      })
-    })
-  })
-
-  it('supports targeted_edit workshop prompt proposals from AI Chat', async () => {
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-      writable: true,
-    })
-
-    serviceMocks.streamOpusChat.mockImplementation(async function* () {
-      yield {
-        type: 'TOOL_RESULT',
-        tool_name: 'update_workshop_prompt_draft',
-        result: {
-          success: true,
-          pending_user_approval: true,
-          apply_mode: 'targeted_edit',
-          proposed_prompt: 'Prompt with small targeted improvements.',
-          change_summary: 'Updated only the output-format section.',
-        },
-      }
-      yield { type: 'DONE' }
-    })
-
-    const onApplyWorkshopPromptUpdate = vi.fn()
-    const context: ChatContext = {
-      active_tab: 'agent_workshop',
+    if (action === 'failure') {
+      await waitFor(() => expect(screen.getByText(/Turn failed after proposal/)).toBeInTheDocument())
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(onApplyWorkshopProposal).not.toHaveBeenCalled()
+      return
     }
-
-    render(
-      <OpusChat
-        context={context}
-        onApplyWorkshopPromptUpdate={onApplyWorkshopPromptUpdate}
-      />
-    )
-
-    const input = screen.getByPlaceholderText('Ask about your workshop draft...')
-    fireEvent.change(input, { target: { value: 'Edit just one section.' } })
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
-
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
-
-    await waitFor(() => {
-      expect(onApplyWorkshopPromptUpdate).toHaveBeenCalledWith({
-        prompt: 'Prompt with small targeted improvements.',
-        summary: 'Updated only the output-format section.',
-        apply_mode: 'targeted_edit',
-        target_prompt: 'main',
-      })
-    })
-  })
-
-  it('routes group-target workshop prompt proposals to the group apply path', async () => {
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-      writable: true,
-    })
-
-    serviceMocks.streamOpusChat.mockImplementation(async function* () {
-      yield {
-        type: 'TOOL_RESULT',
-        tool_name: 'update_workshop_prompt_draft',
-        result: {
-          success: true,
-          pending_user_approval: true,
-          apply_mode: 'replace',
-          target_prompt: 'group',
-          target_group_id: 'WB',
-          proposed_prompt: 'WB-specific override prompt text.',
-          change_summary: 'Tightened WB anatomy constraints.',
-        },
-      }
-      yield { type: 'DONE' }
-    })
-
-    const onApplyWorkshopPromptUpdate = vi.fn()
-    const context: ChatContext = {
-      active_tab: 'agent_workshop',
-      agent_workshop: {
-        selected_group_id: 'WB',
-        selected_group_prompt_draft: 'Old WB prompt',
-      },
+    expect(await screen.findByRole('dialog', { name: 'Review Workshop Proposal' })).toBeInTheDocument()
+    if (action === 'invalid') {
+      expect(screen.getByText('Choose an authorized tool. (custom_agent.tool_ids)')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Apply changes' })).toBeDisabled()
+      expect(onApplyWorkshopProposal).not.toHaveBeenCalled()
+      return
     }
-
-    render(
-      <OpusChat
-        context={context}
-        onApplyWorkshopPromptUpdate={onApplyWorkshopPromptUpdate}
-      />
-    )
-
-    const input = screen.getByPlaceholderText('Ask about your workshop draft...')
-    fireEvent.change(input, { target: { value: 'Update only WB prompt.' } })
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
-
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
-
-    await waitFor(() => {
-      expect(onApplyWorkshopPromptUpdate).toHaveBeenCalledWith({
-        prompt: 'WB-specific override prompt text.',
-        summary: 'Tightened WB anatomy constraints.',
-        apply_mode: 'replace',
-        target_prompt: 'group',
-        target_group_id: 'WB',
-      })
-    })
-  })
-
-  it('auto-runs a post-apply review after workshop draft update is confirmed', async () => {
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-      writable: true,
-    })
-
-    serviceMocks.streamOpusChat
-      .mockImplementationOnce(async function* () {
-        yield {
-          type: 'TOOL_RESULT',
-          tool_name: 'update_workshop_prompt_draft',
-          result: {
-            success: true,
-            pending_user_approval: true,
-            apply_mode: 'targeted_edit',
-            proposed_prompt: 'Line A\nLine B',
-            change_summary: 'Added Line B.',
-          },
-        }
-        yield { type: 'DONE' }
-      })
-      .mockImplementationOnce(async function* () {
-        yield { type: 'TEXT_DELTA', delta: 'Post-apply review completed.' }
-        yield { type: 'DONE' }
-      })
-
-    function Harness() {
-      const [context, setContext] = useState<ChatContext>({
-        active_tab: 'agent_workshop',
-        agent_workshop: {
-          prompt_draft: 'Line A',
-        },
-      })
-
-      return (
-        <OpusChat
-          context={context}
-          onApplyWorkshopPromptUpdate={(proposal) => {
-            setContext({
-              active_tab: 'agent_workshop',
-              agent_workshop: {
-                prompt_draft: proposal.prompt,
-              },
-            })
-          }}
-        />
-      )
+    expect(screen.getByText('Original')).toBeInTheDocument()
+    expect(screen.getByText('Revised')).toBeInTheDocument()
+    expect(onApplyWorkshopProposal).not.toHaveBeenCalled()
+    if (action === 'Escape') {
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' })
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: action }))
     }
-
-    render(<Harness />)
-
-    const input = screen.getByPlaceholderText('Ask about your workshop draft...')
-    fireEvent.change(input, { target: { value: 'Please add one line.' } })
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
-
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
-    })
-    expect(screen.getByText(/Proposed additions are highlighted in green/)).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
-
-    await waitFor(() => {
-      expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2)
-    })
-    const autoReviewMessages = serviceMocks.streamOpusChat.mock.calls[1][0]
-    expect(autoReviewMessages[autoReviewMessages.length - 1].content).toContain(
-      'Please run a post-apply review of my Agent Workshop draft'
-    )
-  })
-
-  it('shows removed lines in red/strikethrough preview when proposal deletes content', async () => {
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-      writable: true,
-    })
-
-    serviceMocks.streamOpusChat.mockImplementation(async function* () {
-      yield {
-        type: 'TOOL_RESULT',
-        tool_name: 'update_workshop_prompt_draft',
-        result: {
-          success: true,
-          pending_user_approval: true,
-          apply_mode: 'targeted_edit',
-          proposed_prompt: 'Line A',
-          change_summary: 'Removed Line B.',
-        },
-      }
-      yield { type: 'DONE' }
-    })
-
-    const context: ChatContext = {
-      active_tab: 'agent_workshop',
-      agent_workshop: {
-        prompt_draft: 'Line A\nLine B',
-      },
-    }
-
-    render(<OpusChat context={context} onApplyWorkshopPromptUpdate={vi.fn()} />)
-
-    const input = screen.getByPlaceholderText('Ask about your workshop draft...')
-    fireEvent.change(input, { target: { value: 'Remove one line.' } })
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
-
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
-    })
-
-    expect(screen.getByText(/Proposed removals are highlighted in red with strikethrough/)).toBeInTheDocument()
-    expect(screen.getByText('Line B')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(onApplyWorkshopProposal).toHaveBeenCalledTimes(action === 'Apply changes' ? 1 : 0)
+    expect(JSON.stringify(snapshot.mock.calls)).not.toContain('Private candidate instructions')
   })
 
   it('requires explicit review before applying a transient flow proposal', async () => {

@@ -110,11 +110,16 @@ Tools for understanding, building, and improving AI behavior:
 - Save and reuse flows across documents
 
 **Agent Workshop Tab**
+
 - Clone any system agent's prompt to create a custom version
 - Edit instructions, choose an icon, and add per-group prompt overrides
 - File menu for managing agents (New, Open, Save, Manage, Delete)
 - Version history with revert support and save notes
 - Custom agents appear in Flow Builder for use in workflows
+- Ask AI Chat to build or revise an agent's instructions, model, tools, output, or access settings. Review the complete proposal, then Apply or Cancel.
+- Apply changes only the local draft; use Undo AI changes before further edits, or explicitly Save to persist. Editing the draft or its saved source makes old proposals stale.
+- Save stores content and visibility together. A failed catalog refresh does not undo a successful Save; refresh before continuing into a flow.
+- General Workshop assistance cannot edit custom profile fields or validator mappings.
 
 **Discuss Responses**
 - Use triple-dot menu on any chat response to open it in Agent Studio

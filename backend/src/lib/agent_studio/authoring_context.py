@@ -99,12 +99,17 @@ def workshop_draft_fingerprint(workshop: Any) -> str:
             "draft": {
                 "getting_started_mode": workshop.getting_started_mode or "scratch",
                 "template_source": workshop.template_source,
+                "clone_source_agent_id": workshop.clone_source_agent_id,
+                "clone_source_updated_at": workshop.clone_source_updated_at,
                 "name": workshop.draft_name or "",
                 "description": workshop.draft_description or "",
                 "icon": workshop.draft_icon or "",
                 "visibility": workshop.draft_visibility or "private",
                 "allowed_group_ids": sorted(
                     workshop.draft_allowed_group_ids or [], key=lambda item: item.encode("utf-8")
+                ),
+                "inherited_allowed_group_ids": sorted(
+                    workshop.inherited_allowed_group_ids or [], key=lambda item: item.encode("utf-8")
                 ),
                 "prompt": workshop.prompt_draft or "",
                 "group_prompt_overrides": workshop.group_prompt_overrides or {},
@@ -126,6 +131,8 @@ def workshop_authoring_metadata(workshop: Any) -> dict[str, Any]:
     return {
         "getting_started_mode": workshop.getting_started_mode or "scratch",
         "template_source": workshop.template_source,
+        "clone_source_agent_id": workshop.clone_source_agent_id,
+        "clone_source_updated_at": workshop.clone_source_updated_at,
         "template_name": workshop.template_name,
         "custom_agent_id": workshop.custom_agent_id,
         "custom_agent_name": workshop.custom_agent_name,

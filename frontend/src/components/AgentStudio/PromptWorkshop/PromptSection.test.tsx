@@ -74,8 +74,8 @@ describe('PromptSection', () => {
     expect(props.onResetToTemplate).toHaveBeenCalledTimes(1)
   })
 
-  it('disables Reset to template when the prompt matches the template', () => {
-    renderPrompt()
+  it('disables Reset to template when no curator instructions override it', () => {
+    renderPrompt({ customPrompt: '' })
     expect(screen.getAllByRole('button', { name: 'Reset to template' })[0]).toBeDisabled()
   })
 

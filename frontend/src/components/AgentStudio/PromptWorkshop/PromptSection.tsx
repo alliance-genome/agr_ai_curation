@@ -154,7 +154,7 @@ export default function PromptSection(props: PromptSectionProps) {
   ]
   const activeLayer = layers.find((entry) => entry.key === layer) ?? layers[3]
   const overrideGroups = Object.keys(groupPromptOverrides)
-  const canResetToTemplate = hasTemplate && customPrompt !== parentBasePrompt
+  const canResetToTemplate = hasTemplate && customPrompt !== ''
 
   return (
     <Stack spacing={2.5}>

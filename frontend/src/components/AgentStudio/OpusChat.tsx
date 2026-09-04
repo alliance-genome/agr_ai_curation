@@ -52,7 +52,7 @@ import type {
   PromptInfo,
   OpusChatEvent,
   ToolIdeaConversationEntry,
-  WorkshopPromptUpdateProposal,
+  WorkshopAuthoringProposal,
   FlowAuthoringProposal,
 } from '@/types/promptExplorer'
 import type { FlowProposalApplyResult } from './FlowBuilder/types'
@@ -165,7 +165,7 @@ interface SharedOpusChatState {
   streamStatus: string | null
   durableSessionId: string | null
   /** Process-local only; never reconstructed from durable chat history. */
-  pendingFlowProposal: FlowAuthoringProposal | null
+  pendingFlowProposal: FlowAuthoringProposal | WorkshopAuthoringProposal | null
 }
 
 const OPUS_DRAFT_CONVERSATION_KEY = 'agent-studio:draft'
@@ -458,9 +458,9 @@ interface OpusChatProps {
   /** Callback with current chat transcript for workshop tool ideation */
   onConversationSnapshotChange?: (messages: ToolIdeaConversationEntry[]) => void
   /** Apply an approved prompt replacement into the Agent Workshop editor */
-  onApplyWorkshopPromptUpdate?: (proposal: WorkshopPromptUpdateProposal) => void
   /** Apply a reviewed transient flow proposal to the in-memory editor draft. */
   onApplyFlowProposal?: (proposal: FlowAuthoringProposal) => Promise<FlowProposalApplyResult>
+  onApplyWorkshopProposal?: (proposal: WorkshopAuthoringProposal) => Promise<FlowProposalApplyResult>
   /** Shell placement: side panel (hide control) or narrow-width drawer (close control) */
   variant?: 'panel' | 'drawer'
   /** DOM id of the shell container the hide/close control toggles (aria-controls) */
@@ -473,78 +473,6 @@ interface OpusChatProps {
   onStreamingChange?: (isStreaming: boolean) => void
 }
 
-interface PromptLineDiff {
-  line: string
-  kind: 'unchanged' | 'added' | 'removed'
-}
-
-function normalizePromptForComparison(value: string | undefined | null): string {
-  return (value || '').replace(/\r\n/g, '\n').trim()
-}
-
-function buildPromptLineDiff(currentPrompt: string, proposedPrompt: string): PromptLineDiff[] {
-  const currentLines = currentPrompt.replace(/\r\n/g, '\n').split('\n')
-  const proposedLines = proposedPrompt.replace(/\r\n/g, '\n').split('\n')
-  const currentCount = currentLines.length
-  const proposedCount = proposedLines.length
-
-  const lcs: number[][] = Array.from({ length: currentCount + 1 }, () =>
-    Array.from({ length: proposedCount + 1 }, () => 0)
-  )
-
-  for (let i = 1; i <= currentCount; i += 1) {
-    for (let j = 1; j <= proposedCount; j += 1) {
-      if (currentLines[i - 1] === proposedLines[j - 1]) {
-        lcs[i][j] = lcs[i - 1][j - 1] + 1
-      } else {
-        lcs[i][j] = Math.max(lcs[i - 1][j], lcs[i][j - 1])
-      }
-    }
-  }
-
-  const reversedDiff: PromptLineDiff[] = []
-  let i = currentCount
-  let j = proposedCount
-
-  while (i > 0 && j > 0) {
-    if (currentLines[i - 1] === proposedLines[j - 1]) {
-      reversedDiff.push({ line: currentLines[i - 1], kind: 'unchanged' })
-      i -= 1
-      j -= 1
-      continue
-    }
-
-    if (lcs[i][j - 1] >= lcs[i - 1][j]) {
-      reversedDiff.push({ line: proposedLines[j - 1], kind: 'added' })
-      j -= 1
-    } else {
-      reversedDiff.push({ line: currentLines[i - 1], kind: 'removed' })
-      i -= 1
-    }
-  }
-
-  while (i > 0) {
-    reversedDiff.push({ line: currentLines[i - 1], kind: 'removed' })
-    i -= 1
-  }
-  while (j > 0) {
-    reversedDiff.push({ line: proposedLines[j - 1], kind: 'added' })
-    j -= 1
-  }
-
-  return reversedDiff.reverse()
-}
-
-function buildAutoReviewRequest(proposal: WorkshopPromptUpdateProposal): string {
-  const summaryText = proposal.summary?.trim()
-    ? proposal.summary.trim()
-    : 'No summary provided.'
-  const targetPrompt = proposal.target_prompt === 'group' ? 'group prompt draft' : 'main workshop prompt draft'
-  const groupLabel = proposal.target_prompt === 'group' && proposal.target_group_id
-    ? ` (${proposal.target_group_id})`
-    : ''
-  return `Please run a post-apply review of my Agent Workshop draft.\n\nTarget reviewed: ${targetPrompt}${groupLabel}\n\nChecklist:\n1. Confirm the intended update is present in the current target prompt draft.\n2. Flag any regressions, contradictions, or ambiguities introduced by the edit.\n3. Suggest one follow-up tweak only if it clearly improves behavior.\n\nApplied update summary: ${summaryText}`
-}
 
 function formatFlowDiffValue(value: unknown): string {
   if (typeof value === 'string') return value
@@ -569,8 +497,8 @@ function OpusChat({
   onDiscussMessageSent,
   onDurableSessionIdChange,
   onConversationSnapshotChange,
-  onApplyWorkshopPromptUpdate,
   onApplyFlowProposal,
+  onApplyWorkshopProposal,
   variant = 'panel',
   panelId,
   onHide,
@@ -597,11 +525,7 @@ function OpusChat({
   const [feedbackComment, setFeedbackComment] = useState('')
   const [isSubmittingDirect, setIsSubmittingDirect] = useState(false)
   const [submissionSent, setSubmissionSent] = useState(false)
-  const [promptUpdateDialogOpen, setPromptUpdateDialogOpen] = useState(false)
-  const [pendingPromptUpdate, setPendingPromptUpdate] = useState<WorkshopPromptUpdateProposal | null>(null)
-  const [awaitingAppliedPromptUpdate, setAwaitingAppliedPromptUpdate] = useState<WorkshopPromptUpdateProposal | null>(null)
   const [flowProposalApplying, setFlowProposalApplying] = useState(false)
-  const [queuedAutoReviewMessage, setQueuedAutoReviewMessage] = useState<string | null>(null)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -644,7 +568,7 @@ function OpusChat({
     }))
   }, [conversationKey])
 
-  const setPendingFlowProposal = useCallback((proposal: FlowAuthoringProposal | null) => {
+  const setPendingFlowProposal = useCallback((proposal: FlowAuthoringProposal | WorkshopAuthoringProposal | null) => {
     emitSharedOpusChatState(conversationKey, (current) => ({
       ...current,
       pendingFlowProposal: proposal,
@@ -762,22 +686,6 @@ function OpusChat({
   const verifyMessageSentRef = useRef<string | null>(null)
   // Track which discuss message was already sent to prevent duplicates
   const discussMessageSentRef = useRef<string | null>(null)
-  const currentMainWorkshopDraft = context?.agent_workshop?.prompt_draft || ''
-  const currentGroupWorkshopDraft = context?.agent_workshop?.selected_group_prompt_draft || ''
-  const currentPromptForPendingUpdate =
-    pendingPromptUpdate?.target_prompt === 'group' ? currentGroupWorkshopDraft : currentMainWorkshopDraft
-  const promptLineDiff = useMemo(
-    () => buildPromptLineDiff(currentPromptForPendingUpdate, pendingPromptUpdate?.prompt || ''),
-    [currentPromptForPendingUpdate, pendingPromptUpdate?.prompt]
-  )
-  const addedLineCount = useMemo(
-    () => promptLineDiff.filter((entry) => entry.kind === 'added').length,
-    [promptLineDiff]
-  )
-  const removedLineCount = useMemo(
-    () => promptLineDiff.filter((entry) => entry.kind === 'removed').length,
-    [promptLineDiff]
-  )
 
   // Attach serial tool events to the current assistant message. Live events
   // correlate by call_id; durable replay events intentionally fall back to the
@@ -846,7 +754,7 @@ function OpusChat({
       }
 
       const toolResult = event.result as Record<string, unknown>
-      const displayToolResult = event.tool_name === 'propose_flow_draft_update'
+      const displayToolResult = ['propose_flow_draft_update', 'propose_workshop_draft_update'].includes(event.tool_name ?? '')
         ? {
             contract_version: toolResult.contract_version,
             success: toolResult.success,
@@ -909,71 +817,13 @@ function OpusChat({
         })
       }
 
-      if (event.tool_name === 'update_workshop_prompt_draft') {
-        const success = toolResult.success === true
-        const proposedPrompt =
-          typeof toolResult.proposed_prompt === 'string'
-            ? toolResult.proposed_prompt
-            : ''
-        const changeSummary =
-          typeof toolResult.change_summary === 'string'
-            ? toolResult.change_summary
-            : undefined
-        const applyMode =
-          toolResult.apply_mode === 'replace' || toolResult.apply_mode === 'targeted_edit'
-            ? toolResult.apply_mode
-            : undefined
-        const targetPrompt =
-          toolResult.target_prompt === 'group'
-            ? 'group'
-            : 'main'
-        const targetGroupId =
-          typeof toolResult.target_group_id === 'string' && toolResult.target_group_id.trim()
-            ? toolResult.target_group_id.trim().toUpperCase()
-            : undefined
-
-        if (success && proposedPrompt) {
-          setPendingPromptUpdate({
-            prompt: proposedPrompt,
-            summary: changeSummary,
-            apply_mode: applyMode || 'replace',
-            target_prompt: targetPrompt,
-            target_group_id: targetPrompt === 'group' ? targetGroupId : undefined,
-          })
-          setPromptUpdateDialogOpen(true)
-          const targetLabel = targetPrompt === 'group'
-            ? `group prompt${targetGroupId ? ` (${targetGroupId})` : ''}`
-            : 'main prompt'
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: 'system',
-              content: `AI Chat prepared a ${targetLabel} update proposal. Review and approve it to apply to your workshop draft.`,
-              timestamp: new Date().toISOString(),
-            },
-          ])
-        } else {
-          const errorText =
-            typeof toolResult.error === 'string'
-              ? toolResult.error
-              : 'Unable to prepare workshop prompt update.'
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: 'system',
-              content: `✗ Prompt update proposal failed: ${errorText}`,
-              timestamp: new Date().toISOString(),
-            },
-          ])
-        }
-      }
-      if (event.tool_name === 'propose_flow_draft_update') {
+      if (event.tool_name === 'propose_flow_draft_update' || event.tool_name === 'propose_workshop_draft_update') {
         const candidate = toolResult.candidate
+        const isWorkshop = event.tool_name === 'propose_workshop_draft_update'
         const proposalReady =
-          toolResult.success === true
-          && toolResult.valid === true
-          && toolResult.pending_user_approval === true
-          && toolResult.contract_version === 'flow_authoring_proposal.v1'
+          ((toolResult.success === true && toolResult.valid === true && toolResult.pending_user_approval === true)
+            || (isWorkshop && toolResult.valid === false))
+          && toolResult.contract_version === (isWorkshop ? 'workshop_authoring_proposal.v1' : 'flow_authoring_proposal.v1')
           && typeof toolResult.base_draft_fingerprint === 'string'
           && typeof toolResult.candidate_draft_fingerprint === 'string'
           && typeof toolResult.change_summary === 'string'
@@ -981,28 +831,33 @@ function OpusChat({
           && Array.isArray(toolResult.findings)
           && candidate !== null
           && typeof candidate === 'object'
-          && typeof (candidate as Record<string, unknown>).name === 'string'
-          && typeof (candidate as Record<string, unknown>).description === 'string'
-          && typeof (candidate as Record<string, unknown>).flow_definition === 'object'
+          && (isWorkshop
+            ? typeof (candidate as Record<string, unknown>).draft_name === 'string'
+            : typeof (candidate as Record<string, unknown>).name === 'string'
+              && typeof (candidate as Record<string, unknown>).description === 'string'
+              && typeof (candidate as Record<string, unknown>).flow_definition === 'object')
         if (proposalReady) {
-          setPendingFlowProposal(toolResult as unknown as FlowAuthoringProposal)
+          setPendingFlowProposal(toolResult as unknown as FlowAuthoringProposal | WorkshopAuthoringProposal)
           setMessages((prev) => [
             ...prev,
             {
               role: 'system',
-              content: 'AI Chat prepared a validated Flow Builder proposal. Review the exact changes, then Apply or Cancel. Save remains manual.',
+              content: toolResult.valid === false
+                ? 'The Workshop proposal has blocking validation findings. Review them and request a repair; the draft is unchanged.'
+                : `AI Chat prepared a validated ${isWorkshop ? 'Workshop' : 'Flow Builder'} proposal. Review the exact changes, then Apply or Cancel. Save remains manual.`,
               timestamp: new Date().toISOString(),
             },
           ])
         } else {
+          setPendingFlowProposal(null)
           const errorText = typeof toolResult.error === 'string'
             ? toolResult.error
-            : 'The flow proposal needs repair before it can be reviewed.'
+            : 'The proposal needs repair before it can be reviewed.'
           setMessages((prev) => [
             ...prev,
             {
               role: 'system',
-              content: `✗ Flow proposal not ready: ${errorText}`,
+              content: `✗ Proposal not ready: ${errorText}`,
               timestamp: new Date().toISOString(),
             },
           ])
@@ -1016,6 +871,7 @@ function OpusChat({
   const handleSend = useCallback(async (messageOverride?: string) => {
     const messageText = messageOverride || input.trim()
     if (!messageText || isStreaming) return
+    setPendingFlowProposal(null)
 
     // Calling the provider starts with a synchronous copy of editor state; its
     // promise only awaits deterministic fingerprint hashing afterward.
@@ -1108,6 +964,7 @@ function OpusChat({
             }
             return updated
           })
+          setPendingFlowProposal(null)
           break
         } else if (event.type === 'DONE') {
           break
@@ -1115,6 +972,7 @@ function OpusChat({
       }
     } catch (error) {
       const isProtocolError = error instanceof Error && error.name === 'AgentStudioStreamProtocolError'
+      setPendingFlowProposal(null)
       if (!isProtocolError) {
         logger.error(
           'Agent Studio AI Chat stream failed',
@@ -1162,6 +1020,7 @@ function OpusChat({
     setIsStreaming,
     setMessages,
     setStreamStatus,
+    setPendingFlowProposal,
   ])
 
   // Update ref for auto-send
@@ -1311,41 +1170,11 @@ function OpusChat({
     }
   }, [context, selectedAgent, messages])
 
-  const handleApprovePromptUpdate = useCallback(() => {
-    if (!pendingPromptUpdate) return
-    if (!onApplyWorkshopPromptUpdate) {
-      setSnackbar({
-        open: true,
-        message: 'Prompt update cannot be applied from this view.',
-        severity: 'error',
-      })
-      setPromptUpdateDialogOpen(false)
-      setPendingPromptUpdate(null)
-      return
-    }
-
-    const approvedProposal = pendingPromptUpdate
-    onApplyWorkshopPromptUpdate(approvedProposal)
-    setAwaitingAppliedPromptUpdate(approvedProposal)
-    setPromptUpdateDialogOpen(false)
-    setPendingPromptUpdate(null)
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: 'system',
-        content: '✓ Prompt update sent to your Agent Workshop draft. I will verify it and run an automatic quality review once the draft updates.',
-        timestamp: new Date().toISOString(),
-      },
-    ])
-  }, [onApplyWorkshopPromptUpdate, pendingPromptUpdate])
-
-  const handleCancelPromptUpdate = useCallback(() => {
-    setPromptUpdateDialogOpen(false)
-    setPendingPromptUpdate(null)
-  }, [])
 
   const handleApplyFlowProposal = useCallback(async () => {
-    if (!pendingFlowProposal || !onApplyFlowProposal) {
+    if (isStreaming || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')) return
+    const isWorkshop = pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
+    if (!pendingFlowProposal || (isWorkshop ? !onApplyWorkshopProposal : !onApplyFlowProposal)) {
       setSnackbar({
         open: true,
         message: 'This flow proposal cannot be applied from the current view.',
@@ -1355,7 +1184,9 @@ function OpusChat({
     }
     setFlowProposalApplying(true)
     try {
-      const result = await onApplyFlowProposal(pendingFlowProposal)
+      const result = pendingFlowProposal.contract_version === 'workshop_authoring_proposal.v1'
+        ? await onApplyWorkshopProposal!(pendingFlowProposal)
+        : await onApplyFlowProposal!(pendingFlowProposal)
       setSnackbar({ open: true, message: result.message, severity: result.applied ? 'success' : 'error' })
       if (result.applied) {
         setPendingFlowProposal(null)
@@ -1363,7 +1194,7 @@ function OpusChat({
           ...prev,
           {
             role: 'system',
-            content: '✓ Flow proposal applied to the in-memory draft. It has not been saved.',
+            content: '✓ Proposal applied to the draft. It has not been saved.',
             timestamp: new Date().toISOString(),
           },
         ])
@@ -1371,12 +1202,12 @@ function OpusChat({
     } finally {
       setFlowProposalApplying(false)
     }
-  }, [onApplyFlowProposal, pendingFlowProposal, setMessages, setPendingFlowProposal])
+  }, [isStreaming, onApplyFlowProposal, onApplyWorkshopProposal, pendingFlowProposal, setMessages, setPendingFlowProposal])
 
   const handleCancelFlowProposal = useCallback(() => {
-    logger.info('Canceled transient flow proposal', {
+    logger.info('Canceled transient authoring proposal', {
       component: 'OpusChat',
-      action: 'review_flow_authoring_proposal',
+      action: 'review_authoring_proposal',
       metadata: { outcome: 'canceled' },
     })
     setPendingFlowProposal(null)
@@ -1384,65 +1215,12 @@ function OpusChat({
       ...prev,
       {
         role: 'system',
-        content: 'Flow proposal canceled; the editor draft was not changed.',
+        content: 'Proposal canceled; the editor draft was not changed.',
         timestamp: new Date().toISOString(),
       },
     ])
   }, [setMessages, setPendingFlowProposal])
 
-  useEffect(() => {
-    if (!awaitingAppliedPromptUpdate) return
-    if (context?.active_tab !== 'agent_workshop') return
-    const targetPrompt = awaitingAppliedPromptUpdate.target_prompt === 'group' ? 'group' : 'main'
-    const expectedGroupId = awaitingAppliedPromptUpdate.target_group_id?.trim().toUpperCase()
-    const currentGroupId = context?.agent_workshop?.selected_group_id?.trim().toUpperCase()
-    if (targetPrompt === 'group' && expectedGroupId && currentGroupId !== expectedGroupId) return
-
-    const sourcePrompt = targetPrompt === 'group'
-      ? context?.agent_workshop?.selected_group_prompt_draft
-      : context?.agent_workshop?.prompt_draft
-    if (!sourcePrompt) return
-
-    const normalizedCurrent = normalizePromptForComparison(sourcePrompt)
-    const normalizedExpected = normalizePromptForComparison(awaitingAppliedPromptUpdate.prompt)
-    if (!normalizedCurrent || normalizedCurrent !== normalizedExpected) return
-
-    const autoReviewRequest = buildAutoReviewRequest(awaitingAppliedPromptUpdate)
-    setAwaitingAppliedPromptUpdate(null)
-    const targetLabel = targetPrompt === 'group'
-      ? `group prompt${expectedGroupId ? ` (${expectedGroupId})` : ''}`
-      : 'main prompt'
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: 'system',
-        content: `✓ Prompt update confirmed in the ${targetLabel}. Starting an automatic post-apply review now.`,
-        timestamp: new Date().toISOString(),
-      },
-    ])
-
-    if (isStreaming || !handleSendRef.current) {
-      setQueuedAutoReviewMessage(autoReviewRequest)
-      return
-    }
-    handleSendRef.current(autoReviewRequest)
-  }, [
-    awaitingAppliedPromptUpdate,
-    context?.active_tab,
-    context?.agent_workshop?.prompt_draft,
-    context?.agent_workshop?.selected_group_prompt_draft,
-    context?.agent_workshop?.selected_group_id,
-    isStreaming,
-  ])
-
-  useEffect(() => {
-    if (!queuedAutoReviewMessage) return
-    if (isStreaming || !handleSendRef.current) return
-
-    const nextMessage = queuedAutoReviewMessage
-    setQueuedAutoReviewMessage(null)
-    handleSendRef.current(nextMessage)
-  }, [queuedAutoReviewMessage, isStreaming])
 
   // Quick action buttons - agent-related suggestions (shown when on agents tab)
   const promptQuickActions = [
@@ -1915,20 +1693,25 @@ function OpusChat({
         fullWidth
         aria-labelledby="flow-proposal-review-title"
       >
-        <DialogTitle id="flow-proposal-review-title">Review Flow Builder Proposal</DialogTitle>
+        <DialogTitle id="flow-proposal-review-title">
+          {pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
+            ? 'Review Workshop Proposal' : 'Review Flow Builder Proposal'}
+        </DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 1.5 }}>
             Review the exact draft changes below. Apply changes only updates the in-memory
-            Flow Builder draft; you must still use Save to persist it.
+            editor draft; you must still use Save to persist it.
           </DialogContentText>
           {pendingFlowProposal?.change_summary && (
             <Alert severity="info" sx={{ mb: 1.5 }}>
               {pendingFlowProposal.change_summary}
             </Alert>
           )}
-          <Alert severity="success" sx={{ mb: 1.5 }} role="status" aria-live="polite">
-            Canonical validation passed with {pendingFlowProposal?.findings.length ?? 0} non-blocking
-            finding{pendingFlowProposal?.findings.length === 1 ? '' : 's'}.
+          <Alert severity={pendingFlowProposal?.findings.some((finding) => finding.severity === 'error') ? 'error' : 'success'}
+            sx={{ mb: 1.5 }} role="status" aria-live="polite">
+            {pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
+              ? 'Canonical validation found blocking issues. Request a repaired proposal before applying.'
+              : `Canonical validation passed with ${pendingFlowProposal?.findings.length ?? 0} non-blocking findings.`}
           </Alert>
           {pendingFlowProposal?.findings.map((finding, index) => (
             <Alert
@@ -1939,12 +1722,23 @@ function OpusChat({
               {finding.message} ({finding.path})
             </Alert>
           ))}
+          {pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1' && (
+            <>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                Inherited access floor (read-only): {pendingFlowProposal.candidate.inherited_allowed_group_ids?.join(', ') || 'Unrestricted'}
+              </Typography>
+              {pendingFlowProposal.assumptions?.map((assumption, index) => (
+                <Alert severity="info" key={index} sx={{ mb: 1 }}>Assumption: {assumption}</Alert>
+              ))}
+            </>
+          )}
           <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
             Exact changes ({pendingFlowProposal?.diff.length ?? 0})
           </Typography>
           <Box
             component="ol"
-            aria-label="Exact flow proposal changes"
+            aria-label={pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
+              ? 'Exact Workshop proposal changes' : 'Exact flow proposal changes'}
             sx={{
               m: 0,
               pl: 3.5,
@@ -2008,7 +1802,9 @@ function OpusChat({
           <Button
             onClick={() => void handleApplyFlowProposal()}
             variant="contained"
-            disabled={flowProposalApplying || !onApplyFlowProposal}
+            disabled={isStreaming || flowProposalApplying || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
+              || (pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
+              ? !onApplyWorkshopProposal : !onApplyFlowProposal)}
             startIcon={flowProposalApplying ? <CircularProgress size={16} color="inherit" /> : undefined}
           >
             {flowProposalApplying ? 'Applying…' : 'Apply changes'}
@@ -2016,77 +1812,6 @@ function OpusChat({
         </DialogActions>
       </Dialog>
 
-      {/* Approval Dialog for Workshop Prompt Updates */}
-      <Dialog
-        open={promptUpdateDialogOpen}
-        onClose={handleCancelPromptUpdate}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>Apply AI Chat Prompt Update?</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 1.5 }}>
-            AI Chat generated a {pendingPromptUpdate?.apply_mode === 'targeted_edit' ? 'targeted prompt update' : 'full replacement prompt'} for your {pendingPromptUpdate?.target_prompt === 'group' ? `group prompt${pendingPromptUpdate?.target_group_id ? ` (${pendingPromptUpdate.target_group_id})` : ''}` : 'main prompt'} draft. Review below, then choose whether to apply it.
-          </DialogContentText>
-          {pendingPromptUpdate?.summary && (
-            <Alert severity="info" sx={{ mb: 1.5 }}>
-              {pendingPromptUpdate.summary}
-            </Alert>
-          )}
-          <Alert severity="success" sx={{ mb: 1.5 }}>
-            Proposed additions are highlighted in green ({addedLineCount} line{addedLineCount === 1 ? '' : 's'}).
-          </Alert>
-          {removedLineCount > 0 && (
-            <Alert severity="warning" sx={{ mb: 1.5 }}>
-              Proposed removals are highlighted in red with strikethrough ({removedLineCount} line{removedLineCount === 1 ? '' : 's'}).
-            </Alert>
-          )}
-          <Box
-            sx={{
-              border: (theme) => `1px solid ${theme.palette.divider}`,
-              borderRadius: 1,
-              maxHeight: 420,
-              overflow: 'auto',
-              bgcolor: 'background.default',
-              px: 1,
-              py: 1,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-              fontSize: '0.8rem',
-            }}
-          >
-            {promptLineDiff.map((entry, idx) => (
-              <Box
-                key={`proposal-line-${idx}`}
-                component="div"
-                sx={{
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  bgcolor:
-                    entry.kind === 'added'
-                      ? (theme) => alpha(theme.palette.success.main, 0.16)
-                      : entry.kind === 'removed'
-                      ? (theme) => alpha(theme.palette.error.main, 0.16)
-                      : 'transparent',
-                  color: entry.kind === 'removed' ? 'error.main' : 'inherit',
-                  textDecoration: entry.kind === 'removed' ? 'line-through' : 'none',
-                  px: 0.5,
-                  borderRadius: 0.5,
-                }}
-              >
-                {entry.line || ' '}
-              </Box>
-            ))}
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCancelPromptUpdate} color="inherit">
-            Cancel
-          </Button>
-          <Button onClick={handleApprovePromptUpdate} variant="contained">
-            Apply to Draft
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Suggestion Dialog */}
       <SuggestionDialog

@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, beforeEach, expect, it, vi } from 'vitest'
 import { createRef } from 'react'
+import { webcrypto } from 'node:crypto'
+import { fingerprintWorkshopDraft } from '../authoringContext'
 
 import PromptWorkshop, {
   type WorkshopAuthoringContextHandle,
@@ -18,7 +20,9 @@ import type {
 } from '@/types/promptExplorer'
 
 const serviceMocks = vi.hoisted(() => ({
+  validateWorkshopDraft: vi.fn(),
   createCustomAgent: vi.fn(),
+  getWorkshopSavedReference: vi.fn(),
   deleteCustomAgent: vi.fn(),
   fetchAgentTemplates: vi.fn(),
   fetchModelOptions: vi.fn(),
@@ -409,6 +413,7 @@ describe('PromptWorkshop', () => {
     serviceMocks.listCustomAgentVersions.mockResolvedValue([])
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [], total: 0 })
     serviceMocks.createCustomAgent.mockResolvedValue(buildCustomAgent())
+    serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: buildCustomAgent().agent_id })
     serviceMocks.setCustomAgentVisibility.mockResolvedValue(buildCustomAgent({ visibility: 'project' }))
     serviceMocks.submitToolIdeaRequest.mockResolvedValue({
       id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
@@ -489,11 +494,13 @@ describe('PromptWorkshop', () => {
   // ── Saving ──
 
   it('saves new agents with template_source payload (no parent_agent_id)', async () => {
+    const onSavedHandoff = vi.fn()
+    const origin = { flow_id: 'flow-1', flow_draft_fingerprint: 'sha256:original-flow' }
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [], total: 0 })
       .mockResolvedValue({ custom_agents: [buildCustomAgent()], total: 1 })
 
-    render(<PromptWorkshop catalog={buildCatalog()} />)
+    render(<PromptWorkshop catalog={buildCatalog()} continuationOrigin={origin} onSavedHandoff={onSavedHandoff} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
 
@@ -515,7 +522,29 @@ describe('PromptWorkshop', () => {
     await waitForHeaderName('My Agent')
     expect(screen.getByRole('status')).toHaveTextContent('Saved just now')
     expect(screen.getByText('Template: Gene Specialist')).toBeInTheDocument()
+    expect(onSavedHandoff).toHaveBeenCalledWith({
+      status: 'ready', saved_agent_id: buildCustomAgent().agent_id, origin,
+    })
   }, 15000)
+
+  it('retains a saved identity when catalog refresh fails without emitting an actionable handoff', async () => {
+    const onSavedHandoff = vi.fn()
+    serviceMocks.listCustomAgents
+      .mockResolvedValue({ custom_agents: [], total: 0 })
+    render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    serviceMocks.listCustomAgents.mockRejectedValue(new Error('Private server payload'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSavedHandoff).toHaveBeenCalledWith({
+      status: 'catalog_unavailable', origin: undefined,
+    }))
+    await waitForHeaderName('My Agent')
+    expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Private server payload')).not.toBeInTheDocument()
+  })
 
   it('asks for a note, lists changed sections, and sends the note with the update', async () => {
     const existing = buildCustomAgent({ tool_ids: ['search_document'] })
@@ -682,8 +711,8 @@ describe('PromptWorkshop', () => {
     await saveFromHeader()
 
     await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(serviceMocks.setCustomAgentVisibility).toHaveBeenCalledTimes(1))
-    expect(serviceMocks.setCustomAgentVisibility).toHaveBeenCalledWith('ca_11111111-1111-1111-1111-111111111111', 'project')
+    expect(serviceMocks.createCustomAgent.mock.calls[0][0].visibility).toBe('project')
+    expect(serviceMocks.setCustomAgentVisibility).not.toHaveBeenCalled()
   }, 15000)
 
   it('saves selected reasoning for reasoning-capable models', async () => {
@@ -939,7 +968,7 @@ describe('PromptWorkshop', () => {
     await waitForHeaderName('Gene Specialist (Custom)')
 
     gotoSection('Prompt')
-    expect(screen.getByLabelText('Your prompt')).toHaveValue('System base prompt')
+    expect(screen.getByLabelText('Your prompt')).toHaveValue('')
 
     fireEvent.click(screen.getByRole('button', { name: /^Built-in, read-only/ }))
     expect(screen.getByRole('region', { name: 'Built-in layer, read-only' })).toHaveTextContent('Locked core contract')
@@ -977,7 +1006,7 @@ describe('PromptWorkshop', () => {
     fireEvent.change(screen.getByLabelText('Your prompt'), { target: { value: 'Rewritten' } })
     expect(screen.getByRole('status')).toHaveTextContent('Unsaved changes')
     fireEvent.click(screen.getAllByRole('button', { name: 'Reset to template' })[0])
-    expect(screen.getByLabelText('Your prompt')).toHaveValue('System base prompt')
+    expect(screen.getByLabelText('Your prompt')).toHaveValue('')
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   }, 15000)
 
@@ -1259,101 +1288,80 @@ describe('PromptWorkshop', () => {
     expect(screen.queryByRole('button', { name: 'Ask AI Chat which model fits' })).not.toBeInTheDocument()
   })
 
-  // ── Incoming AI Chat prompt proposals ──
-
-  it('applies incoming prompt updates from AI Chat approval into the workshop draft', async () => {
-    const { rerender } = render(<PromptWorkshop catalog={buildCatalog()} incomingPromptUpdate={null} />)
-    await startFromTemplate()
-    await waitForHeaderName('Gene Specialist (Custom)')
-
-    rerender(
-      <PromptWorkshop
-        catalog={buildCatalog()}
-        incomingPromptUpdate={{
-          request_id: 1,
-          prompt: 'Updated prompt from AI Chat',
-          summary: 'Reworked structure and tightened extraction constraints.',
-          apply_mode: 'targeted_edit',
-        }}
-      />
-    )
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Your prompt')).toHaveValue('Updated prompt from AI Chat')
-    })
-    expect(screen.getByText('Applied AI Chat update: Reworked structure and tightened extraction constraints.')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('Unsaved changes')
+  it.each([undefined, 'gene'])('applies a complete reviewed proposal without saving and supports Undo (template %s)', async (templateId) => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId={templateId} authoringContextRef={handle} />)
+    await waitFor(() => expect(handle.current?.captureAuthoringContext().draft_model_id).toBeTruthy())
+    if (templateId) await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = { ...base, draft_name: 'Reviewed reader', draft_description: 'Reviewed description', prompt_draft: 'Read evidence.' }
+    const result = await act(async () => handle.current!.applyAuthoringProposal({
+      contract_version: 'workshop_authoring_proposal.v1',
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base),
+      candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Rename the reader', diff: [], findings: [],
+    }))
+    expect(result.applied).toBe(true)
+    expect(handle.current!.captureAuthoringContext().draft_name).toBe('Reviewed reader')
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.setCustomAgentVisibility).not.toHaveBeenCalled()
+    expect(serviceMocks.validateWorkshopDraft.mock.calls.map((call) => call[1])).toEqual(['pre_apply', 'post_apply'])
+    fireEvent.click(screen.getByRole('button', { name: 'Undo AI changes' }))
+    expect(handle.current!.captureAuthoringContext().draft_name).toBe(base.draft_name)
   })
 
-  it('preserves incoming prompt updates when workshop bootstrap finishes after approval', async () => {
-    const modelOptionsDeferred = createDeferred<ModelOption[]>()
-    const toolLibraryDeferred = createDeferred<ToolLibraryItem[]>()
-    const templatesDeferred = createDeferred<{ templates: AgentTemplate[]; group_options: GroupOption[] }>()
-    const customAgentsDeferred = createDeferred<{ custom_agents: CustomAgent[]; total: number }>()
-
-    serviceMocks.fetchModelOptions.mockImplementation(() => modelOptionsDeferred.promise)
-    serviceMocks.fetchToolLibrary.mockImplementation(() => toolLibraryDeferred.promise)
-    serviceMocks.fetchAgentTemplates.mockImplementation(() => templatesDeferred.promise)
-    serviceMocks.listCustomAgents.mockImplementation(() => customAgentsDeferred.promise)
-
-    const { rerender } = render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" incomingPromptUpdate={null} />)
-
-    rerender(
-      <PromptWorkshop
-        catalog={buildCatalog()}
-        initialParentAgentId="gene"
-        incomingPromptUpdate={{
-          request_id: 3,
-          prompt: 'Late-arriving update from AI Chat',
-          summary: 'Applied after workshop bootstrap finished.',
-          apply_mode: 'targeted_edit',
-        }}
-      />
-    )
-
-    modelOptionsDeferred.resolve(modelOptions)
-    toolLibraryDeferred.resolve(toolLibrary)
-    templatesDeferred.resolve({ templates, group_options: groupOptions })
-    customAgentsDeferred.resolve({ custom_agents: [], total: 0 })
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Your prompt')).toHaveValue('Late-arriving update from AI Chat')
-    }, { timeout: 10000 })
-    expect(screen.getByText('Applied AI Chat update: Applied after workshop bootstrap finished.')).toBeInTheDocument()
-  }, 15000)
-
-  it('applies incoming group prompt updates from AI Chat approval into group overrides', async () => {
-    const onContextChange = vi.fn()
-    const { rerender } = render(
-      <PromptWorkshop catalog={buildCatalogWithGroupRule()} initialParentAgentId="gene" incomingPromptUpdate={null} onContextChange={onContextChange} />
-    )
+  it('rejects stale proposals and rolls back post-apply validation failure', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
     await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = { ...base, draft_name: 'Rejected reader' }
+    const proposal = {
+      contract_version: 'workshop_authoring_proposal.v1' as const,
+      base_draft_fingerprint: 'sha256:stale',
+      candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Rename', diff: [], findings: [],
+    }
+    const stale = await act(async () => handle.current!.applyAuthoringProposal(proposal))
+    expect(stale.applied).toBe(false)
+    expect(serviceMocks.validateWorkshopDraft).not.toHaveBeenCalled()
+    serviceMocks.validateWorkshopDraft
+      .mockResolvedValueOnce({ valid: true, findings: [] })
+      .mockResolvedValueOnce({ valid: false, findings: [] })
+    proposal.base_draft_fingerprint = await fingerprintWorkshopDraft(base)
+    const invalid = await act(async () => handle.current!.applyAuthoringProposal(proposal))
+    expect(invalid.applied).toBe(false)
+    expect(handle.current!.captureAuthoringContext().draft_name).toBe(base.draft_name)
+    expect(screen.queryByRole('button', { name: 'Undo AI changes' })).not.toBeInTheDocument()
+  })
 
-    rerender(
-      <PromptWorkshop
-        catalog={buildCatalogWithGroupRule()}
-        initialParentAgentId="gene"
-        onContextChange={onContextChange}
-        incomingPromptUpdate={{
-          request_id: 2,
-          prompt: 'WB override from AI Chat',
-          summary: 'Updated WB-specific extraction guidance.',
-          apply_mode: 'replace',
-          target_prompt: 'group',
-          target_group_id: 'WB',
-        }}
-      />
-    )
-
-    await waitFor(() => {
-      const contextSnapshots = onContextChange.mock.calls.map((call) => call[0])
-      expect(contextSnapshots).toContainEqual(
-        expect.objectContaining({ selected_group_id: 'WB', selected_group_prompt_draft: 'WB override from AI Chat' })
-      )
-    }, { timeout: 10000 })
-    expect(screen.getByRole('button', { name: 'WB, edited' })).toBeInTheDocument()
-    expect(screen.getByLabelText('WB instructions')).toHaveValue('WB override from AI Chat')
-  }, 15000)
+  it('locks the draft while validation is pending and leaves it unchanged on rejection', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    const validation = createDeferred<{ valid: boolean; findings: [] }>()
+    serviceMocks.validateWorkshopDraft.mockReturnValueOnce(validation.promise)
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = { ...base, draft_name: 'Proposed name' }
+    const proposal = {
+      contract_version: 'workshop_authoring_proposal.v1' as const,
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base),
+      candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Rename', diff: [], findings: [],
+    }
+    let applying!: ReturnType<WorkshopAuthoringContextHandle['applyAuthoringProposal']>
+    act(() => { applying = handle.current!.applyAuthoringProposal(proposal) })
+    await waitFor(() => expect(serviceMocks.validateWorkshopDraft).toHaveBeenCalled())
+    expect(screen.getByRole('group', { name: 'Workshop draft' })).toBeDisabled()
+    await act(async () => validation.resolve({ valid: false, findings: [] }))
+    expect((await applying).applied).toBe(false)
+    expect(handle.current!.captureAuthoringContext().draft_name).toBe(base.draft_name)
+  })
 
   it('does not expose an Output Schema Key field anywhere in the workshop', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)

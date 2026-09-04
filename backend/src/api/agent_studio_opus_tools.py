@@ -14,6 +14,7 @@ from src.lib.agent_studio import ChatContext, SUBMIT_SUGGESTION_TOOL
 from src.lib.agent_studio.capability_catalog import CAPABILITY_KINDS
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.flow_tools import register_flow_tools
+from src.lib.agent_studio.workshop_authoring import WorkshopOperation
 from src.lib.chat_history_repository import (
     ALL_CHAT_KINDS_SENTINEL,
     ASSISTANT_CHAT_KIND,
@@ -156,86 +157,26 @@ GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
     },
 }
 
-UPDATE_WORKSHOP_PROMPT_TOOL = {
-    "name": "update_workshop_prompt_draft",
-    "description": """Propose a prompt update for the current Agent Workshop draft.
-
-Use this when the curator asks you to rewrite, replace, or significantly refactor
-their editable workshop layers: the main/base prompt ("main") or selected group
-override ("group"). Backend-owned core/generated layers and inherited base prompts
-are read-only context and must not be copied into updated_prompt.
-This tool does NOT auto-apply or auto-save changes.
-The UI will show the proposal and require explicit curator approval before applying.
-The continuation result is a compact approval acknowledgment and the full proposal is
-delivered to the UI. For replace mode, updated_prompt remains in the retained tool
-input. For targeted-edit mode, only the authored edits remain there; after approval,
-use refresh_workshop_prompt chunks to read the exact resulting text when needed. Do
-not replay the same proposal in another call while approval is pending.
-Before proposing edits about PDF evidence extraction, inspect current prompt and
-tool schemas so the update preserves span-id evidence recording instead of
-legacy quote-generation guidance.
-""",
+PROPOSE_WORKSHOP_TOOL = {
+    "name": "propose_workshop_draft_update",
+    "description": (
+        "Compile complete, read-only Workshop draft proposals from semantic edits. "
+        "Use for clear build/configure/edit requests without preliminary permission. "
+        "Discover current authorized models/tools/outputs/groups through the live catalog. "
+        "Preserve unrelated fields; clear_output explicitly chooses no structured output. "
+        "Curators review and Apply locally, then separately Save. Profile internals are "
+        "owned by the profile authoring extension and are not supported by these operations."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "target_prompt": {
-                "type": "string",
-                "enum": ["main", "group"],
-                "description": "Which editable workshop layer to update. Use 'main' for the main/base prompt and 'group' for the selected group prompt override.",
-                "default": "main",
-            },
-            "target_group_id": {
-                "type": "string",
-                "description": "Optional group ID when target_prompt='group' (for example 'WB'). Must match the currently selected group in Agent Workshop.",
-            },
-            "updated_prompt": {
-                "type": "string",
-                "description": "Complete replacement prompt text (required when apply_mode='replace').",
-            },
-            "edits": {
-                "type": "array",
-                "description": "Targeted edit operations (required when apply_mode='targeted_edit').",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "operation": {
-                            "type": "string",
-                            "enum": ["replace_text", "replace_section"],
-                            "description": "Edit operation type.",
-                        },
-                        "find_text": {
-                            "type": "string",
-                            "description": "Text to find when operation='replace_text'.",
-                        },
-                        "replacement_text": {
-                            "type": "string",
-                            "description": "Replacement text for the operation.",
-                        },
-                        "occurrence": {
-                            "type": "string",
-                            "enum": ["first", "last", "all"],
-                            "description": "Which occurrence to replace for replace_text (default: first).",
-                        },
-                        "section_heading": {
-                            "type": "string",
-                            "description": "Markdown section heading text to replace when operation='replace_section'.",
-                        },
-                    },
-                    "required": ["operation"],
-                },
-            },
-            "change_summary": {
-                "type": "string",
-                "description": "Optional short summary of what changed and why.",
-            },
-            "apply_mode": {
-                "type": "string",
-                "enum": ["replace", "targeted_edit"],
-                "description": "How to build the proposed update.",
-                "default": "replace",
-            },
+            "base_draft_fingerprint": {"type": "string"},
+            "operations": {"type": "array", "items": WorkshopOperation.model_json_schema()},
+            "assumptions": {"type": "array", "items": {"type": "string"}},
+            "change_summary": {"type": "string"},
         },
-        "required": [],
+        "required": ["base_draft_fingerprint", "operations"],
+        "additionalProperties": False,
     },
 }
 
@@ -1300,7 +1241,7 @@ TOOL_METADATA_TOOLS = {
 }
 WORKSHOP_TOOLS = {
     "refresh_workshop_prompt",
-    "update_workshop_prompt_draft",
+    "propose_workshop_draft_update",
 }
 TRACE_TOOLS = {
     "search_traces",
@@ -1355,7 +1296,7 @@ _BUILTIN_OPUS_TOOLS = (
     SEARCH_STUDIO_CAPABILITIES_TOOL,
     GET_STUDIO_CAPABILITY_DETAIL_TOOL,
     REFRESH_WORKSHOP_PROMPT_TOOL,
-    UPDATE_WORKSHOP_PROMPT_TOOL,
+    PROPOSE_WORKSHOP_TOOL,
     REPORT_TOOL_FAILURE_TOOL,
     LIST_RECENT_CHATS_TOOL,
     SEARCH_CHAT_HISTORY_TOOL,

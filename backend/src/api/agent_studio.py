@@ -119,7 +119,6 @@ from src.lib.agent_studio.custom_agent_service import (
     normalize_custom_overlay_for_parent,
     normalize_editable_group_prompt_overrides,
     parse_custom_agent_id,
-    reject_locked_prompt_markers,
     set_custom_agent_visibility,
 )
 from src.lib.agent_studio.catalog_service import (
@@ -163,7 +162,6 @@ from src.lib.openai_agents.config import (
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_workshop_prompt_chunk_max_chars,
-    get_agent_studio_workshop_prompt_max_chars,
 )
 from src.lib.executable_runs import (
     ExecutableRunAccessError,
@@ -515,7 +513,6 @@ async def get_tool_library_endpoint(
     user: Any = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> ToolLibraryResponse:
-    _ = user
     try:
         entries = get_tool_policy_cache().list_curator_visible(db)
         return ToolLibraryResponse(
@@ -536,6 +533,12 @@ async def get_tool_library_endpoint(
                     ),
                 )
                 for entry in entries
+                if is_resource_access_allowed(
+                    visibility_allowed=True,
+                    allowed_group_ids=entry.config.get("allowed_group_ids", []),
+                    active_group_ids=_authenticated_group_ids(user),
+                    resource_kind="agent_studio_tool",
+                )
             ]
         )
     except Exception as e:
@@ -1330,7 +1333,7 @@ async def test_agent_endpoint(
 # Public Agent Studio tool definitions exposed from the focused helper module.
 SUGGESTION_TOOL = opus_tools.SUGGESTION_TOOL
 REFRESH_WORKSHOP_PROMPT_TOOL = opus_tools.REFRESH_WORKSHOP_PROMPT_TOOL
-UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.UPDATE_WORKSHOP_PROMPT_TOOL
+PROPOSE_WORKSHOP_TOOL = opus_tools.PROPOSE_WORKSHOP_TOOL
 REPORT_TOOL_FAILURE_TOOL = opus_tools.REPORT_TOOL_FAILURE_TOOL
 CHAT_HISTORY_TOOL_CHAT_KINDS = opus_tools.CHAT_HISTORY_TOOL_CHAT_KINDS
 LIST_RECENT_CHATS_TOOL = opus_tools.LIST_RECENT_CHATS_TOOL
@@ -1409,7 +1412,7 @@ def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
     if tool_name in _DOMAIN_ENVELOPE_TOOLS:
         return "domain_review", "Domain envelope, validation, and export-readiness inspection"
     if tool_name in _WORKSHOP_TOOLS:
-        return "workshop_prompt", "Agent Workshop prompt inspection and curator-approved proposals"
+        return "workshop_authoring", "Workshop inspection and curator-reviewed complete agent proposals"
     if tool_name in _FLOW_TOOLS:
         if tool_name in {
             "propose_flow_draft_update",
@@ -1955,21 +1958,6 @@ def _collect_provider_payload_refs(
                 return
 
 
-def _workshop_proposal_retention_guidance(apply_mode: Any) -> str:
-    if apply_mode == "replace":
-        return (
-            "The full proposal was streamed to the curator approval UI. "
-            "The exact proposed text remains in this call's retained tool input; "
-            "do not repeat it in another tool call unless the curator requests changes."
-        )
-    if apply_mode == "targeted_edit":
-        return (
-            "The full resulting proposal was streamed to the curator approval UI. "
-            "Only the authored targeted edits remain in this call's retained tool input; "
-            "after approval, use refresh_workshop_prompt chunks to read the exact resulting "
-            "text when needed."
-        )
-    raise ValueError(f"Unsupported Workshop proposal apply mode: {apply_mode!r}")
 
 
 def _provider_content_identity(serialized: str) -> Dict[str, Any]:
@@ -2052,14 +2040,9 @@ def _fit_provider_compact_payload(
     if serialize_if_fits(payload) is None:
         return _provider_cap_error_content(inline_max_chars)
 
-    if tool_name == "update_workshop_prompt_draft":
+    if tool_name in {"propose_workshop_draft_update", "propose_flow_draft_update"}:
         payload["recall"]["retained_proposal_input"] = {
-            "apply_mode": (
-                tool_result.get("apply_mode")
-                if isinstance(tool_result, dict)
-                else None
-            ),
-            "next_tool": "refresh_workshop_prompt",
+            "next_tool": "refresh_workshop_prompt" if tool_name == "propose_workshop_draft_update" else "get_current_flow",
         }
         if serialize_if_fits(payload) is None:
             payload["recall"].pop("retained_proposal_input")
@@ -2197,40 +2180,14 @@ def _provider_tool_result_content(
 
     provider_tool_result = tool_result
     if (
-        tool_name == "update_workshop_prompt_draft"
+        tool_name in {"propose_flow_draft_update", "propose_workshop_draft_update"}
         and isinstance(tool_result, dict)
-        and tool_result.get("success") is True
-        and tool_result.get("pending_user_approval") is True
-    ):
-        # Provider continuation retains the originating tool input. Replace calls
-        # retain updated_prompt; targeted edits retain only their edits.
-        # Do not replay derived prompt text; the full result remains authoritative
-        # for the UI.
-        instruction = _workshop_proposal_retention_guidance(tool_result.get("apply_mode"))
-        provider_tool_result = {
-            "contract_version": "workshop_prompt_proposal_ack.v1",
-            "success": True,
-            "approval_status": tool_result.get("approval_status"),
-            "pending_user_approval": True,
-            "proposal_id": tool_result.get("proposal_id"),
-            "target_prompt": tool_result.get("target_prompt"),
-            "target_group_id": tool_result.get("target_group_id"),
-            "apply_mode": tool_result.get("apply_mode"),
-            "prompt_length": tool_result.get("prompt_length"),
-            "prompt_hash": tool_result.get("prompt_hash"),
-            "change_summary": tool_result.get("change_summary"),
-            "message": tool_result.get("message"),
-            "instruction": instruction,
-        }
-    elif (
-        tool_name == "propose_flow_draft_update"
-        and isinstance(tool_result, dict)
-        and tool_result.get("contract_version") == "flow_authoring_proposal.v1"
+        and tool_result.get("contract_version") in {"flow_authoring_proposal.v1", "workshop_authoring_proposal.v1"}
     ):
         # The full candidate and exact diff are transient UI state. Keep them out
         # of provider continuation and durable conversation records.
         provider_tool_result = {
-            "contract_version": "flow_authoring_proposal_ack.v1",
+            "contract_version": tool_result["contract_version"].replace("proposal.v1", "proposal_ack.v1"),
             "success": tool_result.get("success") is True,
             "valid": tool_result.get("valid") is True,
             "pending_user_approval": tool_result.get("pending_user_approval") is True,
@@ -2245,7 +2202,7 @@ def _provider_tool_result_content(
             "diff_count": len(tool_result.get("diff") or []),
             "message": tool_result.get("message"),
             "instruction": (
-                "Tell the curator the flow proposal is ready for review; do not claim it was applied or saved."
+                "Tell the curator the proposal is ready for review; do not claim it was applied or saved."
                 if tool_result.get("valid") is True
                 else "Repair the listed findings with another semantic proposal call; the request-local candidate is retained."
             ),
@@ -2829,6 +2786,7 @@ async def _handle_tool_call(
     messages: Optional[List[dict]] = None,
     user_db_id: int | None = None,
     active_group_ids: Optional[List[str]] = None,
+    workshop_proposal_state: Optional[dict] = None,
 ) -> dict:
     """
     Handle a tool call from Agent Studio AI Chat.
@@ -3609,151 +3567,17 @@ async def _handle_tool_call(
             "message": result["message"],
         }
 
-    elif tool_name == "update_workshop_prompt_draft":
-        if not context or context.active_tab != "agent_workshop" or not context.agent_workshop:
-            return {
-                "success": False,
-                "error": "This tool is only available while the curator is on the Agent Workshop tab.",
-            }
+    elif tool_name == "propose_workshop_draft_update":
+        from src.lib.agent_studio.workshop_authoring import propose_workshop_update
 
-        if "target_mod_id" in tool_input:
-            return {
-                "success": False,
-                "error": "Unsupported field target_mod_id. Use target_group_id.",
-            }
-
-        target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
-        if target_prompt not in {"main", "group"}:
-            return {
-                "success": False,
-                "error": "Unsupported target_prompt. Must be 'main' or 'group'.",
-            }
-
-        target_group_id = ""
-        if target_prompt == "group":
-            selected_group_id = (context.agent_workshop.selected_group_id or "").strip().upper()
-            raw_target_group = tool_input.get("target_group_id")
-            if raw_target_group is not None and not isinstance(raw_target_group, str):
-                return {
-                    "success": False,
-                    "error": "target_group_id must be a string when provided.",
-                }
-            requested_group_id = raw_target_group.strip().upper() if isinstance(raw_target_group, str) else ""
-            target_group_id = requested_group_id or selected_group_id
-
-            if not target_group_id or selected_group_id != target_group_id:
-                return {
-                    "success": False,
-                    "error": (
-                        "To edit a group prompt, select that group in Agent Workshop first "
-                        "and then retry this update."
-                    ),
-                }
-
-        apply_mode = tool_input.get("apply_mode", "replace")
-        if apply_mode not in {"replace", "targeted_edit"}:
-            return {
-                "success": False,
-                "error": "Unsupported apply_mode. Must be 'replace' or 'targeted_edit'.",
-            }
-
-        change_summary = tool_input.get("change_summary")
-        if change_summary is not None and not isinstance(change_summary, str):
-            return {
-                "success": False,
-                "error": "change_summary must be a string when provided.",
-            }
-
-        updated_prompt = ""
-        applied_edits: List[str] = []
-
-        if apply_mode == "replace":
-            candidate_prompt = tool_input.get("updated_prompt")
-            if not isinstance(candidate_prompt, str) or not candidate_prompt.strip():
-                return {
-                    "success": False,
-                    "error": "updated_prompt must be a non-empty string when apply_mode='replace'.",
-                }
-            updated_prompt = candidate_prompt
-        else:
-            base_prompt = (
-                context.agent_workshop.selected_group_prompt_draft
-                if target_prompt == "group"
-                else context.agent_workshop.prompt_draft
-            ) or ""
-            if not base_prompt.strip():
-                missing_target = (
-                    "selected group prompt"
-                    if target_prompt == "group"
-                    else "workshop draft prompt"
-                )
-                return {
-                    "success": False,
-                    "error": (
-                        f"No {missing_target} is available to edit. "
-                        "Provide updated_prompt with apply_mode='replace' instead."
-                    ),
-                }
-            edits = tool_input.get("edits")
-            if not isinstance(edits, list) or len(edits) == 0:
-                return {
-                    "success": False,
-                    "error": "edits must be a non-empty array when apply_mode='targeted_edit'.",
-                }
-
-            edit_result = _apply_targeted_workshop_edits(base_prompt=base_prompt, edits=edits)
-            if not edit_result.get("success"):
-                return {
-                    "success": False,
-                    "error": str(edit_result.get("error", "Failed to apply targeted edits.")),
-                }
-            updated_prompt = str(edit_result.get("prompt", ""))
-            applied_edits = [str(item) for item in edit_result.get("applied_edits", [])]
-            if not change_summary and isinstance(edit_result.get("summary"), str):
-                change_summary = edit_result["summary"]
-
-        prompt_max_chars = get_agent_studio_workshop_prompt_max_chars()
-        if len(updated_prompt) > prompt_max_chars:
-            return {
-                "success": False,
-                "error": (
-                    "proposed prompt exceeds maximum size "
-                    f"({prompt_max_chars:,} characters)."
-                ),
-            }
-        try:
-            reject_locked_prompt_markers(
-                updated_prompt,
-                target="Prompt update",
+        if not context or context.active_tab != "agent_workshop" or not context.agent_workshop or user_db_id is None:
+            return {"success": False, "error": "Open an authenticated Workshop draft first."}
+        with SessionLocal() as proposal_db:
+            return propose_workshop_update(
+                db=proposal_db, base=context.agent_workshop, tool_input=tool_input,
+                user_id=user_db_id, active_group_ids=active_group_ids or [],
+                state=workshop_proposal_state if workshop_proposal_state is not None else {},
             )
-        except ValueError:
-            return {
-                "success": False,
-                "error": (
-                    "Prompt update targets editable main/base or group-specific instructions only. "
-                    "Locked core/generated prompt contracts cannot be edited or copied."
-                ),
-            }
-
-        prompt_hash = _prompt_hash(updated_prompt)
-        proposal_target = (
-            f"group:{target_group_id}" if target_prompt == "group" else "main"
-        )
-        return {
-            "success": True,
-            "approval_status": "pending_user_approval",
-            "pending_user_approval": True,
-            "proposal_id": f"{proposal_target}:{prompt_hash}",
-            "apply_mode": apply_mode,
-            "proposed_prompt": updated_prompt,
-            "prompt_length": len(updated_prompt),
-            "prompt_hash": prompt_hash,
-            "target_prompt": target_prompt,
-            "target_group_id": target_group_id if target_prompt == "group" else None,
-            "change_summary": change_summary.strip() if isinstance(change_summary, str) else "",
-            "applied_edits": applied_edits,
-            "message": "Prompt update proposal prepared. Awaiting curator approval in the UI.",
-        }
 
     elif tool_name == "report_tool_failure":
         _alert_task = asyncio.create_task(
@@ -4306,6 +4130,7 @@ async def chat_with_opus(
         run_state = AgentStudioRunState(trace_id=str(uuid.uuid4()))
         completed_tool_calls: List[Dict[str, Any]] = []
         domain_reference_events: List[Dict[str, Any]] = []
+        workshop_proposal_state: dict = {}
 
         async def execute_tool(
             tool_name: str,
@@ -4341,6 +4166,7 @@ async def chat_with_opus(
                         messages=input_items,
                         user_db_id=db_user_id,
                         active_group_ids=active_group_ids,
+                        workshop_proposal_state=workshop_proposal_state,
                     )
                 except Exception as exc:
                     _report_agent_studio_exception_once(

@@ -255,6 +255,8 @@ class AgentWorkshopContext(BaseModel):
 
     getting_started_mode: Optional[Literal["template", "scratch", "clone"]] = None
     template_source: Optional[str] = None
+    clone_source_agent_id: Optional[str] = None
+    clone_source_updated_at: Optional[str] = None
     template_name: Optional[str] = None
     custom_agent_id: Optional[str] = None
     custom_agent_name: Optional[str] = None

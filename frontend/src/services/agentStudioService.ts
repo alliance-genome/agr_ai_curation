@@ -406,6 +406,9 @@ export async function fetchPromptPreview(
 // =============================================================================
 
 export interface CreateCustomAgentRequest {
+  visibility?: 'private' | 'project'
+  clone_source_agent_id?: string
+  clone_source_updated_at?: string
   template_source?: string
   name: string
   custom_prompt?: string
@@ -423,6 +426,8 @@ export interface CreateCustomAgentRequest {
 }
 
 export interface UpdateCustomAgentRequest {
+  visibility?: 'private' | 'project'
+  expected_updated_at?: string
   name?: string
   custom_prompt?: string
   group_prompt_overrides?: Record<string, string>
@@ -589,6 +594,12 @@ export async function updateCustomAgent(
   if (!response.ok) {
     throw new Error(await readCurationApiError(response))
   }
+  return response.json()
+}
+
+export async function getWorkshopSavedReference(customAgentId: string): Promise<{ agent_id: string }> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/authoring-reference`)
+  if (!response.ok) throw new Error('The saved agent is not available in the current flow catalog.')
   return response.json()
 }
 
@@ -1156,6 +1167,20 @@ export interface FlowDraftValidationResponse {
 }
 
 /** Canonically validate a transient proposal candidate without writing it. */
+export async function validateWorkshopDraft(
+  workshop: import('@/types/promptExplorer').AgentWorkshopContext,
+  phase: 'pre_apply' | 'post_apply',
+): Promise<FlowDraftValidationResponse> {
+  const response = await fetch('/api/agent-studio/custom-agents/validate-draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ workshop, phase }),
+  })
+  if (!response.ok) throw new Error(`Workshop validation failed (${response.status}).`)
+  return response.json()
+}
+
 export async function validateFlowDraft(
   flowDefinition: FlowDefinition,
   phase: 'pre_apply' | 'post_apply',

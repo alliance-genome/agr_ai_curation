@@ -323,6 +323,8 @@ export interface FlowContextDefinition {
 export interface AgentWorkshopContext {
   getting_started_mode?: 'template' | 'scratch' | 'clone'
   template_source?: string
+  clone_source_agent_id?: string
+  clone_source_updated_at?: string
   template_name?: string
   custom_agent_id?: string
   custom_agent_name?: string
@@ -348,16 +350,26 @@ export interface AgentWorkshopContext {
   draft_output_schema_key?: string
 }
 
-export interface WorkshopPromptUpdateProposal {
-  prompt: string
-  summary?: string
-  apply_mode?: 'replace' | 'targeted_edit'
-  target_prompt?: 'main' | 'group'
-  target_group_id?: string
+export interface WorkshopAuthoringProposal {
+  assumptions?: string[]
+  contract_version: 'workshop_authoring_proposal.v1'
+  base_draft_fingerprint: string
+  candidate_draft_fingerprint: string
+  candidate: AgentWorkshopContext
+  change_summary: string
+  diff: FlowAuthoringDiffEntry[]
+  findings: FlowAuthoringFinding[]
 }
 
-export interface WorkshopPromptUpdateRequest extends WorkshopPromptUpdateProposal {
-  request_id: number
+export interface WorkshopContinuationOrigin {
+  flow_id?: string
+  flow_draft_fingerprint: string
+}
+
+export interface WorkshopSavedHandoff {
+  status: 'ready' | 'stale_origin' | 'catalog_unavailable'
+  saved_agent_id?: string
+  origin?: WorkshopContinuationOrigin
 }
 
 export interface FlowAuthoringFinding {

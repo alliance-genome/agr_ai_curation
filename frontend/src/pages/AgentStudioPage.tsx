@@ -69,8 +69,9 @@ import type {
   FlowContextDefinition,
   AgentWorkshopContext,
   ToolIdeaConversationEntry,
-  WorkshopPromptUpdateProposal,
-  WorkshopPromptUpdateRequest,
+  WorkshopAuthoringProposal,
+  WorkshopContinuationOrigin,
+  WorkshopSavedHandoff,
   FlowAuthoringProposal,
 } from '@/types/promptExplorer'
 
@@ -265,6 +266,9 @@ function AgentStudioPage() {
   const workshopLeaveGuardRef = useRef<WorkshopLeaveGuard | null>(null)
   const workshopAuthoringContextRef = useRef<WorkshopAuthoringContextHandle | null>(null)
   const flowAuthoringContextRef = useRef<FlowAuthoringContextHandle | null>(null)
+  const [workshopContinuationOrigin, setWorkshopContinuationOrigin] = useState<WorkshopContinuationOrigin>()
+  const [workshopSavedHandoff, setWorkshopSavedHandoff] = useState<WorkshopSavedHandoff>()
+  const previousAuthoringTabRef = useRef(activeTab)
 
   useEffect(() => {
     if (activeTab === 'flows') setFlowsVisited(true)
@@ -312,9 +316,7 @@ function AgentStudioPage() {
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null)
   const [discussMessage, setDiscussMessage] = useState<string | null>(null)
   const [opusConversation, setOpusConversation] = useState<ToolIdeaConversationEntry[]>([])
-  const [workshopPromptUpdateRequest, setWorkshopPromptUpdateRequest] = useState<WorkshopPromptUpdateRequest | null>(null)
   const [pendingUrlSwapSessionId, setPendingUrlSwapSessionId] = useState<string | null>(null)
-  const promptUpdateCounterRef = useRef(0)
   const hydratedConversationSessionRef = useRef<string | null>(null)
   const searchParamsRef = useRef(searchParams)
 
@@ -739,6 +741,33 @@ function AgentStudioPage() {
     traceId,
   ])
 
+  useEffect(() => {
+    const previousTab = previousAuthoringTabRef.current
+    previousAuthoringTabRef.current = activeTab
+    if (activeTab !== 'agent_workshop' || previousTab === 'agent_workshop') return
+    setWorkshopSavedHandoff(undefined)
+    setWorkshopContinuationOrigin(undefined)
+    if (previousTab === 'flows') {
+      void captureChatContext().then((captured) => {
+        if (previousAuthoringTabRef.current === 'agent_workshop' && captured.flow_draft_fingerprint) {
+          setWorkshopContinuationOrigin({
+            flow_id: captured.flow_id, flow_draft_fingerprint: captured.flow_draft_fingerprint,
+          })
+        }
+      }).catch(() => {
+        setWorkshopSavedHandoff({ status: 'stale_origin' })
+      })
+    }
+  }, [activeTab, captureChatContext])
+
+  const handleWorkshopSavedHandoff = useCallback((handoff: WorkshopSavedHandoff) => {
+    void captureChatContext().then((captured) => {
+      const stale = handoff.origin
+        && handoff.origin.flow_draft_fingerprint !== captured.flow_draft_fingerprint
+      setWorkshopSavedHandoff(stale ? { ...handoff, status: 'stale_origin' } : handoff)
+    }).catch(() => setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' }))
+  }, [captureChatContext])
+
   const selectedAgentForChat =
     catalog && effectiveSelectedAgentId
       ? catalog.categories
@@ -838,22 +867,14 @@ Agent ID: ${agentId}`
     })
   }, [confirmLeaveWorkshop, openAgentBrowser])
 
-  const handleApplyWorkshopPromptUpdate = useCallback((proposal: WorkshopPromptUpdateProposal) => {
-    promptUpdateCounterRef.current += 1
-    setActiveTab('agent_workshop')
-    safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agent_workshop', {
-      owner: 'preferences',
-      key: AGENT_STUDIO_TAB_KEY,
-    })
-    setWorkshopPromptUpdateRequest({
-      request_id: promptUpdateCounterRef.current,
-      prompt: proposal.prompt,
-      summary: proposal.summary,
-      apply_mode: proposal.apply_mode || 'replace',
-      target_prompt: proposal.target_prompt || 'main',
-      target_group_id: proposal.target_group_id,
-    })
-  }, [])
+
+  const handleApplyWorkshopProposal = useCallback(async (proposal: WorkshopAuthoringProposal) => {
+    const workshop = workshopAuthoringContextRef.current
+    if (!workshop || activeTab !== 'agent_workshop') {
+      return { applied: false, message: 'Open the Workshop before applying this proposal.' }
+    }
+    return workshop.applyAuthoringProposal(proposal)
+  }, [activeTab])
 
   const handleApplyFlowProposal = useCallback(async (proposal: FlowAuthoringProposal) => {
     const builder = flowAuthoringContextRef.current
@@ -907,8 +928,8 @@ Agent ID: ${agentId}`
       onDiscussMessageSent={handleDiscussMessageSent}
       onDurableSessionIdChange={handleDurableSessionIdChange}
       onConversationSnapshotChange={handleConversationSnapshotChange}
-      onApplyWorkshopPromptUpdate={handleApplyWorkshopPromptUpdate}
       onApplyFlowProposal={handleApplyFlowProposal}
+      onApplyWorkshopProposal={handleApplyWorkshopProposal}
       variant={variant}
       panelId={panelId}
       onHide={hideClaude}
@@ -1056,18 +1077,28 @@ Agent ID: ${agentId}`
                 </Box>
               )}
               {activeTab === 'agent_workshop' && catalog && (
+                <>
+                {workshopSavedHandoff && (
+                  <Alert severity={workshopSavedHandoff.status === 'ready' ? 'success' : 'warning'} role="status">
+                    {workshopSavedHandoff.status === 'ready'
+                      ? `Saved agent ${workshopSavedHandoff.saved_agent_id} is available in the refreshed catalog.`
+                      : 'The agent handoff needs a fresh catalog or flow review before continuation.'}
+                  </Alert>
+                )}
                 <PromptWorkshop
                   catalog={catalog}
+                  continuationOrigin={workshopContinuationOrigin}
+                  onSavedHandoff={handleWorkshopSavedHandoff}
                   initialParentAgentId={agentWorkshopTemplateSource}
                   initialCustomAgentId={agentWorkshopCustomAgentId}
                   onContextChange={setAgentWorkshopContext}
                   onVerifyRequest={handleWorkshopVerifyRequest}
                   opusConversation={opusConversation}
-                  incomingPromptUpdate={workshopPromptUpdateRequest}
                   onViewEnvelope={handleWorkshopViewEnvelope}
                   leaveGuardRef={workshopLeaveGuardRef}
                   authoringContextRef={workshopAuthoringContextRef}
                 />
+                </>
               )}
             </TabContent>
           </PanelCard>

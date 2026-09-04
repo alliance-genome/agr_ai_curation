@@ -100,11 +100,14 @@ function workshopAuthorableDraft(workshop: AgentWorkshopContext) {
   return {
     getting_started_mode: workshop.getting_started_mode ?? 'scratch',
     template_source: workshop.template_source ?? null,
+    clone_source_agent_id: workshop.clone_source_agent_id ?? null,
+    clone_source_updated_at: workshop.clone_source_updated_at ?? null,
     name: workshop.draft_name ?? '',
     description: workshop.draft_description ?? '',
     icon: workshop.draft_icon ?? '',
     visibility: workshop.draft_visibility ?? 'private',
     allowed_group_ids: [...(workshop.draft_allowed_group_ids ?? [])].sort(compareUtf8),
+    inherited_allowed_group_ids: [...(workshop.inherited_allowed_group_ids ?? [])].sort(compareUtf8),
     prompt: workshop.prompt_draft ?? '',
     group_prompt_overrides: workshop.group_prompt_overrides ?? {},
     include_group_rules: workshop.include_group_rules ?? false,
@@ -119,6 +122,15 @@ export async function fingerprintWorkshopDraft(workshop: AgentWorkshopContext): 
   return sha256({
     version: 1,
     artifact_kind: 'custom_agent',
+    artifact_id: workshop.custom_agent_id ?? null,
+    baseline_updated_at: workshop.custom_agent_updated_at ?? null,
+    draft: workshopAuthorableDraft(workshop),
+  })
+}
+
+/** Synchronous equality token for guarding awaits; uses only fingerprinted state. */
+export function workshopDraftKey(workshop: AgentWorkshopContext): string {
+  return canonicalAuthoringJson({
     artifact_id: workshop.custom_agent_id ?? null,
     baseline_updated_at: workshop.custom_agent_updated_at ?? null,
     draft: workshopAuthorableDraft(workshop),

@@ -2349,6 +2349,11 @@ def get_agent_studio_flow_inspection_page_limit() -> int:
     )
 
 
+def get_agent_studio_workshop_proposal_max_operations() -> int:
+    """Maximum semantic operations per Workshop proposal call."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_WORKSHOP_PROPOSAL_MAX_OPERATIONS", 30))
+
+
 def get_agent_studio_flow_proposal_max_operations() -> int:
     """Maximum semantic operations accepted by one flow proposal tool call."""
 

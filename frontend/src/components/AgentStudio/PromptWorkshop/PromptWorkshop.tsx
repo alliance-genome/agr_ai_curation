@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
-import { Alert, Box } from '@mui/material'
+import { Alert, Box, Button } from '@mui/material'
+import type { WorkshopAuthoringProposal } from '@/types/promptExplorer'
+import type { WorkshopContinuationOrigin, WorkshopSavedHandoff } from '@/types/promptExplorer'
+import type { FlowProposalApplyResult } from '../FlowBuilder/types'
 
 import type {
   AgentWorkshopContext,
   CustomAgent,
   PromptCatalog,
   ToolIdeaConversationEntry,
-  WorkshopPromptUpdateRequest,
 } from '@/types/promptExplorer'
 import type { AgentMetadata } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
@@ -54,6 +56,7 @@ export interface WorkshopLeaveGuard {
 
 export interface WorkshopAuthoringContextHandle {
   captureAuthoringContext: () => AgentWorkshopContext
+  applyAuthoringProposal: (proposal: WorkshopAuthoringProposal) => Promise<FlowProposalApplyResult>
 }
 
 interface GuardedAction {
@@ -63,12 +66,13 @@ interface GuardedAction {
 
 interface PromptWorkshopProps {
   catalog: PromptCatalog
+  continuationOrigin?: WorkshopContinuationOrigin
+  onSavedHandoff?: (handoff: WorkshopSavedHandoff) => void
   initialParentAgentId?: string | null
   initialCustomAgentId?: string | null
   onContextChange?: (context: AgentWorkshopContext) => void
   onVerifyRequest?: (message: string) => void
   opusConversation?: ToolIdeaConversationEntry[]
-  incomingPromptUpdate?: WorkshopPromptUpdateRequest | null
   /** Open the given system agent in the Agents tab with its Envelope view. */
   onViewEnvelope?: (agentId: string) => void
   /** Receives the leave guard so the page can confirm before navigating away. */
@@ -97,12 +101,13 @@ function summarizeEnvelope(metadata: AgentMetadata | undefined): EnvelopeSummary
 
 function PromptWorkshop({
   catalog,
+  continuationOrigin,
+  onSavedHandoff,
   initialParentAgentId,
   initialCustomAgentId,
   onContextChange,
   onVerifyRequest,
   opusConversation = [],
-  incomingPromptUpdate = null,
   onViewEnvelope,
   leaveGuardRef,
   authoringContextRef,
@@ -110,10 +115,11 @@ function PromptWorkshop({
   const { agents: agentMetadata } = useAgentMetadata()
   const draft = useWorkshopDraft({
     catalog,
+    continuationOrigin,
+    onSavedHandoff,
     initialParentAgentId,
     initialCustomAgentId,
     onContextChange,
-    incomingPromptUpdate,
   })
 
   const [section, setSection] = useState<WorkshopSection>('setup')
@@ -149,12 +155,6 @@ function PromptWorkshop({
 
   const showStartScreen = startScreenRequested && !selectedCustomAgentId
 
-  useEffect(() => {
-    if (!incomingPromptUpdate) return
-    setStartScreenRequested(false)
-    setSection('prompt')
-  }, [incomingPromptUpdate])
-
   const guard = useCallback((action: () => void) => {
     if (dirty.any) {
       setPendingGuardedAction({ proceed: action })
@@ -179,8 +179,15 @@ function PromptWorkshop({
   useImperativeHandle(leaveGuardRef, () => ({ requestLeave }), [requestLeave])
   useImperativeHandle(
     authoringContextRef,
-    () => ({ captureAuthoringContext: draft.captureAuthoringContext }),
-    [draft.captureAuthoringContext]
+    () => ({
+      captureAuthoringContext: draft.captureAuthoringContext,
+      applyAuthoringProposal: async (proposal) => {
+        const result = await draft.applyAuthoringProposal(proposal)
+        if (result.applied) setStartScreenRequested(false)
+        return result
+      },
+    }),
+    [draft.captureAuthoringContext, draft.applyAuthoringProposal]
   )
 
   // After "Keep editing" on a leave request, the dialog hands focus back to the
@@ -315,9 +322,17 @@ function PromptWorkshop({
 
   return (
     <Box
+      component="fieldset"
+      aria-label="Workshop draft"
+      disabled={draft.authoringBusy || draft.saving}
+      aria-busy={draft.authoringBusy}
       ref={rootRef}
       tabIndex={-1}
       sx={{
+        border: 0,
+        padding: 0,
+        margin: 0,
+        minWidth: 0,
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
@@ -390,6 +405,9 @@ function PromptWorkshop({
             <Alert severity="success" onClose={() => draft.setStatus(null)} sx={{ maxWidth: 780 }}>
               {draft.status}
             </Alert>
+          )}
+          {draft.canUndoAuthoringProposal && (
+            <Button onClick={() => void draft.undoAuthoringProposal()}>Undo AI changes</Button>
           )}
 
           {showStartScreen ? (

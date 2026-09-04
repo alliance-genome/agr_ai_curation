@@ -582,6 +582,32 @@ def _agent_validation_sources(
     )
 
 
+def authorized_agent_validation_sources(db, *, user_id, active_group_ids, sources, inherited_tool_ids=()):
+    """Intersect canonical sources with the current authenticated authoring catalog."""
+    from dataclasses import replace
+    from src.lib.agent_studio.capability_catalog import CapabilityCatalogContext, build_authorized_capability_catalog
+    records = build_authorized_capability_catalog(
+        db=db, context=CapabilityCatalogContext(
+            user_id=user_id, active_group_ids=tuple(active_group_ids),
+            active_tab="agent_workshop", artifact_kind="agent",
+        ),
+    )
+    available = {
+        kind: {record.resource_id for record in records
+               if record.kind == kind and record.selectable and record.availability == "available"}
+        for kind in ("model", "tool", "output_contract", "group")
+    }
+    inherited = set(_system_managed_tool_ids(db, list(inherited_tool_ids))) if inherited_tool_ids else set()
+    return replace(
+        sources,
+        models={key: value for key, value in sources.models.items() if key in available["model"]},
+        tools={key: replace(value, system_managed=key in inherited or value.system_managed)
+               for key, value in sources.tools.items() if key in available["tool"] or key in inherited},
+        output_schema_keys=sources.output_schema_keys & available["output_contract"],
+        group_ids=sources.group_ids & available["group"],
+    )
+
+
 def _require_valid_custom_agent_draft(
     db: Session,
     *,
@@ -594,20 +620,25 @@ def _require_valid_custom_agent_draft(
     """Apply the canonical complete-draft contract before any ORM mutation."""
 
     try:
+        sources = _agent_validation_sources(
+            db, model_id=str(candidate.get("model_id") or ""),
+            tool_ids=list(candidate.get("tool_ids") or []),
+            output_schema_key=candidate.get("output_schema_key"),
+            prevalidated_tool_ids=prevalidated_tool_ids,
+            trusted_output_schema_keys=trusted_output_schema_keys,
+        )
+        if active_group_ids is not None:
+            sources = authorized_agent_validation_sources(
+                db, user_id=user_id, active_group_ids=active_group_ids, sources=sources,
+                inherited_tool_ids=prevalidated_tool_ids or (),
+            )
         result = validate_custom_agent_authoring_draft(
             candidate,
             context=AuthoringValidationContext.from_values(
                 db_user_id=user_id,
                 active_group_ids=active_group_ids,
             ),
-            sources=_agent_validation_sources(
-                db,
-                model_id=str(candidate.get("model_id") or ""),
-                tool_ids=list(candidate.get("tool_ids") or []),
-                output_schema_key=candidate.get("output_schema_key"),
-                prevalidated_tool_ids=prevalidated_tool_ids,
-                trusted_output_schema_keys=trusted_output_schema_keys,
-            ),
+            sources=sources,
             phase="save",
         )
     except Exception:
@@ -666,6 +697,19 @@ def _validate_inherited_access_floor(
     )
 
 
+def custom_agent_name_exists(db: Session, user_id: int, name: str, *, excluding_id=None) -> bool:
+    """Match the database's case-insensitive active custom-name uniqueness rule."""
+    query = db.query(CustomAgent).filter(
+        CustomAgent.user_id == user_id,
+        func.lower(CustomAgent.name) == name.lower(),
+        CustomAgent.visibility.in_(["private", "project"]),
+        CustomAgent.is_active == True,  # noqa: E712
+    )
+    if excluding_id is not None:
+        query = query.filter(CustomAgent.id != excluding_id)
+    return query.first() is not None
+
+
 def _has_active_custom_name(db: Session, user_id: int, name: str) -> bool:
     """Case-insensitive active-name check for a user's private/project custom agents."""
     return db.query(CustomAgent).filter(
@@ -722,6 +766,7 @@ def create_custom_agent(
     inherited_allowed_group_ids: Optional[List[str]] = None,
     inherited_group_tool_policy: Optional[Dict[str, Any]] = None,
     active_group_ids: Optional[List[str]] = None,
+    visibility: str = "private",
 ) -> CustomAgent:
     """Create a new custom agent and seed version snapshot."""
     selected_template_key = str(template_source or "").strip()
@@ -847,7 +892,7 @@ def create_custom_agent(
             "custom_prompt": agent_prompt,
             "group_prompt_overrides": normalized_group_overrides,
             "icon": icon or "\U0001F527",
-            "visibility": "private",
+            "visibility": visibility,
             "allowed_group_ids": normalized_allowed_group_ids,
             "inherited_allowed_group_ids": normalized_inherited_allowed_group_ids,
             "include_group_rules": include_group_rules,
@@ -895,15 +940,10 @@ def create_custom_agent(
         is_active=True,
     )
 
-    existing_name = db.query(CustomAgent).filter(
-        CustomAgent.user_id == user_id,
-        CustomAgent.name == name,
-        CustomAgent.visibility.in_(["private", "project"]),
-        CustomAgent.is_active == True,  # noqa: E712
-    ).first()
-    if existing_name:
+    if custom_agent_name_exists(db, user_id, name):
         raise ValueError("A custom agent with this name already exists")
 
+    set_custom_agent_visibility(db, custom_agent, user_id, visibility)
     db.add(custom_agent)
     db.flush()
 
@@ -1132,6 +1172,7 @@ def clone_visible_agent_for_user(
 def update_custom_agent(
     db: Session,
     custom_agent: CustomAgent,
+    expected_updated_at: Optional[datetime] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
     custom_prompt: Optional[str] = None,
@@ -1148,18 +1189,19 @@ def update_custom_agent(
     allow_empty_tool_ids: bool = False,
     allowed_group_ids: Optional[List[str]] = None,
     active_group_ids: Optional[List[str]] = None,
+    visibility: Optional[str] = None,
 ) -> CustomAgent:
     """Update custom-agent config and snapshot previous prompt when prompt changes."""
-    if name is not None:
-        existing_name = db.query(CustomAgent).filter(
-            CustomAgent.user_id == custom_agent.user_id,
-            CustomAgent.name == name,
-            CustomAgent.id != custom_agent.id,
-            CustomAgent.visibility.in_(["private", "project"]),
-            CustomAgent.is_active == True,  # noqa: E712
-        ).first()
-        if existing_name:
-            raise ValueError("A custom agent with this name already exists")
+    if expected_updated_at is not None:
+        db.refresh(custom_agent, with_for_update=True)
+        expected = expected_updated_at.replace(tzinfo=expected_updated_at.tzinfo or timezone.utc)
+        actual = custom_agent.updated_at.replace(tzinfo=custom_agent.updated_at.tzinfo or timezone.utc)
+        if expected != actual:
+            raise ValueError("This agent changed since it was opened. Reopen it before saving.")
+    if name is not None and custom_agent_name_exists(
+        db, custom_agent.user_id, name, excluding_id=custom_agent.id,
+    ):
+        raise ValueError("A custom agent with this name already exists")
 
     current_group_overrides = _read_group_prompt_overrides(custom_agent)
     next_group_overrides: Optional[Dict[str, str]] = None
@@ -1262,7 +1304,7 @@ def update_custom_agent(
                 else current_group_overrides
             ),
             "icon": icon if icon is not None else getattr(custom_agent, "icon", None),
-            "visibility": getattr(custom_agent, "visibility", None) or "private",
+            "visibility": visibility if visibility is not None else (getattr(custom_agent, "visibility", None) or "private"),
             "allowed_group_ids": (
                 next_allowed_group_ids
                 if next_allowed_group_ids is not None
@@ -1298,6 +1340,8 @@ def update_custom_agent(
         prevalidated_tool_ids=(list(next_tool_ids) if tool_ids is not None else []),
     )
 
+    if visibility is not None:
+        set_custom_agent_visibility(db, custom_agent, custom_agent.user_id, visibility)
     if prompt_changed or group_overrides_changed or allowed_group_ids_changed:
         next_version = _get_next_version(db, custom_agent.id)
         db.add(
@@ -1479,14 +1523,6 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         custom_agent.template_source,
         custom_agent.instructions,
     )
-    try:
-        main_prompt = custom_main_prompt_for_parent(
-            custom_agent.template_source,
-            custom_agent.instructions,
-        )
-    except ValueError:
-        main_prompt = ""
-
     return {
         "id": str(custom_agent.id),
         "agent_id": make_custom_agent_id(custom_agent.id),
@@ -1494,7 +1530,7 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "template_source": custom_agent.template_source,
         "name": custom_agent.name,
         "description": custom_agent.description,
-        "custom_prompt": main_prompt,
+        "custom_prompt": overlay_normalization.content,
         "custom_prompt_overlay_status": overlay_normalization.status,
         "custom_prompt_removed_layer_kinds": overlay_normalization.removed_layer_kinds,
         "custom_prompt_warning": overlay_normalization.warning,

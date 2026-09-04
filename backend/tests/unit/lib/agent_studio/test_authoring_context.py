@@ -136,7 +136,7 @@ def test_adversarial_fingerprints_match_frontend_canonical_fixtures():
         "sha256:f9f8664ca18901527a106d90c077ae0b52f2733a592531c7cd1110795a558b92"
     )
     assert workshop_draft_fingerprint(_adversarial_workshop_context()) == (
-        "sha256:0a21e086f82258a59ad20e1d279db0e8d0e1010778a076bee341ab422301a9b0"
+        "sha256:55e4d999b342e07877cb84ca6dafb6f05c852572ac4512d6a1d2491610afe235"
     )
 
 

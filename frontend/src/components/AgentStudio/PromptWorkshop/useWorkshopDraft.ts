@@ -12,10 +12,10 @@ import type {
   ToolIdeaConversationEntry,
   ToolIdeaRequest,
   ToolLibraryItem,
-  WorkshopPromptUpdateRequest,
 } from '@/types/promptExplorer'
 import {
   createCustomAgent,
+  getWorkshopSavedReference,
   deleteCustomAgent,
   fetchAgentTemplates,
   fetchModelOptions,
@@ -24,12 +24,18 @@ import {
   listCustomAgents,
   listToolIdeaRequests,
   revertCustomAgentVersion,
-  setCustomAgentVisibility,
   submitToolIdeaRequest,
   updateCustomAgent,
 } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import { useAuth } from '@/contexts/AuthContext'
+import { logger } from '@/services/logger'
+import { flushSync } from 'react-dom'
+import { fingerprintWorkshopDraft, canonicalAuthoringJson, workshopDraftKey } from '../authoringContext'
+import { validateWorkshopDraft } from '@/services/agentStudioService'
+import type { WorkshopAuthoringProposal } from '@/types/promptExplorer'
+import type { WorkshopContinuationOrigin, WorkshopSavedHandoff } from '@/types/promptExplorer'
+import type { FlowProposalApplyResult } from '../FlowBuilder/types'
 
 import {
   DEFAULT_AGENT_ICON,
@@ -59,7 +65,8 @@ export interface UseWorkshopDraftArgs {
   initialParentAgentId?: string | null
   initialCustomAgentId?: string | null
   onContextChange?: (context: AgentWorkshopContext) => void
-  incomingPromptUpdate?: WorkshopPromptUpdateRequest | null
+  continuationOrigin?: WorkshopContinuationOrigin
+  onSavedHandoff?: (handoff: WorkshopSavedHandoff) => void
 }
 
 export interface WorkshopDraft {
@@ -162,6 +169,10 @@ export interface WorkshopDraft {
   canSave: boolean
   /** Copy the complete current editable value synchronously for an AI Chat turn. */
   captureAuthoringContext: () => AgentWorkshopContext
+  applyAuthoringProposal: (proposal: WorkshopAuthoringProposal) => Promise<FlowProposalApplyResult>
+  undoAuthoringProposal: () => Promise<void>
+  canUndoAuthoringProposal: boolean
+  authoringBusy: boolean
 
   // Actions
   handleNew: () => void
@@ -194,20 +205,22 @@ export function useWorkshopDraft({
   initialParentAgentId,
   initialCustomAgentId,
   onContextChange,
-  incomingPromptUpdate = null,
+  continuationOrigin,
+  onSavedHandoff,
 }: UseWorkshopDraftArgs): WorkshopDraft {
   const { agents: agentMetadata, refresh: refreshAgentMetadata } = useAgentMetadata()
   const { user: authUser } = useAuth()
 
   const [parentAgentId, setParentAgentId] = useState('')
-  const [gettingStartedMode, setGettingStartedMode] = useState<GettingStartedMode>('template')
+  const [gettingStartedMode, setGettingStartedMode] = useState<GettingStartedMode>(
+    initialParentAgentId ? 'template' : 'scratch',
+  )
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
   const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
   const [cloneSourceAgentId, setCloneSourceAgentId] = useState<string>('')
   const [versions, setVersions] = useState<CustomAgentVersion[]>([])
   const [loading, setLoading] = useState(false)
   const [workshopOptionsLoaded, setWorkshopOptionsLoaded] = useState(false)
-  const [hydrationVersion, setHydrationVersion] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null)
@@ -240,8 +253,6 @@ export function useWorkshopDraft({
 
   const appliedInitialCustomAgentId = useRef<string | null>(null)
   const refreshAttemptedForInitialCustomAgentId = useRef<string | null>(null)
-  const appliedPromptUpdateId = useRef<number | null>(null)
-  const appliedPromptUpdateHydrationVersion = useRef<number>(-1)
   const customAgentsLoadingRef = useRef(false)
 
   const parentAgents = useMemo(() => {
@@ -432,7 +443,7 @@ export function useWorkshopDraft({
   const isNewDraft = !selectedCustomAgent
   const canSave = !saving && (isNewDraft || dirty.any)
 
-  const applyDraft = useCallback((fields: DraftFields) => {
+  const applyDraft = useCallback((fields: DraftFields, preserveBaseline = false) => {
     setName(fields.name)
     setDescription(fields.description)
     setCustomPrompt(fields.customPrompt)
@@ -445,8 +456,9 @@ export function useWorkshopDraft({
     setSelectedToolIds(fields.toolIds)
     setOutputSchemaKey(fields.outputSchemaKey)
     setIcon(fields.icon)
-    setSavedSnapshot(fields)
-    setHydrationVersion((prev) => prev + 1)
+    if (!preserveBaseline) {
+      setSavedSnapshot(fields)
+    }
   }, [])
 
   useEffect(() => {
@@ -649,7 +661,7 @@ export function useWorkshopDraft({
       applyDraft({
         name: parentAgent ? `${parentAgent.agent_name} (Custom)` : '',
         description: '',
-        customPrompt: parentBasePrompt,
+        customPrompt: '',
         groupPromptOverrides: {},
         includeGroupRules: true,
         allowedGroupIds: selectedTemplate?.allowed_group_ids || [],
@@ -667,7 +679,7 @@ export function useWorkshopDraft({
     applyDraft({
       name: selectedCustomAgent.name,
       description: selectedCustomAgent.description || '',
-      customPrompt: selectedCustomAgent.custom_prompt || parentBasePrompt,
+      customPrompt: selectedCustomAgent.custom_prompt || '',
       groupPromptOverrides: selectedCustomAgent.group_prompt_overrides || {},
       includeGroupRules: selectedCustomAgent.include_group_rules,
       allowedGroupIds: selectedCustomAgent.allowed_group_ids || [],
@@ -724,13 +736,18 @@ export function useWorkshopDraft({
 
   const captureAuthoringContext = useCallback((): AgentWorkshopContext => {
     const contextTemplateId = selectedCustomAgent?.template_source
-      || (gettingStartedMode === 'template' ? parentAgentId : undefined)
+      || (gettingStartedMode === 'template' ? parentAgentId
+        : gettingStartedMode === 'clone' ? selectedCloneSource?.template_source : undefined)
     const contextTemplateName = contextTemplateId
       ? (selectedTemplate?.name || parentAgent?.agent_name)
       : undefined
     return {
       getting_started_mode: gettingStartedMode,
       template_source: contextTemplateId || undefined,
+      clone_source_agent_id: gettingStartedMode === 'clone' && !selectedCustomAgent
+        ? selectedCloneSource?.agent_id : undefined,
+      clone_source_updated_at: gettingStartedMode === 'clone' && !selectedCustomAgent
+        ? selectedCloneSource?.updated_at : undefined,
       template_name: contextTemplateName,
       custom_agent_id: selectedCustomAgent?.agent_id,
       custom_agent_name: selectedCustomAgent?.name,
@@ -769,6 +786,9 @@ export function useWorkshopDraft({
     parentAgentId,
     selectedAllowedGroupIds,
     selectedCustomAgent,
+    selectedCloneSource?.agent_id,
+    selectedCloneSource?.updated_at,
+    selectedCloneSource?.template_source,
     selectedGroupId,
     selectedGroupPromptForContext,
     selectedModelId,
@@ -783,77 +803,125 @@ export function useWorkshopDraft({
     onContextChange(captureAuthoringContext())
   }, [captureAuthoringContext, onContextChange])
 
+  const liveAuthoringRef = useRef({ captureAuthoringContext, currentFields, saving, loading })
+  liveAuthoringRef.current = { captureAuthoringContext, currentFields, saving, loading }
+  const applyingAuthoringRef = useRef(false)
+  const authoringMountedRef = useRef(true)
   useEffect(() => {
-    if (!incomingPromptUpdate) return
-    if (!workshopOptionsLoaded) return
-    if (loading || customAgentsLoadingRef.current) return
-    if (gettingStartedMode === 'template' && !parentAgentId && !selectedCustomAgentId) return
-    if (gettingStartedMode === 'clone' && !selectedCustomAgentId && !selectedCloneSource && !cloneSourceAgentId) return
-    if (
-      appliedPromptUpdateId.current === incomingPromptUpdate.request_id
-      && appliedPromptUpdateHydrationVersion.current === hydrationVersion
-    ) {
-      return
-    }
-    appliedPromptUpdateId.current = incomingPromptUpdate.request_id
-    appliedPromptUpdateHydrationVersion.current = hydrationVersion
+    authoringMountedRef.current = true
+    return () => { authoringMountedRef.current = false }
+  }, [])
+  const [authoringBusy, setAuthoringBusy] = useState(false)
+  const [authoringUndo, setAuthoringUndo] = useState<{
+    fields: DraftFields
+    applied: string
+  } | null>(null)
 
-    if (
-      incomingPromptUpdate.apply_mode
-      && incomingPromptUpdate.apply_mode !== 'replace'
-      && incomingPromptUpdate.apply_mode !== 'targeted_edit'
-    ) {
-      setError(`Unsupported prompt update mode: ${incomingPromptUpdate.apply_mode}`)
-      return
+  const applyAuthoringProposal = useCallback(async (proposal: WorkshopAuthoringProposal): Promise<FlowProposalApplyResult> => {
+    if (applyingAuthoringRef.current || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading) {
+      return { applied: false, message: 'Wait for the current Workshop operation to finish.' }
     }
-    if (typeof incomingPromptUpdate.prompt !== 'string' || !incomingPromptUpdate.prompt.trim()) {
-      setError('Received an invalid prompt update payload')
-      return
-    }
-
-    const targetPrompt = incomingPromptUpdate.target_prompt === 'group' ? 'group' : 'main'
-    if (targetPrompt === 'group') {
-      const targetGroupId = (incomingPromptUpdate.target_group_id || selectedGroupId || '').trim().toUpperCase()
-      if (!targetGroupId) {
-        setError('Cannot apply group prompt update because no group is selected.')
-        return
+    applyingAuthoringRef.current = true
+    setAuthoringBusy(true)
+    try {
+      const before = liveAuthoringRef.current.captureAuthoringContext()
+      const beforeKey = workshopDraftKey(before)
+      if (await fingerprintWorkshopDraft(before) !== proposal.base_draft_fingerprint) {
+        return { applied: false, message: 'The Workshop changed. Generate a fresh proposal.' }
       }
-      if (availableGroupIds.length > 0 && !availableGroupIds.includes(targetGroupId)) {
-        setError(`Cannot apply group prompt update: ${targetGroupId} is not available for this template.`)
-        return
+      const candidate = structuredClone(proposal.candidate)
+      if (await fingerprintWorkshopDraft(candidate) !== proposal.candidate_draft_fingerprint
+        || candidate.custom_agent_id !== before.custom_agent_id
+        || candidate.custom_agent_updated_at !== before.custom_agent_updated_at
+        || candidate.template_source !== before.template_source
+        || candidate.clone_source_agent_id !== before.clone_source_agent_id
+        || candidate.clone_source_updated_at !== before.clone_source_updated_at
+        || candidate.getting_started_mode !== before.getting_started_mode
+        || canonicalAuthoringJson(candidate.inherited_allowed_group_ids ?? [])
+          !== canonicalAuthoringJson(before.inherited_allowed_group_ids ?? [])) {
+        return { applied: false, message: 'The proposal identity or fingerprint is invalid.' }
       }
-
-      setGroupId(targetGroupId)
-      setGroupPromptOverrides((prev) => ({ ...prev, [targetGroupId]: incomingPromptUpdate.prompt }))
-      setError(null)
-      setStatus(
-        incomingPromptUpdate.summary?.trim()
-          ? `Applied AI Chat group update (${targetGroupId}): ${incomingPromptUpdate.summary.trim()}`
-          : `Applied AI Chat prompt update to ${targetGroupId} group draft`
-      )
-      return
+      candidate.draft_fingerprint = proposal.candidate_draft_fingerprint
+      const validation = await validateWorkshopDraft(candidate, 'pre_apply')
+      if (!validation.valid) {
+        return { applied: false, message: validation.findings.map((item) => item.message).join(' ') }
+      }
+      if (!authoringMountedRef.current
+        || workshopDraftKey(liveAuthoringRef.current.captureAuthoringContext()) !== beforeKey
+        || liveAuthoringRef.current.saving) {
+        return { applied: false, message: 'The Workshop changed during validation. Generate a fresh proposal.' }
+      }
+      const previousFields = structuredClone(liveAuthoringRef.current.currentFields)
+      const nextFields: DraftFields = {
+        name: candidate.draft_name ?? '', description: candidate.draft_description ?? '',
+        customPrompt: candidate.prompt_draft ?? '', groupPromptOverrides: candidate.group_prompt_overrides ?? {},
+        includeGroupRules: candidate.include_group_rules ?? false,
+        visibility: candidate.draft_visibility ?? 'private',
+        allowedGroupIds: candidate.draft_allowed_group_ids ?? [],
+        modelId: candidate.draft_model_id ?? '', modelReasoning: candidate.draft_model_reasoning ?? '',
+        toolIds: candidate.draft_tool_ids ?? [], outputSchemaKey: candidate.draft_output_schema_key ?? '',
+        icon: candidate.draft_icon ?? '',
+      }
+      flushSync(() => applyDraft(nextFields, true))
+      const actual = liveAuthoringRef.current.captureAuthoringContext()
+      const appliedKey = workshopDraftKey(actual)
+      try {
+        actual.draft_fingerprint = await fingerprintWorkshopDraft(actual)
+        if (actual.draft_fingerprint !== proposal.candidate_draft_fingerprint) {
+          throw new Error('The editor did not reproduce the reviewed candidate.')
+        }
+        const afterValidation = await validateWorkshopDraft(actual, 'post_apply')
+        if (!authoringMountedRef.current) {
+          return { applied: false, message: 'The Workshop was closed. Generate a fresh proposal.' }
+        }
+        if (!afterValidation.valid) {
+          if (workshopDraftKey(liveAuthoringRef.current.captureAuthoringContext()) === appliedKey) {
+            flushSync(() => applyDraft(previousFields, true))
+          }
+          return { applied: false, message: afterValidation.findings.map((item) => item.message).join(' ') || 'The applied draft failed validation.' }
+        }
+        if (workshopDraftKey(liveAuthoringRef.current.captureAuthoringContext()) !== appliedKey) {
+          setAuthoringUndo(null)
+          return { applied: false, message: 'The Workshop changed after Apply; your latest edits were preserved.' }
+        }
+      } catch {
+        logger.error('Workshop post-apply validation failed', new Error('Workshop validation failed'), {
+          component: 'PromptWorkshop', action: 'proposal_post_apply',
+        })
+        if (workshopDraftKey(liveAuthoringRef.current.captureAuthoringContext()) === appliedKey) {
+          flushSync(() => applyDraft(previousFields, true))
+        }
+        return { applied: false, message: 'Workshop validation failed. The proposal was not accepted.' }
+      }
+      setAuthoringUndo({ fields: previousFields, applied: appliedKey })
+      logger.info('Workshop proposal applied', { component: 'PromptWorkshop', action: 'proposal_apply' })
+      setStatus('Applied AI changes to the draft. Review and Save when ready.')
+      return { applied: true, message: 'Applied to the Workshop draft. Save remains separate.' }
+    } catch {
+      logger.error('Workshop proposal validation failed', new Error('Workshop validation failed'), {
+        component: 'PromptWorkshop', action: 'proposal_pre_apply',
+      })
+      return { applied: false, message: 'Unable to validate the Workshop proposal. Please try again.' }
+    } finally {
+      applyingAuthoringRef.current = false
+      setAuthoringBusy(false)
     }
+  }, [applyDraft])
 
-    setCustomPrompt(incomingPromptUpdate.prompt)
-    setError(null)
-    setStatus(
-      incomingPromptUpdate.summary?.trim()
-        ? `Applied AI Chat update: ${incomingPromptUpdate.summary.trim()}`
-        : 'Applied AI Chat prompt update to the draft'
-    )
-  }, [
-    incomingPromptUpdate,
-    availableGroupIds,
-    selectedGroupId,
-    workshopOptionsLoaded,
-    gettingStartedMode,
-    parentAgentId,
-    selectedCustomAgentId,
-    selectedCloneSource,
-    cloneSourceAgentId,
-    loading,
-    hydrationVersion,
-  ])
+  const canUndoAuthoringProposal = Boolean(authoringUndo
+    && authoringUndo.applied === workshopDraftKey(captureAuthoringContext()))
+  useEffect(() => {
+    if (authoringUndo && !canUndoAuthoringProposal) setAuthoringUndo(null)
+  }, [authoringUndo, canUndoAuthoringProposal])
+  const undoAuthoringProposal = useCallback(async () => {
+    if (!authoringUndo || applyingAuthoringRef.current || liveAuthoringRef.current.saving
+      || authoringUndo.applied !== workshopDraftKey(liveAuthoringRef.current.captureAuthoringContext())) return
+    applyDraft(authoringUndo.fields, true)
+    setAuthoringUndo(null)
+    logger.info('Workshop proposal undone', { component: 'PromptWorkshop', action: 'proposal_undo' })
+    setStatus('Undid the last AI change.')
+  }, [applyDraft, authoringUndo])
+
 
   useEffect(() => {
     if (!dirty.any) return
@@ -912,9 +980,14 @@ export function useWorkshopDraft({
       setCloneSourceAgentId('')
     }
     await refreshAgentMetadata()
+    const saved = response.custom_agents.find((agent) => agent.id === keepId && agent.is_active)
+    if (!saved) return undefined
+    const reference = await getWorkshopSavedReference(saved.id)
+    return reference.agent_id === saved.agent_id ? saved : undefined
   }, [getTemplateAlignedAgentId, refreshAgentMetadata])
 
   const handleSave = useCallback(async (options?: SaveOptions, selfExclusionConfirmed = false) => {
+    if (applyingAuthoringRef.current) return
     const forceCreate = options?.forceCreate ?? false
     const nameToSave = (options?.nameOverride ?? name).trim()
     const notes = (options?.notes ?? '').trim()
@@ -961,64 +1034,89 @@ export function useWorkshopDraft({
     setError(null)
     setStatus(null)
 
+    let persistedAgent: CustomAgent | undefined
     try {
       const shouldCreate = forceCreate || !selectedCustomAgentId
+      let savedIdentity: string | undefined
       if (!shouldCreate && selectedCustomAgentId) {
-        let updated = await updateCustomAgent(selectedCustomAgentId, {
+        const updated = await updateCustomAgent(selectedCustomAgentId, {
+          visibility: selectedVisibility,
+          expected_updated_at: selectedCustomAgent?.updated_at,
           name: nameToSave,
-          description: description.trim() || undefined,
+          description,
           custom_prompt: customPrompt,
           group_prompt_overrides: groupPromptOverrides,
           include_group_rules: includeGroupRules,
           model_id: selectedModelId,
-          model_reasoning: selectedModelReasoning || undefined,
+          model_reasoning: selectedModelReasoning,
           tool_ids: selectedToolIds,
           output_schema_key: outputSchemaKey || null,
           icon: icon || undefined,
           notes: notes || undefined,
           allowed_group_ids: selectedAllowedGroupIds,
         })
-        const currentVisibility = updated.visibility === 'project' ? 'project' : 'private'
-        if (currentVisibility !== selectedVisibility) {
-          updated = await setCustomAgentVisibility(updated.agent_id, selectedVisibility)
-        }
-        await reloadAfterSave(updated.id)
+        persistedAgent = updated
+        const refreshed = await reloadAfterSave(updated.id)
+        if (refreshed?.agent_id === updated.agent_id) savedIdentity = updated.agent_id
         setStatus(`Updated "${updated.name}"`)
       } else {
         const templateSource = selectedCustomAgent?.template_source
           || (gettingStartedMode === 'template'
             ? parentAgentId
             : (gettingStartedMode === 'clone' ? selectedCloneSource?.template_source : undefined))
-        let created = await createCustomAgent({
+        const created = await createCustomAgent({
+          visibility: selectedVisibility,
           template_source: templateSource || undefined,
+          clone_source_agent_id: gettingStartedMode === 'clone' ? selectedCloneSource?.agent_id : undefined,
+          clone_source_updated_at: gettingStartedMode === 'clone' ? selectedCloneSource?.updated_at : undefined,
           name: nameToSave,
-          description: description.trim() || undefined,
+          description,
           custom_prompt: customPrompt,
           group_prompt_overrides: groupPromptOverrides,
           include_group_rules: includeGroupRules,
           model_id: selectedModelId,
-          model_reasoning: selectedModelReasoning || undefined,
+          model_reasoning: selectedModelReasoning,
           tool_ids: selectedToolIds,
           output_schema_key: outputSchemaKey || null,
           icon: icon || undefined,
           allowed_group_ids: selectedAllowedGroupIds,
         })
-        if (selectedVisibility === 'project') {
-          created = await setCustomAgentVisibility(created.agent_id, 'project')
-        }
-        await reloadAfterSave(created.id)
+        persistedAgent = created
+        const refreshed = await reloadAfterSave(created.id)
+        if (refreshed?.agent_id === created.agent_id) savedIdentity = created.agent_id
         setStatus(forceCreate ? `Saved as "${created.name}"` : `Created "${created.name}"`)
       }
       setSaveState('saved')
       setLastSavedAt(Date.now())
+      onSavedHandoff?.({
+        // Only a fresh authorized catalog can emit an actionable saved identity.
+        status: savedIdentity ? 'ready' : 'catalog_unavailable',
+        saved_agent_id: savedIdentity,
+        origin: continuationOrigin,
+      })
     } catch (err) {
-      setSaveState('failed')
-      setError(err instanceof Error ? err.message : 'Failed to save custom agent')
+      if (persistedAgent) {
+        logger.error('Workshop catalog handoff failed', new Error('Workshop catalog handoff failed'), {
+          component: 'PromptWorkshop', action: 'catalog_handoff',
+        })
+        const saved = persistedAgent
+        setCustomAgents((agents) => [...agents.filter((agent) => agent.id !== saved.id), saved])
+        setSelectedCustomAgentId(saved.id)
+        setSaveState('saved')
+        setLastSavedAt(Date.now())
+        setError('The agent was saved, but catalog refresh did not finish. Refresh before continuing.')
+        onSavedHandoff?.({ status: 'catalog_unavailable', origin: continuationOrigin })
+      } else {
+        setSaveState('failed')
+        setError(err instanceof Error ? err.message : 'Failed to save custom agent')
+      }
     } finally {
       setSaving(false)
     }
   }, [
     cloneSourceAgentId,
+    continuationOrigin,
+    onSavedHandoff,
     currentUserGroupIds,
     customPrompt,
     description,
@@ -1032,8 +1130,11 @@ export function useWorkshopDraft({
     reloadAfterSave,
     selectedAllowedGroupIds,
     selectedCloneSource?.template_source,
+    selectedCloneSource?.agent_id,
+    selectedCloneSource?.updated_at,
     selectedCustomAgent?.template_source,
     selectedCustomAgent?.tool_ids,
+    selectedCustomAgent?.updated_at,
     selectedCustomAgentId,
     selectedModelId,
     selectedModelReasoning,
@@ -1108,8 +1209,8 @@ export function useWorkshopDraft({
   }, [selectedGroupId])
 
   const resetCustomPromptToTemplate = useCallback(() => {
-    setCustomPrompt(parentBasePrompt)
-  }, [parentBasePrompt])
+    setCustomPrompt('')
+  }, [])
 
   const removeTool = useCallback((toolKey: string) => {
     setSelectedToolIds((prev) => prev.filter((existing) => existing !== toolKey))
@@ -1252,6 +1353,10 @@ export function useWorkshopDraft({
     dirty,
     canSave,
     captureAuthoringContext,
+    applyAuthoringProposal,
+    undoAuthoringProposal,
+    canUndoAuthoringProposal,
+    authoringBusy,
 
     handleNew,
     startDraft,

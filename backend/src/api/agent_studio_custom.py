@@ -29,6 +29,8 @@ from src.lib.agent_studio.custom_agent_service import (
     create_custom_agent,
     custom_agent_to_dict,
     get_custom_agent_for_user,
+    get_custom_agent_visible_to_user,
+    parse_custom_agent_id,
     get_custom_agent_runtime_info,
     list_custom_agents_for_user,
     list_custom_agent_versions,
@@ -38,6 +40,7 @@ from src.lib.agent_studio.custom_agent_service import (
     update_custom_agent,
 )
 from src.lib.agent_studio.authoring_validation import AuthoringValidationError
+from src.lib.agent_studio.models import AgentWorkshopContext
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.agent_access import is_resource_access_allowed
@@ -121,16 +124,14 @@ def _custom_agent_log_context(
         "action": action,
         "user_id": getattr(db_user, "id", None),
         "custom_agent_id": str(custom_agent_id) if custom_agent_id else None,
-        "template_source": getattr(request, "template_source", None),
-        "model_id": getattr(request, "model_id", None),
-        "tool_ids": list(getattr(request, "tool_ids", None) or []),
-        "output_schema_key": getattr(request, "output_schema_key", None),
+        "has_template_source": bool(getattr(request, "template_source", None)),
+        "has_model_selection": bool(getattr(request, "model_id", None)),
+        "tool_count": len(getattr(request, "tool_ids", None) or []),
+        "has_output_selection": bool(getattr(request, "output_schema_key", None)),
         "include_group_rules": getattr(request, "include_group_rules", None),
         "has_custom_prompt": getattr(request, "custom_prompt", None) is not None,
-        "group_override_keys": sorted(
-            (getattr(request, "group_prompt_overrides", None) or {}).keys()
-        ),
-        "allowed_group_ids": getattr(request, "allowed_group_ids", None),
+        "group_override_count": len(getattr(request, "group_prompt_overrides", None) or {}),
+        "allowed_group_count": len(getattr(request, "allowed_group_ids", None) or []),
     }
 
 
@@ -140,6 +141,9 @@ class CreateCustomAgentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     template_source: Optional[str] = Field(None, min_length=1, max_length=100)
+    clone_source_agent_id: Optional[str] = Field(None, min_length=1, max_length=100)
+    clone_source_updated_at: Optional[datetime] = None
+    visibility: Literal["private", "project"] = "private"
     name: str = Field(..., min_length=1, max_length=100)
     custom_prompt: Optional[str] = None
     # Removed legacy MOD aliases — group-based prompt override fields are now
@@ -159,6 +163,8 @@ class CreateCustomAgentRequest(BaseModel):
 
 class UpdateCustomAgentRequest(BaseModel):
     """Update request for custom agent."""
+    expected_updated_at: Optional[datetime] = None
+    visibility: Optional[Literal["private", "project"]] = None
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -219,6 +225,10 @@ class CustomAgentResponse(BaseModel):
     updated_at: datetime
 
 
+class WorkshopSavedReference(BaseModel):
+    agent_id: str
+
+
 class ListCustomAgentsResponse(BaseModel):
     """List response for custom agents."""
 
@@ -262,6 +272,59 @@ def _as_version_payload(version_obj) -> CustomAgentVersionResponse:
     )
 
 
+class WorkshopDraftValidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workshop: AgentWorkshopContext
+    phase: Literal["pre_apply", "post_apply"]
+
+
+@router.post("/validate-draft")
+async def validate_workshop_draft_endpoint(
+    request: WorkshopDraftValidationRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> dict:
+    from src.models.sql.user import User
+    from src.lib.agent_studio.authoring_context import workshop_draft_fingerprint
+    from src.lib.agent_studio.workshop_authoring import validate_workshop_context
+
+    db_user = db.query(User).filter(User.auth_sub == str(user.get("sub") or "")).one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=403, detail="Authenticated curator not found")
+    if request.workshop.draft_fingerprint != workshop_draft_fingerprint(request.workshop):
+        raise HTTPException(status_code=422, detail="Workshop candidate fingerprint mismatch")
+    return validate_workshop_context(
+        db, workshop=request.workshop, user_id=db_user.id,
+        active_group_ids=_authenticated_group_ids(user), phase=request.phase,
+    ).to_dict()
+
+
+@router.get("/{custom_agent_id}/authoring-reference", response_model=WorkshopSavedReference)
+async def get_workshop_saved_reference(
+    custom_agent_id: UUID,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> WorkshopSavedReference:
+    """Refresh the authorized capability catalog before exposing a flow reference."""
+    from src.lib.agent_studio.capability_catalog import CapabilityCatalogContext, build_authorized_capability_catalog
+    from src.models.sql.user import User
+    db_user = db.query(User).filter(User.auth_sub == user.get("sub")).one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=403, detail="Authoring access is unavailable")
+    agent_id = make_custom_agent_id(custom_agent_id)
+    records = build_authorized_capability_catalog(
+        db=db, context=CapabilityCatalogContext(
+            user_id=db_user.id, active_group_ids=tuple(_authenticated_group_ids(user)),
+            active_tab="flows", artifact_kind="flow",
+        ),
+    )
+    if not any(record.kind == "agent" and record.resource_id == agent_id and record.selectable
+               and record.availability == "available" and record.compatibility.get("flow_selectable")
+               for record in records):
+        raise HTTPException(status_code=409, detail="The saved agent is not available in the current flow catalog")
+    return WorkshopSavedReference(agent_id=agent_id)
+
+
 @router.post("", response_model=CustomAgentResponse, status_code=201)
 async def create_custom_agent_endpoint(
     request: CreateCustomAgentRequest,
@@ -276,6 +339,23 @@ async def create_custom_agent_endpoint(
         request=request,
     )
     try:
+        clone_options = {}
+        if request.clone_source_agent_id:
+            source_id = parse_custom_agent_id(request.clone_source_agent_id)
+            if source_id is None:
+                raise ValueError("Invalid clone source")
+            source = get_custom_agent_visible_to_user(db, source_id, db_user.id)
+            db.refresh(source, with_for_update=True)
+            from src.lib.agent_studio.workshop_authoring import workshop_source_is_current
+            if not workshop_source_is_current(source, request.clone_source_updated_at):
+                raise ValueError("The clone source changed; reopen the source")
+            _require_custom_agent_group_access(source, user)
+            if (source.template_source or None) != request.template_source:
+                raise ValueError("The clone template changed; reopen the source")
+            clone_options = {
+                "inherited_allowed_group_ids": list(source.allowed_group_ids or []),
+                "inherited_group_tool_policy": dict(source.group_tool_policy or {}),
+            }
         custom_agent = create_custom_agent(
             db=db,
             user_id=db_user.id,
@@ -295,6 +375,8 @@ async def create_custom_agent_endpoint(
             category=request.category,
             allowed_group_ids=request.allowed_group_ids,
             active_group_ids=_authenticated_group_ids(user),
+            **clone_options,
+            visibility=request.visibility,
         )
         db.commit()
         db.refresh(custom_agent)
@@ -423,6 +505,8 @@ async def update_custom_agent_endpoint(
         update_custom_agent(
             db=db,
             custom_agent=custom_agent,
+            expected_updated_at=request.expected_updated_at,
+            visibility=request.visibility,
             name=request.name,
             custom_prompt=request.custom_prompt,
             group_prompt_overrides=request.group_prompt_overrides,
