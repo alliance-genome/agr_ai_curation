@@ -846,8 +846,8 @@ export function useWorkshopDraft({
       setError(null)
       setStatus(
         incomingPromptUpdate.summary?.trim()
-          ? `Applied Claude group update (${targetGroupId}): ${incomingPromptUpdate.summary.trim()}`
-          : `Applied Claude prompt update to ${targetGroupId} group draft`
+          ? `Applied AI Chat group update (${targetGroupId}): ${incomingPromptUpdate.summary.trim()}`
+          : `Applied AI Chat prompt update to ${targetGroupId} group draft`
       )
       return
     }
@@ -857,8 +857,8 @@ export function useWorkshopDraft({
     setError(null)
     setStatus(
       incomingPromptUpdate.summary?.trim()
-        ? `Applied Claude update: ${incomingPromptUpdate.summary.trim()}`
-        : 'Applied Claude prompt update to the draft'
+        ? `Applied AI Chat update: ${incomingPromptUpdate.summary.trim()}`
+        : 'Applied AI Chat prompt update to the draft'
     )
   }, [
     incomingPromptUpdate,

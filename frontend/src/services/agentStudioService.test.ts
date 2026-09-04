@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  AgentStudioStreamProtocolError,
   cloneAgentToWorkshop,
   createAgentStudioSession,
   createFlow,
@@ -11,11 +12,14 @@ import {
   listFlows,
   listCustomAgents,
   listToolIdeaRequests,
+  parseAgentStudioChatEvent,
   setCustomAgentVisibility,
   submitToolIdeaRequest,
+  streamOpusChat,
   updateCustomAgent,
   updateFlow,
 } from './agentStudioService'
+import { logger } from './logger'
 
 const mockFetch = vi.fn()
 global.fetch = mockFetch
@@ -467,5 +471,123 @@ describe('agentStudioService', () => {
       })
     )
     expect(result).toEqual(updatedFlow)
+  })
+
+  it('parses the complete provider-neutral Agent Studio SSE contract', async () => {
+    const base = { session_id: 'session-1', turn_id: 'turn-1', trace_id: 'trace-1' }
+    const events = [
+      { ...base, type: 'PROVIDER_CONTEXT_PREFLIGHT', operation: 'agents_sdk_run', payload_summary: { estimated_tokens: 42 } },
+      { ...base, type: 'TOOL_SEARCH', status: 'searching' },
+      { ...base, type: 'TOOL_SEARCH_RESULT', status: 'loaded', loaded_tool_count: 0 },
+      { ...base, type: 'TOOL_USE', tool_name: 'inspect_flow', tool_input: { flow_id: 'flow-1' }, call_id: 'call-1' },
+      { ...base, type: 'TOOL_RESULT', tool_name: 'inspect_flow', result: { success: true }, call_id: 'call-1' },
+      { ...base, type: 'TEXT_DELTA', delta: 'Checked.' },
+      { ...base, type: 'REFUSAL', message: 'The model declined this request.' },
+      { ...base, type: 'INCOMPLETE', message: 'The model stopped before completing this turn.' },
+      { ...base, type: 'CONTEXT_OVERFLOW', message: 'The conversation exceeded the model context.' },
+      { ...base, type: 'ERROR', message: 'The model service had a temporary problem.' },
+      { ...base, type: 'DONE' },
+    ]
+    const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')
+    mockFetch.mockResolvedValueOnce(new Response(body, { status: 200 }))
+
+    const received = []
+    for await (const event of streamOpusChat([{ role: 'user', content: 'Inspect this flow' }])) {
+      received.push(event)
+    }
+
+    expect(received).toEqual(events)
+    expect(received.map((event) => event.type)).toEqual([
+      'PROVIDER_CONTEXT_PREFLIGHT',
+      'TOOL_SEARCH',
+      'TOOL_SEARCH_RESULT',
+      'TOOL_USE',
+      'TOOL_RESULT',
+      'TEXT_DELTA',
+      'REFUSAL',
+      'INCOMPLETE',
+      'CONTEXT_OVERFLOW',
+      'ERROR',
+      'DONE',
+    ])
+  })
+
+  it('rejects unknown stream events without logging their payload', async () => {
+    const errorSpy = vi.spyOn(logger, 'error')
+    const hiddenPayload = 'hidden-tool-name-that-must-not-be-logged'
+    mockFetch.mockResolvedValueOnce(new Response(
+      `data: ${JSON.stringify({
+        type: 'FUTURE_PROVIDER_EVENT',
+        session_id: 'session-1',
+        turn_id: 'turn-1',
+        provider_payload: hiddenPayload,
+      })}\n\n`,
+      { status: 200 },
+    ))
+
+    const consume = async () => {
+      for await (const _event of streamOpusChat([{ role: 'user', content: 'Hello' }])) {
+        // The unknown event must never reach UI state.
+      }
+    }
+
+    await expect(consume()).rejects.toMatchObject({
+      name: 'AgentStudioStreamProtocolError',
+      reason: 'unknown_type',
+    })
+    expect(errorSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(hiddenPayload)
+  })
+
+  it('rejects malformed and cross-turn stream events with sanitized errors', async () => {
+    expect(() => parseAgentStudioChatEvent({ type: 'TEXT_DELTA', delta: 'missing IDs' }))
+      .toThrow(AgentStudioStreamProtocolError)
+
+    const errorSpy = vi.spyOn(logger, 'error')
+    const body = [
+      { type: 'TEXT_DELTA', session_id: 'session-1', turn_id: 'turn-1', delta: 'First' },
+      { type: 'DONE', session_id: 'session-1', turn_id: 'turn-2' },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')
+    mockFetch.mockResolvedValueOnce(new Response(body, { status: 200 }))
+
+    const consume = async () => {
+      for await (const _event of streamOpusChat([{ role: 'user', content: 'Hello' }])) {
+        // Consume until correlation validation fails.
+      }
+    }
+
+    await expect(consume()).rejects.toMatchObject({
+      reason: 'correlation_mismatch',
+    })
+    expect(errorSpy).toHaveBeenCalledOnce()
+    expect(errorSpy.mock.calls[0][2]?.metadata).toEqual({
+      reason: 'correlation_mismatch',
+      eventType: 'DONE',
+    })
+  })
+
+  it('treats a stream that closes without a terminal event as interrupted', async () => {
+    const errorSpy = vi.spyOn(logger, 'error')
+    mockFetch.mockResolvedValueOnce(new Response(
+      `data: ${JSON.stringify({
+        type: 'TEXT_DELTA',
+        session_id: 'session-1',
+        turn_id: 'turn-1',
+        delta: 'Partial response',
+      })}\n\n`,
+      { status: 200 },
+    ))
+
+    const consume = async () => {
+      for await (const _event of streamOpusChat([{ role: 'user', content: 'Hello' }])) {
+        // Consume through the unexpected end of stream.
+      }
+    }
+
+    await expect(consume()).rejects.toMatchObject({
+      name: 'AgentStudioStreamProtocolError',
+      reason: 'missing_terminal',
+    })
+    expect(errorSpy).toHaveBeenCalledOnce()
   })
 })

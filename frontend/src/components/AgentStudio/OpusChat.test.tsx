@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 
 import OpusChat, { resetSharedOpusChatStateForTests } from './OpusChat'
 import type { ChatContext, PromptInfo } from '@/types/promptExplorer'
+import { logger } from '@/services/logger'
 
 const DISEASE_VALIDATOR: PromptInfo = {
   agent_id: 'disease_validator',
@@ -250,7 +251,7 @@ describe('OpusChat', () => {
     expect(serviceMocks.streamOpusChat.mock.calls[1][2]).toBe('agent-studio-session-12345678')
   })
 
-  it('reattaches to an active Opus turn after unmount without starting a duplicate stream', async () => {
+  it('reattaches to an active AI Chat turn after unmount without starting a duplicate stream', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -460,7 +461,7 @@ describe('OpusChat', () => {
     expect(screen.queryByText(/"gene_id"/)).not.toBeInTheDocument()
   })
 
-  it('applies an approved workshop prompt update proposed by Claude tool call', async () => {
+  it('applies an approved workshop prompt update proposed by AI Chat tool call', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -503,7 +504,7 @@ describe('OpusChat', () => {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 
     await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply Claude Prompt Update?' })).toBeInTheDocument()
+      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
@@ -518,7 +519,7 @@ describe('OpusChat', () => {
     })
   })
 
-  it('supports targeted_edit workshop prompt proposals from Claude', async () => {
+  it('supports targeted_edit workshop prompt proposals from AI Chat', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -557,7 +558,7 @@ describe('OpusChat', () => {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 
     await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply Claude Prompt Update?' })).toBeInTheDocument()
+      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
@@ -617,7 +618,7 @@ describe('OpusChat', () => {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 
     await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply Claude Prompt Update?' })).toBeInTheDocument()
+      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply to Draft' }))
@@ -690,7 +691,7 @@ describe('OpusChat', () => {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 
     await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply Claude Prompt Update?' })).toBeInTheDocument()
+      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
     })
     expect(screen.getByText(/Proposed additions are highlighted in green/)).toBeInTheDocument()
 
@@ -741,7 +742,7 @@ describe('OpusChat', () => {
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 
     await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Apply Claude Prompt Update?' })).toBeInTheDocument()
+      expect(screen.getByRole('dialog', { name: 'Apply AI Chat Prompt Update?' })).toBeInTheDocument()
     })
 
     expect(screen.getByText(/Proposed removals are highlighted in red with strikethrough/)).toBeInTheDocument()
@@ -771,12 +772,12 @@ describe('OpusChat', () => {
       />
     )
 
-    expect(screen.getByRole('heading', { name: 'Claude' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'AI Chat' })).toBeInTheDocument()
     expect(screen.queryByText('Chat with Claude')).not.toBeInTheDocument()
     expect(screen.queryByText('Contact Devs:')).not.toBeInTheDocument()
     expect(screen.getByText('Disease Validator')).toBeInTheDocument()
 
-    const hideButton = screen.getByRole('button', { name: 'Hide Claude' })
+    const hideButton = screen.getByRole('button', { name: 'Hide AI Chat' })
     expect(hideButton).toHaveAttribute('aria-expanded', 'true')
     expect(hideButton).toHaveAttribute('aria-controls', 'agent-studio-claude-panel')
     fireEvent.click(hideButton)
@@ -812,7 +813,7 @@ describe('OpusChat', () => {
 
     expect(screen.getByText('Loaded from durable chat assistan...')).toBeInTheDocument()
     expect(screen.queryByText('Disease Validator')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Close Claude' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Close AI Chat' })).toHaveAttribute(
       'aria-controls',
       'agent-studio-claude-drawer',
     )
@@ -872,12 +873,12 @@ describe('OpusChat', () => {
     fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), {
       target: { value: 'Draft typed mid-stream' },
     })
-    const chatBeforeToggle = screen.getByRole('heading', { name: 'Claude' })
+    const chatBeforeToggle = screen.getByRole('heading', { name: 'AI Chat' })
 
     fireEvent.click(screen.getByText('toggle-shell'))
     fireEvent.click(screen.getByText('toggle-shell'))
 
-    expect(screen.getByRole('heading', { name: 'Claude' })).toBe(chatBeforeToggle)
+    expect(screen.getByRole('heading', { name: 'AI Chat' })).toBe(chatBeforeToggle)
     expect(screen.getByText('Partial reply')).toBeInTheDocument()
     expect(screen.getByText('Tool Calls (1)')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Ask about prompts...')).toHaveValue('Draft typed mid-stream')
@@ -889,5 +890,104 @@ describe('OpusChat', () => {
     await waitFor(() => {
       expect(onStreamingChange).toHaveBeenLastCalledWith(false)
     })
+  })
+
+  it('announces hosted capability-search start and zero-result progress without exposing tool metadata', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    let releaseSearchResult: () => void = () => {}
+    let releaseDone: () => void = () => {}
+    const searchResultGate = new Promise<void>((resolve) => { releaseSearchResult = resolve })
+    const doneGate = new Promise<void>((resolve) => { releaseDone = resolve })
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'PROVIDER_CONTEXT_PREFLIGHT' }
+      yield { type: 'TOOL_SEARCH', status: 'searching' }
+      await searchResultGate
+      yield { type: 'TOOL_SEARCH_RESULT', status: 'loaded', loaded_tool_count: 0 }
+      await doneGate
+      yield { type: 'DONE' }
+    })
+
+    render(<OpusChat context={{ active_tab: 'flows' }} />)
+    const input = screen.getByPlaceholderText('Ask about flows...')
+    fireEvent.change(input, { target: { value: 'Check available capabilities.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Finding relevant capabilities…')
+    expect(screen.queryByText(/tool name/i)).not.toBeInTheDocument()
+
+    releaseSearchResult()
+    expect(await screen.findByRole('status')).toHaveTextContent('No additional capabilities were needed.')
+
+    releaseDone()
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+  })
+
+  it.each([
+    ['REFUSAL', 'Request declined: The model declined this request.'],
+    ['INCOMPLETE', 'Response incomplete: The model stopped before completing this turn.'],
+    ['CONTEXT_OVERFLOW', 'Conversation too long: The conversation exceeded the model context.'],
+    ['ERROR', 'Error: The model service had a temporary problem.'],
+  ] as const)('renders %s as a distinct terminal state without reporting a frontend crash', async (type, expected) => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+    const errorSpy = vi.spyOn(logger, 'error')
+    const messages = {
+      REFUSAL: 'The model declined this request.',
+      INCOMPLETE: 'The model stopped before completing this turn.',
+      CONTEXT_OVERFLOW: 'The conversation exceeded the model context.',
+      ERROR: 'The model service had a temporary problem.',
+    }
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type, message: messages[type] }
+    })
+
+    render(<OpusChat context={{ active_tab: 'agents' }} />)
+    const input = screen.getByPlaceholderText('Ask about prompts...')
+    fireEvent.change(input, { target: { value: 'Please respond.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    expect(await screen.findByText(expected)).toBeInTheDocument()
+    await waitFor(() => expect(input).not.toBeDisabled())
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('matches live tool results to the exact call ID rather than the latest tool', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TOOL_USE', tool_name: 'first_tool', tool_input: {}, call_id: 'call-1' }
+      yield { type: 'TOOL_USE', tool_name: 'second_tool', tool_input: {}, call_id: 'call-2' }
+      yield {
+        type: 'TOOL_RESULT',
+        tool_name: 'first_tool',
+        result: { success: true },
+        call_id: 'call-1',
+      }
+      yield { type: 'DONE' }
+    })
+
+    render(<OpusChat context={{ active_tab: 'agents' }} />)
+    const input = screen.getByPlaceholderText('Ask about prompts...')
+    fireEvent.change(input, { target: { value: 'Use both tools.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    fireEvent.click(await screen.findByText('Tool Calls (2)'))
+    const firstToolRow = screen.getByText('first_tool').parentElement?.parentElement
+    const secondToolRow = screen.getByText('second_tool').parentElement?.parentElement
+    expect(firstToolRow).not.toBeNull()
+    expect(secondToolRow).not.toBeNull()
+    expect(within(firstToolRow as HTMLElement).getByText('✓ Success')).toBeInTheDocument()
+    expect(within(secondToolRow as HTMLElement).queryByText('✓ Success')).not.toBeInTheDocument()
   })
 })

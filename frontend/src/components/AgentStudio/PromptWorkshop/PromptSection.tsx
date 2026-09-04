@@ -167,7 +167,7 @@ export default function PromptSection(props: PromptSectionProps) {
               startIcon={<AutoFixHighIcon sx={{ fontSize: 14 }} />}
               sx={LinkButtonSx}
             >
-              Discuss prompt changes with Claude
+              Discuss prompt changes with AI Chat
             </Button>
           ) : undefined}
         >

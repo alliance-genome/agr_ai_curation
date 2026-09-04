@@ -1,7 +1,7 @@
 /**
  * ClaudeRail
  *
- * The 44px rail that stays on the right edge of Agent Studio while the Claude
+ * The 44px rail that stays on the right edge of Agent Studio while AI Chat
  * panel is collapsed. It holds the Show control, an unread badge, a streaming
  * ring, and a vertical label.
  */
@@ -15,7 +15,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 export const CLAUDE_RAIL_WIDTH = 44
 
 export function formatUnreadDescription(unreadCount: number): string {
-  return `${unreadCount} new message${unreadCount === 1 ? '' : 's'} from Claude`
+  return `${unreadCount} new message${unreadCount === 1 ? '' : 's'} from AI Chat`
 }
 
 const RailRoot = styled(Box)(({ theme }) => ({
@@ -102,11 +102,11 @@ const ClaudeRail = forwardRef<HTMLButtonElement, ClaudeRailProps>(function Claud
           },
         }}
       >
-        <Tooltip title="Show Claude (Ctrl+.)" placement="left">
+        <Tooltip title="Show AI Chat (Ctrl+.)" placement="left">
           <ShowButton
             ref={ref}
             size="small"
-            aria-label="Show Claude"
+            aria-label="Show AI Chat"
             aria-expanded="false"
             aria-controls={panelId}
             aria-describedby={hasUnread ? UNREAD_DESCRIPTION_ID : undefined}
@@ -120,9 +120,9 @@ const ClaudeRail = forwardRef<HTMLButtonElement, ClaudeRailProps>(function Claud
         <VisuallyHidden id={UNREAD_DESCRIPTION_ID}>{formatUnreadDescription(unreadCount)}</VisuallyHidden>
       )}
       {isStreaming && (
-        <CircularProgress size={14} thickness={4} aria-label="Claude is writing" />
+        <CircularProgress size={14} thickness={4} aria-label="AI Chat is responding" />
       )}
-      <VerticalLabel aria-hidden="true">Claude</VerticalLabel>
+      <VerticalLabel aria-hidden="true">AI Chat</VerticalLabel>
       <Box sx={{ flex: 1 }} />
       <ChevronLeftIcon aria-hidden="true" sx={{ fontSize: 20, color: 'text.secondary' }} />
     </RailRoot>

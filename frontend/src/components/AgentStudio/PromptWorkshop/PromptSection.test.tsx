@@ -113,9 +113,9 @@ describe('PromptSection', () => {
     expect(screen.queryByRole('group', { name: 'Group' })).not.toBeInTheDocument()
   })
 
-  it('opens the prompt discussion with Claude', () => {
+  it('opens the prompt discussion with AI Chat', () => {
     const props = renderPrompt()
-    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with AI Chat' }))
     expect(props.onDiscussPromptWithClaude).toHaveBeenCalledTimes(1)
   })
 

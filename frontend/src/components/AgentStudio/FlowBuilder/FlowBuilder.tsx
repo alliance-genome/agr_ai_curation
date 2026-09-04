@@ -639,7 +639,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
   // React Flow state
   // The drawer-vs-docked breakpoint reads the whole builder (palette, canvas,
-  // dock), not the canvas row, which is far narrower once the Claude pane is open.
+  // dock), not the canvas row, which is far narrower once AI Chat is open.
   const [builderRootRef, builderWidth] = useContainerWidth<HTMLDivElement>()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const primaryShortcutLabel = useMemo(getPrimaryShortcutLabel, [])
@@ -934,7 +934,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // Note: Only run on mount - empty deps is intentional
 
-  // Report flow state changes to parent (for context sharing with Claude)
+  // Report flow state changes to parent (for context sharing with AI Chat)
   useEffect(() => {
     if (onFlowChange) {
       const flowState: FlowState = {
@@ -1991,7 +1991,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           </Tooltip>
         </FileActionStrip>
 
-        {/* Verify with Claude Button */}
+        {/* Verify with AI Chat button */}
         {onVerifyRequest && nodes.length > 0 && (
           <Button
             onClick={onVerifyRequest}
@@ -2012,7 +2012,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
               },
             }}
           >
-            Verify with Claude
+            Verify with AI Chat
           </Button>
         )}
 

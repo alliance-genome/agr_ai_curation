@@ -2,7 +2,7 @@
  * AgentDetailsPanel Component
  *
  * Detail view for the agent selected in Agent Browser: a compact header
- * (name, summary, Discuss with Claude, Clone to Workshop) and three tabs:
+ * (name, summary, Discuss with AI Chat, Clone to Workshop) and three tabs:
  * - Guide: when to use it, what it reads, capabilities, limitations, tools
  * - Envelope: the domain pack's objects, fields, and automatic checks
  *   (only when the agent declares a domain pack)
@@ -73,8 +73,8 @@ interface AgentDetailsPanelProps {
   selectedGroupId: string | null
   onGroupSelect: (groupId: string | null) => void
   /**
-   * Discuss-with-Claude handoff. The optional third argument carries a
-   * drafting prompt when the curator asks Claude to draft a guide.
+   * AI Chat discussion handoff. The optional third argument carries a
+   * drafting prompt when the curator asks AI Chat to draft a guide.
    */
   onDiscussWithClaude?: (agentId: string, agentName: string, prompt?: string) => void
   onCloneToWorkshop?: (agentId: string) => void
@@ -265,7 +265,7 @@ function AgentDetailsPanel({
               onClick={handleDiscuss}
               sx={{ whiteSpace: 'nowrap', textTransform: 'none' }}
             >
-              Discuss with Claude
+              Discuss with AI Chat
             </Button>
             {canCloneToWorkshop && (
               <Button

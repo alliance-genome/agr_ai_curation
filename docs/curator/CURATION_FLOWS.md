@@ -39,15 +39,15 @@ Curation Flows are guided supervisor conversations that run multiple AI agents i
 
 1. Click **"Agent Studio"** in the navigation bar
 2. Select the **"Flows"** tab
-3. The Flow Builder canvas appears on the right, with Opus chat on the left
+3. The Flow Builder canvas appears on the right, with AI Chat on the left
 
 ## Flow Builder Interface
 
-**Opus Chat (Left Panel)**
-Chat with Claude Opus about your flow - ask for help building it, troubleshooting
+**AI Chat (Left Panel)**
+Use AI Chat to discuss your flow - ask for help building it, troubleshooting
 issues, understanding what each agent does, or checking which active validators
 the domain-pack validation plan will schedule. When validator-agent IDs are
-present, Claude can inspect those validator prompts and tools through Agent
+present, AI Chat can inspect those validator prompts and tools through Agent
 Studio's existing prompt-inspection tools.
 
 **Agent Palette (Left Panel)**
@@ -154,9 +154,9 @@ structured artifacts from earlier steps separately for review, export, and
 follow-up lookup. Later step prompts do not use hidden previous-output text or
 custom variable templates.
 
-### Step 4: Verify with Claude
+### Step 4: Verify with AI Chat
 
-Before saving, click the **"Verify with Claude"** button. Claude will:
+Before saving, click the **"Verify with AI Chat"** button. AI Chat will:
 - Check your flow structure for issues
 - Identify missing connections or problems
 - Suggest improvements
@@ -186,7 +186,7 @@ The Flow Builder toolbar provides quick access to common operations:
 - **Select All** (Ctrl+A) - Select all nodes on the canvas
 - **Delete Selected** (Del) - Remove selected nodes
 
-**Verify with Claude** - Appears when your flow has nodes. Sends the flow to Claude for structural review before running.
+**Verify with AI Chat** - Appears when your flow has nodes. Sends the flow to AI Chat for structural review before running.
 
 ## Flow Validation
 
@@ -268,7 +268,7 @@ Sends results directly to the chat interface.
 **Use cases:**
 - Quick review before generating a file
 - Iterating on your flow to get the output right
-- Discussing results with Opus in Agent Studio
+- Discussing results with AI Chat in Agent Studio
 
 ### CSV File Formatter
 
@@ -381,7 +381,7 @@ Build simple flows first (A → B → C) to understand how agents work together.
 ### Add Custom Instructions
 Take advantage of the ability to add specific instructions to each agent node.
 
-### Use Verify with Claude
+### Use Verify with AI Chat
 Always verify your flow before running it on important documents.
 
 ### Test with Chat Output First
@@ -430,5 +430,5 @@ Use Chat Output first to review results, then switch to a File Formatter when re
 ## Next Steps
 
 - **[Available Agents](AVAILABLE_AGENTS.md)** - Learn more about each agent
-- **[Agent Studio](AGENT_STUDIO.md)** - Chat with Opus about your flows
+- **[Agent Studio](AGENT_STUDIO.md)** - Use AI Chat to discuss your flows
 - **[Best Practices](BEST_PRACTICES.md)** - Tips for writing effective instructions

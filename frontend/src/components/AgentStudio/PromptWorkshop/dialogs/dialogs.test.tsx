@@ -92,6 +92,7 @@ describe('ToolRequestDialog', () => {
     const onClose = vi.fn()
     render(<ToolRequestDialog open submitting={false} onSubmit={onSubmit} onClose={onClose} />)
     const dialog = screen.getByRole('dialog', { name: 'New request to developers' })
+    expect(within(dialog).getByText('Describe the tool you need. You can draft it with AI Chat first.')).toBeInTheDocument()
     fireEvent.change(within(dialog).getByLabelText('Title'), { target: { value: 'GO tool' } })
     fireEvent.change(within(dialog).getByLabelText('Description'), { target: { value: 'Expand GO relationships.' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Send request' }))

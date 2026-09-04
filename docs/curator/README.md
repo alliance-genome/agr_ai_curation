@@ -12,7 +12,7 @@ Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide
 
 **Ready for advanced features?**
 
-4. **[Agent Studio](AGENT_STUDIO.md)** - Browse prompts, build flows, and chat with Claude Opus
+4. **[Agent Studio](AGENT_STUDIO.md)** - Browse prompts, build flows, and use AI Chat
 5. **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain multiple agents together
 6. **[RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md)** - Run the RGD paper-review flow and review blockers or follow-ups
 7. **[Batch Processing](BATCH_PROCESSING.md)** - Process multiple documents through flows automatically
@@ -44,12 +44,12 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 ### Understand and Improve AI Behavior
 
-- **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus
+- **Agent Studio** - Browse agent prompts, build flows, and use AI Chat
 - **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
 - **Agent Workshop** - Create custom agents with template/scratch/clone starts, model/tool selection, per-group overrides, version history, and icon customization
-- **Validation insight** - Ask Claude to inspect domain-pack validation plans,
+- **Validation insight** - Ask AI Chat to inspect domain-pack validation plans,
   active validator-agent prompts, and export/submission readiness details
-- **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
+- **Discuss Responses** - Use triple-dot menu to discuss any AI response with AI Chat
 - **Submit Suggestions** - Help improve the system with your domain expertise
 
 ## How It Works
@@ -97,7 +97,7 @@ Tools for understanding, building, and improving AI behavior:
 - Browse all agent prompts organized by category
 - See group-specific rules for each agent
 - Click tool names to view detailed tool documentation
-- Chat with Opus about how agents and prompts work
+- Use AI Chat to discuss how agents and prompts work
 
 **Flows Tab (Curation Flows)**
 - Build visual workflows with drag-and-drop
@@ -106,7 +106,7 @@ Tools for understanding, building, and improving AI behavior:
 - Keep active default validators enabled, or replace/supplement them with explicit validation when the flow needs a custom check
 - See under-development validators as metadata without scheduling them
 - Output to chat, CSV, TSV, or JSON files
-- Use "Verify with Claude" to check your flow before running
+- Use "Verify with AI Chat" to check your flow before running
 - Save and reuse flows across documents
 
 **Agent Workshop Tab**
@@ -118,7 +118,7 @@ Tools for understanding, building, and improving AI behavior:
 
 **Discuss Responses**
 - Use triple-dot menu on any chat response to open it in Agent Studio
-- Chat with Opus about why the AI gave that specific response
+- Use AI Chat to discuss why the AI gave that specific response
 
 ### Audit Panel
 Real-time transparency into AI operations:
@@ -176,7 +176,7 @@ final export or direct submission actions.
 
 **The best way to provide feedback:** Use the **triple-dot menu (...)** button on any AI response in the chat interface. This automatically captures your prompts, the AI's responses, and all database traces, giving developers the full context they need to help you.
 
-**Want to understand or improve AI behavior?** Check out **[Agent Studio](AGENT_STUDIO.md)** - browse the exact prompts given to each AI agent, review interaction traces, discuss them with Claude Opus, and submit improvement suggestions based on your domain expertise.
+**Want to understand or improve AI behavior?** Check out **[Agent Studio](AGENT_STUDIO.md)** - browse the exact prompts given to each AI agent, review interaction traces, discuss them with AI Chat, and submit improvement suggestions based on your domain expertise.
 
 For general questions or suggestions, please reach out to the development team.
 
@@ -187,7 +187,7 @@ For general questions or suggestions, please reach out to the development team.
 | [Getting Started](GETTING_STARTED.md) | First-time setup and basic usage |
 | [Best Practices](BEST_PRACTICES.md) | Tips for writing effective queries |
 | [Available Agents](AVAILABLE_AGENTS.md) | All specialist agents and their capabilities |
-| [Agent Studio](AGENT_STUDIO.md) | Browse prompts, build flows, chat with Opus |
+| [Agent Studio](AGENT_STUDIO.md) | Browse prompts, build flows, use AI Chat |
 | [Curation Flows](CURATION_FLOWS.md) | Visual workflow builder guide |
 | [RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md) | RGD paper-review flow task guide |
 | [Batch Processing](BATCH_PROCESSING.md) | Process multiple documents through flows |

@@ -155,7 +155,7 @@ export default function WorkshopNav({
           </Typography>
           <ButtonBase onClick={onAskClaude} sx={askClaudeSx}>
             <AutoFixHighIcon sx={{ fontSize: 15 }} />
-            <span>Ask Claude</span>
+            <span>Ask AI Chat</span>
           </ButtonBase>
         </>
       )}

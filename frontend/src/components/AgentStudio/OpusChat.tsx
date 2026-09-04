@@ -1,7 +1,7 @@
 /**
  * OpusChat Component
  *
- * Chat interface for conversing with Claude Opus about prompts.
+ * Provider-neutral Agent Studio AI Chat interface.
  * Includes tool support for suggestion submission.
  */
 
@@ -44,6 +44,7 @@ import {
   createAgentStudioSession,
   streamOpusChat,
 } from '@/services/agentStudioService'
+import { logger } from '@/services/logger'
 import ModelessFeedbackSurface from '@/components/Feedback/ModelessFeedbackSurface'
 import type {
   ChatMessage,
@@ -144,6 +145,7 @@ const ToolCallBox = styled(Box)(({ theme }) => ({
 interface ToolCallRecord {
   tool_name: string
   tool_input: Record<string, unknown>
+  call_id?: string | null
   result?: Record<string, unknown>
 }
 
@@ -158,6 +160,7 @@ interface DisplayMessage {
 interface SharedOpusChatState {
   messages: DisplayMessage[]
   isStreaming: boolean
+  streamStatus: string | null
   durableSessionId: string | null
 }
 
@@ -188,6 +191,7 @@ function getSharedOpusChatState(
   const nextState = {
     messages: buildDisplayMessages(initialConversation),
     isStreaming: false,
+    streamStatus: null,
     durableSessionId: initialDurableSessionId ?? null,
   }
   sharedOpusChatStates.set(resolvedKey, nextState)
@@ -434,11 +438,11 @@ interface OpusChatProps {
   durableSessionId?: string | null
   sourceSessionId?: string
   selectedAgent?: PromptInfo
-  /** Message to auto-send (e.g., from Verify with Claude button) */
+  /** Message to auto-send (e.g., from the Verify with AI Chat button) */
   verifyMessage?: string | null
   /** Callback after verify message is sent */
   onVerifyMessageSent?: () => void
-  /** Message to auto-send (e.g., from Discuss with Claude button) */
+  /** Message to auto-send (e.g., from the Discuss with AI Chat button) */
   discussMessage?: string | null
   /** Callback after discuss message is sent */
   onDiscussMessageSent?: () => void
@@ -456,7 +460,7 @@ interface OpusChatProps {
   onHide?: () => void
   /** Ref to the chat input so the shell can move focus into the chat */
   inputRef?: Ref<HTMLTextAreaElement>
-  /** Notify the shell when a Claude turn starts or finishes streaming */
+  /** Notify the shell when an AI Chat turn starts or finishes streaming */
   onStreamingChange?: (isStreaming: boolean) => void
 }
 
@@ -561,6 +565,7 @@ function OpusChat({
   )
   const messages = sharedSnapshot.messages
   const isStreaming = sharedSnapshot.isStreaming
+  const streamStatus = sharedSnapshot.streamStatus
   const durableSessionId = sharedSnapshot.durableSessionId
   const [input, setInput] = useState('')
   const [toolCallsExpanded, setToolCallsExpanded] = useState<{ [key: number]: boolean }>({})  // Track expanded state per message
@@ -585,6 +590,7 @@ function OpusChat({
   )
   const preserveCurrentConversationSessionRef = useRef<string | null>(null)
   const sessionCreatePromiseRef = useRef<Promise<string> | null>(null)
+  const pendingToolCallIdsRef = useRef(new Set<string>())
 
   useEffect(() => {
     setSharedSnapshot(getSharedOpusChatState(conversationKey, initialConversation, durableSessionIdProp))
@@ -612,6 +618,15 @@ function OpusChat({
       isStreaming: typeof nextIsStreaming === 'function'
         ? nextIsStreaming(current.isStreaming)
         : nextIsStreaming,
+    }))
+  }, [conversationKey])
+
+  const setStreamStatus = useCallback((nextStatus: SetStateAction<string | null>) => {
+    emitSharedOpusChatState(conversationKey, (current) => ({
+      ...current,
+      streamStatus: typeof nextStatus === 'function'
+        ? nextStatus(current.streamStatus)
+        : nextStatus,
     }))
   }, [conversationKey])
 
@@ -734,9 +749,14 @@ function OpusChat({
     [promptLineDiff]
   )
 
-  // Handle tool events from Opus - add tool calls to the current assistant message
-  const handleToolEvent = useCallback((event: OpusChatEvent) => {
+  // Attach serial tool events to the current assistant message. Live events
+  // correlate by call_id; durable replay events intentionally fall back to the
+  // existing serial order because historical replay does not expose call IDs.
+  const handleToolEvent = useCallback((event: OpusChatEvent): boolean => {
     if (event.type === 'TOOL_USE' && event.tool_name && event.tool_input) {
+      if (event.call_id) {
+        pendingToolCallIdsRef.current.add(event.call_id)
+      }
       // Add tool call to the current assistant message
       setMessages((prev) => {
         const updated = [...prev]
@@ -750,6 +770,7 @@ function OpusChat({
               {
                 tool_name: event.tool_name as string,
                 tool_input: event.tool_input as Record<string, unknown>,
+                call_id: event.call_id,
               },
             ],
           }
@@ -770,6 +791,30 @@ function OpusChat({
         ])
       }
     } else if (event.type === 'TOOL_RESULT' && event.result) {
+      if (event.call_id && !pendingToolCallIdsRef.current.delete(event.call_id)) {
+        logger.error(
+          'Agent Studio tool event correlation failure',
+          new Error('Agent Studio tool event correlation failure'),
+          {
+            component: 'OpusChat',
+            action: 'correlate_tool_result',
+            metadata: { eventType: event.type, hasCallId: true },
+          },
+        )
+        setMessages((prev) => {
+          const updated = [...prev]
+          const lastAssistantIdx = updated.findLastIndex((message) => message.role === 'assistant')
+          if (lastAssistantIdx !== -1) {
+            updated[lastAssistantIdx] = {
+              ...updated[lastAssistantIdx],
+              content: 'AI Chat received an unexpected tool result. Please retry.',
+            }
+          }
+          return updated
+        })
+        return false
+      }
+
       const toolResult = event.result as Record<string, unknown>
       // Update the last tool call with its result
       setMessages((prev) => {
@@ -777,7 +822,9 @@ function OpusChat({
         const lastAssistantIdx = updated.findLastIndex((m) => m.role === 'assistant')
         if (lastAssistantIdx !== -1 && updated[lastAssistantIdx].toolCalls?.length) {
           const toolCalls = [...(updated[lastAssistantIdx].toolCalls || [])]
-          const lastToolIdx = toolCalls.length - 1
+          const lastToolIdx = event.call_id
+            ? toolCalls.findLastIndex((toolCall) => toolCall.call_id === event.call_id)
+            : toolCalls.length - 1
           if (lastToolIdx >= 0) {
             toolCalls[lastToolIdx] = {
               ...toolCalls[lastToolIdx],
@@ -857,7 +904,7 @@ function OpusChat({
             ...prev,
             {
               role: 'system',
-              content: `Claude prepared a ${targetLabel} update proposal. Review and approve it to apply to your workshop draft.`,
+              content: `AI Chat prepared a ${targetLabel} update proposal. Review and approve it to apply to your workshop draft.`,
               timestamp: new Date().toISOString(),
             },
           ])
@@ -877,12 +924,15 @@ function OpusChat({
         }
       }
     }
-  }, [])
+    return true
+  }, [setMessages])
 
   // Handle sending a message (optionally with a specific message text for auto-send)
   const handleSend = useCallback(async (messageOverride?: string) => {
     const messageText = messageOverride || input.trim()
     if (!messageText || isStreaming) return
+
+    pendingToolCallIdsRef.current.clear()
 
     const userMessage: DisplayMessage = {
       role: 'user',
@@ -893,6 +943,7 @@ function OpusChat({
     setMessages(newMessages)
     if (!messageOverride) setInput('')  // Only clear input if not using override
     setIsStreaming(true)
+    setStreamStatus('Preparing AI Chat context…')
 
     // Add empty assistant message to stream into
     setMessages((prev) => [
@@ -915,6 +966,7 @@ function OpusChat({
 
       for await (const event of streamOpusChat(apiMessages, context, activeSessionId)) {
         if (event.type === 'TEXT_DELTA' && event.delta) {
+          setStreamStatus(null)
           setMessages((prev) => {
             const updated = [...prev]
             const lastAssistantIdx = updated.findLastIndex((m) => m.role === 'assistant')
@@ -926,16 +978,38 @@ function OpusChat({
             }
             return updated
           })
+        } else if (event.type === 'TOOL_SEARCH') {
+          setStreamStatus('Finding relevant capabilities…')
+        } else if (event.type === 'TOOL_SEARCH_RESULT') {
+          setStreamStatus(
+            event.loaded_tool_count === 0
+              ? 'No additional capabilities were needed.'
+              : 'Relevant capabilities are ready.',
+          )
+        } else if (event.type === 'PROVIDER_CONTEXT_PREFLIGHT') {
+          setStreamStatus('Preparing AI Chat context…')
         } else if (event.type === 'TOOL_USE' || event.type === 'TOOL_RESULT') {
-          handleToolEvent(event)
-        } else if (event.type === 'ERROR') {
+          setStreamStatus('Using an authorized capability…')
+          if (!handleToolEvent(event)) break
+        } else if (
+          event.type === 'CONTEXT_OVERFLOW'
+          || event.type === 'REFUSAL'
+          || event.type === 'INCOMPLETE'
+          || event.type === 'ERROR'
+        ) {
+          const terminalPrefix = {
+            CONTEXT_OVERFLOW: 'Conversation too long',
+            REFUSAL: 'Request declined',
+            INCOMPLETE: 'Response incomplete',
+            ERROR: 'Error',
+          }[event.type]
           setMessages((prev) => {
             const updated = [...prev]
             const lastAssistantIdx = updated.findLastIndex((m) => m.role === 'assistant')
             if (lastAssistantIdx !== -1) {
               updated[lastAssistantIdx] = {
                 ...updated[lastAssistantIdx],
-                content: `Error: ${event.message || 'Unknown error'}`,
+                content: `${terminalPrefix}: ${event.message}`,
               }
             }
             return updated
@@ -945,22 +1019,55 @@ function OpusChat({
           break
         }
       }
-    } catch {
+    } catch (error) {
+      const isProtocolError = error instanceof Error && error.name === 'AgentStudioStreamProtocolError'
+      if (!isProtocolError) {
+        logger.error(
+          'Agent Studio AI Chat stream failed',
+          new Error('Agent Studio AI Chat stream failed'),
+          {
+            component: 'OpusChat',
+            action: 'stream_chat',
+            metadata: {
+              activeTab: context?.active_tab ?? 'agents',
+              hasDurableSession: Boolean(durableSessionId),
+            },
+          },
+        )
+      }
       setMessages((prev) => {
         const updated = [...prev]
         const lastAssistantIdx = updated.findLastIndex((m) => m.role === 'assistant')
-        if (lastAssistantIdx !== -1 && !updated[lastAssistantIdx].content) {
+        if (
+          lastAssistantIdx !== -1
+          && (isProtocolError || !updated[lastAssistantIdx].content)
+        ) {
           updated[lastAssistantIdx] = {
             ...updated[lastAssistantIdx],
-            content: 'Sorry, an error occurred. Please try again.',
+            content: isProtocolError && error instanceof Error
+              ? error.message
+              : 'Sorry, an error occurred. Please try again.',
           }
         }
         return updated
       })
     } finally {
+      pendingToolCallIdsRef.current.clear()
+      setStreamStatus(null)
       setIsStreaming(false)
     }
-  }, [input, messages, context, isStreaming, ensureDurableSessionId, handleToolEvent])
+  }, [
+    input,
+    messages,
+    context,
+    isStreaming,
+    durableSessionId,
+    ensureDurableSessionId,
+    handleToolEvent,
+    setIsStreaming,
+    setMessages,
+    setStreamStatus,
+  ])
 
   // Update ref for auto-send
   handleSendRef.current = handleSend
@@ -980,7 +1087,7 @@ function OpusChat({
     }
   }, [verifyMessage, isStreaming, onVerifyMessageSent])
 
-  // Auto-send discuss message when provided (from AgentDetailsPanel's Discuss with Claude button)
+  // Auto-send a discussion message from an Agent Details AI Chat action.
   // Uses ref to prevent duplicate sends when isStreaming briefly toggles
   useEffect(() => {
     if (
@@ -1248,7 +1355,7 @@ function OpusChat({
   const feedbackDisabled = messages.length === 0 || isStreaming || isSubmittingDirect
   const feedbackMenuOpen = Boolean(feedbackMenuAnchor)
   const closeFeedbackMenu = () => setFeedbackMenuAnchor(null)
-  const hideLabel = variant === 'drawer' ? 'Close Claude' : 'Hide Claude'
+  const hideLabel = variant === 'drawer' ? 'Close AI Chat' : 'Hide AI Chat'
 
   return (
     <ChatContainer>
@@ -1259,7 +1366,7 @@ function OpusChat({
           variant="subtitle2"
           sx={{ fontWeight: 600, fontSize: '0.85rem', whiteSpace: 'nowrap', lineHeight: 1 }}
         >
-          Claude
+          AI Chat
         </Typography>
         {durableSeedLabel ? (
           <Chip
@@ -1363,19 +1470,19 @@ function OpusChat({
             <Typography variant="body1" textAlign="center">
               {activeTab === 'flows' ? (
                 <>
-                  Ask Claude about curation flows, flow design,
+                  Ask AI Chat about curation flows, flow design,
                   <br />
                   or verify your current flow.
                 </>
               ) : activeTab === 'agent_workshop' ? (
                 <>
-                  Ask Claude to improve your workshop prompt draft,
+                  Ask AI Chat to improve your workshop prompt draft,
                   <br />
                   plan flow tests, and compare against the template-source prompt.
                 </>
               ) : (
                 <>
-                  Ask Claude about prompts, prompt engineering,
+                  Ask AI Chat about prompts, prompt engineering,
                   <br />
                   or discuss improvements.
                 </>
@@ -1535,10 +1642,14 @@ function OpusChat({
               </Box>
             ))}
             {isStreaming && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary' }}>
+              <Box
+                role="status"
+                aria-live="polite"
+                sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary' }}
+              >
                 <CircularProgress size={16} />
                 <Typography variant="body2">
-Claude is responding...
+                  {streamStatus || 'AI Chat is responding…'}
                 </Typography>
               </Box>
             )}
@@ -1637,7 +1748,7 @@ Claude is responding...
         ) : (
           <>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Claude will analyze your conversation and submit a feedback report to the development team.
+              AI Chat will analyze your conversation and submit a feedback report to the development team.
             </Typography>
             <TextField
               autoFocus
@@ -1662,10 +1773,10 @@ Claude is responding...
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Apply Claude Prompt Update?</DialogTitle>
+        <DialogTitle>Apply AI Chat Prompt Update?</DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ mb: 1.5 }}>
-            Claude generated a {pendingPromptUpdate?.apply_mode === 'targeted_edit' ? 'targeted prompt update' : 'full replacement prompt'} for your {pendingPromptUpdate?.target_prompt === 'group' ? `group prompt${pendingPromptUpdate?.target_group_id ? ` (${pendingPromptUpdate.target_group_id})` : ''}` : 'main prompt'} draft. Review below, then choose whether to apply it.
+            AI Chat generated a {pendingPromptUpdate?.apply_mode === 'targeted_edit' ? 'targeted prompt update' : 'full replacement prompt'} for your {pendingPromptUpdate?.target_prompt === 'group' ? `group prompt${pendingPromptUpdate?.target_group_id ? ` (${pendingPromptUpdate.target_group_id})` : ''}` : 'main prompt'} draft. Review below, then choose whether to apply it.
           </DialogContentText>
           {pendingPromptUpdate?.summary && (
             <Alert severity="info" sx={{ mb: 1.5 }}>

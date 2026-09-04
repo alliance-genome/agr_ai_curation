@@ -209,7 +209,7 @@ function PromptWorkshop({
   const handleDiscussPrompt = onVerifyRequest
     ? () => {
       onVerifyRequest(buildDiscussPromptMessage(targetName, targetId, draft.selectedGroupId))
-      draft.setStatus('Opened system-prompt discussion with Claude')
+      draft.setStatus('Opened system-prompt discussion with AI Chat')
     }
     : undefined
   const handleAskAboutModels = onVerifyRequest
@@ -221,7 +221,7 @@ function PromptWorkshop({
         draft.selectedModelReasoning,
         draft.selectedToolIds
       ))
-      draft.setStatus('Opened model-selection discussion with Claude')
+      draft.setStatus('Opened model-selection discussion with AI Chat')
     }
     : undefined
   const handleAskForTool = onVerifyRequest
@@ -231,7 +231,7 @@ function PromptWorkshop({
         selectedCustomAgent?.agent_id || parentAgentId || 'unsaved_draft',
         draft.selectedToolIds
       ))
-      draft.setStatus('Opened tool-ideation discussion with Claude')
+      draft.setStatus('Opened tool-ideation discussion with AI Chat')
     }
     : undefined
 

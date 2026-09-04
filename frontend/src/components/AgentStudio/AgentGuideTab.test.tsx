@@ -164,7 +164,7 @@ describe('AgentGuideTab', () => {
 
     expect(screen.getByText('No curator guide yet')).toBeInTheDocument()
     expect(screen.getByText(/Its prompts are on the Prompts tab/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude to draft a guide' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat to draft a guide' }))
     expect(onDraftGuide).toHaveBeenCalledTimes(1)
     expect(screen.getByText('2 tools')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Capabilities' })).not.toBeInTheDocument()

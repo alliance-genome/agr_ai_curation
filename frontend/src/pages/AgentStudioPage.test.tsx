@@ -91,7 +91,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
       Opus
       <div data-testid="opus-chat-variant">{variant ?? 'none'}</div>
       <textarea aria-label="Ask about prompts" ref={inputRef} />
-      <button aria-label={variant === 'drawer' ? 'Close Claude' : 'Hide Claude'} aria-expanded="true" aria-controls={panelId} onClick={onHide}>
+      <button aria-label={variant === 'drawer' ? 'Close AI Chat' : 'Hide AI Chat'} aria-expanded="true" aria-controls={panelId} onClick={onHide}>
         hide
       </button>
       <button onClick={() => onStreamingChange?.(true)}>start-streaming</button>
@@ -944,18 +944,18 @@ describe('AgentStudioPage', () => {
       expect(panels[1]).toHaveAttribute('data-panel-size', '30.0')
       expect(panels[1]).toHaveAttribute('data-panel-collapsible', 'true')
       expect(screen.getByTestId('opus-chat-variant')).toHaveTextContent('panel')
-      expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
     })
 
     it('collapses Claude to a rail and restores it without remounting the chat', async () => {
       await renderStudio()
       const chatBefore = screen.getByTestId('opus-chat')
 
-      const hideButton = screen.getByRole('button', { name: 'Hide Claude' })
+      const hideButton = screen.getByRole('button', { name: 'Hide AI Chat' })
       expect(hideButton).toHaveAttribute('aria-controls', 'agent-studio-claude-panel')
       fireEvent.click(hideButton)
 
-      const showButton = await screen.findByRole('button', { name: 'Show Claude' })
+      const showButton = await screen.findByRole('button', { name: 'Show AI Chat' })
       expect(showButton).toHaveAttribute('aria-expanded', 'false')
       expect(showButton).toHaveAttribute('aria-controls', 'agent-studio-claude-panel')
       expect(getPanelSize('agent-studio-claude-panel')).toBe('0.0')
@@ -969,7 +969,7 @@ describe('AgentStudioPage', () => {
       fireEvent.click(showButton)
 
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
       })
       expect(getPanelSize('agent-studio-claude-panel')).toBe('30.0')
       expect(screen.getByTestId('opus-chat')).toBe(chatBefore)
@@ -983,57 +983,57 @@ describe('AgentStudioPage', () => {
     it('shows unread and streaming indicators on the rail and clears unread on show', async () => {
       await renderStudio()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Hide Claude' }))
-      const showButton = await screen.findByRole('button', { name: 'Show Claude' })
+      fireEvent.click(screen.getByRole('button', { name: 'Hide AI Chat' }))
+      const showButton = await screen.findByRole('button', { name: 'Show AI Chat' })
       expect(showButton).not.toHaveAccessibleDescription()
-      expect(screen.queryByRole('progressbar', { name: 'Claude is writing' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('progressbar', { name: 'AI Chat is responding' })).not.toBeInTheDocument()
 
       fireEvent.click(screen.getByText('start-streaming'))
-      expect(screen.getByRole('progressbar', { name: 'Claude is writing' })).toBeInTheDocument()
+      expect(screen.getByRole('progressbar', { name: 'AI Chat is responding' })).toBeInTheDocument()
 
       fireEvent.click(screen.getByText('simulate-live-conversation'))
       await waitFor(() => {
-        expect(showButton).toHaveAccessibleDescription('2 new messages from Claude')
+        expect(showButton).toHaveAccessibleDescription('2 new messages from AI Chat')
       })
 
       fireEvent.click(screen.getByText('stop-streaming'))
-      expect(screen.queryByRole('progressbar', { name: 'Claude is writing' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('progressbar', { name: 'AI Chat is responding' })).not.toBeInTheDocument()
 
       fireEvent.click(showButton)
-      fireEvent.click(await screen.findByRole('button', { name: 'Hide Claude' }))
-      expect(await screen.findByRole('button', { name: 'Show Claude' })).not.toHaveAccessibleDescription()
+      fireEvent.click(await screen.findByRole('button', { name: 'Hide AI Chat' }))
+      expect(await screen.findByRole('button', { name: 'Show AI Chat' })).not.toHaveAccessibleDescription()
     })
 
     it('does not count assistant messages that arrive while Claude is visible', async () => {
       await renderStudio()
 
       fireEvent.click(screen.getByText('simulate-live-conversation'))
-      fireEvent.click(screen.getByRole('button', { name: 'Hide Claude' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Hide AI Chat' }))
 
-      expect(await screen.findByRole('button', { name: 'Show Claude' })).not.toHaveAccessibleDescription()
+      expect(await screen.findByRole('button', { name: 'Show AI Chat' })).not.toHaveAccessibleDescription()
     })
 
     it('toggles Claude with Ctrl+. and Cmd+.', async () => {
       await renderStudio()
 
       fireEvent.keyDown(window, { key: '.', ctrlKey: true })
-      expect(await screen.findByRole('button', { name: 'Show Claude' })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: 'Show AI Chat' })).toBeInTheDocument()
 
       fireEvent.keyDown(window, { key: '.', metaKey: true })
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
       })
-      expect(screen.getByRole('button', { name: 'Hide Claude' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Hide AI Chat' })).toBeInTheDocument()
 
       fireEvent.keyDown(window, { key: '.' })
-      expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
     })
 
     it('applies a persisted collapsed flag at desktop widths', async () => {
       localStorage.setItem(COLLAPSED_KEY, 'true')
       await renderStudio()
 
-      expect(screen.getByRole('button', { name: 'Show Claude' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Show AI Chat' })).toBeInTheDocument()
       expect(getPanelSize('agent-studio-claude-panel')).toBe('0.0')
       expect(screen.getByTestId('opus-chat')).toBeInTheDocument()
     })
@@ -1074,8 +1074,8 @@ describe('AgentStudioPage', () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
       expect(screen.getByTestId('flow-builder')).toBeInTheDocument()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Hide Claude' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'Show Claude' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Hide AI Chat' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Show AI Chat' }))
 
       expect(screen.getByRole('tab', { name: 'Flows' })).toHaveAttribute('aria-selected', 'true')
       expect(screen.getByTestId('flow-builder')).toBeInTheDocument()
@@ -1088,10 +1088,10 @@ describe('AgentStudioPage', () => {
       await renderStudio()
 
       expect(document.querySelectorAll('[data-panel]')).toHaveLength(1)
-      expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
 
-      const launcher = screen.getByRole('button', { name: 'Claude' })
+      const launcher = screen.getByRole('button', { name: 'AI Chat' })
       expect(launcher).toHaveAttribute('aria-expanded', 'false')
       expect(launcher).toHaveAttribute('aria-controls', 'agent-studio-claude-drawer')
       const chatBefore = screen.getByTestId('opus-chat')
@@ -1099,12 +1099,12 @@ describe('AgentStudioPage', () => {
 
       fireEvent.click(screen.getByText('simulate-live-conversation'))
       await waitFor(() => {
-        expect(launcher).toHaveAccessibleDescription('2 new messages from Claude')
+        expect(launcher).toHaveAccessibleDescription('2 new messages from AI Chat')
       })
 
       fireEvent.click(launcher)
 
-      const dialog = await screen.findByRole('dialog', { name: 'Claude' })
+      const dialog = await screen.findByRole('dialog', { name: 'AI Chat' })
       expect(dialog).toHaveAttribute('aria-modal', 'true')
       expect(launcher).toHaveAttribute('aria-expanded', 'true')
       expect(launcher).not.toHaveAccessibleDescription()
@@ -1113,9 +1113,9 @@ describe('AgentStudioPage', () => {
         expect(screen.getByRole('textbox', { name: 'Ask about prompts' })).toHaveFocus()
       })
 
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Close Claude' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close AI Chat' }))
       await waitFor(() => {
-        expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
       })
       expect(screen.getByTestId('opus-chat')).toBe(chatBefore)
       await waitFor(() => {
@@ -1123,14 +1123,14 @@ describe('AgentStudioPage', () => {
       })
 
       fireEvent.click(launcher)
-      const reopened = await screen.findByRole('dialog', { name: 'Claude' })
+      const reopened = await screen.findByRole('dialog', { name: 'AI Chat' })
       fireEvent.keyDown(reopened, { key: 'Escape' })
       await waitFor(() => {
-        expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
       })
 
       fireEvent.keyDown(window, { key: '.', ctrlKey: true })
-      expect(await screen.findByRole('dialog', { name: 'Claude' })).toBeInTheDocument()
+      expect(await screen.findByRole('dialog', { name: 'AI Chat' })).toBeInTheDocument()
       // The drawer is never persisted; the collapsed flag is untouched at narrow widths.
       expect(localStorage.getItem(COLLAPSED_KEY)).toBe('true')
     })
@@ -1139,8 +1139,8 @@ describe('AgentStudioPage', () => {
       mockViewportWidth(1000)
       await renderStudio()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Claude' }))
-      await screen.findByRole('dialog', { name: 'Claude' })
+      fireEvent.click(screen.getByRole('button', { name: 'AI Chat' }))
+      await screen.findByRole('dialog', { name: 'AI Chat' })
 
       const backdrop = document.querySelector('#agent-studio-claude-drawer .MuiBackdrop-root')
       expect(backdrop).not.toBeNull()
@@ -1148,7 +1148,7 @@ describe('AgentStudioPage', () => {
         fireEvent.click(backdrop as Element)
       })
       await waitFor(() => {
-        expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
       })
     })
     it('does not count a restored conversation as unread when Claude starts collapsed', async () => {
@@ -1182,12 +1182,12 @@ describe('AgentStudioPage', () => {
           'Restored question|Restored answer'
         )
       })
-      const showButton = screen.getByRole('button', { name: 'Show Claude' })
+      const showButton = screen.getByRole('button', { name: 'Show AI Chat' })
       expect(showButton).not.toHaveAccessibleDescription()
 
       fireEvent.click(screen.getByText('append-assistant-reply'))
       await waitFor(() => {
-        expect(showButton).toHaveAccessibleDescription('1 new message from Claude')
+        expect(showButton).toHaveAccessibleDescription('1 new message from AI Chat')
       })
     })
 
@@ -1240,26 +1240,26 @@ describe('AgentStudioPage', () => {
           'Restored question|Restored answer'
         )
       })
-      const showButton = screen.getByRole('button', { name: 'Show Claude' })
+      const showButton = screen.getByRole('button', { name: 'Show AI Chat' })
       expect(showButton).not.toHaveAccessibleDescription()
 
       fireEvent.click(screen.getByText('append-assistant-reply'))
       await waitFor(() => {
-        expect(showButton).toHaveAccessibleDescription('1 new message from Claude')
+        expect(showButton).toHaveAccessibleDescription('1 new message from AI Chat')
       })
     })
 
     it('reveals a collapsed Claude and focuses the input when a discuss request arrives', async () => {
       localStorage.setItem(COLLAPSED_KEY, 'true')
       await renderStudio()
-      expect(screen.getByRole('button', { name: 'Show Claude' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Show AI Chat' })).toBeInTheDocument()
 
       fireEvent.click(screen.getByText('discuss-agent'))
 
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
       })
-      expect(screen.getByRole('button', { name: 'Hide Claude' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Hide AI Chat' })).toBeInTheDocument()
       expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Agent ID: gene')
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: 'Ask about prompts' })).toHaveFocus()
@@ -1269,11 +1269,11 @@ describe('AgentStudioPage', () => {
     it('opens the drawer and focuses the input when a discuss request arrives at narrow width', async () => {
       mockViewportWidth(1000)
       await renderStudio()
-      expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
 
       fireEvent.click(screen.getByText('discuss-agent'))
 
-      expect(await screen.findByRole('dialog', { name: 'Claude' })).toBeInTheDocument()
+      expect(await screen.findByRole('dialog', { name: 'AI Chat' })).toBeInTheDocument()
       expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Agent ID: gene')
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: 'Ask about prompts' })).toHaveFocus()
@@ -1288,7 +1288,7 @@ describe('AgentStudioPage', () => {
       fireEvent.click(await screen.findByText('verify-flow'))
 
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
       })
       expect(screen.getByTestId('opus-chat-verify-message')).toHaveTextContent('get_current_flow() first')
     })

@@ -42,17 +42,17 @@ describe('WorkshopNav', () => {
     expect(screen.getByRole('button', { name: 'Tools, 3 attached, unsaved edits' })).toBeInTheDocument()
   })
 
-  it('switches sections and opens the Claude discussion', () => {
+  it('switches sections and opens the AI Chat discussion', () => {
     const props = renderNav()
     fireEvent.click(screen.getByRole('button', { name: /^Tools/ }))
     expect(props.onSectionChange).toHaveBeenCalledWith('tools')
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat' }))
     expect(props.onAskClaude).toHaveBeenCalledTimes(1)
   })
 
-  it('omits the Help group when Claude is unavailable', () => {
+  it('omits the Help group when AI Chat is unavailable', () => {
     renderNav({ onAskClaude: undefined })
-    expect(screen.queryByRole('button', { name: 'Ask Claude' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ask AI Chat' })).not.toBeInTheDocument()
     expect(screen.queryByText('Help')).not.toBeInTheDocument()
   })
 })

@@ -7,7 +7,7 @@ An AI-powered curation assistant for the [Alliance of Genome Resources](https://
 ## Features
 
 - **Config-Driven Agents** - Shipped agents live in package-owned YAML, not hardcoded Python files. Standard installs customize via `~/.agr_ai_curation/runtime/packages/*` and `~/.agr_ai_curation/runtime/config/*`.
-- **Agent Studio** - Browse agents, inspect prompts, discuss behavior with Claude, and submit improvement suggestions.
+- **Agent Studio** - Browse agents, inspect prompts, discuss behavior with AI Chat, and submit improvement suggestions.
 - **Agent Workshop** - Clone any agent, customize its prompt, select a model, attach tools, and test it against live documents -- all without writing code.
 - **Visual Workflow Builder** - Create reusable curation flows by chaining agents together in a drag-and-drop interface.
 - **Multi-Provider LLM Support** - Pluggable provider system (`config/providers.yaml`) supporting OpenAI, Gemini, and Groq out of the box. Models are declared in `config/models.yaml`.
@@ -22,7 +22,7 @@ An AI-powered curation assistant for the [Alliance of Genome Resources](https://
 
 - Docker and Docker Compose
 - OpenAI API key (for embeddings and GPT models)
-- Optional: Anthropic API key (for Claude in Agent Studio chat)
+- Optional: Anthropic API key (when using Anthropic models)
 - Optional: Groq API key, Gemini API key (additional LLM providers)
 
 ### Standalone Install
@@ -167,7 +167,7 @@ behavior through additional packages under
 - [Available Agents](docs/curator/AVAILABLE_AGENTS.md) - All specialist agents
 - [Curation Flows](docs/curator/CURATION_FLOWS.md) - Visual workflow builder
 - [Batch Processing](docs/curator/BATCH_PROCESSING.md) - Process multiple documents
-- [Agent Studio](docs/curator/AGENT_STUDIO.md) - Browse prompts, Agent Workshop, and chat with Claude
+- [Agent Studio](docs/curator/AGENT_STUDIO.md) - Browse prompts, Agent Workshop, and use AI Chat
 
 ### For Developers
 

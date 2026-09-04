@@ -277,7 +277,7 @@ export interface CustomAgentTestEvent {
   [key: string]: unknown
 }
 
-// Chat message for Opus conversation
+// Chat message for the Agent Studio AI Chat conversation
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
@@ -343,7 +343,7 @@ export interface WorkshopPromptUpdateRequest extends WorkshopPromptUpdateProposa
   request_id: number
 }
 
-// Context passed to Opus chat
+// Context passed to Agent Studio AI Chat
 export interface ChatContext {
   selected_agent_id?: string
   selected_group_id?: string
@@ -399,8 +399,23 @@ export interface TraceContext {
   agent_count: number
 }
 
-// SSE event types for Opus chat streaming
-export type OpusChatEventType = 'TEXT_DELTA' | 'TOOL_USE' | 'TOOL_RESULT' | 'DONE' | 'ERROR'
+// Provider-neutral SSE contract for Agent Studio AI Chat. The legacy Opus type
+// names remain internal compatibility identifiers until the broader cleanup.
+export const AGENT_STUDIO_CHAT_EVENT_TYPES = [
+  'TEXT_DELTA',
+  'TOOL_SEARCH',
+  'TOOL_SEARCH_RESULT',
+  'TOOL_USE',
+  'TOOL_RESULT',
+  'PROVIDER_CONTEXT_PREFLIGHT',
+  'CONTEXT_OVERFLOW',
+  'REFUSAL',
+  'INCOMPLETE',
+  'DONE',
+  'ERROR',
+] as const
+
+export type OpusChatEventType = typeof AGENT_STUDIO_CHAT_EVENT_TYPES[number]
 
 // Tool result from suggestion submission
 export interface ToolResult {
@@ -418,16 +433,48 @@ export interface ToolResult {
   [key: string]: unknown
 }
 
-export interface OpusChatEvent {
-  type: OpusChatEventType
-  delta?: string
-  message?: string
-  // For TOOL_USE events
-  tool_name?: string
-  tool_input?: Record<string, unknown>
-  // For TOOL_RESULT events
-  result?: ToolResult
+interface AgentStudioChatEventBase {
+  session_id: string
+  turn_id: string
+  trace_id?: string | null
 }
+
+export type OpusChatEvent = AgentStudioChatEventBase & (
+  | { type: 'TEXT_DELTA'; delta: string }
+  | { type: 'TOOL_SEARCH'; status: string; search_id?: string | null }
+  | {
+      type: 'TOOL_SEARCH_RESULT'
+      status: string
+      loaded_tool_count: number
+      search_id?: string | null
+    }
+  | {
+      type: 'TOOL_USE'
+      tool_name: string
+      tool_input: Record<string, unknown>
+      call_id?: string | null
+    }
+  | {
+      type: 'TOOL_RESULT'
+      tool_name: string
+      result: ToolResult
+      call_id?: string | null
+    }
+  | {
+      type: 'PROVIDER_CONTEXT_PREFLIGHT'
+      operation?: string
+      provider?: string
+      model?: string
+      model_live?: boolean
+      payload_summary?: Record<string, unknown>
+    }
+  | {
+      type: 'CONTEXT_OVERFLOW' | 'REFUSAL' | 'INCOMPLETE' | 'ERROR'
+      message: string
+      error_source?: string
+    }
+  | { type: 'DONE' }
+)
 
 // Suggestion types
 export type SuggestionType = 'improvement' | 'bug' | 'clarification' | 'group_specific' | 'missing_case' | 'general'

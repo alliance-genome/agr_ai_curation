@@ -309,6 +309,15 @@ describe('FlowBuilder', () => {
     agentMetadataMocks.agents = {}
   })
 
+  it('offers provider-neutral AI Chat verification', async () => {
+    const onVerifyRequest = vi.fn()
+    render(<FlowBuilder onVerifyRequest={onVerifyRequest} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Verify with AI Chat' }))
+
+    expect(onVerifyRequest).toHaveBeenCalledOnce()
+  })
+
   it('asks the dirty node guard once before selecting another node in Strict Mode', async () => {
     render(
       <React.StrictMode>

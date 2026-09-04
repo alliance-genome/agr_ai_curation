@@ -1,9 +1,9 @@
 /**
  * Agent Studio Page
  *
- * Adaptive shell for exploring agent prompts, building flows, and chatting with Claude:
+ * Adaptive shell for exploring agent prompts, building flows, and using AI Chat:
  * - Left: work surface with the Agents, Flows, and Agent Workshop tabs
- * - Right: Claude copilot pane (30% by default) that collapses to a 44px rail
+ * - Right: AI Chat pane (30% by default) that collapses to a 44px rail
  * - Below 1100px: the pane becomes a right-side drawer opened from the tab bar
  *
  * OpusChat stays mounted across collapse, expand, and drawer open/close so
@@ -409,7 +409,7 @@ function AgentStudioPage() {
     writeCollapsedPreference(false)
   }, [])
 
-  // Ctrl+. / Cmd+. toggles Claude from anywhere on the page.
+  // Ctrl+. / Cmd+. toggles AI Chat from anywhere on the page.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== '.' || !(event.ctrlKey || event.metaKey) || event.altKey) {
@@ -437,7 +437,7 @@ function AgentStudioPage() {
     }
   }, [claudeHidden, isNarrow])
 
-  // Unread tracking: assistant messages appended while Claude is hidden. The
+  // Unread tracking: assistant messages appended while AI Chat is hidden. The
   // first snapshot only sets the baseline; later growth while hidden counts.
   const handleConversationSnapshotChange = useCallback((messages: ToolIdeaConversationEntry[]) => {
     setOpusConversation(messages)
@@ -562,7 +562,7 @@ function AgentStudioPage() {
   ])
 
   // Load catalog on mount
-  // Note: trace context is NOT fetched here - it's injected into Opus's prompt on the backend
+  // Trace context is not fetched here; the backend injects it into AI Chat context.
   // when the user sends a message. The trace_id is passed via chatContext.
   useEffect(() => {
     async function loadData() {
@@ -628,7 +628,7 @@ function AgentStudioPage() {
         }
       : undefined
 
-  // Build chat context for Opus (includes active tab, flow state, and agent workshop state)
+  // Build AI Chat context (active tab, flow state, and Workshop state).
   const chatContext: ChatContext = {
     selected_agent_id: effectiveSelectedAgentId,
     selected_group_id: effectiveSelectedGroupId,
@@ -666,7 +666,7 @@ function AgentStudioPage() {
     setFlowState(newFlowState)
   }, [])
 
-  // Handle verify request - sends a message to Claude to validate the flow
+  // Handle a request for AI Chat to validate the flow.
   // Include timestamp to ensure each click triggers a new request
   const handleVerifyRequest = useCallback(() => {
     showClaude()
@@ -894,7 +894,7 @@ Agent ID: ${agentId}`
                         },
                       }}
                     >
-                      Claude
+                      AI Chat
                     </Button>
                   </Badge>
                   {unreadCount > 0 && (
@@ -956,7 +956,7 @@ Agent ID: ${agentId}`
           <>
             <ResizeHandle collapsed={claudeCollapsed} />
 
-            {/* Claude copilot pane */}
+            {/* Provider-neutral AI Chat pane */}
             <Panel
               id="claude"
               order={2}

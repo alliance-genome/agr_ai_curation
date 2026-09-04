@@ -257,7 +257,7 @@ export interface FlowBuilderProps {
   onFlowSaved?: (flowId: string) => void
   /** Callback when flow state changes (for sharing context with chat) */
   onFlowChange?: (flowState: FlowState) => void
-  /** Callback to trigger a verify request to Claude */
+  /** Callback to trigger an AI Chat verification request */
   onVerifyRequest?: () => void
   /** Opens the Agent Browser on an agent's Guide, Envelope, or Prompts tab. */
   onOpenAgent?: (request: AgentBrowserRequest) => void

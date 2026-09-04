@@ -4,7 +4,7 @@
 
 React-based frontend application built with Vite, Material-UI, and TypeScript. Provides user interfaces for:
 - AI chat interactions with OpenAI Agents
-- **Agent Studio** - Browse agents, inspect prompts, chat with Claude, and submit suggestions
+- **Agent Studio** - Browse agents, inspect prompts, use AI Chat, and submit suggestions
 - **Agent Workshop** - Clone agents, customize prompts, select models/tools, and test against live documents
 - **Visual Flow Builder** - Drag-and-drop workflow creation by chaining agents
 - Domain-envelope curation review with projected object rows, field-path editing, validation findings, evidence anchors, and export/submission blockers
@@ -20,7 +20,7 @@ frontend/
 │   │   ├── AgentStudio/           # Agent Studio feature (see below)
 │   │   │   ├── AgentBrowser.tsx         # Searchable agent catalog with subcategory grouping
 │   │   │   ├── AgentDetailsPanel.tsx    # Overview, guidance, and prompt tabs for agents
-│   │   │   ├── OpusChat.tsx             # Claude chat with tool support (suggestions, prompt edits)
+│   │   │   ├── OpusChat.tsx             # AI Chat with tool support (suggestions, prompt edits)
 │   │   │   ├── SuggestionDialog.tsx     # Manual prompt improvement submission
 │   │   │   ├── ToolDetailsDialog.tsx    # Tool inspection dialog
 │   │   │   ├── TraceContextPanel.tsx    # Trace context display from curation sessions
@@ -155,7 +155,7 @@ The primary API client for Agent Studio features is `agentStudioService.ts`. It 
 | Agent Testing | `streamCustomAgentTest`, `streamAgentTest` | Streaming SSE test execution |
 | Models & Tools | `fetchModelOptions`, `fetchToolLibrary`, `fetchAgentTemplates` | Model catalog and tool library |
 | Tool Ideas | `submitToolIdeaRequest`, `listToolIdeaRequests` | Tool feature requests |
-| Opus Chat | `streamOpusChat` | Streaming Claude conversation with tool support |
+| AI Chat | `streamOpusChat` | Streaming AI Chat conversation with tool support |
 | Suggestions | `submitSuggestion` | Manual prompt improvement submissions |
 | Flows | `listFlows`, `createFlow`, `updateFlow`, `deleteFlow` | Flow CRUD |
 | Tools | `fetchToolDetails`, `fetchAllTools` | Tool inspection |
@@ -172,7 +172,7 @@ for await (const event of streamCustomAgentTest(agentId, { input: 'query' })) {
   // Handle streaming SSE events
 }
 
-// Example: Stream Opus chat
+// Example: Stream AI Chat
 import { streamOpusChat } from '@/services/agentStudioService'
 for await (const event of streamOpusChat(messages, context)) {
   if (event.type === 'TEXT_DELTA') {
@@ -196,13 +196,13 @@ for await (const event of streamOpusChat(messages, context)) {
 
 The Agent Studio page (`AgentStudioPage.tsx`) uses a two-panel layout with resizable panes:
 
-**Left panel: OpusChat** - Chat with Claude for guidance on prompts, agent behavior, flow verification, and prompt editing. Supports tool use for submitting suggestions and applying prompt changes to the Agent Workshop.
+**Left panel: OpusChat** - Use AI Chat for guidance on prompts, agent behavior, flow verification, and prompt editing. Supports tool use for submitting suggestions and applying prompt changes to the Agent Workshop.
 
 **Right panel: Tabbed interface** with three tabs:
 
-1. **Agents tab** (`AgentBrowser.tsx`) - Searchable agent catalog organized by subcategory (System, Input, PDF Extraction, Data Validation, Output, Custom). Each agent can be inspected in `AgentDetailsPanel.tsx` which provides Overview, Guidance, and Prompts tabs. Agents can be discussed with Claude or cloned to the Agent Workshop.
+1. **Agents tab** (`AgentBrowser.tsx`) - Searchable agent catalog organized by subcategory (System, Input, PDF Extraction, Data Validation, Output, Custom). Each agent can be inspected in `AgentDetailsPanel.tsx` which provides Overview, Guidance, and Prompts tabs. Agents can be discussed with AI Chat or cloned to the Agent Workshop.
 
-2. **Flows tab** (`FlowBuilder/`) - Drag-and-drop visual workflow builder. Curators drag agents from the `AgentPalette` onto a canvas, connect them with edges, and configure each node with custom instructions. Domain-pack extraction nodes show envelope metadata and validation attachments derived from backend registry metadata. Flows can be verified by Claude for structural correctness.
+2. **Flows tab** (`FlowBuilder/`) - Drag-and-drop visual workflow builder. Curators drag agents from the `AgentPalette` onto a canvas, connect them with edges, and configure each node with custom instructions. Domain-pack extraction nodes show envelope metadata and validation attachments derived from backend registry metadata. Flows can be verified by AI Chat for structural correctness.
 
 3. **Agent Workshop tab** (`PromptWorkshop/PromptWorkshop.tsx`) - Full-featured custom agent editor. Curators can:
    - Clone any system agent as a starting point or create from scratch

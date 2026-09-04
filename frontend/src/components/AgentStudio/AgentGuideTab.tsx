@@ -155,7 +155,7 @@ function AgentGuideTab({
             onClick={onDraftGuide}
             sx={{ mt: 1, textTransform: 'none' }}
           >
-            Ask Claude to draft a guide
+            Ask AI Chat to draft a guide
           </Button>
         </Box>
         {toolsSection}

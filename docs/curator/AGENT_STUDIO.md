@@ -1,6 +1,6 @@
 # Agent Studio Guide
 
-Agent Studio helps you understand how the AI curation agents work and gives you tools to improve them. You can browse agent prompts, build visual curation workflows, and chat with Claude Opus about any of it.
+Agent Studio helps you understand how the AI curation agents work and gives you tools to improve them. You can browse agent prompts, build visual curation workflows, and use AI Chat to discuss any of it.
 
 ## Accessing Agent Studio
 
@@ -8,24 +8,24 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. The tabs sit on the left. The Claude chat sits in a panel on the right, and it is available from every tab.
+Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. The tabs sit on the left. AI Chat sits in a panel on the right, and it is available from every tab.
 
-### Claude Chat (Right Panel)
+### AI Chat (Right Panel)
 
-The panel on the right is your chat with Claude Opus. You can ask Opus about whatever you are viewing on the left - agent prompts, flows, or your workshop draft.
+The panel on the right contains AI Chat. You can ask about whatever you are viewing on the left - agent prompts, flows, or your workshop draft.
 
 You can make more room for your work:
 
-- Click **Hide Claude** in the chat header to shrink the panel to a narrow strip on the right edge. Click **Show Claude** on that strip to bring it back. A small orange dot on the strip means Claude answered while the panel was hidden.
-- Press **Ctrl+.** (or **Cmd+.** on a Mac) to hide or show Claude from anywhere in Agent Studio.
+- Click **Hide AI Chat** in the chat header to shrink the panel to a narrow strip on the right edge. Click **Show AI Chat** on that strip to bring it back. A small orange dot on the strip means AI Chat answered while the panel was hidden.
+- Press **Ctrl+.** (or **Cmd+.** on a Mac) to hide or show AI Chat from anywhere in Agent Studio.
 - Drag the divider between the tabs and the chat to change how much space each side gets. Your choice is remembered.
-- On a narrow browser window, the panel is replaced by a **Claude** button at the right end of the tab bar. Click it to open the chat as a slide-out sheet. Press **Escape**, click outside the sheet, or click **Close Claude** to put it away.
+- On a narrow browser window, the panel is replaced by an **AI Chat** button at the right end of the tab bar. Click it to open the chat as a slide-out sheet. Press **Escape**, click outside the sheet, or click **Close AI Chat** to put it away.
 
-When you click **Discuss with Claude** on an agent or **Verify with Claude** in a flow, the chat opens by itself if it was hidden.
+When you click **Discuss with AI Chat** on an agent or **Verify with AI Chat** in a flow, the chat opens by itself if it was hidden.
 
-When your question is about how the application itself works, Opus can inspect the live repository in read-only mode to verify whether a feature, restriction, or code path exists before answering.
+When your question is about how the application itself works, AI Chat can inspect the live repository in read-only mode to verify whether a feature, restriction, or code path exists before answering.
 
-Opus is best used as an explanation and drafting assistant. It can help you
+AI Chat is best used as an explanation and drafting assistant. It can help you
 interpret prompts, domain-envelope metadata, validation choices, trace context,
 and flow structure. It does not replace the curation workspace readiness checks:
 final export and submission still depend on the saved envelope, validation
@@ -33,7 +33,7 @@ findings, and domain-pack policy.
 
 ### Agents Tab
 
-Browse the instructions given to each AI agent and chat with Opus about them.
+Browse the instructions given to each AI agent and discuss them with AI Chat.
 
 **Agent Browser (Left Panel)**
 
@@ -89,7 +89,7 @@ Tool names in agent cards are clickable! Click any tool name to open a detailed 
 
 This helps you understand exactly what capabilities each agent has and how they interact with databases and APIs. When comparing extractor and validator agents, check which document/evidence tools the extractor can use, which broad lookup tools are deliberately unavailable to it, and which validator tools perform authoritative database, API, or ontology resolution.
 
-**Ask Opus about agents:**
+**Ask AI Chat about agents:**
 - "Why does this agent look for negative evidence?"
 - "I think this prompt is missing guidance about [organism-specific convention]"
 - "Can you help me write a suggestion to improve this?"
@@ -100,7 +100,7 @@ This helps you understand exactly what capabilities each agent has and how they 
 
 ### Flows Tab
 
-Build visual curation workflows and chat with Opus about them. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide to building flows.
+Build visual curation workflows and discuss them with AI Chat. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide to building flows.
 
 **Flow Builder (Left Panel)**
 
@@ -111,9 +111,9 @@ Create workflows by dragging agents onto a canvas and connecting them:
 - Adjust, per flow, which optional automatic checks run on an extraction step
 - Reach each agent's guide, envelope, and prompts from the step panel's "About this agent" row
 
-**Verify with Claude (Important!)**
+**Verify with AI Chat (Important!)**
 
-Before running a flow, click the **"Verify with Claude"** button. Claude will:
+Before running a flow, click the **"Verify with AI Chat"** button. AI Chat will:
 - Check your flow structure for issues
 - Identify missing connections or problematic configurations
 - Suggest improvements
@@ -137,15 +137,15 @@ curation concern you want checked. Custom validation agents are saved as regular
 flow nodes; automatic checks remain controlled by the extraction agent's
 domain-pack metadata.
 
-**Ask Opus about flows:**
+**Ask AI Chat about flows:**
 - "Does this flow make sense for extracting expression data?"
 - "What agent should I add to map anatomy terms to WBbt IDs?"
 - "Why isn't my flow generating the output I expected?"
 - "Which validators will run for this extraction agent, and what prompt does each validator agent use?"
 
-When you ask Chat with Claude how validation works, Claude can inspect the
+When you ask AI Chat how validation works, it can inspect the
 domain-pack validation plan. If an active binding includes a validator-agent ID,
-Claude can use the existing Agent Studio prompt tools to inspect that validator
+AI Chat can use the existing Agent Studio prompt tools to inspect that validator
 agent's prompt, tools, and group-specific rules.
 
 ### Agent Workshop Tab
@@ -161,7 +161,7 @@ If you clone a domain-pack extraction agent, the Workshop shows what the agent p
 **The Workshop Layout**
 
 - **Header** - Shows the agent's icon, name, and where it came from ("Template: ...", "Cloned from ...", or "From scratch"), plus a status pill: Unsaved changes, Saving, Saved, or Save failed. The header holds the **Open**, **New**, and **Save** buttons and a **More** menu with **Save as**, **Manage agents**, and **Delete agent**.
-- **Navigation** - Four sections: **Setup**, **Prompt**, **Tools**, and **Versions**. An orange dot marks a section with unsaved edits. Tools shows how many tools are attached and Versions shows how many versions exist. The **Help** group has **Ask Claude**, which opens a discussion of your draft in the right-panel chat.
+- **Navigation** - Four sections: **Setup**, **Prompt**, **Tools**, and **Versions**. An orange dot marks a section with unsaved edits. Tools shows how many tools are attached and Versions shows how many versions exist. The **Help** group has **Ask AI Chat**, which opens a discussion of your draft in the right-panel chat.
 
 **Starting a New Agent**
 
@@ -180,14 +180,14 @@ You can also get here quickly from the Agents tab: click "Clone to Workshop" on 
 1. **Starting point** - Template, Scratch, or Clone, with the template or clone source picker beside it. A note under the picker explains any group restriction the template carries.
 2. **Identity** - Pick an icon, name the agent, and add a short description.
 3. **What it produces** - One line showing the envelope, the number of automatic checks, and the **View envelope** link.
-4. **Model** - Choose the model and, when the model supports it, a reasoning level. Higher levels are slower but better for difficult tasks. Open **Model guidance** to read the description, recommendations, and what to avoid. Not sure which to pick? Click **Ask Claude which model fits**.
+4. **Model** - Choose the model and, when the model supports it, a reasoning level. Higher levels are slower but better for difficult tasks. Open **Model guidance** to read the description, recommendations, and what to avoid. Not sure which to pick? Click **Ask AI Chat which model fits**.
 5. **Sharing** - **Visibility** sets who can see the agent (Private, or Shared with project). **Available to groups** restricts who can run it. If the template or clone source already limits groups, a locked note says you can narrow that list but not widen it.
 
 **Prompt**
 
 The layer strip at the top shows what your prompt builds on: **Built-in**, **Output structure**, **Template**, and **Your prompt**, each with its length. The first three are read-only and marked with a lock. Click one to read it in the editor pane. **Your prompt** is the layer you edit; it replaces the template prompt. **Reset to template** puts the template text back.
 
-Under **Group-specific instructions**, click a group button to see or edit that group's instructions. A group with your own text shows an "edited" badge. **Reset to template** removes your override for that group. The **Add group instructions at runtime** switch controls whether group instructions are included when the agent runs. Click **Discuss prompt changes with Claude** to get feedback on the prompt.
+Under **Group-specific instructions**, click a group button to see or edit that group's instructions. A group with your own text shows an "edited" badge. **Reset to template** removes your override for that group. The **Add group instructions at runtime** switch controls whether group instructions are included when the agent runs. Click **Discuss prompt changes with AI Chat** to get feedback on the prompt.
 
 **Tools**
 
@@ -199,7 +199,7 @@ Attached tools appear in a table with each tool's purpose and any policy note. C
 
 Tools listed as "Disabled by policy for custom agents" appear with the reason but cannot be selected.
 
-If you need a tool that does not exist yet, click **New request**, describe it, and click **Send request**. Your requests to developers appear below with their status (New, Reviewed, In progress, Shipped, or Declined). Click **Ask Claude to draft a request** if you want help writing one.
+If you need a tool that does not exist yet, click **New request**, describe it, and click **Send request**. Your requests to developers appear below with their status (New, Reviewed, In progress, Shipped, or Declined). Click **Ask AI Chat to draft a request** if you want help writing one.
 
 **Versions**
 
@@ -219,9 +219,9 @@ When creating or editing a custom agent, select an icon on Setup to help identif
 
 Custom agents appear in the Flow Builder palette under "My Custom Agents". You can drag them into flows just like system agents.
 
-**Ask Claude**
+**Ask AI Chat**
 
-Click **Ask Claude** in the Workshop navigation to send your current draft to Opus for review. When the Agent Workshop tab is active, the right-panel chat is aware of your workshop context: your selected template source, draft prompt, and group settings. You can ask Claude to:
+Click **Ask AI Chat** in the Workshop navigation to send your current draft to AI Chat for review. When the Agent Workshop tab is active, the right-panel chat is aware of your workshop context: your selected template source, draft prompt, and group settings. You can ask AI Chat to:
 - "Critique this draft and suggest concrete edits"
 - "Help me restructure this prompt for clarity"
 - "What would happen if I changed this instruction?"
@@ -237,17 +237,17 @@ If you want to talk about the results from a conversation you're having in the m
 2. Click the **triple-dot menu (⋮)** on that message
 3. Select **"Open in Agent Studio"**
 
-This opens Agent Studio with your conversation loaded, so Opus knows exactly what you're referring to. You can then ask questions like:
+This opens Agent Studio with your conversation loaded, so AI Chat knows exactly what you're referring to. You can then ask questions like:
 - "Why did the AI suggest this ontology term instead of that one?"
 - "The AI missed the gene mentioned in paragraph 3 - what went wrong?"
 - "Can you help me understand why I got this response?"
 - "Which envelope object and field path did this validation finding target?"
 - "Was this lookup attempt a final failure or just part of the audit trail?"
 
-When a trace is available, Claude can inspect the TraceReview summary,
+When a trace is available, AI Chat can inspect the TraceReview summary,
 extraction diagnostic report, ordered model/tool/event reconstruction, exact
 prompt and tool payload chunks, validation timeline, token/cost accounting, and
-duplicate-context reports. This lets Claude explain what the AI actually did
+duplicate-context reports. This lets AI Chat explain what the AI actually did
 before suggesting whether the issue is missing routing, missing data, or prompt
 behavior.
 
@@ -284,13 +284,13 @@ Your domain expertise is invaluable for improving the AI. Agent Studio provides 
 
 ### AI-Assisted Suggestions
 
-Click **Send feedback** (the light bulb) in the chat header, then choose **AI-assisted**. Opus will:
+Click **Send feedback** (the light bulb) in the chat header, then choose **AI-assisted**. AI Chat will:
 - Review your conversation
 - Summarize the issue you've discussed
 - Draft a concrete improvement suggestion
 - Submit it for your confirmation
 
-**When to use:** After discussing a specific issue with Opus, this is the fastest way to submit actionable feedback.
+**When to use:** After discussing a specific issue with AI Chat, this is the fastest way to submit actionable feedback.
 
 ### Manual Suggestions
 
@@ -307,7 +307,7 @@ Click **Send feedback** in the chat header, then choose **Manual** to fill out a
 - **Detailed Reasoning** - Why this change is needed
 - **Proposed Change** (optional) - Specific wording you'd suggest
 
-**When to use:** When you have a clear suggestion and don't need Opus's help drafting it.
+**When to use:** When you have a clear suggestion and don't need AI Chat's help drafting it.
 
 ## Tips for Effective Feedback
 
@@ -324,7 +324,7 @@ If your group has specific naming conventions, annotation rules, or curation pra
 Before suggesting a change to a base prompt, check if your group already has specific rules in the Agent Browser. The issue might be that your group's rules need updating rather than the base prompt.
 
 ### Use "Open in Agent Studio"
-When providing feedback about a specific interaction, always use the triple-dot menu to open it in Agent Studio rather than describing it manually. This gives Opus (and the development team) the full context.
+When providing feedback about a specific interaction, always use the triple-dot menu to open it in Agent Studio rather than describing it manually. This gives AI Chat (and the development team) the full context.
 
 ## What Happens to Your Suggestions
 
@@ -355,9 +355,9 @@ Each curator group has organism-specific conventions and curation practices. Gro
 
 Each agent has a base prompt, optional group-specific rules, and optional flow custom instructions. These combine in a defined priority order: flow custom instructions (highest) > base prompt > group rules. Flow instructions override everything else for that step. See **[How Prompts Layer Together](CURATION_FLOWS.md#how-prompts-layer-together)** in the Curation Flows guide for full details.
 
-### What's the difference between Agent Studio's Opus and the main chat?
+### What's the difference between Agent Studio's AI Chat and the main chat?
 
-The main chat uses a multi-agent system optimized for curation tasks - it routes your questions to specialists who query databases. Agent Studio's Opus is for discussing how the AI works, understanding specific responses, and improving the system.
+The main chat uses a multi-agent system optimized for curation tasks - it routes your questions to specialists who query databases. Agent Studio's AI Chat is for discussing how the AI works, understanding specific responses, and improving the system.
 
 ### How do I build curation flows?
 
@@ -365,4 +365,4 @@ See the **[Curation Flows](CURATION_FLOWS.md)** guide for complete documentation
 
 ## Need Help?
 
-If you have questions about using Agent Studio or need help formulating feedback, just ask Opus! It's designed to help you translate your domain expertise into actionable suggestions.
+If you have questions about using Agent Studio or need help formulating feedback, just ask AI Chat! It's designed to help you translate your domain expertise into actionable suggestions.

@@ -1085,7 +1085,7 @@ describe('PromptWorkshop', () => {
     expect(onViewEnvelope).toHaveBeenCalledWith('gene')
   }, 15000)
 
-  it('opens a model-selection guidance request with Claude from the model helper line', async () => {
+  it('opens a model-selection guidance request with AI Chat from the model helper line', async () => {
     const onVerifyRequest = vi.fn()
     render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} />)
     await startFromTemplate()
@@ -1097,7 +1097,7 @@ describe('PromptWorkshop', () => {
     expect(screen.getByText('Use for validation, lookups, utilities, and iterative drafting.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Confused about models/ })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude which model fits' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat which model fits' }))
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     const request = onVerifyRequest.mock.calls[0][0]
     expect(request).toContain('Help me choose the best model settings')
@@ -1148,7 +1148,7 @@ describe('PromptWorkshop', () => {
     expect(within(nav).getByRole('button', { name: 'Tools, 2 attached, unsaved edits' })).toBeInTheDocument()
   }, 25000)
 
-  it('submits tool requests to developers with the Claude conversation attached', async () => {
+  it('submits tool requests to developers with the AI Chat conversation attached', async () => {
     const opusConversation = [
       { role: 'user' as const, content: 'I need a GO enrichment helper', timestamp: '2026-02-23T01:00:00Z' },
       { role: 'assistant' as const, content: 'What should the output look like?', timestamp: '2026-02-23T01:00:05Z' },
@@ -1191,7 +1191,7 @@ describe('PromptWorkshop', () => {
     expect(list).toHaveTextContent('New')
   }, 25000)
 
-  // ── Claude handoffs ──
+  // ── AI Chat handoffs ──
 
   it('opens a draft discussion request from the navigation Help group', async () => {
     const onVerifyRequest = vi.fn()
@@ -1199,37 +1199,37 @@ describe('PromptWorkshop', () => {
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat' }))
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('inspect current prompt/tool schemas')
     expect(onVerifyRequest.mock.calls[0][0]).toContain('read_chunk span IDs')
     expect(onVerifyRequest.mock.calls[0][0]).toContain('record_evidence(span_ids)')
   }, 15000)
 
-  it('opens a system-prompt discussion request with Claude', async () => {
+  it('opens a system-prompt discussion request with AI Chat', async () => {
     const onVerifyRequest = vi.fn()
     render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
 
     gotoSection('Prompt')
-    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with AI Chat' }))
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me improve the SYSTEM PROMPT')
     expect(onVerifyRequest.mock.calls[0][0]).toContain('record_evidence(span_ids)')
   })
 
-  it('hides the Claude entry points when no handoff is available', async () => {
+  it('hides the AI Chat entry points when no handoff is available', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
-    expect(screen.queryByRole('button', { name: 'Ask Claude' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Ask Claude which model fits' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ask AI Chat' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ask AI Chat which model fits' })).not.toBeInTheDocument()
   })
 
-  // ── Incoming Claude prompt proposals ──
+  // ── Incoming AI Chat prompt proposals ──
 
-  it('applies incoming prompt updates from Opus approval into the workshop draft', async () => {
+  it('applies incoming prompt updates from AI Chat approval into the workshop draft', async () => {
     const { rerender } = render(<PromptWorkshop catalog={buildCatalog()} incomingPromptUpdate={null} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
@@ -1239,7 +1239,7 @@ describe('PromptWorkshop', () => {
         catalog={buildCatalog()}
         incomingPromptUpdate={{
           request_id: 1,
-          prompt: 'Updated prompt from Claude',
+          prompt: 'Updated prompt from AI Chat',
           summary: 'Reworked structure and tightened extraction constraints.',
           apply_mode: 'targeted_edit',
         }}
@@ -1247,9 +1247,9 @@ describe('PromptWorkshop', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Your prompt')).toHaveValue('Updated prompt from Claude')
+      expect(screen.getByLabelText('Your prompt')).toHaveValue('Updated prompt from AI Chat')
     })
-    expect(screen.getByText('Applied Claude update: Reworked structure and tightened extraction constraints.')).toBeInTheDocument()
+    expect(screen.getByText('Applied AI Chat update: Reworked structure and tightened extraction constraints.')).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Unsaved changes')
   })
 
@@ -1272,7 +1272,7 @@ describe('PromptWorkshop', () => {
         initialParentAgentId="gene"
         incomingPromptUpdate={{
           request_id: 3,
-          prompt: 'Late-arriving update from Claude',
+          prompt: 'Late-arriving update from AI Chat',
           summary: 'Applied after workshop bootstrap finished.',
           apply_mode: 'targeted_edit',
         }}
@@ -1285,12 +1285,12 @@ describe('PromptWorkshop', () => {
     customAgentsDeferred.resolve({ custom_agents: [], total: 0 })
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Your prompt')).toHaveValue('Late-arriving update from Claude')
+      expect(screen.getByLabelText('Your prompt')).toHaveValue('Late-arriving update from AI Chat')
     }, { timeout: 10000 })
-    expect(screen.getByText('Applied Claude update: Applied after workshop bootstrap finished.')).toBeInTheDocument()
+    expect(screen.getByText('Applied AI Chat update: Applied after workshop bootstrap finished.')).toBeInTheDocument()
   }, 15000)
 
-  it('applies incoming group prompt updates from Opus approval into group overrides', async () => {
+  it('applies incoming group prompt updates from AI Chat approval into group overrides', async () => {
     const onContextChange = vi.fn()
     const { rerender } = render(
       <PromptWorkshop catalog={buildCatalogWithGroupRule()} initialParentAgentId="gene" incomingPromptUpdate={null} onContextChange={onContextChange} />
@@ -1304,7 +1304,7 @@ describe('PromptWorkshop', () => {
         onContextChange={onContextChange}
         incomingPromptUpdate={{
           request_id: 2,
-          prompt: 'WB override from Claude',
+          prompt: 'WB override from AI Chat',
           summary: 'Updated WB-specific extraction guidance.',
           apply_mode: 'replace',
           target_prompt: 'group',
@@ -1316,11 +1316,11 @@ describe('PromptWorkshop', () => {
     await waitFor(() => {
       const contextSnapshots = onContextChange.mock.calls.map((call) => call[0])
       expect(contextSnapshots).toContainEqual(
-        expect.objectContaining({ selected_group_id: 'WB', selected_group_prompt_draft: 'WB override from Claude' })
+        expect.objectContaining({ selected_group_id: 'WB', selected_group_prompt_draft: 'WB override from AI Chat' })
       )
     }, { timeout: 10000 })
     expect(screen.getByRole('button', { name: 'WB, edited' })).toBeInTheDocument()
-    expect(screen.getByLabelText('WB instructions')).toHaveValue('WB override from Claude')
+    expect(screen.getByLabelText('WB instructions')).toHaveValue('WB override from AI Chat')
   }, 15000)
 
   it('does not expose an Output Schema Key field anywhere in the workshop', async () => {

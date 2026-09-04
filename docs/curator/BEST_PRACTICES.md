@@ -136,7 +136,7 @@ The task input is the starting point for your flow. Write clear, specific task d
 
 **Test Incrementally:** Add one agent at a time and verify results before adding more.
 
-**Use Verify with Claude:** Before running on important documents, let Claude check your flow for issues.
+**Use Verify with AI Chat:** Before running on important documents, let AI Chat check your flow for issues.
 
 ### Choosing Output Formats
 
@@ -184,7 +184,7 @@ Always review the AI's work:
 - Check ontology term IDs against source databases
 - Verify evidence codes match AGR standards
 - Confirm anatomical mappings make biological sense
-- For domain-pack flows, ask Claude in Agent Studio to inspect the validation
+- For domain-pack flows, ask AI Chat in Agent Studio to inspect the validation
   plan when you need to know which active validators ran or which validator
   agent prompt owns a check
 

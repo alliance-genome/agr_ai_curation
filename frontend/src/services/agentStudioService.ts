@@ -2,6 +2,7 @@
  * API service for Agent Studio feature.
  */
 
+import { AGENT_STUDIO_CHAT_EVENT_TYPES } from '@/types/promptExplorer'
 import type {
   PromptCatalog,
   CombinedPromptResponse,
@@ -23,6 +24,7 @@ import type {
   ToolIdeaConversationEntry,
 } from '@/types/promptExplorer'
 import { readCurationApiError } from '@/features/curation/services/api'
+import { logger } from '@/services/logger'
 import {
   AGENT_STUDIO_CHAT_HISTORY_KIND,
   fetchChatHistoryDetail,
@@ -35,6 +37,116 @@ import {
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 
 const BASE_URL = '/api/agent-studio'
+
+const AGENT_STUDIO_CHAT_EVENT_TYPE_SET = new Set<string>(AGENT_STUDIO_CHAT_EVENT_TYPES)
+
+type AgentStudioStreamProtocolReason =
+  | 'malformed_json'
+  | 'invalid_shape'
+  | 'unknown_type'
+  | 'correlation_mismatch'
+  | 'missing_terminal'
+
+export class AgentStudioStreamProtocolError extends Error {
+  readonly reason: AgentStudioStreamProtocolReason
+  readonly eventType?: OpusChatEvent['type']
+
+  constructor(reason: AgentStudioStreamProtocolReason, eventType?: OpusChatEvent['type']) {
+    super('AI Chat received an unexpected stream response. Please retry.')
+    this.name = 'AgentStudioStreamProtocolError'
+    this.reason = reason
+    this.eventType = eventType
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
+function hasOptionalString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string'
+}
+
+/**
+ * Validate the public Agent Studio SSE shape before UI state sees it. Errors
+ * deliberately contain no raw event payload, provider response, or tool data.
+ */
+export function parseAgentStudioChatEvent(value: unknown): OpusChatEvent {
+  if (!isRecord(value) || !hasString(value.type)) {
+    throw new AgentStudioStreamProtocolError('invalid_shape')
+  }
+  if (!AGENT_STUDIO_CHAT_EVENT_TYPE_SET.has(value.type)) {
+    throw new AgentStudioStreamProtocolError('unknown_type')
+  }
+
+  const eventType = value.type as OpusChatEvent['type']
+  if (
+    !hasString(value.session_id)
+    || !hasString(value.turn_id)
+    || !hasOptionalString(value.trace_id)
+  ) {
+    throw new AgentStudioStreamProtocolError('invalid_shape', eventType)
+  }
+
+  const hasOptionalCorrelation = hasOptionalString(value.call_id) && hasOptionalString(value.search_id)
+  let valid = hasOptionalCorrelation
+  switch (eventType) {
+    case 'TEXT_DELTA':
+      valid = valid && typeof value.delta === 'string'
+      break
+    case 'TOOL_SEARCH':
+      valid = valid && hasString(value.status)
+      break
+    case 'TOOL_SEARCH_RESULT':
+      valid = valid
+        && hasString(value.status)
+        && typeof value.loaded_tool_count === 'number'
+        && Number.isInteger(value.loaded_tool_count)
+        && value.loaded_tool_count >= 0
+      break
+    case 'TOOL_USE':
+      valid = valid && hasString(value.tool_name) && isRecord(value.tool_input)
+      break
+    case 'TOOL_RESULT':
+      valid = valid && hasString(value.tool_name) && isRecord(value.result)
+      break
+    case 'PROVIDER_CONTEXT_PREFLIGHT':
+      valid = valid && (value.payload_summary === undefined || isRecord(value.payload_summary))
+      break
+    case 'CONTEXT_OVERFLOW':
+    case 'REFUSAL':
+    case 'INCOMPLETE':
+    case 'ERROR':
+      valid = valid && hasString(value.message)
+      break
+    case 'DONE':
+      break
+  }
+
+  if (!valid) {
+    throw new AgentStudioStreamProtocolError('invalid_shape', eventType)
+  }
+  return value as unknown as OpusChatEvent
+}
+
+function reportAgentStudioStreamProtocolError(error: AgentStudioStreamProtocolError): void {
+  logger.error(
+    'Agent Studio stream protocol failure',
+    new Error('Agent Studio stream protocol failure'),
+    {
+      component: 'agentStudioService',
+      action: 'parse_chat_event',
+      metadata: {
+        reason: error.reason,
+        eventType: error.eventType ?? 'unknown',
+      },
+    },
+  )
+}
 
 export interface AgentStudioDurableSessionResponse {
   session_id: string
@@ -717,7 +829,7 @@ export async function fetchAgentStudioSessionDetail(
 }
 
 /**
- * Stream chat with Opus
+ * Stream Agent Studio AI Chat
  * Returns an async generator that yields SSE events
  *
  * Uses effort="medium" on the backend for optimal quality/cost balance.
@@ -755,6 +867,54 @@ export async function* streamOpusChat(
 
   const decoder = new TextDecoder()
   let buffer = ''
+  let responseSessionId: string | null = null
+  let responseTurnId: string | null = null
+  let receivedTerminalEvent = false
+
+  const parseAndCorrelate = (payload: string): OpusChatEvent => {
+    let decoded: unknown
+    try {
+      decoded = JSON.parse(payload)
+    } catch {
+      const error = new AgentStudioStreamProtocolError('malformed_json')
+      reportAgentStudioStreamProtocolError(error)
+      throw error
+    }
+
+    let event: OpusChatEvent
+    try {
+      event = parseAgentStudioChatEvent(decoded)
+    } catch (error) {
+      if (error instanceof AgentStudioStreamProtocolError) {
+        reportAgentStudioStreamProtocolError(error)
+      }
+      throw error
+    }
+
+    if (responseSessionId === null) {
+      responseSessionId = event.session_id
+      responseTurnId = event.turn_id
+    } else if (event.session_id !== responseSessionId || event.turn_id !== responseTurnId) {
+      const error = new AgentStudioStreamProtocolError('correlation_mismatch', event.type)
+      reportAgentStudioStreamProtocolError(error)
+      throw error
+    }
+    if (
+      event.type === 'DONE'
+      || event.type === 'CONTEXT_OVERFLOW'
+      || event.type === 'REFUSAL'
+      || event.type === 'INCOMPLETE'
+      || event.type === 'ERROR'
+    ) {
+      receivedTerminalEvent = true
+    }
+    return event
+  }
+
+  const eventPayload = (line: string): string | null => {
+    if (!line.startsWith('data:')) return null
+    return line.slice(5).trimStart()
+  }
 
   try {
     while (true) {
@@ -766,25 +926,25 @@ export async function* streamOpusChat(
       buffer = lines.pop() || ''
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const event = JSON.parse(line.slice(6)) as OpusChatEvent
-            yield event
-          } catch {
-            // Silently skip malformed SSE events - they may be incomplete
-          }
+        const payload = eventPayload(line)
+        if (payload !== null && payload.length > 0) {
+          yield parseAndCorrelate(payload)
         }
       }
     }
 
-    // Process any remaining buffer
-    if (buffer.startsWith('data: ')) {
-      try {
-        const event = JSON.parse(buffer.slice(6)) as OpusChatEvent
-        yield event
-      } catch {
-        // Ignore incomplete final event
-      }
+    buffer += decoder.decode()
+
+    // Process a complete final event even when the stream omits a newline.
+    const payload = eventPayload(buffer)
+    if (payload !== null && payload.length > 0) {
+      yield parseAndCorrelate(payload)
+    }
+
+    if (!receivedTerminalEvent) {
+      const error = new AgentStudioStreamProtocolError('missing_terminal')
+      reportAgentStudioStreamProtocolError(error)
+      throw error
     }
   } finally {
     reader.releaseLock()

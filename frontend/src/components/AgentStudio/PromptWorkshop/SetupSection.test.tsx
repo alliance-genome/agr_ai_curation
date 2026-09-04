@@ -188,7 +188,7 @@ describe('SetupSection', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'High' }))
     expect(props.onReasoningChange).toHaveBeenCalledWith('high')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude which model fits' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat which model fits' }))
     expect(props.onAskClaudeAboutModels).toHaveBeenCalledTimes(1)
     expect(screen.queryByText(/Confused about models/)).not.toBeInTheDocument()
   })

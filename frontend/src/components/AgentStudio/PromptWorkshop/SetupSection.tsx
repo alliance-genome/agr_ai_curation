@@ -432,7 +432,7 @@ export default function SetupSection(props: SetupSectionProps) {
               <>
                 {helperLine ? ' ' : ''}
                 <Button size="small" onClick={onAskClaudeAboutModels} sx={{ ...LinkButtonSx, verticalAlign: 'baseline' }}>
-                  Ask Claude which model fits
+                  Ask AI Chat which model fits
                 </Button>
               </>
             )}
