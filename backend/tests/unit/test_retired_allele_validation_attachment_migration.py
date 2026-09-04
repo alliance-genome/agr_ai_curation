@@ -25,6 +25,19 @@ _SPEC = importlib.util.spec_from_file_location(
 assert _SPEC and _SPEC.loader
 migration = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(migration)
+_REAPPLY_MIGRATION_PATH = (
+    Path(__file__).parents[2]
+    / "alembic"
+    / "versions"
+    / "i6j7k8l9m0n1_reapply_retired_flow_attachment_repair.py"
+)
+_REAPPLY_SPEC = importlib.util.spec_from_file_location(
+    "reapply_retired_flow_attachment_repair",
+    _REAPPLY_MIGRATION_PATH,
+)
+assert _REAPPLY_SPEC and _REAPPLY_SPEC.loader
+reapply_migration = importlib.util.module_from_spec(_REAPPLY_SPEC)
+_REAPPLY_SPEC.loader.exec_module(reapply_migration)
 SHIPPED_MIGRATION = next(
     item
     for item in load_persisted_flow_migration_catalog().migrations
@@ -129,3 +142,19 @@ def test_upgrade_is_noop_when_active_packages_do_not_declare_repair(monkeypatch)
     )
 
     migration.upgrade()
+
+
+def test_post_head_reconciliation_reapplies_the_same_idempotent_repair(monkeypatch):
+    connection = object()
+    calls = []
+    monkeypatch.setattr(reapply_migration.op, "get_bind", lambda: connection)
+    monkeypatch.setattr(
+        reapply_migration,
+        "apply_persisted_flow_migration",
+        lambda bind, flow_migration: calls.append((bind, flow_migration)),
+    )
+
+    reapply_migration.upgrade()
+
+    assert reapply_migration.down_revision == "h5c6d7e8f9a0"
+    assert calls == [(connection, SHIPPED_MIGRATION)]
