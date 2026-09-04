@@ -282,7 +282,8 @@ def test_alliance_prompt_documents_catalog_and_tool_continuation_contracts():
         "get_flow_templates(template_query, query, category, section, "
         "template_cursor, cursor)"
     ) in prompt
-    assert "call `validate_flow` before\n`create_flow`" in prompt
+    assert "complete save-equivalent `flow_definition`" in prompt
+    assert "never substitute or reconstruct a simplified `steps` list" in prompt
     assert (
         "get_tool_inventory(agent_id, category, include_method_tools, query, "
         "limit, cursor)"

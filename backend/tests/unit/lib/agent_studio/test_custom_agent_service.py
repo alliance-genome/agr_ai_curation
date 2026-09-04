@@ -813,7 +813,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         custom_prompt="Prompt",
         group_prompt_overrides={},
         include_group_rules=True,
-        model_id="gpt-5.5",
+        model_id="gpt-5.6-sol",
         model_temperature=0.1,
         model_reasoning=None,
         tool_ids=[
@@ -848,6 +848,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
             ],
         ),
     )
+    monkeypatch.setattr(service, "resolve_output_schema", lambda _key: object())
 
     service.update_custom_agent(
         db=SimpleNamespace(),
@@ -872,7 +873,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
         custom_prompt="Prompt",
         group_prompt_overrides={},
         include_group_rules=True,
-        model_id="gpt-5.5",
+        model_id="gpt-5.6-sol",
         model_temperature=0.1,
         model_reasoning=None,
         tool_ids=[
@@ -906,6 +907,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
             ],
         ),
     )
+    monkeypatch.setattr(service, "resolve_output_schema", lambda _key: object())
 
     service.update_custom_agent(
         db=SimpleNamespace(),
@@ -1202,7 +1204,7 @@ def _restricted_custom_agent(**overrides):
         "instructions": "Current prompt",
         "group_prompt_overrides": {},
         "template_source": "system_template",
-        "model_id": "gpt-5.5",
+        "model_id": "gpt-5.6-sol",
         "model_temperature": 0.1,
         "model_reasoning": None,
         "tool_ids": [],
@@ -1267,6 +1269,24 @@ def test_update_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
     assert updated.version == 5
     assert len(db.added) == 1
     assert db.added[0].allowed_group_ids == ["WB", "RGD"]
+
+
+def test_update_can_explicitly_clear_inherited_output_schema_to_none():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = _restricted_custom_agent(
+        output_schema_key="PackagedEnvelope",
+        tool_ids=[],
+    )
+
+    updated = service.update_custom_agent(
+        db=_AccessFloorDB(),
+        custom_agent=custom_agent,
+        output_schema_key=None,
+        output_schema_key_provided=True,
+    )
+
+    assert updated.output_schema_key is None
 
 
 def test_update_restricted_clone_missing_floor_fails_closed():

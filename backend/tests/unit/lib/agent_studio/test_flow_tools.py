@@ -166,473 +166,101 @@ def test_get_flow_agent_ids_excludes_supervisor_task_input_and_attachment_only_v
     ]
 
 
-def test_validate_flow_handler_reports_errors_warnings_and_suggestions(monkeypatch):
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["pdf_extraction", "gene_expression", "chat_output", "gene_validation"],
-    )
-    validate = flow_tools._validate_flow_handler()
-
-    result = validate(
-        steps=[
-            {"agent_id": "pdf_extraction"},
-            {"agent_id": "pdf_extraction"},  # duplicate -> warning
-            {"agent_id": "gene_expression", "custom_instructions": "x" * 2001},
-            {"agent_id": "unknown"},
-            {"agent_id": "chat_output", "step_goal": "y" * 501},
-        ],
-        name=" " * 2,
-    )
-
-    assert result["valid"] is False
-    assert any("unknown agent_id 'unknown'" in e for e in result["errors"])
-    assert any("custom_instructions exceeds 2000" in e for e in result["errors"])
-    assert any("step_goal exceeds 500" in e for e in result["errors"])
-    assert any("Flow name cannot be empty" in e for e in result["errors"])
-    assert any("used multiple times" in w for w in result["warnings"])
-    assert any("Consider adding 'gene_validation' step" in s for s in result["suggestions"])
-
-
-def test_validate_flow_handler_suggests_pdf_and_output(monkeypatch):
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["gene_validation", "disease_validation", "pdf_extraction", "chat_output"],
-    )
-    validate = flow_tools._validate_flow_handler()
-    result = validate(
-        steps=[{"agent_id": "gene_validation"}, {"agent_id": "disease_validation"}],
-        name="Flow Name",
-    )
-
-    assert result["valid"] is True
-    assert any("Consider adding 'pdf_extraction'" in s for s in result["suggestions"])
-    output_suggestion = next(
-        suggestion
-        for suggestion in result["suggestions"]
-        if "Consider attaching 'chat_output'" in suggestion
-    )
-    assert (
-        "via ordered source_steps to one or more earlier Extraction or typed "
-        "Validation steps"
-    ) in output_suggestion
-
-
-def test_validate_flow_handler_only_mentions_installed_agent_ids(monkeypatch):
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["gene_expression_extraction", "gene_validation"],
-    )
-    validate = flow_tools._validate_flow_handler()
-
-    result = validate(
-        steps=[{"agent_id": "gene_expression_extraction"}],
-        name="Expression Flow",
-    )
-
-    assert result["valid"] is True
-    assert result["suggestions"] == [
-        "Consider adding 'gene_validation' step after 'gene_expression_extraction' to validate gene identifiers"
-    ]
-    assert not any("pdf_extraction" in suggestion for suggestion in result["suggestions"])
-    assert not any("chat_output" in suggestion for suggestion in result["suggestions"])
-
-
-def test_validate_flow_handler_accepts_gene_expression_alias_pair(monkeypatch):
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["gene_expression", "gene_expression_extraction", "gene_validation"],
-    )
-    validate = flow_tools._validate_flow_handler()
-
-    flow_alias_result = validate(
-        steps=[{"agent_id": "gene_expression"}],
-        name="Expression Flow",
-    )
-    package_agent_result = validate(
-        steps=[{"agent_id": "gene_expression_extraction"}],
-        name="Expression Flow",
-    )
-
-    assert flow_alias_result["valid"] is True
-    assert package_agent_result["valid"] is True
-    assert flow_alias_result["errors"] == []
-    assert package_agent_result["errors"] == []
-    assert any(
-        "Consider adding 'gene_validation' step after 'gene_expression'" in suggestion
-        for suggestion in flow_alias_result["suggestions"]
-    )
-    assert any(
-        "Consider adding 'gene_validation' step after 'gene_expression'" in suggestion
-        for suggestion in package_agent_result["suggestions"]
-    )
-
-
-def test_validate_flow_handler_accepts_ordered_extraction_and_typed_validator_sources(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["pdf_extraction", "gene_validation", "chat_output"],
-    )
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
-        {
-            "pdf_extraction": {"category": "Extraction"},
-            "gene_validation": {
-                "category": "Validation",
-                "output_schema_key": "GeneResultEnvelope",
-            },
-            "chat_output": {"category": "Output"},
-        },
-    )
-
-    result = flow_tools._validate_flow_handler()(
-        steps=[
-            {"agent_id": "pdf_extraction"},
-            {"agent_id": "gene_validation"},
-            {"agent_id": "chat_output", "source_steps": [1, 2]},
-        ],
-        name="Grouped Output",
-    )
-
-    assert result["valid"] is True
-    assert result["errors"] == []
-
-
-def test_validate_flow_handler_rejects_removed_singular_source_step(monkeypatch):
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["pdf_extraction", "chat_output"],
-    )
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
-        {
-            "pdf_extraction": {"category": "Extraction"},
-            "chat_output": {"category": "Output"},
-        },
-    )
-
-    result = flow_tools._validate_flow_handler()(
-        steps=[
-            {"agent_id": "pdf_extraction"},
-            {"agent_id": "chat_output", "source_step": 1},
-        ],
-    )
-
-    assert result["valid"] is False
-    assert result["errors"] == [
-        "Step 2: output formatter requires non-empty source_steps"
-    ]
-    assert result["help"].startswith("Bind formatter source_steps")
-
-
-def test_validate_flow_handler_checks_every_grouped_source_with_shared_policy(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["pdf_extraction", "untyped_validator", "chat_output"],
-    )
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
-        {
-            "pdf_extraction": {"category": "Extraction"},
-            "untyped_validator": {"category": "Validation"},
-            "chat_output": {"category": "Output"},
-        },
-    )
-
-    result = flow_tools._validate_flow_handler()(
-        steps=[
-            {"agent_id": "pdf_extraction"},
-            {"agent_id": "untyped_validator"},
-            {"agent_id": "chat_output", "source_steps": [1, 2]},
-        ],
-    )
-
-    assert result["valid"] is False
-    assert result["errors"] == [
-        "Step 3: source_steps entry 2 ('untyped_validator') is not an extraction "
-        "agent or a typed validation agent"
-    ]
-
-
-def test_validate_flow_uses_canonical_output_filename_template_validation(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["pdf_extraction", "csv_formatter"],
-    )
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
-        {
-            "pdf_extraction": {"category": "Extraction"},
-            "csv_formatter": {"category": "Output"},
-        },
-    )
-    validate = flow_tools._validate_flow_handler()
-
-    valid = validate(
-        steps=[
-            {"agent_id": "pdf_extraction"},
+def _exact_validation_flow() -> dict[str, Any]:
+    return {
+        "version": "1.1",
+        "nodes": [
             {
-                "agent_id": "csv_formatter",
-                "source_steps": [1],
-                "output_filename_template": "{{input_filename_stem}}.csv",
+                "id": "task",
+                "type": "task_input",
+                "position": {"x": 0, "y": 0},
+                "data": {
+                    "agent_id": "task_input",
+                    "agent_display_name": "Initial Instructions",
+                    "task_instructions": "Extract facts",
+                    "output_key": "task_input",
+                },
             },
-        ]
-    )
-    invalid = validate(
-        steps=[
-            {"agent_id": "pdf_extraction"},
             {
-                "agent_id": "csv_formatter",
-                "source_steps": [1],
-                "output_filename_template": "{{unsupported_variable}}.csv",
+                "id": "extract",
+                "type": "agent",
+                "position": {"x": 100, "y": 100},
+                "data": {
+                    "agent_id": "extractor",
+                    "agent_display_name": "Extractor",
+                    "prompt_version": 2,
+                    "custom_instructions": "Preserve evidence.",
+                    "output_key": "facts",
+                },
             },
-        ]
-    )
-
-    assert valid["valid"] is True
-    assert invalid["valid"] is False
-    assert any("unsupported_variable" in error for error in invalid["errors"])
-
-
-@pytest.mark.parametrize(
-    "unsupported_variable",
-    ["agent_id", "source_steps", "exceeds"],
-)
-def test_validate_and_create_share_pre_persistence_rejection(
-    monkeypatch,
-    unsupported_variable,
-):
-    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["pdf_extraction", "csv_formatter"],
-    )
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
-        {
-            "pdf_extraction": {"category": "Extraction"},
-            "csv_formatter": {"category": "Output"},
-        },
-    )
-
-    import src.models.sql as sql_module
-
-    def _unexpected_db_access():
-        raise AssertionError("invalid preflight must not access the database")
-
-    monkeypatch.setattr(sql_module, "get_db", _unexpected_db_access)
-    steps = [
-        {"agent_id": "pdf_extraction"},
-        {
-            "agent_id": "csv_formatter",
-            "source_steps": [1],
-            "output_filename_template": (
-                "{{" + unsupported_variable + "}}.csv"
-            ),
-        },
-    ]
-
-    validation = flow_tools._validate_flow_handler()(steps=steps)
-    creation = flow_tools._create_flow_handler()(
-        name="Template flow",
-        description="Validate the filename template before persistence",
-        steps=steps,
-    )
-
-    assert validation["valid"] is False
-    assert "supported filename variables" in validation["help"]
-    assert creation["success"] is False
-    assert creation["error"] == validation["errors"][0]
-    assert "supported filename variables" in creation["help"]
-    assert "Valid agent IDs" not in creation["help"]
-
-
-def test_validate_and_create_share_configured_step_goal_limit(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS", "4")
-    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction"])
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
-        {"pdf_extraction": {"category": "Extraction"}},
-    )
-    steps = [{"agent_id": "pdf_extraction", "step_goal": "12345"}]
-
-    validation = flow_tools._validate_flow_handler()(steps=steps)
-    creation = flow_tools._create_flow_handler()(
-        name="Short goal flow",
-        description="Exercise the configured admission limit",
-        steps=steps,
-    )
-
-    assert validation["errors"] == [
-        "Step 1: step_goal exceeds 4 characters"
-    ]
-    assert creation["error"] == validation["errors"][0]
-    assert creation["help"] == (
-        "Shorten the named field to the configured maximum"
-    )
-
-
-def test_overlong_filename_template_returns_length_help(monkeypatch):
-    monkeypatch.setenv(
-        "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
-        "4",
-    )
-    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
-    monkeypatch.setattr(
-        flow_tools,
-        "FLOW_AGENT_IDS",
-        ["pdf_extraction", "csv_formatter"],
-    )
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
-        {
-            "pdf_extraction": {"category": "Extraction"},
-            "csv_formatter": {"category": "Output"},
-        },
-    )
-    steps = [
-        {"agent_id": "pdf_extraction"},
-        {
-            "agent_id": "csv_formatter",
-            "source_steps": [1],
-            "output_filename_template": "a.csv",
-        },
-    ]
-
-    validation = flow_tools._validate_flow_handler()(steps=steps)
-    creation = flow_tools._create_flow_handler()(
-        name="Filename length",
-        description="Exercise filename length recovery",
-        steps=steps,
-    )
-
-    assert validation["help"] == (
-        "Shorten the named field to the configured maximum"
-    )
-    assert creation["help"] == validation["help"]
-
-
-def test_limit_clamp_warnings_are_not_repeated_per_step(monkeypatch, caplog):
-    monkeypatch.setenv(
-        "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
-        "2001",
-    )
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS", "501")
-    monkeypatch.setenv(
-        "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
-        "256",
-    )
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction"])
-    monkeypatch.setattr(
-        flow_tools,
-        "AGENT_REGISTRY",
-        {"pdf_extraction": {"category": "Extraction"}},
-    )
-
-    result = flow_tools._validate_flow_handler()(
-        steps=[{"agent_id": "pdf_extraction"}] * 3
-    )
-
-    assert result["valid"] is True
-    for environment_name in (
-        "AGENT_STUDIO_FLOW_CUSTOM_INSTRUCTIONS_MAX_CHARS",
-        "AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS",
-        "AGENT_STUDIO_FLOW_OUTPUT_FILENAME_TEMPLATE_MAX_CHARS",
-    ):
-        assert sum(environment_name in message for message in caplog.messages) == 1
-
-
-def test_validate_collects_field_limits_before_unknown_agent_id(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_STEP_GOAL_MAX_CHARS", "4")
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction"])
-
-    result = flow_tools._validate_flow_handler()(
-        steps=[{"agent_id": "not_available", "step_goal": "12345"}]
-    )
-
-    assert result["errors"] == [
-        "Step 1: step_goal exceeds 4 characters",
-        "Step 1: unknown agent_id 'not_available'",
-    ]
-
-
-@pytest.mark.parametrize("malformed_steps", [None, {"agent_id": "pdf_extraction"}])
-def test_validate_and_create_structurally_reject_non_array_steps(
-    monkeypatch,
-    malformed_steps,
-):
-    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
-    invalid_steps = cast(Any, malformed_steps)
-
-    validation = flow_tools._validate_flow_handler()(steps=invalid_steps)
-    creation = flow_tools._create_flow_handler()(
-        name="Malformed steps",
-        description="Reject a non-array step payload",
-        steps=invalid_steps,
-    )
-
-    assert validation == {
-        "valid": False,
-        "errors": ["Flow steps must be an array"],
-        "warnings": [],
-        "suggestions": [],
-        "step_count": 0,
-        "unique_agents": [],
-        "help": "Provide a non-empty steps array within the configured step limit",
+        ],
+        "edges": [
+            {
+                "id": "control",
+                "source": "task",
+                "target": "extract",
+                "role": "control_flow",
+            }
+        ],
+        "entry_node_id": "task",
     }
-    assert creation["success"] is False
-    assert creation["error"] == validation["errors"][0]
 
 
-def test_effective_step_limit_fits_required_task_input_node(monkeypatch):
-    monkeypatch.delenv("FLOW_DEFINITION_MAX_NODES", raising=False)
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_MAX_STEPS", "100")
-    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction"])
+def test_validate_flow_handler_accepts_exact_full_draft(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
-        "AGENT_REGISTRY",
-        {"pdf_extraction": {"category": "Extraction"}},
+        "resolve_live_flow_agent",
+        lambda agent_id, _context: {
+            "category": "Extraction",
+            "is_active": True,
+            "supervisor": {"enabled": True},
+            "produces_flow_artifacts": True,
+        }
+        if agent_id == "extractor"
+        else None,
     )
-    validate = flow_tools._validate_flow_handler()
-
-    for authored_step_count in (29, 30):
-        result = validate(
-            steps=[{"agent_id": "pdf_extraction"}] * authored_step_count
-        )
-        assert result["valid"] is True, result
-
-    too_many = validate(steps=[{"agent_id": "pdf_extraction"}] * 31)
-    assert too_many["valid"] is False
-    assert too_many["errors"] == ["Flow has 31 steps; maximum is 30"]
-
-    assert flow_tools._simplified_flow_steps_schema()["maxItems"] == 30
-    assert (
-        flow_tools._simplified_flow_steps_schema()["items"]["properties"]
-        ["source_steps"]["maxItems"]
-        == 29
+    monkeypatch.setattr(
+        flow_tools,
+        "apply_flow_validation_attachment_defaults",
+        lambda candidate, **_kwargs: candidate,
     )
+
+    result = flow_tools._validate_flow_handler()(
+        flow_definition=_exact_validation_flow(),
+        name="Exact flow",
+        phase="pre_apply",
+    )
+
+    assert result == {
+        "artifact_kind": "flow",
+        "phase": "pre_apply",
+        "valid": True,
+        "findings": [],
+        "node_count": 2,
+        "edge_count": 1,
+    }
+
+
+def test_validate_flow_handler_returns_structured_safe_reference_finding(monkeypatch):
+    monkeypatch.setattr(flow_tools, "resolve_live_flow_agent", lambda *_args: None)
+    monkeypatch.setattr(
+        flow_tools,
+        "apply_flow_validation_attachment_defaults",
+        lambda candidate, **_kwargs: candidate,
+    )
+    draft = _exact_validation_flow()
+    draft["nodes"][1]["data"]["agent_id"] = "private_other_user_agent"
+
+    result = flow_tools._validate_flow_handler()(
+        flow_definition=draft,
+        name="Exact flow",
+    )
+
+    assert result["valid"] is False
+    finding = next(item for item in result["findings"] if item["code"] == "unavailable_agent")
+    assert finding["path"] == "flow_definition.nodes.extract.data.agent_id"
+    assert "private_other_user_agent" not in finding["message"]
+
 
 
 def test_get_flow_templates_handler_uses_registry(monkeypatch):
@@ -802,14 +430,19 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
         2,
         3,
     ]
-    validate = flow_tools._validate_flow_handler()
     for name in (
         "Gene Curation",
         "Disease Annotation",
         "Allele Annotation",
         "GO Annotation Pipeline",
     ):
-        assert validate(steps=templates[name]["steps"], name=name)["valid"] is True
+        definition = flow_tools._build_simplified_flow_definition(
+            steps=templates[name]["steps"],
+            task_instructions=name,
+            flow_agent_ids=sorted(installed_agent_ids),
+            agent_registry=flow_tools.AGENT_REGISTRY,
+        )
+        assert definition.version == "1.1"
 
 
 def test_all_twelve_alliance_recipes_appear_when_required_agents_are_flow_eligible(
@@ -957,7 +590,7 @@ def test_rgd_recipe_discovery_instantiates_saved_flow_and_denies_non_rgd_creatio
         steps=combined["steps"],
     )
 
-    assert created["success"] is True
+    assert created["success"] is True, created
     saved_flow = db.added
     assert saved_flow is not None
     assert created["flow_id"] == str(saved_flow.id)
@@ -984,17 +617,16 @@ def test_rgd_recipe_discovery_instantiates_saved_flow_and_denies_non_rgd_creatio
     }
 
 
-def test_advertised_alliance_recipes_pass_the_public_validation_contract():
+def test_advertised_alliance_recipes_pass_the_create_compiler_contract():
     templates = flow_tools._get_flow_templates_handler()()["templates"]
-    validate = flow_tools._validate_flow_handler()
 
     assert templates
     for template in templates:
-        result = validate(steps=template["steps"], name=template["name"])
-        assert result["valid"] is True, {
-            "recipe": template["name"],
-            "errors": result["errors"],
-        }
+        definition = flow_tools.build_flow_definition_from_recipe(
+            steps=template["steps"],
+            task_instructions=template["name"],
+        )
+        assert definition.version == "1.1"
 
 
 def test_flow_templates_do_not_advertise_rejected_output_bindings(monkeypatch):
@@ -2467,8 +2099,10 @@ def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeyp
     assert "output_filename_template" in step_properties
     assert step_properties["step_goal"]["maxLength"] == 500
     validate_flow_schema = registrations[1]["input_schema"]
-    validate_steps_schema = validate_flow_schema["properties"]["steps"]
-    assert validate_steps_schema == create_steps_schema
+    assert "steps" not in validate_flow_schema["properties"]
+    assert validate_flow_schema["required"] == ["flow_definition"]
+    exact_schema = validate_flow_schema["properties"]["flow_definition"]
+    assert {"nodes", "edges", "entry_node_id"}.issubset(exact_schema["properties"])
 
 
 def test_register_flow_tools_propagates_configured_limits(monkeypatch):
@@ -2500,7 +2134,8 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
     validate_schema = registrations[1]["input_schema"]
     steps_schema = create_schema["properties"]["steps"]
     step_properties = steps_schema["items"]["properties"]
-    assert steps_schema == validate_schema["properties"]["steps"]
+    assert "steps" not in validate_schema["properties"]
+    assert validate_schema["required"] == ["flow_definition"]
     assert steps_schema["maxItems"] == 4
     assert step_properties["source_steps"]["maxItems"] == 3
     assert step_properties["source_steps"]["items"]["maximum"] == 3

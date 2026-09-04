@@ -60,8 +60,15 @@ from src.lib.openai_agents.config import (
     get_tool_page_max_limit,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
+from src.lib.flows.validation_attachments import apply_flow_validation_attachment_defaults
 
 from .catalog_service import AGENT_REGISTRY
+from .authoring_validation import (
+    AuthoringValidationContext,
+    report_authoring_validation_engine_failure,
+    resolve_live_flow_agent,
+    validate_flow_authoring_draft,
+)
 from .diagnostic_tools import get_diagnostic_tools_registry
 from .flow_agent_policy import (
     agent_allows_ordinary_flow_step,
@@ -729,6 +736,59 @@ def _accessible_flow_agent_ids() -> set[str]:
     return set(_accessible_flow_agents())
 
 
+def _validate_exact_flow_for_current_user(
+    flow_definition: Dict[str, Any] | "FlowDefinition",
+    *,
+    phase: Literal["proposal", "pre_apply", "post_apply", "save"],
+):
+    """Run the canonical exact-draft validator with live request authorization."""
+
+    context = AuthoringValidationContext.from_values(
+        db_user_id=get_current_user_id(),
+        active_group_ids=get_current_active_group_ids(),
+    )
+    accessible_entries = _accessible_flow_agents()
+    resolved_entries: dict[str, Mapping[str, Any]] = {}
+
+    def _resolve(agent_id: str, auth: AuthoringValidationContext):
+        entry = accessible_entries.get(agent_id)
+        if entry is None:
+            entry = resolve_live_flow_agent(agent_id, auth)
+        if entry is not None:
+            resolved_entries[agent_id] = entry
+        return entry
+
+    def _apply_defaults(candidate: "FlowDefinition") -> "FlowDefinition":
+        node_ids = {
+            str(node.data.agent_id or "").strip()
+            for node in candidate.nodes
+            if node.data.agent_id != "task_input"
+        }
+        for agent_id in node_ids:
+            _resolve(agent_id, context)
+        custom_entries = {
+            agent_id: entry
+            for agent_id, entry in resolved_entries.items()
+            if agent_id.startswith("ca_")
+            and isinstance(entry.get("curation"), Mapping)
+            and str(entry["curation"].get("domain_pack_id") or "").strip()
+        }
+        if not custom_entries:
+            return apply_flow_validation_attachment_defaults(candidate)
+        return apply_flow_validation_attachment_defaults(
+            candidate,
+            agent_registry={**AGENT_REGISTRY, **custom_entries},
+        )
+
+    return validate_flow_authoring_draft(
+        flow_definition,
+        context=context,
+        resolve_agent=_resolve,
+        apply_attachment_defaults=_apply_defaults,
+        phase=phase,
+    )
+
+
 def list_available_flow_templates(
     *,
     available_agent_ids: set[str],
@@ -1079,7 +1139,42 @@ def _create_flow_handler():
                 "help": _simplified_flow_recovery_help(exc.errors),
             }
 
-        flow_definition = validated_flow_def.model_dump()
+        try:
+            canonical_result = _validate_exact_flow_for_current_user(
+                validated_flow_def,
+                phase="save",
+            )
+        except Exception:
+            report_authoring_validation_engine_failure(
+                artifact_kind="flow",
+                phase="save",
+            )
+            return {
+                "success": False,
+                "error": "Flow validation is temporarily unavailable",
+                "help": "Try again. If the problem persists, contact support.",
+            }
+        if not canonical_result.valid:
+            first = canonical_result.errors[0]
+            return {
+                "success": False,
+                "error": first.message,
+                "findings": [finding.to_dict() for finding in canonical_result.findings],
+                "help": first.fix_hint or "Correct the exact flow draft and try again.",
+            }
+
+        validated_candidate = canonical_result.candidate
+        if validated_candidate is None:
+            report_authoring_validation_engine_failure(
+                artifact_kind="flow",
+                phase="save",
+            )
+            return {
+                "success": False,
+                "error": "Flow validation is temporarily unavailable",
+                "help": "Try again. If the problem persists, contact support.",
+            }
+        flow_definition = validated_candidate.model_dump()
 
         # Save to database
         try:
@@ -1133,92 +1228,66 @@ def _create_flow_handler():
 def _validate_flow_handler():
     """Create handler for the validate_flow tool.
 
-    Validates flow structure without saving. No user context required.
+    Validates the exact full canvas draft without saving.
     """
     def handler(
-        steps: List[Dict[str, Any]],
-        name: Optional[str] = None
+        flow_definition: Dict[str, Any],
+        name: Optional[str] = None,
+        phase: Literal["proposal", "pre_apply", "post_apply", "save"] = "proposal",
     ) -> Dict[str, Any]:
-        """Validate a flow definition.
+        """Validate a complete save-equivalent flow definition.
 
         Args:
-            steps: List of step configs to validate
+            flow_definition: Exact nodes, edges, positions, configuration, and refs
             name: Optional flow name to validate
+            phase: Authoring lifecycle phase using this same canonical contract
 
         Returns:
-            Dict with valid (bool), errors, warnings, and suggestions
+            Structured findings with stable paths and node/edge identities
         """
-        errors = _simplified_flow_metadata_errors(name=name)
-        warnings: List[str] = []
-        suggestions: List[str] = []
-        available_agents = _accessible_flow_agents()
-        available_agent_ids = set(available_agents)
-        recipe_catalog = load_flow_recipe_catalog()
-        equivalences = _agent_id_equivalences(recipe_catalog)
-
         try:
-            _build_simplified_flow_definition(
-                steps=steps,
-                task_instructions="Agent Studio validation preflight",
-                flow_agent_ids=sorted(available_agent_ids),
-                agent_registry=available_agents,
+            result = _validate_exact_flow_for_current_user(
+                flow_definition,
+                phase=phase,
             )
-        except _SimplifiedFlowValidationError as exc:
-            errors.extend(exc.errors)
-
-        validated_steps = steps if isinstance(steps, list) else []
-        seen_agents: set[str] = set()
-        for i, step in enumerate(validated_steps):
-            if not isinstance(step, dict):
-                continue
-            agent_id = step.get("agent_id")
-            if not isinstance(agent_id, str) or agent_id not in available_agent_ids:
-                continue
-            if agent_id in seen_agents:
-                warnings.append(
-                    f"Step {i + 1}: agent '{agent_id}' used multiple times "
-                    "(allowed but unusual)"
-                )
-            seen_agents.add(agent_id)
-
-        suggestions.extend(
-            _build_package_suggestions(
-                seen_agents,
-                available_agent_ids,
-                recipe_catalog,
-                equivalences,
-                "first",
+        except Exception:
+            report_authoring_validation_engine_failure(
+                artifact_kind="flow",
+                phase=phase,
             )
-        )
-
-        output_suggestion = _build_output_suggestion(
-            seen_agents,
-            available_agent_ids,
-            equivalences,
-        )
-        if output_suggestion and len(seen_agents) >= 2:
-            suggestions.append(output_suggestion)
-        suggestions.extend(
-            _build_package_suggestions(
-                seen_agents,
-                available_agent_ids,
-                recipe_catalog,
-                equivalences,
-                "after",
-            )
-        )
-
-        result = {
-            "valid": len(errors) == 0,
-            "errors": errors,
-            "warnings": warnings,
-            "suggestions": suggestions,
-            "step_count": len(validated_steps),
-            "unique_agents": list(seen_agents),
-        }
-        if errors:
-            result["help"] = _simplified_flow_recovery_help(errors)
-        return result
+            return {
+                "artifact_kind": "flow",
+                "phase": phase,
+                "valid": False,
+                "findings": [
+                    {
+                        "code": "validation_engine_failure",
+                        "severity": "error",
+                        "path": "flow_definition",
+                        "message": "Flow validation is temporarily unavailable.",
+                        "fix_hint": "Try validation again. If the problem persists, contact support.",
+                    }
+                ],
+                "node_count": len(flow_definition.get("nodes", [])),
+                "edge_count": len(flow_definition.get("edges", [])),
+            }
+        payload = result.to_dict()
+        metadata_errors = _simplified_flow_metadata_errors(name=name)
+        if metadata_errors:
+            payload["valid"] = False
+            payload["findings"] = [
+                {
+                    "code": "invalid_flow_name",
+                    "severity": "error",
+                    "path": "name",
+                    "message": metadata_errors[0],
+                    "fix_hint": "Provide a non-empty flow name within the configured limit.",
+                },
+                *payload["findings"],
+            ]
+        payload["node_count"] = len(flow_definition.get("nodes", []))
+        payload["edge_count"] = len(flow_definition.get("edges", []))
+        return payload
 
     return handler
 
@@ -2657,6 +2726,9 @@ def register_flow_tools() -> None:
     """
     registry = get_diagnostic_tools_registry()
     simplified_steps_schema = _simplified_flow_steps_schema()
+    from src.schemas.flows import FlowDefinition
+
+    exact_flow_definition_schema = FlowDefinition.model_json_schema()
 
     logger.info("Registering flow tools...")
 
@@ -2712,13 +2784,16 @@ to check for issues without saving.""",
     # -------------------------------------------------------------------------
     registry.register(
         name="validate_flow",
-        description="""Validate a flow definition and provide recommendations.
+        description="""Validate an exact complete flow definition.
 
 Use this tool to check if a flow structure is valid BEFORE saving.
-Validates agent IDs, step configuration, and provides suggestions
-for improvement.
+Pass the full save-equivalent canvas draft, including nodes, edges, positions,
+configuration, attachment metadata, prompt revision references, and output settings.
+The same structured rules are used for proposals, pre-apply checks, post-apply
+checks, and API saves.
 
-Returns validation results with any errors, warnings, and suggestions.
+Returns stable findings with severity, exact path, safe message, optional fix hint,
+and node/edge identity. Errors block apply/save; warnings and info do not.
 
 ALWAYS use this before create_flow to catch issues early.""",
         input_schema={
@@ -2730,9 +2805,15 @@ ALWAYS use this before create_flow to catch issues early.""",
                     "maxLength": get_agent_studio_flow_name_max_chars(),
                     "description": "Flow name to validate (optional)"
                 },
-                "steps": simplified_steps_schema,
+                "flow_definition": exact_flow_definition_schema,
+                "phase": {
+                    "type": "string",
+                    "enum": ["proposal", "pre_apply", "post_apply", "save"],
+                    "default": "proposal",
+                    "description": "Lifecycle phase; every phase uses identical rules.",
+                },
             },
-            "required": ["steps"]
+            "required": ["flow_definition"]
         },
         handler=_validate_flow_handler(),
         category="flows",

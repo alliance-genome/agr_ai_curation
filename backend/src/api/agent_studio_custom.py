@@ -37,6 +37,7 @@ from src.lib.agent_studio.custom_agent_service import (
     soft_delete_custom_agent,
     update_custom_agent,
 )
+from src.lib.agent_studio.authoring_validation import AuthoringValidationError
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.agent_access import is_resource_access_allowed
@@ -93,7 +94,7 @@ def _raise_custom_agent_validation_http_exception(
     *,
     exc: Exception,
     status_code: int,
-    detail: str,
+    detail: Any,
     log_message: str,
     log_extra: Optional[Dict[str, Any]] = None,
 ) -> NoReturn:
@@ -290,6 +291,7 @@ async def create_custom_agent_endpoint(
             model_reasoning=request.model_reasoning,
             tool_ids=request.tool_ids,
             output_schema_key=request.output_schema_key,
+            output_schema_key_provided="output_schema_key" in request.model_fields_set,
             category=request.category,
             allowed_group_ids=request.allowed_group_ids,
             active_group_ids=_authenticated_group_ids(user),
@@ -319,7 +321,11 @@ async def create_custom_agent_endpoint(
         _raise_custom_agent_validation_http_exception(
             exc=exc,
             status_code=400,
-            detail=str(exc) or "Custom agent request is invalid",
+            detail=(
+                exc.result.to_dict()
+                if isinstance(exc, AuthoringValidationError)
+                else str(exc) or "Custom agent request is invalid"
+            ),
             log_message="Failed to create custom agent",
             log_extra=log_context,
         )
@@ -428,9 +434,11 @@ async def update_custom_agent_endpoint(
             model_reasoning=request.model_reasoning,
             tool_ids=request.tool_ids,
             output_schema_key=request.output_schema_key,
+            output_schema_key_provided="output_schema_key" in request.model_fields_set,
             allow_empty_tool_ids=request.allow_empty_tool_ids,
             notes=request.notes,
             allowed_group_ids=request.allowed_group_ids,
+            active_group_ids=_authenticated_group_ids(user),
         )
         db.commit()
         db.refresh(custom_agent)
@@ -455,7 +463,11 @@ async def update_custom_agent_endpoint(
         _raise_custom_agent_validation_http_exception(
             exc=exc,
             status_code=400,
-            detail=str(exc) or "Custom agent update is invalid",
+            detail=(
+                exc.result.to_dict()
+                if isinstance(exc, AuthoringValidationError)
+                else str(exc) or "Custom agent update is invalid"
+            ),
             log_message=f"Failed to update custom agent '{custom_agent_id}'",
             log_extra=log_context,
         )

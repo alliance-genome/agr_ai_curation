@@ -13,11 +13,23 @@ from src.lib.agent_studio.agent_service import get_agent_by_key, get_project_ids
 from src.lib.agent_studio.agent_identity import require_canonical_agent_identity
 from src.lib.agent_studio.catalog_service import DOCUMENT_TOOL_IDS, has_tool_binding
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
+from src.lib.agent_studio.authoring_validation import (
+    AgentModelValidationRecord,
+    AgentToolValidationRecord,
+    AgentValidationSources,
+    AuthoringValidationContext,
+    AuthoringValidationError,
+    LOCKED_PROMPT_MARKERS,
+    report_authoring_validation_engine_failure,
+    validate_custom_agent_authoring_draft,
+)
 from src.lib.agent_access import (
     normalize_allowed_group_ids,
     require_allowed_group_ids_narrowing,
 )
 from src.lib.config.models_loader import get_model
+from src.lib.config.groups_loader import get_valid_group_ids
+from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.group_tool_policy import parse_group_tool_policy
 from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.models.sql.agent import Agent as CustomAgent, ProjectMember
@@ -36,12 +48,6 @@ _SYSTEM_MANAGED_INHERITED_TOOL_IDS = {
     "discard_recorded_evidence",
     "update_recorded_evidence_metadata",
 }
-LOCKED_PROMPT_MARKERS = (
-    "Platform Runtime Contract",
-    "backend-owned instructions",
-    "Generated runtime contract",
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -500,6 +506,112 @@ def _validate_model_id(model_id: str) -> str:
     return normalized
 
 
+def _agent_validation_sources(
+    db: Session,
+    *,
+    model_id: str,
+    tool_ids: List[str],
+    output_schema_key: Optional[str],
+    prevalidated_tool_ids: Optional[List[str]] = None,
+    trusted_output_schema_keys: Optional[List[str]] = None,
+) -> AgentValidationSources:
+    """Capture the live read-only catalogs used by canonical draft validation."""
+
+    model_def = get_model(model_id)
+    models = {}
+    if model_def is not None:
+        supports_reasoning = bool(getattr(model_def, "supports_reasoning", True))
+        reasoning_options = tuple(
+            getattr(model_def, "reasoning_options", ()) or ()
+        )
+        if supports_reasoning and not hasattr(model_def, "reasoning_options"):
+            reasoning_options = ("minimal", "low", "medium", "high", "xhigh")
+        models[model_id] = AgentModelValidationRecord(
+            model_id=model_id,
+            curator_visible=bool(getattr(model_def, "curator_visible", True)),
+            supports_reasoning=supports_reasoning,
+            reasoning_options=reasoning_options,
+        )
+
+    prevalidated = set(_dedupe_tool_ids(prevalidated_tool_ids or []))
+    unresolved_tool_ids = [tool_id for tool_id in tool_ids if tool_id not in prevalidated]
+    policies = _tool_policy_by_key(db) if unresolved_tool_ids else {}
+    system_managed = (
+        set(_system_managed_tool_ids(db, unresolved_tool_ids))
+        if unresolved_tool_ids
+        else set()
+    )
+    tools = {}
+    for tool_id in _dedupe_tool_ids(tool_ids):
+        policy = policies.get(tool_id)
+        tools[tool_id] = AgentToolValidationRecord(
+            tool_id=tool_id,
+            attachable=bool(tool_id in prevalidated or (policy and policy.allow_attach)),
+            installed=bool(
+                tool_id in prevalidated
+                or has_tool_binding(tool_id)
+                or tool_id in system_managed
+            ),
+            system_managed=tool_id in system_managed,
+        )
+
+    normalized_schema = str(output_schema_key or "").strip()
+    trusted_schemas = set(trusted_output_schema_keys or [])
+    output_schema_keys = frozenset(
+        [normalized_schema]
+        if normalized_schema
+        and (
+            normalized_schema in trusted_schemas
+            or resolve_output_schema(normalized_schema) is not None
+        )
+        else []
+    )
+    return AgentValidationSources(
+        models=models,
+        tools=tools,
+        output_schema_keys=output_schema_keys,
+        group_ids=frozenset(get_valid_group_ids()),
+        builder_finalization_tool_ids=frozenset(_builder_finalization_tool_ids()),
+    )
+
+
+def _require_valid_custom_agent_draft(
+    db: Session,
+    *,
+    user_id: int,
+    active_group_ids: Optional[List[str]],
+    candidate: Dict[str, Any],
+    prevalidated_tool_ids: Optional[List[str]] = None,
+    trusted_output_schema_keys: Optional[List[str]] = None,
+) -> None:
+    """Apply the canonical complete-draft contract before any ORM mutation."""
+
+    try:
+        result = validate_custom_agent_authoring_draft(
+            candidate,
+            context=AuthoringValidationContext.from_values(
+                db_user_id=user_id,
+                active_group_ids=active_group_ids,
+            ),
+            sources=_agent_validation_sources(
+                db,
+                model_id=str(candidate.get("model_id") or ""),
+                tool_ids=list(candidate.get("tool_ids") or []),
+                output_schema_key=candidate.get("output_schema_key"),
+                prevalidated_tool_ids=prevalidated_tool_ids,
+                trusted_output_schema_keys=trusted_output_schema_keys,
+            ),
+            phase="save",
+        )
+    except Exception:
+        raise report_authoring_validation_engine_failure(
+            artifact_kind="custom_agent",
+            phase="save",
+        ) from None
+    if not result.valid:
+        raise AuthoringValidationError(result)
+
+
 def _resolve_system_template_agent(
     db: Session,
     template_source: str,
@@ -595,6 +707,7 @@ def create_custom_agent(
     model_id: Optional[str] = None,
     tool_ids: Optional[List[str]] = None,
     output_schema_key: Optional[str] = None,
+    output_schema_key_provided: bool = False,
     category: Optional[str] = None,
     model_temperature: Optional[float] = None,
     model_reasoning: Optional[str] = None,
@@ -697,12 +810,53 @@ def create_custom_agent(
         effective_tool_ids = parent_tool_ids
     effective_output_schema_key = (
         output_schema_key
-        if output_schema_key is not None
+        if output_schema_key_provided or output_schema_key is not None
         else parent_defaults["output_schema_key"]
     )
     _validate_envelope_output_requires_finalize_tool(
         output_schema_key=effective_output_schema_key,
         tool_ids=list(effective_tool_ids),
+    )
+    effective_model_temperature = float(
+        model_temperature
+        if model_temperature is not None
+        else parent_defaults["model_temperature"]
+    )
+    effective_model_reasoning = (
+        model_reasoning
+        if model_reasoning is not None
+        else parent_defaults["model_reasoning"]
+    )
+    effective_category = (
+        category if category is not None else parent_defaults["category"]
+    )
+    _require_valid_custom_agent_draft(
+        db,
+        user_id=user_id,
+        active_group_ids=active_group_ids,
+        candidate={
+            "name": name,
+            "description": description,
+            "custom_prompt": agent_prompt,
+            "group_prompt_overrides": normalized_group_overrides,
+            "icon": icon or "\U0001F527",
+            "visibility": "private",
+            "allowed_group_ids": normalized_allowed_group_ids,
+            "inherited_allowed_group_ids": normalized_inherited_allowed_group_ids,
+            "include_group_rules": include_group_rules,
+            "model_id": effective_model_id,
+            "model_reasoning": effective_model_reasoning,
+            "model_temperature": effective_model_temperature,
+            "tool_ids": list(effective_tool_ids),
+            "output_schema_key": effective_output_schema_key,
+            "category": effective_category,
+        },
+        prevalidated_tool_ids=list(effective_tool_ids),
+        trusted_output_schema_keys=(
+            [str(parent_defaults["output_schema_key"])]
+            if parent_defaults.get("output_schema_key")
+            else []
+        ),
     )
 
     custom_agent = CustomAgent(
@@ -714,16 +868,8 @@ def create_custom_agent(
         description=description,
         instructions=agent_prompt,
         model_id=effective_model_id,
-        model_temperature=float(
-            model_temperature
-            if model_temperature is not None
-            else parent_defaults["model_temperature"]
-        ),
-        model_reasoning=(
-            model_reasoning
-            if model_reasoning is not None
-            else parent_defaults["model_reasoning"]
-        ),
+        model_temperature=effective_model_temperature,
+        model_reasoning=effective_model_reasoning,
         tool_ids=list(effective_tool_ids),
         group_tool_policy=normalized_group_tool_policy,
         output_schema_key=effective_output_schema_key,
@@ -733,7 +879,7 @@ def create_custom_agent(
         allowed_group_ids=normalized_allowed_group_ids,
         inherited_allowed_group_ids=normalized_inherited_allowed_group_ids,
         icon=(icon or "\U0001F527"),
-        category=category if category is not None else parent_defaults["category"],
+        category=effective_category,
         template_source=parent_agent_key,
         supervisor_enabled=False,
         supervisor_batchable=False,
@@ -991,8 +1137,10 @@ def update_custom_agent(
     model_reasoning: Optional[str] = None,
     tool_ids: Optional[List[str]] = None,
     output_schema_key: Optional[str] = None,
+    output_schema_key_provided: bool = False,
     allow_empty_tool_ids: bool = False,
     allowed_group_ids: Optional[List[str]] = None,
+    active_group_ids: Optional[List[str]] = None,
 ) -> CustomAgent:
     """Update custom-agent config and snapshot previous prompt when prompt changes."""
     if name is not None:
@@ -1073,12 +1221,74 @@ def update_custom_agent(
             )
     next_output_schema_key = (
         output_schema_key
-        if output_schema_key is not None
+        if output_schema_key_provided or output_schema_key is not None
         else custom_agent.output_schema_key
     )
     _validate_envelope_output_requires_finalize_tool(
         output_schema_key=next_output_schema_key,
         tool_ids=list(next_tool_ids),
+    )
+    effective_model_id = (
+        _validate_model_id(model_id)
+        if model_id is not None
+        else custom_agent.model_id
+    )
+    _require_valid_custom_agent_draft(
+        db,
+        user_id=custom_agent.user_id,
+        active_group_ids=active_group_ids,
+        candidate={
+            "name": name if name is not None else custom_agent.name,
+            "description": (
+                description
+                if description is not None
+                else getattr(custom_agent, "description", None)
+            ),
+            "custom_prompt": (
+                str(next_custom_prompt)
+                if next_custom_prompt is not None
+                else getattr(custom_agent, "instructions", "")
+            ),
+            "group_prompt_overrides": (
+                next_group_overrides
+                if next_group_overrides is not None
+                else current_group_overrides
+            ),
+            "icon": icon if icon is not None else getattr(custom_agent, "icon", None),
+            "visibility": getattr(custom_agent, "visibility", None) or "private",
+            "allowed_group_ids": (
+                next_allowed_group_ids
+                if next_allowed_group_ids is not None
+                else current_allowed_group_ids
+            ),
+            "inherited_allowed_group_ids": list(
+                custom_agent.inherited_allowed_group_ids or []
+            ),
+            "include_group_rules": (
+                include_group_rules
+                if include_group_rules is not None
+                else (
+                    True
+                    if getattr(custom_agent, "group_rules_enabled", None) is None
+                    else bool(custom_agent.group_rules_enabled)
+                )
+            ),
+            "model_id": effective_model_id,
+            "model_reasoning": (
+                model_reasoning
+                if model_reasoning is not None
+                else custom_agent.model_reasoning
+            ),
+            "model_temperature": (
+                model_temperature
+                if model_temperature is not None
+                else custom_agent.model_temperature
+            ),
+            "tool_ids": next_tool_ids,
+            "output_schema_key": next_output_schema_key,
+            "category": getattr(custom_agent, "category", None),
+        },
+        prevalidated_tool_ids=(list(next_tool_ids) if tool_ids is not None else []),
     )
 
     if prompt_changed or group_overrides_changed or allowed_group_ids_changed:
@@ -1110,15 +1320,14 @@ def update_custom_agent(
     if include_group_rules is not None:
         custom_agent.group_rules_enabled = include_group_rules
     if model_id is not None:
-        clean_model_id = _validate_model_id(model_id)
-        custom_agent.model_id = clean_model_id
+        custom_agent.model_id = effective_model_id
     if model_temperature is not None:
         custom_agent.model_temperature = float(model_temperature)
     if model_reasoning is not None:
         custom_agent.model_reasoning = model_reasoning
     if tool_ids is not None:
         custom_agent.tool_ids = next_tool_ids
-    if output_schema_key is not None:
+    if output_schema_key_provided or output_schema_key is not None:
         custom_agent.output_schema_key = output_schema_key
 
     if prompt_changed or group_overrides_changed or allowed_group_ids_changed:

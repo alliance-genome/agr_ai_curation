@@ -68,8 +68,11 @@ When designing a new flow, start with
 `get_flow_templates(template_query, query, category, section, template_cursor, cursor)`
 and execute each returned `next_call` through all matching template and agent
 pages or exact oversized-record chunks needed for the design. Use those installed
-agent IDs and template steps as evidence, then call `validate_flow` before
-`create_flow`; do not infer a template or installed agent from prompt memory.
+agent IDs and template steps as evidence. `create_flow` compiles that bounded
+recipe source and runs canonical save validation. When validating an editable
+canvas proposal, pass its complete save-equivalent `flow_definition` to
+`validate_flow`; never substitute or reconstruct a simplified `steps` list and
+do not infer a template or installed agent from prompt memory.
 
 When discussing or verifying a flow:
 

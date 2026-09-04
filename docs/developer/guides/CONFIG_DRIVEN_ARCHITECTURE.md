@@ -171,13 +171,15 @@ exports:
 ```
 
 The exported YAML uses `flow_recipes_api_version: 1.0.0` and may declare
-`recipes`, `equivalence_groups`, and `suggestions`. Recipes use the same
-simplified `steps` contract accepted by Agent Studio's `validate_flow` and
-`create_flow` tools. At runtime, a recipe is advertised only when all required
-specialists are installed; an unavailable formatter is omitted only when the
-remaining recipe still passes the shared validator. Invalid metadata and
-cross-package name or equivalence collisions fail with package, file, and
-recipe provenance.
+`recipes`, `equivalence_groups`, and `suggestions`. Recipes use the simplified
+`steps` source contract compiled by Agent Studio's `create_flow` tool. The
+separate `validate_flow` tool accepts the exact full `FlowDefinition` canvas
+draft and applies the same structured rules used by flow saves; it does not
+validate or reconstruct a `steps` approximation. At runtime, a recipe is
+advertised only when all required specialists are installed; an unavailable
+formatter is omitted only when the remaining recipe still passes recipe
+compilation. Invalid metadata and cross-package name or equivalence collisions
+fail with package, file, and recipe provenance.
 
 ```yaml
 flow_recipes_api_version: 1.0.0

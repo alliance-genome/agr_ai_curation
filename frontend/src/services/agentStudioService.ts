@@ -417,7 +417,7 @@ export interface CreateCustomAgentRequest {
   model_temperature?: number
   model_reasoning?: string
   tool_ids?: string[]
-  output_schema_key?: string
+  output_schema_key?: string | null
   category?: string
   allowed_group_ids?: string[]
 }
@@ -433,7 +433,7 @@ export interface UpdateCustomAgentRequest {
   model_temperature?: number
   model_reasoning?: string
   tool_ids?: string[]
-  output_schema_key?: string
+  output_schema_key?: string | null
   allow_empty_tool_ids?: boolean
   notes?: string
   allowed_group_ids?: string[]

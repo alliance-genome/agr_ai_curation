@@ -266,11 +266,11 @@ the generic core package contains no database-schema assumptions.
 
 A package can export `config/flow_recipes.yaml` with `kind: flow_recipes`.
 The strict versioned contract contributes starter recipes plus optional agent
-equivalence and suggestion metadata. Recipe steps are checked by the same
-validation path as `validate_flow` and `create_flow`; malformed exports fail
-startup with package and source-file context. Core-only installs expose no
-domain recipes. See the developer configuration guide for the complete YAML
-shape.
+equivalence and suggestion metadata. Recipe steps are checked by the
+`create_flow` recipe compiler; malformed exports fail startup with package and
+source-file context. `validate_flow` instead checks the exact full canvas draft
+through the canonical save-time validator. Core-only installs expose no domain
+recipes. See the developer configuration guide for the complete YAML shape.
 
 Recipes use the same canonical group-availability contract as agents:
 

@@ -973,7 +973,7 @@ export function useWorkshopDraft({
           model_id: selectedModelId,
           model_reasoning: selectedModelReasoning || undefined,
           tool_ids: selectedToolIds,
-          output_schema_key: outputSchemaKey || undefined,
+          output_schema_key: outputSchemaKey || null,
           icon: icon || undefined,
           notes: notes || undefined,
           allowed_group_ids: selectedAllowedGroupIds,
@@ -999,7 +999,7 @@ export function useWorkshopDraft({
           model_id: selectedModelId,
           model_reasoning: selectedModelReasoning || undefined,
           tool_ids: selectedToolIds,
-          output_schema_key: outputSchemaKey || undefined,
+          output_schema_key: outputSchemaKey || null,
           icon: icon || undefined,
           allowed_group_ids: selectedAllowedGroupIds,
         })

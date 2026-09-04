@@ -367,7 +367,6 @@ def test_flow_agent_policy_entry_rejects_unresolvable_validation_schema(monkeypa
 
     assert entry is not None
     assert entry["produces_flow_artifacts"] is False
-    assert flows.agent_can_source_output_attachment(entry) is False
 
 
 def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypatch):
@@ -435,7 +434,7 @@ def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypa
     payload["nodes"][-2]["data"]["agent_id"] = "gene_validator"
     with pytest.raises(
         HTTPException,
-        match="Gene Extractor.*not an extraction agent or a typed validation agent",
+        match="not an extraction agent or a typed validation agent",
     ):
         flows._validated_flow_definition_payload(
             FlowDefinition.model_validate(payload),
@@ -524,8 +523,11 @@ def test_flow_definition_payload_rejects_missing_agent_reference(monkeypatch):
         )
 
     assert exc.value.status_code == 422
-    assert "references unavailable agent" in str(exc.value.detail)
-    assert "fixture_agent_without_pack" in str(exc.value.detail)
+    assert isinstance(exc.value.detail, dict)
+    finding = exc.value.detail["findings"][0]
+    assert finding["code"] == "unavailable_agent"
+    assert finding["path"] == "flow_definition.nodes.extract_1.data.agent_id"
+    assert "fixture_agent_without_pack" not in str(exc.value.detail)
 
 
 def test_flow_definition_validation_uses_authenticated_group_snapshot(monkeypatch):
@@ -570,7 +572,9 @@ def test_flow_definition_payload_rejects_retired_validator_alias(retired_alias):
         )
 
     assert exc.value.status_code == 422
-    assert f"missing agent_id '{retired_alias}'" in str(exc.value.detail)
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail["findings"][0]["code"] == "unavailable_agent"
+    assert retired_alias not in str(exc.value.detail)
 
 
 def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
@@ -710,7 +714,11 @@ def test_create_validation_does_not_apply_persisted_flow_migrations(monkeypatch)
         )
 
     assert exc.value.status_code == 422
-    assert "Unknown validation attachment selections" in str(exc.value.detail)
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail["findings"][0]["code"] == (
+        "invalid_validation_attachment_configuration"
+    )
+    assert "Unknown validation attachment selections" not in str(exc.value.detail)
 
 
 def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(

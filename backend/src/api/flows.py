@@ -41,22 +41,17 @@ from ..lib.agent_studio.catalog_service import (
     get_active_visible_agent_metadata,
 )
 from ..lib.group_rules import get_groups_from_provider_groups
-from ..lib.agent_studio.flow_agent_policy import (
-    agent_allows_ordinary_flow_step,
-    attachment_only_validator_reason,
+from ..lib.agent_studio.authoring_validation import (
+    AuthoringValidationContext,
+    report_authoring_validation_engine_failure,
+    validate_flow_authoring_draft,
 )
 from ..lib.config.schema_discovery import resolve_output_schema
 from ..lib.openai_agents.config import get_flow_list_page_size_default
-from ..lib.flow_edge_roles import (
-    OUTPUT_ATTACHMENT_EDGE_ROLE,
-    SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
-    agent_can_source_output_attachment,
-)
 from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import (
     CreateFlowRequest,
-    DEFAULT_FLOW_EDGE_ROLE,
     FlowDefinition,
     FlowListResponse,
     FlowResponse,
@@ -98,26 +93,62 @@ def _validated_flow_definition_payload(
     enforce_agent_references: bool = False,
     active_group_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Return flow definition JSON with metadata-backed validation defaults."""
+    """Return JSON accepted by the canonical exact-draft save validator."""
 
-    validated = _validated_flow_definition(
-        flow_definition,
+    context = AuthoringValidationContext.from_values(
         db_user_id=db_user_id,
-        enforce_agent_references=enforce_agent_references,
         active_group_ids=active_group_ids,
     )
-    if enforce_agent_step_policy:
-        _validate_output_attachment_agent_roles(
-            validated,
+
+    def _apply_defaults(candidate: FlowDefinition) -> FlowDefinition:
+        agent_registry, _ = _validation_attachment_agent_registry(
+            candidate,
             db_user_id=db_user_id,
             active_group_ids=active_group_ids,
         )
-        _validate_flow_agent_step_policy(
-            validated,
-            db_user_id=db_user_id,
-            active_group_ids=active_group_ids,
+        if agent_registry is None:
+            return apply_flow_validation_attachment_defaults(candidate)
+        return apply_flow_validation_attachment_defaults(
+            candidate,
+            agent_registry=agent_registry,
         )
-    return validated.model_dump()
+
+    try:
+        result = validate_flow_authoring_draft(
+            flow_definition,
+            context=context,
+            resolve_agent=lambda agent_id, auth: _flow_agent_policy_entry(
+                agent_id,
+                db_user_id=auth.db_user_id,
+                active_group_ids=list(auth.active_group_ids),
+            ),
+            apply_attachment_defaults=_apply_defaults,
+            phase="save",
+            enforce_agent_references=enforce_agent_references,
+            enforce_agent_step_policy=enforce_agent_step_policy,
+        )
+    except Exception:
+        report_authoring_validation_engine_failure(
+            artifact_kind="flow",
+            phase="save",
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Flow validation is temporarily unavailable",
+        ) from None
+    if not result.valid:
+        raise HTTPException(status_code=422, detail=result.to_dict())
+    validated_candidate = result.candidate
+    if not isinstance(validated_candidate, FlowDefinition):
+        report_authoring_validation_engine_failure(
+            artifact_kind="flow",
+            phase="save",
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Flow validation is temporarily unavailable",
+        )
+    return validated_candidate.model_dump()
 
 
 def _validated_flow_definition(
@@ -280,142 +311,6 @@ def _flow_agent_policy_entry(
         "supervisor": metadata.get("supervisor") or {},
         "curation": metadata.get("curation"),
     }
-
-
-def _is_supported_output_formatter_agent(agent_id: str) -> bool:
-    """Return whether runtime has a scoped formatter implementation for this ID."""
-
-    return agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
-
-
-def _validate_output_attachment_agent_roles(
-    flow_definition: FlowDefinition,
-    *,
-    db_user_id: int | None,
-    active_group_ids: list[str] | None = None,
-) -> None:
-    """Enforce typed-source-to-formatter roles using catalog metadata."""
-
-    nodes_by_id = {node.id: node for node in flow_definition.nodes}
-    errors: list[str] = []
-    for edge in flow_definition.edges:
-        if edge.role != OUTPUT_ATTACHMENT_EDGE_ROLE:
-            continue
-        source = nodes_by_id.get(edge.source)
-        target = nodes_by_id.get(edge.target)
-        source_entry = (
-            _flow_agent_policy_entry(
-                source.data.agent_id,
-                db_user_id=db_user_id,
-                active_group_ids=active_group_ids,
-            )
-            if source is not None and source.data.agent_id != "task_input"
-            else None
-        )
-        if source is None or not agent_can_source_output_attachment(source_entry):
-            source_label = source.data.agent_display_name if source is not None else edge.source
-            errors.append(
-                f"output attachment '{edge.id}' source '{source_label}' is not an "
-                "extraction agent or a typed validation agent"
-            )
-        if target is None or not _is_supported_output_formatter_agent(
-            target.data.agent_id
-        ):
-            target_label = target.data.agent_display_name if target is not None else edge.target
-            errors.append(
-                f"output attachment '{edge.id}' target '{target_label}' is not an output formatter"
-            )
-    if errors:
-        raise HTTPException(
-            status_code=422,
-            detail="Invalid output attachment role(s): " + "; ".join(errors),
-        )
-
-
-def _is_output_formatter_policy_entry(
-    agent_id: str,
-    entry: dict[str, Any] | None,
-) -> bool:
-    if agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS:
-        return True
-    if not isinstance(entry, dict):
-        return False
-    category = str(entry.get("category") or "").strip().lower()
-    subcategory = str(entry.get("subcategory") or "").strip().lower()
-    return "output" in category or "output" in subcategory or "format" in subcategory
-
-
-def _validate_flow_agent_step_policy(
-    flow_definition: FlowDefinition,
-    *,
-    db_user_id: int | None,
-    active_group_ids: list[str] | None = None,
-) -> None:
-    """Reject attachment-only validators wired as ordinary flow steps."""
-
-    validation_attachment_targets = {
-        edge.target
-        for edge in flow_definition.edges
-        if edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
-    }
-    output_attachment_sources = {
-        edge.source
-        for edge in flow_definition.edges
-        if edge.role == OUTPUT_ATTACHMENT_EDGE_ROLE
-    }
-    control_flow_edges_by_node: dict[str, list[str]] = {}
-    for edge in flow_definition.edges:
-        if edge.role != DEFAULT_FLOW_EDGE_ROLE:
-            continue
-        control_flow_edges_by_node.setdefault(edge.source, []).append(edge.id)
-        control_flow_edges_by_node.setdefault(edge.target, []).append(edge.id)
-
-    for node in flow_definition.nodes:
-        agent_id = node.data.agent_id
-        if agent_id == "task_input":
-            continue
-
-        entry = _flow_agent_policy_entry(
-            agent_id,
-            db_user_id=db_user_id,
-            active_group_ids=active_group_ids,
-        )
-        control_flow_edge_ids = control_flow_edges_by_node.get(node.id, [])
-        if control_flow_edge_ids and _is_output_formatter_policy_entry(agent_id, entry):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Formatter node '{node.data.agent_display_name}' must be an explicit "
-                    "output node connected only by output_attachment edge(s). Remove "
-                    f"ordinary control-flow edge(s): {', '.join(control_flow_edge_ids)}."
-                ),
-            )
-        if (
-            node.id in output_attachment_sources
-            and agent_can_source_output_attachment(entry)
-        ):
-            # A typed validation result is a supported formatter input even when
-            # the validator is otherwise hidden from ordinary supervisor dispatch.
-            continue
-        if entry is None or agent_allows_ordinary_flow_step(agent_id, entry):
-            continue
-
-        if node.id in validation_attachment_targets and not control_flow_edge_ids:
-            continue
-
-        agent_name = str(entry.get("name") or node.data.agent_display_name or agent_id)
-        reason = attachment_only_validator_reason(agent_name)
-        if control_flow_edge_ids:
-            reason = (
-                f"{reason} Remove ordinary control-flow edge(s) connected to "
-                f"node '{node.id}': {', '.join(control_flow_edge_ids)}."
-            )
-        else:
-            reason = (
-                f"{reason} Node '{node.id}' is not connected as a validation "
-                "attachment target."
-            )
-        raise HTTPException(status_code=422, detail=reason)
 
 
 def _validate_flow_agent_references(
