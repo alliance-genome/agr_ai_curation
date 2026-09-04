@@ -79,6 +79,12 @@ def normalize_workshop_candidate(workshop):
     candidate = workshop.model_copy(deep=True)
     candidate.draft_name = (candidate.draft_name or "").strip()
     candidate.draft_icon = candidate.draft_icon or "🔧"
+    model = service.get_model(candidate.draft_model_id or "")
+    if model is not None and not candidate.draft_model_reasoning:
+        options = list(getattr(model, "reasoning_options", ()) or ())
+        if getattr(model, "supports_reasoning", False) and options:
+            default = str(getattr(model, "default_reasoning", None) or "").strip().lower()
+            candidate.draft_model_reasoning = default if default in options else options[0]
     candidate.group_prompt_overrides = service.normalize_editable_group_prompt_overrides(
         candidate.group_prompt_overrides,
     )
@@ -115,7 +121,7 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
     except ValueError:
         findings.append(AuthoringValidationFinding(
             code="noncanonical_editable_fields", severity="error", path="custom_agent",
-            message="Normalize editable text, remove copied inherited layers, and use a nonempty icon before applying.",
+            message="Normalize editable text and model defaults, remove copied inherited layers, and use a nonempty icon before applying.",
         ))
     if candidate["visibility"] == "project":
         try:

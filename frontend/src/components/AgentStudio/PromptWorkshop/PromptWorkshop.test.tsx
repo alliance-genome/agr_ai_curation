@@ -1296,7 +1296,11 @@ describe('PromptWorkshop', () => {
     await waitFor(() => expect(handle.current?.captureAuthoringContext().draft_model_id).toBeTruthy())
     if (templateId) await waitForHeaderName('Gene Specialist (Custom)')
     const base = handle.current!.captureAuthoringContext()
-    const candidate = { ...base, draft_name: 'Reviewed reader', draft_description: 'Reviewed description', prompt_draft: 'Read evidence.' }
+    // The compiler fills the configured default when select_model omits reasoning.
+    const candidate = {
+      ...base, draft_name: 'Reviewed reader', draft_description: 'Reviewed description',
+      prompt_draft: 'Read evidence.', draft_model_id: 'gpt-5.6-sol', draft_model_reasoning: 'medium',
+    }
     const result = await act(async () => handle.current!.applyAuthoringProposal({
       contract_version: 'workshop_authoring_proposal.v1',
       base_draft_fingerprint: await fingerprintWorkshopDraft(base),
@@ -1305,6 +1309,7 @@ describe('PromptWorkshop', () => {
     }))
     expect(result.applied).toBe(true)
     expect(handle.current!.captureAuthoringContext().draft_name).toBe('Reviewed reader')
+    expect(handle.current!.captureAuthoringContext().draft_model_reasoning).toBe('medium')
     expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
     expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
     expect(serviceMocks.setCustomAgentVisibility).not.toHaveBeenCalled()

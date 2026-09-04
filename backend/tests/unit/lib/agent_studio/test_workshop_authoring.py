@@ -105,6 +105,17 @@ def test_reviewed_candidate_uses_save_normalization(db, base):
     assert validate_workshop_context(db, workshop=candidate, user_id=1, active_group_ids=["TEAM"]).valid
 
 
+def test_select_model_without_reasoning_compiles_the_editor_default(db, base, monkeypatch):
+    from src.lib.agent_studio import custom_agent_service as service
+    monkeypatch.setattr(service, "get_model", lambda *a: SimpleNamespace(
+        supports_reasoning=True, reasoning_options=["low", "high"], default_reasoning="high",
+    ))
+    result = propose(db, base, [{"operation": "select_model", "resource_id": "model-a"}])
+    assert result["valid"]
+    assert result["candidate"]["draft_model_reasoning"] == "high"
+    assert any(item["path"] == "custom_agent.model_reasoning" and item["after"] == "high" for item in result["diff"])
+
+
 def test_clone_source_revision_is_reauthorized(db, base, monkeypatch):
     from src.lib.agent_studio import custom_agent_service as service
     source = SimpleNamespace(
