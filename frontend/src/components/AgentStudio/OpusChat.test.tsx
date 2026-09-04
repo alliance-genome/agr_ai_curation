@@ -35,6 +35,42 @@ describe('OpusChat', () => {
     })
   })
 
+  it('uses the send-time context capture rather than the render projection', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'DONE' }
+    })
+    const capturedContext: ChatContext = {
+      active_tab: 'flows',
+      flow_name: 'Latest unsaved name',
+      flow_draft_fingerprint: `sha256:${'a'.repeat(64)}`,
+    }
+    const captureContext = vi.fn(() => Promise.resolve(capturedContext))
+
+    render(
+      <OpusChat
+        context={{ active_tab: 'flows', flow_name: 'Stale render name' }}
+        captureContext={captureContext}
+      />
+    )
+    const input = screen.getByPlaceholderText('Ask about flows...')
+    fireEvent.change(input, { target: { value: 'Review this exact draft' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    expect(captureContext).toHaveBeenCalledTimes(1)
+    await waitFor(() => {
+      expect(serviceMocks.streamOpusChat).toHaveBeenCalledWith(
+        expect.any(Array),
+        capturedContext,
+        'agent-studio-session-12345678'
+      )
+    })
+  })
+
   it('loads the complete targeted flow verification contract from the quick action', () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,

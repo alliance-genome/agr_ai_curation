@@ -70,6 +70,8 @@ export interface NodeDraft {
   set: <K extends keyof NodeDraftValues>(key: K, value: NodeDraftValues[K]) => void
   setAttachmentsEnabled: (attachmentIds: string[], enabled: boolean) => void
   reset: () => void
+  /** Exact current editor projection, including values that are not yet valid to Apply. */
+  snapshotPayload: () => Partial<AgentNodeData>
   /** Payload for onApply, or null when blockingError is set. */
   buildPayload: () => Partial<AgentNodeData> | null
 }
@@ -178,6 +180,31 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
     setValues(initial)
   }, [initial])
 
+  const snapshotPayload = useCallback((): Partial<AgentNodeData> => {
+    if (isTaskInput) {
+      return {
+        task_instructions: values.taskInstructions,
+        output_key: values.outputKey,
+      }
+    }
+    const includeEvidence = agentMetadata[node.data.agent_id]
+      ? resolveOutputFormatterIncludeEvidence(node.data.agent_id, agentMetadata, values.includeEvidence)
+      : node.data.include_evidence
+    return {
+      custom_instructions: values.customInstructions,
+      include_evidence: includeEvidence,
+      output_filename_template: supportsFileOutputNaming
+        ? values.outputFilenameMode === 'source_pdf'
+          ? SOURCE_PDF_FILENAME_TEMPLATE
+          : values.outputFilenameMode === 'custom'
+            ? values.outputFilenameTemplate
+            : undefined
+        : node.data.output_filename_template,
+      output_key: values.outputKey,
+      validation_attachments: values.attachments.map(validationAttachmentForPersistence),
+    }
+  }, [agentMetadata, isTaskInput, node.data.agent_id, node.data.include_evidence, node.data.output_filename_template, supportsFileOutputNaming, values])
+
   const buildPayload = useCallback((): Partial<AgentNodeData> | null => {
     if (blockingError) return null
     const outputKey = values.outputKey.trim()
@@ -207,5 +234,15 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
     }
   }, [agentMetadata, blockingError, isTaskInput, node, supportsFileOutputNaming, values])
 
-  return { values, dirty, changeSummary, blockingError, set, setAttachmentsEnabled, reset, buildPayload }
+  return {
+    values,
+    dirty,
+    changeSummary,
+    blockingError,
+    set,
+    setAttachmentsEnabled,
+    reset,
+    snapshotPayload,
+    buildPayload,
+  }
 }

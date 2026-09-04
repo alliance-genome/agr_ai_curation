@@ -283,15 +283,18 @@ export interface ChatMessage {
   content: string
 }
 
-// Flow definition for context (simplified version for chat)
+// Lossless save-equivalent Flow Builder draft passed to AI Chat.
 export interface FlowContextDefinition {
   version: '1.1'
+  task_instructions_default_only?: boolean
   entry_node_id?: string
   nodes: Array<{
     id: string
     node_type: 'agent' | 'decision' | 'output' | 'task_input'
+    position: { x: number; y: number }
     agent_id: string
     agent_display_name: string
+    agent_description?: string
     task_instructions?: string  // For task_input nodes
     step_goal?: string
     custom_instructions?: string
@@ -310,25 +313,39 @@ export interface FlowContextDefinition {
     role?: 'control_flow' | 'output_attachment' | 'validation_attachment'
     satisfies_binding_id?: string
     replaces_attachment_id?: string
+    condition?: {
+      type: 'contains' | 'not_empty' | 'matches_pattern'
+      value?: string
+    }
   }>
 }
 
 export interface AgentWorkshopContext {
+  getting_started_mode?: 'template' | 'scratch' | 'clone'
   template_source?: string
   template_name?: string
   custom_agent_id?: string
   custom_agent_name?: string
+  draft_name?: string
+  draft_description?: string
+  draft_icon?: string
+  draft_visibility?: 'private' | 'project'
+  draft_allowed_group_ids?: string[]
+  inherited_allowed_group_ids?: string[]
   include_group_rules?: boolean
   selected_group_id?: string
   prompt_draft?: string
   selected_group_prompt_draft?: string
+  group_prompt_overrides?: Record<string, string>
   draft_is_dirty?: boolean
+  draft_fingerprint?: string
   custom_agent_updated_at?: string
   group_prompt_override_count?: number
   has_group_prompt_overrides?: boolean
   draft_tool_ids?: string[]
   draft_model_id?: string
   draft_model_reasoning?: string
+  draft_output_schema_key?: string
 }
 
 export interface WorkshopPromptUpdateProposal {
@@ -352,7 +369,12 @@ export interface ChatContext {
   session_id?: string
   // Flow context (when on Flows tab)
   active_tab?: 'agents' | 'flows' | 'agent_workshop'
+  flow_id?: string
   flow_name?: string
+  flow_description?: string
+  flow_updated_at?: string
+  flow_is_dirty?: boolean
+  flow_draft_fingerprint?: string
   flow_definition?: FlowContextDefinition
   agent_workshop?: AgentWorkshopContext
 }

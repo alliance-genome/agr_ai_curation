@@ -2067,6 +2067,16 @@ def _build_current_flow_manifest() -> Dict[str, Any]:
         "success": True,
         "contract": "current_flow_manifest_v1",
         "flow_name": flow_context.get("flow_name", "Untitled Flow"),
+        "authoring": {
+            "flow_id": flow_context.get("flow_id"),
+            "description": flow_context.get("flow_description", ""),
+            "baseline_updated_at": flow_context.get("flow_updated_at"),
+            "draft_is_dirty": flow_context.get("flow_is_dirty"),
+            "draft_fingerprint": flow_context.get("flow_draft_fingerprint"),
+            "task_instructions_default_only": flow_context.get(
+                "task_instructions_default_only"
+            ),
+        },
         "version": flow_context.get("version", "1.1"),
         "topology_valid": projection.valid,
         "has_critical_issues": bool(critical_findings),
@@ -2214,6 +2224,7 @@ def _get_current_flow_topology_handler():
                     "edge_id": edge.get("id"),
                     "source_node_id": edge.get("source"),
                     "target_node_id": edge.get("target"),
+                    "condition": edge.get("condition"),
                 }
                 for edge in edges
                 if (edge.get("role") or "control_flow") == "control_flow"
@@ -2284,6 +2295,7 @@ def _get_current_flow_node_handler():
             "success": True,
             "node_id": str(node_id),
             "node_type": _flow_node_type(node),
+            "position": node.get("position"),
             "scalar_configuration": scalar_configuration,
             "detail_availability": {
                 field: isinstance(data.get(field), str)

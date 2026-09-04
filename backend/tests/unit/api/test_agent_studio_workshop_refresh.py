@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 import src.api.agent_studio as api_module
+from src.lib.agent_studio.authoring_context import workshop_draft_fingerprint
 from src.lib.agent_studio.models import AgentWorkshopContext, ChatContext
 from src.lib.chat_history_repository import AGENT_STUDIO_CHAT_KIND
 
@@ -64,6 +65,7 @@ def test_workshop_refresh_tool_is_agent_workshop_scoped():
     assert refresh_properties["start"]["minimum"] == 0
     assert refresh_properties["max_chars"]["minimum"] == 1
     assert "prompt_hash" in refresh_properties
+    assert refresh_properties["target_prompt"]["enum"] == ["main", "group", "metadata"]
 
     agents_tools = {
         tool["name"]
@@ -123,8 +125,51 @@ async def test_refresh_workshop_prompt_rejects_invalid_target_prompt():
 
     assert result == {
         "success": False,
-        "error": "Invalid target_prompt: 'mod'. Must be 'main' or 'group'.",
+        "error": "Invalid target_prompt: 'mod'. Must be 'main', 'group', or 'metadata'.",
     }
+
+
+@pytest.mark.asyncio
+async def test_refresh_workshop_metadata_chunks_exact_oversized_values(monkeypatch):
+    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_PROMPT_CHUNK_MAX_CHARS", "31")
+    description = "Exact oversized description 🧬 " * 30
+    context = ChatContext(
+        active_tab="agent_workshop",
+        agent_workshop=AgentWorkshopContext(
+            getting_started_mode="clone",
+            draft_name="Exact name",
+            draft_description=description,
+            draft_allowed_group_ids=["WB", "FB"],
+            group_prompt_overrides={"WB": "rules", "FB": "other rules"},
+            draft_tool_ids=[f"tool-{index}" for index in range(40)],
+            draft_output_schema_key="gene",
+            draft_is_dirty=True,
+        ),
+    )
+
+    result = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input={"target_prompt": "metadata"},
+        context=context,
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+    )
+    assert result["source"] == "current_workshop_metadata"
+    chunks: list[str] = []
+    while result["next_call"] is not None:
+        result = await api_module._handle_tool_call(
+            tool_name="refresh_workshop_prompt",
+            tool_input=result["next_call"]["arguments"],
+            context=context,
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
+        )
+        chunks.append(result["content"])
+
+    metadata = json.loads("".join(chunks))
+    assert metadata["draft_description"] == description
+    assert metadata["draft_tool_ids"] == [f"tool-{index}" for index in range(40)]
+    assert metadata["group_prompt_override_ids"] == ["FB", "WB"]
 
 
 @pytest.mark.asyncio
@@ -150,7 +195,7 @@ async def test_refresh_workshop_prompt_rejects_invalid_context_timestamp():
 
 
 @pytest.mark.asyncio
-async def test_refresh_workshop_prompt_requires_explicit_selected_group_identity():
+async def test_refresh_workshop_prompt_reads_any_captured_group_override():
     result = await api_module._handle_tool_call(
         tool_name="refresh_workshop_prompt",
         tool_input={"target_prompt": "group", "target_group_id": "group-b"},
@@ -159,6 +204,49 @@ async def test_refresh_workshop_prompt_requires_explicit_selected_group_identity
             agent_workshop=AgentWorkshopContext(
                 selected_group_id="group-a",
                 selected_group_prompt_draft="Current group A draft",
+                group_prompt_overrides={"GROUP-B": "Exact non-selected B override"},
+                draft_is_dirty=True,
+            ),
+        ),
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+    )
+
+    assert result["success"] is True
+    assert result["target_group_id"] == "GROUP-B"
+    assert result["source"] == "current_workshop_draft"
+    assert result["length"] == len("Exact non-selected B override")
+
+    chunk = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input=result["next_call"]["arguments"],
+        context=ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                selected_group_id="GROUP-A",
+                selected_group_prompt_draft="Current group A draft",
+                group_prompt_overrides={"GROUP-B": "Exact non-selected B override"},
+                draft_is_dirty=True,
+            ),
+        ),
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+    )
+    assert chunk["content"] == "Exact non-selected B override"
+    assert chunk["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_workshop_prompt_rejects_unknown_group_identity():
+    result = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input={"target_prompt": "group", "target_group_id": "group-c"},
+        context=ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                selected_group_id="GROUP-A",
+                selected_group_prompt_draft="Current group A draft",
+                group_prompt_overrides={"GROUP-B": "Group B override"},
             ),
         ),
         user_email="curator@example.org",
@@ -167,10 +255,7 @@ async def test_refresh_workshop_prompt_requires_explicit_selected_group_identity
 
     assert result == {
         "success": False,
-        "error": (
-            "To inspect a group prompt, select that group in Agent Workshop first "
-            "and then retry the refresh."
-        ),
+        "error": "Agent Workshop has no editable group prompt for GROUP-C.",
     }
 
 
@@ -459,6 +544,16 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
 
     monkeypatch.setattr(api_module, "stream_agent_studio_run", _fake_openai_runtime)
 
+    workshop_payload = {
+        "custom_agent_id": f"ca_{custom_agent_uuid}",
+        "custom_agent_name": "Debbie test agent",
+        "prompt_draft": "Older context still says minerite.",
+        "draft_is_dirty": True,
+        "custom_agent_updated_at": "2026-05-06T14:10:00+00:00",
+    }
+    workshop_model = AgentWorkshopContext.model_validate(workshop_payload)
+    workshop_payload["draft_fingerprint"] = workshop_draft_fingerprint(workshop_model)
+
     with contract_client.stream(
         "POST",
         "/api/agent-studio/chat",
@@ -470,13 +565,7 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
             ],
             "context": {
                 "active_tab": "agent_workshop",
-                "agent_workshop": {
-                    "custom_agent_id": f"ca_{custom_agent_uuid}",
-                    "custom_agent_name": "Debbie test agent",
-                    "prompt_draft": "Older context still says minerite.",
-                    "draft_is_dirty": True,
-                    "custom_agent_updated_at": "2026-05-06T14:10:00+00:00",
-                },
+                "agent_workshop": workshop_payload,
             },
         },
     ) as response:

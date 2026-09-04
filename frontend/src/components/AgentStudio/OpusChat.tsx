@@ -434,6 +434,8 @@ function formatShortSessionId(sessionId: string): string {
 
 interface OpusChatProps {
   context: ChatContext
+  /** Capture exact editor state at send time before asynchronous work begins. */
+  captureContext?: () => Promise<ChatContext>
   initialConversation?: ToolIdeaConversationEntry[] | null
   durableSessionId?: string | null
   sourceSessionId?: string
@@ -539,6 +541,7 @@ function buildAutoReviewRequest(proposal: WorkshopPromptUpdateProposal): string 
 
 function OpusChat({
   context,
+  captureContext,
   initialConversation,
   durableSessionId: durableSessionIdProp,
   sourceSessionId,
@@ -932,6 +935,12 @@ function OpusChat({
     const messageText = messageOverride || input.trim()
     if (!messageText || isStreaming) return
 
+    // Calling the provider starts with a synchronous copy of editor state; its
+    // promise only awaits deterministic fingerprint hashing afterward.
+    const contextPromise = captureContext
+      ? captureContext()
+      : Promise.resolve(context)
+
     pendingToolCallIdsRef.current.clear()
 
     const userMessage: DisplayMessage = {
@@ -962,9 +971,12 @@ function OpusChat({
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
     try {
-      const activeSessionId = await ensureDurableSessionId()
+      const [activeSessionId, sendContext] = await Promise.all([
+        ensureDurableSessionId(),
+        contextPromise,
+      ])
 
-      for await (const event of streamOpusChat(apiMessages, context, activeSessionId)) {
+      for await (const event of streamOpusChat(apiMessages, sendContext, activeSessionId)) {
         if (event.type === 'TEXT_DELTA' && event.delta) {
           setStreamStatus(null)
           setMessages((prev) => {
@@ -1057,6 +1069,7 @@ function OpusChat({
       setIsStreaming(false)
     }
   }, [
+    captureContext,
     input,
     messages,
     context,

@@ -87,6 +87,7 @@ from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.config import list_groups
 from src.lib.agent_access import is_resource_access_allowed
 from src.lib.agent_studio.agent_service import get_agent_by_key
+from src.lib.agent_studio.authoring_context import workshop_authoring_metadata_json
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.flow_edge_roles import agent_can_source_output_attachment
 from src.lib.config.schema_discovery import resolve_output_schema
@@ -2333,6 +2334,15 @@ def _build_agent_studio_user_debug_payload(
         },
         "trace_capture": _trace_capture_snapshot(trace_id),
     }
+    if context and context.flow_definition:
+        payload["debug_context"]["flow_authoring"] = {
+            "flow_id": context.flow_id,
+            "baseline_updated_at": context.flow_updated_at,
+            "draft_is_dirty": context.flow_is_dirty,
+            "draft_fingerprint": context.flow_draft_fingerprint,
+            "node_count": len(context.flow_definition.nodes),
+            "edge_count": len(context.flow_definition.edges),
+        }
     if context and context.agent_workshop:
         prompt_summary, saved_debug = _build_workshop_prompt_context_summary(
             db=db,
@@ -2348,6 +2358,7 @@ def _build_agent_studio_user_debug_payload(
             "selected_group_id": workshop.selected_group_id,
             "include_group_rules": workshop.include_group_rules,
             "draft_is_dirty": workshop.draft_is_dirty,
+            "draft_fingerprint": workshop.draft_fingerprint,
             "group_prompt_override_count": workshop.group_prompt_override_count,
             "has_group_prompt_overrides": workshop.has_group_prompt_overrides,
             "draft_tool_count": (
@@ -2416,12 +2427,12 @@ def _build_refresh_workshop_prompt_result(
 
     workshop = context.agent_workshop
     target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
-    if target_prompt not in {"main", "group"}:
+    if target_prompt not in {"main", "group", "metadata"}:
         return {
             "success": False,
             "error": (
                 f"Invalid target_prompt: {target_prompt!r}. "
-                "Must be 'main' or 'group'."
+                "Must be 'main', 'group', or 'metadata'."
             ),
         }
     target_prompt, target_group_id = _resolve_refresh_target(
@@ -2430,32 +2441,41 @@ def _build_refresh_workshop_prompt_result(
         context,
     )
     if target_prompt == "group":
-        selected_group_id = (workshop.selected_group_id or "").strip().upper()
         if not target_group_id:
             return {
                 "success": False,
                 "error": "No Agent Workshop group is selected for a group prompt refresh.",
             }
-        if target_group_id != selected_group_id:
+        selected_group_id = (workshop.selected_group_id or "").strip().upper()
+        available_overrides = {
+            str(group_id).strip().upper(): prompt
+            for group_id, prompt in (workshop.group_prompt_overrides or {}).items()
+            if str(group_id).strip()
+        }
+        if target_group_id != selected_group_id and target_group_id not in available_overrides:
             return {
                 "success": False,
                 "error": (
-                    "To inspect a group prompt, select that group in Agent Workshop "
-                    "first and then retry the refresh."
+                    f"Agent Workshop has no editable group prompt for {target_group_id}."
                 ),
             }
-    context_prompt = (
-        workshop.selected_group_prompt_draft
-        if target_prompt == "group"
-        else workshop.prompt_draft
-    ) or ""
+    if target_prompt == "metadata":
+        context_prompt = workshop_authoring_metadata_json(workshop)
+    elif target_prompt == "group":
+        context_prompt = (
+            workshop.selected_group_prompt_draft
+            if target_group_id == (workshop.selected_group_id or "").strip().upper()
+            else available_overrides.get(target_group_id)
+        ) or ""
+    else:
+        context_prompt = workshop.prompt_draft or ""
 
     saved_prompt: str | None = None
     saved_custom_agent: UnifiedAgent | None = None
     saved_updated_at: datetime | None = None
     custom_agent_uuid = _parse_workshop_custom_agent_uuid(workshop.custom_agent_id)
 
-    if custom_agent_uuid and user_db_id is not None:
+    if target_prompt != "metadata" and custom_agent_uuid and user_db_id is not None:
         db = SessionLocal()
         try:
             saved_custom_agent = get_custom_agent_visible_to_user(
@@ -2506,11 +2526,22 @@ def _build_refresh_workshop_prompt_result(
                 "Expected an ISO 8601 timestamp."
             ),
         }
-    saved_is_newer = _is_newer_datetime(saved_updated_at, context_updated_at)
-    has_unsaved_context = bool(workshop.draft_is_dirty) and not saved_is_newer
+    saved_is_newer = (
+        False
+        if target_prompt == "metadata"
+        else _is_newer_datetime(saved_updated_at, context_updated_at)
+    )
+    has_unsaved_context = (
+        target_prompt == "metadata"
+        or (bool(workshop.draft_is_dirty) and not saved_is_newer)
+    )
 
     if has_unsaved_context and context_prompt:
-        source = "current_workshop_draft"
+        source = (
+            "current_workshop_metadata"
+            if target_prompt == "metadata"
+            else "current_workshop_draft"
+        )
         refreshed_prompt = context_prompt
         version = saved_custom_agent.version if saved_custom_agent else None
         updated_at = context_updated_at
@@ -2585,8 +2616,8 @@ def _build_refresh_workshop_prompt_result(
                 },
             },
             "instruction": (
-                "This summary contains no prompt text. Follow next_call until "
-                "complete is true before judging the current prompt."
+                "This summary contains no exact content. Follow next_call until "
+                "complete is true before judging the current Workshop context."
             ),
         }
 
@@ -4024,7 +4055,10 @@ async def chat_with_opus(
             active_group_ids=_authenticated_group_ids(user),
         )
 
-    if request.context and request.context.active_tab == "flows" and request.context.flow_definition:
+    # Keep the most recently visited Flow Builder draft callable while the curator
+    # moves to Workshop and back. The active tab controls guidance, not whether
+    # the captured authoring artifact exists.
+    if request.context and request.context.flow_definition:
         task_input_node_id = next(
             (
                 node.id
@@ -4036,7 +4070,15 @@ async def chat_with_opus(
         set_current_flow_context(
             {
                 "flow_name": request.context.flow_name or "Untitled Flow",
+                "flow_id": request.context.flow_id,
+                "flow_description": request.context.flow_description or "",
+                "flow_updated_at": request.context.flow_updated_at,
+                "flow_is_dirty": request.context.flow_is_dirty,
+                "flow_draft_fingerprint": request.context.flow_draft_fingerprint,
                 "version": request.context.flow_definition.version,
+                "task_instructions_default_only": (
+                    request.context.flow_definition.task_instructions_default_only
+                ),
                 "nodes": [
                     {**node.model_dump(exclude={"node_type"}), "type": node.node_type}
                     for node in request.context.flow_definition.nodes

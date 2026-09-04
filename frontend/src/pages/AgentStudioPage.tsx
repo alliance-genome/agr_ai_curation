@@ -41,9 +41,17 @@ import ClaudeRail, { formatUnreadDescription } from '@/components/AgentStudio/Cl
 import ClaudeDrawer from '@/components/AgentStudio/ClaudeDrawer'
 import { buildFlowVerificationPrompt } from '@/components/AgentStudio/flowVerificationPrompt'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
-import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
+import {
+  FlowBuilder,
+  type FlowAuthoringContextHandle,
+  type FlowState,
+} from '@/components/AgentStudio/FlowBuilder'
 import type { AgentBrowserRequest, AgentDetailsRequest } from '@/components/AgentStudio/agentBrowserRequest'
-import PromptWorkshop, { type WorkshopLeaveGuard } from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
+import PromptWorkshop, {
+  type WorkshopAuthoringContextHandle,
+  type WorkshopLeaveGuard,
+} from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
+import { fingerprintAuthoringContext } from '@/components/AgentStudio/authoringContext'
 import {
   useChatHistoryDetailQuery,
   useChatHistoryTranscriptQuery,
@@ -54,6 +62,7 @@ import {
   buildRestorableChatMessages,
 } from '@/services/chatHistoryApi'
 import { safeGetItem, safeRemoveItem, safeSetItem } from '@/lib/browserStorage'
+import logger from '@/services/logger'
 import type {
   PromptCatalog,
   ChatContext,
@@ -253,6 +262,8 @@ function AgentStudioPage() {
   })
 
   const workshopLeaveGuardRef = useRef<WorkshopLeaveGuard | null>(null)
+  const workshopAuthoringContextRef = useRef<WorkshopAuthoringContextHandle | null>(null)
+  const flowAuthoringContextRef = useRef<FlowAuthoringContextHandle | null>(null)
 
   useEffect(() => {
     if (activeTab === 'flows') setFlowsVisited(true)
@@ -593,15 +604,18 @@ function AgentStudioPage() {
     activeTab === 'agent_workshop' ? workshopSelectedGroupId : (selectedGroupId || undefined)
   const effectiveViewMode = effectiveSelectedGroupId ? 'combined' : 'base'
   const flowDefinition: FlowContextDefinition | undefined =
-    activeTab === 'flows' && flowState
+    flowsVisited && flowState
       ? {
           version: flowState.version,
+          task_instructions_default_only: flowState.task_instructions_default_only,
           entry_node_id: flowState.entry_node_id,
           nodes: flowState.nodes.map((node) => ({
             id: node.id,
             node_type: node.type,
+            position: { ...node.position },
             agent_id: node.agent_id,
             agent_display_name: node.agent_display_name,
+            agent_description: node.agent_description,
             task_instructions: node.task_instructions,
             step_goal: node.step_goal,
             custom_instructions: node.custom_instructions,
@@ -624,6 +638,7 @@ function AgentStudioPage() {
             role: edge.role,
             satisfies_binding_id: edge.satisfies_binding_id,
             replaces_attachment_id: edge.replaces_attachment_id,
+            condition: edge.condition,
           })),
         }
       : undefined
@@ -635,12 +650,93 @@ function AgentStudioPage() {
     view_mode: effectiveViewMode,
     trace_id: traceId || undefined,
     session_id: effectiveDurableSessionId || undefined,
-    // Flow context (when on flows tab)
+    // Preserve visited flow context while moving into Workshop and back.
     active_tab: activeTab,
-    flow_name: activeTab === 'flows' ? flowState?.flowName : undefined,
+    flow_id: flowsVisited ? flowState?.flowId : undefined,
+    flow_name: flowsVisited ? flowState?.flowName : undefined,
+    flow_description: flowsVisited ? flowState?.flowDescription : undefined,
+    flow_updated_at: flowsVisited ? flowState?.flowUpdatedAt : undefined,
+    flow_is_dirty: flowsVisited ? flowState?.isDirty : undefined,
     flow_definition: flowDefinition,
     agent_workshop: activeTab === 'agent_workshop' ? (agentWorkshopContext || undefined) : undefined,
   }
+
+  const captureChatContext = useCallback(async (): Promise<ChatContext> => {
+    // Both editor calls copy their current values before fingerprint hashing
+    // reaches the first await.
+    const capturedFlow = flowsVisited
+      ? (flowAuthoringContextRef.current?.captureAuthoringContext() ?? flowState)
+      : null
+    const capturedWorkshop = activeTab === 'agent_workshop'
+      ? (workshopAuthoringContextRef.current?.captureAuthoringContext() ?? agentWorkshopContext)
+      : null
+    const capturedFlowDefinition: FlowContextDefinition | undefined = capturedFlow
+      ? {
+          version: capturedFlow.version,
+          task_instructions_default_only: capturedFlow.task_instructions_default_only,
+          entry_node_id: capturedFlow.entry_node_id,
+          nodes: capturedFlow.nodes.map((node) => ({
+            id: node.id,
+            node_type: node.type,
+            position: { ...node.position },
+            agent_id: node.agent_id,
+            agent_display_name: node.agent_display_name,
+            agent_description: node.agent_description,
+            task_instructions: node.task_instructions,
+            step_goal: node.step_goal,
+            custom_instructions: node.custom_instructions,
+            prompt_version: node.prompt_version,
+            include_evidence: node.include_evidence,
+            output_filename_template: node.output_filename_template,
+            projection_plan: node.projection_plan,
+            output_key: node.output_key,
+            validation_attachments: node.validation_attachments?.map((attachment) => ({ ...attachment })),
+            validation_groups: node.validation_groups?.map((group) => ({ ...group })),
+          })),
+          edges: capturedFlow.edges.map((edge) => ({ ...edge })),
+        }
+      : undefined
+    const captured: ChatContext = {
+      selected_agent_id: effectiveSelectedAgentId,
+      selected_group_id: effectiveSelectedGroupId,
+      view_mode: effectiveViewMode,
+      trace_id: traceId || undefined,
+      session_id: effectiveDurableSessionId || undefined,
+      active_tab: activeTab,
+      flow_id: capturedFlow?.flowId,
+      flow_name: capturedFlow?.flowName,
+      flow_description: capturedFlow?.flowDescription,
+      flow_updated_at: capturedFlow?.flowUpdatedAt,
+      flow_is_dirty: capturedFlow?.isDirty,
+      flow_definition: capturedFlowDefinition,
+      agent_workshop: capturedWorkshop || undefined,
+    }
+    const fingerprinted = await fingerprintAuthoringContext(captured)
+    logger.info('Captured Agent Studio authoring context', {
+      component: 'AgentStudioPage',
+      action: 'capture_authoring_context',
+      metadata: {
+        activeTab,
+        hasFlowDraft: Boolean(fingerprinted.flow_definition),
+        flowDirty: fingerprinted.flow_is_dirty,
+        flowNodeCount: fingerprinted.flow_definition?.nodes.length ?? 0,
+        hasWorkshopDraft: Boolean(fingerprinted.agent_workshop),
+        workshopDirty: fingerprinted.agent_workshop?.draft_is_dirty,
+        workshopToolCount: fingerprinted.agent_workshop?.draft_tool_ids?.length ?? 0,
+      },
+    })
+    return fingerprinted
+  }, [
+    activeTab,
+    agentWorkshopContext,
+    effectiveDurableSessionId,
+    effectiveSelectedAgentId,
+    effectiveSelectedGroupId,
+    effectiveViewMode,
+    flowState,
+    flowsVisited,
+    traceId,
+  ])
 
   const selectedAgentForChat =
     catalog && effectiveSelectedAgentId
@@ -779,6 +875,7 @@ Agent ID: ${agentId}`
   const chatElement = (variant: 'panel' | 'drawer', panelId: string) => (
     <OpusChat
       context={chatContext}
+      captureContext={captureChatContext}
       initialConversation={seededConversation}
       durableSessionId={effectiveDurableSessionId}
       sourceSessionId={transcriptSourceSessionId}
@@ -932,6 +1029,7 @@ Agent ID: ${agentId}`
                     onVerifyRequest={handleVerifyRequest}
                     onOpenAgent={openAgentBrowser}
                     active={activeTab === 'flows'}
+                    authoringContextRef={flowAuthoringContextRef}
                   />
                 </Box>
               )}
@@ -946,6 +1044,7 @@ Agent ID: ${agentId}`
                   incomingPromptUpdate={workshopPromptUpdateRequest}
                   onViewEnvelope={handleWorkshopViewEnvelope}
                   leaveGuardRef={workshopLeaveGuardRef}
+                  authoringContextRef={workshopAuthoringContextRef}
                 />
               )}
             </TabContent>

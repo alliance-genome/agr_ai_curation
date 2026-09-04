@@ -34,8 +34,6 @@ import { useAuth } from '@/contexts/AuthContext'
 import {
   DEFAULT_AGENT_ICON,
   FALLBACK_ICON_OPTIONS,
-  areStringArraysEqual,
-  areStringRecordsEqual,
   cloneDraftName,
   computeDirtyState,
   joinPromptLayers,
@@ -162,6 +160,8 @@ export interface WorkshopDraft {
   setStatus: (value: string | null) => void
   dirty: DraftDirtyState
   canSave: boolean
+  /** Copy the complete current editable value synchronously for an AI Chat turn. */
+  captureAuthoringContext: () => AgentWorkshopContext
 
   // Actions
   handleNew: () => void
@@ -217,9 +217,7 @@ export function useWorkshopDraft({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [customPrompt, setCustomPrompt] = useState('')
-  const [debouncedPromptDraft, setDebouncedPromptDraft] = useState('')
   const [groupPromptOverrides, setGroupPromptOverrides] = useState<Record<string, string>>({})
-  const [debouncedGroupPromptOverrides, setDebouncedGroupPromptOverrides] = useState<Record<string, string>>({})
   const [includeGroupRules, setIncludeGroupRules] = useState(true)
   const [selectedVisibility, setSelectedVisibility] = useState<WorkshopVisibility>('private')
   const [selectedAllowedGroupIds, setSelectedAllowedGroupIds] = useState<string[]>([])
@@ -346,11 +344,11 @@ export function useWorkshopDraft({
 
   const selectedGroupPromptForContext = useMemo(() => {
     if (!selectedGroupId) return undefined
-    if (Object.prototype.hasOwnProperty.call(debouncedGroupPromptOverrides, selectedGroupId)) {
-      return debouncedGroupPromptOverrides[selectedGroupId]
+    if (Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)) {
+      return groupPromptOverrides[selectedGroupId]
     }
     return groupRuleSourceAgent?.group_rules[selectedGroupId]?.content
-  }, [debouncedGroupPromptOverrides, groupRuleSourceAgent, selectedGroupId])
+  }, [groupPromptOverrides, groupRuleSourceAgent, selectedGroupId])
 
   const parentCorePrompt = joinPromptLayers(parentAgent, 'core_static')
   const parentGeneratedContract = joinPromptLayers(parentAgent, 'core_generated')
@@ -438,9 +436,7 @@ export function useWorkshopDraft({
     setName(fields.name)
     setDescription(fields.description)
     setCustomPrompt(fields.customPrompt)
-    setDebouncedPromptDraft(fields.customPrompt)
     setGroupPromptOverrides(fields.groupPromptOverrides)
-    setDebouncedGroupPromptOverrides(fields.groupPromptOverrides)
     setIncludeGroupRules(fields.includeGroupRules)
     setSelectedAllowedGroupIds(fields.allowedGroupIds)
     setSelectedVisibility(fields.visibility)
@@ -726,79 +722,66 @@ export function useWorkshopDraft({
     }
   }, [availableGroupIds, groupId, groupPromptOverrides, loggedInGroupIds])
 
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedPromptDraft(customPrompt)
-    }, 450)
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [customPrompt])
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setDebouncedGroupPromptOverrides(groupPromptOverrides)
-    }, 450)
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [groupPromptOverrides])
-
-  useEffect(() => {
-    if (!onContextChange) return
+  const captureAuthoringContext = useCallback((): AgentWorkshopContext => {
     const contextTemplateId = selectedCustomAgent?.template_source
       || (gettingStartedMode === 'template' ? parentAgentId : undefined)
     const contextTemplateName = contextTemplateId
       ? (selectedTemplate?.name || parentAgent?.agent_name)
       : undefined
-    const normalizedSelectedGroupOverrides = selectedCustomAgent?.group_prompt_overrides || {}
-    const draftIsDirty = selectedCustomAgent
-      ? customPrompt !== selectedCustomAgent.custom_prompt
-        || !areStringRecordsEqual(groupPromptOverrides, normalizedSelectedGroupOverrides)
-        || includeGroupRules !== selectedCustomAgent.include_group_rules
-        || !areStringArraysEqual(selectedAllowedGroupIds, selectedCustomAgent.allowed_group_ids || [])
-        || selectedModelId !== selectedCustomAgent.model_id
-        || (selectedModelReasoning || '') !== (selectedCustomAgent.model_reasoning || '')
-        || !areStringArraysEqual(selectedToolIds, selectedCustomAgent.tool_ids || [])
-        || (outputSchemaKey || '') !== (selectedCustomAgent.output_schema_key || '')
-      : Boolean(customPrompt.trim())
-    onContextChange({
+    return {
+      getting_started_mode: gettingStartedMode,
       template_source: contextTemplateId || undefined,
       template_name: contextTemplateName,
       custom_agent_id: selectedCustomAgent?.agent_id,
       custom_agent_name: selectedCustomAgent?.name,
+      draft_name: name,
+      draft_description: description,
+      draft_icon: icon,
+      draft_visibility: selectedVisibility,
+      draft_allowed_group_ids: [...selectedAllowedGroupIds],
+      inherited_allowed_group_ids: [...inheritedAllowedGroupIds],
       include_group_rules: includeGroupRules,
       selected_group_id: selectedGroupId || undefined,
-      prompt_draft: debouncedPromptDraft,
+      prompt_draft: customPrompt,
       selected_group_prompt_draft: selectedGroupPromptForContext,
-      draft_is_dirty: draftIsDirty,
+      group_prompt_overrides: { ...groupPromptOverrides },
+      draft_is_dirty: dirty.any,
       custom_agent_updated_at: selectedCustomAgent?.updated_at,
-      group_prompt_override_count: Object.keys(debouncedGroupPromptOverrides).length,
-      has_group_prompt_overrides: Object.keys(debouncedGroupPromptOverrides).length > 0,
-      draft_tool_ids: selectedToolIds,
+      group_prompt_override_count: Object.keys(groupPromptOverrides).length,
+      has_group_prompt_overrides: Object.keys(groupPromptOverrides).length > 0,
+      draft_tool_ids: [...selectedToolIds],
       draft_model_id: selectedModelId || undefined,
       draft_model_reasoning: selectedModelReasoning || undefined,
-    })
+      draft_output_schema_key: outputSchemaKey || undefined,
+    }
   }, [
-    gettingStartedMode,
-    onContextChange,
-    parentAgentId,
-    parentAgent?.agent_name,
-    selectedTemplate?.name,
-    selectedCustomAgent,
-    includeGroupRules,
-    selectedGroupId,
     customPrompt,
+    description,
+    dirty.any,
+    gettingStartedMode,
     groupPromptOverrides,
-    debouncedPromptDraft,
-    selectedGroupPromptForContext,
-    debouncedGroupPromptOverrides,
-    selectedToolIds,
+    icon,
+    includeGroupRules,
+    inheritedAllowedGroupIds,
+    name,
+    outputSchemaKey,
+    parentAgent?.agent_name,
+    parentAgentId,
     selectedAllowedGroupIds,
+    selectedCustomAgent,
+    selectedGroupId,
+    selectedGroupPromptForContext,
     selectedModelId,
     selectedModelReasoning,
-    outputSchemaKey,
+    selectedTemplate?.name,
+    selectedToolIds,
+    selectedVisibility,
   ])
+
+  useEffect(() => {
+    if (!onContextChange) return
+    onContextChange(captureAuthoringContext())
+  }, [captureAuthoringContext, onContextChange])
 
   useEffect(() => {
     if (!incomingPromptUpdate) return
@@ -842,7 +825,6 @@ export function useWorkshopDraft({
 
       setGroupId(targetGroupId)
       setGroupPromptOverrides((prev) => ({ ...prev, [targetGroupId]: incomingPromptUpdate.prompt }))
-      setDebouncedGroupPromptOverrides((prev) => ({ ...prev, [targetGroupId]: incomingPromptUpdate.prompt }))
       setError(null)
       setStatus(
         incomingPromptUpdate.summary?.trim()
@@ -853,7 +835,6 @@ export function useWorkshopDraft({
     }
 
     setCustomPrompt(incomingPromptUpdate.prompt)
-    setDebouncedPromptDraft(incomingPromptUpdate.prompt)
     setError(null)
     setStatus(
       incomingPromptUpdate.summary?.trim()
@@ -1270,6 +1251,7 @@ export function useWorkshopDraft({
     setStatus,
     dirty,
     canSave,
+    captureAuthoringContext,
 
     handleNew,
     startDraft,

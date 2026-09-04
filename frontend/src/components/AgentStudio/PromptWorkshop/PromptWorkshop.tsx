@@ -52,6 +52,10 @@ export interface WorkshopLeaveGuard {
   requestLeave: () => Promise<boolean>
 }
 
+export interface WorkshopAuthoringContextHandle {
+  captureAuthoringContext: () => AgentWorkshopContext
+}
+
 interface GuardedAction {
   proceed: () => void
   cancel?: () => void
@@ -69,6 +73,8 @@ interface PromptWorkshopProps {
   onViewEnvelope?: (agentId: string) => void
   /** Receives the leave guard so the page can confirm before navigating away. */
   leaveGuardRef?: Ref<WorkshopLeaveGuard>
+  /** Synchronous access to the current draft for send-time AI Chat capture. */
+  authoringContextRef?: Ref<WorkshopAuthoringContextHandle>
 }
 
 function summarizeEnvelope(metadata: AgentMetadata | undefined): EnvelopeSummary | null {
@@ -99,6 +105,7 @@ function PromptWorkshop({
   incomingPromptUpdate = null,
   onViewEnvelope,
   leaveGuardRef,
+  authoringContextRef,
 }: PromptWorkshopProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const draft = useWorkshopDraft({
@@ -170,6 +177,11 @@ function PromptWorkshop({
   }, [dirty.any])
 
   useImperativeHandle(leaveGuardRef, () => ({ requestLeave }), [requestLeave])
+  useImperativeHandle(
+    authoringContextRef,
+    () => ({ captureAuthoringContext: draft.captureAuthoringContext }),
+    [draft.captureAuthoringContext]
+  )
 
   // After "Keep editing" on a leave request, the dialog hands focus back to the
   // element that opened it (a page tab). Bring it back into the Workshop instead.

@@ -44,6 +44,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_trace_search_filter_max_chars,
     get_agent_studio_trace_search_max_limit,
     get_agent_studio_workshop_context_group_prompt_max_chars,
+    get_agent_studio_workshop_context_metadata_max_chars,
     get_agent_studio_workshop_context_prompt_max_chars,
     get_api_key,
     get_base_url,
@@ -282,6 +283,15 @@ def test_service_log_maxima_are_configurable_and_not_below_defaults(monkeypatch)
     monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_MAX_LOOKBACK_MINUTES", "2880")
     assert get_agent_studio_service_log_max_lines() == 75
     assert get_agent_studio_service_log_max_lookback_minutes() == 2880
+
+
+def test_workshop_context_metadata_limit_is_configurable_and_positive(monkeypatch):
+    monkeypatch.delenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", raising=False)
+    assert get_agent_studio_workshop_context_metadata_max_chars() == 2_000
+    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "125")
+    assert get_agent_studio_workshop_context_metadata_max_chars() == 125
+    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "0")
+    assert get_agent_studio_workshop_context_metadata_max_chars() == 1
 
 
 def test_service_log_timeout_is_configurable_and_positive(monkeypatch):

@@ -183,13 +183,14 @@ REFRESH_WORKSHOP_PROMPT_TOOL = {
     "name": "refresh_workshop_prompt",
     "description": """Inspect the exact current Agent Workshop prompt before reviewing it.
 
-Use this before commenting on the current Agent Workshop prompt text, especially
+Use this before commenting on current Agent Workshop prompt text or metadata, especially
 after the curator saves manual edits or asks whether a typo, schema issue, or
 prompt-quality concern is fixed. Treat older chat history and version snapshots
 as historical after this tool returns. Omit start for a content-free identity,
 hash, length, and freshness summary. Then follow next_call with its prompt_hash,
 start, and max_chars until complete=true to reconstruct the exact prompt. Pair
-this with get_tool_inventory and get_tool_details before advising on
+Use target_prompt="metadata" to reconstruct exact authoring fields when the
+system-context metadata preview is incomplete. Pair this with get_tool_inventory and get_tool_details before advising on
 document/evidence tool instructions.
 """,
     "input_schema": {
@@ -197,13 +198,13 @@ document/evidence tool instructions.
         "properties": {
             "target_prompt": {
                 "type": "string",
-                "enum": ["main", "group"],
-                "description": "Refresh the main prompt or the currently selected group prompt.",
+                "enum": ["main", "group", "metadata"],
+                "description": "Refresh the main prompt, a captured group override, or the exact non-prompt Workshop authoring metadata.",
                 "default": "main",
             },
             "target_group_id": {
                 "type": "string",
-                "description": "Optional group ID when target_prompt='group'. Defaults to the selected Agent Workshop group.",
+                "description": "Optional group ID when target_prompt='group'. Defaults to the selected group; any group listed in the Workshop context's Group override IDs may be inspected directly.",
             },
             "prompt_hash": {
                 "type": "string",

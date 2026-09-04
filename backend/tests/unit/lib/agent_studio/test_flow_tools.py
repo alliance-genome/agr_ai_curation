@@ -99,6 +99,7 @@ def test_flow_context_definition_preserves_node_verification_fields():
                 "id": "extract",
                 "agent_id": "gene_extractor",
                 "agent_display_name": "Gene",
+                "position": {"x": 200, "y": 100},
                 "output_key": "genes",
                 "step_goal": "Extract genes",
                 "prompt_version": 9,
@@ -121,6 +122,7 @@ def test_flow_context_definition_preserves_node_verification_fields():
     node = definition.model_dump()["nodes"][0]
     assert node["step_goal"] == "Extract genes"
     assert node["prompt_version"] == 9
+    assert node["position"] == {"x": 200.0, "y": 100.0}
     assert [group["state"] for group in node["validation_groups"]] == [
         "replaced",
         "supplemental",
@@ -1347,6 +1349,16 @@ def test_get_current_flow_returns_minimal_manifest_for_empty_flow():
 
 def test_manifest_classifies_continuing_multi_output_control_path_and_duplicates():
     flow = _inspection_flow()
+    flow.update({
+        "flow_id": "flow-123",
+        "flow_description": "Current exact description",
+        "flow_updated_at": "2026-09-04T12:00:00Z",
+        "flow_is_dirty": True,
+        "flow_draft_fingerprint": f"sha256:{'b' * 64}",
+        "task_instructions_default_only": False,
+    })
+    flow["nodes"][1]["position"] = {"x": 123.5, "y": -9.25}
+    flow["edges"][0]["condition"] = {"type": "not_empty"}
     flow["nodes"][4]["data"]["output_key"] = "diseases"
     flow_tools.set_current_flow_context(flow)
 
@@ -1372,6 +1384,22 @@ def test_manifest_classifies_continuing_multi_output_control_path_and_duplicates
     assert duplicate["duplicate_count"] == 2
     assert manifest["high_issue_count"] == 1
     assert manifest["has_critical_issues"] is False
+    assert manifest["authoring"] == {
+        "flow_id": "flow-123",
+        "description": "Current exact description",
+        "baseline_updated_at": "2026-09-04T12:00:00Z",
+        "draft_is_dirty": True,
+        "draft_fingerprint": f"sha256:{'b' * 64}",
+        "task_instructions_default_only": False,
+    }
+
+    node = flow_tools._get_current_flow_node_handler()(node_id="extract")
+    assert node["position"] == {"x": 123.5, "y": -9.25}
+
+    control_edges = flow_tools._get_current_flow_topology_handler()(
+        section="control_edges"
+    )
+    assert control_edges["items"][0]["condition"] == {"type": "not_empty"}
 
     bindings = flow_tools._get_current_flow_topology_handler()(
         section="output_bindings"

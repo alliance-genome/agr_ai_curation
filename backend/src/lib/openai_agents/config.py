@@ -1931,6 +1931,21 @@ def get_agent_studio_workshop_context_group_prompt_max_chars() -> int:
     )
 
 
+def get_agent_studio_workshop_context_metadata_max_chars() -> int:
+    """Max Workshop authoring-metadata characters included in system context.
+
+    Exact metadata remains available through the bounded Workshop refresh tool
+    when this preview is clipped. Default 2000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS",
+            2_000,
+        ),
+    )
+
+
 def get_agent_studio_workshop_prompt_chunk_max_chars() -> int:
     """Max exact prompt characters returned by one Workshop refresh chunk.
 

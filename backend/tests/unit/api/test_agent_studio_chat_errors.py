@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from src.api import agent_studio as api_module
 from src.lib import http_errors
+from src.lib.agent_studio.authoring_context import workshop_draft_fingerprint
 from src.lib.agent_studio.models import AgentWorkshopContext
 
 
@@ -209,13 +210,16 @@ def test_chat_with_opus_hides_group_restricted_workshop_agent_without_selected_i
         lambda **_kwargs: pytest.fail("inaccessible workshop agent reached persistence"),
     )
 
+    workshop = AgentWorkshopContext(
+        custom_agent_id=str(custom_agent_uuid),
+        custom_agent_updated_at="2026-09-04T00:00:00Z",
+    )
+    workshop.draft_fingerprint = workshop_draft_fingerprint(workshop)
     request = api_module.ChatRequest(
         messages=[api_module.ChatMessage(role="user", content="Review this prompt")],
         context=api_module.ChatContext(
             active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(
-                custom_agent_id=str(custom_agent_uuid),
-            ),
+            agent_workshop=workshop,
         ),
     )
 

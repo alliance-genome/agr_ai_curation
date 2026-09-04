@@ -5,8 +5,10 @@ import re
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from src.lib.agent_studio.models import ChatContext
+from src.lib.agent_studio.authoring_context import workshop_authoring_metadata_json
 from src.lib.openai_agents.config import (
     get_agent_studio_workshop_context_group_prompt_max_chars,
+    get_agent_studio_workshop_context_metadata_max_chars,
     get_agent_studio_workshop_context_prompt_max_chars,
 )
 from src.lib.prompts.assembly import PromptLayerBundle
@@ -381,6 +383,20 @@ def build_opus_system_prompt(
                     "chunks until `complete=true`.]"
                 )
 
+            metadata_document = workshop_authoring_metadata_json(workshop)
+            metadata_total_chars = len(metadata_document)
+            metadata_max_chars = get_agent_studio_workshop_context_metadata_max_chars()
+            metadata_preview = metadata_document[:metadata_max_chars]
+            metadata_truncated = ""
+            if metadata_total_chars > metadata_max_chars:
+                metadata_truncated = (
+                    "\n[Incomplete metadata preview: retained "
+                    f"{len(metadata_preview)} of {metadata_total_chars} characters. "
+                    "Retrieve the exact metadata with `refresh_workshop_prompt` "
+                    "using `target_prompt=\"metadata\"` and follow every `next_call` "
+                    "until `complete=true`.]"
+                )
+
             selected_group_prompt_block = ""
             if workshop.selected_group_id and selected_group_prompt:
                 selected_group_prompt_block = f"""
@@ -420,15 +436,9 @@ def build_opus_system_prompt(
 
 The curator is actively iterating an agent draft in Agent Workshop.
 
-- Template source: {workshop.template_name or workshop.template_source or 'Unknown'}
-- Custom agent: {workshop.custom_agent_name or workshop.custom_agent_id or 'Unsaved draft'}
-- Include group rules: {"Yes" if workshop.include_group_rules else "No"}
-- Selected group: {workshop.selected_group_id or "None"}
-- Has group prompt overrides: {"Yes" if workshop.has_group_prompt_overrides else "No"}
-- Group override count: {workshop.group_prompt_override_count or 0}
-- Draft attached tools: {", ".join(workshop_draft_tools) if workshop_draft_tools else "None"}
-- Draft model: {workshop.draft_model_id or "Not set"}
-- Draft reasoning: {workshop.draft_model_reasoning or "Not set"}
+<workshop_authoring_metadata_preview>
+{metadata_preview}
+</workshop_authoring_metadata_preview>{metadata_truncated}
 
 Configured model options (authoritative recommendation source):
 {model_catalog_text}
@@ -457,6 +467,8 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
 9. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
 10. after a curator applies a prompt update, verify the current `<workshop_prompt_draft>` contains the intended change and provide a quick quality review.
 11. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; read the summary and follow every deterministic `next_call` until `complete=true`. Reconstruct the exact text from ordered chunk ranges, treat conversation history and older versions as historical, and never report text as present unless it appears in those refreshed chunks.
+   - every ID listed in `group_prompt_override_ids` is callable with `target_prompt="group"` and `target_group_id`; inspect each relevant override rather than assuming only the selected group exists.
+   - if the metadata preview is incomplete, reconstruct it with `target_prompt="metadata"` before making metadata-dependent claims.
 12. when proposing or applying prompt edits, use this distilled OpenAI-style prompt playbook:
    - put core instructions first, then separate context/examples with clear delimiters (`###` sections or triple quotes),
    - make directions specific and measurable (length, format, required fields, decision rules),
@@ -490,7 +502,9 @@ Prompt injection note:
                 # In Agent Workshop, prefer the live draft tool attachments from UI context.
                 if context.active_tab == "agent_workshop" and workshop_draft_tools is not None:
                     tools_label = "Tools attached to current workshop draft"
-                    tools_for_context = workshop_draft_tools
+                    tools_for_context = [
+                        "See workshop_authoring_metadata_preview (or its exact metadata continuation)"
+                    ]
 
                 additions.append(f"""
 ## Current Context

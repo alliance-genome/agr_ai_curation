@@ -240,6 +240,29 @@ describe('NodePanel', () => {
       const guardRef = createRef<NodePanelLeaveGuard>()
       renderPanel(buildNode(), { leaveGuardRef: guardRef })
       await expect(guardRef.current!.requestLeave()).resolves.toBe(true)
+      expect(guardRef.current!.takeLastLeaveOutcome()).toBe('clean')
+    })
+
+    it('captures the exact unapplied keystroke for authoring context', async () => {
+      const user = userEvent.setup()
+      const guardRef = createRef<NodePanelLeaveGuard>()
+      const onDraftDirtyChange = vi.fn()
+      const { onApply } = renderPanel(
+        buildNode({ custom_instructions: 'Original' }),
+        { leaveGuardRef: guardRef, onDraftDirtyChange },
+      )
+
+      const field = screen.getByRole('textbox', { name: 'Instructions for this step' })
+      await user.clear(field)
+      await user.type(field, 'Latest unapplied text')
+
+      expect(guardRef.current!.captureAuthoringDraft()).toEqual({
+        nodeId: 'node_1',
+        data: expect.objectContaining({ custom_instructions: 'Latest unapplied text' }),
+        dirty: true,
+      })
+      expect(onApply).not.toHaveBeenCalled()
+      expect(onDraftDirtyChange).toHaveBeenLastCalledWith(true)
     })
 
     it('asks Apply, Discard, or Keep editing when the draft is dirty', async () => {
@@ -255,12 +278,14 @@ describe('NodePanel', () => {
       expect(dialog).toHaveTextContent('You turned off one check. Apply them before you leave this step, or discard them.')
       await user.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
       await expect(keep).resolves.toBe(false)
+      expect(guardRef.current!.takeLastLeaveOutcome()).toBe('kept')
       expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
       const discard = guardRef.current!.requestLeave()
       await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Discard' }))
       await expect(discard).resolves.toBe(true)
+      expect(guardRef.current!.takeLastLeaveOutcome()).toBe('discarded')
       expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
       expect(onApply).not.toHaveBeenCalled()
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -269,6 +294,7 @@ describe('NodePanel', () => {
       const apply = guardRef.current!.requestLeave()
       await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Apply' }))
       await expect(apply).resolves.toBe(true)
+      expect(guardRef.current!.takeLastLeaveOutcome()).toBe('applied')
       expect(onApply).toHaveBeenCalledTimes(1)
     })
   })

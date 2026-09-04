@@ -13,7 +13,7 @@
  * guard the parent calls before it changes the selection.
  */
 
-import { useCallback, useImperativeHandle, useMemo, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { ReactNode, Ref } from 'react'
 import {
   Alert,
@@ -60,6 +60,16 @@ import type { OutputFilenameMode } from './useNodeDraft'
 export interface NodePanelLeaveGuard {
   /** Resolves true when the parent may change the selection. */
   requestLeave: () => Promise<boolean>
+  captureAuthoringDraft: () => NodePanelAuthoringDraft
+  takeLastLeaveOutcome: () => NodePanelLeaveOutcome
+}
+
+export type NodePanelLeaveOutcome = 'clean' | 'applied' | 'discarded' | 'kept' | null
+
+export interface NodePanelAuthoringDraft {
+  nodeId: string
+  data: Partial<AgentNodeData>
+  dirty: boolean
 }
 
 /** How a custom validator step is attached, derived from the flow's edges. */
@@ -85,6 +95,7 @@ export interface NodePanelProps {
   onTaskInstructionsAuthored?: () => void
   onOpenAgent?: (request: AgentBrowserRequest) => void
   leaveGuardRef?: Ref<NodePanelLeaveGuard>
+  onDraftDirtyChange?: (dirty: boolean) => void
 }
 
 type StepKind = 'input' | 'extraction' | 'validation' | 'output' | 'agent'
@@ -132,6 +143,7 @@ function NodePanel({
   onTaskInstructionsAuthored,
   onOpenAgent,
   leaveGuardRef,
+  onDraftDirtyChange,
 }: NodePanelProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const icon = useAgentIcon(node.data.agent_id)
@@ -151,6 +163,7 @@ function NodePanel({
 
   const draft = useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOutputNaming })
   const [pendingLeave, setPendingLeave] = useState<PendingLeave | null>(null)
+  const lastLeaveOutcomeRef = useRef<NodePanelLeaveOutcome>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const checksView = useMemo(
@@ -167,7 +180,11 @@ function NodePanel({
   }, [draft, isTaskInput, node.id, onApply, onTaskInstructionsAuthored])
 
   const requestLeave = useCallback((): Promise<boolean> => {
-    if (!draft.dirty) return Promise.resolve(true)
+    lastLeaveOutcomeRef.current = null
+    if (!draft.dirty) {
+      lastLeaveOutcomeRef.current = 'clean'
+      return Promise.resolve(true)
+    }
     return new Promise<boolean>((resolve) => {
       setPendingLeave({
         proceed: () => resolve(true),
@@ -176,7 +193,29 @@ function NodePanel({
     })
   }, [draft.dirty])
 
-  useImperativeHandle(leaveGuardRef, () => ({ requestLeave }), [requestLeave])
+  const captureAuthoringDraft = useCallback((): NodePanelAuthoringDraft => ({
+    nodeId: node.id,
+    data: draft.snapshotPayload(),
+    dirty: draft.dirty,
+  }), [draft, node.id])
+
+  const takeLastLeaveOutcome = useCallback((): NodePanelLeaveOutcome => {
+    const outcome = lastLeaveOutcomeRef.current
+    lastLeaveOutcomeRef.current = null
+    return outcome
+  }, [])
+
+  useImperativeHandle(
+    leaveGuardRef,
+    () => ({ requestLeave, captureAuthoringDraft, takeLastLeaveOutcome }),
+    [captureAuthoringDraft, requestLeave, takeLastLeaveOutcome]
+  )
+
+  useEffect(() => {
+    onDraftDirtyChange?.(draft.dirty)
+  }, [draft.dirty, onDraftDirtyChange])
+
+  useEffect(() => () => onDraftDirtyChange?.(false), [onDraftDirtyChange])
 
   // Hiding the panel unmounts it, draft included, so it goes through the same guard.
   const guardedHide = useCallback(() => {
@@ -505,17 +544,20 @@ function NodePanel({
         onApply={() => {
           if (!pendingLeave) return
           if (!applyDraft()) return
+          lastLeaveOutcomeRef.current = 'applied'
           setPendingLeave(null)
           pendingLeave.proceed()
         }}
         onDiscard={() => {
           if (!pendingLeave) return
+          lastLeaveOutcomeRef.current = 'discarded'
           draft.reset()
           setPendingLeave(null)
           pendingLeave.proceed()
         }}
         onKeepEditing={() => {
           if (!pendingLeave) return
+          lastLeaveOutcomeRef.current = 'kept'
           setPendingLeave(null)
           pendingLeave.cancel()
         }}

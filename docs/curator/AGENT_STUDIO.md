@@ -107,6 +107,7 @@ Build visual curation workflows and discuss them with AI Chat. See **[Curation F
 Create workflows by dragging agents onto a canvas and connecting them:
 - 15 available agents from extraction to file output
 - Save, load, and reuse flows
+- Starting or opening another flow while the current flow has unsaved edits asks you to keep editing, save, or discard those edits. A failed open leaves the current draft unchanged, and closing the browser tab also warns you.
 - Generate downloadable CSV, TSV, or JSON files
 - Adjust, per flow, which optional automatic checks run on an extraction step
 - Reach each agent's guide, envelope, and prompts from the step panel's "About this agent" row
@@ -221,7 +222,7 @@ Custom agents appear in the Flow Builder palette under "My Custom Agents". You c
 
 **Ask AI Chat**
 
-Click **Ask AI Chat** in the Workshop navigation to send your current draft to AI Chat for review. When the Agent Workshop tab is active, the right-panel chat is aware of your workshop context: your selected template source, draft prompt, and group settings. You can ask AI Chat to:
+Click **Ask AI Chat** in the Workshop navigation to send your current draft to AI Chat for review. When the Agent Workshop tab is active, the right-panel chat receives the exact current draft when you send the message, including identity and visibility settings, prompt and group overrides, model, tools, and output schema. Moving from Flow Builder to Workshop does not discard the Flow context. You can ask AI Chat to:
 - "Critique this draft and suggest concrete edits"
 - "Help me restructure this prompt for clarity"
 - "What would happen if I changed this instruction?"

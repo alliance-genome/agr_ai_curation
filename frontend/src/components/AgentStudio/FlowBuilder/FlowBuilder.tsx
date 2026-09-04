@@ -5,7 +5,7 @@
  * Supports drag-drop from palette, node editing, and save/load.
  */
 
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
+import { useState, useCallback, useRef, useMemo, useEffect, useImperativeHandle } from 'react'
 import ReactFlow, {
   ReactFlowProvider,
   Controls,
@@ -99,6 +99,7 @@ import {
   isValidationAgentFromMetadata,
 } from './agentMetadataUtils'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
+import { canonicalAuthoringJson } from '../authoringContext'
 
 /**
  * Helper to create initial task_input node for new flows.
@@ -165,6 +166,57 @@ const flowNodeDataForPersistence = (data: AgentNodeData): FlowNodeData => {
 
   return persisted
 }
+
+const buildFlowDefinition = (
+  nodes: AgentNode[],
+  edges: FlowEdge[],
+  taskInstructionsDefaultOnly: boolean,
+): FlowDefinition => {
+  const taskInputNode = nodes.find((node) => node.data.agent_id === 'task_input')
+  return {
+    version: '1.1',
+    ...(taskInstructionsDefaultOnly ? { task_instructions_default_only: true } : {}),
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      type: node.data.agent_id === 'task_input'
+        ? 'task_input'
+        : node.type === 'output'
+          ? 'output'
+          : 'agent',
+      position: { ...node.position },
+      data: flowNodeDataForPersistence(node.data),
+    })),
+    edges: edges.map((edge) => {
+      const role = edgeRole(edge)
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        role,
+        satisfies_binding_id: role === 'validation_attachment'
+          ? edge.data?.satisfies_binding_id
+          : undefined,
+        replaces_attachment_id: role === 'validation_attachment'
+          ? edge.data?.replaces_attachment_id
+          : undefined,
+        condition: edge.data?.condition,
+      }
+    }),
+    entry_node_id: taskInputNode?.id ?? '',
+  }
+}
+
+interface FlowDraftBaseline {
+  name: string
+  description: string
+  definition: FlowDefinition
+}
+
+const initialFlowDraftBaseline = (): FlowDraftBaseline => ({
+  name: 'New Flow',
+  description: '',
+  definition: buildFlowDefinition([createInitialTaskInputNode()], [], false),
+})
 
 const activeValidationBindingOptions = (
   node?: AgentNode
@@ -621,7 +673,15 @@ const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
   return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? 'Cmd' : 'Ctrl'
 }
 
-function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, onOpenAgent, active = true }: FlowBuilderProps) {
+function FlowBuilderInner({
+  flowId,
+  onFlowSaved,
+  onFlowChange,
+  onVerifyRequest,
+  onOpenAgent,
+  active = true,
+  authoringContextRef,
+}: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   const isValidationAgentDynamic = useCallback(
@@ -644,11 +704,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const primaryShortcutLabel = useMemo(getPrimaryShortcutLabel, [])
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
-  const [nodes, setNodes, onNodesChange] = useNodesState<AgentNodeData>([])
+  const [nodes, setNodes, onNodesChange] = useNodesState<AgentNodeData>(
+    flowId ? [] : [createInitialTaskInputNode()]
+  )
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge['data']>([])
 
   // Node ID counter - useRef to persist across renders without causing HMR issues
-  const nodeIdRef = useRef(0)
+  const nodeIdRef = useRef(flowId ? 0 : 1)
   const getNodeId = useCallback(() => `node_${nodeIdRef.current++}`, [])
 
   // UI state
@@ -669,6 +731,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   // before the selection changes so unapplied edits are never dropped silently.
   const [nodePanelCollapsed, setNodePanelCollapsed] = useState(false)
   const nodePanelGuardRef = useRef<NodePanelLeaveGuard | null>(null)
+  const [nodePanelDraftDirty, setNodePanelDraftDirty] = useState(false)
   const [canvasSplitRef, canvasAreaWidth] = useContainerWidth<HTMLDivElement>()
 
   // Menu bar state
@@ -808,6 +871,41 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
   // Current flow ID (null for new flow)
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(flowId || null)
+  const [flowUpdatedAt, setFlowUpdatedAt] = useState<string | null>(null)
+  const [savedBaseline, setSavedBaseline] = useState<FlowDraftBaseline>(initialFlowDraftBaseline)
+  const initialBaselineCapturedRef = useRef(Boolean(flowId))
+  const [pendingFlowReplacement, setPendingFlowReplacement] = useState<{
+    label: string
+    proceed: () => void
+  } | null>(null)
+
+  const currentFlowDefinition = useMemo(
+    () => buildFlowDefinition(nodes as AgentNode[], edges as FlowEdge[], taskInstructionsDefaultOnly),
+    [edges, nodes, taskInstructionsDefaultOnly]
+  )
+  const appliedFlowIsDirty = useMemo(
+    () => canonicalAuthoringJson({
+      name: flowName,
+      description: flowDescription,
+      definition: currentFlowDefinition,
+    }) !== canonicalAuthoringJson(savedBaseline),
+    [currentFlowDefinition, flowDescription, flowName, savedBaseline]
+  )
+  const flowIsDirty = appliedFlowIsDirty || nodePanelDraftDirty
+  const appliedFlowIsDirtyRef = useRef(appliedFlowIsDirty)
+  const flowIsDirtyRef = useRef(flowIsDirty)
+  appliedFlowIsDirtyRef.current = appliedFlowIsDirty
+  flowIsDirtyRef.current = flowIsDirty
+
+  useEffect(() => {
+    if (initialBaselineCapturedRef.current) return
+    initialBaselineCapturedRef.current = true
+    setSavedBaseline({
+      name: flowName,
+      description: flowDescription,
+      definition: currentFlowDefinition,
+    })
+  }, [currentFlowDefinition, flowDescription, flowName])
 
   // Ref for cleanup of setTimeout
   const fitViewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -825,6 +923,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       setFlowDescription(flow.description || '')
       setTaskInstructionsDefaultOnly(flow.flow_definition.task_instructions_default_only === true)
       setCurrentFlowId(flow.id)
+      setFlowUpdatedAt(flow.updated_at)
 
       // Convert flow definition to React Flow format
       const flowNodes = flow.flow_definition.nodes.map((n) => (
@@ -850,11 +949,21 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           role: e.role ?? 'control_flow',
           satisfies_binding_id: e.satisfies_binding_id,
           replaces_attachment_id: e.replaces_attachment_id,
+          condition: e.condition,
         },
       }))
 
       setNodes(flowNodes)
       setEdges(flowEdges)
+      setSavedBaseline({
+        name: flow.name,
+        description: flow.description || '',
+        definition: buildFlowDefinition(
+          flowNodes as AgentNode[],
+          flowEdges as FlowEdge[],
+          flow.flow_definition.task_instructions_default_only === true,
+        ),
+      })
       if (flow.validation_warnings?.length) {
         const warningMessages = flow.validation_warnings.map((warning) => warning.message).join(' ')
         const hasCriticalWarning = flow.has_critical_issues
@@ -924,28 +1033,29 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   // Note: We intentionally exclude loadFlow and currentFlowId from deps
   // to prevent re-loading after save (which updates currentFlowId)
 
-  // Initialize new flow with task_input node when no flowId is provided
-  useEffect(() => {
-    // Only run once on mount when there's no flowId
-    if (!flowId && nodes.length === 0) {
-      setNodes([createInitialTaskInputNode()])
-      nodeIdRef.current = 1
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  // Note: Only run on mount - empty deps is intentional
-
-  // Report flow state changes to parent (for context sharing with AI Chat)
-  useEffect(() => {
-    if (onFlowChange) {
-      const flowState: FlowState = {
+  const captureAuthoringContext = useCallback((): FlowState => {
+    const nodePanelDraft = nodePanelGuardRef.current?.captureAuthoringDraft?.()
+    const capturedNodes = nodes.map((node) => (
+      nodePanelDraft?.nodeId === node.id
+        ? { ...node, data: { ...node.data, ...nodePanelDraft.data } }
+        : node
+    ))
+    return {
+        flowId: currentFlowId || undefined,
         flowName,
+        flowDescription,
+        flowUpdatedAt: flowUpdatedAt || undefined,
+        isDirty: flowIsDirty,
         version: '1.1',
+        task_instructions_default_only: taskInstructionsDefaultOnly || undefined,
         entry_node_id: nodes.find(node => node.data.agent_id === 'task_input')?.id,
-        nodes: nodes.map((n) => ({
+        nodes: capturedNodes.map((n) => ({
           id: n.id,
           type: (n.type ?? 'agent') as NodeType,
+          position: { ...n.position },
           agent_id: n.data.agent_id,
           agent_display_name: n.data.agent_display_name,
+          agent_description: n.data.agent_description,
           task_instructions: n.data.task_instructions,
           step_goal: n.data.step_goal,
           custom_instructions: n.data.custom_instructions,
@@ -964,11 +1074,41 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           role: edgeRole(e as FlowEdge),
           satisfies_binding_id: e.data?.satisfies_binding_id,
           replaces_attachment_id: e.data?.replaces_attachment_id,
+          condition: e.data?.condition,
         })),
       }
-      onFlowChange(flowState)
+  }, [
+        currentFlowId,
+        edges,
+        flowDescription,
+        flowIsDirty,
+        flowName,
+        flowUpdatedAt,
+        nodes,
+        taskInstructionsDefaultOnly,
+  ])
+
+  useImperativeHandle(
+    authoringContextRef,
+    () => ({ captureAuthoringContext }),
+    [captureAuthoringContext]
+  )
+
+  // Report flow state changes to parent for passive UI context. AI Chat uses
+  // the imperative capture above so submission never waits for this effect.
+  useEffect(() => {
+    onFlowChange?.(captureAuthoringContext())
+  }, [captureAuthoringContext, onFlowChange])
+
+  useEffect(() => {
+    if (!flowIsDirty) return
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
     }
-  }, [nodes, edges, flowName, onFlowChange])
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [flowIsDirty])
 
   // Update hasError/errorMessage on nodes based on current validation state
   // Called when extractors are added/removed, connections change, or node data updates
@@ -1084,33 +1224,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       const entryNodeId = taskInputNode.id
 
       const flowDefinition: FlowDefinition = {
-        version: '1.1',
-        ...(taskInstructionsDefaultOnly ? { task_instructions_default_only: true } : {}),
-        nodes: nodes.map((n) => ({
-          id: n.id,
-          type: n.data.agent_id === 'task_input'
-            ? 'task_input'
-            : n.type === 'output'
-              ? 'output'
-              : 'agent',
-          position: n.position,
-          data: flowNodeDataForPersistence(n.data),
-        })),
-        edges: edges.map((e) => {
-          const role = edgeRole(e as FlowEdge)
-          return {
-            id: e.id,
-            source: e.source,
-            target: e.target,
-            role,
-            satisfies_binding_id: role === 'validation_attachment'
-              ? e.data?.satisfies_binding_id
-              : undefined,
-            replaces_attachment_id: role === 'validation_attachment'
-              ? e.data?.replaces_attachment_id
-              : undefined,
-          }
-        }),
+        ...currentFlowDefinition,
         entry_node_id: entryNodeId,
       }
 
@@ -1129,6 +1243,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
         })
         setCurrentFlowId(savedFlow.id)
       }
+      setFlowUpdatedAt(savedFlow.updated_at)
 
       const flowMutationReason = currentFlowId && !forceCreate ? 'updated' : 'created'
       await refreshFlowLists()
@@ -1139,6 +1254,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       setTaskInstructionsDefaultOnly(
         savedFlow.flow_definition.task_instructions_default_only === true
       )
+      setSavedBaseline({
+        name: savedFlow.name,
+        description: savedFlow.description || '',
+        definition: flowDefinition,
+      })
       notifyFlowListInvalidated({
         flowId: savedFlow.id,
         reason: flowMutationReason,
@@ -1148,26 +1268,36 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
         severity: 'success'
       })
       onFlowSaved?.(savedFlow.id)
+      return true
     } catch (err) {
       logger.error('Failed to save flow', err as Error, { component: 'FlowBuilder' })
       const errorMessage = err instanceof Error ? err.message : 'Failed to save flow'
       setSnackbar({ message: errorMessage, severity: 'error' })
+      return false
     } finally {
       setSaving(false)
     }
   }
 
   // Handle new flow
-  const handleNewFlow = () => {
-    setNodes([createInitialTaskInputNode()])
+  const handleNewFlow = useCallback(() => {
+    const initialNode = createInitialTaskInputNode()
+    setNodes([initialNode])
     setEdges([])
     setFlowName('New Flow')
     setFlowDescription('')
     setTaskInstructionsDefaultOnly(false)
     setCurrentFlowId(null)
+    setFlowUpdatedAt(null)
     setSelectedNode(null)
     nodeIdRef.current = 1  // Start from 1 since node_0 is used
-  }
+    setSavedBaseline(initialFlowDraftBaseline())
+    logger.info('Started a new Flow Builder draft', {
+      component: 'FlowBuilder',
+      action: 'new_flow',
+      metadata: { priorArtifactPresent: Boolean(currentFlowId) },
+    })
+  }, [currentFlowId, setEdges, setNodes])
 
   const addValidationAttachmentEdge = useCallback(
     (connection: Connection, binding: ValidationAttachmentSelection) => {
@@ -1326,6 +1456,28 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     if (!guard) return Promise.resolve(true)
     return guard.requestLeave()
   }, [])
+
+  const requestFlowReplacement = useCallback((label: string, proceed: () => void) => {
+    void confirmLeaveNode().then((nodeMayLeave) => {
+      if (!nodeMayLeave) return
+      const leaveOutcome = nodePanelGuardRef.current?.takeLastLeaveOutcome?.()
+      const currentDirty = leaveOutcome === 'applied'
+        ? true
+        : leaveOutcome === 'discarded'
+          ? appliedFlowIsDirtyRef.current
+          : flowIsDirtyRef.current
+      if (!currentDirty) {
+        proceed()
+        return
+      }
+      logger.info('Flow Builder replacement requires curator decision', {
+        component: 'FlowBuilder',
+        action: 'confirm_flow_replacement',
+        metadata: { replacement: label, dirty: true },
+      })
+      setPendingFlowReplacement({ label, proceed })
+    })
+  }, [confirmLeaveNode])
 
   // Handle node selection. Clicking another node while the panel holds
   // unapplied edits asks Apply, Discard, or Keep editing first.
@@ -1548,9 +1700,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
   // Handle selecting a flow to load
   const handleSelectFlow = useCallback((selectedFlowId: string) => {
-    setOpenDialogOpen(false)
-    loadFlow(selectedFlowId)
-  }, [loadFlow])
+    requestFlowReplacement('open another flow', () => {
+      setOpenDialogOpen(false)
+      void loadFlow(selectedFlowId)
+    })
+  }, [loadFlow, requestFlowReplacement])
 
   // Filtered flows based on search
   const filteredFlows = useMemo(() => {
@@ -1669,6 +1823,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       if (editingFlowId === currentFlowId) {
         setFlowName(updatedFlow.name)
         setFlowDescription(updatedFlow.description || '')
+        setFlowUpdatedAt(updatedFlow.updated_at)
+        setSavedBaseline((baseline) => ({
+          ...baseline,
+          name: updatedFlow.name,
+          description: updatedFlow.description || '',
+        }))
       }
       setEditingFlowId(null)
       setEditingFlowName('')
@@ -1878,7 +2038,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
           transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         >
-          <StyledMenuItem onClick={() => { handleFileMenuClose(); handleNewFlow(); }}>
+          <StyledMenuItem onClick={() => {
+            handleFileMenuClose()
+            requestFlowReplacement('start a new flow', handleNewFlow)
+          }}>
             <span>New Flow</span>
           </StyledMenuItem>
           <StyledMenuItem onClick={handleOpenDialogOpen}>
@@ -1937,7 +2100,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
               <FileActionButton
                 aria-label="New flow"
                 size="small"
-                onClick={handleNewFlow}
+                onClick={() => requestFlowReplacement('start a new flow', handleNewFlow)}
               >
                 <NoteAddIcon />
               </FileActionButton>
@@ -2119,6 +2282,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
                   onTaskInstructionsAuthored={() => setTaskInstructionsDefaultOnly(false)}
                   onOpenAgent={onOpenAgent}
                   leaveGuardRef={nodePanelGuardRef}
+                  onDraftDirtyChange={setNodePanelDraftDirty}
                 />
               </NodePanelDock>
             )}
@@ -2173,6 +2337,53 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
         </DialogContent>
         <DialogActions>
           <Button onClick={handleBindingDialogClose}>Cancel</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(pendingFlowReplacement)}
+        onClose={() => setPendingFlowReplacement(null)}
+        maxWidth="xs"
+        fullWidth
+        aria-labelledby="flow-unsaved-changes-title"
+      >
+        <DialogTitle id="flow-unsaved-changes-title">Save this flow before continuing?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This draft has unsaved edits. Choose whether to keep editing, save through the existing Save action,
+            or discard the edits and {pendingFlowReplacement?.label}.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPendingFlowReplacement(null)} size="small" autoFocus>
+            Keep editing
+          </Button>
+          <Button
+            onClick={() => {
+              setPendingFlowReplacement(null)
+              handleSaveClick()
+            }}
+            size="small"
+          >
+            Save
+          </Button>
+          <Button
+            onClick={() => {
+              const replacement = pendingFlowReplacement
+              setPendingFlowReplacement(null)
+              logger.info('Curator discarded Flow Builder draft edits', {
+                component: 'FlowBuilder',
+                action: 'discard_flow_draft',
+                metadata: { replacement: replacement?.label, dirty: true },
+              })
+              replacement?.proceed()
+            }}
+            color="error"
+            variant="contained"
+            size="small"
+          >
+            Discard
+          </Button>
         </DialogActions>
       </Dialog>
 

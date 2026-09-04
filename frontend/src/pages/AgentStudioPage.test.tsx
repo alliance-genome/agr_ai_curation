@@ -414,6 +414,13 @@ describe('AgentStudioPage', () => {
       expect(context).toHaveTextContent('"state":"replaced"')
       expect(context).toHaveTextContent('"state":"supplemental"')
     })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Agent Workshop' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('opus-chat-context')).toHaveTextContent(
+        '"flow_name":"Propagation Flow"'
+      )
+    })
   })
 
   it('sends the complete targeted verification contract from Flow Builder', async () => {

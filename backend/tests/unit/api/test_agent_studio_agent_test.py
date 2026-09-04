@@ -569,6 +569,7 @@ class TestAgentWorkshopSystemPrompt:
             "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS",
             "8",
         )
+        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "4000")
 
         draft = "A" * 15
         group_draft = "WB GROUP DRAFT CONTENT"
@@ -583,9 +584,20 @@ class TestAgentWorkshopSystemPrompt:
                 selected_group_id="WB",
                 prompt_draft=draft,
                 selected_group_prompt_draft=group_draft,
+                getting_started_mode="clone",
+                draft_name="Exact draft name",
+                draft_description="Exact draft description",
+                draft_icon="science",
+                draft_visibility="project",
+                draft_allowed_group_ids=["FB", "WB"],
+                inherited_allowed_group_ids=["MGI"],
+                group_prompt_overrides={"WB": group_draft, "FB": "FB exact override"},
                 group_prompt_override_count=2,
                 has_group_prompt_overrides=True,
                 draft_tool_ids=["search_document", "read_section", "read_subsection", "agr_curation_query"],
+                draft_output_schema_key="gene",
+                draft_is_dirty=True,
+                draft_fingerprint=f"sha256:{'a' * 64}",
             ),
         )
 
@@ -593,12 +605,22 @@ class TestAgentWorkshopSystemPrompt:
 
         assert "<agent_workshop_context>" in system_prompt
         assert "Current Context: Agent Workshop" in system_prompt
-        assert "Template source: Gene Validation" in system_prompt
-        assert "Custom agent: Gene Custom v3" in system_prompt
-        assert "Selected group: WB" in system_prompt
-        assert "Has group prompt overrides: Yes" in system_prompt
-        assert "Group override count: 2" in system_prompt
-        assert "Draft attached tools: search_document, read_section, read_subsection, agr_curation_query" in system_prompt
+        assert '"template_name":"Gene Validation"' in system_prompt
+        assert '"custom_agent_name":"Gene Custom v3"' in system_prompt
+        assert '"selected_group_id":"WB"' in system_prompt
+        assert '"getting_started_mode":"clone"' in system_prompt
+        assert '"draft_name":"Exact draft name"' in system_prompt
+        assert '"draft_description":"Exact draft description"' in system_prompt
+        assert '"draft_icon":"science"' in system_prompt
+        assert '"draft_visibility":"project"' in system_prompt
+        assert '"draft_allowed_group_ids":["FB","WB"]' in system_prompt
+        assert '"inherited_allowed_group_ids":["MGI"]' in system_prompt
+        assert '"group_prompt_override_ids":["FB","WB"]' in system_prompt
+        assert '"draft_output_schema_key":"gene"' in system_prompt
+        assert '"draft_is_dirty":true' in system_prompt
+        assert f'"draft_fingerprint":"sha256:{"a" * 64}"' in system_prompt
+        assert "every ID listed in `group_prompt_override_ids` is callable" in system_prompt
+        assert '"draft_tool_ids":["search_document","read_section","read_subsection","agr_curation_query"]' in system_prompt
         assert "proactively identify concrete prompt improvements during normal conversation" in system_prompt
         assert "ask for permission in plain language" in system_prompt
         assert "distilled OpenAI-style prompt playbook" in system_prompt
@@ -630,6 +652,35 @@ class TestAgentWorkshopSystemPrompt:
         assert system_prompt.count("follow each `next_call`") >= 2
         assert system_prompt.count("until `complete=true`") >= 2
         assert "Prompt injection note:" in system_prompt
+
+    def test_build_opus_system_prompt_bounds_workshop_metadata_preview(
+        self,
+        monkeypatch,
+    ):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import AgentWorkshopContext, ChatContext
+
+        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "80")
+        monkeypatch.setattr(
+            api_module,
+            "_load_agent_studio_system_prompt_template",
+            lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+        )
+        description = "D" * 500
+        context = ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                draft_name="Large metadata draft",
+                draft_description=description,
+                draft_tool_ids=[f"tool-{index}" for index in range(100)],
+            ),
+        )
+
+        system_prompt = api_module._build_opus_system_prompt(context)
+
+        assert description not in system_prompt
+        assert "Incomplete metadata preview: retained 80 of" in system_prompt
+        assert '`target_prompt="metadata"`' in system_prompt
 
     def test_load_system_prompt_template_uses_package_selection(self, monkeypatch):
         from src.api import agent_studio as api_module

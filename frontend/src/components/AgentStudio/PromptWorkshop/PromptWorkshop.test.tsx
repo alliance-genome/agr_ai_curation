@@ -2,7 +2,10 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, beforeEach, expect, it, vi } from 'vitest'
 import { createRef } from 'react'
 
-import PromptWorkshop, { type WorkshopLeaveGuard } from './PromptWorkshop'
+import PromptWorkshop, {
+  type WorkshopAuthoringContextHandle,
+  type WorkshopLeaveGuard,
+} from './PromptWorkshop'
 import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
 import type {
   PromptCatalog,
@@ -437,6 +440,35 @@ describe('PromptWorkshop', () => {
     expect(screen.queryByRole('group', { name: 'Start a new agent' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Scratch' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByText('From scratch · Not saved yet')).toBeInTheDocument()
+  }, 15000)
+
+  it('captures the complete current draft immediately after an edit', async () => {
+    const authoringRef = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} authoringContextRef={authoringRef} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Immediate Agent' } })
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Exact description' } })
+    gotoSection('Prompt')
+    fireEvent.change(screen.getByLabelText('Your prompt'), {
+      target: { value: 'The latest prompt keystroke' },
+    })
+
+    const context = authoringRef.current!.captureAuthoringContext()
+    expect(context).toEqual(expect.objectContaining({
+      getting_started_mode: 'scratch',
+      draft_name: 'Immediate Agent',
+      draft_description: 'Exact description',
+      prompt_draft: 'The latest prompt keystroke',
+      draft_visibility: 'private',
+      draft_allowed_group_ids: [],
+      inherited_allowed_group_ids: [],
+      group_prompt_overrides: {},
+      draft_is_dirty: true,
+    }))
+    expect(context.draft_tool_ids).toEqual([])
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
   }, 15000)
 
   it('lands on Setup with the template selector focused after From a template', async () => {

@@ -4,6 +4,7 @@
  */
 
 import type { Node, Edge } from 'reactflow'
+import type { Ref } from 'react'
 import type { ValidationAttachmentOption } from '@/services/agentStudioService'
 import type { AgentBrowserRequest } from '../agentBrowserRequest'
 
@@ -211,6 +212,7 @@ export type FlowEdge = Edge<{
   role?: FlowEdgeRole
   satisfies_binding_id?: string
   replaces_attachment_id?: string
+  condition?: FlowEdgeCondition
   validationLabel?: string
   onDeleteEdge?: (edgeId: string) => void
 }>
@@ -221,14 +223,21 @@ export type FlowEdge = Edge<{
 
 /** Flow state reported to parent for context sharing */
 export interface FlowState {
+  flowId?: string
   flowName: string
+  flowDescription: string
+  flowUpdatedAt?: string
+  isDirty: boolean
   version: FlowDefinition['version']
+  task_instructions_default_only?: boolean
   entry_node_id?: string
   nodes: Array<{
     id: string
     type: NodeType
+    position: FlowNodePosition
     agent_id: string
     agent_display_name: string
+    agent_description?: string
     task_instructions?: string
     step_goal?: string
     custom_instructions?: string
@@ -247,6 +256,7 @@ export interface FlowState {
     role?: FlowEdgeRole
     satisfies_binding_id?: string
     replaces_attachment_id?: string
+    condition?: FlowEdgeCondition
   }>
 }
 
@@ -267,6 +277,12 @@ export interface FlowBuilderProps {
    * must not answer keyboard shortcuts. Defaults to true.
    */
   active?: boolean
+  /** Synchronous access to the current exact draft for AI Chat submission. */
+  authoringContextRef?: Ref<FlowAuthoringContextHandle>
+}
+
+export interface FlowAuthoringContextHandle {
+  captureAuthoringContext: () => FlowState
 }
 
 export interface AgentPaletteProps {
