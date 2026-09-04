@@ -24,11 +24,18 @@ FROM public.ecr.aws/docker/library/python:3.11-slim AS runtime
 ARG APP_USER=agr
 ARG APP_UID=10001
 ARG APP_GID=10001
+ARG TRACE_REVIEW_RUNTIME_VERSION=unknown
+ARG TRACE_REVIEW_SOURCE_REVISION=unknown
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/opt/venv \
-    PATH="/opt/venv/bin:${PATH}"
+    PATH="/opt/venv/bin:${PATH}" \
+    TRACE_REVIEW_RUNTIME_VERSION="${TRACE_REVIEW_RUNTIME_VERSION}" \
+    TRACE_REVIEW_SOURCE_REVISION="${TRACE_REVIEW_SOURCE_REVISION}"
+
+LABEL org.opencontainers.image.version="${TRACE_REVIEW_RUNTIME_VERSION}" \
+      org.opencontainers.image.revision="${TRACE_REVIEW_SOURCE_REVISION}"
 
 WORKDIR /app
 

@@ -168,6 +168,22 @@ def get_langfuse_observation_page_limit() -> int:
     return max(1, int(os.getenv("TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT", "1000")))
 
 
+def get_langfuse_search_observation_limit() -> int:
+    """Return the maximum v2 observations inspected by one trace search."""
+    return max(
+        1,
+        int(os.getenv("TRACE_REVIEW_LANGFUSE_SEARCH_OBSERVATION_LIMIT", "10000")),
+    )
+
+
+def get_langfuse_search_request_limit() -> int:
+    """Return the maximum Langfuse API requests made by one trace search."""
+    return max(
+        1,
+        int(os.getenv("TRACE_REVIEW_LANGFUSE_SEARCH_REQUEST_LIMIT", "200")),
+    )
+
+
 def get_langfuse_request_timeout_seconds() -> float:
     """Return the timeout for each TraceReview-to-Langfuse API request."""
     return max(
