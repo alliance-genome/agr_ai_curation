@@ -259,14 +259,20 @@ async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, ag
             document_name=None,
             active_groups=["MOD"],
             supervisor_model=None,
-            specialist_model=None,
+            specialist_model="chat-model-override",
             supervisor_temperature=None,
-            specialist_temperature=None,
+            specialist_temperature=0.7,
             supervisor_reasoning=None,
-            specialist_reasoning=None,
+            specialist_reasoning="high",
         )
     ]
     assert captured["agent_id"] == agent_id
+    overrides = {key: value for key, value in captured["agent_kwargs"].items() if key.endswith("_override")}
+    assert overrides == ({} if agent_id.startswith("ca_") else {
+        "model_id_override": "chat-model-override",
+        "model_temperature_override": 0.7,
+        "model_reasoning_override": "high",
+    })
     assert captured["runner"]["context_messages"] == [
         {"role": "user", "content": message}
     ]

@@ -1291,7 +1291,7 @@ def _agent_structured_finalization_config(
     direct_config = _normalize_structured_finalization_config(
         getattr(agent, "structured_finalization", None)
     )
-    if direct_config:
+    if direct_config or getattr(agent, "execution_snapshot_fingerprint", None):
         return direct_config
 
     if not tool_name:

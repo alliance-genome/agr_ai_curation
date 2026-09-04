@@ -4,7 +4,6 @@ import type {
   AgentTemplate,
   AgentWorkshopContext,
   CustomAgent,
-  CustomAgentVersion,
   GroupOption,
   ModelOption,
   PromptCatalog,
@@ -20,14 +19,15 @@ import {
   fetchAgentTemplates,
   fetchModelOptions,
   fetchToolLibrary,
-  listCustomAgentVersions,
+  listAgentExecutionRevisions,
   listCustomAgents,
   listToolIdeaRequests,
-  revertCustomAgentVersion,
+  restoreAgentExecutionRevision,
   submitToolIdeaRequest,
   updateCustomAgent,
 } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
+import type { AgentExecutionRevision } from '@/types/agentExecution'
 import { useAuth } from '@/contexts/AuthContext'
 import { logger } from '@/services/logger'
 import { flushSync } from 'react-dom'
@@ -155,7 +155,12 @@ export interface WorkshopDraft {
   toolIdeaSubmitting: boolean
 
   // Versions
-  versions: CustomAgentVersion[]
+  versions: AgentExecutionRevision[]
+  versionsLoading: boolean
+  versionsError: string | null
+  hasMoreVersions: boolean
+  loadMoreVersions: () => void
+  retryVersions: () => void
 
   // Save state
   saving: boolean
@@ -180,7 +185,7 @@ export interface WorkshopDraft {
   startDraft: (mode: GettingStartedMode) => void
   handleSave: (options?: SaveOptions, selfExclusionConfirmed?: boolean) => Promise<void>
   handleDeleteById: (agent: CustomAgent) => Promise<void>
-  handleRevert: (version: number) => Promise<void>
+  handleRevert: (version: AgentExecutionRevision) => Promise<void>
   selfExclusionPrompt: SaveOptions | null
   confirmSelfExclusion: () => void
   cancelSelfExclusion: () => void
@@ -218,7 +223,13 @@ export function useWorkshopDraft({
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
   const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
   const [cloneSourceAgentId, setCloneSourceAgentId] = useState<string>('')
-  const [versions, setVersions] = useState<CustomAgentVersion[]>([])
+  const [versions, setVersions] = useState<AgentExecutionRevision[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versionsError, setVersionsError] = useState<string | null>(null)
+  const [nextVersionCursor, setNextVersionCursor] = useState<number | null>(null)
+  const [versionCursor, setVersionCursor] = useState<number | undefined>()
+  const [versionRetry, setVersionRetry] = useState(0)
+  const versionHistoryKey = useRef('')
   const [loading, setLoading] = useState(false)
   const [workshopOptionsLoaded, setWorkshopOptionsLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -597,20 +608,44 @@ export function useWorkshopDraft({
   }, [customAgents, initialCustomAgentId, loadCustomAgents])
 
   useEffect(() => {
+    const key = `${selectedCustomAgentId ?? ''}:${selectedCustomAgent?.execution_revision_id ?? ''}`
+    if (versionHistoryKey.current !== key) {
+      versionHistoryKey.current = key
+      setVersions([])
+      setNextVersionCursor(null)
+      if (versionCursor !== undefined) {
+        setVersionCursor(undefined)
+        return
+      }
+    }
+    let cancelled = false
     async function loadVersions() {
       if (!selectedCustomAgentId) {
         setVersions([])
+        setNextVersionCursor(null)
+        setVersionsLoading(false)
+        setVersionsError(null)
         return
       }
+      setVersionsLoading(true)
+      setVersionsError(null)
+      if (versionCursor === undefined) setVersions([])
       try {
-        const loaded = await listCustomAgentVersions(selectedCustomAgentId)
-        setVersions(loaded)
-      } catch {
-        setVersions([])
+        const loaded = await listAgentExecutionRevisions(selectedCustomAgentId, versionCursor)
+        if (cancelled) return
+        setVersions((previous) => versionCursor === undefined ? loaded.revisions : [
+          ...previous, ...loaded.revisions.filter((revision) => !previous.some((item) => item.id === revision.id)),
+        ])
+        setNextVersionCursor(loaded.next_before_revision)
+      } catch (err) {
+        if (!cancelled) setVersionsError(err instanceof Error ? err.message : 'Could not load saved configurations')
+      } finally {
+        if (!cancelled) setVersionsLoading(false)
       }
     }
     void loadVersions()
-  }, [selectedCustomAgentId])
+    return () => { cancelled = true }
+  }, [selectedCustomAgentId, selectedCustomAgent?.execution_revision_id, versionCursor, versionRetry])
 
   useEffect(() => {
     // Hydrate only once model and template options are known, so the draft is
@@ -1053,7 +1088,10 @@ export function useWorkshopDraft({
           model_id: selectedModelId,
           model_reasoning: selectedModelReasoning,
           tool_ids: selectedToolIds,
-          output_schema_key: outputSchemaKey || null,
+          // Omission preserves the explicit saved output contract, including a
+          // generic profile pin. Null is an intentional transition to none.
+          ...(outputSchemaKey !== (selectedCustomAgent?.output_schema_key || '')
+            ? { output_schema_key: outputSchemaKey || null } : {}),
           icon: icon || undefined,
           notes: notes || undefined,
           allowed_group_ids: selectedAllowedGroupIds,
@@ -1067,11 +1105,13 @@ export function useWorkshopDraft({
           || (gettingStartedMode === 'template'
             ? parentAgentId
             : (gettingStartedMode === 'clone' ? selectedCloneSource?.template_source : undefined))
+        const cloneSource = selectedCustomAgent
+          || (gettingStartedMode === 'clone' ? selectedCloneSource : undefined)
         const created = await createCustomAgent({
           visibility: selectedVisibility,
           template_source: templateSource || undefined,
-          clone_source_agent_id: gettingStartedMode === 'clone' ? selectedCloneSource?.agent_id : undefined,
-          clone_source_updated_at: gettingStartedMode === 'clone' ? selectedCloneSource?.updated_at : undefined,
+          clone_source_agent_id: cloneSource?.agent_id,
+          clone_source_updated_at: cloneSource?.updated_at,
           name: nameToSave,
           description,
           custom_prompt: customPrompt,
@@ -1080,7 +1120,8 @@ export function useWorkshopDraft({
           model_id: selectedModelId,
           model_reasoning: selectedModelReasoning,
           tool_ids: selectedToolIds,
-          output_schema_key: outputSchemaKey || null,
+          ...(!cloneSource || outputSchemaKey !== (cloneSource.output_schema_key || '')
+            ? { output_schema_key: outputSchemaKey || null } : {}),
           icon: icon || undefined,
           allowed_group_ids: selectedAllowedGroupIds,
         })
@@ -1174,20 +1215,20 @@ export function useWorkshopDraft({
     }
   }, [customAgents, handleNew, reloadAfterSave, selectedCustomAgentId])
 
-  const handleRevert = useCallback(async (version: number) => {
-    if (!selectedCustomAgentId) return
+  const handleRevert = useCallback(async (version: AgentExecutionRevision) => {
+    if (!selectedCustomAgentId || !selectedCustomAgent?.execution_revision_id) return
     setSaving(true)
     setError(null)
     try {
-      const reverted = await revertCustomAgentVersion(selectedCustomAgentId, version, undefined)
+      const reverted = await restoreAgentExecutionRevision(selectedCustomAgentId, version.id, selectedCustomAgent.execution_revision_id)
       await reloadAfterSave(reverted.id)
-      setStatus(`Reverted to version ${version}`)
+      setStatus(`Restored configuration ${version.revision} as a new version`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to revert version')
+      setError(err instanceof Error ? err.message : 'Failed to restore configuration')
     } finally {
       setSaving(false)
     }
-  }, [reloadAfterSave, selectedCustomAgentId])
+  }, [reloadAfterSave, selectedCustomAgentId, selectedCustomAgent?.execution_revision_id])
 
   const handleSelectedGroupPromptChange = useCallback((value: string) => {
     if (!selectedGroupId) return
@@ -1346,6 +1387,11 @@ export function useWorkshopDraft({
     toolIdeaSubmitting,
 
     versions,
+    versionsLoading,
+    versionsError,
+    hasMoreVersions: nextVersionCursor !== null,
+    loadMoreVersions: () => { if (nextVersionCursor !== null && !versionsLoading) setVersionCursor(nextVersionCursor) },
+    retryVersions: () => { if (!versionsLoading) setVersionRetry((previous) => previous + 1) },
 
     saving,
     saveState,

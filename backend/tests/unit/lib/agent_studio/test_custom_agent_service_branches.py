@@ -8,6 +8,20 @@ import pytest
 from src.lib.agent_studio import custom_agent_service as service
 
 
+@pytest.fixture(autouse=True)
+def isolate_execution_persistence(monkeypatch):
+    """SQL snapshot behavior is exercised by real persistence integration tests."""
+    from src.schemas.agent_execution_revision import initial_output_contract
+    monkeypatch.setattr(service, "_record_execution_save", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        service, "_prepare_execution_update",
+        lambda _db, agent, *_args: (None, SimpleNamespace(
+            output_contract=initial_output_contract(agent.output_schema_key),
+            system_managed_tool_ids=[], group_tool_policy={},
+        )),
+    )
+
+
 class _FakeQuery:
     def __init__(self, first_value=None, all_value=None, scalar_value=None):
         self._first_value = first_value
@@ -324,124 +338,8 @@ def test_soft_delete_and_versions_listing():
     assert listed == versions
 
 
-def test_revert_custom_agent_to_version_paths(monkeypatch):
-    custom_agent = SimpleNamespace(
-        id=uuid.uuid4(),
-        instructions="current prompt",
-        group_prompt_overrides={" wb ": "keep"},
-        template_source="gene",
-        allowed_group_ids=[],
-        inherited_allowed_group_ids=[],
-        version=4,
-    )
-
-    with pytest.raises(service.CustomAgentNotFoundError, match="Version 9 not found"):
-        service.revert_custom_agent_to_version(
-            _FakeDB([_FakeQuery(first_value=None)]),
-            custom_agent=custom_agent,
-            version=9,
-        )
-
-    target = SimpleNamespace(
-        custom_prompt="old prompt",
-        group_prompt_overrides={"mgi": "m rules"},
-        allowed_group_ids=[],
-    )
-    db = _FakeDB([_FakeQuery(first_value=target)])
-    monkeypatch.setattr(service, "_get_next_version", lambda _db, _id: 10)
-    monkeypatch.setattr(
-        service,
-        "build_agent_prompt_layers",
-        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
-    )
-    updated = service.revert_custom_agent_to_version(db, custom_agent=custom_agent, version=3, notes=None)
-    assert updated.instructions == "old prompt"
-    assert updated.group_prompt_overrides == {"MGI": "m rules"}
-    assert updated.version == 5
-    assert len(db.added) == 1
-    snapshot = db.added[0]
-    assert snapshot.version == 10
-    assert snapshot.custom_prompt == "current prompt"
-    assert snapshot.group_prompt_overrides == {"WB": "keep"}
-    assert snapshot.notes == "Snapshot before revert to v3"
-
-
-def test_revert_custom_agent_to_version_strips_exact_locked_parent_layers(monkeypatch):
-    custom_agent = SimpleNamespace(
-        id=uuid.uuid4(),
-        instructions="current prompt",
-        group_prompt_overrides={"WB": "current rules"},
-        template_source="gene",
-        allowed_group_ids=[],
-        inherited_allowed_group_ids=[],
-        version=4,
-    )
-    target = SimpleNamespace(
-        custom_prompt="LOCKED CORE\n\nPARENT BASE\n\nKeep historical curator guidance.",
-        group_prompt_overrides={"mgi": "historical rules"},
-        allowed_group_ids=[],
-    )
-    db = _FakeDB([_FakeQuery(first_value=target)])
-    monkeypatch.setattr(service, "_get_next_version", lambda _db, _id: 10)
-    monkeypatch.setattr(
-        service,
-        "build_agent_prompt_layers",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            layers=(
-                SimpleNamespace(kind="core_static", content="LOCKED CORE"),
-                SimpleNamespace(kind="base_prompt", content="PARENT BASE"),
-            )
-        ),
-    )
-
-    updated = service.revert_custom_agent_to_version(
-        db,
-        custom_agent=custom_agent,  # type: ignore[arg-type]
-        version=3,
-    )
-
-    assert updated.instructions == "Keep historical curator guidance."
-    assert updated.group_prompt_overrides == {"MGI": "historical rules"}
-    assert db.added[0].custom_prompt == "current prompt"
-    assert db.added[0].group_prompt_overrides == {"WB": "current rules"}
-
-
-def test_revert_custom_agent_to_version_rejects_ambiguous_locked_prompt(monkeypatch):
-    custom_agent = SimpleNamespace(
-        id=uuid.uuid4(),
-        instructions="current prompt",
-        group_prompt_overrides={"WB": "current rules"},
-        template_source="gene",
-        allowed_group_ids=[],
-        inherited_allowed_group_ids=[],
-        version=4,
-    )
-    target = SimpleNamespace(
-        custom_prompt="Edited Platform Runtime Contract with historical curator changes.",
-        group_prompt_overrides={"mgi": "historical rules"},
-        allowed_group_ids=[],
-    )
-    db = _FakeDB([_FakeQuery(first_value=target)])
-    monkeypatch.setattr(
-        service,
-        "build_agent_prompt_layers",
-        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
-    )
-
-    with pytest.raises(ValueError, match="locked/core prompt markers"):
-        service.revert_custom_agent_to_version(
-            db,
-            custom_agent=custom_agent,  # type: ignore[arg-type]
-            version=3,
-        )
-
-    assert custom_agent.instructions == "current prompt"
-    assert custom_agent.group_prompt_overrides == {"WB": "current rules"}
-    assert custom_agent.version == 4
-    assert db.added == []
-
-
 def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
+    from src.lib.agent_studio import execution_revision_service
     custom_uuid = uuid.uuid4()
     runtime_agent = SimpleNamespace(
         id=custom_uuid,
@@ -458,7 +356,7 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
         description="desc",
         icon="tool",
         model_id="gpt-5.4-mini",
-        model_temperature=0.2,
+        model_temperature=0.0,
         model_reasoning="medium",
         output_schema_key=None,
         allowed_group_ids=[],
@@ -466,23 +364,27 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
         project_id=None,
         created_at="c",
         updated_at="u",
+        execution_revision_id=uuid.uuid4(),
     )
 
     db = _FakeDB([_FakeQuery(first_value=runtime_agent)])
     monkeypatch.setattr(service, "SessionLocal", lambda: db)
-    runtime = service.get_custom_agent_runtime_info(service.make_custom_agent_id(custom_uuid))
+    saved = SimpleNamespace(**vars(runtime_agent), group_tool_policy={})
+    monkeypatch.setattr(execution_revision_service, "get_execution_revision", lambda *_args, **_kwargs: (None, saved))
+    runtime = service.get_custom_agent_runtime_info(service.make_custom_agent_id(custom_uuid), user_id=7)
     assert runtime is not None
     assert runtime.custom_agent_uuid == custom_uuid
     assert runtime.requires_document is True
     assert db.closed is True
 
     assert service.get_custom_agent_runtime_info("not-custom-id") is None
-    assert service.get_custom_agent_runtime_info(service.make_custom_agent_id(uuid.uuid4()), db=_FakeDB([_FakeQuery(first_value=None)])) is None
+    assert service.get_custom_agent_runtime_info(service.make_custom_agent_id(uuid.uuid4()), db=_FakeDB([_FakeQuery(first_value=None)]), user_id=7) is None
 
     as_dict = service.custom_agent_to_dict(runtime_agent)
     assert as_dict["agent_id"].startswith("ca_")
     assert as_dict["group_prompt_overrides"] == {"WB": "rules"}
     assert as_dict["custom_prompt"] == "prompt"
+    assert as_dict["model_temperature"] == 0.0
 
 
 def test_get_custom_agent_group_prompt_additional_paths(monkeypatch):

@@ -1362,6 +1362,13 @@ async def _run_resolved_chat_route(
 
     runtime_agent = None
     if route.mode == "agent":
+        # Custom agents execute their saved model configuration. Chat-wide
+        # specialist overrides apply only to system agents, never saved heads.
+        model_overrides = {} if (route.target_id or "").startswith("ca_") else {
+            "model_id_override": specialist_model,
+            "model_temperature_override": specialist_temperature,
+            "model_reasoning_override": specialist_reasoning,
+        }
         runtime_agent = get_agent_by_id(
             route.target_id or "",
             db_user_id=db_user_id,
@@ -1370,9 +1377,7 @@ async def _run_resolved_chat_route(
             document_name=document_name,
             active_groups=active_groups,
             authenticated_groups=active_groups,
-            model_id_override=specialist_model,
-            model_temperature_override=specialist_temperature,
-            model_reasoning_override=specialist_reasoning,
+            **model_overrides,
         )
 
     agent_stream = run_agent_streamed(

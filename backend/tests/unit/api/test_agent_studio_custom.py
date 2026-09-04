@@ -16,6 +16,29 @@ from sqlalchemy.exc import IntegrityError
 from src.lib import http_errors
 
 
+@pytest.mark.parametrize("creating", [False, True])
+@pytest.mark.parametrize("output", [
+    {"output_contract": None},
+    {"new_generic_profile": None},
+    {"output_contract": {"output_state": "none"}, "output_schema_key": None},
+])
+def test_output_transition_requests_reject_ambiguous_nulls(creating, output):
+    from src.api.agent_studio_custom import CreateCustomAgentRequest, UpdateCustomAgentRequest
+    request_type = CreateCustomAgentRequest if creating else UpdateCustomAgentRequest
+    with pytest.raises(ValidationError):
+        request_type(**({"name": "Draft"} if creating else {}), **output)
+
+
+def test_output_transition_requests_accept_explicit_none_and_new_profile():
+    from src.api.agent_studio_custom import CreateCustomAgentRequest, UpdateCustomAgentRequest
+    cleared = UpdateCustomAgentRequest(output_contract={"output_state": "none"})
+    assert cleared.output_contract.output_state == "none"
+    created = CreateCustomAgentRequest(
+        name="Draft", new_generic_profile={"name": "Record", "semantic_class": "example", "fields": []},
+    )
+    assert created.new_generic_profile.semantic_class == "example"
+
+
 class TestCustomAgentTestEndpoint:
     """Unit tests for POST /api/agent-studio/custom-agents/{id}/test."""
 
@@ -56,7 +79,7 @@ class TestCustomAgentTestEndpoint:
         monkeypatch.setattr(
             api_module,
             "get_custom_agent_runtime_info",
-            lambda _aid, db=None: SimpleNamespace(
+            lambda _aid, db=None, **_kwargs: SimpleNamespace(
                 requires_document=True,
             ),
         )
@@ -93,7 +116,7 @@ class TestCustomAgentTestEndpoint:
         monkeypatch.setattr(
             api_module,
             "get_custom_agent_runtime_info",
-            lambda _aid, db=None: SimpleNamespace(
+            lambda _aid, db=None, **_kwargs: SimpleNamespace(
                 requires_document=False,
             ),
         )
@@ -856,99 +879,15 @@ class TestCustomAgentCrudErrorsAndBranches:
         assert "missing" not in str(versions_exc.value.detail)
         assert "missing" in caplog.text
 
-    def test_revert_endpoint_success_and_404(self, monkeypatch, caplog):
+    def test_prompt_only_revert_route_is_removed(self):
         import src.api.agent_studio_custom as api_module
 
-        from src.lib.agent_studio.custom_agent_service import CustomAgentNotFoundError
-
-        custom_agent = SimpleNamespace(id=uuid.uuid4())
-        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
-        monkeypatch.setattr(
-            api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        assert not any("/revert/" in route.path for route in api_module.router.routes)
+        payload = api_module.CustomAgentVersionResponse(
+            id=str(uuid.uuid4()), custom_agent_id=str(uuid.uuid4()), version=1,
+            custom_prompt="Historical prompt", created_at=datetime.now(UTC),
         )
-        monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
-        monkeypatch.setattr(api_module, "revert_custom_agent_to_version", lambda **_kwargs: None)
-        monkeypatch.setattr(api_module, "custom_agent_to_dict", lambda _agent: _custom_agent_payload("gene"))
-
-        db = _db_mock()
-        response = asyncio.run(
-            api_module.revert_custom_agent_endpoint(
-                custom_agent_id=custom_agent.id,
-                version=2,
-                request=api_module.RevertCustomAgentRequest(notes="rollback"),
-                user={"sub": "auth-sub"},
-                db=db,
-            )
-        )
-        assert response.template_source == "gene"
-        db.commit.assert_called_once()
-        db.refresh.assert_called_once_with(custom_agent)
-
-        monkeypatch.setattr(
-            api_module,
-            "get_custom_agent_for_user",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(CustomAgentNotFoundError("missing")),
-        )
-        db = _db_mock()
-        with pytest.raises(HTTPException) as revert_exc:
-            asyncio.run(
-                api_module.revert_custom_agent_endpoint(
-                    custom_agent_id=custom_agent.id,
-                    version=99,
-                    request=api_module.RevertCustomAgentRequest(),
-                    user={"sub": "auth-sub"},
-                    db=db,
-                )
-            )
-        assert revert_exc.value.status_code == 404
-        assert revert_exc.value.detail == "Custom agent not found"
-        assert "missing" not in str(revert_exc.value.detail)
-        assert "missing" in caplog.text
-        db.rollback.assert_called_once()
-
-    def test_revert_endpoint_returns_400_for_locked_group_prompt_version(
-        self,
-        monkeypatch,
-        caplog,
-    ):
-        import src.api.agent_studio_custom as api_module
-
-        custom_agent = SimpleNamespace(id=uuid.uuid4())
-        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
-        monkeypatch.setattr(
-            api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
-        )
-        monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
-        monkeypatch.setattr(
-            api_module,
-            "revert_custom_agent_to_version",
-            lambda **_kwargs: (_ for _ in ()).throw(
-                ValueError("Editable group prompt overrides cannot include locked prompt marker")
-            ),
-        )
-
-        db = _db_mock()
-        with pytest.raises(HTTPException) as revert_exc:
-            asyncio.run(
-                api_module.revert_custom_agent_endpoint(
-                    custom_agent_id=custom_agent.id,
-                    version=2,
-                    request=api_module.RevertCustomAgentRequest(notes="rollback"),
-                    user={"sub": "auth-sub"},
-                    db=db,
-                )
-            )
-
-        assert revert_exc.value.status_code == 400
-        assert revert_exc.value.detail == "Custom agent revert is invalid"
-        assert "locked prompt marker" in caplog.text
-        db.rollback.assert_called_once()
-        db.commit.assert_not_called()
-        db.refresh.assert_not_called()
+        assert payload.executable is False
 
     def test_test_endpoint_runtime_and_stream_error_branches(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module

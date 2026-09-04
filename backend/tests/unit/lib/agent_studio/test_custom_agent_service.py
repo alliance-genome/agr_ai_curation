@@ -20,6 +20,26 @@ from src.lib.agent_studio.custom_agent_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolate_execution_persistence(monkeypatch):
+    """These legacy unit fakes test draft policy, not SQL revision persistence.
+
+    Real create/update/head/rollback coverage is in the persistence suite.
+    """
+    from src.lib.agent_studio import custom_agent_service as service
+    from src.schemas.agent_execution_revision import initial_output_contract
+    monkeypatch.setattr(service, "_record_execution_save", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        service, "_prepare_execution_update",
+        lambda _db, agent, *_args: (None, SimpleNamespace(
+            output_contract=initial_output_contract(agent.output_schema_key),
+            system_managed_tool_ids=[tool for tool in (agent.tool_ids or [])
+                                     if tool in {"record_evidence", "finalize_allele_extraction"}],
+            group_tool_policy=getattr(agent, "group_tool_policy", {}),
+        )),
+    )
+
+
 def test_make_and_parse_custom_agent_id_round_trip():
     custom_uuid = uuid.uuid4()
     agent_id = make_custom_agent_id(custom_uuid)
@@ -1136,11 +1156,13 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
         ),
     )
 
-    def _fake_create_custom_agent(**kwargs):
+    def _fake_clone_saved(_db, user_id, selected_source, **kwargs):
         observed.update(kwargs)
+        observed["user_id"] = user_id
+        observed["source"] = selected_source
         return SimpleNamespace(id=uuid.uuid4())
 
-    monkeypatch.setattr(service, "create_custom_agent", _fake_create_custom_agent)
+    monkeypatch.setattr(service, "clone_saved_custom_agent", _fake_clone_saved)
 
     service.clone_visible_agent_for_user(
         db=SimpleNamespace(),
@@ -1151,11 +1173,8 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
 
     assert observed["user_id"] == 7
     assert observed["name"] == "Shared Agent (Copy)"
-    assert observed["template_source"] == "gene_validation"
-    assert observed["custom_prompt"] == "prompt"
-    assert observed["allowed_group_ids"] == ["RGD"]
-    assert observed["inherited_allowed_group_ids"] == ["RGD"]
-    assert observed["inherited_group_tool_policy"] == source.group_tool_policy
+    assert observed["source"] is source
+    assert observed["allowed_group_ids"] is None  # resolved from the saved source, not mutable head
 
 
 def test_clone_visible_agent_rejects_widening_source_restriction(monkeypatch):
@@ -1255,12 +1274,11 @@ def test_update_restricted_clone_rejects_access_widening(requested):
     assert custom_agent.version == 4
 
 
-def test_update_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
+def test_update_restricted_clone_allows_narrowing_without_legacy_prompt_writes():
     import src.lib.agent_studio.custom_agent_service as service
 
     custom_agent = _restricted_custom_agent()
     db = _AccessFloorDB()
-    monkeypatch.setattr(service, "_get_next_version", lambda *_args: 5)
 
     updated = service.update_custom_agent(
         db=db,
@@ -1270,8 +1288,7 @@ def test_update_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
 
     assert updated.allowed_group_ids == ["RGD"]
     assert updated.version == 5
-    assert len(db.added) == 1
-    assert db.added[0].allowed_group_ids == ["WB", "RGD"]
+    assert db.added == []  # Immutable revision boundary is tested in PostgreSQL.
 
 
 @pytest.mark.parametrize("cleared_schema", [None, "   "])
@@ -1307,54 +1324,3 @@ def test_update_restricted_clone_missing_floor_fails_closed():
         )
 
     assert custom_agent.allowed_group_ids == ["WB", "RGD"]
-
-
-@pytest.mark.parametrize("target_groups", [[], ["WB", "RGD", "MGI"]])
-def test_revert_restricted_clone_rejects_access_widening(target_groups, monkeypatch):
-    import src.lib.agent_studio.custom_agent_service as service
-
-    custom_agent = _restricted_custom_agent()
-    target = SimpleNamespace(
-        custom_prompt="Historical prompt",
-        group_prompt_overrides={},
-        allowed_group_ids=target_groups,
-    )
-    db = _AccessFloorDB(target)
-    monkeypatch.setattr(
-        service,
-        "build_agent_prompt_layers",
-        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
-    )
-
-    with pytest.raises(ValueError, match="cannot widen"):
-        service.revert_custom_agent_to_version(db, custom_agent, version=2)
-
-    assert custom_agent.instructions == "Current prompt"
-    assert custom_agent.allowed_group_ids == ["WB", "RGD"]
-    assert db.added == []
-
-
-def test_revert_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
-    import src.lib.agent_studio.custom_agent_service as service
-
-    custom_agent = _restricted_custom_agent()
-    target = SimpleNamespace(
-        custom_prompt="Historical prompt",
-        group_prompt_overrides={},
-        allowed_group_ids=["RGD"],
-    )
-    db = _AccessFloorDB(target)
-    monkeypatch.setattr(service, "_get_next_version", lambda *_args: 5)
-    monkeypatch.setattr(
-        service,
-        "build_agent_prompt_layers",
-        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
-    )
-
-    updated = service.revert_custom_agent_to_version(db, custom_agent, version=2)
-
-    assert updated.instructions == "Historical prompt"
-    assert updated.allowed_group_ids == ["RGD"]
-    assert updated.version == 5
-    assert len(db.added) == 1
-    assert db.added[0].allowed_group_ids == ["WB", "RGD"]

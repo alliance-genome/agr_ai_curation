@@ -363,6 +363,13 @@ def test_direct_save_api_rejects_tool_outside_authenticated_catalog(db, monkeypa
     from src.api import agent_studio_custom as api
     from src.lib.agent_studio import custom_agent_service as service, capability_catalog
     from src.models.sql.agent import Agent
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    # This test isolates catalog authorization after a successful revision lock.
+    # Real stale-head/SQL behavior is covered by persistence tests.
+    monkeypatch.setattr(service, "_prepare_execution_update", lambda *_args: (
+        None, SimpleNamespace(output_contract=AgentOutputContract(output_state="none"),
+                              system_managed_tool_ids=[], group_tool_policy={}),
+    ))
     monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *a: SimpleNamespace(id=1))
     monkeypatch.setattr(service, "get_model", lambda *a: SimpleNamespace(curator_visible=True))
     monkeypatch.setattr(service, "_tool_policy_by_key", lambda *a: {

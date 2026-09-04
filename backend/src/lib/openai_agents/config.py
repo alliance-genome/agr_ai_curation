@@ -2744,6 +2744,28 @@ def get_flow_list_page_size_default() -> int:
     return max(1, _get_env_int_with_fallback("FLOW_LIST_PAGE_SIZE_DEFAULT", 50))
 
 
+# --- Closed generic extraction profiles ---
+
+def get_generic_profile_max_depth() -> int:
+    """Maximum nested profile value-schema depth; raise for deeper record structures."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_DEPTH", 8))
+
+
+def get_generic_profile_list_page_size() -> int:
+    """Authorized profile listing page size; tune payload size for larger catalogs."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_LIST_PAGE_SIZE", 50))
+
+
+def get_generic_profile_max_fields() -> int:
+    """Maximum total canonical fields across a profile's nested objects."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_FIELDS", 200))
+
+
+def get_generic_profile_max_contract_bytes() -> int:
+    """Maximum UTF-8 serialized profile contract size, including descriptions/aliases."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_CONTRACT_BYTES", 262144))
+
+
 # --- Flow output projection tooling ---
 
 def get_flow_projection_max_text_chars() -> int:

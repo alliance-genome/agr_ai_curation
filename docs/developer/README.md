@@ -43,6 +43,7 @@ Start here for new developers:
 | [DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md) | Forward-only development policy: remove fallbacks, avoid compatibility shims, prefer explicit migrations |
 | [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide for repo contributors -- package loading, database runtime, loaders, deployment |
 | [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) | Domain-envelope architecture: source of truth, field paths, structural checks, validator dispatch, lookup attempts, curator review, materialization, export/submission, and Agent Studio metadata |
+| [GENERIC_PROFILE_REVISIONS.md](guides/GENERIC_PROFILE_REVISIONS.md) | Closed generic profile contracts, immutable executable custom-agent revisions, output transitions, authorization, and migration |
 | [GENE_EXPRESSION_0_7_0.md](guides/GENE_EXPRESSION_0_7_0.md) | Gene Expression 0.7.0 release contract: LinkML pin, fixtures, validation behavior, export handoff, known limitations, and non-Alliance domain-pack pattern |
 | [TEST_STRATEGY.md](TEST_STRATEGY.md) | Docker-first test commands plus domain-envelope contract, LinkML, live DB, fixture, and release-gate expectations |
 | [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) | Add agent bundles for runtime packages or source-checkout shipped-package maintenance |

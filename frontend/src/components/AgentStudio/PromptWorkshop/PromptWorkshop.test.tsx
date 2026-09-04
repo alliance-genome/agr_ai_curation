@@ -9,10 +9,10 @@ import PromptWorkshop, {
   type WorkshopLeaveGuard,
 } from './PromptWorkshop'
 import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
+import { buildExecutionRevision as buildVersion } from '@/test/fixtures/agentExecutionRevision'
 import type {
   PromptCatalog,
   CustomAgent,
-  CustomAgentVersion,
   ModelOption,
   ToolLibraryItem,
   AgentTemplate,
@@ -28,9 +28,9 @@ const serviceMocks = vi.hoisted(() => ({
   fetchModelOptions: vi.fn(),
   fetchToolLibrary: vi.fn(),
   listToolIdeaRequests: vi.fn(),
-  listCustomAgentVersions: vi.fn(),
+  listAgentExecutionRevisions: vi.fn(),
   listCustomAgents: vi.fn(),
-  revertCustomAgentVersion: vi.fn(),
+  restoreAgentExecutionRevision: vi.fn(),
   setCustomAgentVisibility: vi.fn(),
   submitToolIdeaRequest: vi.fn(),
   updateCustomAgent: vi.fn(),
@@ -205,20 +205,8 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     is_active: true,
     created_at: '2026-02-23T00:00:00Z',
     updated_at: '2026-02-23T00:00:00Z',
+    execution_revision_id: 'version-2',
     ...overrides,
-  }
-}
-
-function buildVersion(version: number, notes?: string): CustomAgentVersion {
-  return {
-    id: `version-${version}`,
-    custom_agent_id: '11111111-1111-1111-1111-111111111111',
-    version,
-    custom_prompt: 'Prompt',
-    group_prompt_overrides: {},
-    allowed_group_ids: [],
-    notes,
-    created_at: `2026-02-2${version}T00:00:00Z`,
   }
 }
 
@@ -410,7 +398,7 @@ describe('PromptWorkshop', () => {
     serviceMocks.fetchToolLibrary.mockResolvedValue(toolLibrary)
     serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates, group_options: groupOptions })
     serviceMocks.listToolIdeaRequests.mockResolvedValue({ tool_ideas: [], total: 0 })
-    serviceMocks.listCustomAgentVersions.mockResolvedValue([])
+    serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [], next_before_revision: null })
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [], total: 0 })
     serviceMocks.createCustomAgent.mockResolvedValue(buildCustomAgent())
     serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: buildCustomAgent().agent_id })
@@ -565,7 +553,7 @@ describe('PromptWorkshop', () => {
   it('asks for a note, lists changed sections, and sends the note with the update', async () => {
     const existing = buildCustomAgent({ tool_ids: ['search_document'] })
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
-    serviceMocks.listCustomAgentVersions.mockResolvedValue([buildVersion(1, 'First'), buildVersion(2)])
+    serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [buildVersion(1), buildVersion(2)], next_before_revision: null })
     serviceMocks.updateCustomAgent.mockResolvedValue(existing)
 
     render(<PromptWorkshop catalog={buildCatalogWithGroupRule()} initialCustomAgentId={existing.id} />)
@@ -600,6 +588,7 @@ describe('PromptWorkshop', () => {
     await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledTimes(1))
     const [id, payload] = serviceMocks.updateCustomAgent.mock.calls[0]
     expect(id).toBe(existing.id)
+    expect(payload).not.toHaveProperty('output_schema_key')
     expect(payload.notes).toBe('Second pass')
     expect(payload.custom_prompt).toBe('Prompt with edits')
     expect(payload.group_prompt_overrides).toEqual({ WB: 'WB override' })
@@ -954,13 +943,30 @@ describe('PromptWorkshop', () => {
     expect(dirtyEvent.defaultPrevented).toBe(true)
   }, 15000)
 
-  // ── Versions ──
-
-  it('lists versions with the current one marked and reverts after confirmation', async () => {
+  it('Save As clones the saved agent and does not clear an unchanged output contract', async () => {
     const existing = buildCustomAgent()
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
-    serviceMocks.listCustomAgentVersions.mockResolvedValue([buildVersion(1, 'First'), buildVersion(2, 'Second')])
-    serviceMocks.revertCustomAgentVersion.mockResolvedValue(existing)
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    await waitForHeaderName('My Agent')
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Save as/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Save as a new agent' })
+    fireEvent.change(within(dialog).getByLabelText('Agent name'), { target: { value: 'Saved copy' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save as' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledOnce())
+    const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
+    expect(payload).toMatchObject({ clone_source_agent_id: existing.agent_id,
+      clone_source_updated_at: existing.updated_at, name: 'Saved copy' })
+    expect(payload).not.toHaveProperty('output_schema_key')
+  }, 15000)
+
+  // ── Versions ──
+
+  it('lists complete configurations and restores the exact revision with an expected-head guard', async () => {
+    const existing = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [buildVersion(1), buildVersion(2)], next_before_revision: null })
+    serviceMocks.restoreAgentExecutionRevision.mockResolvedValue(existing)
 
     render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
     await waitForHeaderName('My Agent')
@@ -970,15 +976,60 @@ describe('PromptWorkshop', () => {
     const rows = within(table).getAllByRole('row').slice(1)
     expect(rows[0]).toHaveTextContent('v2')
     expect(rows[0]).toHaveTextContent('Current')
-    fireEvent.click(within(rows[1]).getByRole('button', { name: 'Revert to version 1' }))
-    const confirm = await screen.findByRole('dialog', { name: 'Revert to version 1?' })
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Revert' }))
+    fireEvent.click(within(rows[1]).getByRole('button', { name: 'Restore configuration 1' }))
+    const confirm = await screen.findByRole('dialog', { name: 'Restore configuration 1?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Restore' }))
 
-    await waitFor(() => expect(serviceMocks.revertCustomAgentVersion).toHaveBeenCalledWith(existing.id, 1, undefined))
-    expect(await screen.findByText('Reverted to version 1')).toBeInTheDocument()
+    await waitFor(() => expect(serviceMocks.restoreAgentExecutionRevision).toHaveBeenCalledWith(existing.id, 'version-1', 'version-2'))
+    expect(await screen.findByText('Restored configuration 1 as a new version')).toBeInTheDocument()
   }, 15000)
 
   // ── Prompt layers and groups ──
+
+  it('loads older saved configurations and refreshes history after a restore', async () => {
+    const existing = buildCustomAgent()
+    const restored = buildCustomAgent({ execution_revision_id: 'version-3', updated_at: '2026-02-24T00:00:00Z' })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.listAgentExecutionRevisions.mockRejectedValueOnce(new Error('History temporarily unavailable'))
+      .mockResolvedValueOnce({ revisions: [buildVersion(2)], next_before_revision: 2 })
+      .mockRejectedValueOnce(new Error('Older history temporarily unavailable'))
+      .mockResolvedValueOnce({ revisions: [buildVersion(1)], next_before_revision: null })
+      .mockResolvedValue({ revisions: [buildVersion(3), buildVersion(2), buildVersion(1)], next_before_revision: null })
+    serviceMocks.restoreAgentExecutionRevision.mockResolvedValue(restored)
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    await waitForHeaderName('My Agent')
+    gotoSection('Versions')
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry loading configurations' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Load older configurations' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry loading configurations' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore configuration 1' }))
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [restored], total: 1 })
+    const confirm = await screen.findByRole('dialog', { name: 'Restore configuration 1?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Restore' }))
+    await waitFor(() => expect(serviceMocks.listAgentExecutionRevisions).toHaveBeenCalledWith(existing.id, 2))
+    await waitFor(() => {
+      const rows = within(screen.getByRole('table', { name: 'Version history' })).getAllByRole('row')
+      expect(rows[1]).toHaveTextContent('v3')
+      expect(rows[1]).toHaveTextContent('Current')
+    })
+  }, 15000)
+
+  it('keeps unsaved edits when a curator cancels restoration', async () => {
+    const existing = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [buildVersion(2), buildVersion(1)], next_before_revision: null })
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    await waitForHeaderName('My Agent')
+    fireEvent.change(screen.getByRole('textbox', { name: /Agent name/ }), { target: { value: 'Unsaved name' } })
+    gotoSection('Versions')
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore configuration 1' }))
+    const discard = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    fireEvent.click(within(discard).getByRole('button', { name: 'Keep editing' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument())
+    expect(serviceMocks.restoreAgentExecutionRevision).not.toHaveBeenCalled()
+    gotoSection('Setup')
+    expect(screen.getByRole('textbox', { name: /Agent name/ })).toHaveValue('Unsaved name')
+  }, 15000)
 
   it('shows locked inherited layers read-only inside the Prompt section', async () => {
     render(<PromptWorkshop catalog={buildCatalogWithPromptLayers()} />)

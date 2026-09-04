@@ -2,10 +2,12 @@
 
 from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from .agent import Agent, Project, ProjectMember
+from .agent_execution_revision import AgentExecutionRevision
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .chat_route_preference import ChatRoutePreference
 from .custom_agent import CustomAgentVersion
+from .generic_extraction_profile import GenericExtractionProfile, GenericExtractionProfileRevision
 from .curation_flow import CurationFlow
 from .database import Base, SessionLocal, engine, get_db
 from .file_output import FileOutput, FileType
@@ -28,12 +30,15 @@ __all__ = [
     "BatchStatus",
     "BatchDocumentStatus",
     "Agent",
+    "AgentExecutionRevision",
     "Project",
     "ProjectMember",
     "ChatMessage",
     "ChatSession",
     "ChatRoutePreference",
     "CustomAgentVersion",
+    "GenericExtractionProfile",
+    "GenericExtractionProfileRevision",
     "CurationFlow",
     "FileOutput",
     "FileType",

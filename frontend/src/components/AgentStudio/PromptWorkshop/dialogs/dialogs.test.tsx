@@ -147,8 +147,9 @@ describe('confirmation dialogs', () => {
   it('RevertVersionDialog names the version and confirms', () => {
     const onConfirm = vi.fn()
     render(<RevertVersionDialog open version={3} saving={false} onConfirm={onConfirm} onCancel={vi.fn()} />)
-    const dialog = screen.getByRole('dialog', { name: 'Revert to version 3?' })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Revert' }))
+    const dialog = screen.getByRole('dialog', { name: 'Restore configuration 3?' })
+    expect(dialog).toHaveTextContent('model settings, prompts, tools, group rules')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }))
     expect(onConfirm).toHaveBeenCalledTimes(1)
   })
 })

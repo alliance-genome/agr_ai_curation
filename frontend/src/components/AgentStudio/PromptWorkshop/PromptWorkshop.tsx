@@ -134,7 +134,7 @@ function PromptWorkshop({
   const [toolLibraryOpen, setToolLibraryOpen] = useState(false)
   const [toolRequestOpen, setToolRequestOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<CustomAgent | null>(null)
-  const [pendingRevert, setPendingRevert] = useState<number | null>(null)
+  const [pendingRevert, setPendingRevert] = useState<(typeof draft.versions)[number] | null>(null)
   const [pendingGuardedAction, setPendingGuardedAction] = useState<GuardedAction | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [returnFocusToken, setReturnFocusToken] = useState(0)
@@ -317,7 +317,7 @@ function PromptWorkshop({
     void draft.handleRevert(version)
   }
 
-  const nextVersion = versions.reduce((max, version) => Math.max(max, version.version), 0) + 1
+  const nextVersion = versions.reduce((max, version) => Math.max(max, version.revision), 0) + 1
   const hasTemplate = Boolean(draft.parentAgent) && (gettingStartedMode !== 'scratch' || Boolean(selectedCustomAgent?.template_source))
 
   return (
@@ -497,9 +497,15 @@ function PromptWorkshop({
           ) : (
             <VersionsSection
               versions={versions}
+              currentRevisionId={selectedCustomAgent?.execution_revision_id}
               hasAgent={Boolean(selectedCustomAgent)}
               saving={draft.saving}
-              onRevert={setPendingRevert}
+              loading={draft.versionsLoading}
+              error={draft.versionsError}
+              hasMore={draft.hasMoreVersions}
+              onLoadMore={draft.loadMoreVersions}
+              onRetry={draft.retryVersions}
+              onRevert={(version) => guard(() => setPendingRevert(version))}
             />
           )}
         </Box>
@@ -575,7 +581,7 @@ function PromptWorkshop({
       />
       <RevertVersionDialog
         open={pendingRevert !== null}
-        version={pendingRevert}
+        version={pendingRevert?.revision ?? null}
         saving={draft.saving}
         onConfirm={handleRevertConfirm}
         onCancel={() => setPendingRevert(null)}

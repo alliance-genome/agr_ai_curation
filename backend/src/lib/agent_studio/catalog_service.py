@@ -1751,15 +1751,38 @@ def validate_active_agent_output_schemas(db: Any) -> None:
         )
 
 
-def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
+def _create_db_agent(db_agent: Any, *, execution_snapshot=None, **kwargs: Any) -> Optional[Agent]:
     """Create an agent from a row in the unified agents table."""
+    if execution_snapshot is not None:
+        from src.schemas.agent_execution_revision import AgentExecutionSnapshot
+
+        execution_snapshot = AgentExecutionSnapshot.model_validate(
+            execution_snapshot.model_dump(mode="json")
+        )
+        if any(
+            key in kwargs
+            for key in (
+                "model_id_override", "model_temperature_override",
+                "model_reasoning_override", "model_provider_override",
+            )
+        ):
+            raise ValueError("Pinned execution settings cannot be overridden")
+        # Read only presentation/identity from the live row. Every execution
+        # setting below comes from the validated immutable snapshot.
+        db_agent = SimpleNamespace(
+            name=db_agent.name,
+            agent_key=db_agent.agent_key,
+            visibility=db_agent.visibility,
+            **execution_snapshot.model_dump(),
+            output_schema_key=execution_snapshot.output_contract.output_schema_key,
+        )
     visibility = str(getattr(db_agent, "visibility", "") or "").strip()
     if visibility == "system":
         require_canonical_agent_identity(
             getattr(db_agent, "agent_key", None),
             field_name="System agent key",
         )
-    else:
+    elif execution_snapshot is None:
         parent_key = (
             getattr(db_agent, "template_source", None)
             or getattr(db_agent, "group_rules_component", None)
@@ -1865,11 +1888,22 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     else:
         tools = []
 
-    prompt_bundle = _build_runtime_instructions(
-        db_agent=db_agent,
-        runtime_kwargs=runtime_kwargs,
-        canonical_tool_ids=canonical_tool_ids,
-    )
+    if execution_snapshot is not None:
+        from src.lib.agent_studio.execution_snapshot import saved_runtime_prompt_bundle
+
+        prompt_bundle = saved_runtime_prompt_bundle(
+            execution_snapshot,
+            active_groups=runtime_kwargs.get("active_groups", []) or [],
+            runtime_context=_build_runtime_context(
+                runtime_kwargs=runtime_kwargs, canonical_tool_ids=canonical_tool_ids
+            ),
+        )
+    else:
+        prompt_bundle = _build_runtime_instructions(
+            db_agent=db_agent,
+            runtime_kwargs=runtime_kwargs,
+            canonical_tool_ids=canonical_tool_ids,
+        )
     instructions = prompt_bundle.render()
 
     model_id_override = str(kwargs.get("model_id_override") or "").strip()
@@ -1923,6 +1957,48 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     runtime_agent.authenticated_groups = tuple(
         group_tool_resolution.active_group_ids
     )
+    if execution_snapshot is not None:
+        from copy import deepcopy
+
+        runtime_agent.execution_snapshot_fingerprint = execution_snapshot.fingerprint()
+        runtime_agent.output_contract = execution_snapshot.output_contract.model_dump(mode="json")
+        runtime_agent.curation_metadata = deepcopy(execution_snapshot.curation)
+        runtime_agent.curation = deepcopy(execution_snapshot.curation)
+        runtime_agent.structured_finalization = deepcopy(execution_snapshot.structured_finalization)
+    else:
+        _attach_live_curation_metadata(runtime_agent, db_agent, output_schema)
+    prompt_run_id = set_pending_prompts(
+        runtime_agent.name,
+        # Saved manifests are the prompt evidence for a pin. Resolving active
+        # PromptTemplate rows here would mislabel historical bytes as today's.
+        [] if execution_snapshot is not None else list(prompt_templates_for_bundle(prompt_bundle)),
+        effective_prompt_hash=prompt_bundle.hash,
+        layer_manifest=prompt_bundle.to_manifest(),
+    )
+    bind_prompt_run(runtime_agent, prompt_run_id)
+
+    from src.lib.openai_agents.langfuse_client import log_agent_config
+
+    log_agent_config(
+        agent_name=str(db_agent.name),
+        instructions=instructions,
+        model=str(effective_model_id),
+        tools=canonical_tool_ids,
+        model_settings={
+            "temperature": effective_temperature,
+            "reasoning": reasoning_effort,
+        },
+        metadata={
+            "agent_key": str(db_agent.agent_key),
+            "effective_prompt_hash": prompt_bundle.hash,
+            "group_tool_exposure": group_tool_audit,
+        },
+    )
+    return runtime_agent
+
+
+def _attach_live_curation_metadata(runtime_agent, db_agent, output_schema):
+    """Resolve deployment-owned metadata only for unpinned/system execution."""
     try:
         from src.lib.config.agent_loader import get_agent_by_folder, get_agent_definition
 
@@ -1966,32 +2042,6 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             getattr(db_agent, "agent_key", None),
             exc_info=True,
         )
-    prompt_run_id = set_pending_prompts(
-        runtime_agent.name,
-        list(prompt_templates_for_bundle(prompt_bundle)),
-        effective_prompt_hash=prompt_bundle.hash,
-        layer_manifest=prompt_bundle.to_manifest(),
-    )
-    bind_prompt_run(runtime_agent, prompt_run_id)
-
-    from src.lib.openai_agents.langfuse_client import log_agent_config
-
-    log_agent_config(
-        agent_name=str(db_agent.name),
-        instructions=instructions,
-        model=str(effective_model_id),
-        tools=canonical_tool_ids,
-        model_settings={
-            "temperature": effective_temperature,
-            "reasoning": reasoning_effort,
-        },
-        metadata={
-            "agent_key": str(db_agent.agent_key),
-            "effective_prompt_hash": prompt_bundle.hash,
-            "group_tool_exposure": group_tool_audit,
-        },
-    )
-    return runtime_agent
 
 
 def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
@@ -2020,6 +2070,8 @@ def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
 
 def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
     """Create an agent by ID using the unified agents table only."""
+    if agent_id.startswith("ca_") or "execution_revision_id" in kwargs:
+        return _get_pinned_agent_by_id(agent_id, **kwargs)
     db_agent = _get_db_agent_row(agent_id, kwargs)
     if db_agent is None:
         raise ValueError(
@@ -2035,6 +2087,55 @@ def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
         )
 
     return built
+
+
+def _get_pinned_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
+    """Authorize a pin against current visibility and saved group restrictions."""
+    from uuid import UUID
+    from sqlalchemy import select
+    from src.models.sql.agent import Agent as DBAgent
+    from src.models.sql.tool_policy import ToolPolicy
+    from src.models.sql.database import SessionLocal
+    from src.lib.agent_studio.execution_revision_service import get_execution_revision
+
+    has_explicit_pin = "execution_revision_id" in kwargs
+    revision_id = UUID(str(kwargs.pop("execution_revision_id"))) if has_explicit_pin else None
+    user_id = _coerce_db_user_id(kwargs.get("db_user_id"))
+    if user_id is None:
+        user_id = _coerce_db_user_id(kwargs.get("user_id"))
+    if user_id is None:
+        raise ValueError("Authenticated user is required for pinned execution")
+    with SessionLocal() as db:
+        head = db.execute(select(DBAgent).where(DBAgent.agent_key == agent_id)).scalar_one_or_none()
+        if head is None:
+            raise ValueError("Executable agent revision not found")
+        if not has_explicit_pin:
+            if not head.is_active:
+                raise ValueError("Custom agent is archived")
+            revision_id = head.execution_revision_id
+            if revision_id is None:
+                raise ValueError("Custom agent has no saved executable configuration")
+        revision, saved = get_execution_revision(
+            db, head.id, revision_id, user_id,
+            active_group_ids=list(kwargs.get("authenticated_groups", []) or []),
+        )
+        selected_tools = resolve_group_tool_policy(
+            saved.tool_ids, saved.group_tool_policy,
+            kwargs.get("authenticated_groups"),
+        ).tool_ids
+        if selected_tools:
+            policies = db.execute(
+                select(ToolPolicy).where(ToolPolicy.tool_key.in_(selected_tools))
+            ).scalars().all()
+            executable = {policy.tool_key for policy in policies if policy.allow_execute}
+            if set(selected_tools) - executable:
+                raise ValueError("A saved tool is no longer available for execution")
+        built = _create_db_agent(head, execution_snapshot=saved, **kwargs)
+        if built is None:
+            raise ValueError("Executable agent revision could not be built")
+        built.execution_revision_id = str(revision.id)
+        built.execution_revision = revision.revision
+        return built
 
 
 def _merge_registry_required_params(

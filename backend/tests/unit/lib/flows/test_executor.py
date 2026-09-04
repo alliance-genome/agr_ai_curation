@@ -5134,10 +5134,15 @@ class TestGetAllAgentToolsCreatedNames:
         mock_streaming.return_value = MagicMock()
 
         flow = _make_flow([_agent_node("n1", custom_id)])
-        tools, created_names = get_all_agent_tools(flow)
+        tools, created_names = get_all_agent_tools(
+            flow, db_user_id=7, model_id_override="flow-model", model_provider_override="openai",
+        )
 
         assert len(tools) == 1
         assert "ask_ca_11111111_2222_3333_4444_555555555555_specialist" in created_names
+        assert mock_get_agent.call_args.kwargs["db_user_id"] == 7
+        assert "model_id_override" not in mock_get_agent.call_args.kwargs
+        assert "model_provider_override" not in mock_get_agent.call_args.kwargs
 
     @patch("src.lib.flows.executor.get_agent_metadata")
     @patch("src.lib.flows.executor._create_streaming_tool")

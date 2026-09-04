@@ -217,6 +217,7 @@ export interface ToolIdeaRequest {
 export interface CustomAgent {
   id: string
   agent_id: string
+  execution_revision_id?: string | null
   user_id: number
   template_source?: string
   name: string
@@ -243,6 +244,8 @@ export interface CustomAgent {
 }
 
 export interface CustomAgentVersion {
+  /** Historical prompt-only audit record; never runnable or restorable. */
+  executable: false
   id: string
   custom_agent_id: string
   version: number

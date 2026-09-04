@@ -1225,6 +1225,10 @@ async def _run_custom_flow_validator_agent(
     )
     runtime_context = [instruction_prefix]
     agent_kwargs = dict(agent_context)
+    if validator_agent_id.startswith("ca_"):
+        # Flow-wide model overrides do not replace saved custom configurations.
+        agent_kwargs.pop("model_id_override", None)
+        agent_kwargs.pop("model_provider_override", None)
     agent_kwargs["additional_runtime_context"] = runtime_context
     agent = get_agent_by_id(validator_agent_id, **agent_kwargs)
 
@@ -3278,6 +3282,9 @@ def get_all_agent_tools(
                 include_evidence=include_evidence,
             )
             agent_kwargs = dict(context)
+            if agent_id.startswith("ca_"):
+                agent_kwargs.pop("model_id_override", None)
+                agent_kwargs.pop("model_provider_override", None)
             if step_instruction_prefix:
                 agent_kwargs["additional_runtime_context"] = [step_instruction_prefix]
             output_format = _resolve_flow_terminal_output_format(agent_id)

@@ -35,6 +35,8 @@ from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.models.sql.agent import Agent as CustomAgent, ProjectMember
 from src.models.sql.custom_agent import CustomAgentVersion
 from src.models.sql.database import SessionLocal
+from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin, initial_output_contract
+from src.schemas.generic_extraction_profile import GenericProfileContract
 
 
 CUSTOM_AGENT_PREFIX = "ca_"
@@ -359,13 +361,6 @@ def normalize_editable_group_prompt_overrides(
             target=f"Group prompt override '{group_id}'",
         )
     return normalized
-
-
-def _get_next_version(db: Session, custom_agent_uuid: uuid.UUID) -> int:
-    max_version = db.query(func.max(CustomAgentVersion.version)).filter(
-        CustomAgentVersion.custom_agent_id == custom_agent_uuid
-    ).scalar()
-    return int(max_version or 0) + 1
 
 
 def _dedupe_tool_ids(tool_ids: List[str]) -> List[str]:
@@ -745,6 +740,87 @@ def _generate_clone_name(db: Session, user_id: int, source_name: str) -> str:
         suffix += 1
 
 
+def _prepare_execution_update(db, agent, expected_revision_id, expected_updated_at, active_group_ids):
+    from src.lib.agent_studio.execution_revision_service import (
+        ExecutionRevisionConflictError, get_execution_revision,
+    )
+
+    if expected_revision_id is None and expected_updated_at is None:
+        raise ExecutionRevisionConflictError("An expected agent revision is required before saving")
+    db.refresh(agent, with_for_update=True)
+    if expected_revision_id is not None and agent.execution_revision_id != expected_revision_id:
+        raise ExecutionRevisionConflictError("This agent changed since it was opened. Reopen it before saving.")
+    if expected_updated_at is not None:
+        expected = expected_updated_at.replace(tzinfo=expected_updated_at.tzinfo or timezone.utc)
+        actual = agent.updated_at.replace(tzinfo=agent.updated_at.tzinfo or timezone.utc)
+        if expected != actual:
+            raise ExecutionRevisionConflictError("This agent changed since it was opened. Reopen it before saving.")
+    if agent.execution_revision_id is None:
+        raise ValueError("Custom agent has no executable baseline; complete the database migration")
+    _, saved = get_execution_revision(
+        db, agent.id, agent.execution_revision_id, agent.user_id,
+        active_group_ids=list(active_group_ids or []),
+    )
+    return agent.execution_revision_id, saved
+
+
+def _selected_output_schema(output_contract, new_generic_profile, schema, schema_provided):
+    if output_contract is not None and new_generic_profile is not None:
+        raise ValueError("Select an existing output contract or create a profile, not both")
+    if (output_contract is not None or new_generic_profile is not None) and schema_provided:
+        raise ValueError("Use one output transition, not output_contract and output_schema_key together")
+    if output_contract is not None:
+        return AgentOutputContract.model_validate(output_contract).output_schema_key
+    if new_generic_profile is not None:
+        return None
+    return schema
+
+
+def _record_execution_save(
+    db, agent, *, expected_revision_id, output_contract=None, new_generic_profile=None,
+    previous_output=None, previous_snapshot=None, schema_provided=False, notes=None,
+):
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.agent_studio.generic_profile_service import create_profile
+
+    if new_generic_profile is not None:
+        profile, revision = create_profile(
+            db, agent.user_id, new_generic_profile,
+            visibility=agent.visibility, project_id=agent.project_id,
+        )
+        selected = AgentOutputContract(
+            output_state="structured_extraction", output_mode="profile_bound_generic",
+            generic_profile_ref=GenericProfilePin(
+                profile_id=profile.id, profile_revision_id=revision.id,
+                revision=revision.revision, fingerprint=revision.fingerprint,
+            ),
+        )
+    elif output_contract is not None:
+        selected = AgentOutputContract.model_validate(output_contract)
+    elif schema_provided or previous_output is None:
+        selected = initial_output_contract(agent.output_schema_key)
+    else:
+        selected = previous_output
+    saved = capture_execution_snapshot(db, agent, selected)
+    if previous_snapshot is not None:
+        # Inherited policy belongs to the saved agent, not today's parent/tool
+        # catalog. New selectable tools are validated separately at this save.
+        saved = saved.model_copy(update={
+            "system_managed_tool_ids": list(previous_snapshot.system_managed_tool_ids),
+            "group_tool_policy": previous_snapshot.group_tool_policy,
+        })
+    return append_execution_revision(
+        db, agent, saved, user_id=agent.user_id, expected_revision_id=expected_revision_id,
+        notes=notes,
+        allow_archived_profile=(
+            previous_output is not None
+            and previous_output.generic_profile_ref is not None
+            and previous_output.generic_profile_ref == selected.generic_profile_ref
+        ),
+    )
+
+
 def create_custom_agent(
     db: Session,
     user_id: int,
@@ -762,11 +838,14 @@ def create_custom_agent(
     category: Optional[str] = None,
     model_temperature: Optional[float] = None,
     model_reasoning: Optional[str] = None,
+    model_reasoning_provided: bool = False,
     allowed_group_ids: Optional[List[str]] = None,
     inherited_allowed_group_ids: Optional[List[str]] = None,
     inherited_group_tool_policy: Optional[Dict[str, Any]] = None,
     active_group_ids: Optional[List[str]] = None,
     visibility: str = "private",
+    output_contract: AgentOutputContract | None = None,
+    new_generic_profile: GenericProfileContract | None = None,
 ) -> CustomAgent:
     """Create a new custom agent and seed version snapshot."""
     selected_template_key = str(template_source or "").strip()
@@ -782,7 +861,10 @@ def create_custom_agent(
         parent_agent_key = parent_template.agent_key
         parent_defaults = {
             "model_id": parent_template.model_id,
-            "model_temperature": float(parent_template.model_temperature or 0.1),
+            "model_temperature": float(
+                parent_template.model_temperature
+                if parent_template.model_temperature is not None else 0.1
+            ),
             "model_reasoning": parent_template.model_reasoning,
             "tool_ids": list(parent_template.tool_ids or []),
             "output_schema_key": parent_template.output_schema_key,
@@ -861,9 +943,12 @@ def create_custom_agent(
     else:
         effective_tool_ids = parent_tool_ids
     effective_output_schema_key = _normalize_output_schema_key(
-        output_schema_key
-        if output_schema_key_provided or output_schema_key is not None
-        else parent_defaults["output_schema_key"]
+        _selected_output_schema(
+            output_contract, new_generic_profile,
+            output_schema_key if output_schema_key_provided or output_schema_key is not None
+            else parent_defaults["output_schema_key"],
+            output_schema_key_provided or output_schema_key is not None,
+        )
     )
     _validate_envelope_output_requires_finalize_tool(
         output_schema_key=effective_output_schema_key,
@@ -876,7 +961,7 @@ def create_custom_agent(
     )
     effective_model_reasoning = (
         model_reasoning
-        if model_reasoning is not None
+        if model_reasoning_provided or model_reasoning is not None
         else parent_defaults["model_reasoning"]
     )
     effective_category = (
@@ -947,15 +1032,10 @@ def create_custom_agent(
     db.add(custom_agent)
     db.flush()
 
-    # Seed version history with the initial prompt.
-    db.add(CustomAgentVersion(
-        custom_agent_id=custom_agent.id,
-        version=1,
-        custom_prompt=agent_prompt,
-        group_prompt_overrides=normalized_group_overrides,
-        allowed_group_ids=normalized_allowed_group_ids,
-        notes="Initial version",
-    ))
+    _record_execution_save(
+        db, custom_agent, expected_revision_id=None,
+        output_contract=output_contract, new_generic_profile=new_generic_profile,
+    )
 
     return custom_agent
 
@@ -1103,6 +1183,89 @@ def set_custom_agent_visibility(
     return custom_agent
 
 
+def clone_saved_custom_agent(
+    db: Session, user_id: int, source: CustomAgent, *, name: str,
+    allowed_group_ids: Optional[List[str]] = None,
+    active_group_ids: Optional[List[str]] = None,
+    visibility: str = "private", edits: Optional[Dict[str, Any]] = None,
+) -> CustomAgent:
+    """Clone an exact executable head, not a reconstruction from mutable fields."""
+    from copy import deepcopy
+    from src.lib.agent_studio.execution_revision_service import (
+        append_execution_revision, get_execution_revision,
+    )
+    from src.schemas.agent_execution_revision import AgentExecutionSnapshot
+
+    if source.execution_revision_id is None:
+        raise ValueError("Clone source has no executable baseline")
+    _, saved = get_execution_revision(
+        db, source.id, source.execution_revision_id, user_id,
+        active_group_ids=list(active_group_ids or []),
+    )
+    allowed = require_allowed_group_ids_narrowing(
+        saved.allowed_group_ids,
+        saved.allowed_group_ids if allowed_group_ids is None else allowed_group_ids,
+        source_name="saved clone source",
+    )
+    data = saved.model_dump(mode="json")
+    data["allowed_group_ids"] = allowed
+    data["inherited_allowed_group_ids"] = list(saved.allowed_group_ids)
+    cloned_snapshot = AgentExecutionSnapshot.model_validate(data)
+    if custom_agent_name_exists(db, user_id, name):
+        raise ValueError("A custom agent with this name already exists")
+    clone_id = uuid.uuid4()
+    clone = CustomAgent(
+        id=clone_id, agent_key=make_custom_agent_id(clone_id), user_id=user_id,
+        name=name, description=source.description, icon=source.icon, category=source.category,
+        is_active=True, visibility="private", version=1,
+        supervisor_enabled=False, supervisor_batchable=False, show_in_palette=True,
+        output_schema_key=saved.output_contract.output_schema_key,
+        **{
+            field: deepcopy(getattr(cloned_snapshot, field))
+            for field in (
+                "model_id", "model_temperature", "model_reasoning", "instructions",
+                "tool_ids", "group_tool_policy", "allowed_group_ids",
+                "inherited_allowed_group_ids", "group_rules_enabled",
+                "group_rules_component", "group_prompt_overrides", "template_source",
+            )
+        },
+    )
+    set_custom_agent_visibility(db, clone, user_id, visibility)
+    db.add(clone)
+    db.flush()
+    # Keep original prompt manifests/provenance and full resolved contracts. No
+    # parent lookup, prompt normalization, or second editable profile copy.
+    append_execution_revision(
+        db, clone, cloned_snapshot, user_id=user_id, expected_revision_id=None,
+    )
+    changed = {}
+    field_names = {"custom_prompt": "instructions", "include_group_rules": "group_rules_enabled"}
+    for key, value in (edits or {}).items():
+        if key == "template_source":
+            if value != saved.template_source:
+                raise ValueError("The clone template changed; reopen the source")
+            continue
+        if key == "category":
+            clone.category = value
+            continue
+        if key in {"output_contract", "new_generic_profile"}:
+            if key == "output_contract" and AgentOutputContract.model_validate(value) == saved.output_contract:
+                continue
+            changed[key] = value
+        elif value != getattr(clone, field_names.get(key, key)):
+            changed[key] = value
+    if changed:
+        update_custom_agent(
+            db, clone, expected_revision_id=clone.execution_revision_id,
+            active_group_ids=active_group_ids,
+            output_schema_key_provided="output_schema_key" in changed,
+            model_reasoning_provided="model_reasoning" in changed,
+            allow_empty_tool_ids=changed.get("tool_ids") == [],
+            **changed,
+        )
+    return clone
+
+
 def clone_visible_agent_for_user(
     db: Session,
     user_id: int,
@@ -1131,6 +1294,12 @@ def clone_visible_agent_for_user(
     clone_name = requested_name or _generate_clone_name(db, user_id, source_agent.name)
     if _has_active_custom_name(db, user_id, clone_name):
         raise ValueError("A custom agent with this name already exists")
+
+    if source_agent.visibility != "system":
+        return clone_saved_custom_agent(
+            db, user_id, source_agent, name=clone_name,
+            allowed_group_ids=allowed_group_ids, active_group_ids=active_group_ids,
+        )
 
     template_source = str(source_agent.template_source or "").strip() or (
         source_agent.agent_key if source_agent.visibility == "system" else None
@@ -1183,6 +1352,7 @@ def update_custom_agent(
     model_id: Optional[str] = None,
     model_temperature: Optional[float] = None,
     model_reasoning: Optional[str] = None,
+    model_reasoning_provided: bool = False,
     tool_ids: Optional[List[str]] = None,
     output_schema_key: Optional[str] = None,
     output_schema_key_provided: bool = False,
@@ -1190,14 +1360,15 @@ def update_custom_agent(
     allowed_group_ids: Optional[List[str]] = None,
     active_group_ids: Optional[List[str]] = None,
     visibility: Optional[str] = None,
+    expected_revision_id: uuid.UUID | None = None,
+    output_contract: AgentOutputContract | None = None,
+    new_generic_profile: GenericProfileContract | None = None,
 ) -> CustomAgent:
-    """Update custom-agent config and snapshot previous prompt when prompt changes."""
-    if expected_updated_at is not None:
-        db.refresh(custom_agent, with_for_update=True)
-        expected = expected_updated_at.replace(tzinfo=expected_updated_at.tzinfo or timezone.utc)
-        actual = custom_agent.updated_at.replace(tzinfo=custom_agent.updated_at.tzinfo or timezone.utc)
-        if expected != actual:
-            raise ValueError("This agent changed since it was opened. Reopen it before saving.")
+    """Save a complete new executable revision with inherited policy preserved."""
+    previous_revision_id, previous_snapshot = _prepare_execution_update(
+        db, custom_agent, expected_revision_id, expected_updated_at, active_group_ids,
+    )
+    previous_output = previous_snapshot.output_contract
     if name is not None and custom_agent_name_exists(
         db, custom_agent.user_id, name, excluding_id=custom_agent.id,
     ):
@@ -1239,23 +1410,11 @@ def update_custom_agent(
 
     next_tool_ids = list(custom_agent.tool_ids or [])
     if tool_ids is not None:
-        inherited_tool_ids: List[str] = []
-        template_source = getattr(custom_agent, "template_source", None)
-        if template_source:
-            try:
-                parent_template = _resolve_system_template_agent(db, template_source)
-                inherited_tool_ids = list(parent_template.tool_ids or [])
-            except ValueError:
-                inherited_tool_ids = []
-        inherited_system_tool_ids = (
-            _system_managed_tool_ids(db, inherited_tool_ids)
-            if inherited_tool_ids
-            else []
-        )
+        inherited_system_tool_ids = list(previous_snapshot.system_managed_tool_ids)
         validated_tool_ids = _validate_requested_tool_ids(
             db,
             tool_ids,
-            inherited_tool_ids=inherited_tool_ids,
+            inherited_tool_ids=inherited_system_tool_ids,
         ) or []
         next_tool_ids = _merge_system_managed_tool_ids(
             validated_tool_ids,
@@ -1269,9 +1428,12 @@ def update_custom_agent(
                 "Re-attach at least one tool before saving."
             )
     next_output_schema_key = _normalize_output_schema_key(
-        output_schema_key
-        if output_schema_key_provided or output_schema_key is not None
-        else custom_agent.output_schema_key
+        _selected_output_schema(
+            output_contract, new_generic_profile,
+            output_schema_key if output_schema_key_provided or output_schema_key is not None
+            else custom_agent.output_schema_key,
+            output_schema_key_provided or output_schema_key is not None,
+        )
     )
     _validate_envelope_output_requires_finalize_tool(
         output_schema_key=next_output_schema_key,
@@ -1325,7 +1487,7 @@ def update_custom_agent(
             "model_id": effective_model_id,
             "model_reasoning": (
                 model_reasoning
-                if model_reasoning is not None
+                if model_reasoning_provided or model_reasoning is not None
                 else custom_agent.model_reasoning
             ),
             "model_temperature": (
@@ -1342,19 +1504,6 @@ def update_custom_agent(
 
     if visibility is not None:
         set_custom_agent_visibility(db, custom_agent, custom_agent.user_id, visibility)
-    if prompt_changed or group_overrides_changed or allowed_group_ids_changed:
-        next_version = _get_next_version(db, custom_agent.id)
-        db.add(
-            CustomAgentVersion(
-                custom_agent_id=custom_agent.id,
-                version=next_version,
-                custom_prompt=custom_agent.instructions,
-                group_prompt_overrides=current_group_overrides,
-                allowed_group_ids=current_allowed_group_ids,
-                notes=notes or "Auto-snapshot before prompt update",
-            )
-        )
-
     if prompt_changed:
         custom_agent.instructions = str(next_custom_prompt)
     if group_overrides_changed and next_group_overrides is not None:
@@ -1374,15 +1523,21 @@ def update_custom_agent(
         custom_agent.model_id = effective_model_id
     if model_temperature is not None:
         custom_agent.model_temperature = float(model_temperature)
-    if model_reasoning is not None:
+    if model_reasoning_provided or model_reasoning is not None:
         custom_agent.model_reasoning = model_reasoning
     if tool_ids is not None:
         custom_agent.tool_ids = next_tool_ids
-    if output_schema_key_provided or output_schema_key is not None:
+    if output_schema_key_provided or output_schema_key is not None or output_contract is not None or new_generic_profile is not None:
         custom_agent.output_schema_key = next_output_schema_key
 
     if prompt_changed or group_overrides_changed or allowed_group_ids_changed:
         custom_agent.version = int(custom_agent.version or 1) + 1
+    _record_execution_save(
+        db, custom_agent, expected_revision_id=previous_revision_id,
+        output_contract=output_contract, new_generic_profile=new_generic_profile,
+        previous_output=previous_output, previous_snapshot=previous_snapshot, notes=notes,
+        schema_provided=output_schema_key_provided or output_schema_key is not None,
+    )
     return custom_agent
 
 
@@ -1404,53 +1559,6 @@ def list_custom_agent_versions(
     )
 
 
-def revert_custom_agent_to_version(
-    db: Session,
-    custom_agent: CustomAgent,
-    version: int,
-    notes: Optional[str] = None,
-) -> CustomAgent:
-    """Revert custom agent prompt to a previous version and snapshot current prompt."""
-    target = db.query(CustomAgentVersion).filter(
-        CustomAgentVersion.custom_agent_id == custom_agent.id,
-        CustomAgentVersion.version == version,
-    ).first()
-    if not target:
-        raise CustomAgentNotFoundError(
-            f"Version {version} not found for custom agent '{custom_agent.id}'"
-        )
-
-    target_custom_prompt = _normalize_editable_custom_prompt(
-        getattr(custom_agent, "template_source", None),
-        target.custom_prompt,
-        target="Custom agent main prompt",
-    )
-    target_group_overrides = normalize_editable_group_prompt_overrides(
-        _read_group_prompt_overrides(target)
-    )
-    target_allowed_group_ids = _validate_inherited_access_floor(
-        custom_agent,
-        _read_allowed_group_ids(target),
-    )
-    snapshot_version = _get_next_version(db, custom_agent.id)
-    db.add(
-        CustomAgentVersion(
-            custom_agent_id=custom_agent.id,
-            version=snapshot_version,
-            custom_prompt=custom_agent.instructions,
-            group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
-            allowed_group_ids=_read_allowed_group_ids(custom_agent),
-            notes=notes or f"Snapshot before revert to v{version}",
-        )
-    )
-
-    custom_agent.instructions = target_custom_prompt
-    _write_group_prompt_overrides(custom_agent, target_group_overrides)
-    custom_agent.allowed_group_ids = target_allowed_group_ids
-    custom_agent.version = int(custom_agent.version or 1) + 1
-    return custom_agent
-
-
 @dataclass
 class CustomAgentRuntimeInfo:
     """Runtime data needed to execute a custom agent by `ca_<uuid>` id."""
@@ -1468,10 +1576,14 @@ class CustomAgentRuntimeInfo:
 def get_custom_agent_runtime_info(
     custom_agent_id: str,
     db: Optional[Session] = None,
+    *, user_id: int | None = None, active_group_ids: Optional[List[str]] = None,
 ) -> Optional[CustomAgentRuntimeInfo]:
-    """Resolve active custom agent to runtime info."""
+    """Resolve runtime requirements from the authorized saved configuration."""
+    from src.lib.group_tool_policy import resolve_group_tool_policy
+    from src.lib.agent_studio.execution_revision_service import get_execution_revision, ExecutionRevisionNotFoundError
+
     custom_uuid = parse_custom_agent_id(custom_agent_id)
-    if not custom_uuid:
+    if not custom_uuid or user_id is None:
         return None
 
     own_session = db is None
@@ -1486,28 +1598,27 @@ def get_custom_agent_runtime_info(
             CustomAgent.visibility.in_(["private", "project"]),
             CustomAgent.agent_key == custom_agent_id,
         ).first()
-        if not custom_agent:
+        if not custom_agent or custom_agent.execution_revision_id is None:
             return None
-
-        tool_ids = list(custom_agent.tool_ids or [])
-        requires_document = bool(set(tool_ids) & DOCUMENT_TOOL_IDS)
         try:
-            main_prompt = custom_main_prompt_for_parent(
-                custom_agent.template_source,
-                custom_agent.instructions,
+            _, saved = get_execution_revision(
+                db, custom_agent.id, custom_agent.execution_revision_id, user_id,
+                active_group_ids=list(active_group_ids or []),
             )
-        except ValueError:
-            main_prompt = ""
+        except ExecutionRevisionNotFoundError:
+            return None
+        tool_ids = resolve_group_tool_policy(saved.tool_ids, saved.group_tool_policy, active_group_ids).tool_ids
+        requires_document = bool(set(tool_ids) & DOCUMENT_TOOL_IDS)
 
         return CustomAgentRuntimeInfo(
             custom_agent_uuid=custom_agent.id,
             custom_agent_id=make_custom_agent_id(custom_agent.id),
             display_name=custom_agent.name,
-            instructions=main_prompt,
-            group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
-            include_group_rules=bool(custom_agent.group_rules_enabled),
+            instructions=saved.instructions,
+            group_prompt_overrides=dict(saved.group_prompt_overrides),
+            include_group_rules=saved.group_rules_enabled,
             requires_document=requires_document,
-            allowed_group_ids=_read_allowed_group_ids(custom_agent),
+            allowed_group_ids=list(saved.allowed_group_ids),
         )
     finally:
         if own_session and db is not None:
@@ -1526,6 +1637,7 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
     return {
         "id": str(custom_agent.id),
         "agent_id": make_custom_agent_id(custom_agent.id),
+        "execution_revision_id": getattr(custom_agent, "execution_revision_id", None),
         "user_id": custom_agent.user_id,
         "template_source": custom_agent.template_source,
         "name": custom_agent.name,
@@ -1540,7 +1652,10 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "icon": custom_agent.icon,
         "include_group_rules": include_group_rules,
         "model_id": custom_agent.model_id,
-        "model_temperature": float(custom_agent.model_temperature or 0.1),
+        "model_temperature": float(
+            custom_agent.model_temperature
+            if custom_agent.model_temperature is not None else 0.1
+        ),
         "model_reasoning": custom_agent.model_reasoning,
         "tool_ids": list(custom_agent.tool_ids or []),
         "output_schema_key": custom_agent.output_schema_key,

@@ -35,6 +35,8 @@ import {
   type ChatHistoryListResponse,
 } from '@/services/chatHistoryApi'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
+import type { AgentOutputContract, AgentExecutionRevision, AgentExecutionRevisionPage } from '@/types/agentExecution'
+import type { GenericProfileContract } from '@/services/genericProfileService'
 
 const BASE_URL = '/api/agent-studio'
 
@@ -418,16 +420,19 @@ export interface CreateCustomAgentRequest {
   include_group_rules?: boolean
   model_id?: string
   model_temperature?: number
-  model_reasoning?: string
+  model_reasoning?: string | null
   tool_ids?: string[]
   output_schema_key?: string | null
   category?: string
   allowed_group_ids?: string[]
+  output_contract?: AgentOutputContract
+  new_generic_profile?: GenericProfileContract
 }
 
 export interface UpdateCustomAgentRequest {
   visibility?: 'private' | 'project'
   expected_updated_at?: string
+  expected_revision_id?: string
   name?: string
   custom_prompt?: string
   group_prompt_overrides?: Record<string, string>
@@ -436,12 +441,14 @@ export interface UpdateCustomAgentRequest {
   include_group_rules?: boolean
   model_id?: string
   model_temperature?: number
-  model_reasoning?: string
+  model_reasoning?: string | null
   tool_ids?: string[]
   output_schema_key?: string | null
   allow_empty_tool_ids?: boolean
   notes?: string
   allowed_group_ids?: string[]
+  output_contract?: AgentOutputContract
+  new_generic_profile?: GenericProfileContract
 }
 
 export interface CloneAgentRequest {
@@ -603,6 +610,34 @@ export async function getWorkshopSavedReference(customAgentId: string): Promise<
   return response.json()
 }
 
+export async function listAgentExecutionRevisions(
+  customAgentId: string, beforeRevision?: number,
+): Promise<AgentExecutionRevisionPage> {
+  const query = beforeRevision === undefined ? '' : `?before_revision=${beforeRevision}`
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions${query}`)
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
+export async function getAgentExecutionRevision(
+  customAgentId: string, revisionId: string,
+): Promise<AgentExecutionRevision> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions/${encodeURIComponent(revisionId)}`)
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
+export async function restoreAgentExecutionRevision(
+  customAgentId: string, revisionId: string, expectedRevisionId: string,
+): Promise<CustomAgent> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions/${encodeURIComponent(revisionId)}/restore`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expected_revision_id: expectedRevisionId }),
+  })
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
 export async function deleteCustomAgent(customAgentId: string): Promise<void> {
   const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}`, {
     method: 'DELETE',
@@ -653,25 +688,6 @@ export async function listCustomAgentVersions(customAgentId: string): Promise<Cu
   const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/versions`)
   if (!response.ok) {
     throw new Error(`Failed to list custom agent versions: ${response.status}`)
-  }
-  return response.json()
-}
-
-export async function revertCustomAgentVersion(
-  customAgentId: string,
-  version: number,
-  notes?: string
-): Promise<CustomAgent> {
-  const response = await fetch(
-    `${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/revert/${version}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes }),
-    }
-  )
-  if (!response.ok) {
-    throw new Error(`Failed to revert custom agent version: ${response.status}`)
   }
   return response.json()
 }

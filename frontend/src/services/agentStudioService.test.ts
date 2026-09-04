@@ -17,6 +17,9 @@ import {
   submitToolIdeaRequest,
   streamOpusChat,
   updateCustomAgent,
+  listAgentExecutionRevisions,
+  getAgentExecutionRevision,
+  restoreAgentExecutionRevision,
   updateFlow,
   validateFlowDraft,
 } from './agentStudioService'
@@ -274,6 +277,27 @@ describe('agentStudioService', () => {
 
     const fetchOptions = mockFetch.mock.calls[0][1]
     expect(JSON.parse(fetchOptions.body as string)).toEqual({ allowed_group_ids: ['GROUP_A'] })
+  })
+
+  it('sends explicit output transitions and the expected executable head', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) })
+    await updateCustomAgent('custom-id', {
+      expected_revision_id: 'revision-1', output_contract: { output_state: 'none' },
+    })
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({
+      expected_revision_id: 'revision-1', output_contract: { output_state: 'none' },
+    })
+  })
+
+  it('browses exact executable revisions and restores with a head guard', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) })
+    await listAgentExecutionRevisions('custom-id', 5)
+    await getAgentExecutionRevision('custom-id', 'revision-2')
+    await restoreAgentExecutionRevision('custom-id', 'revision-2', 'revision-7')
+    expect(mockFetch.mock.calls[0][0]).toBe('/api/agent-studio/custom-agents/custom-id/execution-revisions?before_revision=5')
+    expect(mockFetch.mock.calls[1][0]).toBe('/api/agent-studio/custom-agents/custom-id/execution-revisions/revision-2')
+    expect(mockFetch.mock.calls[2][0]).toBe('/api/agent-studio/custom-agents/custom-id/execution-revisions/revision-2/restore')
+    expect(JSON.parse(mockFetch.mock.calls[2][1].body)).toEqual({ expected_revision_id: 'revision-7' })
   })
 
   it('updateCustomAgent falls back safely for malformed structured findings', async () => {
