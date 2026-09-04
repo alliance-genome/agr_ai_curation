@@ -4,6 +4,7 @@ import asyncio
 from contextlib import nullcontext
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from agents import FunctionTool, ToolSearchTool
 
@@ -61,6 +62,58 @@ def test_tracked_sentry_span_treats_refusal_as_typed_outcome_without_content(mon
         "error_type": "ModelRefusalError",
     }
     assert "sensitive refusal details" not in repr(data)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_outcome"),
+    [
+        (
+            runtime.ModelBehaviorError(
+                "Responses stream ended with terminal event `response.incomplete`."
+            ),
+            "incomplete",
+        ),
+        (
+            runtime.BadRequestError(
+                "Request exceeded the context length token limit",
+                response=httpx.Response(
+                    400,
+                    request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+                ),
+                body={},
+            ),
+            "context_overflow",
+        ),
+    ],
+)
+def test_tracked_sentry_span_treats_expected_terminal_outcomes_as_non_crashes(
+    monkeypatch,
+    error,
+    expected_outcome,
+):
+    span = object()
+    statuses = []
+    data = []
+    monkeypatch.setattr(runtime, "gen_ai_invoke_agent_span", lambda **_kwargs: nullcontext(span))
+    monkeypatch.setattr(runtime, "set_sentry_span_status", lambda value, status: statuses.append((value, status)))
+    monkeypatch.setattr(
+        runtime,
+        "set_redacted_ai_span_data",
+        lambda value, key, payload: data.append((value, key, payload)),
+    )
+
+    with pytest.raises(type(error)):
+        with runtime._tracked_agent_span(workflow="agent_studio_authoring"):
+            raise error
+
+    assert statuses == [(span, "ok")]
+    assert data[0] == (
+        span,
+        "ai_curation.agent_studio.outcome",
+        expected_outcome,
+    )
+    assert data[1][2]["error_type"] == type(error).__name__
+    assert "Request exceeded" not in repr(data)
 
 
 def test_tools_use_one_hosted_search_surface_and_keep_forced_tool_eager():
@@ -257,6 +310,44 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch):
     assert closed == [(resources, {"trace_id": "trace-1", "user_id": "user-1"})]
 
 
+def test_stream_closes_owned_resources_when_runtime_construction_fails(monkeypatch):
+    resources = SimpleNamespace(provider=object())
+    state = runtime.AgentStudioRunState(trace_id="trace-construction")
+    closed = []
+    monkeypatch.setattr(runtime, "build_owned_openai_responses_resources", lambda: resources)
+    monkeypatch.setattr(
+        runtime,
+        "_run_config",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("construction failed")),
+    )
+
+    async def _close(value, **kwargs):
+        closed.append((value, kwargs))
+
+    monkeypatch.setattr(runtime, "close_owned_openai_resources", _close)
+
+    async def collect():
+        return [
+            event
+            async for event in runtime.stream_agent_studio_run(
+                instructions="system",
+                input_items=[],
+                tools=[],
+                state=state,
+                session_id="session-1",
+                user_id="user-1",
+                max_turns=1,
+                model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100),
+            )
+        ]
+
+    with pytest.raises(RuntimeError, match="construction failed"):
+        asyncio.run(collect())
+    assert closed == [
+        (resources, {"trace_id": "trace-construction", "user_id": "user-1"})
+    ]
+
+
 def test_forced_tool_run_uses_sdk_runner_and_stops_after_submission(monkeypatch):
     captured = {}
     provider = object()
@@ -321,3 +412,49 @@ def test_forced_tool_run_uses_sdk_runner_and_stops_after_submission(monkeypatch)
     assert captured["run_config"].model_provider is provider
     assert captured["max_turns"] == 2
     assert state.response_id == "resp-suggestion"
+
+
+def test_forced_tool_run_closes_owned_resources_when_runtime_construction_fails(
+    monkeypatch,
+):
+    resources = SimpleNamespace(provider=object())
+    state = runtime.AgentStudioRunState(trace_id="trace-suggestion-construction")
+    closed = []
+
+    async def execute(_name, _arguments, _call_id):
+        raise AssertionError("tool must not execute")
+
+    async def _close(value, **kwargs):
+        closed.append((value, kwargs))
+
+    monkeypatch.setattr(runtime, "build_owned_openai_responses_resources", lambda: resources)
+    monkeypatch.setattr(runtime, "close_owned_openai_resources", _close)
+    monkeypatch.setattr(
+        runtime,
+        "_run_config",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("construction failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="construction failed"):
+        asyncio.run(
+            runtime.run_forced_agent_studio_tool(
+                instructions="submit feedback",
+                input_items=[],
+                tool_definition=_tool_definition("submit_prompt_suggestion"),
+                executor=execute,
+                state=state,
+                session_id="suggestion-session",
+                user_id="user-1",
+                max_turns=2,
+                max_output_tokens=512,
+            )
+        )
+    assert closed == [
+        (
+            resources,
+            {
+                "trace_id": "trace-suggestion-construction",
+                "user_id": "user-1",
+            },
+        )
+    ]

@@ -3658,7 +3658,19 @@ async def _handle_tool_call(
             result = tool_def.handler(**tool_input)
             return result
         except Exception as e:
-            logger.error('Diagnostic tool %s failed: %s', tool_name, e, exc_info=True)
+            _report_agent_studio_exception_once(
+                e,
+                operation="diagnostic_tool_execution_failed",
+                phase="tool_execution",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            logger.error(
+                'Diagnostic tool %s failed: %s',
+                tool_name,
+                e,
+                exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
             return {
                 "success": False,
                 "error": "Tool execution failed unexpectedly.",
@@ -4885,7 +4897,15 @@ async def chat_with_opus(
                 operation="agents_sdk_run",
                 provider="openai",
                 model=AGENT_STUDIO_OPENAI_MODEL,
-                payload={"messages": input_items, "tool_counts": tool_counts},
+                payload={
+                    "instructions": system_prompt,
+                    "input": input_items,
+                    "tools": tool_definitions,
+                    "tool_search": {
+                        "forced_tool_name": forced_tool_name,
+                        **tool_counts,
+                    },
+                },
                 metadata={
                     "session_id": prepared_turn.session_id,
                     "turn_id": prepared_turn.turn_id,
@@ -5064,6 +5084,7 @@ async def chat_with_opus(
                     trace_id=run_state.trace_id,
                     session_id=prepared_turn.session_id,
                     curator_id=user_email,
+                    capture_sentry=False,
                 )
             )
             logger.error(

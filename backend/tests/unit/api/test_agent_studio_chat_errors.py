@@ -374,6 +374,7 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
             "trace_id": "12345678-1234-5678-1234-567812345678",
             "session_id": "agent-studio-session-1",
             "curator_id": "curator@example.org",
+            "capture_sentry": False,
         }
     ]
     assert logger_errors[0][0][0] == "OpenAI Agent Studio API error: %s"
@@ -525,4 +526,59 @@ def test_chat_with_opus_reports_turn_limit_without_leaking_sdk_detail(monkeypatc
     assert runtime_reports[0][1]["tags"] == {
         "phase": "agents_sdk_run",
         "provider": "openai",
+    }
+
+
+def test_chat_preflight_sizes_instructions_messages_and_authorized_tool_schemas(monkeypatch):
+    captured = {}
+    tool_definition = {
+        "name": "inspect_catalog",
+        "description": "Inspect the authorized catalog",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    }
+    _configure_chat_endpoint(
+        monkeypatch,
+        api_module.ModelRefusalError("expected typed refusal"),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "_get_all_opus_tools",
+        lambda _context=None: [tool_definition],
+    )
+
+    def _capture_preflight(**kwargs):
+        captured.update(kwargs)
+        return {
+            "operation": kwargs["operation"],
+            "json_chars": 100,
+            "estimated_tokens": 25,
+            "threshold": None,
+            "largest_paths": [],
+        }
+
+    monkeypatch.setattr(api_module, "provider_context_preflight", _capture_preflight)
+
+    response = asyncio.run(
+        api_module.chat_with_opus(
+            request=_chat_request(),
+            user={"email": "curator@example.org", "sub": "auth-sub"},
+        )
+    )
+    asyncio.run(_consume_stream(response))
+
+    assert captured["payload"]["instructions"] == "system prompt"
+    assert captured["payload"]["input"] == [
+        {"role": "user", "content": "Please help"}
+    ]
+    assert captured["payload"]["tools"] == [tool_definition]
+    assert captured["payload"]["tool_search"] == {
+        "forced_tool_name": None,
+        "candidate_count": 1,
+        "eager_count": 0,
+        "deferred_count": 1,
+        "namespace_count": 1,
     }

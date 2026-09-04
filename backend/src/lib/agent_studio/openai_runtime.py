@@ -24,6 +24,7 @@ from agents import (
     ToolSearchTool,
     tool_namespace,
 )
+from openai import BadRequestError
 from openai.types.responses import ResponseTextDeltaEvent
 
 from src.lib.observability.sentry import (
@@ -300,6 +301,13 @@ def _capture_terminal_metadata(result: Any, state: AgentStudioRunState) -> None:
     state.reasoning_tokens = int(getattr(output_details, "reasoning_tokens", 0) or 0)
 
 
+def _is_context_overflow_error(exc: BaseException) -> bool:
+    return isinstance(exc, BadRequestError) and any(
+        phrase in str(exc).lower()
+        for phrase in ("too many tokens", "context length", "maximum context", "token limit")
+    )
+
+
 @contextmanager
 def _tracked_agent_span(**kwargs: Any):
     """Give the manual Sentry span a sanitized terminal outcome and status."""
@@ -313,7 +321,10 @@ def _tracked_agent_span(**kwargs: Any):
                 status = "ok"
             elif isinstance(exc, ModelBehaviorError) and "response.incomplete" in str(exc).lower():
                 outcome = "incomplete"
-                status = "internal_error"
+                status = "ok"
+            elif _is_context_overflow_error(exc):
+                outcome = "context_overflow"
+                status = "ok"
             elif type(exc).__name__ == "CancelledError":
                 outcome = "cancelled"
                 status = "cancelled"
@@ -360,21 +371,21 @@ async def stream_agent_studio_run(
     """Run the SDK-owned authoring loop and emit provider-neutral Studio events."""
 
     resources = build_owned_openai_responses_resources()
-    run_config = _run_config(
-        state=state,
-        session_id=session_id,
-        user_id=user_id,
-        model_provider=resources.provider,
-    )
-    agent = Agent(
-        name="Agent Studio Authoring Assistant",
-        instructions=instructions,
-        model=AGENT_STUDIO_OPENAI_MODEL,
-        model_settings=model_settings,
-        tools=tools,
-    )
-    pending_calls: dict[str, tuple[str, dict[str, Any]]] = {}
     try:
+        run_config = _run_config(
+            state=state,
+            session_id=session_id,
+            user_id=user_id,
+            model_provider=resources.provider,
+        )
+        agent = Agent(
+            name="Agent Studio Authoring Assistant",
+            instructions=instructions,
+            model=AGENT_STUDIO_OPENAI_MODEL,
+            model_settings=model_settings,
+            tools=tools,
+        )
+        pending_calls: dict[str, tuple[str, dict[str, Any]]] = {}
         with gen_ai_conversation_scope(session_id):
             with _tracked_agent_span(
                 agent_name="Agent Studio Authoring Assistant",
@@ -490,24 +501,24 @@ async def run_forced_agent_studio_tool(
         forced_tool_name=tool_name,
     )
     resources = build_owned_openai_responses_resources()
-    run_config = _run_config(
-        state=state,
-        session_id=session_id,
-        user_id=user_id,
-        model_provider=resources.provider,
-    )
-    agent = Agent(
-        name="Agent Studio Suggestion Assistant",
-        instructions=instructions,
-        model=AGENT_STUDIO_OPENAI_MODEL,
-        model_settings=build_agent_studio_model_settings(
-            max_output_tokens=max_output_tokens,
-            tool_choice=tool_name,
-        ),
-        tools=tools,
-        tool_use_behavior="stop_on_first_tool",
-    )
     try:
+        run_config = _run_config(
+            state=state,
+            session_id=session_id,
+            user_id=user_id,
+            model_provider=resources.provider,
+        )
+        agent = Agent(
+            name="Agent Studio Suggestion Assistant",
+            instructions=instructions,
+            model=AGENT_STUDIO_OPENAI_MODEL,
+            model_settings=build_agent_studio_model_settings(
+                max_output_tokens=max_output_tokens,
+                tool_choice=tool_name,
+            ),
+            tools=tools,
+            tool_use_behavior="stop_on_first_tool",
+        )
         with gen_ai_conversation_scope(session_id):
             with _tracked_agent_span(
                 agent_name="Agent Studio Suggestion Assistant",

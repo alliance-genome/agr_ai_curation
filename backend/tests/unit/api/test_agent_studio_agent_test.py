@@ -1078,6 +1078,8 @@ class TestAgentWorkshopSystemPrompt:
     def test_handle_tool_call_sanitizes_diagnostic_tool_failures(self, monkeypatch, caplog):
         from src.api import agent_studio as api_module
 
+        reports = []
+
         def _raise_tool_failure(**_kwargs):
             raise RuntimeError("registry backend unavailable")
 
@@ -1093,6 +1095,11 @@ class TestAgentWorkshopSystemPrompt:
             ),
         )
         monkeypatch.setattr(api_module, "_ensure_flow_tools_registered", lambda _registry: None)
+        monkeypatch.setattr(
+            api_module,
+            "_report_agent_studio_exception_once",
+            lambda exc, **kwargs: reports.append((exc, kwargs)) or True,
+        )
         caplog.set_level(logging.ERROR, logger=api_module.logger.name)
 
         result = asyncio.run(
@@ -1110,6 +1117,11 @@ class TestAgentWorkshopSystemPrompt:
         assert result["error"] == "Tool execution failed unexpectedly."
         assert "registry backend unavailable" not in result["error"]
         assert "registry backend unavailable" in caplog.text
+        assert reports[0][1] == {
+            "operation": "diagnostic_tool_execution_failed",
+            "phase": "tool_execution",
+            "context": {"model": "gpt-5.6-sol"},
+        }
 
     def test_handle_update_workshop_prompt_tool_supports_group_targeted_edit(self):
         from src.api import agent_studio as api_module
