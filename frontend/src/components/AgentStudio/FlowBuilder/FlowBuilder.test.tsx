@@ -531,7 +531,7 @@ describe('FlowBuilder', () => {
     expect(dirtyEvent.defaultPrevented).toBe(true)
   })
 
-  it('atomically applies an exact flow proposal without saving and offers one-step undo', async () => {
+  it.each(['normal', 'pre_apply', 'post_apply', 'post_failure'] as const)('preserves exact flow Apply/Undo across %s validation', async (editDuring) => {
     const user = userEvent.setup()
     const authoringRef = React.createRef<FlowAuthoringContextHandle>()
     render(<FlowBuilder authoringContextRef={authoringRef} />)
@@ -645,6 +645,39 @@ describe('FlowBuilder', () => {
     expect(result).toEqual(expect.objectContaining({ applied: false, reason: 'stale' }))
     expect(screen.getByText('1 step')).toBeInTheDocument()
     expect(serviceMocks.validateFlowDraft).not.toHaveBeenCalled()
+
+    if (editDuring !== 'normal') {
+      let finishValidation!: () => void
+      serviceMocks.validateFlowDraft.mockImplementation((_, phase) => {
+        const result = { artifact_kind: 'flow', phase, valid: true, findings: [] }
+        if (phase !== (editDuring === 'post_failure' ? 'post_apply' : editDuring)) return Promise.resolve(result)
+        return new Promise((resolve, reject) => {
+          finishValidation = () => editDuring === 'post_failure'
+            ? reject(new Error('Validation unavailable')) : resolve(result)
+        })
+      })
+      let pending!: ReturnType<FlowAuthoringContextHandle['applyAuthoringProposal']>
+      act(() => { pending = authoringRef.current!.applyAuthoringProposal(proposal) })
+      await waitFor(() => expect(finishValidation).toBeDefined())
+      expect(await authoringRef.current!.applyAuthoringProposal(proposal)).toEqual(
+        expect.objectContaining({ applied: false, reason: 'unavailable' }),
+      )
+      expect(screen.getByRole('button', { name: 'Save flow' })).toBeDisabled()
+      fireEvent.drop(screen.getByTestId('react-flow'), {
+        clientX: 320, clientY: 220,
+        dataTransfer: { getData: (format: string) => format === 'application/reactflow'
+          ? JSON.stringify({ type: 'agent', agentId: 'gene_extractor', agentName: 'Manual step' }) : '' },
+      })
+      const edited = authoringRef.current!.captureAuthoringContext()
+      await act(async () => { finishValidation(); result = await pending })
+      expect(result).toEqual(expect.objectContaining({
+        applied: false, reason: editDuring === 'post_failure' ? 'unavailable' : 'stale',
+      }))
+      expect(authoringRef.current!.captureAuthoringContext()).toEqual(edited)
+      expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+      expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+      return
+    }
 
     await act(async () => {
       result = await authoringRef.current!.applyAuthoringProposal(proposal)

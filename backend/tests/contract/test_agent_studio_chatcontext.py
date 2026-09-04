@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.api import agent_studio as api_module
+from src.lib.agent_studio.authoring_context import flow_draft_fingerprint
 from src.lib.chat_history_repository import AGENT_STUDIO_CHAT_KIND, ChatMessageRecord
 
 
@@ -16,12 +17,21 @@ CONTEXT_TURN_ID = "agent-studio-chatcontext-turn-1"
 
 
 def _consume_sse_events(stream_response) -> list[dict]:
+    if stream_response.status_code != 200:
+        stream_response.read()
+        raise AssertionError(stream_response.text)
     events: list[dict] = []
     for line in stream_response.iter_lines():
         if not line.startswith("data: "):
             continue
         events.append(json.loads(line[6:]))
     return events
+
+
+def _with_flow_fingerprint(payload: dict) -> dict:
+    context = api_module.ChatContext.model_validate(payload["context"])
+    payload["context"]["flow_draft_fingerprint"] = flow_draft_fingerprint(context)
+    return payload
 
 
 def test_chat_context_model_round_trips_session_id():
@@ -123,7 +133,7 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
         "POST",
         "/api/agent-studio/chat",
         headers=chat_contract_auth_headers,
-        json={
+        json=_with_flow_fingerprint({
             "messages": [{"role": "user", "content": "Please analyze this trace"}],
             "context": {
                 "trace_id": "trace-123",
@@ -135,6 +145,7 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
                     "nodes": [
                         {
                             "id": "task_input_0",
+                            "position": {"x": 250, "y": 100},
                             "node_type": "task_input",
                             "agent_id": "task_input",
                             "agent_display_name": "Initial Instructions",
@@ -143,6 +154,7 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
                         },
                         {
                             "id": "allele_1",
+                            "position": {"x": 250, "y": 280},
                             "node_type": "agent",
                             "agent_id": "allele_extractor",
                             "agent_display_name": "Allele Extractor",
@@ -159,7 +171,7 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
                     ],
                 },
             },
-        },
+        }),
     ) as response:
         events = _consume_sse_events(response)
 

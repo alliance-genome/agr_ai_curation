@@ -43,7 +43,7 @@ def sources(monkeypatch):
     monkeypatch.setattr(
         catalog,
         "get_tool_policy_cache",
-        lambda: SimpleNamespace(list_curator_visible=lambda _db: []),
+        lambda: SimpleNamespace(refresh=lambda _db: []),
     )
     monkeypatch.setattr(flow_tools, "list_available_flow_templates", lambda **_: [])
     return agents
@@ -212,7 +212,7 @@ def test_catalog_projects_live_models_tools_and_registered_output_contracts(
     monkeypatch.setattr(
         catalog,
         "get_tool_policy_cache",
-        lambda: SimpleNamespace(list_curator_visible=lambda _db: policies),
+        lambda: SimpleNamespace(refresh=lambda _db: policies),
     )
     monkeypatch.setattr(catalog, "has_tool_binding", lambda tool_id: tool_id == "search_document")
     monkeypatch.setattr(catalog, "tool_requires_document", lambda tool_id: tool_id == "search_document")
@@ -256,3 +256,34 @@ def test_custom_output_remains_discoverable_but_not_flow_selectable(sources):
     custom = next(record for record in records if record.resource_id == "ca_owned")
     assert custom.selectable is True
     assert custom.compatibility["flow_selectable"] is False
+
+
+def test_search_reauthorizes_tools_despite_warm_library_cache(sources, monkeypatch):
+    import time
+    from src.lib.agent_studio.tool_policy_service import ToolPolicyCacheService
+
+    cache = ToolPolicyCacheService()
+    cache._entries = [SimpleNamespace(
+        tool_key="revoked_tool", display_name="Revoked tool", description="Hidden now",
+        category="Other", curator_visible=True, allow_attach=True, allow_execute=True,
+        config={},
+    )]
+    cache._loaded_at_monotonic = time.monotonic()
+    monkeypatch.setattr(cache, "_load", lambda _db: [SimpleNamespace(curator_visible=False)])
+    monkeypatch.setattr(catalog, "get_tool_policy_cache", lambda: cache)
+    monkeypatch.setattr(catalog, "has_tool_binding", lambda _: True)
+    monkeypatch.setattr(catalog, "tool_requires_document", lambda _: False)
+    result = catalog.search_capabilities(
+        db=object(), context=catalog.CapabilityCatalogContext(user_id=7), kinds=["tool"],
+    )
+    assert result["results"] == []
+
+
+def test_search_cannot_return_a_nonadvancing_empty_page(sources, monkeypatch):
+    sources[0].description = "x" * 10_000
+    monkeypatch.setattr(catalog, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 2000)
+    with pytest.raises(catalog.CapabilityCatalogUnavailable):
+        catalog.search_capabilities(
+            db=object(), context=catalog.CapabilityCatalogContext(user_id=7),
+            kinds=["agent"], query="system_agent",
+        )

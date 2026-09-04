@@ -366,7 +366,11 @@ def _tool_records(
     context: CapabilityCatalogContext,
 ) -> list[CapabilityRecord]:
     records: list[CapabilityRecord] = []
-    for entry in get_tool_policy_cache().list_curator_visible(db):
+    # Library caching is not an authorization snapshot: re-read revocations on
+    # every model-facing search/detail and proposal validation.
+    for entry in get_tool_policy_cache().refresh(db):
+        if not entry.curator_visible:
+            continue
         raw_allowed_groups = entry.config.get("allowed_group_ids", [])
         allowed_groups = (
             list(raw_allowed_groups) if isinstance(raw_allowed_groups, list) else []
@@ -719,6 +723,14 @@ def search_capabilities(
     while _provider_chars(response) > maximum_chars and summaries:
         summaries.pop()
         response = build_response()
+    if not summaries and offset < len(matched):
+        raise CapabilityCatalogUnavailable(
+            "No capability summary fits the provider result bound",
+            phase="result_bound",
+            candidate_count=len(matched),
+            bound=maximum_chars,
+            catalog_fingerprint=fingerprint,
+        )
     if _provider_chars(response) > maximum_chars:
         raise CapabilityCatalogUnavailable(
             "Capability catalog page metadata cannot fit the provider result bound",

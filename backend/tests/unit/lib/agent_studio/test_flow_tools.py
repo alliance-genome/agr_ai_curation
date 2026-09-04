@@ -1392,8 +1392,9 @@ def test_manifest_exposes_compact_domain_pack_link_without_aggregate_analysis(
     extract = next(node for node in manifest["nodes"] if node["node_id"] == "extract")
     assert extract["domain_pack_id"] == "alliance_gene"
     assert "domain_envelope_analysis" not in manifest
+@pytest.mark.parametrize("isolated_tool_context", [False, True])
 def test_flow_proposal_compiles_semantic_operations_without_database_writes(
-    monkeypatch,
+    monkeypatch, isolated_tool_context,
 ):
     base_fingerprint = f"sha256:{'a' * 64}"
     flow_tools.set_workflow_user_context(123)
@@ -1441,7 +1442,15 @@ def test_flow_proposal_compiles_semantic_operations_without_database_writes(
         lambda agent_id, _context: accessible.get(agent_id),
     )
 
-    propose = flow_tools._propose_flow_draft_update_handler()
+    from contextvars import copy_context
+
+    handler = flow_tools._propose_flow_draft_update_handler()
+
+    def propose(**kwargs):
+        # SDK tool tasks inherit a copy; ContextVar.set does not propagate back.
+        if isolated_tool_context:
+            return copy_context().run(handler, **kwargs)
+        return handler(**kwargs)
     result = propose(
         base_draft_fingerprint=base_fingerprint,
         change_summary="Build a gene extraction flow.",
@@ -1530,6 +1539,16 @@ def test_flow_proposal_compiles_semantic_operations_without_database_writes(
     assert follow_up["candidate"]["flow_definition"]["edges"][-2]["target"] == "node_3"
     assert follow_up["candidate"]["flow_definition"]["edges"][-1]["source"] == "node_2"
     assert follow_up["candidate"]["flow_definition"]["edges"][-1]["target"] == "node_3"
+
+    # A new request starts from its own editor base, never the previous candidate.
+    flow_tools.set_current_flow_context(flow_tools.get_current_flow_context())
+    fresh = propose(
+        base_draft_fingerprint=base_fingerprint,
+        change_summary="Do not reuse another turn's semantic references.",
+        operations=[{"operation": "update_step", "node_ref": "extractor", "step_goal": "Changed"}],
+    )
+    assert fresh["success"] is False
+    assert "Unknown flow step" in fresh["error"]
 
 
 def test_flow_proposal_rejects_stale_or_unavailable_references(monkeypatch):

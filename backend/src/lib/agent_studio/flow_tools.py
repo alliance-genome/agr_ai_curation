@@ -187,7 +187,9 @@ def set_current_flow_context(flow_context: Optional[Dict[str, Any]]) -> None:
         flow_context: Dict with flow_name, nodes, edges, entry_node_id
     """
     _current_flow_context.set(flow_context)
-    _current_flow_proposal.set(None)
+    # Tool tasks inherit this request-local holder by reference. Replacing a
+    # ContextVar inside an SDK task would lose the candidate for the next call.
+    _current_flow_proposal.set({} if flow_context is not None else None)
     if flow_context:
         logger.debug('Set flow context: %s', flow_context.get('flow_name', 'Unnamed'))
 
@@ -1736,7 +1738,8 @@ def _propose_flow_draft_update_handler():
             }
 
         original = _flow_context_definition(flow_context)
-        proposal_state = _current_flow_proposal.get()
+        proposal_holder = _current_flow_proposal.get()
+        proposal_state = proposal_holder
         if (
             reset_candidate
             or not proposal_state
@@ -1798,7 +1801,9 @@ def _propose_flow_draft_update_handler():
         proposal_state["candidate"] = deepcopy(candidate)
         proposal_state["metadata"] = deepcopy(metadata)
         proposal_state["semantic_refs"] = deepcopy(semantic_refs)
-        _current_flow_proposal.set(proposal_state)
+        if proposal_holder is not None and proposal_holder is not proposal_state:
+            proposal_holder.clear()
+            proposal_holder.update(proposal_state)
 
         normalized_original = _save_equivalent_flow_payload(original)
         base_payload = {

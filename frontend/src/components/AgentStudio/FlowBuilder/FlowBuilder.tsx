@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback, useRef, useMemo, useEffect, useImperativeHandle } from 'react'
+import { flushSync } from 'react-dom'
 import ReactFlow, {
   ReactFlowProvider,
   Controls,
@@ -942,6 +943,13 @@ function FlowBuilderInner({
   const [flowUpdatedAt, setFlowUpdatedAt] = useState<string | null>(null)
   const [savedBaseline, setSavedBaseline] = useState<FlowDraftBaseline>(initialFlowDraftBaseline)
   const [proposalUndo, setProposalUndo] = useState<FlowProposalUndo | null>(null)
+  const [applyingProposal, setApplyingProposal] = useState(false)
+  const applyingProposalRef = useRef(false)
+  const authoringMountedRef = useRef(true)
+  useEffect(() => {
+    authoringMountedRef.current = true
+    return () => { authoringMountedRef.current = false }
+  }, [])
   const initialBaselineCapturedRef = useRef(Boolean(flowId))
   const [pendingFlowReplacement, setPendingFlowReplacement] = useState<{
     label: string
@@ -1171,6 +1179,9 @@ function FlowBuilderInner({
     taskInstructionsDefaultOnly,
   ])
 
+  const liveAuthoringRef = useRef({ captureAuthoringContext, saving, loading })
+  liveAuthoringRef.current = { captureAuthoringContext, saving, loading }
+
   const applyDefinitionToEditor = useCallback((draft: FlowDraftBaseline) => {
     const nextNodes: AgentNode[] = draft.definition.nodes.map((node) => ({
       id: node.id,
@@ -1221,13 +1232,14 @@ function FlowBuilderInner({
     nodeIdRef.current = maxId + 1
   }, [agentMetadata, setEdges, setNodes])
 
-  const applyAuthoringProposal = useCallback(async (
+  const applyAuthoringCandidate = useCallback(async (
     proposal: FlowAuthoringProposal,
   ): Promise<FlowProposalApplyResult> => {
     if (proposal.contract_version !== 'flow_authoring_proposal.v1') {
       return { applied: false, reason: 'invalid', message: 'This flow proposal format is not supported.' }
     }
-    const captured = captureAuthoringContext()
+    const captured = liveAuthoringRef.current.captureAuthoringContext()
+    const capturedKey = canonicalAuthoringJson(captured)
     const capturedDefinition = flowStateDefinition(captured)
     const currentFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
       captured,
@@ -1296,6 +1308,12 @@ function FlowBuilderInner({
       }
     }
 
+    if (!authoringMountedRef.current
+      || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading
+      || canonicalAuthoringJson(liveAuthoringRef.current.captureAuthoringContext()) !== capturedKey) {
+      return { applied: false, reason: 'stale', message: 'The flow changed during validation. Ask AI Chat to refresh it.' }
+    }
+
     const candidateNodes = proposal.candidate.flow_definition.nodes.map((node) => ({
       id: node.id,
       type: node.type,
@@ -1323,12 +1341,12 @@ function FlowBuilderInner({
       description: proposal.candidate.description,
       definition: proposal.candidate.flow_definition,
     }
-    applyDefinitionToEditor(requestedDraft)
+    setProposalUndo(null)
+    flushSync(() => applyDefinitionToEditor(requestedDraft))
     const actualAppliedDraft = currentEditorDraftRef.current
-    setProposalUndo({
-      draft: undoDraft,
-      appliedCanonical: canonicalAuthoringJson(actualAppliedDraft),
-    })
+    const appliedKey = canonicalAuthoringJson(liveAuthoringRef.current.captureAuthoringContext())
+    const appliedDraftStillCurrent = () => authoringMountedRef.current
+      && canonicalAuthoringJson(liveAuthoringRef.current.captureAuthoringContext()) === appliedKey
     try {
       const actualAppliedFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
         captured,
@@ -1342,8 +1360,11 @@ function FlowBuilderInner({
         proposal.candidate_draft_fingerprint,
         actualAppliedFingerprint,
       )
+      if (!appliedDraftStillCurrent()) {
+        return { applied: false, reason: 'stale', message: 'The flow changed during validation; your latest edits were preserved.' }
+      }
       if (!canonicalPostApply.valid) {
-        applyDefinitionToEditor(undoDraft)
+        flushSync(() => applyDefinitionToEditor(undoDraft))
         setProposalUndo(null)
         return {
           applied: false,
@@ -1352,7 +1373,9 @@ function FlowBuilderInner({
         }
       }
     } catch (error) {
-      applyDefinitionToEditor(undoDraft)
+      if (appliedDraftStillCurrent()) {
+        flushSync(() => applyDefinitionToEditor(undoDraft))
+      }
       setProposalUndo(null)
       logger.error('Flow proposal post-apply validation failed', error as Error, {
         component: 'FlowBuilder',
@@ -1361,9 +1384,10 @@ function FlowBuilderInner({
       return {
         applied: false,
         reason: 'unavailable',
-        message: 'Post-apply validation was unavailable; the original draft was restored.',
+        message: 'Post-apply validation was unavailable. The proposal was not accepted; later edits were preserved.',
       }
     }
+    setProposalUndo({ draft: undoDraft, appliedCanonical: canonicalAuthoringJson(actualAppliedDraft) })
     setSnackbar({
       message: 'AI Chat proposal applied to the draft. Review it, then Save when ready.',
       severity: 'success',
@@ -1378,7 +1402,21 @@ function FlowBuilderInner({
       },
     })
     return { applied: true, message: 'Proposal applied to the draft. Save remains manual.' }
-  }, [applyDefinitionToEditor, captureAuthoringContext])
+  }, [applyDefinitionToEditor])
+
+  const applyAuthoringProposal = useCallback(async (proposal: FlowAuthoringProposal): Promise<FlowProposalApplyResult> => {
+    if (applyingProposalRef.current || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading) {
+      return { applied: false, reason: 'unavailable', message: 'Wait for the current flow operation to finish.' }
+    }
+    applyingProposalRef.current = true
+    setApplyingProposal(true)
+    try {
+      return await applyAuthoringCandidate(proposal)
+    } finally {
+      applyingProposalRef.current = false
+      if (authoringMountedRef.current) setApplyingProposal(false)
+    }
+  }, [applyAuthoringCandidate])
 
   const undoAuthoringProposal = useCallback(() => {
     if (!proposalUndo) return
@@ -1506,6 +1544,7 @@ function FlowBuilderInner({
     nameOverride?: string,
     options?: { forceCreate?: boolean }
   ) => {
+    if (applyingProposalRef.current) return
     const forceCreate = options?.forceCreate ?? false
     const nameToUse = nameOverride || flowName
 
@@ -2046,7 +2085,7 @@ function FlowBuilderInner({
 
   // Save Dialog handlers
   const handleSaveClick = useCallback(() => {
-    if (saving) return
+    if (saving || applyingProposalRef.current) return
 
     setFileMenuAnchor(null)
     if (nodes.length === 0) {
@@ -2347,7 +2386,7 @@ function FlowBuilderInner({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [active, builderRootRef, handleSaveClick, handleSelectAll, handleDeleteAllSelected, nodes.length, selectedElementsCount])
 
-  const saveActionsDisabled = saving || nodes.length === 0
+  const saveActionsDisabled = saving || applyingProposal || nodes.length === 0
 
   return (
     <BuilderContainer ref={builderRootRef}>
