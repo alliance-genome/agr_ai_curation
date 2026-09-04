@@ -4,6 +4,7 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
@@ -208,6 +209,77 @@ def test_process_suggestion_background_uses_openai_agents_sdk_contract(monkeypat
     assert captured["tool_call"]["tool_input"] == {
         "summary": "Focused request contract"
     }
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_outcome"),
+    [
+        pytest.param("refusal", "refusal", id="refusal"),
+        pytest.param("incomplete", "incomplete", id="incomplete"),
+        pytest.param(
+            "context_overflow",
+            "context_overflow",
+            id="context-overflow",
+        ),
+    ],
+)
+def test_process_suggestion_background_does_not_report_typed_outcomes_as_crashes(
+    monkeypatch,
+    error,
+    expected_outcome,
+):
+    import src.api.agent_studio as api_module
+
+    provider_error = {
+        "refusal": api_module.ModelRefusalError("sensitive refusal"),
+        "incomplete": api_module.ModelBehaviorError(
+            "Responses stream ended with terminal event `response.incomplete`."
+        ),
+        "context_overflow": api_module.openai.BadRequestError(
+            "Sensitive request exceeded the context length token limit",
+            response=httpx.Response(
+                400,
+                request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+            ),
+            body={},
+        ),
+    }[error]
+    notifications = []
+    reports = []
+
+    async def _raise_typed_outcome(**_kwargs):
+        raise provider_error
+
+    monkeypatch.setattr(
+        api_module,
+        "run_forced_agent_studio_tool",
+        _raise_typed_outcome,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "report_background_task_exception",
+        lambda *args, **kwargs: reports.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "_send_error_notification_sns",
+        lambda *args: notifications.append(args),
+    )
+
+    asyncio.run(
+        api_module._process_suggestion_background(
+            messages=[{"role": "user", "content": "hello"}],
+            system_prompt="system",
+            context=None,
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
+        )
+    )
+
+    assert reports == []
+    assert len(notifications) == 1
+    assert expected_outcome.replace("_", " ") in notifications[0][1]
+    assert "sensitive" not in notifications[0][1].lower()
 
 
 def test_submit_suggestion_direct_sanitizes_unexpected_errors(monkeypatch, caplog):

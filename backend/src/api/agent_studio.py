@@ -130,6 +130,7 @@ from src.lib.agent_studio.openai_runtime import (
     ToolExecutionResult,
     build_agent_studio_model_settings,
     build_agent_studio_tools,
+    expected_agent_studio_terminal_outcome,
     run_forced_agent_studio_tool,
     stream_agent_studio_run,
 )
@@ -5418,6 +5419,22 @@ async def _process_suggestion_background(
             extra={"trace_id": state.trace_id, "response_id": state.response_id},
         )
     except Exception as exc:
+        expected_outcome = expected_agent_studio_terminal_outcome(exc)
+        if expected_outcome is not None:
+            logger.info(
+                "[Background] OpenAI suggestion ended with typed outcome: %s",
+                expected_outcome,
+                extra={"trace_id": state.trace_id},
+            )
+            _send_error_notification_sns(
+                user_email,
+                (
+                    "The AI-assisted suggestion did not complete "
+                    f"({expected_outcome.replace('_', ' ')}). Please retry."
+                ),
+                context,
+            )
+            return
         logger.error(
             "[Background] OpenAI suggestion submission failed: %s",
             exc,

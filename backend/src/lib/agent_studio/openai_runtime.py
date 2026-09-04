@@ -301,11 +301,19 @@ def _capture_terminal_metadata(result: Any, state: AgentStudioRunState) -> None:
     state.reasoning_tokens = int(getattr(output_details, "reasoning_tokens", 0) or 0)
 
 
-def _is_context_overflow_error(exc: BaseException) -> bool:
-    return isinstance(exc, BadRequestError) and any(
+def expected_agent_studio_terminal_outcome(exc: BaseException) -> str | None:
+    """Classify provider outcomes that are product states, not runtime crashes."""
+
+    if isinstance(exc, ModelRefusalError):
+        return "refusal"
+    if isinstance(exc, ModelBehaviorError) and "response.incomplete" in str(exc).lower():
+        return "incomplete"
+    if isinstance(exc, BadRequestError) and any(
         phrase in str(exc).lower()
         for phrase in ("too many tokens", "context length", "maximum context", "token limit")
-    )
+    ):
+        return "context_overflow"
+    return None
 
 
 @contextmanager
@@ -316,14 +324,9 @@ def _tracked_agent_span(**kwargs: Any):
         try:
             yield span
         except BaseException as exc:
-            if isinstance(exc, ModelRefusalError):
-                outcome = "refusal"
-                status = "ok"
-            elif isinstance(exc, ModelBehaviorError) and "response.incomplete" in str(exc).lower():
-                outcome = "incomplete"
-                status = "ok"
-            elif _is_context_overflow_error(exc):
-                outcome = "context_overflow"
+            expected_outcome = expected_agent_studio_terminal_outcome(exc)
+            if expected_outcome is not None:
+                outcome = expected_outcome
                 status = "ok"
             elif type(exc).__name__ == "CancelledError":
                 outcome = "cancelled"
