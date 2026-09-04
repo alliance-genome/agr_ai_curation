@@ -2,7 +2,7 @@
 
 Provides endpoints for the Agent Studio feature:
 - GET /catalog - Get all agent prompts organized by category
-- POST /chat - Stream a conversation with the configured Anthropic chat model
+- POST /chat - Stream an OpenAI Agents SDK authoring conversation
 - GET /trace/{trace_id}/context - Get enriched trace context
 """
 
@@ -19,6 +19,8 @@ from typing import Any, Callable, Dict, List, NoReturn, Optional, cast
 
 import anthropic
 import boto3
+import openai
+from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -121,15 +123,31 @@ from src.lib.agent_studio.tool_idea_service import (
     tool_idea_request_to_dict,
 )
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
+from src.lib.agent_studio.openai_runtime import (
+    AGENT_STUDIO_OPENAI_MODEL,
+    AGENT_STUDIO_REASONING_EFFORT,
+    AgentStudioRunState,
+    ToolExecutionResult,
+    build_agent_studio_model_settings,
+    build_agent_studio_tools,
+    run_forced_agent_studio_tool,
+    stream_agent_studio_run,
+)
 from src.lib.openai_agents.config import get_domain_reference_max_values
 from src.lib.openai_agents.config import (
+    get_api_key,
     get_agent_studio_chat_history_page_size,
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
+    get_agent_studio_openai_max_output_tokens,
+    get_agent_studio_openai_max_turns,
     get_agent_studio_opus_context_editing_keep_tool_uses,
     get_agent_studio_opus_context_editing_trigger_tokens,
     get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_service_log_default_lines,
+    get_agent_studio_suggestion_max_output_tokens,
+    get_agent_studio_suggestion_max_turns,
+    get_agent_studio_tool_search_max_candidates,
     get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
@@ -153,6 +171,7 @@ from src.lib.packages import load_installed_agent_studio_prompt
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.runtime_payload_budget import provider_context_preflight
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents import run_agent_streamed
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
@@ -1400,6 +1419,78 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
         logger=logger,
         is_allowed=_is_tool_allowed_for_context,
     )
+
+
+def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
+    """Place authorized tools in small, purpose-specific search namespaces."""
+
+    if tool_name in _COMMON_TOOLS:
+        return "studio_history", "Conversation recall, feedback, and failure reporting"
+    if tool_name in _DOMAIN_ENVELOPE_TOOLS:
+        return "domain_review", "Domain envelope, validation, and export-readiness inspection"
+    if tool_name in _WORKSHOP_TOOLS:
+        return "workshop_prompt", "Agent Workshop prompt inspection and curator-approved proposals"
+    if tool_name in _FLOW_TOOLS:
+        if tool_name in {"create_flow", "validate_flow", "get_flow_templates"}:
+            return "flow_authoring", "Flow creation, templates, and validation"
+        return "flow_inspection", "Focused inspection of the active flow draft"
+    if tool_name in _TRACE_TOOLS:
+        if tool_name in {
+            "search_traces",
+            "get_trace_summary",
+            "get_trace_conversation",
+            "get_trace_costs",
+        }:
+            return "trace_overview", "Trace discovery, summaries, conversation, and cost"
+        if tool_name.startswith("get_tool_call") or tool_name == "get_service_logs":
+            return "trace_tools", "Tool-call and service-log diagnostics"
+        return "trace_evidence", "Detailed extraction trace, payload, and evidence reconstruction"
+    if tool_name in _AGENTS_ONLY_DIAGNOSTIC_TOOLS:
+        return "source_diagnostics", "Bounded source-code diagnostics for Agent Studio"
+    if tool_name in opus_tools.TOOL_METADATA_TOOLS or tool_name == "get_prompt":
+        return "agent_catalog", "Agent prompt and callable-tool catalog inspection"
+    return "package_diagnostics", "Authenticated package-provided diagnostic capabilities"
+
+
+def _get_openai_authorized_tool_definitions(
+    context: Optional[ChatContext],
+) -> List[dict[str, Any]]:
+    """Return the request-local, context-authorized hosted-search universe."""
+
+    definitions = _get_all_opus_tools(context)
+    candidate_limit = get_agent_studio_tool_search_max_candidates()
+    if len(definitions) > candidate_limit:
+        raise RuntimeError(
+            "Agent Studio authorized tool catalog exceeds "
+            f"AGENT_STUDIO_TOOL_SEARCH_MAX_CANDIDATES={candidate_limit}"
+        )
+    return definitions
+
+
+def _report_agent_studio_exception_once(
+    exc: Exception,
+    *,
+    operation: str,
+    phase: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Capture one sanitized Sentry event even when an SDK layer re-raises it."""
+
+    marker = "_agent_studio_sentry_reported"
+    if getattr(exc, marker, False):
+        return False
+    reported = report_runtime_exception(
+        exc,
+        component="agent_studio",
+        operation=operation,
+        tags={"phase": phase, "provider": "openai"},
+        context=context or {"model": AGENT_STUDIO_OPENAI_MODEL},
+    )
+    try:
+        setattr(exc, marker, True)
+    except Exception:
+        pass
+    return reported
 
 
 def _format_conversation_context(messages: Optional[List[dict]]) -> Optional[str]:
@@ -3850,30 +3941,11 @@ def _build_agent_studio_replay_events(
     )
 
 
-@router.post(
-    "/chat",
-    summary="Chat with configured model",
-    description="""
-    Stream a conversation with the configured Anthropic model about prompts.
-
-    The assistant can discuss prompts, suggest improvements, and submit suggestions
-    to the development team using the submit_prompt_suggestion tool.
-
-    Uses the effort parameter (beta) set to "medium" for optimal quality/cost balance.
-
-    The response is a Server-Sent Events stream with the following event types:
-    - TEXT_DELTA: Text content from Opus
-    - TOOL_USE: Opus is calling a tool (includes tool name and input)
-    - TOOL_RESULT: Result of a tool call
-    - DONE: Stream complete
-    - ERROR: An error occurred
-    """,
-)
-async def chat_with_opus(
+async def _legacy_anthropic_chat_with_opus(
     request: ChatRequest,
     user: Dict[str, Any] = get_auth_dependency()
 ):
-    """Stream a conversation with the configured Anthropic model with tool support."""
+    """Inactive pre-OpenAI implementation retained only for ALL-1043 removal."""
     import anthropic
 
     # Get user info for attribution and prompt personalization
@@ -4502,6 +4574,590 @@ async def chat_with_opus(
     )
 
 
+@router.post(
+    "/chat",
+    summary="Chat with the Agent Studio AI assistant",
+    description="""Stream an OpenAI Agents SDK authoring conversation over SSE.""",
+)
+async def chat_with_opus(
+    request: ChatRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Run Agent Studio through the SDK-managed OpenAI Responses path."""
+
+    user_id = _require_user_sub(user)
+    user_email = user.get("email", user.get("sub", "unknown"))
+    user_name = user.get("name", user.get("given_name", None))
+    db_user_id: int | None = None
+
+    try:
+        db = next(get_db())
+        try:
+            try:
+                db_user = set_global_user_from_cognito(db, user)
+                db_user_id = db_user.id
+            except Exception as exc:
+                logger.warning("Could not resolve workflow user context: %s", exc)
+
+            selected_agent_id = request.context.selected_agent_id if request.context else None
+            if selected_agent_id:
+                if db_user_id is None:
+                    raise HTTPException(status_code=403, detail="Agent not available")
+                _require_selected_agent_access(
+                    db=db,
+                    db_user_id=db_user_id,
+                    user=user,
+                    agent_id=selected_agent_id,
+                )
+
+            workshop_custom_agent_id = (
+                request.context.agent_workshop.custom_agent_id
+                if request.context and request.context.agent_workshop
+                else None
+            )
+            if workshop_custom_agent_id:
+                workshop_custom_uuid = _parse_workshop_custom_agent_uuid(
+                    workshop_custom_agent_id
+                )
+                if workshop_custom_uuid is None:
+                    raise HTTPException(status_code=404, detail="Agent not found")
+                workshop_runtime_agent_id = make_custom_agent_id(workshop_custom_uuid)
+                if workshop_runtime_agent_id != selected_agent_id:
+                    if db_user_id is None:
+                        raise HTTPException(status_code=403, detail="Agent not available")
+                    _require_selected_agent_access(
+                        db=db,
+                        db_user_id=db_user_id,
+                        user=user,
+                        agent_id=workshop_runtime_agent_id,
+                    )
+
+            prepared_turn = _prepare_agent_studio_turn(
+                db=db,
+                user_id=user_id,
+                request=request,
+            )
+            if prepared_turn.user_turn_created:
+                source_trace_id = request.context.trace_id if request.context else None
+                user_payload = _build_agent_studio_user_debug_payload(
+                    db=db,
+                    request=request,
+                    prepared_turn=prepared_turn,
+                    user_db_id=db_user_id,
+                )
+                _persist_agent_studio_user_debug_payload(
+                    db=db,
+                    user_id=user_id,
+                    prepared_turn=prepared_turn,
+                    trace_id=source_trace_id,
+                    payload_json=user_payload,
+                )
+                db.commit()
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except ChatHistorySessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Chat session not found") from exc
+    except ValueError as exc:
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Agent Studio chat request is invalid",
+            log_message="Failed to persist Agent Studio chat request because the request was invalid",
+        )
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to persist Agent Studio chat request",
+            log_message="Failed to persist Agent Studio chat request",
+            exc=exc,
+        )
+
+    replay_assistant_turn = prepared_turn.replay_assistant_turn
+    if replay_assistant_turn is not None:
+        async def replay_stream():
+            for event in _build_agent_studio_replay_events(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                assistant_turn=replay_assistant_turn,
+            ):
+                yield event
+
+        return StreamingResponse(
+            replay_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    if not str(get_api_key("openai") or "").strip():
+        logger.error("OpenAI API key is not configured")
+        raise HTTPException(status_code=500, detail="Chat service not properly configured")
+
+    if db_user_id is not None:
+        set_workflow_user_context(
+            user_id=db_user_id,
+            user_email=user_email,
+            active_group_ids=_authenticated_group_ids(user),
+        )
+
+    if request.context and request.context.active_tab == "flows" and request.context.flow_definition:
+        task_input_node_id = next(
+            (
+                node.id
+                for node in request.context.flow_definition.nodes
+                if node.node_type == "task_input" or node.agent_id == "task_input"
+            ),
+            None,
+        )
+        set_current_flow_context(
+            {
+                "flow_name": request.context.flow_name or "Untitled Flow",
+                "version": request.context.flow_definition.version,
+                "nodes": [
+                    {**node.model_dump(exclude={"node_type"}), "type": node.node_type}
+                    for node in request.context.flow_definition.nodes
+                ],
+                "edges": [edge.model_dump() for edge in request.context.flow_definition.edges],
+                "entry_node_id": request.context.flow_definition.entry_node_id
+                or task_input_node_id,
+            }
+        )
+    else:
+        clear_current_flow_context()
+
+    system_prompt = _build_opus_system_prompt(
+        context=request.context,
+        user_name=user_name,
+        user_email=user_email,
+    )
+    latest_user_index = max(
+        (
+            index
+            for index, message in enumerate(request.messages)
+            if str(message.role).strip() == "user"
+        ),
+        default=None,
+    )
+    input_items = [
+        {
+            "role": message.role,
+            "content": (
+                prepared_turn.user_message
+                if latest_user_index is not None and index == latest_user_index
+                else message.content
+            ),
+        }
+        for index, message in enumerate(request.messages)
+    ]
+    try:
+        tool_definitions = _get_openai_authorized_tool_definitions(request.context)
+    except RuntimeError as exc:
+        _report_agent_studio_exception_once(
+            exc,
+            operation="tool_search_catalog_rejected",
+            phase="tool_surface",
+            context={"model": AGENT_STUDIO_OPENAI_MODEL},
+        )
+        logger.error(
+            "Agent Studio tool-search catalog rejected: %s",
+            exc,
+            extra={"sentry_skip_event": True},
+        )
+        clear_workflow_user_context()
+        clear_current_flow_context()
+        raise HTTPException(status_code=503, detail="Agent Studio capability catalog is unavailable") from exc
+
+    async def generate_stream():
+        source_trace_id = request.context.trace_id if request.context else None
+        run_state = AgentStudioRunState(trace_id=str(uuid.uuid4()))
+        completed_tool_calls: List[Dict[str, Any]] = []
+        domain_reference_events: List[Dict[str, Any]] = []
+
+        async def execute_tool(
+            tool_name: str,
+            tool_input: dict[str, Any],
+            call_id: str | None,
+        ) -> ToolExecutionResult:
+            if not _is_tool_allowed_for_context(tool_name, request.context):
+                tool_result = _tool_scope_error(tool_name, request.context)
+            else:
+                try:
+                    tool_result = await _handle_tool_call(
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                        context=request.context,
+                        user_email=user_email,
+                        user_auth_sub=user_id,
+                        messages=input_items,
+                        user_db_id=db_user_id,
+                    )
+                except Exception as exc:
+                    _report_agent_studio_exception_once(
+                        exc,
+                        operation="authorized_tool_execution_failed",
+                        phase="tool_execution",
+                        context={"model": AGENT_STUDIO_OPENAI_MODEL},
+                    )
+                    raise
+            safe_result = _json_safe(tool_result)
+            completed_tool_calls.append(
+                _tool_call_audit_entry(
+                    tool_name=tool_name,
+                    tool_use_id=call_id,
+                    tool_input=_json_safe(tool_input),
+                    tool_result=safe_result,
+                    context=request.context,
+                )
+            )
+            domain_reference = _domain_references_from_tool_result(tool_name, safe_result)
+            if domain_reference:
+                domain_reference_events.append(domain_reference)
+            return ToolExecutionResult(
+                full_output=safe_result,
+                provider_output=_provider_tool_result_content(
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    tool_result=safe_result,
+                    session_id=prepared_turn.session_id,
+                    turn_id=prepared_turn.turn_id,
+                ),
+            )
+
+        forced_tool_name = (
+            "refresh_workshop_prompt"
+            if _should_force_workshop_prompt_refresh(
+                context=request.context,
+                latest_user_message=prepared_turn.user_message,
+            )
+            else None
+        )
+        try:
+            tools, tool_counts = build_agent_studio_tools(
+                tool_definitions,
+                executor=execute_tool,
+                state=run_state,
+                namespace_for_tool=_agent_studio_tool_namespace,
+                forced_tool_name=forced_tool_name,
+            )
+        except Exception as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="tool_surface_build_failed",
+                phase="tool_surface",
+                context={"candidate_count": len(tool_definitions)},
+            )
+            logger.error(
+                "Agent Studio OpenAI tool surface could not be built",
+                exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
+                message="Agent Studio could not prepare its authorized capabilities. Please retry.",
+                error_source="tool_surface",
+            )
+            clear_workflow_user_context()
+            clear_current_flow_context()
+            return
+        logger.info(
+            "Agent Studio OpenAI tool surface",
+            extra={
+                **tool_counts,
+                "session_id": prepared_turn.session_id,
+                "turn_id": prepared_turn.turn_id,
+                "provider": "openai",
+                "model": AGENT_STUDIO_OPENAI_MODEL,
+            },
+        )
+
+        try:
+            preflight = provider_context_preflight(
+                surface="agent_studio",
+                operation="agents_sdk_run",
+                provider="openai",
+                model=AGENT_STUDIO_OPENAI_MODEL,
+                payload={"messages": input_items, "tool_counts": tool_counts},
+                metadata={
+                    "session_id": prepared_turn.session_id,
+                    "turn_id": prepared_turn.turn_id,
+                    "trace_id": run_state.trace_id,
+                },
+                emit_trace_event=True,
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="PROVIDER_CONTEXT_PREFLIGHT",
+                trace_id=run_state.trace_id,
+                operation=preflight["operation"],
+                provider="openai",
+                model=AGENT_STUDIO_OPENAI_MODEL,
+                model_live=True,
+                payload_summary={
+                    "json_chars": preflight["json_chars"],
+                    "estimated_tokens": preflight["estimated_tokens"],
+                    "threshold": preflight["threshold"],
+                    "largest_paths": preflight["largest_paths"],
+                },
+            )
+
+            model_settings = build_agent_studio_model_settings(
+                max_output_tokens=get_agent_studio_openai_max_output_tokens(),
+                tool_choice=forced_tool_name,
+            )
+            async for runtime_event in stream_agent_studio_run(
+                instructions=system_prompt,
+                input_items=input_items,
+                tools=tools,
+                state=run_state,
+                session_id=prepared_turn.session_id,
+                user_id=user_id,
+                max_turns=get_agent_studio_openai_max_turns(),
+                model_settings=model_settings,
+            ):
+                event_type = str(runtime_event.pop("type"))
+                yield _opus_sse_event(
+                    session_id=prepared_turn.session_id,
+                    turn_id=prepared_turn.turn_id,
+                    event_type=event_type,
+                    trace_id=run_state.trace_id,
+                    **runtime_event,
+                )
+
+            assistant_payload = _build_agent_studio_assistant_payload(
+                tool_calls=completed_tool_calls,
+                requested_context_session_id=prepared_turn.requested_context_session_id,
+                session_id=prepared_turn.session_id,
+                trace_capture={
+                    "status": "captured",
+                    "trace_id": run_state.trace_id,
+                    "source_trace_id": source_trace_id,
+                    "error": None,
+                },
+                domain_references=_merge_domain_reference_events(domain_reference_events),
+            ) or {}
+            assistant_payload["provider_run"] = {
+                "provider": "openai",
+                "model": AGENT_STUDIO_OPENAI_MODEL,
+                "reasoning_effort": AGENT_STUDIO_REASONING_EFFORT,
+                "response_id": run_state.response_id,
+                "usage": {
+                    "input_tokens": run_state.input_tokens,
+                    "output_tokens": run_state.output_tokens,
+                    "cached_input_tokens": run_state.cached_input_tokens,
+                    "reasoning_tokens": run_state.reasoning_tokens,
+                },
+                "tool_search": {
+                    **tool_counts,
+                    "search_calls": run_state.tool_search_calls,
+                    "search_outputs": run_state.tool_search_outputs,
+                    "loaded_tool_count": run_state.tool_search_loaded_tools,
+                },
+            }
+            assistant_turn = _persist_completed_agent_studio_turn(
+                session_id=prepared_turn.session_id,
+                user_id=user_id,
+                turn_id=prepared_turn.turn_id,
+                assistant_message=run_state.assistant_text,
+                trace_id=run_state.trace_id,
+                payload_json=assistant_payload,
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="DONE",
+                trace_id=assistant_turn.trace_id,
+            )
+        except ModelRefusalError:
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="REFUSAL",
+                trace_id=run_state.trace_id,
+                message="The model declined this request. No incomplete response was saved.",
+                error_source="model_refusal",
+            )
+        except ModelBehaviorError as exc:
+            error_text = str(exc).lower()
+            is_incomplete = "response.incomplete" in error_text
+            if not is_incomplete:
+                _report_agent_studio_exception_once(
+                    exc,
+                    operation="openai_model_behavior_failure",
+                    phase="agents_sdk_run",
+                    context={"model": AGENT_STUDIO_OPENAI_MODEL},
+                )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="INCOMPLETE" if is_incomplete else "ERROR",
+                trace_id=run_state.trace_id,
+                message=(
+                    "The model stopped before completing this turn. No incomplete response was saved."
+                    if is_incomplete
+                    else "Agent Studio could not complete the model request. Please review the last step and retry."
+                ),
+                error_source="openai",
+            )
+        except openai.BadRequestError as exc:
+            error_text = str(exc).lower()
+            is_context_overflow = any(
+                phrase in error_text
+                for phrase in ("too many tokens", "context length", "maximum context", "token limit")
+            )
+            if not is_context_overflow:
+                _report_agent_studio_exception_once(
+                    exc,
+                    operation="openai_bad_request",
+                    phase="agents_sdk_run",
+                    context={"model": AGENT_STUDIO_OPENAI_MODEL},
+                )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="CONTEXT_OVERFLOW" if is_context_overflow else "ERROR",
+                trace_id=run_state.trace_id,
+                message=(
+                    "The conversation exceeded the model context. Use a bounded recall tool or start a new chat."
+                    if is_context_overflow
+                    else "Agent Studio could not complete the model request. Please review the last step and retry."
+                ),
+                error_source="openai",
+            )
+        except MaxTurnsExceeded as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="openai_turn_limit_exceeded",
+                phase="agents_sdk_run",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
+                message="Agent Studio reached its configured tool-turn limit without completing.",
+                error_source="turn_limit",
+            )
+        except openai.APIError as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="openai_provider_failure",
+                phase="agents_sdk_run",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            asyncio.create_task(
+                notify_tool_failure(
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    source="infrastructure",
+                    specialist_name="agent_studio_openai",
+                    trace_id=run_state.trace_id,
+                    session_id=prepared_turn.session_id,
+                    curator_id=user_email,
+                )
+            )
+            logger.error(
+                "OpenAI Agent Studio API error: %s",
+                exc,
+                exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
+                message="The model service had a temporary problem. Check any completed tool actions before retrying.",
+                error_source="openai",
+            )
+        except ChatHistorySessionNotFoundError as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="completed_turn_persistence_failed",
+                phase="persistence",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
+                message="Agent Studio completed the response, but the durable session is no longer available.",
+                error_source="history",
+            )
+        except Exception as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="openai_stream_failure",
+                phase="agents_sdk_run",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            logger.error(
+                "Agent Studio OpenAI stream error: %s",
+                exc,
+                exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
+                message="Agent Studio ran into an unexpected problem. Check completed actions before retrying.",
+                error_source=type(exc).__name__,
+            )
+        finally:
+            clear_workflow_user_context()
+            clear_current_flow_context()
+
+    run_id = f"agent_studio_chat_turn:{prepared_turn.session_id}:{prepared_turn.turn_id}"
+
+    def terminal_error_event(exc: Exception) -> str:
+        return _opus_sse_event(
+            session_id=prepared_turn.session_id,
+            turn_id=prepared_turn.turn_id,
+            event_type="ERROR",
+            message="Agent Studio turn could not be started. Please retry.",
+            error_source=type(exc).__name__,
+        )
+
+    try:
+        executable_run, _ = await executable_run_manager.get_or_start_stream(
+            run_id=run_id,
+            kind="agent_studio_chat_turn",
+            owner_user_id=user_id,
+            session_id=prepared_turn.session_id,
+            turn_id=prepared_turn.turn_id,
+            stream_factory=generate_stream,
+            can_cancel=False,
+            terminal_error_event_factory=terminal_error_event,
+        )
+    except ExecutableRunAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return StreamingResponse(
+        executable_run_manager.observe(executable_run),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 def _send_error_notification_sns(user_email: str, error_message: str, context: Optional[ChatContext] = None) -> None:
     """
     Send an error notification via SNS when background suggestion processing fails.
@@ -4562,7 +5218,7 @@ def _send_error_notification_sns(user_email: str, error_message: str, context: O
         logger.error('Failed to send error notification via SNS: %s', e, exc_info=True)
 
 
-async def _process_suggestion_background(
+async def _legacy_anthropic_process_suggestion_background(
     messages: List[Dict[str, str]],
     system_prompt: str,
     context: Optional[ChatContext],
@@ -4678,12 +5334,93 @@ async def _process_suggestion_background(
         _send_error_notification_sns(user_email, error_msg, context)
 
 
+async def _process_suggestion_background(
+    messages: List[Dict[str, str]],
+    system_prompt: str,
+    context: Optional[ChatContext],
+    user_email: str,
+    user_auth_sub: str,
+) -> None:
+    """Submit AI-assisted feedback through a forced Agents SDK tool call."""
+
+    state = AgentStudioRunState(trace_id=str(uuid.uuid4()))
+
+    async def execute_tool(
+        tool_name: str,
+        tool_input: dict[str, Any],
+        call_id: str | None,
+    ) -> ToolExecutionResult:
+        if tool_name != "submit_prompt_suggestion":
+            result: dict[str, Any] = {
+                "success": False,
+                "error": "Only submit_prompt_suggestion is allowed in this run.",
+            }
+        else:
+            result = await _handle_tool_call(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                context=context,
+                user_email=user_email,
+                user_auth_sub=user_auth_sub,
+                messages=messages,
+            )
+        safe_result = _json_safe(result)
+        return ToolExecutionResult(
+            full_output=safe_result,
+            provider_output=_serialize_provider_tool_result(safe_result),
+        )
+
+    try:
+        execution = await run_forced_agent_studio_tool(
+            instructions=system_prompt,
+            input_items=messages,
+            tool_definition=ANTHROPIC_SUGGESTION_TOOL,
+            executor=execute_tool,
+            state=state,
+            session_id=f"agent-studio-suggestion:{uuid.uuid4()}",
+            user_id=user_auth_sub,
+            max_turns=get_agent_studio_suggestion_max_turns(),
+            max_output_tokens=get_agent_studio_suggestion_max_output_tokens(),
+        )
+        result = execution.output if execution is not None else None
+        if not isinstance(result, dict) or result.get("success") is not True:
+            error_message = (
+                str(result.get("error"))
+                if isinstance(result, dict) and result.get("error")
+                else "OpenAI did not submit the requested suggestion."
+            )
+            raise RuntimeError(error_message)
+        logger.info(
+            "[Background] Suggestion submitted through OpenAI Responses for %s: %s",
+            user_email,
+            result.get("suggestion_id"),
+            extra={"trace_id": state.trace_id, "response_id": state.response_id},
+        )
+    except Exception as exc:
+        logger.error(
+            "[Background] OpenAI suggestion submission failed: %s",
+            exc,
+            exc_info=True,
+            extra={"sentry_skip_event": True},
+        )
+        report_background_task_exception(
+            exc,
+            task_name="agent_studio.process_suggestion",
+            tags={
+                "component": "agent_studio",
+                "failure_stage": "openai_agents_sdk",
+            },
+        )
+        _send_error_notification_sns(user_email, str(exc), context)
+
+
 @router.post(
     "/submit-suggestion-direct",
     summary="Direct AI-assisted suggestion submission",
     description="""
-    Directly trigger Opus to analyze the current context and submit a suggestion
-    to the development team. This bypasses the chat UI and forces Opus to call
+    Directly trigger the Agent Studio assistant to analyze the current context and
+    submit a suggestion to the development team. This bypasses the chat UI and
+    forces the assistant to call
     the submit_prompt_suggestion tool based on available context (trace, selected agent, etc.).
 
     Used by the "AI-Assisted" feedback button to streamline the submission process.
@@ -4697,19 +5434,17 @@ async def submit_suggestion_direct(
     user: dict = get_auth_dependency(),
 ):
     """
-    Directly trigger Opus to submit a suggestion based on available context.
+    Directly trigger the Agent Studio assistant to submit a suggestion.
 
     This endpoint validates the request and spawns a background task to process
-    the suggestion via Opus. Returns immediately so the curator can continue working.
+    the suggestion. Returns immediately so the curator can continue working.
     On success or failure, notifications are sent via SNS.
     """
     try:
         user_email = user.get("email", "unknown@localhost")
         user_auth_sub = _require_user_sub(user)
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-
-        if not api_key:
-            raise HTTPException(status_code=500, detail="Anthropic API key not configured")
+        if not str(get_api_key("openai") or "").strip():
+            raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
         db_user = set_global_user_from_cognito(db, user)
 
@@ -4757,7 +5492,7 @@ async def submit_suggestion_direct(
         # Build the system prompt
         system_prompt = _build_opus_system_prompt(request.context)
 
-        # Create a forced message that instructs Opus to submit
+        # Create a forced message that instructs the authoring assistant to submit.
         context_description = []
         if request.context:
             if request.context.trace_id:
@@ -4777,7 +5512,7 @@ Please analyze the conversation history above and the available context, then su
 
 If there's limited information available, that's okay - just explain what you know and suggest that the developers investigate further."""
         else:
-            # No context - Opus should still try
+            # No context - the assistant should still make a bounded submission attempt.
             forced_message = """The user has requested you submit feedback to the development team.
 
 Please review our conversation history above and submit a general suggestion using the submit_prompt_suggestion tool. Summarize what we discussed and provide context for the developers."""
@@ -4809,7 +5544,6 @@ Please review our conversation history above and submit a general suggestion usi
             context=request.context,
             user_email=user_email,
             user_auth_sub=user_auth_sub,
-            api_key=api_key,
             task_name="agent_studio.process_suggestion",
             tags={
                 "component": "agent_studio",

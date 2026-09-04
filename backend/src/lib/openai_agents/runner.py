@@ -218,6 +218,45 @@ def _build_owned_openai_resources() -> OwnedOpenAIResources:
     )
 
 
+def build_owned_openai_responses_resources() -> OwnedOpenAIResources:
+    """Build an explicitly OpenAI Responses-backed client/provider pair.
+
+    Agent Studio is intentionally pinned to the native OpenAI Responses path.
+    Keep this separate from the configurable default-runner provider so a future
+    deployment-level provider change cannot silently move authoring chat onto
+    Chat Completions or an OpenAI-compatible adapter.
+    """
+
+    api_key = get_api_key("openai")
+    if not str(api_key or "").strip():
+        raise ValueError("OPENAI_API_KEY environment variable not set")
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = get_base_url("openai")
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    client = SafeLangfuseAsyncOpenAI(**client_kwargs)
+
+    websocket_enabled = not _env_flag_disabled("OPENAI_RESPONSES_WEBSOCKET_ENABLED")
+    provider_kwargs: dict[str, Any] = {
+        "openai_client": client,
+        "use_responses": True,
+        "strict_feature_validation": True,
+    }
+    if websocket_enabled:
+        provider_kwargs.update(
+            use_responses_websocket=True,
+            responses_websocket_options=_request_ws_keepalive_options(),
+        )
+    else:
+        provider_kwargs["use_responses_websocket"] = False
+
+    return OwnedOpenAIResources(
+        client=client,
+        provider=OpenAIProvider(**provider_kwargs),
+    )
+
+
 async def close_owned_openai_resources(
     resources: OwnedOpenAIResources,
     *,

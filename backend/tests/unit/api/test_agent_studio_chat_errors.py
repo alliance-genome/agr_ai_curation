@@ -1,10 +1,10 @@
-"""Unit tests for Agent Studio Anthropic chat error handling."""
+"""Unit tests for Agent Studio OpenAI chat error handling."""
 
 import asyncio
 import json
 import logging
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -38,33 +38,10 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
     return payloads
 
 
-class _RaisingStreamContext:
-    def __init__(self, error: Exception):
-        self._error = error
-
-    async def __aenter__(self):
-        raise self._error
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
-class _FakeMessagesAPI:
-    def __init__(self, error: Exception):
-        self._error = error
-
-    def stream(self, **_kwargs):
-        return _RaisingStreamContext(self._error)
-
-
-class _FakeAnthropicClient:
-    def __init__(self, error: Exception):
-        self.beta = SimpleNamespace(messages=_FakeMessagesAPI(error))
-
-
 def _configure_chat_endpoint(monkeypatch, error: Exception):
     alerts = []
     logger_errors = []
+    runtime_reports = []
     prepared_turn = api_module.PreparedAgentStudioTurn(
         session_id="agent-studio-session-1",
         turn_id="opus-turn-1",
@@ -73,11 +50,11 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
         user_turn_created=False,
     )
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(
-        api_module,
-        "_resolve_prompt_explorer_model",
-        lambda: ("claude-sonnet-test", "Claude Sonnet Test"),
+        api_module.uuid,
+        "uuid4",
+        lambda: UUID("12345678-1234-5678-1234-567812345678"),
     )
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
@@ -109,28 +86,34 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
     monkeypatch.setattr(api_module, "get_db", _fake_get_db)
     monkeypatch.setattr(api_module, "notify_tool_failure", _fake_notify_tool_failure)
     monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _FakeAnthropicClient(error),
+        api_module,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
     )
+    async def _raise_from_openai_runtime(**_kwargs):
+        if False:
+            yield {}
+        raise error
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", _raise_from_openai_runtime)
     monkeypatch.setattr(
         api_module.logger,
         "error",
         lambda *args, **kwargs: logger_errors.append((args, kwargs)),
     )
 
-    return alerts, logger_errors
+    return alerts, logger_errors, runtime_reports
 
 
 def _make_bad_request_error(message: str):
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
     response = httpx.Response(400, request=request)
-    return api_module.anthropic.BadRequestError(message, response=response, body={"request_id": "req_test_123"})
+    return api_module.openai.BadRequestError(message, response=response, body={"request_id": "req_test_123"})
 
 
 def _make_api_error(message: str):
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    return api_module.anthropic.APIError(message, request, body={"request_id": "req_test_456"})
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    return api_module.openai.APIError(message, request, body={"request_id": "req_test_456"})
 
 
 def _chat_request():
@@ -144,10 +127,10 @@ def _assert_provider_context_preflight(event: dict) -> None:
     assert event["type"] == "PROVIDER_CONTEXT_PREFLIGHT"
     assert event["session_id"] == "agent-studio-session-1"
     assert event["turn_id"] == "opus-turn-1"
-    assert event["trace_id"] == "trace-123"
-    assert event["operation"] == "initial_anthropic_call"
-    assert event["provider"] == "anthropic"
-    assert event["model"] == "claude-sonnet-test"
+    assert event["trace_id"] == "12345678-1234-5678-1234-567812345678"
+    assert event["operation"] == "agents_sdk_run"
+    assert event["provider"] == "openai"
+    assert event["model"] == "gpt-5.6-sol"
     assert event["model_live"] is True
     assert event["payload_summary"]["json_chars"] > 0
 
@@ -313,7 +296,7 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
         "Bad request: {'type': 'error', 'error': {'type': 'invalid_request_error', "
         "'message': 'Bad body'}, 'request_id': 'req_test_123'}"
     )
-    alerts, logger_errors = _configure_chat_endpoint(
+    alerts, logger_errors, runtime_reports = _configure_chat_endpoint(
         monkeypatch,
         _make_bad_request_error(raw_message),
     )
@@ -334,29 +317,20 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "trace-123",
-            "message": (
-                "Agent Studio couldn't complete that request because it ran into a problem "
-                "sending it to the model. Please review your last step and try again. If "
-                "the problem continues, refresh Agent Studio and retry."
-            ),
-            "error_source": "anthropic",
+            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "message": "Agent Studio could not complete the model request. Please review the last step and retry.",
+            "error_source": "openai",
         }
     ]
     assert "req_test_123" not in output_events[0]["message"]
-    assert alerts == [
-        {
-            "error_type": "BadRequestError",
-            "error_message": raw_message,
-            "source": "infrastructure",
-            "specialist_name": "agent_studio_opus",
-            "trace_id": "trace-123",
-            "session_id": "agent-studio-session-1",
-            "curator_id": "curator@example.org",
-        }
-    ]
-    assert logger_errors[0][0][0] == "Anthropic bad request error: %s"
-    assert logger_errors[0][1]["exc_info"] is True
+    assert alerts == []
+    assert logger_errors == []
+    assert runtime_reports[0][1]["operation"] == "openai_bad_request"
+    assert runtime_reports[0][1]["tags"] == {
+        "phase": "agents_sdk_run",
+        "provider": "openai",
+    }
+    assert runtime_reports[0][1]["context"] == {"model": "gpt-5.6-sol"}
 
 
 def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
@@ -364,7 +338,7 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
         "API error: {'type': 'error', 'error': {'details': None, 'type': 'api_error', "
         "'message': 'Internal server error'}, 'request_id': 'req_test_456'}"
     )
-    alerts, logger_errors = _configure_chat_endpoint(
+    alerts, logger_errors, runtime_reports = _configure_chat_endpoint(
         monkeypatch,
         _make_api_error(raw_message),
     )
@@ -385,13 +359,9 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "trace-123",
-            "message": (
-                "The model service had a temporary problem while working on your request. "
-                "Any tool actions started during this turn may already have completed, so "
-                "please check the results before retrying. If needed, try again in a moment."
-            ),
-            "error_source": "anthropic",
+            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "message": "The model service had a temporary problem. Check any completed tool actions before retrying.",
+            "error_source": "openai",
         }
     ]
     assert "req_test_456" not in output_events[0]["message"]
@@ -400,18 +370,20 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
             "error_type": "APIError",
             "error_message": raw_message,
             "source": "infrastructure",
-            "specialist_name": "agent_studio_opus",
-            "trace_id": "trace-123",
+            "specialist_name": "agent_studio_openai",
+            "trace_id": "12345678-1234-5678-1234-567812345678",
             "session_id": "agent-studio-session-1",
             "curator_id": "curator@example.org",
         }
     ]
-    assert logger_errors[0][0][0] == "Anthropic API error: %s"
+    assert logger_errors[0][0][0] == "OpenAI Agent Studio API error: %s"
     assert logger_errors[0][1]["exc_info"] is True
+    assert logger_errors[0][1]["extra"] == {"sentry_skip_event": True}
+    assert runtime_reports[0][1]["operation"] == "openai_provider_failure"
 
 
 def test_chat_with_opus_preserves_context_overflow_branch(monkeypatch):
-    alerts, logger_errors = _configure_chat_endpoint(
+    alerts, logger_errors, runtime_reports = _configure_chat_endpoint(
         monkeypatch,
         _make_bad_request_error("Prompt is too long and exceeded the token limit"),
     )
@@ -432,30 +404,61 @@ def test_chat_with_opus_preserves_context_overflow_branch(monkeypatch):
             "type": "CONTEXT_OVERFLOW",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "trace-123",
-            "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",
-            "recovery_hint": (
-                "Try a lighter-weight tool call: use get_trace_summary instead of full views, "
-                "get_tool_calls_summary instead of get_tool_calls_page, or use smaller page_size "
-                "(e.g., 5) with get_tool_calls_page. You can also filter by tool_name to get "
-                "only specific tool calls."
-            ),
-            "suggested_tools": [
-                "get_trace_summary - lightweight overview (~500 tokens)",
-                "get_tool_calls_summary - summaries only, no full results",
-                "get_tool_calls_page with page_size=5 - smaller batches",
-                "get_tool_call_detail - single call at a time",
-            ],
+            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "message": "The conversation exceeded the model context. Use a bounded recall tool or start a new chat.",
+            "error_source": "openai",
         }
     ]
     assert alerts == []
     assert logger_errors == []
-    assert "error_source" not in output_events[0]
+    assert runtime_reports == []
+
+
+@pytest.mark.parametrize(
+    ("error", "event_type", "error_source"),
+    [
+        (
+            api_module.ModelRefusalError("sensitive refusal details"),
+            "REFUSAL",
+            "model_refusal",
+        ),
+        (
+            api_module.ModelBehaviorError(
+                "Responses stream ended with terminal event `response.incomplete`."
+            ),
+            "INCOMPLETE",
+            "openai",
+        ),
+    ],
+)
+def test_chat_with_opus_preserves_typed_non_crash_terminal_outcomes(
+    monkeypatch,
+    error,
+    event_type,
+    error_source,
+):
+    alerts, logger_errors, runtime_reports = _configure_chat_endpoint(monkeypatch, error)
+
+    response = asyncio.run(
+        api_module.chat_with_opus(
+            request=_chat_request(),
+            user={"email": "curator@example.org", "sub": "auth-sub"},
+        )
+    )
+    events = asyncio.run(_consume_stream(response))
+    output_events = _events_after_preflight(events)
+
+    assert output_events[0]["type"] == event_type
+    assert output_events[0]["error_source"] == error_source
+    assert "sensitive refusal details" not in output_events[0]["message"]
+    assert alerts == []
+    assert logger_errors == []
+    assert runtime_reports == []
 
 
 def test_chat_with_opus_sanitizes_unexpected_errors(monkeypatch):
     raw_message = "stream exploded while completing Agent Studio response"
-    alerts, logger_errors = _configure_chat_endpoint(
+    alerts, logger_errors, runtime_reports = _configure_chat_endpoint(
         monkeypatch,
         RuntimeError(raw_message),
     )
@@ -476,26 +479,50 @@ def test_chat_with_opus_sanitizes_unexpected_errors(monkeypatch):
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "trace-123",
-            "message": (
-                "Agent Studio ran into an unexpected problem while completing your request. "
-                "Any tool actions started during this turn may already have completed, so "
-                "please check the results before retrying. If needed, refresh Agent Studio "
-                "and try again."
-            ),
+            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "message": "Agent Studio ran into an unexpected problem. Check completed actions before retrying.",
+            "error_source": "RuntimeError",
         }
     ]
     assert raw_message not in output_events[0]["message"]
-    assert alerts == [
+    assert alerts == []
+    assert logger_errors[0][0][0] == "Agent Studio OpenAI stream error: %s"
+    assert logger_errors[0][1]["exc_info"] is True
+    assert logger_errors[0][1]["extra"] == {"sentry_skip_event": True}
+    assert runtime_reports[0][1]["operation"] == "openai_stream_failure"
+
+
+def test_chat_with_opus_reports_turn_limit_without_leaking_sdk_detail(monkeypatch):
+    raw_message = "turn limit reached after sensitive tool activity"
+    alerts, logger_errors, runtime_reports = _configure_chat_endpoint(
+        monkeypatch,
+        api_module.MaxTurnsExceeded(raw_message),
+    )
+
+    response = asyncio.run(
+        api_module.chat_with_opus(
+            request=_chat_request(),
+            user={"email": "curator@example.org", "sub": "auth-sub"},
+        )
+    )
+    events = asyncio.run(_consume_stream(response))
+    output_events = _events_after_preflight(events)
+
+    assert output_events == [
         {
-            "error_type": "RuntimeError",
-            "error_message": raw_message,
-            "source": "infrastructure",
-            "specialist_name": "agent_studio_opus",
-            "trace_id": "trace-123",
+            "type": "ERROR",
             "session_id": "agent-studio-session-1",
-            "curator_id": "curator@example.org",
+            "turn_id": "opus-turn-1",
+            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "message": "Agent Studio reached its configured tool-turn limit without completing.",
+            "error_source": "turn_limit",
         }
     ]
-    assert logger_errors[0][0][0] == "Chat stream error: %s"
-    assert logger_errors[0][1]["exc_info"] is True
+    assert raw_message not in output_events[0]["message"]
+    assert alerts == []
+    assert logger_errors == []
+    assert runtime_reports[0][1]["operation"] == "openai_turn_limit_exceeded"
+    assert runtime_reports[0][1]["tags"] == {
+        "phase": "agents_sdk_run",
+        "provider": "openai",
+    }

@@ -432,15 +432,8 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     custom_agent_uuid = uuid4()
     captured: dict[str, Any] = {}
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("AGENT_STUDIO_OPUS_CONTEXT_EDITING_TRIGGER_TOKENS", "140000")
-    monkeypatch.setenv("AGENT_STUDIO_OPUS_CONTEXT_EDITING_KEEP_TOOL_USES", "3")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    monkeypatch.setattr(
-        api_module,
-        "_resolve_prompt_explorer_model",
-        lambda: ("claude-opus-5", "Claude Opus 5"),
-    )
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)
@@ -492,11 +485,50 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
             created_at=datetime(2026, 5, 6, 14, 16, tzinfo=timezone.utc),
         ),
     )
-    monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _FakeAnthropicClient(captured),
-    )
+    async def _fake_openai_runtime(**kwargs):
+        captured["runtime"] = kwargs
+        state = kwargs["state"]
+        tool = next(
+            item
+            for item in kwargs["tools"]
+            if getattr(item, "name", None) == "refresh_workshop_prompt"
+        )
+        tool_input = {"target_prompt": "main", "view": "summary"}
+        captured["forced_tool"] = tool
+        tool_result = {
+            "contract_version": "workshop_prompt_refresh.v1",
+            "success": True,
+            "source": "saved_custom_agent",
+            "view": "summary",
+            "length": len("Current saved prompt with no typo."),
+        }
+        captured["provider_output"] = api_module._provider_tool_result_content(
+            tool_name="refresh_workshop_prompt",
+            tool_input=tool_input,
+            tool_result=tool_result,
+            session_id="agent-studio-session-1",
+            turn_id="opus-turn-1",
+        )
+        yield {
+            "type": "TOOL_USE",
+            "tool_name": "refresh_workshop_prompt",
+            "tool_input": tool_input,
+            "call_id": "call-1",
+        }
+        yield {
+            "type": "TOOL_RESULT",
+            "tool_name": "refresh_workshop_prompt",
+            "result": tool_result,
+            "call_id": "call-1",
+        }
+        state.assistant_text_parts.append("The current saved prompt no longer contains the typo.")
+        state.response_id = "resp-workshop-1"
+        yield {
+            "type": "TEXT_DELTA",
+            "delta": "The current saved prompt no longer contains the typo.",
+        }
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", _fake_openai_runtime)
 
     with contract_client.stream(
         "POST",
@@ -525,10 +557,7 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     preflight_events = [
         event for event in events if event["type"] == "PROVIDER_CONTEXT_PREFLIGHT"
     ]
-    assert [event["operation"] for event in preflight_events] == [
-        "initial_anthropic_call",
-        "tool_loop_continuation",
-    ]
+    assert [event["operation"] for event in preflight_events] == ["agents_sdk_run"]
     output_events = [
         event for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
     ]
@@ -539,32 +568,11 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
         "TEXT_DELTA",
         "DONE",
     ]
-    first_call = captured["api_calls"][0]
-    second_call = captured["api_calls"][1]
-    for api_call in (first_call, second_call):
-        assert api_call["model"] == "claude-opus-5"
-        assert api_call["max_tokens"] == 16384
-        assert api_call["output_config"] == {"effort": "medium"}
-        assert "thinking" not in api_call
-        assert "temperature" not in api_call
-        assert "top_k" not in api_call
-        assert "top_p" not in api_call
-    assert first_call["betas"] == ["effort-2025-11-24", "context-management-2025-06-27"]
-    assert first_call["context_management"] == {
-        "edits": [
-            {
-                "type": "clear_tool_uses_20250919",
-                "trigger": {"type": "input_tokens", "value": 140000},
-                "keep": {"type": "tool_uses", "value": 3},
-                "clear_tool_inputs": False,
-            }
-        ]
-    }
-    assert first_call["tool_choice"] == {
-        "type": "tool",
-        "name": "refresh_workshop_prompt",
-    }
-    assert "tool_choice" not in second_call
+    runtime_call = captured["runtime"]
+    assert runtime_call["max_turns"] == api_module.get_agent_studio_openai_max_turns()
+    assert runtime_call["model_settings"].reasoning.effort == "medium"
+    assert runtime_call["model_settings"].tool_choice == "refresh_workshop_prompt"
+    assert runtime_call["model_settings"].parallel_tool_calls is False
 
     tool_result = output_events[1]["result"]
     assert tool_result["source"] == "saved_custom_agent"
@@ -573,9 +581,6 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     assert "content" not in tool_result
     assert "current_prompt" not in tool_result
 
-    second_messages = captured["second_call_messages"]
-    tool_result_message = second_messages[-1]["content"][0]
-    assert tool_result_message["type"] == "tool_result"
-    assert "Current saved prompt with no typo." not in tool_result_message["content"]
-    assert "workshop_prompt_refresh.v1" in tool_result_message["content"]
-    assert "minerite" not in tool_result_message["content"]
+    assert "Current saved prompt with no typo." not in captured["provider_output"]
+    assert "workshop_prompt_refresh.v1" in captured["provider_output"]
+    assert "minerite" not in captured["provider_output"]

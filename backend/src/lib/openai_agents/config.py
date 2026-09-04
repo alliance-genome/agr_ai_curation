@@ -1784,6 +1784,45 @@ def get_agent_studio_endpoint_timeout_seconds() -> float:
     return max(1.0, _get_env_float_with_fallback("AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS", 30.0))
 
 
+def get_agent_studio_openai_max_turns() -> int:
+    """Maximum Agents SDK turns for one Agent Studio authoring response."""
+
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_OPENAI_MAX_TURNS", 12))
+
+
+def get_agent_studio_openai_max_output_tokens() -> int:
+    """Maximum output tokens requested for each Agent Studio model turn."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_OPENAI_MAX_OUTPUT_TOKENS", 16_384),
+    )
+
+
+def get_agent_studio_suggestion_max_turns() -> int:
+    """Maximum Agents SDK turns for forced AI-assisted suggestion submission."""
+
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_SUGGESTION_MAX_TURNS", 2))
+
+
+def get_agent_studio_suggestion_max_output_tokens() -> int:
+    """Maximum output tokens requested for suggestion-submission model turns."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_SUGGESTION_MAX_OUTPUT_TOKENS", 4_096),
+    )
+
+
+def get_agent_studio_tool_search_max_candidates() -> int:
+    """Maximum authorized tools declared to hosted Agent Studio tool search."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_TOOL_SEARCH_MAX_CANDIDATES", 128),
+    )
+
+
 def get_agent_studio_opus_context_editing_trigger_tokens() -> int:
     """Input-token threshold for Anthropic tool context editing.
 

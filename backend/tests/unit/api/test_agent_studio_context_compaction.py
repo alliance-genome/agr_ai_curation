@@ -818,15 +818,20 @@ def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch)
     captured: dict[str, Any] = {}
     large_value = "payload chunk " * 500
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
+    monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(
         api_module,
-        "_resolve_prompt_explorer_model",
-        lambda: ("claude-sonnet-test", "Claude Sonnet Test"),
+        "_get_all_opus_tools",
+        lambda _context=None: [
+            {
+                "name": "get_trace_payload",
+                "description": "Fetch a trace payload",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
     )
-    monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
-    monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)
     monkeypatch.setattr(api_module, "set_current_flow_context", lambda _context: None)
@@ -876,11 +881,23 @@ def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch)
         }
 
     monkeypatch.setattr(api_module, "_handle_tool_call", _fake_handle_tool_call)
-    monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _FakeAnthropicClient(captured),
-    )
+    async def _fake_openai_runtime(**kwargs):
+        tool = next(
+            item for item in kwargs["tools"]
+            if str(getattr(item, "name", "")).endswith("get_trace_payload")
+        )
+        tool_input = {"trace_id": "trace-1", "payload_id": "observation:abc:output"}
+        captured["provider_result"] = await tool.on_invoke_tool(
+            SimpleNamespace(tool_call_id="call-1"),
+            json.dumps(tool_input),
+        )
+        execution = kwargs["state"].executed_tools[-1]
+        yield {"type": "TOOL_USE", "tool_name": "get_trace_payload", "tool_input": tool_input, "call_id": "call-1"}
+        yield {"type": "TOOL_RESULT", "tool_name": "get_trace_payload", "result": execution.output, "call_id": "call-1"}
+        kwargs["state"].assistant_text_parts.append("Payload fetched")
+        yield {"type": "TEXT_DELTA", "delta": "Payload fetched"}
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", _fake_openai_runtime)
 
     request = api_module.ChatRequest(
         messages=[api_module.ChatMessage(role="user", content="Fetch the large payload")],
@@ -898,19 +915,19 @@ def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch)
     tool_result_events = [event for event in events if event["type"] == "TOOL_RESULT"]
     assert tool_result_events[0]["result"]["data"]["value"] == large_value
 
-    second_messages = captured["second_call_messages"]
-    tool_result_content = second_messages[-1]["content"][0]["content"]
+    tool_result_content = captured["provider_result"]
     compact = json.loads(tool_result_content)
 
     assert compact["status"] == "compacted_tool_result"
     assert len(tool_result_content) <= 500
     assert compact["recall"]["turn"]["turn_id"] == "opus-turn-4-abc123"
-    assert "next_call" not in compact["recall"]
-    assert compact["recall"]["narrow"]["tool"] == "get_trace_payload"
-    assert compact["recall"]["narrow"]["supply_bounded"] == [
-        "trace_id",
-        "payload_id",
-    ]
+    assert compact["recall"]["next_call"] == {
+        "tool": "get_trace_payload",
+        "input": {
+            "trace_id": "trace-1",
+            "payload_id": "observation:abc:output",
+        },
+    }
     assert large_value not in tool_result_content
 
 
@@ -921,15 +938,21 @@ def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
     inventory_value = "payload inventory entry " * 400
     exact_payload_value = "exact TraceReview payload " * 500
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
+    monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(
         api_module,
-        "_resolve_prompt_explorer_model",
-        lambda: ("claude-sonnet-test", "Claude Sonnet Test"),
+        "_get_all_opus_tools",
+        lambda _context=None: [
+            {
+                "name": name,
+                "description": name,
+                "input_schema": {"type": "object", "properties": {}},
+            }
+            for name in ("get_trace_payloads", "get_trace_payload")
+        ],
     )
-    monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
-    monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)
     monkeypatch.setattr(api_module, "set_current_flow_context", lambda _context: None)
@@ -998,11 +1021,37 @@ def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
         raise AssertionError(f"unexpected tool: {tool_name}")
 
     monkeypatch.setattr(api_module, "_handle_tool_call", _fake_handle_tool_call)
-    monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _RepeatedToolLoopAnthropicClient(captured),
-    )
+    async def _fake_openai_runtime(**kwargs):
+        provider_results = []
+        for index, (tool_name, tool_input) in enumerate(
+            (
+                ("get_trace_payloads", {"trace_id": "trace-1"}),
+                (
+                    "get_trace_payload",
+                    {"trace_id": "trace-1", "payload_id": "observation:abc:output"},
+                ),
+            ),
+            start=1,
+        ):
+            tool = next(
+                item for item in kwargs["tools"]
+                if str(getattr(item, "name", "")).endswith(tool_name)
+            )
+            call_id = f"call-{index}"
+            provider_results.append(
+                await tool.on_invoke_tool(
+                    SimpleNamespace(tool_call_id=call_id),
+                    json.dumps(tool_input),
+                )
+            )
+            execution = kwargs["state"].executed_tools[-1]
+            yield {"type": "TOOL_USE", "tool_name": tool_name, "tool_input": tool_input, "call_id": call_id}
+            yield {"type": "TOOL_RESULT", "tool_name": tool_name, "result": execution.output, "call_id": call_id}
+        captured["first_provider_result"], captured["second_provider_result"] = provider_results
+        kwargs["state"].assistant_text_parts.append("Trace inspected")
+        yield {"type": "TEXT_DELTA", "delta": "Trace inspected"}
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", _fake_openai_runtime)
 
     request = api_module.ChatRequest(
         messages=[
@@ -1027,11 +1076,7 @@ def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
         for event in events
         if event["type"] == "PROVIDER_CONTEXT_PREFLIGHT"
     ]
-    assert preflight_operations == [
-        "initial_anthropic_call",
-        "tool_loop_continuation",
-        "tool_loop_continuation",
-    ]
+    assert preflight_operations == ["agents_sdk_run"]
 
     tool_result_events = [event for event in events if event["type"] == "TOOL_RESULT"]
     assert tool_result_events[0]["result"]["data"]["payloads"][0]["preview"] == inventory_value

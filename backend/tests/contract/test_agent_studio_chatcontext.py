@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 from src.api import agent_studio as api_module
@@ -95,14 +96,9 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     chat_contract_auth_headers,
     monkeypatch,
 ):
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(
-        api_module,
-        "_resolve_prompt_explorer_model",
-        lambda: ("claude-sonnet-test", "Claude Sonnet Test"),
-    )
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
@@ -152,22 +148,13 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
 
     monkeypatch.setattr(api_module, "_prepare_agent_studio_turn", _prepare_turn)
     monkeypatch.setattr(api_module, "_persist_completed_agent_studio_turn", _persist_turn)
-    monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _FakeAnthropicClient(
-            events=[
-                SimpleNamespace(
-                    type="content_block_delta",
-                    delta=SimpleNamespace(text="Stored answer"),
-                )
-            ],
-            final_message=SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="Stored answer")],
-                stop_reason="end_turn",
-            ),
-        ),
-    )
+    async def _fake_openai_runtime(**kwargs):
+        captured["runtime"] = kwargs
+        kwargs["state"].assistant_text_parts.append("Stored answer")
+        kwargs["state"].response_id = "resp-context-1"
+        yield {"type": "TEXT_DELTA", "delta": "Stored answer"}
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", _fake_openai_runtime)
 
     with contract_client.stream(
         "POST",
@@ -223,19 +210,17 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     assert all(event["session_id"] == CONTEXT_SESSION_ID for event in events)
     assert captured["request_context_session_id"] == "assistant-session-123"
     assert captured["flow_context"]["entry_node_id"] == "task_input_0"
-    assert captured.get("assistant_trace_id") == "trace-123", {
-        "events": events,
-        "captured": captured,
-    }
+    assert captured.get("assistant_trace_id")
+    assert captured["assistant_trace_id"] != "trace-123"
     assistant_payload = captured["assistant_payload"]
     assert isinstance(assistant_payload, dict)
-    preflight_events = assistant_payload.pop("provider_context_preflight_events", None)
-    assert assistant_payload == {
-        "trace_capture": {
-            "status": "provided_context_trace_id",
-            "trace_id": "trace-123",
-            "error": None,
-        },
-        "seed_session_id": "assistant-session-123",
+    assert assistant_payload["trace_capture"] == {
+        "status": "captured",
+        "trace_id": captured["assistant_trace_id"],
+        "source_trace_id": "trace-123",
+        "error": None,
     }
-    assert isinstance(preflight_events, list) and preflight_events
+    assert assistant_payload["seed_session_id"] == "assistant-session-123"
+    assert assistant_payload["provider_run"]["provider"] == "openai"
+    assert assistant_payload["provider_run"]["model"] == "gpt-5.6-sol"
+    assert assistant_payload["provider_run"]["response_id"] == "resp-context-1"

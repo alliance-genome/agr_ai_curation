@@ -24,6 +24,8 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_name_max_chars,
     get_agent_studio_flow_output_filename_template_max_chars,
     get_agent_studio_flow_step_goal_max_chars,
+    get_agent_studio_openai_max_output_tokens,
+    get_agent_studio_openai_max_turns,
     get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_service_log_default_lookback_minutes,
@@ -31,6 +33,9 @@ from src.lib.openai_agents.config import (
     get_agent_studio_service_log_max_lookback_minutes,
     get_agent_studio_service_log_page_max_chars,
     get_agent_studio_service_log_timeout_seconds,
+    get_agent_studio_suggestion_max_output_tokens,
+    get_agent_studio_suggestion_max_turns,
+    get_agent_studio_tool_search_max_candidates,
     get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
@@ -95,6 +100,42 @@ def test_sentry_log_event_level_is_bounded_and_environment_configurable(
     with caplog.at_level("WARNING"):
         assert get_sentry_log_event_level() is None
     assert "Log-event promotion remains disabled" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("env_name", "getter", "default"),
+    [
+        ("AGENT_STUDIO_OPENAI_MAX_TURNS", get_agent_studio_openai_max_turns, 12),
+        (
+            "AGENT_STUDIO_OPENAI_MAX_OUTPUT_TOKENS",
+            get_agent_studio_openai_max_output_tokens,
+            16_384,
+        ),
+        ("AGENT_STUDIO_SUGGESTION_MAX_TURNS", get_agent_studio_suggestion_max_turns, 2),
+        (
+            "AGENT_STUDIO_SUGGESTION_MAX_OUTPUT_TOKENS",
+            get_agent_studio_suggestion_max_output_tokens,
+            4_096,
+        ),
+        (
+            "AGENT_STUDIO_TOOL_SEARCH_MAX_CANDIDATES",
+            get_agent_studio_tool_search_max_candidates,
+            128,
+        ),
+    ],
+)
+def test_agent_studio_openai_limits_are_env_backed_and_positive(
+    monkeypatch,
+    env_name,
+    getter,
+    default,
+):
+    monkeypatch.delenv(env_name, raising=False)
+    assert getter() == default
+    monkeypatch.setenv(env_name, "7")
+    assert getter() == 7
+    monkeypatch.setenv(env_name, "0")
+    assert getter() == 1
 
 
 def test_supervisor_specialist_deadline_is_env_configured_and_positive(monkeypatch):

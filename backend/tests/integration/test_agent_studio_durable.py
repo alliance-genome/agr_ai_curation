@@ -1,4 +1,4 @@
-"""Integration coverage for durable Agent Studio Opus persistence."""
+"""Integration coverage for durable Agent Studio persistence."""
 
 from __future__ import annotations
 
@@ -73,14 +73,22 @@ def _configure_agent_studio_chat(monkeypatch, *, scenarios, tool_result=None, st
 
     calls = stream_calls if stream_calls is not None else []
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
+    monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(
         api_module,
-        "_resolve_prompt_explorer_model",
-        lambda: ("claude-sonnet-test", "Claude Sonnet Test"),
+        "_get_all_opus_tools",
+        lambda _context=None: [
+            {
+                "name": "summarize_trace",
+                "description": "Summarize a trace",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"trace_id": {"type": "string"}},
+                },
+            }
+        ],
     )
-    monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
-    monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)
     monkeypatch.setattr(api_module, "set_current_flow_context", lambda _context: None)
@@ -90,11 +98,33 @@ def _configure_agent_studio_chat(monkeypatch, *, scenarios, tool_result=None, st
         return tool_result if tool_result is not None else {"summary": "trace summary"}
 
     monkeypatch.setattr(api_module, "_handle_tool_call", _fake_tool_call)
-    monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _FakeAnthropicClient(scenarios, calls),
-    )
+    async def _fake_openai_runtime(**kwargs):
+        calls.append(kwargs)
+        state = kwargs["state"]
+        for events, final_message in scenarios:
+            for event in events:
+                delta = str(getattr(getattr(event, "delta", None), "text", "") or "")
+                if delta:
+                    state.assistant_text_parts.append(delta)
+                    yield {"type": "TEXT_DELTA", "delta": delta}
+            for block in getattr(final_message, "content", []):
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                tool = next(
+                    item for item in kwargs["tools"]
+                    if str(getattr(item, "name", "")).endswith(block.name)
+                )
+                provider_output = await tool.on_invoke_tool(
+                    SimpleNamespace(tool_call_id=block.id),
+                    __import__("json").dumps(block.input),
+                )
+                execution = state.executed_tools[-1]
+                yield {"type": "TOOL_USE", "tool_name": block.name, "tool_input": block.input, "call_id": block.id}
+                yield {"type": "TOOL_RESULT", "tool_name": block.name, "result": execution.output, "call_id": block.id}
+                assert provider_output
+        state.response_id = "resp-durable-1"
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", _fake_openai_runtime)
     return calls
 
 
@@ -148,8 +178,7 @@ def test_agent_studio_chat_persists_durable_rows_and_replays_completed_turn(
         events = collect_sse_events(stream_response)
         assert stream_response.status_code == 200
 
-    # PROVIDER_CONTEXT_PREFLIGHT is emitted before each provider call (96ab9632);
-    # filter it to assert the meaningful stream (two provider calls -> two preflights).
+    # One preflight covers the SDK-owned run, including its internal tool loop.
     assert [
         event["type"] for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
     ] == [
@@ -159,7 +188,7 @@ def test_agent_studio_chat_persists_durable_rows_and_replays_completed_turn(
         "DONE",
     ]
     assert all(event["session_id"] == "agent-studio-session-replay" for event in events)
-    assert len(stream_calls) == 2
+    assert len(stream_calls) == 1
 
     test_db.expire_all()
     session_row = test_db.scalar(
@@ -188,8 +217,9 @@ def test_agent_studio_chat_persists_durable_rows_and_replays_completed_turn(
         "error": None,
     }
     assert rows[1].payload_json["trace_capture"] == {
-        "status": "provided_context_trace_id",
-        "trace_id": "trace-123",
+        "status": "captured",
+        "trace_id": rows[1].trace_id,
+        "source_trace_id": "trace-123",
         "error": None,
     }
     assert rows[1].payload_json["tool_calls"][0]["tool_name"] == "summarize_trace"
@@ -206,11 +236,11 @@ def test_agent_studio_chat_persists_durable_rows_and_replays_completed_turn(
 
     from src.api import agent_studio as api_module
 
-    monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _UnexpectedAnthropicClient(),
-    )
+    async def _unexpected_openai_runtime(**_kwargs):
+        raise AssertionError("OpenAI runtime should not run for durable replay")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", _unexpected_openai_runtime)
 
     with client.stream("POST", "/api/agent-studio/chat", json=request_payload) as replay_response:
         replay_events = collect_sse_events(replay_response)
@@ -227,7 +257,7 @@ def test_agent_studio_chat_persists_durable_rows_and_replays_completed_turn(
         "DONE",
     ]
     assert all(event["session_id"] == "agent-studio-session-replay" for event in replay_events)
-    assert len(stream_calls) == 2
+    assert len(stream_calls) == 1
 
 
 def test_agent_studio_chat_derives_a_durable_session_from_assistant_seed_id(
@@ -303,19 +333,15 @@ def test_agent_studio_chat_derives_a_durable_session_from_assistant_seed_id(
         ("user", "Please continue from the seeded transcript"),
         ("assistant", "Seeded durable answer"),
     ]
-    # provider_context_preflight_events is token-budget observability (96ab9632) with
-    # dynamic values; assert the stable payload contract and that observability is present.
     seeded_payload = dict(stored_messages[1].payload_json)
-    preflight_events = seeded_payload.pop("provider_context_preflight_events", None)
-    assert seeded_payload == {
-        "trace_capture": {
-            "status": "provided_context_trace_id",
-            "trace_id": "trace-seeded",
-            "error": None,
-        },
-        "seed_session_id": "assistant-seed-session",
+    assert seeded_payload["trace_capture"] == {
+        "status": "captured",
+        "trace_id": stored_messages[1].trace_id,
+        "source_trace_id": "trace-seeded",
+        "error": None,
     }
-    assert isinstance(preflight_events, list) and preflight_events
+    assert seeded_payload["seed_session_id"] == "assistant-seed-session"
+    assert seeded_payload["provider_run"]["provider"] == "openai"
 
 
 def test_agent_studio_chat_returns_404_for_other_users_session(
@@ -335,12 +361,7 @@ def test_agent_studio_chat_returns_404_for_other_users_session(
 
     from src.api import agent_studio as api_module
 
-    monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _UnexpectedAnthropicClient(),
-    )
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     get_auth_mock.set_user("chat2")
 
     response = client.post(
