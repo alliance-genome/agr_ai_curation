@@ -493,6 +493,13 @@ def _validate_envelope_output_requires_finalize_tool(
     )
 
 
+def _normalize_output_schema_key(value: Optional[str]) -> Optional[str]:
+    """Normalize the persisted no-output contract to ``None``."""
+
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
 def _validate_model_id(model_id: str) -> str:
     """Validate model selection against the configured model catalog."""
     normalized = str(model_id or "").strip()
@@ -808,7 +815,7 @@ def create_custom_agent(
         )
     else:
         effective_tool_ids = parent_tool_ids
-    effective_output_schema_key = (
+    effective_output_schema_key = _normalize_output_schema_key(
         output_schema_key
         if output_schema_key_provided or output_schema_key is not None
         else parent_defaults["output_schema_key"]
@@ -1219,7 +1226,7 @@ def update_custom_agent(
                 "explicit override. "
                 "Re-attach at least one tool before saving."
             )
-    next_output_schema_key = (
+    next_output_schema_key = _normalize_output_schema_key(
         output_schema_key
         if output_schema_key_provided or output_schema_key is not None
         else custom_agent.output_schema_key
@@ -1328,7 +1335,7 @@ def update_custom_agent(
     if tool_ids is not None:
         custom_agent.tool_ids = next_tool_ids
     if output_schema_key_provided or output_schema_key is not None:
-        custom_agent.output_schema_key = output_schema_key
+        custom_agent.output_schema_key = next_output_schema_key
 
     if prompt_changed or group_overrides_changed or allowed_group_ids_changed:
         custom_agent.version = int(custom_agent.version or 1) + 1

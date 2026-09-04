@@ -288,12 +288,15 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
         user_id=7,
         template_source="gene_validation",
         name="My Agent",
+        output_schema_key="   ",
+        output_schema_key_provided=True,
     )
 
     assert custom.template_source == "gene_validation"
     assert custom.user_id == 7
     assert custom.agent_key.startswith("ca_")
     assert custom.instructions == ""
+    assert custom.output_schema_key is None
 
 
 @pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
@@ -1271,7 +1274,8 @@ def test_update_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
     assert db.added[0].allowed_group_ids == ["WB", "RGD"]
 
 
-def test_update_can_explicitly_clear_inherited_output_schema_to_none():
+@pytest.mark.parametrize("cleared_schema", [None, "   "])
+def test_update_can_explicitly_clear_inherited_output_schema_to_none(cleared_schema):
     import src.lib.agent_studio.custom_agent_service as service
 
     custom_agent = _restricted_custom_agent(
@@ -1282,7 +1286,7 @@ def test_update_can_explicitly_clear_inherited_output_schema_to_none():
     updated = service.update_custom_agent(
         db=_AccessFloorDB(),
         custom_agent=custom_agent,
-        output_schema_key=None,
+        output_schema_key=cleared_schema,
         output_schema_key_provided=True,
     )
 

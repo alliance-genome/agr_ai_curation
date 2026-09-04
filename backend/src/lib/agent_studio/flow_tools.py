@@ -2750,10 +2750,12 @@ include source_steps, an ordered list of one or more 1-based indexes of earlier
 Extraction or typed Validation agents. Multiple formatters may point to the same
 sources, and ordinary control-flow steps may continue after a formatter branch.
 
-Returns the created flow's ID for reference.
+Returns the created flow's ID for reference. This tool compiles the steps into
+the exact graph and runs canonical validation before writing. `validate_flow`
+is for validating an already-compiled exact canvas draft, not these simplified
+steps.
 
-NOTE: This tool saves the flow to the database. Use validate_flow first
-to check for issues without saving.""",
+NOTE: This tool saves the flow to the database.""",
         input_schema={
             "type": "object",
             "properties": {
@@ -2786,16 +2788,16 @@ to check for issues without saving.""",
         name="validate_flow",
         description="""Validate an exact complete flow definition.
 
-Use this tool to check if a flow structure is valid BEFORE saving.
+Use this tool to check an already-compiled exact canvas draft before applying or
+saving that draft. Do not manufacture a separate graph before `create_flow`;
+`create_flow` compiles and canonically validates its own simplified steps.
 Pass the full save-equivalent canvas draft, including nodes, edges, positions,
 configuration, attachment metadata, prompt revision references, and output settings.
 The same structured rules are used for proposals, pre-apply checks, post-apply
 checks, and API saves.
 
 Returns stable findings with severity, exact path, safe message, optional fix hint,
-and node/edge identity. Errors block apply/save; warnings and info do not.
-
-ALWAYS use this before create_flow to catch issues early.""",
+and node/edge identity. Errors block apply/save; warnings and info do not.""",
         input_schema={
             "type": "object",
             "properties": {

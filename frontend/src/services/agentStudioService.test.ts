@@ -207,6 +207,25 @@ describe('agentStudioService', () => {
     expect(parsedBody).not.toHaveProperty('parent_agent_id')
   })
 
+  it('createCustomAgent renders the first structured validation error', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({
+        detail: {
+          artifact_kind: 'custom_agent',
+          findings: [
+            { severity: 'warning', message: 'Optional warning' },
+            { severity: 'error', message: 'Choose an available model.' },
+          ],
+        },
+      }),
+    })
+
+    await expect(createCustomAgent({ name: 'Draft' })).rejects.toThrow(
+      'Choose an available model.',
+    )
+  })
+
   it('cloneAgentToWorkshop posts clone request payload', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -254,6 +273,17 @@ describe('agentStudioService', () => {
 
     const fetchOptions = mockFetch.mock.calls[0][1]
     expect(JSON.parse(fetchOptions.body as string)).toEqual({ allowed_group_ids: ['GROUP_A'] })
+  })
+
+  it('updateCustomAgent falls back safely for malformed structured findings', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ detail: { findings: [{ severity: 'error' }] } }),
+    })
+
+    await expect(updateCustomAgent('custom-id', { name: 'Draft' })).rejects.toThrow(
+      'Request failed',
+    )
   })
 
   it('setCustomAgentVisibility posts visibility payload', async () => {
