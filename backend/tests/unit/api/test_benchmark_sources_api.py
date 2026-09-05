@@ -141,7 +141,7 @@ def test_install_rejects_duplicate_extension_id():
 
 
 def test_materialize_endpoint_returns_token_free_snapshot_receipt(tmp_path, monkeypatch):
-    payload = b'{"messages": []}\n'
+    payload = b'[{"text": "fixture"}]\n'
     (tmp_path / "input.json").write_bytes(payload)
     digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
@@ -177,10 +177,39 @@ def test_materialize_endpoint_returns_token_free_snapshot_receipt(tmp_path, monk
     }
 
 
-def test_materialize_endpoint_supports_browser_session_principal(
+def test_invalid_fixture_shape_is_rejected_before_snapshot_persistence(
     tmp_path, monkeypatch
 ):
     payload = b'{"messages": []}\n'
+    (tmp_path / "input.json").write_bytes(payload)
+    application = _app(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        _SnapshotRepository,
+        "freeze_input",
+        lambda *_args, **_kwargs: pytest.fail("invalid fixture must not be persisted"),
+    )
+
+    response = TestClient(application).post(
+        "/api/v1/benchmarks/sources/materialize",
+        json={
+            "resolver": "checked_in_fixture",
+            "reference": "input.json",
+            "version": "1",
+            "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "error": "invalid_reference",
+        "message": "Benchmark fixture must contain extracted document elements",
+    }
+
+
+def test_materialize_endpoint_supports_browser_session_principal(
+    tmp_path, monkeypatch
+):
+    payload = b'[{"text": "fixture"}]\n'
     (tmp_path / "input.json").write_bytes(payload)
     digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
     application = _app(tmp_path, monkeypatch)
@@ -226,7 +255,7 @@ def test_materialize_endpoint_supports_browser_session_principal(
 def test_materialize_endpoint_builds_and_memoizes_catalog_lazily(
     tmp_path, monkeypatch
 ):
-    payload = b'{"messages": []}\n'
+    payload = b'[{"text": "fixture"}]\n'
     (tmp_path / "input.json").write_bytes(payload)
     digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
     catalog = BenchmarkInputResolverCatalog(
@@ -449,7 +478,7 @@ def test_unavailable_source_reports_only_sanitized_failure(monkeypatch):
 def test_snapshot_failure_preserves_internal_signal_and_sanitizes_response(
     tmp_path, monkeypatch
 ):
-    payload = b'{"messages": []}\n'
+    payload = b'[{"text": "fixture"}]\n'
     (tmp_path / "input.json").write_bytes(payload)
     digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
     captured = {}
