@@ -9,6 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 from src.lib.agent_studio.catalog_service import get_agent_by_id
 from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
 from src.lib.config.agent_loader import load_agent_definitions
+from src.lib.document_context import DocumentContext
 from src.lib.flows.executor import execute_flow
 from src.lib.openai_agents.config import (
     get_benchmark_adjudication_case_limit,
@@ -46,6 +47,7 @@ from src.models.sql.curation_flow import CurationFlow
 
 from .adjudication import SupplementalAdjudicator, execute_direct_openai_adjudication
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
+from .flow_results import load_flow_extractions
 from .models import (
     BenchmarkCellExecutionResult,
     BenchmarkRoute,
@@ -188,6 +190,14 @@ async def execute_resolved_agent_cell(
     messages = case_input.get("messages")
     if not isinstance(messages, list):
         raise ValueError("Agent benchmark input must contain messages")
+    user_id = str(case_input.get("user_id") or "benchmark")
+    document_id = case_input.get("document_id")
+    document_name = case_input.get("document_name")
+    doc_context = (
+        DocumentContext.fetch(document_id, user_id, document_name)
+        if document_id
+        else None
+    )
     active_groups = case_input.get("active_groups") or []
     with benchmark_route_plan(cell.routes), capture_provider_usage(
         max_records=get_benchmark_max_invocations_per_cell(),
@@ -196,18 +206,23 @@ async def execute_resolved_agent_cell(
         agent = get_agent_by_id(
             cell.target.id,
             db_user_id=case_input.get("db_user_id"),
+            active_groups=active_groups,
             authenticated_groups=active_groups,
             model_id_override=route.model,
             model_provider_override=route.provider,
             model_reasoning_override=route.reasoning_effort,
             benchmark_route_slot=slot,
+            **(doc_context.to_agent_kwargs() if doc_context else {}),
         )
         attach_benchmark_route(agent, slot)
         output: Any = None
         terminal_seen = False
         async for event in run_agent_streamed(
             context_messages=messages,
-            user_id=str(case_input.get("user_id") or "benchmark"),
+            user_id=user_id,
+            document_id=document_id,
+            document_name=document_name,
+            doc_context=doc_context,
             session_id=run_id,
             active_groups=active_groups,
             agent=agent,
@@ -218,12 +233,14 @@ async def execute_resolved_agent_cell(
         ):
             if event.get("type") == "RUN_ERROR":
                 raise RuntimeError("Agent benchmark target failed")
+            if event.get("type") == "STRUCTURED_RESULT":
+                output = (event.get("data") or {}).get("result")
             if event.get("type") == "RUN_FINISHED":
                 terminal_seen = True
-                data = event.get("data") or {}
-                output = data.get("structured_result", data.get("response"))
         if not terminal_seen:
             raise RuntimeError("Agent benchmark target ended without a terminal event")
+        if not isinstance(output, dict):
+            raise ValueError("Agent benchmark target must return a structured JSON object")
     return BenchmarkCellExecutionResult(
         output=output,
         invocations=_stable_invocations(usage_records),
@@ -327,7 +344,15 @@ async def execute_resolved_flow_cell(
                 raise RuntimeError("Flow benchmark target failed")
             if event.get("type") == "FLOW_FINISHED":
                 terminal_seen = True
-                output = event.get("data") or event.get("details")
+                completion = event.get("data")
+                if not isinstance(completion, dict):
+                    raise ValueError("Benchmark flow completion must contain a receipt")
+                output = load_flow_extractions(
+                    completion,
+                    document_id=str(case_input.get("document_id") or ""),
+                    user_id=str(case_input.get("user_id") or "benchmark"),
+                    run_id=run_id,
+                )
         if not terminal_seen:
             raise RuntimeError("Flow benchmark target ended without a terminal event")
     return BenchmarkCellExecutionResult(

@@ -58,6 +58,7 @@ class BenchmarkSuiteCase(FrozenStrictModel):
     case_id: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
     target: BenchmarkExecutionTarget
     input: BenchmarkInputReference
+    user_query: str | None = Field(default=None, min_length=1)
 
 
 class BenchmarkRoute(StrictModel):
@@ -225,6 +226,7 @@ class ResolvedBenchmarkCase(FrozenStrictModel):
     case_id: str
     target: BenchmarkExecutionTarget
     input: BenchmarkInputReference
+    user_query: str | None = Field(default=None, min_length=1)
 
 
 class ResolvedBenchmarkCell(FrozenStrictModel):
@@ -234,6 +236,7 @@ class ResolvedBenchmarkCell(FrozenStrictModel):
     repetition: int = Field(ge=1)
     target: BenchmarkExecutionTarget
     input: BenchmarkInputReference
+    user_query: str | None = Field(default=None, min_length=1)
     routes: Mapping[str, BenchmarkSuiteRoute]
 
     @field_validator("routes")

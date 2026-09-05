@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from src.lib.document_sources.models import DocumentSourceError
@@ -136,52 +137,16 @@ async def ingest_provider_markdown_document(
             filename=request.filename,
         )
 
-        try:
-            from src.lib.pipeline.hierarchy_resolution import resolve_document_hierarchy
-
-            elements, hierarchy_metadata = await resolve_document_hierarchy(elements)
-            if hierarchy_metadata:
-                await _store_hierarchy_metadata(
-                    document_id,
-                    user_id,
-                    owner_user_id,
-                    hierarchy_metadata,
-                )
-        except Exception as exc:
-            logger.warning(
-                "Provider Markdown hierarchy resolution failed for %s; continuing flat: %s",
-                document_id,
-                exc,
-            )
-
-        await _sync_sql_document_status(
-            document_id,
+        chunk_count = await index_owned_document_elements(
+            elements,
+            document_id=document_id,
             user_id=user_id,
             owner_user_id=owner_user_id,
-            status="processing",
-        )
-        from src.lib.pipeline.chunk import chunk_parsed_document
-
-        chunks = await chunk_parsed_document(elements, strategy, document_id)
-        stages_completed.append(ProcessingStage.CHUNKING)
-
-        from src.lib.pipeline.figure_locator_resolution import resolve_figure_locators
-
-        chunks = await resolve_figure_locators(
-            chunks,
+            weaviate_client=weaviate_client,
+            strategy=strategy,
             provider_figure_metadata=request.provider_figure_metadata,
         )
-
-        await _sync_sql_document_status(
-            document_id,
-            user_id=user_id,
-            owner_user_id=owner_user_id,
-            status="processing",
-        )
-        from src.lib.pipeline.store import store_to_weaviate
-
-        await store_to_weaviate(chunks, document_id, weaviate_client, user_id)
-        stages_completed.append(ProcessingStage.STORING)
+        stages_completed.extend((ProcessingStage.CHUNKING, ProcessingStage.STORING))
 
         await _sync_sql_document_status(
             document_id,
@@ -194,14 +159,14 @@ async def ingest_provider_markdown_document(
             success=True,
             document_id=document_id,
             stages_completed=stages_completed,
-            total_chunks=len(chunks),
-            total_embeddings=len(chunks),
+            total_chunks=chunk_count,
+            total_embeddings=chunk_count,
             duration_seconds=duration_seconds,
         )
         return ProviderMarkdownIngestionResult(
             processing_result=processing_result,
             element_count=len(elements),
-            chunk_count=len(chunks),
+            chunk_count=chunk_count,
             source_markdown_path=source_markdown_path,
             processed_json_path=processed_json_path,
             validation_warnings=warnings,
@@ -218,6 +183,69 @@ async def ingest_provider_markdown_document(
         if isinstance(exc, DocumentSourceIngestionError):
             raise
         raise DocumentSourceIngestionError("Provider Markdown ingestion failed") from exc
+
+
+async def index_owned_document_elements(
+    elements: list[dict[str, Any]],
+    *,
+    document_id: str,
+    user_id: str,
+    owner_user_id: int,
+    weaviate_client: Any,
+    strategy: ChunkingStrategy,
+    provider_figure_metadata: tuple[Mapping[str, Any], ...] = (),
+    stage_checkpoint: Callable[[str], Awaitable[None]] | None = None,
+) -> int:
+    """Use normal hierarchy, chunking, figure, and vector storage for frozen or imported text.
+
+    The caller owns document creation, source-artifact persistence, and terminal
+    lifecycle. This shared post-parsing path does not fetch original sources.
+    """
+
+    await _require_owned_document(document_id, user_id, owner_user_id)
+    # Keep lease/cancellation failures outside the normal hierarchy fallback.
+    if stage_checkpoint is not None:
+        await stage_checkpoint("hierarchy")
+    try:
+        from src.lib.pipeline.hierarchy_resolution import resolve_document_hierarchy
+
+        elements, hierarchy_metadata = await resolve_document_hierarchy(elements)
+        if hierarchy_metadata:
+            await _store_hierarchy_metadata(
+                document_id, user_id, owner_user_id, hierarchy_metadata
+            )
+    except Exception as exc:
+        logger.warning(
+            "Document hierarchy resolution failed for %s; continuing flat: %s",
+            document_id,
+            exc,
+        )
+
+    await _sync_sql_document_status(
+        document_id, user_id=user_id, owner_user_id=owner_user_id, status="processing"
+    )
+    from src.lib.pipeline.chunk import chunk_parsed_document
+
+    if stage_checkpoint is not None:
+        await stage_checkpoint("chunking")
+    chunks = await chunk_parsed_document(elements, strategy, document_id)
+
+    from src.lib.pipeline.figure_locator_resolution import resolve_figure_locators
+
+    if stage_checkpoint is not None:
+        await stage_checkpoint("figure_locators")
+    chunks = await resolve_figure_locators(
+        chunks, provider_figure_metadata=provider_figure_metadata
+    )
+    await _sync_sql_document_status(
+        document_id, user_id=user_id, owner_user_id=owner_user_id, status="processing"
+    )
+    from src.lib.pipeline.store import store_to_weaviate
+
+    if stage_checkpoint is not None:
+        await stage_checkpoint("vector_storage")
+    await store_to_weaviate(chunks, document_id, weaviate_client, user_id)
+    return len(chunks)
 
 
 def _validate_provider_markdown(markdown: str) -> list[str]:

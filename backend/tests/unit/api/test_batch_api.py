@@ -141,7 +141,13 @@ async def test_create_batch_success(monkeypatch):
     found_doc = SimpleNamespace(id=doc_id)
 
     flow_query = SimpleNamespace(filter=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: flow))
-    docs_query = SimpleNamespace(filter=lambda *_args, **_kwargs: SimpleNamespace(all=lambda: [found_doc]))
+    document_filters = []
+
+    def filter_documents(*conditions):
+        document_filters.extend(conditions)
+        return SimpleNamespace(all=lambda: [found_doc])
+
+    docs_query = SimpleNamespace(filter=filter_documents)
     db = SimpleNamespace(query=lambda model: flow_query if model is batch_api.CurationFlow else docs_query)
 
     monkeypatch.setattr(batch_api, "validate_flow_for_batch", lambda *_args, **_kwargs: BatchValidationResponse(valid=True, errors=[]))
@@ -173,6 +179,9 @@ async def test_create_batch_success(monkeypatch):
     assert getattr(background_tasks.tasks[0].func, "__observability_task_name__") == "batch.process_batch"
     assert background_tasks.tasks[0].args == (batch_id,)
     assert create_kwargs["active_group_ids"] == ["group-a"]
+    assert any(condition.compare(
+        batch_api.PDFDocument.viewer_mode.is_distinct_from("benchmark_frozen")
+    ) for condition in document_filters)
 
 
 @pytest.mark.asyncio

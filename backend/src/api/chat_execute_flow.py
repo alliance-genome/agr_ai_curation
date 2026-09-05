@@ -41,6 +41,7 @@ from src.lib.flows.outcome import (
     flow_typed_output_transcript_values,
 )
 from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
+from src.services.document_access import exclude_benchmark_document
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -774,6 +775,7 @@ async def execute_flow_endpoint(
     if flow.user_id != db_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    exclude_benchmark_document(db, request.document_id)
     user_id = _require_user_sub(user)
     history_user_message = (request.user_query or "").strip() or f"Run flow '{flow.name}'"
 

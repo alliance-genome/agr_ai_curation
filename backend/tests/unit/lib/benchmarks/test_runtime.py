@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -181,7 +181,9 @@ def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch
     assert captured["tool_kwargs"]["benchmark_routes"] == benchmark_routes
 
 
-def _resolved_cell(kind: str, target_id: str, routes: dict[str, BenchmarkSuiteRoute]):
+def _resolved_cell(
+    kind: Literal["agent", "flow"], target_id: str, routes: dict[str, BenchmarkSuiteRoute]
+):
     return ResolvedBenchmarkCell(
         cell_id="sha256:" + "1" * 64,
         case_id="case-1",
@@ -229,6 +231,7 @@ async def test_resolved_agent_cell_applies_route_and_keeps_all_invocations(monke
                     sequence=attempt,
                 )
             )
+        yield {"type": "STRUCTURED_RESULT", "data": {"result": {"records": []}}}
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
     monkeypatch.setattr(benchmark_runtime, "get_agent_by_id", fake_agent)
@@ -242,7 +245,87 @@ async def test_resolved_agent_cell_applies_route_and_keeps_all_invocations(monke
     assert captured["kwargs"]["model_provider_override"] == "openrouter"
     assert captured["kwargs"]["model_reasoning_override"] == "high"
     assert [item.routing_attempt for item in result.invocations] == [1, 2]
-    assert result.output == "done"
+    assert result.output == {"records": []}
+
+
+@pytest.mark.asyncio
+async def test_resolved_agent_uses_same_document_context_for_tools_and_runner(monkeypatch):
+    from src.lib.document_context import DocumentContext
+
+    context = DocumentContext(
+        document_id="isolated-document",
+        user_id="benchmark-owner",
+        document_name="Frozen paper",
+        hierarchy={"sections": [{"name": "Results"}]},
+        abstract="Frozen abstract",
+        sections=["Results"],
+    )
+    captured = {}
+
+    def fetch(document_id, user_id, document_name):
+        assert (document_id, user_id, document_name) == (
+            context.document_id, context.user_id, context.document_name
+        )
+        return context
+
+    def agent(_agent_id, **kwargs):
+        captured["agent"] = kwargs
+        return SimpleNamespace(model=SimpleNamespace())
+
+    async def stream(**kwargs):
+        captured["runner"] = kwargs
+        yield {"type": "STRUCTURED_RESULT", "data": {"result": {"records": []}}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    monkeypatch.setattr(DocumentContext, "fetch", fetch)
+    monkeypatch.setattr(benchmark_runtime, "get_agent_by_id", agent)
+    monkeypatch.setattr(benchmark_runtime, "run_agent_streamed", stream)
+    route = BenchmarkSuiteRoute(provider="openai", model="extractor-model")
+    cell = _resolved_cell("agent", "extractor", {"agent:extractor": route})
+    messages = [{"role": "user", "content": "Extract the requested records."}]
+
+    await benchmark_runtime.execute_resolved_agent_cell(
+        cell,
+        {
+            "messages": messages,
+            "user_id": context.user_id,
+            "db_user_id": 42,
+            "active_groups": ["FB"],
+            "document_id": context.document_id,
+            "document_name": context.document_name,
+        },
+        "run-1",
+    )
+
+    for key, value in context.to_agent_kwargs().items():
+        assert captured["agent"][key] == value
+    assert captured["agent"]["db_user_id"] == 42
+    assert captured["agent"]["active_groups"] == ["FB"]
+    assert captured["agent"]["authenticated_groups"] == ["FB"]
+    assert captured["runner"]["active_groups"] == ["FB"]
+    assert captured["runner"]["doc_context"] is context
+    assert captured["runner"]["document_id"] == context.document_id
+    assert captured["runner"]["document_name"] == context.document_name
+    assert captured["runner"]["context_messages"] == messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [None, "completion text", ["not an envelope"]])
+async def test_resolved_agent_rejects_missing_or_non_object_structured_output(monkeypatch, result):
+    route = BenchmarkSuiteRoute(provider="openai", model="extractor-model")
+    cell = _resolved_cell("agent", "extractor", {"agent:extractor": route})
+    monkeypatch.setattr(
+        benchmark_runtime, "get_agent_by_id", lambda *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace())
+    )
+
+    async def stream(**_kwargs):
+        if result is not None:
+            yield {"type": "STRUCTURED_RESULT", "data": {"result": result}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    monkeypatch.setattr(benchmark_runtime, "run_agent_streamed", stream)
+    with pytest.raises(ValueError, match="structured JSON object"):
+        await benchmark_runtime.execute_resolved_agent_cell(cell, {"messages": []}, "run-1")
 
 
 @pytest.mark.asyncio
@@ -263,6 +346,13 @@ async def test_resolved_flow_cell_passes_complete_routes_and_stable_invocations(
     cell = _resolved_cell("flow", "flow-1", routes)
     captured = {}
     monkeypatch.setattr(benchmark_runtime, "_flow_from_recipe", lambda _id: SimpleNamespace(id="flow-id"))
+
+    def load_results(completion, **kwargs):
+        captured["result_scope"] = kwargs
+        assert completion == {"status": "completed", "extraction_result_refs": [{"extraction_result_id": "r1"}]}
+        return {"schema_version": "benchmark-flow-extractions/v1", "envelopes": [{"envelope_id": "e1"}]}
+
+    monkeypatch.setattr(benchmark_runtime, "load_flow_extractions", load_results)
 
     async def fake_flow(**kwargs):
         captured.update(kwargs)
@@ -285,12 +375,20 @@ async def test_resolved_flow_cell_passes_complete_routes_and_stable_invocations(
                     sequence=sequence,
                 )
             )
-        yield {"type": "FLOW_FINISHED", "data": {"ok": True}}
+        yield {"type": "FLOW_FINISHED", "data": {
+            "status": "completed", "extraction_result_refs": [{"extraction_result_id": "r1"}]
+        }}
 
     monkeypatch.setattr(benchmark_runtime, "execute_flow", fake_flow)
-    result = await benchmark_runtime.execute_resolved_flow_cell(cell, {}, "run-1")
+    result = await benchmark_runtime.execute_resolved_flow_cell(
+        cell, {"user_id": "owner-1", "document_id": "document-1"}, "run-1"
+    )
 
     assert captured["benchmark_routes"] == cell.routes
+    assert captured["result_scope"] == {
+        "document_id": "document-1", "user_id": "owner-1", "run_id": "run-1"
+    }
+    assert result.output["envelopes"] == [{"envelope_id": "e1"}]
     assert [item.route_slot for item in result.invocations] == list(routes)
     assert [item.requested_model for item in result.invocations] == [
         "supervisor-model",

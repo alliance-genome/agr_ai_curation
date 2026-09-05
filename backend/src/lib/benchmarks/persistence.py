@@ -15,6 +15,7 @@ from sqlalchemy import case, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from src.lib.benchmarks.models import BenchmarkSuite, ResolvedBenchmarkPlan
+from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
     get_benchmark_max_envelope_bytes,
@@ -205,6 +206,7 @@ class BenchmarkRepository:
         *,
         owner_subject: str,
         suite: BenchmarkSuite,
+        curator_context: BenchmarkCuratorContext,
         plan: ResolvedBenchmarkPlan,
         config_digest: str,
         code_digest: str,
@@ -212,7 +214,14 @@ class BenchmarkRepository:
         snapshot_ids_by_case: Mapping[str, UUID],
         rerun_of_job_id: UUID | None = None,
     ) -> BenchmarkJob:
-        """Persist a frozen plan and all cells in one caller-owned transaction."""
+        """Persist a frozen plan and trusted context in one transaction.
+
+        The admission layer must authenticate the curator and authorize the
+        operation before calling this internal repository, including reruns.
+        A typed context alone is not proof of authentication.
+        """
+        if not isinstance(curator_context, BenchmarkCuratorContext):
+            raise ValueError("verified curator context is required for new jobs")
         if not owner_subject:
             raise ValueError("benchmark owner subject is required")
         if not plan.cells:
@@ -220,6 +229,15 @@ class BenchmarkRepository:
         if suite.suite_id != plan.suite_id:
             raise ValueError("suite and resolved plan IDs differ")
         case_ids = {case.case_id for case in plan.cases}
+        suite_queries = {case.case_id: case.user_query for case in suite.cases}
+        for planned_case in plan.cases:
+            if planned_case.user_query != suite_queries.get(planned_case.case_id):
+                raise ValueError("resolved case query differs from suite")
+            if planned_case.target.kind == "agent" and not (planned_case.user_query or "").strip():
+                raise ValueError("agent benchmark cases require an explicit curator query")
+        for cell in plan.cells:
+            if cell.user_query != suite_queries.get(cell.case_id):
+                raise ValueError("resolved cell query differs from suite")
         if set(snapshot_ids_by_case) != case_ids:
             raise ValueError("every plan case must reference exactly one frozen snapshot")
         snapshots = {
@@ -274,6 +292,7 @@ class BenchmarkRepository:
             suite_id=suite.suite_id,
             suite_specification=suite.model_dump(mode="json"),
             resolved_plan=plan.model_dump(mode="json"),
+            curator_context=curator_context.model_dump(mode="json"),
             suite_digest=plan.suite_digest,
             catalog_digest=plan.catalog_digest,
             plan_digest=plan.plan_digest,
@@ -1099,6 +1118,12 @@ class BenchmarkRepository:
         )
 
     def delete_terminal_job(self, *, job_id: UUID, owner_subject: str) -> bool:
+        """Delete a terminal SQL-only job, retaining prepared-copy recovery IDs.
+
+        Terminal state does not prove external preparation writes are quiescent.
+        Prepared jobs need coordinated vector/file/SQL cleanup before journal
+        deletion, which this synchronous repository method cannot provide.
+        """
         job = self.session.scalar(
             select(BenchmarkJob)
             .where(
@@ -1111,6 +1136,14 @@ class BenchmarkRepository:
             return False
         if job.status not in _TERMINAL_JOB_STATUSES:
             raise ValueError("only terminal benchmark jobs may be deleted")
+        has_preparation = self.session.scalar(
+            select(select(BenchmarkEvent.id).where(
+                BenchmarkEvent.job_id == job.id,
+                BenchmarkEvent.event_type == "document_preparation.started",
+            ).exists())
+        )
+        if has_preparation:
+            raise ValueError("prepared benchmark jobs require coordinated document cleanup before deletion")
         self.session.execute(delete(BenchmarkJob).where(BenchmarkJob.id == job.id))
         self.session.flush()
         return True

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 from pydantic import ValidationError
@@ -10,6 +10,7 @@ from src.lib.benchmarks.catalog import build_route_catalog
 from src.lib.benchmarks.loader import BenchmarkCatalogError
 from src.lib.benchmarks.models import (
     BenchmarkModelCatalogEntry,
+    BenchmarkSuite,
     BenchmarkSuiteRoute,
 )
 from src.lib.benchmarks.suites import (
@@ -24,8 +25,24 @@ ROOT = Path(__file__).resolve().parents[5] / "packages" / "alliance" / "benchmar
 ALLIANCE_ROOT = ROOT.parent
 
 
+def test_explicit_curator_query_is_frozen_into_case_cell_and_plan_identity():
+    from tests.unit.lib.benchmarks.test_suite_models import _suite_payload
+
+    payload = _suite_payload()
+    payload["cases"][0]["user_query"] = "Extract the requested evidence."
+    payload["configurations"][0]["routes"]["agent:extractor"]["provider"] = "provider-a"
+    suite = BenchmarkSuite.model_validate(payload)
+    limits = dict(max_cases=1, max_configurations=1, max_repetitions=1, max_cells=1)
+    plan = resolve_suite(suite, _catalog(), **limits)
+    assert plan.cases[0].user_query == plan.cells[0].user_query == suite.cases[0].user_query
+    changed_case = suite.cases[0].model_copy(update={"user_query": "Extract a different evidence type."})
+    changed = resolve_suite(suite.model_copy(update={"cases": (changed_case,)}), _catalog(), **limits)
+    assert changed.plan_digest != plan.plan_digest
+    assert changed.cells[0].cell_id != plan.cells[0].cell_id
+
+
 def _route(
-    model: str = "model-a", effort: str | None = "high"
+    model: str = "model-a", effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = "high"
 ) -> BenchmarkSuiteRoute:
     return BenchmarkSuiteRoute(
         provider="provider-a", model=model, reasoning_effort=effort

@@ -1038,6 +1038,16 @@ def get_benchmark_cell_timeout_seconds() -> float:
     return max(0.1, _get_env_float_with_fallback("BENCHMARK_CELL_TIMEOUT_SECONDS", 3600.0))
 
 
+def get_benchmark_curator_auth_timeout_seconds() -> float:
+    """Connect/read timeout for current curator authorization lookups."""
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_CURATOR_AUTH_TIMEOUT_SECONDS", 10.0))
+
+
+def get_benchmark_curator_auth_max_attempts() -> int:
+    """Total SDK attempts per read-only authorization request, including the first."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CURATOR_AUTH_MAX_ATTEMPTS", 1))
+
+
 def get_benchmark_oidc_issuer_url() -> str:
     """Trusted issuer for benchmark bearer access tokens."""
     return os.getenv("BENCHMARK_OIDC_ISSUER_URL", "").strip()

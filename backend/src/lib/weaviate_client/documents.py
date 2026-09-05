@@ -90,6 +90,17 @@ async def async_list_documents(
             }
         # user_id parameter already contains auth_sub, use it for tenant naming
         tenant_name = get_tenant_name(user_id)
+        # Runtime benchmark copies share the real curator tenant for normal
+        # tools, but are not library entries. Exclude them in the vector query
+        # itself so page sizes and aggregate totals remain consistent.
+        benchmark_document_ids = [
+            str(identifier) for identifier in db.scalars(
+                select(PdfDocumentModel.id).where(
+                    PdfDocumentModel.user_id == db_user.id,
+                    PdfDocumentModel.viewer_mode == "benchmark_frozen",
+                )
+            )
+        ]
     finally:
         db.close()
 
@@ -182,6 +193,13 @@ async def async_list_documents(
                     where_filter,
                 )
 
+            if benchmark_document_ids:
+                library_filter = Filter.by_id().contains_none(benchmark_document_ids)
+                where_filter = (
+                    Filter.all_of([where_filter, library_filter]) if where_filter is not None
+                    else library_filter
+                )
+
             # Query for documents using v4 fetch_objects
             from weaviate.classes.query import Sort
 
@@ -220,7 +238,8 @@ async def async_list_documents(
                 pg_docs = db.execute(
                     select(PGDocument).where(
                         PGDocument.id.in_([UUID(doc_id) for doc_id in weaviate_doc_ids]),
-                        PGDocument.user_id == db_user.id  # T030: PostgreSQL ownership filter (integer)
+                        PGDocument.user_id == db_user.id,  # T030: PostgreSQL ownership filter (integer)
+                        PGDocument.viewer_mode.is_distinct_from("benchmark_frozen"),
                     )
                 ).scalars().all()
 
@@ -413,6 +432,14 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
         db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
         if not db_user:
             raise ValueError(f"User with auth_sub {user_id} not found")
+        if db.scalar(select(PdfDocumentModel.viewer_mode).where(
+            PdfDocumentModel.id == UUID(document_id),
+            PdfDocumentModel.user_id == db_user.id,
+        )) == "benchmark_frozen":
+            # Chat selection/resume and detailed library reads must not expose
+            # runtime benchmark copies. Normal benchmark tools use the direct
+            # owned chunk/context helpers, not this library detail operation.
+            raise ValueError("Document is not available in the curator library")
         # user_id parameter already contains auth_sub, use it for tenant naming
         tenant_name = get_tenant_name(user_id)
     finally:
