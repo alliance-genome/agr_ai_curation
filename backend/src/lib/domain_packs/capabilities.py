@@ -29,16 +29,24 @@ def registry_object_capabilities(
                 item["validator_binding_id"]
                 for item in matches
                 if item.get("state") == state and item.get("validator_binding_id")
+                and item.get("available") is not False
             }
         )
         for state in ("active", "under_development")
     }
-    return object_capabilities(
+    result = object_capabilities(
         registry.domain_pack.metadata,
         obj,
         active_validators=counts["active"],
         development_validators=counts["under_development"],
     )
+    unavailable = len({item["validator_binding_id"] for item in matches
+                       if item.get("available") is False and item.get("validator_binding_id")})
+    if unavailable:
+        result["validate"]["unavailable_bindings"] = unavailable
+        if not counts["active"] and not counts["under_development"]:
+            result["validate"]["state"] = "unavailable"
+    return result
 
 
 def object_capabilities(

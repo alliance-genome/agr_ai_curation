@@ -445,6 +445,7 @@ async def get_domain_envelope_review_rows(
             db,
             envelope_id,
             revision=revision,
+            active_group_ids=_authenticated_active_groups(user),
         )
     except DomainEnvelopeRevisionUnavailableError as exc:
         raise_sanitized_http_exception(

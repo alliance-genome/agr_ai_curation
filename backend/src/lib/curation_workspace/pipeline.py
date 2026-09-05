@@ -490,6 +490,7 @@ def _materialized_review_rows(
             db,
             envelope_ref.envelope_id,
             revision=envelope_revision,
+            active_group_ids=request.active_groups,
         )
         rows.extend(response.rows)
 
@@ -515,16 +516,27 @@ def _refresh_domain_envelope_validation_for_ref(
             f"No domain pack is registered for domain_pack_id={envelope.domain_pack_id!r}"
         )
 
+    from src.lib.domain_packs.profile_validation import (
+        profile_dispatch_matches, resolve_envelope_profile_validation,
+    )
+    profile_groups = (runtime_context.authenticated_groups or ()) if runtime_context is not None else ()
+    profile_context = resolve_envelope_profile_validation(
+        envelope, domain_pack, db=db, active_group_ids=profile_groups,
+    )
+    if profile_context is not None:
+        domain_pack = profile_context.registry.domain_pack
     structural_result = run_domain_envelope_structural_checks(
         envelope,
         domain_pack,
+        registry=profile_context.registry if profile_context is not None else None,
+        profile_context=profile_context,
     )
     package_validator = resolve_curation_domain_envelope_validator_by_id(
         envelope.domain_pack_id
     )
     package_appended_findings = ()
     validator_envelope = structural_result.envelope
-    if package_validator is not None:
+    if package_validator is not None and profile_context is None:
         validator_envelope, package_appended_findings = (
             append_validation_findings_to_envelope(
                 structural_result.envelope,
@@ -538,11 +550,23 @@ def _refresh_domain_envelope_validation_for_ref(
         # the validator agents. (Curator edits re-validate via the session validation service.)
         dispatch_appended_findings: tuple = ()
         result_envelope = validator_envelope
+        if profile_context is not None:
+            # Reusing semantic results is not reusing authorization: capability
+            # activation, caller groups and provider scope are checked now.
+            _, eligibility_findings, binding_audit = profile_dispatch_matches(
+                validator_envelope, profile_context, authenticated_groups=profile_groups,
+            )
+            result_envelope, dispatch_appended_findings = append_validation_findings_to_envelope(
+                validator_envelope, eligibility_findings, actor_id="profile_validation_reauthorization",
+            )
+            result_envelope = result_envelope.model_copy(deep=True)
+            result_envelope.metadata["validator_binding_audit"] = list(binding_audit)
     else:
         dispatch_result = dispatch_active_validator_bindings(
             validator_envelope,
             domain_pack,
             registry=structural_result.registry,
+            profile_context=profile_context,
             source_envelope_revision=envelope_row.revision,
             runtime_context=runtime_context,
         )

@@ -62,4 +62,13 @@ describe('EnvelopeValidatorList', () => {
     render(<EnvelopeValidatorList validators={[]} ariaLabelledBy="x" />)
     expect(screen.getByText('No automatic checks run on this object.')).toBeInTheDocument()
   })
+
+  it('shows unavailable checks and their reason without claiming they are active', () => {
+    render(<EnvelopeValidatorList ariaLabelledBy="x" validators={[
+      validator({ state: 'unavailable', stateExplanation: 'Access to this validator was revoked.' }),
+    ]} />)
+    expect(screen.getByRole('img', { name: 'Unavailable' })).toBeInTheDocument()
+    expect(screen.getByText(/Unavailable: Access to this validator was revoked/)).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'Active' })).not.toBeInTheDocument()
+  })
 })

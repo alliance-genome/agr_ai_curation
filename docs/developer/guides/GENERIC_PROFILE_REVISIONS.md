@@ -214,9 +214,42 @@ foreign-key references. A deferred constraint rejects a saved profile mapping
 without its matching capability receipt. A package cannot reuse the same
 composite version for different capability bytes after it has been referenced.
 Historical revisions remain readable if a package disappears; snapshots never
-authorize executing an unavailable package. ALL-1036 owns reauthorization,
-compilation and semantic execution through the existing dispatcher, followed by
-transactional complete-record conformance.
+authorize executing an unavailable package.
+
+### Runtime validation and write-back
+
+`domain_packs/profile_validation.py` compiles a request-local registry from the
+exact receipt and live authorized package capabilities. Chat, Flow, Workspace,
+curation preparation, inspection and readiness share this context. It does not
+modify the global generic pack. Missing or revoked capabilities and denied
+group/provider scopes produce explicit findings under the saved mapping policy;
+they do not discard an otherwise conforming extraction. Cached validation does
+not cache capability access. Blocking mappings use the existing required/blocking
+readiness contract; conformance alone is not semantic validation or submission
+approval.
+
+The existing dispatcher still owns requests, batching and validator jobs.
+`profile_materialization.py` stages all mapped outputs for one record, checks
+typed slots and destination conflicts, and invokes the shared closed-profile
+patch once for the complete record. One invalid output leaves that record
+unchanged. Source mirrors, undeclared outputs and implicit resolved-object
+side channels are not approved profile write destinations. Ordinary packaged
+validators retain their existing materialization behavior.
+
+Flow validation groups must cover each saved mapping exactly once; omission,
+replacement, supplementation or opt-out cannot alter the pinned profile. Catalog
+and inspection projections retain saved mapping identity while reporting live
+availability separately. An unavailable mapping is not an under-development
+feature and must not count as an executable automatic check.
+
+Validating a manual profile candidate creates its canonical envelope through the
+existing checkpoint service, using the session's selected saved revision and
+explicit `curator_manual` origin. No agent extraction is fabricated. Subsequent
+validation, edits and export use that envelope. Validator write-back refreshes
+all affected sibling candidate drafts and revisions. Readiness uses the closed
+profile contract rather than inherited generic field requirements. Real
+PostgreSQL regressions in `test_profile_validator_workspace.py` cover receipt
+linkage, policy-governed unavailable findings, export data and sibling drafts.
 
 ## API and migration
 

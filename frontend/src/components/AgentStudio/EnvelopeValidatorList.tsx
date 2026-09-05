@@ -61,10 +61,12 @@ function EnvelopeValidatorList({ validators, ariaLabelledBy }: EnvelopeValidator
           <Box sx={{ color: 'text.secondary', fontSize: 12.5, gridColumn: { xs: '2 / span 2', md: 'auto' } }}>
             {validator.description ? `${validator.description} ` : ''}
             {validator.policySentence}
-            {validator.state === 'under_development' && (
+            {(validator.state === 'under_development' || validator.state === 'unavailable') && (
               <Box component="span" sx={{ color: 'warning.main' }}>
                 {' '}
-                {validator.stateExplanation || 'Under development: not yet runnable.'}
+                {validator.state === 'unavailable' ? 'Unavailable: ' : ''}
+                {validator.stateExplanation || (validator.state === 'unavailable'
+                  ? 'This selected check cannot currently run.' : 'Under development: not yet runnable.')}
               </Box>
             )}
           </Box>

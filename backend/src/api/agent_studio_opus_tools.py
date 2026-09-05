@@ -1051,6 +1051,10 @@ GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
                 "type": "string",
                 "description": "Optional agent ID whose domain pack should be inspected.",
             },
+            "agent_revision_id": {
+                "type": "string",
+                "description": "Exact saved custom-agent revision UUID. Use the Flow node's pin; omit only to select today's authorized head. Returned detail requests retain the selected revision.",
+            },
             "domain_pack_id": {
                 "type": "string",
                 "description": "Optional domain pack ID to inspect directly.",
@@ -1088,7 +1092,7 @@ GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
             },
             "state": {
                 "type": "string",
-                "enum": ["active", "under_development"],
+                "enum": ["active", "under_development", "unavailable"],
                 "description": "Exact validator or binding state filter.",
             },
             "query": {

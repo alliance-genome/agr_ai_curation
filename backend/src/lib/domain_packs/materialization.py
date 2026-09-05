@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .profile_validation import ProfileValidationContext
 
 from sqlalchemy.orm import Session
 
@@ -138,6 +141,7 @@ class DomainPackMetadataReviewRowMaterializer:
     """Metadata-driven materializer that keeps provider mappings in domain packs."""
 
     metadata: DomainPackMetadata
+    profile_context: ProfileValidationContext | None = None
 
     def materialize(
         self,
@@ -156,6 +160,10 @@ class DomainPackMetadataReviewRowMaterializer:
             raise DomainEnvelopeMaterializationError(
                 "envelope_revision must be greater than zero"
             )
+        if self.profile_context is not None:
+            from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
+            require_resolved_profile_conformance(self.profile_context.profile, self.profile_context.receipt,
+                                                 envelope.model_dump(mode="json"))
 
         object_definitions = {
             definition.object_type: definition
@@ -165,6 +173,7 @@ class DomainPackMetadataReviewRowMaterializer:
         unavailable_capabilities = _unavailable_validator_capabilities_by_target(
             envelope,
             metadata=self.metadata,
+            profile_context=self.profile_context,
         )
         rows: list[DomainEnvelopeReviewRow] = []
 
@@ -176,10 +185,16 @@ class DomainPackMetadataReviewRowMaterializer:
                 object_definition,
                 object_role_key=_object_role_key(self.metadata),
             )
+            if self.profile_context is not None:
+                # Every closed-profile object is a curation record. Model-supplied
+                # metadata cannot hide it as a packaged metadata/reference row.
+                object_role = None
             if object_role == "metadata_only":
                 continue
 
             display_config = _workspace_display_config(domain_object, object_definition)
+            if self.profile_context is not None:
+                display_config = object_definition.metadata.get("workspace_display", {}) if object_definition else {}
             summary_fields = _summary_fields(
                 domain_object,
                 object_definition=object_definition,
@@ -239,6 +254,12 @@ class DomainPackMetadataReviewRowMaterializer:
                     field.model_dump(mode="json")
                     for field in workspace_fields
                 ]
+            if self.profile_context is not None:
+                metadata.update(
+                    execution_receipt=self.profile_context.receipt.model_dump(mode="json"),
+                    generic_profile_ref=self.profile_context.profile.receipt,
+                    profile_conformance="conforming", linkml_alignment="not_assessed",
+                )
 
             rows.append(
                 DomainEnvelopeReviewRow(
@@ -258,16 +279,16 @@ class DomainPackMetadataReviewRowMaterializer:
                     summary_fields=summary_fields,
                     schema_provider=(
                         domain_object.schema_ref.provider
-                        if domain_object.schema_ref is not None
+                        if domain_object.schema_ref is not None and self.profile_context is None
                         else None
                     ),
                     schema_ref=(
                         domain_object.schema_ref.model_dump(mode="json")
-                        if domain_object.schema_ref is not None
+                        if domain_object.schema_ref is not None and self.profile_context is None
                         else {}
                     ),
-                    object_model_ref=_object_model_ref(domain_object, object_definition),
-                    model_field_ref=_model_field_ref(domain_object, object_definition),
+                    object_model_ref=_object_model_ref(domain_object, object_definition) if self.profile_context is None else {},
+                    model_field_ref=_model_field_ref(domain_object, object_definition) if self.profile_context is None else {},
                     metadata=metadata,
                 )
             )
@@ -306,6 +327,7 @@ def materialize_persisted_envelope_review_rows(
     *,
     revision: int | None = None,
     materializer: DomainEnvelopeReviewRowMaterializer | None = None,
+    active_group_ids: Sequence[str] = (),
 ) -> DomainEnvelopeReviewRowsResponse:
     """Regenerate review rows from the currently persisted envelope JSON."""
 
@@ -324,9 +346,19 @@ def materialize_persisted_envelope_review_rows(
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
-    resolved_materializer = materializer or _registered_materializer_for(
-        envelope.domain_pack_id
-    )
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if domain_pack is None and envelope.metadata.get("execution_receipt") is not None:
+        raise DomainEnvelopeMaterializationError("The saved execution's domain pack is unavailable for review")
+    profile_context = (resolve_envelope_profile_validation(envelope, domain_pack, db=db,
+                       active_group_ids=active_group_ids) if domain_pack is not None else None)
+    if profile_context is not None:
+        resolved_materializer = DomainPackMetadataReviewRowMaterializer(
+            profile_context.registry.domain_pack.metadata, profile_context=profile_context,
+        )
+    else:
+        resolved_materializer = materializer or _registered_materializer_for(envelope.domain_pack_id)
     rows = resolved_materializer.materialize(
         envelope,
         envelope_revision=envelope_row.revision,
@@ -2098,7 +2130,20 @@ def _unavailable_validator_capabilities_by_target(
     envelope: DomainEnvelope,
     *,
     metadata: DomainPackMetadata,
+    profile_context: ProfileValidationContext | None = None,
 ) -> dict[str, Any]:
+    if profile_context is not None:
+        from .profile_validation import profile_mapping_binding_id
+        capabilities = tuple({
+            "validator_binding_id": profile_mapping_binding_id(profile_context.profile, item.mapping),
+            "state": "unavailable", "label": item.mapping.mapping_id,
+            "state_explanation": "; ".join(item.reasons), "scope": "object",
+            "object_type": "generic_object", "affected_fields": list(item.mapping.outputs.values()),
+            "generic_profile_ref": profile_context.profile.receipt,
+            "profile_validator_mapping": item.mapping.model_dump(mode="json"),
+        } for item in profile_context.unavailable)
+        return {"global": (), "by_object": {stable_object_id(obj): capabilities for obj in envelope.extracted_objects},
+                "by_field": {}}
     registry = DomainPackValidationRegistry.from_domain_pack(
         LoadedDomainPack(
             pack_id=metadata.pack_id,

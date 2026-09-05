@@ -186,10 +186,11 @@ async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeyp
     )
     captured: dict[str, object] = {}
 
-    def _materialize(db, envelope_id, *, revision=None):
+    def _materialize(db, envelope_id, *, revision=None, active_group_ids=()):
         captured["db"] = db
         captured["envelope_id"] = envelope_id
         captured["revision"] = revision
+        captured["active_group_ids"] = active_group_ids
         return expected
 
     monkeypatch.setattr(module, "materialize_persisted_envelope_review_rows", _materialize)
@@ -197,13 +198,14 @@ async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeyp
     response = await module.get_domain_envelope_review_rows(
         "env-1",
         revision=2,
-        user={"sub": "user-1"},
+        user={"sub": "user-1", "cognito:groups": ["zfin-curators", "rgd-curators"]},
         db=object(),
     )
 
     assert response is expected
     assert captured["envelope_id"] == "env-1"
     assert captured["revision"] == 2
+    assert captured["active_group_ids"] == ["ZFIN", "RGD"]
 
 
 @pytest.mark.asyncio

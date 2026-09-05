@@ -15,7 +15,10 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, cast
+
+if TYPE_CHECKING:
+    from .profile_validation import ProfileValidationContext
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
@@ -361,23 +364,41 @@ def dispatch_active_validator_bindings(
     source_envelope_revision: int | None = None,
     max_parallel_validators: int = DEFAULT_MAX_PARALLEL_VALIDATORS,
     runtime_context: ValidatorRuntimeContext | None = None,
+    profile_context: ProfileValidationContext | None = None,
 ) -> ActiveValidatorDispatchResult:
     """Dispatch active validator bindings and append result findings."""
 
-    validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(
-        domain_pack
-    )
+    authenticated_groups = _normalized_authenticated_groups(runtime_context)
+    if profile_context is None:
+        from .profile_validation import resolve_envelope_profile_validation
+        profile_context = resolve_envelope_profile_validation(
+            envelope, domain_pack, active_group_ids=authenticated_groups or (),
+        )
+    if profile_context is not None:
+        from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
+        from src.lib.agent_studio.profile_conformance import ProfileIdentityError
+        if envelope.metadata.get("execution_receipt") != profile_context.receipt.model_dump(mode="json"):
+            raise ProfileIdentityError("Validation context does not match the authoritative execution receipt")
+        require_resolved_profile_conformance(profile_context.profile, profile_context.receipt, envelope.model_dump(mode="json"))
+        validation_registry = profile_context.registry
+        domain_pack = validation_registry.domain_pack
+    else:
+        validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(domain_pack)
     matches = validation_registry.match_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
-    authenticated_groups = _normalized_authenticated_groups(runtime_context)
-    eligible_matches, eligibility_findings, binding_audit = (
-        resolve_group_scoped_validator_matches(
-            list(_ordered_matches(matches)),
-            authenticated_groups=authenticated_groups,
+    if profile_context is not None:
+        from .profile_validation import profile_dispatch_matches
+        eligible_matches, eligibility_findings, binding_audit = profile_dispatch_matches(
+            envelope, profile_context, authenticated_groups=authenticated_groups,
         )
-    )
+    else:
+        eligible_matches, eligibility_findings, binding_audit = (
+            resolve_group_scoped_validator_matches(
+                list(_ordered_matches(matches)), authenticated_groups=authenticated_groups,
+            )
+        )
     selector_findings: list[ValidationFinding] = list(eligibility_findings)
     jobs: list[ValidatorDispatchJob] = []
     dispatch_context = group_dispatch_context(authenticated_groups)
@@ -391,7 +412,15 @@ def dispatch_active_validator_bindings(
             continue
         selector_result = build_domain_validation_request(match)
         if selector_result.findings:
-            selector_findings.extend(selector_result.findings)
+            if profile_context is not None:
+                from .profile_validation import profile_policy_finding
+                mapping_id = match.binding.raw["profile_validation"]["mapping"]["mapping_id"]
+                mapping = next(m for m in profile_context.profile.contract.validator_mappings if m.mapping_id == mapping_id)
+                selector_findings.extend(profile_policy_finding(profile_context, mapping,
+                    code=finding.code, message=finding.message, object_ref=finding.object_ref,
+                    details=finding.details) for finding in selector_result.findings)
+            else:
+                selector_findings.extend(selector_result.findings)
             continue
         if selector_result.request is None:
             continue
@@ -435,13 +464,17 @@ def dispatch_active_validator_bindings(
             materialization_items,
         )
         materialization_started_at = time.monotonic()
-        materialization_result = materialize_validator_results_into_envelope(
-            updated_envelope,
-            domain_pack.metadata,
-            materialization_items,
-            actor_id=actor_id,
-            source_envelope_revision=source_envelope_revision,
-        )
+        if profile_context is not None:
+            from .profile_materialization import materialize_profile_validator_results
+            materialization_result = materialize_profile_validator_results(
+                updated_envelope, profile_context, materialization_items,
+                actor_id=actor_id, source_envelope_revision=source_envelope_revision,
+            )
+        else:
+            materialization_result = materialize_validator_results_into_envelope(
+                updated_envelope, domain_pack.metadata, materialization_items,
+                actor_id=actor_id, source_envelope_revision=source_envelope_revision,
+            )
         LOGGER.info(
             "Materialized %s active validator result(s) in %.3fs",
             len(materialization_items),

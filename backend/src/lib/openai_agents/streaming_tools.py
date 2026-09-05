@@ -3636,6 +3636,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     source_agent_key: Optional[str] = None,
     is_builder_envelope: bool = False,
     runtime_context: Optional[Any] = None,
+    execution_receipt: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
 
@@ -3702,6 +3703,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         agent_key=agent_key,
         conversation_summary=f"{specialist_name} chat extraction",
         adapter_key=adapter_key,
+        execution_receipt=execution_receipt,
     )
     dispatch_phase_timings_ms["candidate_build_ms"] = _elapsed_ms(
         candidate_started_at
@@ -3729,6 +3731,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
             payload_json=candidate.payload_json,
             created_at=datetime.now(timezone.utc),
             metadata=dict(candidate.metadata),
+            execution_receipt=candidate.execution_receipt,
         )
         envelope = domain_envelope_from_extraction_result(extraction_record)
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
@@ -6026,6 +6029,7 @@ async def run_specialist_with_events(
                 tool_name=tool_name,
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
+                execution_receipt=builder_workspace.execution_receipt,
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
@@ -6087,6 +6091,7 @@ async def run_specialist_with_events(
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
                 is_builder_envelope=True,
+                execution_receipt=builder_workspace.execution_receipt,
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),

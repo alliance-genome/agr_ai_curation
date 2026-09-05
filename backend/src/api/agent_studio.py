@@ -13,9 +13,8 @@ import os
 import re
 import asyncio
 import uuid
-from copy import deepcopy
 from datetime import datetime, timezone  # noqa: F401 - Agent Studio module API surface.
-from typing import Any, Callable, Dict, List, NoReturn, Optional, cast
+from typing import Any, Callable, Dict, List, NoReturn, Optional
 
 import boto3
 import openai
@@ -779,6 +778,7 @@ async def get_registry_metadata(
     """
     from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
     from src.lib.agent_studio.domain_envelope_metadata import (
+        custom_agent_revision_metadata,
         domain_envelope_metadata_catalog_by_agent,
     )
     from src.lib.flows.validation_attachments import validation_attachment_catalog_by_agent
@@ -843,9 +843,15 @@ async def get_registry_metadata(
         for custom in custom_agents:
             category = custom.category or "Custom"
             custom_id = make_custom_agent_id(custom.id)
-            template_source = _custom_agent_template_source(custom)
-            # A missing template source should miss these catalogs and use get() defaults.
-            template_metadata_key = cast(str, template_source)
+            receipt = None
+            envelope_metadata = None
+            execution_metadata_error = None
+            try:
+                receipt, envelope_metadata = custom_agent_revision_metadata(
+                    db, custom_id, db_user.id, active_group_ids=_authenticated_group_ids(user),
+                )
+            except ValueError:
+                execution_metadata_error = "Saved executable revision metadata is unavailable."
 
             agents[custom_id] = AgentMetadata(
                 name=custom.name,
@@ -855,26 +861,14 @@ async def get_registry_metadata(
                     "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
                 ),
                 supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
-                output_schema_key=getattr(custom, "output_schema_key", None),
-                is_active=bool(getattr(custom, "is_active", True)),
+                output_schema_key=receipt.output_contract.output_schema_key if receipt else None,
+                is_active=bool(getattr(custom, "is_active", True)) and receipt is not None,
                 visible=True,
                 allowed_group_ids=list(custom.allowed_group_ids),
-                produces_flow_artifacts=_produces_flow_artifacts(
-                    {
-                        "category": category,
-                        "output_schema_key": getattr(
-                            custom, "output_schema_key", None
-                        ),
-                        "is_active": bool(getattr(custom, "is_active", True)),
-                        "visible": True,
-                    }
-                ),
-                validation_attachments=deepcopy(
-                    validation_attachments_by_agent.get(template_metadata_key, [])
-                ),
-                domain_envelope=deepcopy(
-                    domain_envelope_metadata_by_agent.get(template_metadata_key)
-                ),
+                produces_flow_artifacts=bool(receipt and receipt.output_contract.output_state == "structured_extraction"),
+                validation_attachments=envelope_metadata["validation_attachments"] if envelope_metadata else [],
+                domain_envelope=envelope_metadata,
+                execution_metadata_error=execution_metadata_error,
             )
 
     return RegistryMetadataResponse(agents=agents)
@@ -3437,6 +3431,10 @@ async def _handle_tool_call(
     elif tool_name == "get_domain_pack_validation_plan":
         return agent_studio_domain_envelope_tools.get_domain_pack_validation_plan(
             agent_id=tool_input.get("agent_id"),
+            agent_revision_id=tool_input.get("agent_revision_id"),
+            session_factory=SessionLocal,
+            user_id=user_db_id,
+            active_group_ids=active_group_ids or [],
             domain_pack_id=tool_input.get("domain_pack_id"),
             section=tool_input.get("section"),
             object_type=tool_input.get("object_type"),
@@ -3455,6 +3453,7 @@ async def _handle_tool_call(
             return agent_studio_domain_envelope_tools.get_domain_envelope_review_rows(
                 session_factory=SessionLocal,
                 user_auth_sub=user_auth_sub,
+                active_group_ids=active_group_ids or [],
                 envelope_id=envelope_id,
                 revision=tool_input.get("revision"),
                 section=tool_input.get("section"),

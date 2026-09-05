@@ -57,6 +57,7 @@ from src.lib.domain_packs.validator_dispatch import (
     dispatch_active_validator_bindings,
 )
 from src.schemas.curation_workspace import (
+    CurationCandidateSource,
     CurationCandidateValidationRequest,
     CurationCandidateValidationResponse,
     CurationDraftField as CurationDraftFieldSchema,
@@ -70,7 +71,7 @@ from src.schemas.curation_workspace import (
     FieldValidationResult,
     FieldValidationStatus,
 )
-from src.schemas.domain_envelope import DomainEnvelope
+from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 
 
 def _load_candidate_for_write(
@@ -164,6 +165,8 @@ def _compute_candidate_validation(
     field_keys: Sequence[str] | None = None,
 ) -> CandidateValidationComputation:
     require_candidate_conformance(db, candidate)
+    _ensure_manual_profile_envelope(db, candidate)
+    profile_cache_current = _profile_validation_cache_is_current(db, candidate, runtime_context)
     requested_field_keys = set(field_keys or [])
     draft_fields = [
         CurationDraftFieldSchema.model_validate(field_payload)
@@ -200,6 +203,7 @@ def _compute_candidate_validation(
         and latest_snapshot.state == CurationValidationSnapshotState.COMPLETED
         and snapshot_matches_projection
         and snapshot_matches_group_context
+        and profile_cache_current
         and all(
             not field.stale_validation and _existing_result(field) is not None
             for field in draft_fields
@@ -234,10 +238,18 @@ def _compute_candidate_validation(
     )
     warnings.extend(envelope_warnings)
 
+    # Profile validator write-back refreshes the canonical envelope projection.
+    # Do not overwrite those values below with the pre-dispatch draft snapshot.
+    if candidate.execution_receipt is not None and (
+        candidate.execution_receipt["output_contract"]["output_mode"] == "profile_bound_generic"
+    ):
+        draft_fields = [CurationDraftFieldSchema.model_validate(field) for field in candidate.draft.fields or []]
+
     for draft_field in draft_fields:
         existing_result = _existing_result(draft_field)
         field_is_targeted = (
             not requested_field_keys
+            or not profile_cache_current
             or snapshot_projection_mismatch
             or draft_field.field_key in requested_field_keys
         )
@@ -245,6 +257,7 @@ def _compute_candidate_validation(
             field_is_targeted
             and (
                 force
+                or not profile_cache_current
                 or draft_field.stale_validation
                 or existing_result is None
                 or snapshot_missing_or_incomplete
@@ -306,6 +319,85 @@ def _compute_candidate_validation(
         snapshot=snapshot,
         updated_fields=updated_fields,
     )
+
+
+def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate) -> None:
+    """Give manual profile records the normal durable validation/patch surface.
+
+    The record is explicitly curator-created using a saved output contract, not
+    an invented agent extraction. Subsequent validation, editing, and export use
+    the same persisted envelope as extracted candidates.
+    """
+    if candidate.envelope_id is not None or candidate.execution_receipt is None:
+        return
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+    from src.lib.curation_workspace.execution_contracts import profiled_draft_payload
+    receipt = AgentExecutionReceipt.model_validate(candidate.execution_receipt)
+    if receipt.output_contract.generic_profile_ref is None:
+        return
+    if candidate.source != CurationCandidateSource.MANUAL:
+        raise ValueError("Profile extraction candidate is missing its source envelope")
+    payload = profiled_draft_payload(db, receipt, [
+        CurationDraftFieldSchema.model_validate(field) for field in candidate.draft.fields or []
+    ])
+    assert payload is not None
+    payload.pop("object_type", None)
+    pin = receipt.output_contract.generic_profile_ref.model_dump(mode="json")
+    object_id = f"manual:{candidate.id}"
+    envelope = DomainEnvelope(
+        envelope_id=f"manual-profile:{candidate.id}", domain_pack_id="generic",
+        extracted_objects=[CuratableObjectEnvelope.model_validate({"object_type": "generic_object", "object_id": object_id,
+            "payload": payload, "metadata": {"generic_profile_ref": pin,
+                "generic_extraction": {"class_key": "generic:generic_object"}, "source": "manual"}})],
+        metadata={"execution_receipt": receipt.model_dump(mode="json"), "source": "manual",
+            "extraction_metadata": {"provenance": {"produced_by": receipt.agent_key,
+                "execution_receipt": receipt.model_dump(mode="json"), "generic_profile_ref": pin,
+                "record_source": "curator_manual", "candidate_id": str(candidate.id)}}},
+    )
+    checkpoint = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
+        project_key=envelope.domain_pack_id, envelope=envelope, expected_revision=0,
+        execution_receipt=receipt, document_id=candidate.session.document_id,
+        session_id=candidate.session_id, flow_run_id=candidate.session.flow_run_id,
+        adapter_key=candidate.adapter_key,
+    ))
+    candidate.envelope_id = checkpoint.envelope_id
+    candidate.object_id = object_id
+    candidate.envelope_revision = checkpoint.revision
+    candidate.normalized_payload = {}
+    db.flush()
+
+
+def _profile_validation_cache_is_current(
+    db: Session, candidate: CurationCandidate, runtime_context: ValidatorRuntimeContext | None,
+) -> bool:
+    """Cached results never cache access to a pinned validator capability."""
+    receipt = candidate.execution_receipt
+    if receipt is None or receipt["output_contract"]["output_mode"] != "profile_bound_generic":
+        return True
+    if candidate.envelope_id is None:
+        return False
+    row = db.get(DomainEnvelopeModel, candidate.envelope_id)
+    if row is None:
+        return False
+    envelope = DomainEnvelope.model_validate(row.envelope_json)
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if domain_pack is None:
+        return False
+    from src.lib.domain_packs.profile_validation import profile_dispatch_matches, resolve_envelope_profile_validation
+    groups = (runtime_context.authenticated_groups or ()) if runtime_context is not None else ()
+    context = resolve_envelope_profile_validation(envelope, domain_pack, db=db, active_group_ids=groups)
+    if context is None:
+        return False
+    _, findings, _ = profile_dispatch_matches(envelope, context, authenticated_groups=groups)
+    # A previously unavailable mapping must also refresh when access returns,
+    # so its stale denial does not stay embedded in an otherwise current cache.
+    prior_denial = any(
+        finding.status.value == "open" and finding.code in {
+            "generic_profile.validator_unavailable", "generic_profile.validator_scope_unavailable",
+        }
+        for finding in envelope.validation_findings
+    )
+    return not findings and not prior_denial
 
 
 def _apply_candidate_validation(
@@ -451,6 +543,13 @@ def _dispatch_workspace_envelope_validation(
             ),
         )
 
+    from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+    profile_context = resolve_envelope_profile_validation(
+        envelope, domain_pack, db=db,
+        active_group_ids=(runtime_context.authenticated_groups or ()) if runtime_context is not None else (),
+    )
+    if profile_context is not None:
+        domain_pack = profile_context.registry.domain_pack
     source_revision = int(envelope_row.revision)
     refresh_scope = remove_open_validation_findings_for_scope(
         envelope,
@@ -460,13 +559,15 @@ def _dispatch_workspace_envelope_validation(
     structural_result = run_domain_envelope_structural_checks(
         refresh_scope.envelope,
         domain_pack,
+        registry=profile_context.registry if profile_context is not None else None,
+        profile_context=profile_context,
     )
     package_validator = resolve_curation_domain_envelope_validator_by_id(
         envelope.domain_pack_id
     )
     package_appended_findings = ()
     validator_envelope = structural_result.envelope
-    if package_validator is not None:
+    if package_validator is not None and profile_context is None:
         validator_envelope, package_appended_findings = (
             append_validation_findings_to_envelope(
                 structural_result.envelope,
@@ -478,6 +579,7 @@ def _dispatch_workspace_envelope_validation(
         validator_envelope,
         domain_pack,
         actor_id="workspace_candidate_validation",
+        profile_context=profile_context,
         registry=structural_result.registry,
         source_envelope_revision=source_revision,
         runtime_context=runtime_context,
@@ -533,6 +635,21 @@ def _dispatch_workspace_envelope_validation(
 
     candidate.envelope_revision = checkpoint.revision
     candidate.updated_at = validated_at
+    if profile_context is not None:
+        from src.lib.curation_workspace.session_mutation_service import (
+            _refresh_candidate_projection_from_envelope, load_envelope_candidates_for_patch,
+        )
+        linked = load_envelope_candidates_for_patch(db, session_id=candidate.session_id,
+                                                    envelope_id=envelope.envelope_id)
+        for projection in [candidate, *(item for item in linked if item.id != candidate.id)]:
+            obj = next(item for item in stale_resolution.envelope.extracted_objects
+                       if projection.object_id in (item.object_id, item.pending_ref_id))
+            _refresh_candidate_projection_from_envelope(
+                projection, obj, envelope_revision=checkpoint.revision,
+                changed_field_path=[path for binding in profile_context.registry.bindings
+                                    for path in binding.expected_result_fields.values()],
+                updated_at=validated_at,
+            )
     return stale_resolution.envelope, checkpoint.revision, []
 
 

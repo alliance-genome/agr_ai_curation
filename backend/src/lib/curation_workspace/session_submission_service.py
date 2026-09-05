@@ -886,6 +886,8 @@ def _build_domain_envelope_object_context(
     envelope: DomainEnvelope,
     expected_revision: int,
     projection_refs: tuple[dict[str, Any], ...],
+    db: Session | None = None,
+    active_groups: Sequence[str] = (),
 ) -> _DomainEnvelopeObjectContext:
     object_id = str(candidate.object_id)
     projection_ref = projection_refs[0] if projection_refs else {
@@ -948,8 +950,18 @@ def _build_domain_envelope_object_context(
         )
 
     domain_pack = _loaded_domain_pack_for_envelope(envelope)
+    profile_context = None
+    if domain_pack is not None:
+        from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation, profile_dispatch_matches
+        profile_context = resolve_envelope_profile_validation(envelope, domain_pack, db=db,
+                                                              active_group_ids=active_groups)
+        if profile_context is not None:
+            domain_pack = profile_context.registry.domain_pack
+            _, live_findings, _ = profile_dispatch_matches(envelope, profile_context,
+                                                         authenticated_groups=active_groups)
+            envelope = envelope.model_copy(update={"validation_findings": [*envelope.validation_findings, *live_findings]})
     registry = (
-        DomainPackValidationRegistry.from_domain_pack(domain_pack)
+        profile_context.registry if profile_context is not None else DomainPackValidationRegistry.from_domain_pack(domain_pack)
         if domain_pack is not None
         else None
     )
@@ -991,7 +1003,9 @@ def _build_domain_envelope_object_context(
             projection_ref=projection_ref,
         )
     )
-    field_blockers, field_warnings = _field_policy_blockers(
+    # Closed profile conformance was checked above, including nested arrays.
+    # The packaged flat field checker cannot express that recursive contract.
+    field_blockers, field_warnings = ([], []) if profile_context is not None else _field_policy_blockers(
         envelope=envelope,
         object_id=object_id,
         domain_object=domain_object,
@@ -1039,6 +1053,7 @@ def _build_domain_envelope_submission_context(
     candidates: Mapping[str, CurationCandidate],
     target_candidate_ids: Sequence[str],
     expected_envelope_revisions: Mapping[str, int] | None = None,
+    active_groups: Sequence[str] = (),
 ) -> _DomainEnvelopeSubmissionContext:
     expected_revisions = dict(expected_envelope_revisions or {})
     for envelope_id, revision in expected_revisions.items():
@@ -1122,6 +1137,8 @@ def _build_domain_envelope_submission_context(
 
         envelope = DomainEnvelope.model_validate(row.envelope_json)
         context = _build_domain_envelope_object_context(
+            db=db,
+            active_groups=active_groups,
             candidate=candidate,
             envelope_row=row,
             envelope=envelope,
@@ -2482,6 +2499,7 @@ def submission_preview(
         candidates=candidate_map,
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,
+        active_groups=active_groups_from_actor_claims(actor_claims),
     )
     readiness = _dedupe_envelope_scoped_readiness([
         _candidate_submission_readiness(
@@ -2598,6 +2616,7 @@ def execute_submission(
         candidates=candidate_map,
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,
+        active_groups=active_groups_from_actor_claims(actor_claims),
     )
     readiness = _dedupe_envelope_scoped_readiness([
         _candidate_submission_readiness(
@@ -2741,6 +2760,7 @@ def retry_submission(
         candidates=candidate_map,
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,
+        active_groups=active_groups_from_actor_claims(actor_claims),
     )
     readiness = _dedupe_envelope_scoped_readiness([
         _candidate_submission_readiness(

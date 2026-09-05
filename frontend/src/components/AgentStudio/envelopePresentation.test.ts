@@ -54,6 +54,15 @@ describe('fieldTypeLabel', () => {
 })
 
 describe('validator policy words', () => {
+  it('separates a selected mapping from its current execution availability', () => {
+    const attachment = buildValidationAttachmentOption({ available: false, unavailable_reasons: ['Access revoked'] })
+    const metadata = buildDomainEnvelopeMetadata({ validation_attachments: [attachment] })
+    expect(envelopeCounts(metadata).activeValidators).toBe(0)
+    const views = objectValidators(buildObject({ validation_attachments: [attachment], fields: [] }))
+    expect(views[0].state).toBe('unavailable')
+    expect(views[0].stateExplanation).toBe('Access revoked')
+    expect(attachment.state).toBe('active')
+  })
   it('prefers Blocking over Opt-out and returns null otherwise', () => {
     expect(validatorPolicyBadge({ blocking: true, allow_opt_out: true })).toBe('Blocking')
     expect(validatorPolicyBadge({ blocking: false, allow_opt_out: true })).toBe('Opt-out')

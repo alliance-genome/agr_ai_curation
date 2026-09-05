@@ -177,6 +177,9 @@ export interface ValidationAttachmentOption {
   validator_package_id?: string
   validator_agent_id?: string
   state: 'active' | 'under_development'
+  /** Live execution availability is separate from the saved selection state. */
+  available?: boolean
+  unavailable_reasons?: string[]
   scope: 'pack' | 'object' | 'field'
   object_type?: string
   object_role?: string

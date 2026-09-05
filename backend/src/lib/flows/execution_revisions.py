@@ -137,7 +137,9 @@ def resolve_flow_execution_revisions(
                         fingerprint=row.fingerprint, output_contract=saved.output_contract,
                     )
                 node.data.execution_receipt = receipt
-                entries[node.id] = _revision_entry(node, receipt, saved)
+                entry = _revision_entry(node, receipt, saved)
+                entry["authenticated_group_ids"] = list(active_group_ids)
+                entries[node.id] = entry
                 continue
             except ExecutionRevisionNotFoundError:
                 pass

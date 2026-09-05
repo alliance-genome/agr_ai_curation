@@ -584,6 +584,7 @@ def get_domain_envelope_review_rows(
     *,
     session_factory: SessionFactory,
     user_auth_sub: str,
+    active_group_ids: Sequence[str] = (),
     envelope_id: str,
     revision: int | None = None,
     section: str | None = None,
@@ -605,6 +606,7 @@ def get_domain_envelope_review_rows(
             db,
             normalized_envelope_id,
             revision=revision,
+            active_group_ids=active_group_ids,
         )
         normalized_object_id = _optional_text(object_id)
         rows = [
@@ -677,6 +679,10 @@ def get_domain_envelope_review_rows(
 def get_domain_pack_validation_plan(
     *,
     agent_id: str | None = None,
+    agent_revision_id: str | None = None,
+    session_factory: SessionFactory | None = None,
+    user_id: int | None = None,
+    active_group_ids: Sequence[str] = (),
     domain_pack_id: str | None = None,
     section: str | None = None,
     object_type: str | None = None,
@@ -690,13 +696,43 @@ def get_domain_pack_validation_plan(
 ) -> dict[str, Any]:
     """Return a compact domain-pack summary or one bounded detail section."""
 
+    db = None
     try:
         resolved_agent_id = _optional_text(agent_id)
         resolved_domain_pack_id = _optional_text(domain_pack_id)
         if not resolved_agent_id and not resolved_domain_pack_id:
             raise ValueError("Provide agent_id or domain_pack_id")
 
-        if resolved_agent_id and not resolved_domain_pack_id:
+        receipt = None
+        profile_context = None
+        if resolved_agent_id and resolved_agent_id.startswith("ca_"):
+            if session_factory is None or user_id is None:
+                raise ValueError("Authenticated curator required to inspect custom agent revisions")
+            from src.lib.agent_studio.custom_agent_service import parse_custom_agent_id
+            from src.lib.agent_studio.execution_revision_service import current_execution_receipt, get_execution_revision
+            from src.schemas.agent_execution_revision import AgentExecutionReceipt
+            custom_id = parse_custom_agent_id(resolved_agent_id)
+            if custom_id is None:
+                raise ValueError("Invalid custom agent ID")
+            db = session_factory()
+            if agent_revision_id is None:
+                receipt = current_execution_receipt(db, resolved_agent_id, user_id, active_group_ids=list(active_group_ids))
+                revision_id = receipt.agent_revision_id
+            else:
+                revision_id = _uuid(agent_revision_id, "agent_revision_id")
+            row, saved = get_execution_revision(db, custom_id, revision_id, user_id, active_group_ids=list(active_group_ids))
+            receipt = AgentExecutionReceipt(agent_id=custom_id, agent_key=resolved_agent_id,
+                agent_revision_id=row.id, revision=row.revision, fingerprint=row.fingerprint,
+                output_contract=saved.output_contract)
+            if saved.output_contract.output_state != "structured_extraction":
+                raise ValueError("This saved agent revision does not produce structured extraction")
+            saved_pack_id = (saved.curation or {}).get("domain_pack_id")
+            if not saved_pack_id or (resolved_domain_pack_id and resolved_domain_pack_id != saved_pack_id):
+                raise ValueError("Domain pack does not match the saved agent revision")
+            resolved_domain_pack_id = saved_pack_id
+        elif agent_revision_id is not None:
+            raise ValueError("agent_revision_id requires a custom agent_id")
+        elif resolved_agent_id and not resolved_domain_pack_id:
             from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
 
             entry = AGENT_REGISTRY.get(resolved_agent_id)
@@ -714,9 +750,21 @@ def get_domain_pack_validation_plan(
         if registry is None:
             return _error(f"Domain pack {resolved_domain_pack_id} was not found.")
 
+        if receipt is not None:
+            from src.lib.domain_packs.profile_validation import resolve_profile_validation
+            profile_context = resolve_profile_validation(receipt, registry.domain_pack,
+                db=db, active_group_ids=active_group_ids)
+            if profile_context is not None:
+                registry = profile_context.registry
         metadata = registry.domain_pack.metadata
         attachment_options = [option.to_dict() for option in registry.validation_attachment_options()]
-        attachments_by_state = _group_by_string_key(attachment_options, "state")
+        if profile_context is not None:
+            from src.lib.domain_packs.profile_validation import profile_validation_attachment_metadata
+            attachment_options = profile_validation_attachment_metadata(profile_context)
+        attachments_by_state = _group_by_string_key([
+            {**option, "state": "unavailable"} if option.get("available") is False else option
+            for option in attachment_options
+        ], "state")
         fields = [
             {
                 "object_type": object_definition.object_type,
@@ -751,7 +799,7 @@ def get_domain_pack_validation_plan(
                     }
                     for object_definition in metadata.object_definitions
                 ),
-                key=lambda item: item["object_type"],
+                key=lambda item: str(item["object_type"]),
             ),
             "fields": sorted(
                 fields,
@@ -774,6 +822,19 @@ def get_domain_pack_validation_plan(
                 key=lambda item: item["attachment_id"],
             ),
         }
+        if profile_context is not None:
+            from src.lib.domain_packs.profile_validation import profile_mapping_binding_id
+            unavailable = {item.mapping.mapping_id: item.reasons for item in profile_context.unavailable}
+            active_bindings = {item["validator_binding_id"]: item for item in section_items["validator_bindings"]}
+            section_items["validator_bindings"] = [
+                {**active_bindings.get(profile_mapping_binding_id(profile_context.profile, mapping), {}),
+                 "validator_binding_id": profile_mapping_binding_id(profile_context.profile, mapping),
+                 "binding_state": "unavailable" if mapping.mapping_id in unavailable else "active",
+                 "available": mapping.mapping_id not in unavailable,
+                 "unavailable_reasons": list(unavailable.get(mapping.mapping_id, ())),
+                 "profile_validator_mapping": mapping.model_dump(mode="json")}
+                for mapping in profile_context.profile.contract.validator_mappings
+            ]
         validation_attachment_summary = {
             "total": len(attachment_options),
             "by_state": {
@@ -795,12 +856,12 @@ def get_domain_pack_validation_plan(
             "active_automatic": sum(
                 1
                 for option in attachment_options
-                if option.get("state") == "active" and option.get("default_enabled")
+                if option.get("state") == "active" and option.get("default_enabled") and option.get("available") is not False
             ),
             "active_flow_opt_out_capable": sum(
                 1
                 for option in attachment_options
-                if option.get("state") == "active" and option.get("allow_opt_out")
+                if option.get("state") == "active" and option.get("allow_opt_out") and option.get("available") is not False
             ),
             "under_development_metadata": sum(
                 1
@@ -832,6 +893,19 @@ def get_domain_pack_validation_plan(
             "status": metadata.status.value,
             "metadata_api_version": metadata.metadata_api_version,
         }
+        request_identity = {"domain_pack_id": metadata.pack_id}
+        if receipt is not None:
+            identity["execution_receipt"] = receipt.model_dump(mode="json")
+            request_identity = {"agent_id": receipt.agent_key, "agent_revision_id": str(receipt.agent_revision_id)}
+        if profile_context is not None:
+            identity["generic_profile_ref"] = profile_context.profile.receipt
+            identity["unavailable_mapping_count"] = len(profile_context.unavailable)
+            automatic_validation_semantics = (
+                "Only the immutable profile's selected mappings apply. Capabilities are reauthorized at runtime; "
+                "unavailable mappings produce explicit findings under their saved readiness policy. "
+                "Validator updates must conform to the complete closed record and commit atomically. "
+                "Structural conformance, semantic validation and LinkML alignment are distinct checks."
+            )
         resolved_section = _optional_text(section)
         filters = {
             key: value
@@ -866,7 +940,7 @@ def get_domain_pack_validation_plan(
                         "section": name,
                         "filters": list(_DOMAIN_PLAN_FILTERS[name]),
                         "example_input": {
-                            "domain_pack_id": metadata.pack_id,
+                            **request_identity,
                             "section": name,
                             "limit": _DOMAIN_PLAN_DEFAULT_LIMIT,
                         },
@@ -879,8 +953,8 @@ def get_domain_pack_validation_plan(
             raise ValueError(
                 "section must be one of: " + ", ".join(_DOMAIN_PLAN_SECTIONS)
             )
-        if filters.get("state") not in {None, "active", "under_development"}:
-            raise ValueError("state must be one of: active, under_development")
+        if filters.get("state") not in {None, "active", "under_development", "unavailable"}:
+            raise ValueError("state must be one of: active, under_development, unavailable")
         unsupported_filters = sorted(
             set(filters) - set(_DOMAIN_PLAN_FILTERS[resolved_section])
         )
@@ -914,7 +988,7 @@ def get_domain_pack_validation_plan(
                 None
                 if next_cursor is None
                 else {
-                    "domain_pack_id": metadata.pack_id,
+                    **request_identity,
                     "section": resolved_section,
                     **filters,
                     "limit": page_limit,
@@ -924,6 +998,9 @@ def get_domain_pack_validation_plan(
         }
     except ValueError as exc:
         return _error(str(exc))
+    finally:
+        if db is not None:
+            db.close()
 
 
 def _domain_plan_limit(value: int | None) -> int:

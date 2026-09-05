@@ -2249,7 +2249,7 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
     monkeypatch.setattr(
         validation_module,
         "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack: SimpleNamespace(
+        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
             envelope=envelope,
             registry=SimpleNamespace(domain_pack=loaded_pack),
             appended_findings=(),
@@ -3909,7 +3909,7 @@ def test_submission_export_allows_binding_policy_curator_override(
     monkeypatch.setattr(
         validation_module,
         "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack: SimpleNamespace(
+        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
             envelope=envelope,
             registry=SimpleNamespace(domain_pack=loaded_pack),
             appended_findings=(),
@@ -3965,7 +3965,7 @@ def test_submission_export_allows_binding_policy_curator_override_without_reason
     monkeypatch.setattr(
         validation_module,
         "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack: SimpleNamespace(
+        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
             envelope=envelope,
             registry=SimpleNamespace(domain_pack=loaded_pack),
             appended_findings=(),
@@ -4042,7 +4042,7 @@ def test_submission_export_blocks_open_blocking_validation_findings(
     monkeypatch.setattr(
         validation_module,
         "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack: SimpleNamespace(
+        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
             envelope=envelope,
             registry=SimpleNamespace(domain_pack=loaded_pack),
             appended_findings=(),
@@ -4131,7 +4131,7 @@ def test_submission_export_blocks_envelope_scoped_finding_with_null_targets(
     monkeypatch.setattr(
         validation_module,
         "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack: SimpleNamespace(
+        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
             envelope=envelope,
             registry=SimpleNamespace(domain_pack=loaded_pack),
             appended_findings=(),

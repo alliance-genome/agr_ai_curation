@@ -103,6 +103,7 @@ class AgentMetadata(BaseModel):
     produces_flow_artifacts: bool = False
     validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)
     domain_envelope: Optional[Dict[str, Any]] = None
+    execution_metadata_error: Optional[str] = None
 
 
 class RegistryMetadataResponse(BaseModel):

@@ -27,8 +27,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, cast
+from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, TYPE_CHECKING, cast
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from src.lib.domain_packs.profile_validation import ProfileValidationContext
 
 from agents import Agent, RunContextWrapper, function_tool
 from sqlalchemy.orm import Session
@@ -1343,14 +1346,32 @@ async def _collect_flow_validator_materialization_inputs(
     agent_context: Mapping[str, Any],
     document_id: str | None = None,
     user_id: str | None = None,
+    profile_context: "ProfileValidationContext | None" = None,
 ) -> tuple[
     list[ValidatorResultMaterializationInput],
     list[ValidationFinding],
     list[dict[str, Any]],
 ]:
     authenticated_groups = _authenticated_groups_from_agent_context(agent_context)
-    eligible_matches, group_scope_findings, binding_audit = (
-        resolve_group_scoped_validator_matches(
+    if profile_context is not None:
+        from src.lib.domain_packs.profile_validation import profile_dispatch_matches, profile_mapping_binding_id
+        from src.lib.agent_studio.profile_conformance import ProfileIdentityError
+        if source_envelope.metadata.get("execution_receipt") != profile_context.receipt.model_dump(mode="json"):
+            raise ProfileIdentityError("Flow validation context conflicts with its source receipt")
+        allowed_binding_ids = {profile_mapping_binding_id(profile_context.profile, mapping)
+                               for mapping in profile_context.profile.contract.validator_mappings}
+        supplied_binding_ids = [_binding_id_from_group(group) for group in groups]
+        if len(supplied_binding_ids) != len(allowed_binding_ids) or set(supplied_binding_ids) != allowed_binding_ids:
+            raise ValueError("Flow validation groups must cover the exact profile's automatic validator mappings once each")
+        for group in groups:
+            if group.get("state") != "automatic" or _binding_id_from_group(group) not in allowed_binding_ids:
+                raise ValueError("Flow validation groups must use the exact profile's automatic validator mappings")
+        registry = profile_context.registry
+        eligible_matches, group_scope_findings, binding_audit = profile_dispatch_matches(
+            source_envelope, profile_context, authenticated_groups=authenticated_groups,
+        )
+    else:
+        eligible_matches, group_scope_findings, binding_audit = resolve_group_scoped_validator_matches(
             list(
                 registry.match_bindings(
                     source_envelope,
@@ -1359,7 +1380,6 @@ async def _collect_flow_validator_materialization_inputs(
             ),
             authenticated_groups=authenticated_groups,
         )
-    )
     matches_by_binding = _validation_matches_by_binding(
         tuple(eligible_matches)
     )
@@ -1455,7 +1475,17 @@ async def _collect_flow_validator_materialization_inputs(
 
             selector_result = build_domain_validation_request(match)
             if selector_result.findings:
-                selector_findings.extend(selector_result.findings)
+                if profile_context is None:
+                    selector_findings.extend(selector_result.findings)
+                else:
+                    from src.lib.domain_packs.profile_validation import profile_policy_finding
+                    mapping_id = match.binding.raw["profile_validation"]["mapping"]["mapping_id"]
+                    mapping = next(item for item in profile_context.profile.contract.validator_mappings
+                                   if item.mapping_id == mapping_id)
+                    selector_findings.extend(profile_policy_finding(profile_context, mapping,
+                        code=finding.code, message=finding.message,
+                        object_ref=match.object_envelope.to_object_ref(), details=finding.details)
+                        for finding in selector_result.findings)
                 result_metadata.append(
                     {
                         "group_id": group.get("group_id"),
@@ -1742,7 +1772,12 @@ async def _execute_validation_groups_for_step(
         + grouped.get("replaced", [])
         + grouped.get("supplemental", [])
     )
-    if not groups:
+    profile_candidate = (
+        isinstance(candidate, ExtractionEnvelopeCandidate)
+        and candidate.execution_receipt is not None
+        and candidate.execution_receipt.output_contract.generic_profile_ref is not None
+    )
+    if not groups and not profile_candidate:
         return {}
 
     timing_started_at = time.monotonic()
@@ -1799,7 +1834,7 @@ async def _execute_validation_groups_for_step(
             raise RuntimeError(error)
         _emit_validation_group_timing(status="skipped", extra_details={"reason": "no_candidate"})
         return {"validation_group_results": {"groups": result_metadata}}
-    if not executable_groups and not grouped.get("skipped"):
+    if not executable_groups and not grouped.get("skipped") and not profile_candidate:
         _emit_validation_group_timing(
             status="skipped",
             extra_details={"reason": "no_executable_groups"},
@@ -1855,7 +1890,12 @@ async def _execute_validation_groups_for_step(
             )
             _emit_validation_group_timing(status="error", error=error)
             raise RuntimeError(error)
-        registry = DomainPackValidationRegistry.from_domain_pack(domain_pack)
+        from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+        profile_context = resolve_envelope_profile_validation(
+            source_envelope, domain_pack, db=session,
+            active_group_ids=_authenticated_groups_from_agent_context(agent_context) or (),
+        )
+        registry = profile_context.registry if profile_context is not None else DomainPackValidationRegistry.from_domain_pack(domain_pack)
         phase_timings_ms["load_source_envelope_ms"] = _elapsed_ms(
             source_load_started_at
         )
@@ -1871,6 +1911,7 @@ async def _execute_validation_groups_for_step(
                 agent_context=agent_context,
                 document_id=document_id,
                 user_id=user_id,
+                profile_context=profile_context,
             )
         )
         phase_timings_ms["collect_materialization_inputs_ms"] = _elapsed_ms(
@@ -1893,13 +1934,20 @@ async def _execute_validation_groups_for_step(
             )
         if materialization_inputs:
             result_materialization_started_at = time.monotonic()
-            materialization_result = materialize_validator_results_into_envelope(
-                working_envelope,
-                domain_pack.metadata,
-                materialization_inputs,
-                actor_id="flow_validator_group",
-                source_envelope_revision=source_envelope_revision,
-            )
+            if profile_context is not None:
+                from src.lib.domain_packs.profile_materialization import materialize_profile_validator_results
+                materialization_result = materialize_profile_validator_results(
+                    working_envelope, profile_context, materialization_inputs,
+                    actor_id="flow_validator_group", source_envelope_revision=source_envelope_revision,
+                )
+            else:
+                materialization_result = materialize_validator_results_into_envelope(
+                    working_envelope,
+                    domain_pack.metadata,
+                    materialization_inputs,
+                    actor_id="flow_validator_group",
+                    source_envelope_revision=source_envelope_revision,
+                )
             working_envelope = materialization_result.envelope
             appended_findings.extend(materialization_result.appended_findings)
             phase_timings_ms["materialize_validator_results_ms"] = _elapsed_ms(

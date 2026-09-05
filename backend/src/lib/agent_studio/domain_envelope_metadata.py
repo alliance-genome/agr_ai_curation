@@ -64,12 +64,15 @@ def _domain_pack_id_for_agent(entry: Mapping[str, Any]) -> str | None:
 
 def _domain_envelope_metadata(
     registry: DomainPackValidationRegistry,
+    *,
+    validation_attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     domain_pack = registry.domain_pack
     metadata = domain_pack.metadata
-    validation_attachments = [
-        option.to_dict() for option in registry.validation_attachment_options()
-    ]
+    if validation_attachments is None:
+        validation_attachments = [
+            option.to_dict() for option in registry.validation_attachment_options()
+        ]
 
     source_of_truth_notes = [SEMANTIC_SOURCE_NOTE]
     source_of_truth_notes.extend(
@@ -102,6 +105,38 @@ def _domain_envelope_metadata(
         ],
         "validation_summary": _validation_summary(validation_attachments),
     }
+
+
+def custom_agent_revision_metadata(db, agent_key: str, user_id: int, *, active_group_ids: list[str]):
+    """Project the authorized head for new selection, never template metadata.
+
+    Existing flow nodes retain their own pins; this catalog is not a runtime
+    resolver. Unavailable revisions raise instead of advertising a fallback.
+    """
+    from src.lib.agent_studio.execution_revision_service import current_execution_receipt, get_execution_revision
+    from src.lib.domain_packs.profile_validation import (
+        profile_validation_attachment_metadata, resolve_profile_validation,
+    )
+
+    receipt = current_execution_receipt(db, agent_key, user_id, active_group_ids=active_group_ids)
+    if receipt.output_contract.output_state != "structured_extraction":
+        return receipt, None
+    _, saved = get_execution_revision(db, receipt.agent_id, receipt.agent_revision_id, user_id,
+                                      active_group_ids=active_group_ids)
+    pack_id = (saved.curation or {}).get("domain_pack_id")
+    registry = domain_pack_validation_registries().get(pack_id) if isinstance(pack_id, str) else None
+    if registry is None:
+        raise ValueError("Saved executable revision has no available domain pack")
+    context = resolve_profile_validation(receipt, registry.domain_pack, db=db,
+                                         active_group_ids=active_group_ids)
+    if context is None:
+        result = _domain_envelope_metadata(registry)
+    else:
+        attachments = profile_validation_attachment_metadata(context)
+        result = _domain_envelope_metadata(context.registry, validation_attachments=attachments)
+        result["generic_profile_ref"] = context.profile.receipt
+    result["execution_receipt"] = receipt.model_dump(mode="json")
+    return receipt, result
 
 
 def _model_definition_payload(
@@ -283,7 +318,7 @@ def _source_of_truth_notes(
 def _validation_summary(
     validation_attachments: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    by_state = {"active": 0, "under_development": 0}
+    by_state = {"active": 0, "under_development": 0, "unavailable": 0}
     by_scope = {"pack": 0, "object": 0, "field": 0}
     default_enabled = 0
     required = 0
@@ -291,7 +326,7 @@ def _validation_summary(
     opt_out_allowed = 0
 
     for attachment in validation_attachments:
-        state = attachment.get("state")
+        state = "unavailable" if attachment.get("available") is False else attachment.get("state")
         if state in by_state:
             by_state[state] += 1
 
