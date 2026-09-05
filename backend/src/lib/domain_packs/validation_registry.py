@@ -163,6 +163,13 @@ class ValidatorBinding:
             "required": self.required,
             "allow_opt_out": self.allow_opt_out,
         }
+        if self.raw.get("description"):
+            details["description"] = self.raw["description"]
+        if self.raw.get("custom_validator"):
+            details["origin"] = "custom_agent"
+            details["custom_validator"] = self.raw["custom_validator"]
+        else:
+            details["origin"] = "package"
         if self.custom_profile_reuse is not None:
             details["custom_profile_reuse"] = self.custom_profile_reuse.model_dump(mode="json")
         if self.required_any_active_group:

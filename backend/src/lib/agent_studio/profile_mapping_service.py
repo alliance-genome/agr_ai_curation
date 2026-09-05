@@ -45,7 +45,7 @@ class ReusableCapability:
 
 def capability_catalog(
     registries: Iterable[DomainPackValidationRegistry] | None = None,
-    *, active_group_ids: Iterable[str] = (),
+    *, active_group_ids: Iterable[str] = (), user_id: int | None = None, references=(),
 ) -> list[ReusableCapability]:
     """Inspect opted-in declarations, reusing package identity and authorization."""
     from src.lib.config.agent_loader import get_agent_definition_for_package
@@ -81,6 +81,9 @@ def capability_catalog(
                 binding, not reason, reason,
             )
             results.append(capability)
+    from src.lib.agent_studio.custom_profile_validators import custom_validator_capabilities
+    results.extend(custom_validator_capabilities(results, user_id=user_id,
+                   active_group_ids=groups, references=references))
     counts: dict[str, int] = {}
     for capability in results:
         counts[capability.key()] = counts.get(capability.key(), 0) + 1
@@ -182,14 +185,14 @@ def capability_issues(capability: ReusableCapability, active_group_ids: Iterable
 
 def validate_profile_mappings(
     contract: GenericProfileContract | dict[str, Any], *, active_group_ids: Iterable[str] = (),
-    capabilities: Iterable[ReusableCapability] | None = None,
+    capabilities: Iterable[ReusableCapability] | None = None, user_id: int | None = None,
 ) -> list[ReusableCapability]:
     """Validate complete mappings without persisting or executing any validator."""
     profile = normalize_profile_contract(contract)
     if not profile.validator_mappings:
         return []
     groups = tuple(active_group_ids or ())
-    catalog = list(capabilities) if capabilities is not None else capability_catalog(active_group_ids=groups)
+    catalog = list(capabilities) if capabilities is not None else capability_catalog(active_group_ids=groups, user_id=user_id, references=[m.capability_ref for m in profile.validator_mappings])
     by_key = {capability.key(): capability for capability in catalog}
     issues, selected, writes = [], [], []
     limit = get_generic_profile_max_issues()

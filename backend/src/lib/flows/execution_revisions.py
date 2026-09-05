@@ -139,6 +139,7 @@ def resolve_flow_execution_revisions(
                 node.data.execution_receipt = receipt
                 entry = _revision_entry(node, receipt, saved)
                 entry["authenticated_group_ids"] = list(active_group_ids)
+                entry["authenticated_user_id"] = user_id
                 entries[node.id] = entry
                 continue
             except ExecutionRevisionNotFoundError:

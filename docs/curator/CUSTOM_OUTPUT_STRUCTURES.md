@@ -42,3 +42,28 @@ The developer fixture `backend/tests/fixtures/profiles/provisional_reagent_inven
 The two-column example uses existing list/pair joins and a conditional display rule. “New in paper” is display text, never a stored source identifier. Source-only entries display the name; identifier-only entries display the identifier. The not-stated example has no source values and therefore displays an empty cell. Contradictory status/source combinations need curator review; the fixture does not introduce a business-rule validator or silently discard those values.
 
 Before using this for real curation, confirm record grouping, label meaning and duplicate treatment, source pairing, identifier-only behavior, source-state meanings, ordering, and representative expected rows. These choices remain pending human review. Test only a clearly named dev clone; do not replace or retire the original production flow.
+
+### Attach a validator to a detail or part
+
+Open the detail and choose **Validation → Add a validator**. Search the available
+built-in/package validators or your Workshop custom validators, select the input
+that describes your detail, then choose **Attach validator**. A text answer is not
+automatically gene or reference information: choose a validator that matches its meaning.
+
+Use **Edit validator settings** for additional inputs, fixed values, result destinations,
+and unresolved-answer policies. These settings change the Workshop draft; Workshop Save
+creates the saved revision. Fields requiring additional inputs must have those configured
+before the profile can be saved. **All validator settings** also retains mappings for
+removed or incompatible fields so you can repair or remove them explicitly.
+
+The details table, parts table and review show **Validator attached**. The parent answer
+separately reports how many parts have validators. “Yes” means an association is configured,
+not that an extracted answer passed validation. Structural validation always applies.
+
+Custom-package validators must declare a reusable input/output contract. Workshop custom
+validators are eligible when based on an opted-in packaged validator and retaining that
+validator's result schema. The attachment pins the custom agent's saved executable revision;
+later prompt edits do not change an existing attachment. Current visibility, group access,
+package availability and executable tool permissions are enforced again at runtime.
+A custom agent without a supported validator contract is not offered merely because it is
+named “validator.” There is currently no supported stock/supplier/catalog-number validator.

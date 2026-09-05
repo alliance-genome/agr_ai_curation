@@ -127,7 +127,7 @@ def custom_agent_revision_metadata(db, agent_key: str, user_id: int, *, active_g
     registry = domain_pack_validation_registries().get(pack_id) if isinstance(pack_id, str) else None
     if registry is None:
         raise ValueError("Saved executable revision has no available domain pack")
-    context = resolve_profile_validation(receipt, registry.domain_pack, db=db,
+    context = resolve_profile_validation(receipt, registry.domain_pack, db=db, user_id=user_id,
                                          active_group_ids=active_group_ids)
     if context is None:
         result = _domain_envelope_metadata(registry)

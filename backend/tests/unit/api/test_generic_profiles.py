@@ -69,7 +69,7 @@ def test_validator_options_validate_shape_and_never_save(client, monkeypatch):
     monkeypatch.setattr(api, "profile_mapping_options", read)
     response = http.post("/api/agent-studio/generic-profiles/validator-options?after=opaque", json=contract())
     assert response.status_code == 200
-    assert read.call_args.kwargs == {"active_group_ids": [], "after": "opaque"}
+    assert read.call_args.kwargs == {"active_group_ids": [], "after": "opaque", "user_id": 7}
     assert read.call_args.args[0].semantic_class == "example"
     db.commit.assert_not_called()
     bad = {**contract(), "fields": [{"key": "unknown", "value_schema": {"kind": "not_a_type"}}]}

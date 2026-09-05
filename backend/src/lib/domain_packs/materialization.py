@@ -328,6 +328,7 @@ def materialize_persisted_envelope_review_rows(
     revision: int | None = None,
     materializer: DomainEnvelopeReviewRowMaterializer | None = None,
     active_group_ids: Sequence[str] = (),
+    user_id: int | str | None = None,
 ) -> DomainEnvelopeReviewRowsResponse:
     """Regenerate review rows from the currently persisted envelope JSON."""
 
@@ -352,7 +353,7 @@ def materialize_persisted_envelope_review_rows(
     if domain_pack is None and envelope.metadata.get("execution_receipt") is not None:
         raise DomainEnvelopeMaterializationError("The saved execution's domain pack is unavailable for review")
     profile_context = (resolve_envelope_profile_validation(envelope, domain_pack, db=db,
-                       active_group_ids=active_group_ids) if domain_pack is not None else None)
+                       active_group_ids=active_group_ids, user_id=user_id) if domain_pack is not None else None)
     if profile_context is not None:
         resolved_materializer = DomainPackMetadataReviewRowMaterializer(
             profile_context.registry.domain_pack.metadata, profile_context=profile_context,

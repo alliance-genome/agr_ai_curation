@@ -90,9 +90,12 @@ export interface ProfileValidatorCapability {
   selectable: boolean
   diagnostics: string[]
   metadata: {
+    origin?: 'package' | 'custom_agent'
+    custom_validator?: { agent_id: string; agent_key: string; revision_id: string; fingerprint: string }
     validator_binding_id: string
     display_name?: string
     reason?: string
+    description?: string
     custom_profile_reuse: CustomProfileValidatorReuse
     group_scope?: {
       required_any_active_group: string[]
@@ -263,7 +266,7 @@ export const listProfileValidatorCapabilities = (after?: string) =>
 
 export const getProfileMappingOptions = (contract: GenericProfileContract, after?: string) =>
   request<ProfileMappingOptions>('/validator-options' +
-    (after === undefined ? '' : '?after=' + encodeURIComponent(after)), contract)
+    (after === undefined ? '' : '?after=' + encodeURIComponent(after)), { ...contract, validator_mappings: contract.validator_mappings?.map(mapping => ({ ...mapping, inputs: {}, outputs: {} })) })
 
 export const inspectProfileValidatorMappings = (id: string, revision: number) =>
   request<ProfileMappingInspection>('/' + encodeURIComponent(id) + '/revisions/' + revision + '/validator-mappings')

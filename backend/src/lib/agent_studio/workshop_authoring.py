@@ -280,7 +280,7 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
                     raise ValueError("The source profile revision pin does not match")
             output_validation_path = "custom_agent.output_contract.profileContract"
             profile = GenericProfileContract.model_validate(draft_output.get("profileContract"))
-            validate_profile_mappings(profile, active_group_ids=active_group_ids)
+            validate_profile_mappings(profile, active_group_ids=active_group_ids, user_id=user_id)
         elif draft_output.get("mode") == "unprofiled_generic":
             if candidate["output_schema_key"] or any(draft_output.get(key) for key in ("schemaKey", "profilePin", "profileContract", "domainExtractionRef")):
                 raise ValueError("Flexible generic output cannot retain a profile, schema or builder selection")

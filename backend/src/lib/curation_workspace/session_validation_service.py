@@ -385,7 +385,7 @@ def _profile_validation_cache_is_current(
         return False
     from src.lib.domain_packs.profile_validation import profile_dispatch_matches, resolve_envelope_profile_validation
     groups = (runtime_context.authenticated_groups or ()) if runtime_context is not None else ()
-    context = resolve_envelope_profile_validation(envelope, domain_pack, db=db, active_group_ids=groups)
+    context = resolve_envelope_profile_validation(envelope, domain_pack, db=db, active_group_ids=groups, user_id=runtime_context.user_id if runtime_context else None)
     if context is None:
         return False
     _, findings, _ = profile_dispatch_matches(envelope, context, authenticated_groups=groups)
@@ -545,7 +545,7 @@ def _dispatch_workspace_envelope_validation(
 
     from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
     profile_context = resolve_envelope_profile_validation(
-        envelope, domain_pack, db=db,
+        envelope, domain_pack, db=db, user_id=runtime_context.user_id if runtime_context else None,
         active_group_ids=(runtime_context.authenticated_groups or ()) if runtime_context is not None else (),
     )
     if profile_context is not None:

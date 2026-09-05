@@ -138,7 +138,7 @@ def create_profile(
     active_group_ids=(),
 ) -> tuple[Profile, Revision]:
     parsed = normalize_profile_contract(contract)
-    capabilities = validate_profile_mappings(parsed, active_group_ids=active_group_ids)
+    capabilities = validate_profile_mappings(parsed, active_group_ids=active_group_ids, user_id=user_id)
     row = Profile(
         owner_id=user_id,
         name=parsed.name,
@@ -173,7 +173,7 @@ def revise_profile(
     active_group_ids=(),
 ) -> tuple[Profile, Revision, list[dict]]:
     parsed = normalize_profile_contract(contract)
-    capabilities = validate_profile_mappings(parsed, active_group_ids=active_group_ids)
+    capabilities = validate_profile_mappings(parsed, active_group_ids=active_group_ids, user_id=user_id)
     row = get_profile(db, profile_id, user_id, for_update=True)
     if row.owner_id != user_id:
         raise ProfileNotFoundError(

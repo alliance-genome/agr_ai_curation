@@ -80,7 +80,7 @@ describe('typed semantic validator controls', () => {
     choose('Find validators for canonical field', 'Paper name · attributes.paper_name')
     expect(screen.getByRole('button', { name: 'Map field to mention · Identifier lookup' })).toBeDisabled()
     expect(screen.getByText(/No available compatible/)).toBeInTheDocument()
-    expect(screen.getByText(/No semantic validators mapped/)).toBeInTheDocument()
+    expect(screen.getByText(/No validators attached/)).toBeInTheDocument()
   })
 
   it('invalidates field choices after structure changes but preserves mappings and input', async () => {
@@ -144,10 +144,37 @@ describe('typed semantic validator controls', () => {
       policy: { unresolved: 'requires_curator_review', blocks_readiness: false }, mode: 'whole',
     }] }
     render(<ProfileValidatorEditor value={saved} onChange={changed} onValidate={vi.fn()} issues={[]} />)
-    expect(screen.getByText('Input mention: attributes.paper_name')).toBeInTheDocument()
+    expect(screen.getByText('Mention: attributes.paper_name')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Find compatible validators' }))
     await screen.findByText(/not automatically repinned/)
     expect(changed).not.toHaveBeenCalled()
     expect(saved.validator_mappings![0].capability_fingerprint).toBe('sha256:old')
   })
+})
+
+it('attaches a compatible custom validator to the selected part without changing its sibling', async () => {
+  const partContract: GenericProfileContract = { ...contract, fields: [{ key: 'gene', value_schema: { kind: 'object', fields: contract.fields } }] }
+  const custom = { ...cap, capability_ref: { ...cap.capability_ref, binding_id: 'lookup--custom--saved-revision' },
+    metadata: { ...cap.metadata, origin: 'custom_agent' as const, display_name: 'My gene validator' },
+    input_paths: { mention: ['attributes.gene.paper_name'] } }
+  api.getProfileMappingOptions.mockResolvedValue({ ...response, fields: response.fields.map(f => ({ ...f, path: f.path.replace('attributes.', 'attributes.gene.') })), capabilities: [custom] })
+  let current = partContract
+  function FieldHarness() {
+    const [value, setValue] = useState(partContract)
+    return <ProfileValidatorEditor value={value} onChange={next => { current = next; setValue(next) }} onValidate={() => {}} issues={[]} fieldPath="attributes.gene.paper_name" fieldName="Paper name" />
+  }
+  render(<FieldHarness />)
+  fireEvent.click(screen.getByRole('button', { name: 'Add a validator' }))
+  const search = await screen.findByRole('combobox', { name: 'Search built-in and custom validators' })
+  fireEvent.change(search, { target: { value: 'My gene' } })
+  fireEvent.keyDown(search, { key: 'ArrowDown' })
+  fireEvent.click(await screen.findByRole('option', { name: 'My gene validator' }))
+  expect(screen.getByRole('button', { name: 'Attach validator' })).toBeDisabled()
+  choose('Use “Paper name” as', 'Mention')
+  fireEvent.click(screen.getByRole('button', { name: 'Attach validator' }))
+  expect(current.validator_mappings?.[0].inputs).toEqual({ mention: { source: 'field', field_path: 'attributes.gene.paper_name' } })
+  expect(current.fields).toEqual(partContract.fields)
+  expect(current.validator_mappings?.[0].capability_ref).toEqual(custom.capability_ref)
+  fireEvent.click(screen.getByRole('button', { name: 'Remove validator' }))
+  expect(current.validator_mappings).toEqual([])
 })

@@ -1,3 +1,5 @@
+import ValidatorAttachmentStatus, { ValidatorAttachmentHeading } from './ValidatorAttachmentStatus'
+import { profileFieldPath } from './profileMappingUi'
 import { useEffect, useState } from 'react'
 import {
   Alert, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle,
@@ -195,7 +197,7 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
       <Tab label="Details to collect" value="fields" id="collection-tab-fields" aria-controls="collection-panel-fields" />
       <Tab label="Example record" value="example" id="collection-tab-example" aria-controls="collection-panel-example" />
     </Tabs>
-    {validating && <Typography role="status">Checking your fields…</Typography>}
+    {validating && <Typography role="status">Validating your fields…</Typography>}
     {issues.length > 0 && <Alert severity="error"><Typography fontWeight={600}>Some settings need attention. Your draft is preserved.</Typography>
       {issues.map((issue, index) => <Button key={index} onClick={() => selectIssue(issue.path)} sx={{ display: 'block', textAlign: 'left' }}>{issue.message}</Button>)}
     </Alert>}
@@ -204,7 +206,7 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
       <Typography color="text.secondary" sx={{ mb: 3 }}>Add only the details you need. The paper and supporting evidence are kept automatically.</Typography>
       <TableContainer sx={{ position: 'relative', border: 1, borderColor: 'divider', borderRadius: 1 }} tabIndex={0} role="region" aria-label="Details table; scroll horizontally on small screens">
       <Table aria-label="Details to collect" sx={{ minWidth: 560 }}>
-        <TableHead sx={{ bgcolor: 'action.hover' }}><TableRow><TableCell sx={{ fontWeight: 700 }}>Detail</TableCell><TableCell sx={{ fontWeight: 700 }}>What to collect</TableCell><TableCell sx={{ fontWeight: 700 }}>Include</TableCell><TableCell><span className="collection-sr-only">Actions</span></TableCell></TableRow></TableHead>
+        <TableHead sx={{ bgcolor: 'action.hover' }}><TableRow><TableCell sx={{ fontWeight: 700 }}>Detail</TableCell><TableCell sx={{ fontWeight: 700 }}>What to collect</TableCell><TableCell sx={{ fontWeight: 700 }}>Include</TableCell><TableCell><ValidatorAttachmentHeading /></TableCell><TableCell><span className="collection-sr-only">Actions</span></TableCell></TableRow></TableHead>
         <TableBody>
         {rows.map((entry) => {
           const name = entry.field.display_name || entry.field.key
@@ -216,10 +218,10 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
             </Stack>{parent && <Typography variant="body2" color="text.secondary">Part of {parent.field.display_name || parent.field.key}</Typography>}</TableCell>
             <TableCell><Typography>{answerSummary(entry.field.value_schema)}</Typography><Typography variant="body2" color="text.secondary">{answerExample(entry.field.value_schema)}</Typography></TableCell>
             <TableCell><Typography color="text.secondary">{entry.field.required ? (entry.depth ? 'With its parent answer' : 'Every record') : 'When available'}</Typography></TableCell>
-            <TableCell><Button disabled={disabled} aria-label={`Edit ${name}`} onClick={() => edit(entry.address)}>Edit</Button></TableCell>
+            <TableCell><ValidatorAttachmentStatus value={value} address={entry.address} issues={issues} onEdit={() => edit(entry.address)} /></TableCell><TableCell><Button disabled={disabled} aria-label={`Edit ${name}`} onClick={() => edit(entry.address)}>Edit</Button></TableCell>
           </TableRow>
         })}
-        {rows.length === 0 && <TableRow><TableCell colSpan={4} sx={{ py: 5, textAlign: 'center' }}><Typography fontWeight={600}>No details yet</Typography><Typography color="text.secondary" sx={{ mt: 1 }}>Add your first detail, such as “Stock name”.</Typography></TableCell></TableRow>}
+        {rows.length === 0 && <TableRow><TableCell colSpan={5} sx={{ py: 5, textAlign: 'center' }}><Typography fontWeight={600}>No details yet</Typography><Typography color="text.secondary" sx={{ mt: 1 }}>Add your first detail, such as “Stock name”.</Typography></TableCell></TableRow>}
         </TableBody>
       </Table></TableContainer>
       <Button startIcon={<Add />} disabled={disabled} onClick={() => beginAdd([])} sx={{ mt: 2 }}>Add a detail</Button>
@@ -234,7 +236,7 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
     </Box>
     <Stack direction={{ xs: 'column', sm: 'row' }} gap={2} justifyContent="space-between" className="collection-footer">
       <Typography color="text.secondary">Edits stay in your draft until you save the agent.</Typography>
-      <Stack direction="row" gap={1}><Button onClick={() => setChecks(true)}>Additional checks{value.validator_mappings?.length ? ` (${value.validator_mappings.length})` : ''}</Button><Button disabled={disabled || validating} onClick={onValidate}>Check fields</Button></Stack>
+      <Stack direction="row" gap={1}><Button onClick={() => setChecks(true)}>All validator settings{value.validator_mappings?.length ? ` (${value.validator_mappings.length})` : ''}</Button><Button disabled={disabled || validating} onClick={onValidate}>Validate fields</Button></Stack>
     </Stack>
     </Stack>
     <Popover open={Boolean(help)} anchorEl={help?.anchor} onClose={() => setHelp(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
@@ -279,10 +281,10 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
                   <IconButton aria-label="Help with Always include" onClick={(event) => setHelp({
                     anchor: event.currentTarget,
                     title: 'What does “Always include” mean?',
-                    text: 'Checked: this part must be included whenever the parent answer is included. Unchecked: this part may be left out.\n\nFor example, check Stock number and leave Name unchecked to require a number for each stock answer while allowing the name to be omitted. The parts already belong together because they are in the same group.\n\nThe AI must not invent missing information. An empty answer is allowed only if you enable “Allow an empty answer if the paper doesn’t say” in that part’s settings. Otherwise, a missing value will not pass the structure checks.',
+                    text: 'Checked: this part must be included whenever the parent answer is included. Unchecked: this part may be left out.\n\nFor example, check Stock number and leave Name unchecked to require a number for each stock answer while allowing the name to be omitted. The parts already belong together because they are in the same group.\n\nThe AI must not invent missing information. An empty answer is allowed only if you enable “Allow an empty answer if the paper doesn’t say” in that part’s settings. Otherwise, a missing value will not pass the structure validation.',
                   })}><HelpOutline fontSize="small" /></IconButton>
                 </Stack></TableCell>
-                <TableCell><span className="collection-sr-only">Actions</span></TableCell>
+                <TableCell><ValidatorAttachmentHeading /></TableCell><TableCell><span className="collection-sr-only">Actions</span></TableCell>
               </TableRow></TableHead>
               <TableBody>
                 {childSchema(field.value_schema)!.fields.map((part, index) => {
@@ -292,10 +294,10 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
                     <TableCell component="th" scope="row">{name}</TableCell>
                     <TableCell>{answerSummary(part.value_schema)}</TableCell>
                     <TableCell><Checkbox inputProps={{ 'aria-label': `Always include ${name} with this answer` }} disabled={disabled} checked={part.required ?? false} onChange={(_, required) => onChange(updateProfileField(value, address, { required }))} /></TableCell>
-                    <TableCell><Button disabled={disabled} onClick={() => edit(address)} aria-label={`Edit part ${name}`}>Edit</Button></TableCell>
+                    <TableCell><ValidatorAttachmentStatus value={value} address={address} issues={issues} onEdit={() => edit(address)} /></TableCell><TableCell><Button disabled={disabled} onClick={() => edit(address)} aria-label={`Edit part ${name}`}>Edit</Button></TableCell>
                   </TableRow>
                 })}
-                {childSchema(field.value_schema)!.fields.length === 0 && <TableRow><TableCell colSpan={4} sx={{ py: 4, textAlign: 'center' }}>
+                {childSchema(field.value_schema)!.fields.length === 0 && <TableRow><TableCell colSpan={5} sx={{ py: 4, textAlign: 'center' }}>
                   <Typography fontWeight={600}>No parts yet</Typography>
                   <Typography color="text.secondary">Start with Supplier name, then add Catalog number.</Typography>
                 </TableCell></TableRow>}
@@ -314,6 +316,8 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
           <Button disabled={disabled} onClick={() => setInstructions(!instructions)}>{instructions ? 'Close editor' : field.description ? 'Edit instructions' : 'Add instructions'}</Button></Stack>
           {instructions ? <TextField fullWidth sx={{ mt: 2 }} id={`profile-${row.schemaPath}.description`} label="Instructions for the agent" multiline minRows={3} disabled={disabled} value={field.description ?? ''} placeholder="For example, keep the exact name and punctuation used in the paper." onChange={(event) => patch({ description: event.target.value })} onBlur={onValidate} /> : <Typography color="text.secondary" sx={{ mt: 1 }}>{field.description || 'Optional. Add a rule if the agent needs guidance beyond the detail’s name.'}</Typography>}
         </Box>
+        <Divider />
+        <ProfileValidatorEditor key={profileFieldPath(value, row.address)} value={value} onChange={onChange} onValidate={onValidate} issues={issues} disabled={disabled} fieldPath={profileFieldPath(value, row.address)} fieldName={field.display_name || field.key} />
         <Divider />
         <Button aria-expanded={more} onClick={() => setMore(!more)} sx={{ alignSelf: 'flex-start' }}>More field options</Button>
         {more && <Stack spacing={2}>
@@ -338,8 +342,8 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
         {issues.filter((issue) => !issue.path.startsWith('fields')).map((issue, index) => <Alert severity="error" key={index}>{issue.message}</Alert>)}
       </Stack></DialogContent><DialogActions><Button onClick={() => { setBasics(false); onValidate() }}>Done</Button></DialogActions>
     </Dialog>
-    <Dialog open={checks} onClose={() => setChecks(false)} fullWidth maxWidth="md" aria-labelledby="collection-checks-title"><DialogTitle id="collection-checks-title">Additional checks</DialogTitle><DialogContent><ProfileValidatorEditor value={value} onChange={onChange} onValidate={onValidate} issues={issues} disabled={disabled} /></DialogContent><DialogActions><Button onClick={() => setChecks(false)}>Done</Button></DialogActions></Dialog>
-    <Dialog open={pendingRemoval !== null} onClose={() => setPendingRemoval(null)} aria-labelledby="remove-profile-field-title"><DialogTitle id="remove-profile-field-title">Remove this field from the draft?</DialogTitle><DialogContent>Its nested fields will also be removed. Saved revisions remain unchanged. Any checks referencing this field will need updating.</DialogContent><DialogActions><Button onClick={() => setPendingRemoval(null)}>Cancel</Button><Button color="error" disabled={disabled} onClick={() => { if (pendingRemoval) onChange(removeProfileField(value, pendingRemoval)); setPendingRemoval(null); setSelected(null) }}>Remove field</Button></DialogActions></Dialog>
+    <Dialog open={checks} onClose={() => setChecks(false)} fullWidth maxWidth="md" aria-labelledby="collection-checks-title"><DialogTitle id="collection-checks-title">All validator settings</DialogTitle><DialogContent><ProfileValidatorEditor value={value} onChange={onChange} onValidate={onValidate} issues={issues} disabled={disabled} /></DialogContent><DialogActions><Button onClick={() => setChecks(false)}>Done</Button></DialogActions></Dialog>
+    <Dialog open={pendingRemoval !== null} onClose={() => setPendingRemoval(null)} aria-labelledby="remove-profile-field-title"><DialogTitle id="remove-profile-field-title">Remove this field from the draft?</DialogTitle><DialogContent>Its nested fields will also be removed. Saved revisions remain unchanged. Any validators referencing this field will need updating.</DialogContent><DialogActions><Button onClick={() => setPendingRemoval(null)}>Cancel</Button><Button color="error" disabled={disabled} onClick={() => { if (pendingRemoval) onChange(removeProfileField(value, pendingRemoval)); setPendingRemoval(null); setSelected(null) }}>Remove field</Button></DialogActions></Dialog>
     <Dialog open={pendingType !== null} onClose={() => setPendingType(null)} aria-labelledby="change-profile-kind-title"><DialogTitle id="change-profile-kind-title">Replace this answer format?</DialogTitle><DialogContent>Changing this format changes how the answer is stored and removes any parts or choices that the new format cannot represent. Its name and instructions stay. Cancel to keep the current format. Saved revisions are unchanged.</DialogContent><DialogActions><Button onClick={() => setPendingType(null)}>Cancel</Button><Button disabled={disabled} onClick={() => { if (pendingType) onChange(updateProfileField(value, pendingType.address, { value_schema: pendingType.schema })); setPendingType(null) }}>Change format</Button></DialogActions></Dialog>
   </Stack>
 }

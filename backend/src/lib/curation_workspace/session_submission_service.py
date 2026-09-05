@@ -888,6 +888,7 @@ def _build_domain_envelope_object_context(
     projection_refs: tuple[dict[str, Any], ...],
     db: Session | None = None,
     active_groups: Sequence[str] = (),
+    user_id: str | int | None = None,
 ) -> _DomainEnvelopeObjectContext:
     object_id = str(candidate.object_id)
     projection_ref = projection_refs[0] if projection_refs else {
@@ -954,7 +955,7 @@ def _build_domain_envelope_object_context(
     if domain_pack is not None:
         from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation, profile_dispatch_matches
         profile_context = resolve_envelope_profile_validation(envelope, domain_pack, db=db,
-                                                              active_group_ids=active_groups)
+                                                              active_group_ids=active_groups, user_id=user_id)
         if profile_context is not None:
             domain_pack = profile_context.registry.domain_pack
             _, live_findings, _ = profile_dispatch_matches(envelope, profile_context,
@@ -1054,6 +1055,7 @@ def _build_domain_envelope_submission_context(
     target_candidate_ids: Sequence[str],
     expected_envelope_revisions: Mapping[str, int] | None = None,
     active_groups: Sequence[str] = (),
+    user_id: str | int | None = None,
 ) -> _DomainEnvelopeSubmissionContext:
     expected_revisions = dict(expected_envelope_revisions or {})
     for envelope_id, revision in expected_revisions.items():
@@ -1137,7 +1139,7 @@ def _build_domain_envelope_submission_context(
 
         envelope = DomainEnvelope.model_validate(row.envelope_json)
         context = _build_domain_envelope_object_context(
-            db=db,
+            db=db, user_id=user_id,
             active_groups=active_groups,
             candidate=candidate,
             envelope_row=row,
@@ -2495,7 +2497,7 @@ def submission_preview(
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
     domain_context = _build_domain_envelope_submission_context(
-        db=db,
+        db=db, user_id=actor_user_id(actor_claims),
         candidates=candidate_map,
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,
@@ -2612,7 +2614,7 @@ def execute_submission(
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
     domain_context = _build_domain_envelope_submission_context(
-        db=db,
+        db=db, user_id=actor_user_id(actor_claims),
         candidates=candidate_map,
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,
@@ -2756,7 +2758,7 @@ def retry_submission(
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     domain_context = _build_domain_envelope_submission_context(
-        db=db,
+        db=db, user_id=actor_user_id(actor_claims),
         candidates=candidate_map,
         target_candidate_ids=target_candidate_ids,
         expected_envelope_revisions=request.expected_envelope_revisions,

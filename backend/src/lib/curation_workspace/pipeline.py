@@ -490,7 +490,7 @@ def _materialized_review_rows(
             db,
             envelope_ref.envelope_id,
             revision=envelope_revision,
-            active_group_ids=request.active_groups,
+            active_group_ids=request.active_groups, user_id=request.user_id,
         )
         rows.extend(response.rows)
 
@@ -521,7 +521,7 @@ def _refresh_domain_envelope_validation_for_ref(
     )
     profile_groups = (runtime_context.authenticated_groups or ()) if runtime_context is not None else ()
     profile_context = resolve_envelope_profile_validation(
-        envelope, domain_pack, db=db, active_group_ids=profile_groups,
+        envelope, domain_pack, db=db, active_group_ids=profile_groups, user_id=runtime_context.user_id if runtime_context else None,
     )
     if profile_context is not None:
         domain_pack = profile_context.registry.domain_pack

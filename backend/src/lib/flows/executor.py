@@ -1892,7 +1892,7 @@ async def _execute_validation_groups_for_step(
             raise RuntimeError(error)
         from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
         profile_context = resolve_envelope_profile_validation(
-            source_envelope, domain_pack, db=session,
+            source_envelope, domain_pack, db=session, user_id=agent_context.get("db_user_id") or agent_context.get("user_id"),
             active_group_ids=_authenticated_groups_from_agent_context(agent_context) or (),
         )
         registry = profile_context.registry if profile_context is not None else DomainPackValidationRegistry.from_domain_pack(domain_pack)

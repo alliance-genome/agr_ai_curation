@@ -56,10 +56,10 @@ def inspect_workshop_profile(db, *, workshop, user_id, active_group_ids, request
     raw = deepcopy(output["profileContract"])
     if request.action == "validator_options":
         # Stale mappings must not prevent discovering valid replacements.
-        raw["validator_mappings"] = []
+        raw["validator_mappings"] = [{**mapping, "inputs": {}, "outputs": {}} for mapping in raw.get("validator_mappings", [])]
         profile = GenericProfileContract.model_validate(raw)
         return {"draft_fingerprint": fingerprint, **profile_mapping_options(
-            profile, active_group_ids=active_group_ids, after=request.after,
+            profile, active_group_ids=active_group_ids, after=request.after, user_id=user_id,
         )}
     profile = GenericProfileContract.model_validate(raw)
     return {"draft_fingerprint": fingerprint, "placeholder_data": True, "paper_evidence": False,

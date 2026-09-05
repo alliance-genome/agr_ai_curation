@@ -249,7 +249,7 @@ def _options_for_agent_entry(
         )
         context = resolve_profile_validation(
             AgentExecutionReceipt.model_validate(entry["execution_receipt"]), registry.domain_pack,
-            active_group_ids=entry.get("authenticated_group_ids") or (),
+            active_group_ids=entry.get("authenticated_group_ids") or (), user_id=entry.get("authenticated_user_id"),
         )
         if context is not None:
             return profile_validation_attachment_options(context)

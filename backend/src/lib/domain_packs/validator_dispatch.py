@@ -373,6 +373,7 @@ def dispatch_active_validator_bindings(
         from .profile_validation import resolve_envelope_profile_validation
         profile_context = resolve_envelope_profile_validation(
             envelope, domain_pack, active_group_ids=authenticated_groups or (),
+            user_id=runtime_context.user_id if runtime_context else None,
         )
     if profile_context is not None:
         from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
@@ -1436,14 +1437,19 @@ def run_package_scoped_validator_agent(
         )
 
     authenticated_groups = _normalized_authenticated_groups(runtime_context)
-    agent = get_agent_by_id(
-        canonical_system_agent_key(agent_definition),
-        **(
-            {"authenticated_groups": list(authenticated_groups)}
-            if authenticated_groups is not None
-            else {}
-        ),
-    )
+    custom_pin = binding.raw.get("custom_validator")
+    if custom_pin:
+        from src.lib.agent_studio.custom_profile_validators import build_custom_validator_agent
+        agent = build_custom_validator_agent(custom_pin, runtime_context)
+    else:
+        agent = get_agent_by_id(
+            canonical_system_agent_key(agent_definition),
+            **(
+                {"authenticated_groups": list(authenticated_groups)}
+                if authenticated_groups is not None
+                else {}
+            ),
+        )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
     output_type = getattr(agent, "output_type", None)

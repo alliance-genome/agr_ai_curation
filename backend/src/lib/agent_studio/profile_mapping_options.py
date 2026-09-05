@@ -13,7 +13,7 @@ from src.schemas.generic_extraction_profile import (
 
 def profile_mapping_options(
     contract: GenericProfileContract, *, active_group_ids: Iterable[str], after: str | None = None,
-    capabilities: Iterable[ReusableCapability] | None = None,
+    capabilities: Iterable[ReusableCapability] | None = None, user_id: int | None = None,
 ) -> dict:
     """Return shape-compatible slots, not guessed mappings or save approval.
 
@@ -42,7 +42,7 @@ def profile_mapping_options(
                       "required": field.required, "nullable": field.nullable,
                       "array_domains": list(domains)} for path, (field, domains) in fields.items()]
     groups = tuple(active_group_ids)
-    catalog = list(capabilities) if capabilities is not None else capability_catalog(active_group_ids=groups)
+    catalog = list(capabilities) if capabilities is not None else capability_catalog(active_group_ids=groups, user_id=user_id, references=[m.capability_ref for m in contract.validator_mappings])
     catalog.sort(key=lambda cap: cap.key())
     if after is not None:
         catalog = [cap for cap in catalog if cap.key() > after]

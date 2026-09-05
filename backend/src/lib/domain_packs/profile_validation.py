@@ -64,6 +64,7 @@ def resolve_profile_validation(
     *,
     active_group_ids: Iterable[str] = (),
     db: Session | None = None,
+    user_id: int | str | None = None,
 ) -> ProfileValidationContext | None:
     """Resolve persisted identity, never a mutable head or global generic fallback."""
     if receipt.output_contract.output_mode != "profile_bound_generic":
@@ -72,7 +73,7 @@ def resolve_profile_validation(
     profile = resolve_receipt_profile(db, receipt) if db is not None else load_receipt_profile(receipt)
     if profile is None:
         raise ProfileIdentityError("The pinned validation profile is unavailable")
-    return compile_profile_validation(receipt, profile, generic_pack, active_group_ids=active_group_ids)
+    return compile_profile_validation(receipt, profile, generic_pack, active_group_ids=active_group_ids, user_id=user_id)
 
 
 def resolve_envelope_profile_validation(
@@ -81,6 +82,7 @@ def resolve_envelope_profile_validation(
     *,
     active_group_ids: Iterable[str] = (),
     db: Session | None = None,
+    user_id: int | str | None = None,
 ) -> ProfileValidationContext | None:
     """Use authoritative normalized identity; never infer a pin from model output.
 
@@ -103,7 +105,7 @@ def resolve_envelope_profile_validation(
         if profile_marked:
             raise ProfileIdentityError("Profile output conflicts with its execution receipt")
         return None
-    context = resolve_profile_validation(receipt, generic_pack, active_group_ids=active_group_ids, db=db)
+    context = resolve_profile_validation(receipt, generic_pack, active_group_ids=active_group_ids, db=db, user_id=user_id)
     assert context is not None
     from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
     require_resolved_profile_conformance(context.profile, receipt, envelope.model_dump(mode="json"))
@@ -117,6 +119,7 @@ def compile_profile_validation(
     *,
     active_group_ids: Iterable[str] = (),
     capabilities: Iterable[ReusableCapability] | None = None,
+    user_id: int | str | None = None,
 ) -> ProfileValidationContext:
     """Compile approved paths and retain every unavailable pinned mapping.
 
@@ -131,7 +134,10 @@ def compile_profile_validation(
         raise ProfileIdentityError("Custom profiles require the generic domain pack")
     contract = profile.contract
     groups = tuple(active_group_ids)
-    catalog = list(capabilities) if capabilities is not None else capability_catalog(active_group_ids=groups)
+    from src.lib.agent_studio.custom_profile_validators import runtime_validator_user_id
+    catalog = list(capabilities) if capabilities is not None else capability_catalog(
+        active_group_ids=groups, user_id=runtime_validator_user_id(user_id),
+        references=[m.capability_ref for m in contract.validator_mappings])
     problems: list[dict[str, str]] = []
     try:
         validate_profile_mappings(contract, active_group_ids=groups, capabilities=catalog)
@@ -234,7 +240,7 @@ def _compile_binding(profile, mapping, capability) -> tuple[ValidatorBinding, st
         provider_value_field_paths=provider_paths,
         blocking=mapping.policy.blocks_readiness, required=source.required or mapping.policy.blocks_readiness,
         allow_opt_out=False, curator_override_allowed=False,
-        custom_profile_reuse=None, raw={"profile_validation": provenance},
+        custom_profile_reuse=None, raw={"profile_validation": provenance, **({"custom_validator": source.raw["custom_validator"]} if source.raw.get("custom_validator") else {})},
     ), array_path
 
 

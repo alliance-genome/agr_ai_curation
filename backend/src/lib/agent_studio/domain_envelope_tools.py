@@ -606,7 +606,7 @@ def get_domain_envelope_review_rows(
             db,
             normalized_envelope_id,
             revision=revision,
-            active_group_ids=active_group_ids,
+            active_group_ids=active_group_ids, user_id=user_auth_sub,
         )
         normalized_object_id = _optional_text(object_id)
         rows = [
@@ -753,7 +753,7 @@ def get_domain_pack_validation_plan(
         if receipt is not None:
             from src.lib.domain_packs.profile_validation import resolve_profile_validation
             profile_context = resolve_profile_validation(receipt, registry.domain_pack,
-                db=db, active_group_ids=active_group_ids)
+                db=db, active_group_ids=active_group_ids, user_id=user_id)
             if profile_context is not None:
                 registry = profile_context.registry
         metadata = registry.domain_pack.metadata

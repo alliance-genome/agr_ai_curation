@@ -439,13 +439,13 @@ async def get_domain_envelope_review_rows(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> DomainEnvelopeReviewRowsResponse:
-    set_global_user_from_cognito(db, user)
+    acting_user = set_global_user_from_cognito(db, user)
     try:
         return materialize_persisted_envelope_review_rows(
             db,
             envelope_id,
             revision=revision,
-            active_group_ids=_authenticated_active_groups(user),
+            active_group_ids=_authenticated_active_groups(user), user_id=acting_user.id,
         )
     except DomainEnvelopeRevisionUnavailableError as exc:
         raise_sanitized_http_exception(

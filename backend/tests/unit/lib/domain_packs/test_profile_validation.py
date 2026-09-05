@@ -307,3 +307,47 @@ def test_complete_provider_policy_cannot_be_relaxed_by_overlay(example, case):
         assert findings[0].code == "generic_profile.validator_unavailable"
         assert findings[0].details["profile_validator_mapping"] == profile.contract.validator_mappings[0].model_dump(mode="json")
     assert source.extracted_objects[0].payload["attributes"] == attrs
+
+
+def test_custom_revision_survives_compilation_and_uses_normal_dispatch_finalization(example, monkeypatch):
+    """Integration seam: profile pin -> compiled binding -> pinned agent -> result."""
+    from types import SimpleNamespace
+    from src.lib.domain_packs.validator_dispatch import run_package_scoped_validator_agent, ValidatorRuntimeContext
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
+    from src.schemas.domain_validator import DomainValidatorResultBase
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
+    raw, cap, pack = example
+    pin = {"agent_id": str(uuid4()), "agent_key": "ca_my_validator", "revision_id": str(uuid4()), "fingerprint": "sha256:" + "b" * 64}
+    cap = replace(cap, ref=cap.ref.model_copy(update={"binding_id": "lookup--custom--" + pin["revision_id"]}),
+                  binding=replace(cap.binding, raw={**cap.binding.raw, "custom_validator": pin}))
+    raw["validator_mappings"][0].update(capability_ref=cap.ref.model_dump(), capability_fingerprint=cap.fingerprint())
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap])
+    binding, = context.registry.bindings
+    assert binding.raw['custom_validator'] == pin
+    match, = context.registry.match_bindings(envelope({"paper_name": "abc"}))
+    request = build_domain_validation_request(match).request
+    calls = []
+    saved_agent = SimpleNamespace(output_type=DomainValidatorResultBase, tools=[], instructions='Saved custom instructions',
+                                  model='validator-model', execution_receipt={'fingerprint': pin['fingerprint']})
+    def build(agent_key, **kwargs):
+        calls.append((agent_key, kwargs))
+        assert agent_key == pin['agent_key']  # Package-agent lookup would fail here.
+        return saved_agent
+    monkeypatch.setattr('src.lib.config.agent_loader.get_agent_definition_for_package', lambda *_: SimpleNamespace())
+    monkeypatch.setattr('src.lib.agent_studio.catalog_service.get_agent_by_id', build)
+    monkeypatch.setattr('src.lib.domain_packs.validator_dispatch.provider_context_preflight', lambda **_: {})
+    monkeypatch.setattr('src.lib.openai_agents.config.resolve_model_provider', lambda _: 'openai')
+    def run(agent, **kwargs):
+        assert 'Saved custom instructions' in agent.instructions
+        finalizer = next(tool for tool in agent.tools if tool.name == 'finalize_validator_result')
+        _unwrap_function_tool(finalizer)(result=_result_payload(request, resolved_values={'identifier': 'AGR:123'}))
+        return {'status': 'resolved'}
+    monkeypatch.setattr('src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources', run)
+    result = run_package_scoped_validator_agent(request, binding=binding,
+        runtime_context=ValidatorRuntimeContext(user_id='7', authenticated_groups=('FB',)))
+    assert calls == [(pin['agent_key'], {'execution_revision_id': pin['revision_id'], 'db_user_id': 7,
+        'user_id': '7', 'document_id': None, 'authenticated_groups': ['FB']})]
+    assert result.accepted_result.resolved_values == {'identifier': 'AGR:123'}
+    assert result.accepted_result.validator_binding_id == binding.binding_id
+    assert saved_agent.tools == []

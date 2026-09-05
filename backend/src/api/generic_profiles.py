@@ -177,10 +177,11 @@ def list_profiles(
 def validate_profile(
     contract: GenericProfileContract,
     user: dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
 ):
     """Validate a local draft without persisting it or creating a revision."""
     try:
-        validate_profile_mappings(contract, active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])))
+        validate_profile_mappings(contract, active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])), user_id=set_global_user_from_cognito(db, user).id)
     except ProfileMappingError as exc:
         raise HTTPException(status_code=422, detail={"code": "profile_mapping_invalid", "issues": exc.issues}) from exc
     return ValidatedProfileResponse(
@@ -192,11 +193,12 @@ def validate_profile(
 def list_validator_capabilities(
     after: str | None = None,
     user: dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
 ):
     """Stable package-owned slots/policies, including honest unavailable states."""
     from src.lib.openai_agents.config import get_generic_profile_list_page_size
     groups = get_groups_from_provider_groups(user.get("cognito:groups", []))
-    capabilities = capability_catalog(active_group_ids=groups)
+    capabilities = capability_catalog(active_group_ids=groups, user_id=set_global_user_from_cognito(db, user).id)
     if after is not None:
         capabilities = [cap for cap in capabilities if cap.key() > after]
     size = get_generic_profile_list_page_size()
@@ -213,10 +215,11 @@ def get_validator_options(
     contract: GenericProfileContract,
     after: str | None = None,
     user: dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
 ):
     """Inspect canonical field choices for an unsaved draft, without writes."""
     return profile_mapping_options(
-        contract, after=after,
+        contract, after=after, user_id=set_global_user_from_cognito(db, user).id,
         active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
     )
 
@@ -249,7 +252,7 @@ def inspect_validator_mappings(
         groups = get_groups_from_provider_groups(user.get("cognito:groups", []))
         issues = []
         try:
-            validate_profile_mappings(saved.contract, active_group_ids=groups)
+            validate_profile_mappings(saved.contract, active_group_ids=groups, user_id=set_global_user_from_cognito(db, user).id)
         except ProfileMappingError as exc:
             issues = exc.issues
         mappings = saved.contract.get("validator_mappings", [])
@@ -332,7 +335,7 @@ def compare_revision(
     with _profile_errors(db):
         user_id = set_global_user_from_cognito(db, user).id
         base = service.get_profile_revision(db, profile_id, revision, user_id, include_archived=True)
-        validate_profile_mappings(contract, active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])))
+        validate_profile_mappings(contract, active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])), user_id=set_global_user_from_cognito(db, user).id)
         return ProfileComparisonResponse(
             base_revision=ProfileRevisionResponse.model_validate(base),
             proposed_fingerprint=contract.fingerprint(),
