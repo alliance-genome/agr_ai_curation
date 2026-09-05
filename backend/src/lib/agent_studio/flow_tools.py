@@ -1346,9 +1346,14 @@ def _save_equivalent_flow_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
 def _proposal_candidate_payload(candidate: "FlowDefinition") -> Dict[str, Any]:
     """Serialize a validated candidate in save-equivalent transport form."""
 
-    return _save_equivalent_flow_payload(
-        candidate.model_dump(mode="json", exclude_none=True, exclude_unset=True)
-    )
+    payload = candidate.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    for source, node in zip(candidate.nodes, payload["nodes"]):
+        if source.data.execution_receipt is not None:
+            # The browser retains explicit nulls inside immutable receipts.
+            node["data"]["execution_receipt"] = source.data.execution_receipt.model_dump(
+                mode="json", exclude_unset=True,
+            )
+    return _save_equivalent_flow_payload(payload)
 
 
 def _compile_flow_operations(

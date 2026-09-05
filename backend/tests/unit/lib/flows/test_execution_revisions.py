@@ -515,7 +515,10 @@ def test_ai_proposal_serializes_exact_custom_receipt_for_browser_review():
     import json
     from src.lib.agent_studio import flow_tools
 
-    pin = receipt("profile_bound_generic")
+    # Saved HTTP receipts include explicit null output-contract fields.
+    pin = AgentExecutionReceipt.model_validate(
+        receipt("profile_bound_generic").model_dump(mode="json"),
+    )
     original = flow(pin)
     candidate = flow_tools._proposal_candidate_payload(original)
     fingerprint = flow_tools._flow_candidate_fingerprint(
@@ -527,6 +530,22 @@ def test_ai_proposal_serializes_exact_custom_receipt_for_browser_review():
     assert fingerprint.startswith("sha256:")
     assert transported["nodes"][1]["data"]["agent_revision_id"] == str(pin.agent_revision_id)
     assert restored.nodes[1].data.execution_receipt == pin
+    assert transported["nodes"][1]["data"]["execution_receipt"] == pin.model_dump(mode="json")
+    from src.lib.agent_studio.authoring_context import _fingerprint
+    flat_nodes = [
+        {"id": node["id"], "node_type": node["type"], "position": node["position"], **node["data"]}
+        for node in transported["nodes"]
+    ]
+    # This is the browser's JSON value, without Pydantic coercion/serialization.
+    expected = _fingerprint({
+        "version": 1, "artifact_kind": "flow", "artifact_id": None,
+        "baseline_updated_at": None,
+        "draft": {"name": "Custom extraction", "description": "", "definition": {
+            **transported, "version": transported.get("version", "1.1"),
+            "nodes": sorted(flat_nodes, key=lambda node: node["id"]),
+        }},
+    })
+    assert fingerprint == expected
     assert original.nodes[1].data.execution_receipt == pin
     assert fingerprint == flow_tools._flow_candidate_fingerprint(
         flow_context={}, name="Custom extraction", description="",

@@ -4082,7 +4082,7 @@ async def chat_with_opus(
                     request.context.flow_definition.task_instructions_default_only
                 ),
                 "nodes": [
-                    {**node.model_dump(exclude={"node_type"}), "type": node.node_type}
+                    {**node.model_dump(mode="json", exclude={"node_type"}), "type": node.node_type}
                     for node in request.context.flow_definition.nodes
                 ],
                 "edges": [edge.model_dump() for edge in request.context.flow_definition.edges],

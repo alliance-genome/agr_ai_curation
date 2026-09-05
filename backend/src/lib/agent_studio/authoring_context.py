@@ -47,7 +47,11 @@ def _fingerprint(payload: Mapping[str, Any]) -> str:
 
 def _normalized_flow_definition(flow_definition: Any) -> dict[str, Any]:
     definition = flow_definition.model_dump(mode="json", exclude_none=True, exclude_unset=True)
-    for node in definition.get("nodes", []):
+    for source, node in zip(flow_definition.nodes, definition.get("nodes", [])):
+        if source.execution_receipt is not None:
+            node["execution_receipt"] = source.execution_receipt.model_dump(
+                mode="json", exclude_unset=True,
+            )
         if "validation_attachments" in node:
             node["validation_attachments"] = sorted(
                 node["validation_attachments"],
