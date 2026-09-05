@@ -227,8 +227,10 @@ function PromptWorkshop({
     return `${base} · Not saved yet`
   })()
 
-  const targetName = selectedCustomAgent?.name || draft.name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
-  const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
+  // Template/clone provenance lives in the authoring context; it is not the
+  // identity of this draft. Prefer the current name, including unsaved renames.
+  const targetName = draft.name.trim() || 'this agent draft'
+  const targetId = selectedCustomAgent?.agent_id || 'unsaved_draft'
 
   const handleAskClaude = onVerifyRequest
     ? () => onVerifyRequest(buildDiscussDraftMessage(targetName, targetId, draft.selectedGroupId))
@@ -255,7 +257,7 @@ function PromptWorkshop({
     ? () => {
       onVerifyRequest(buildToolRequestMessage(
         targetName,
-        selectedCustomAgent?.agent_id || parentAgentId || 'unsaved_draft',
+        targetId,
         draft.selectedToolIds
       ))
       draft.setStatus('Opened tool-ideation discussion with AI Chat')

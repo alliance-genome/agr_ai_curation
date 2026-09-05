@@ -1,3 +1,4 @@
+import { sha256 as hashSha256 } from '@noble/hashes/sha2.js'
 import type { AgentWorkshopContext, ChatContext, FlowContextDefinition } from '@/types/promptExplorer'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -52,8 +53,9 @@ export function canonicalAuthoringJson(value: unknown): string {
 
 async function sha256(value: unknown): Promise<string> {
   const bytes = textEncoder.encode(JSON.stringify(canonicalize(value, true)))
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
-  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  // Draft authoring also runs on HTTP dev hosts, where crypto.subtle is unavailable.
+  const digest = hashSha256(bytes)
+  const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
   return `sha256:${hex}`
 }
 

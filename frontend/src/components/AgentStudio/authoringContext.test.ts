@@ -1,5 +1,5 @@
 import { webcrypto } from 'node:crypto'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { ChatContext } from '@/types/promptExplorer'
 import {
@@ -91,6 +91,7 @@ const adversarialWorkshopContext = () => ({
 })
 
 describe('Agent Studio authoring context fingerprints', () => {
+  afterEach(() => vi.unstubAllGlobals())
   beforeAll(() => {
     Object.defineProperty(globalThis, 'crypto', {
       configurable: true,
@@ -101,6 +102,17 @@ describe('Agent Studio authoring context fingerprints', () => {
   it('matches the backend canonical hash fixture', async () => {
     await expect(fingerprintFlowDraft(flowContext())).resolves.toBe(
       'sha256:d78fb31bafaeef99c20bbebb07af22debf58dbe0315a1caa327a03e89f7586d7'
+    )
+  })
+
+  it('preserves backend-compatible fingerprints on HTTP without SubtleCrypto', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: webcrypto.getRandomValues.bind(webcrypto) })
+    expect(globalThis.crypto.subtle).toBeUndefined()
+    await expect(fingerprintFlowDraft(adversarialFlowContext())).resolves.toBe(
+      'sha256:f9f8664ca18901527a106d90c077ae0b52f2733a592531c7cd1110795a558b92'
+    )
+    await expect(fingerprintWorkshopDraft(adversarialWorkshopContext())).resolves.toBe(
+      'sha256:63fee43c366577e95a0eb9382622d0d345f4bd98b6d467f2ed5be2c155780443'
     )
   })
 

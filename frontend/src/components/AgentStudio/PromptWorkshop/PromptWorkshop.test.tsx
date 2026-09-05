@@ -480,6 +480,28 @@ describe('PromptWorkshop', () => {
     expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
   }, 15000)
 
+  it('discusses an unnamed scratch draft without borrowing the default template identity', async () => {
+    const onVerifyRequest = vi.fn()
+    const authoringRef = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} authoringContextRef={authoringRef} />)
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat' }))
+    expect(onVerifyRequest).toHaveBeenLastCalledWith(expect.stringContaining('draft for "this agent draft"'))
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('Agent ID: unsaved_draft')
+    expect(onVerifyRequest.mock.calls[0][0]).not.toContain('Gene Specialist')
+    expect(authoringRef.current!.captureAuthoringContext()).toEqual(expect.objectContaining({
+      getting_started_mode: 'scratch',
+      template_source: undefined,
+      custom_agent_id: undefined,
+    }))
+
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'My new extractor' } })
+    gotoSection('Prompt')
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with AI Chat' }))
+    expect(onVerifyRequest).toHaveBeenLastCalledWith(expect.stringContaining('SYSTEM PROMPT for "My new extractor"'))
+    expect(onVerifyRequest.mock.calls[1][0]).toContain('Agent ID: unsaved_draft')
+  }, 15000)
+
   it('lands on Setup with the template selector focused after From a template', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
     await startFromTemplate()
@@ -1343,6 +1365,19 @@ describe('PromptWorkshop', () => {
 
   // ── AI Chat handoffs ──
 
+  it('discusses unsaved name edits with the saved agent identity', async () => {
+    const existing = buildCustomAgent({ name: 'Original Agent' })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    const onVerifyRequest = vi.fn()
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} onVerifyRequest={onVerifyRequest} />)
+    await waitForHeaderName('Original Agent')
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Renamed draft' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat' }))
+    expect(onVerifyRequest).toHaveBeenLastCalledWith(expect.stringContaining('draft for "Renamed draft"'))
+    expect(onVerifyRequest.mock.calls[0][0]).toContain(`Agent ID: ${existing.agent_id}`)
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  }, 15000)
+
   it('opens a draft discussion request from the navigation Help group', async () => {
     const onVerifyRequest = vi.fn()
     render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} />)
@@ -1352,6 +1387,8 @@ describe('PromptWorkshop', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat' }))
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('inspect current prompt/tool schemas')
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('draft for "Gene Specialist (Custom)"')
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('Agent ID: unsaved_draft')
     expect(onVerifyRequest.mock.calls[0][0]).toContain('read_chunk span IDs')
     expect(onVerifyRequest.mock.calls[0][0]).toContain('record_evidence(span_ids)')
   }, 15000)

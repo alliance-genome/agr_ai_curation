@@ -8,6 +8,7 @@
     "@mui/icons-material": "^5.15.3",
     "@mui/material": "^5.15.3",
     "@mui/x-date-pickers": "^8.11.3",
+    "@noble/hashes": "^2.4.0",
     "@reactflow/background": "^11.3.14",
     "@reactflow/controls": "^11.2.14",
     "@reactflow/minimap": "^11.7.14",
