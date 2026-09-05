@@ -1787,7 +1787,7 @@ def get_agent_studio_endpoint_timeout_seconds() -> float:
 def get_agent_studio_openai_max_turns() -> int:
     """Maximum Agents SDK turns for one Agent Studio authoring response."""
 
-    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_OPENAI_MAX_TURNS", 12))
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_OPENAI_MAX_TURNS", 24))
 
 
 def get_agent_studio_openai_max_output_tokens() -> int:

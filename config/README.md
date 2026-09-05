@@ -273,6 +273,13 @@ tool_policies:
 Notes:
 - Installed packages may export tool policy defaults first; this file is merged afterward and wins on `tool_key` collisions.
 - Override entries replace the full tool policy definition for the same `tool_key`.
+- Package runtime helpers can declare `config.system_managed_inheritance: true`
+  with `curator_visible: false`, `allow_attach: false`, and `allow_execute: true`.
+  This preserves tools from the authorized template or saved agent; it does not
+  let curators attach unrelated hidden helpers. Current execution and group
+  restrictions still apply. Defaults are database seeds, not startup overrides:
+  forward backfills insert missing installed policies without changing existing
+  operator decisions.
 
 ### maintenance_message.txt
 

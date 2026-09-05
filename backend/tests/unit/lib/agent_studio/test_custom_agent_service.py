@@ -33,6 +33,7 @@ def isolate_execution_persistence(monkeypatch):
         service, "_prepare_execution_update",
         lambda _db, agent, *_args: (None, SimpleNamespace(
             output_contract=initial_output_contract(agent.output_schema_key),
+            tool_ids=[],  # These fakes cover the saved managed floor, not historical policy backfill.
             system_managed_tool_ids=[tool for tool in (agent.tool_ids or [])
                                      if tool in {"record_evidence", "finalize_allele_extraction"}],
             group_tool_policy=getattr(agent, "group_tool_policy", {}),

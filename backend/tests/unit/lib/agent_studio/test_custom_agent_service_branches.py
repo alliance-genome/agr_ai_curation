@@ -17,7 +17,7 @@ def isolate_execution_persistence(monkeypatch):
         service, "_prepare_execution_update",
         lambda _db, agent, *_args: (None, SimpleNamespace(
             output_contract=initial_output_contract(agent.output_schema_key),
-            system_managed_tool_ids=[], group_tool_policy={},
+            tool_ids=[], system_managed_tool_ids=[], group_tool_policy={},
         )),
     )
 

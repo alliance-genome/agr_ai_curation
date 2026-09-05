@@ -327,10 +327,15 @@ def test_select_model_without_reasoning_compiles_the_editor_default(db, base, mo
 
 
 def test_clone_source_revision_is_reauthorized(db, base, monkeypatch):
+    from uuid import uuid4
+    from src.lib.agent_studio import execution_revision_service
     from src.lib.agent_studio import custom_agent_service as service
     source = SimpleNamespace(
+        id=uuid4(), execution_revision_id=uuid4(),
         updated_at=datetime(2026, 9, 4, tzinfo=timezone.utc), allowed_group_ids=[], tool_ids=[],
     )
+    monkeypatch.setattr(execution_revision_service, "get_execution_revision",
+                        lambda *a, **kw: (None, SimpleNamespace(tool_ids=[], system_managed_tool_ids=[])))
     monkeypatch.setattr(service, "get_custom_agent_visible_to_user", lambda *a: source)
     base.clone_source_agent_id = "ca_11111111-1111-1111-1111-111111111111"
     base.clone_source_updated_at = source.updated_at.isoformat()
@@ -608,7 +613,7 @@ def test_direct_save_api_rejects_tool_outside_authenticated_catalog(db, monkeypa
     # Real stale-head/SQL behavior is covered by persistence tests.
     monkeypatch.setattr(service, "_prepare_execution_update", lambda *_args: (
         None, SimpleNamespace(output_contract=AgentOutputContract(output_state="none"),
-                              system_managed_tool_ids=[], group_tool_policy={}),
+                              tool_ids=[], system_managed_tool_ids=[], group_tool_policy={}),
     ))
     monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *a: SimpleNamespace(id=1))
     monkeypatch.setattr(service, "get_model", lambda *a: SimpleNamespace(curator_visible=True))

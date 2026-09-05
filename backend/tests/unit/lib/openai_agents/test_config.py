@@ -107,7 +107,7 @@ def test_sentry_log_event_level_is_bounded_and_environment_configurable(
 @pytest.mark.parametrize(
     ("env_name", "getter", "default"),
     [
-        ("AGENT_STUDIO_OPENAI_MAX_TURNS", get_agent_studio_openai_max_turns, 12),
+        ("AGENT_STUDIO_OPENAI_MAX_TURNS", get_agent_studio_openai_max_turns, 24),
         (
             "AGENT_STUDIO_OPENAI_MAX_OUTPUT_TOKENS",
             get_agent_studio_openai_max_output_tokens,

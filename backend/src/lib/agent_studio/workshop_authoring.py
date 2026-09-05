@@ -64,9 +64,31 @@ def workshop_save_candidate(workshop: AgentWorkshopContext) -> dict[str, Any]:
     }
 
 
-def workshop_system_tools(db, workshop, active_group_ids):
+def workshop_system_tools(db, workshop, active_group_ids, *, user_id):
     """Resolve template-owned mechanical tools using the existing Save rules."""
     from src.lib.agent_studio import custom_agent_service as service
+    saved_source_id = workshop.custom_agent_id or workshop.clone_source_agent_id
+    if saved_source_id:
+        from src.lib.agent_studio.execution_revision_service import get_execution_revision
+        source_id = service.parse_custom_agent_id(saved_source_id)
+        if source_id is None:
+            raise ValueError("Invalid saved Workshop source")
+        try:
+            source = (
+                service.get_custom_agent_for_user(db, source_id, user_id)
+                if workshop.custom_agent_id else
+                service.get_custom_agent_visible_to_user(db, source_id, user_id)
+            )
+            _, saved = get_execution_revision(
+                db, source.id, source.execution_revision_id, user_id,
+                active_group_ids=active_group_ids,
+            )
+        except service.CustomAgentError as exc:
+            raise ValueError("Unavailable saved Workshop source") from exc
+        return service._dedupe_tool_ids([
+            *saved.system_managed_tool_ids,
+            *service._system_managed_tool_ids(db, list(saved.tool_ids)),
+        ])
     if not workshop.template_source:
         return []
     template = service._resolve_system_template_agent(
@@ -153,6 +175,7 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             message="The editable instructions exceed the configured prompt size limit.",
         ))
     source = None
+    required_tools = []
     try:
         if workshop.custom_agent_id:
             source_id = service.parse_custom_agent_id(workshop.custom_agent_id)
@@ -199,7 +222,7 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
                 raise ValueError("Changed inherited access")
         elif candidate["inherited_allowed_group_ids"]:
             raise ValueError("Missing inherited source")
-        required_tools = workshop_system_tools(db, workshop, active_group_ids)
+        required_tools = workshop_system_tools(db, workshop, active_group_ids, user_id=user_id)
         if not set(required_tools).issubset(candidate["tool_ids"]):
             findings.append(AuthoringValidationFinding(
                 code="missing_inherited_tools", severity="error", path="custom_agent.tool_ids",
@@ -303,7 +326,7 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             ))
         sources = service.authorized_agent_validation_sources(
             db, user_id=user_id, active_group_ids=active_group_ids, sources=sources,
-            inherited_tool_ids=inherited_tools,
+            inherited_tool_ids=required_tools,
         )
         result = validate_custom_agent_authoring_draft(
             candidate,
@@ -452,7 +475,7 @@ def propose_workshop_update(*, db, base, tool_input, user_id, active_group_ids, 
         except ValueError:
             # Keep the invalid editable values for canonical findings and same-turn repair.
             pass
-        required_tools = workshop_system_tools(db, candidate, active_group_ids)
+        required_tools = workshop_system_tools(db, candidate, active_group_ids, user_id=user_id)
         candidate.draft_tool_ids = list(dict.fromkeys([*(candidate.draft_tool_ids or []), *required_tools]))
     except (ValueError, ValidationError):
         return {"success": False, "error": "Invalid Workshop operation. Use the declared typed fields."}

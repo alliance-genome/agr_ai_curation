@@ -391,16 +391,24 @@ def _tool_policy_by_key(db: Session) -> Dict[str, Any]:
 
 def _system_managed_tool_ids(db: Session, tool_ids: List[str]) -> List[str]:
     """Tools inherited from system templates that curators cannot attach manually."""
+    if not tool_ids:
+        return []
     policy_by_key = _tool_policy_by_key(db)
     builder_finalization_tool_ids = _builder_finalization_tool_ids()
     managed: List[str] = []
     for tool_id in _dedupe_tool_ids(tool_ids):
+        policy = policy_by_key.get(tool_id)
+        designated = bool(
+            policy is not None
+            and isinstance(getattr(policy, "config", None), dict)
+            and policy.config.get("system_managed_inheritance") is True
+        )
         if (
             tool_id not in _SYSTEM_MANAGED_INHERITED_TOOL_IDS
             and tool_id not in builder_finalization_tool_ids
+            and not designated
         ):
             continue
-        policy = policy_by_key.get(tool_id)
         if policy is None or not policy.allow_attach:
             managed.append(tool_id)
     return managed
@@ -427,13 +435,7 @@ def _validate_requested_tool_ids(
         return []
 
     policy_by_key = _tool_policy_by_key(db)
-    builder_finalization_tool_ids = _builder_finalization_tool_ids()
-    inherited_system_managed = {
-        tool_id
-        for tool_id in _dedupe_tool_ids(inherited_tool_ids or [])
-        if tool_id in _SYSTEM_MANAGED_INHERITED_TOOL_IDS
-        or tool_id in builder_finalization_tool_ids
-    }
+    inherited_system_managed = set(_system_managed_tool_ids(db, inherited_tool_ids or []))
     unknown = sorted({
         tool_id
         for tool_id in normalized
@@ -579,6 +581,7 @@ def _agent_validation_sources(
 def authorized_agent_validation_sources(db, *, user_id, active_group_ids, sources, inherited_tool_ids=()):
     """Intersect canonical sources with the current authenticated authoring catalog."""
     from dataclasses import replace
+    from src.lib.agent_access import is_resource_access_allowed
     from src.lib.agent_studio.capability_catalog import CapabilityCatalogContext, build_authorized_capability_catalog
     records = build_authorized_capability_catalog(
         db=db, context=CapabilityCatalogContext(
@@ -592,10 +595,23 @@ def authorized_agent_validation_sources(db, *, user_id, active_group_ids, source
         for kind in ("model", "tool", "output_contract", "group")
     }
     inherited = set(_system_managed_tool_ids(db, list(inherited_tool_ids))) if inherited_tool_ids else set()
+    # Inheritance is source provenance, not an attachment permission. Retain only
+    # helpers still executable under current policy and installed in this runtime.
+    policies = _tool_policy_by_key(db) if inherited else {}
+    inherited = {
+        key for key in inherited
+        if key in policies and policies[key].allow_execute and has_tool_binding(key)
+        and is_resource_access_allowed(
+            visibility_allowed=True,
+            allowed_group_ids=policies[key].config.get("allowed_group_ids", []),
+            active_group_ids=active_group_ids,
+            resource_kind="agent_studio_tool",
+        )
+    }
     return replace(
         sources,
         models={key: value for key, value in sources.models.items() if key in available["model"]},
-        tools={key: replace(value, system_managed=key in inherited or value.system_managed)
+        tools={key: replace(value, system_managed=key in inherited)
                for key, value in sources.tools.items() if key in available["tool"] or key in inherited},
         output_schema_keys=sources.output_schema_keys & available["output_contract"],
         group_ids=sources.group_ids & available["group"],
@@ -609,6 +625,7 @@ def _require_valid_custom_agent_draft(
     active_group_ids: Optional[List[str]],
     candidate: Dict[str, Any],
     prevalidated_tool_ids: Optional[List[str]] = None,
+    inherited_tool_ids: Optional[List[str]] = None,
     trusted_output_schema_keys: Optional[List[str]] = None,
 ) -> None:
     """Apply the canonical complete-draft contract before any ORM mutation."""
@@ -624,7 +641,7 @@ def _require_valid_custom_agent_draft(
         if active_group_ids is not None:
             sources = authorized_agent_validation_sources(
                 db, user_id=user_id, active_group_ids=active_group_ids, sources=sources,
-                inherited_tool_ids=prevalidated_tool_ids or (),
+                inherited_tool_ids=inherited_tool_ids or (),
             )
         result = validate_custom_agent_authoring_draft(
             candidate,
@@ -830,7 +847,10 @@ def _record_execution_save(
         # Inherited policy belongs to the saved agent, not today's parent/tool
         # catalog. New selectable tools are validated separately at this save.
         saved = saved.model_copy(update={
-            "system_managed_tool_ids": list(previous_snapshot.system_managed_tool_ids),
+            "system_managed_tool_ids": _dedupe_tool_ids([
+                *previous_snapshot.system_managed_tool_ids,
+                *saved.system_managed_tool_ids,
+            ]),
             "group_tool_policy": previous_snapshot.group_tool_policy,
         })
     return append_execution_revision(
@@ -1012,6 +1032,7 @@ def create_custom_agent(
             "category": effective_category,
         },
         prevalidated_tool_ids=list(effective_tool_ids),
+        inherited_tool_ids=parent_tool_ids,
         trusted_output_schema_keys=(
             [str(parent_defaults["output_schema_key"])]
             if parent_defaults.get("output_schema_key")
@@ -1434,8 +1455,13 @@ def update_custom_agent(
     )
 
     next_tool_ids = list(custom_agent.tool_ids or [])
+    # Older immutable snapshots predate explicit builder-helper policies. Only
+    # their actual saved tools can acquire the new inheritance designation.
+    inherited_system_tool_ids = _dedupe_tool_ids([
+        *previous_snapshot.system_managed_tool_ids,
+        *_system_managed_tool_ids(db, list(previous_snapshot.tool_ids)),
+    ])
     if tool_ids is not None:
-        inherited_system_tool_ids = list(previous_snapshot.system_managed_tool_ids)
         validated_tool_ids = _validate_requested_tool_ids(
             db,
             tool_ids,
@@ -1526,6 +1552,7 @@ def update_custom_agent(
             "category": getattr(custom_agent, "category", None),
         },
         prevalidated_tool_ids=(list(next_tool_ids) if tool_ids is not None else []),
+        inherited_tool_ids=inherited_system_tool_ids,
     )
 
     if visibility is not None:
