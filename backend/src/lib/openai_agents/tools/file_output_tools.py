@@ -153,7 +153,7 @@ def _projection_content_for_file_type(
         output = io.StringIO()
         column_keys = [column.key for column in projection.columns]
         writer = csv.DictWriter(output, fieldnames=column_keys, extrasaction="ignore")
-        writer.writeheader()
+        writer.writerow({column.key: column.header or column.key for column in projection.columns})
         writer.writerows(projection.rows)
         return output.getvalue()
     if output_format == "tsv":
@@ -165,7 +165,7 @@ def _projection_content_for_file_type(
             delimiter="\t",
             extrasaction="ignore",
         )
-        writer.writeheader()
+        writer.writerow({column.key: column.header or column.key for column in projection.columns})
         writer.writerows(
             [
                 {

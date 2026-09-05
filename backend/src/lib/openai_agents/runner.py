@@ -120,6 +120,9 @@ from .streaming_tools import (
     _output_type_name,
     _bind_run_state_into_tools,
     _agent_runtime_canonical_agent_key,
+    _agent_runtime_curation_adapter_key,
+    _dispatch_domain_envelope_validators_for_chat,
+    _validator_runtime_context_for_chat,
 )
 from .curation_context_registry import clear_current_turn_curation_context
 
@@ -1886,6 +1889,34 @@ async def _run_agent_with_owned_resources(
                         }
                     }
 
+        if generic_profile is not None and builder_workspace.finalization is not None:
+            finalization = builder_workspace.finalization
+            generic_profile.require_envelope(
+                finalization.payload,
+                execution_receipt=builder_workspace.execution_receipt,
+                agent_key=canonical_agent_key,
+            )
+            # Use the same exact-profile validation boundary as supervisor
+            # specialists while run context and validator event delivery remain active.
+            validated_output = await _dispatch_domain_envelope_validators_for_chat(
+                json.dumps(finalization.payload),
+                expected_output_type=getattr(agent, "output_type", None),
+                specialist_name=current_agent,
+                tool_name=canonical_agent_key,
+                adapter_key=_agent_runtime_curation_adapter_key(agent),
+                source_agent_key=canonical_agent_key,
+                is_builder_envelope=True,
+                execution_receipt=builder_workspace.execution_receipt,
+                runtime_context=_validator_runtime_context_for_chat(
+                    document_id=document_id,
+                    user_id=user_id,
+                    authenticated_groups=getattr(agent, "authenticated_groups", None),
+                ),
+            )
+            builder_workspace.finalization = replace(
+                finalization, payload=json.loads(validated_output),
+            )
+
         # Yield any remaining live events after stream completes
         while live_events_yielded < len(live_events):
             yield live_events[live_events_yielded]
@@ -1902,7 +1933,8 @@ async def _run_agent_with_owned_resources(
                 "trace_id": trace_id,
             },
         )
-        builder_workspace.mark_cancelled(reason="runner stream cancelled")
+        if builder_workspace.finalization is None:
+            builder_workspace.mark_cancelled(reason="runner stream cancelled")
         raise
     except Exception as exc:
         sentry_stream_finalization_status = "error"
@@ -1915,7 +1947,8 @@ async def _run_agent_with_owned_resources(
                 "trace_id": trace_id,
             },
         )
-        builder_workspace.mark_aborted(reason=f"{type(exc).__name__}: {exc}")
+        if builder_workspace.finalization is None:
+            builder_workspace.mark_aborted(reason=f"{type(exc).__name__}: {exc}")
         raise
     finally:
         # Clear the live event list reference
@@ -1967,8 +2000,8 @@ async def _run_agent_with_owned_resources(
                 "error_type": "BuilderFinalizationMissing", "trace_id": trace_id,
             }}
             return
-        generic_profile.require_envelope(finalization.payload,
-            execution_receipt=builder_workspace.execution_receipt, agent_key=canonical_agent_key)
+        # The original extraction was checked before dispatch; the shared
+        # validator returns a normalized DomainEnvelope with retained findings.
         structured_result = finalization.payload
         if not full_response:
             full_response = str(getattr(result, "final_output", "") or "Extraction finalized.")
@@ -2170,6 +2203,8 @@ async def _run_agent_with_owned_resources(
                 tool_name=canonical_agent_key, specialist_name=current_agent,
                 finalization=finalization,
                 agent_key=canonical_agent_key,
+                adapter_key=_agent_runtime_curation_adapter_key(agent),
+                execution_receipt=builder_workspace.execution_receipt,
             )
 
         try:

@@ -564,6 +564,8 @@ def build_internal_extraction_result_event(
     specialist_name: str,
     finalization: ExtractionBuilderFinalization,
     agent_key: str | None = None,
+    adapter_key: str | None = None,
+    execution_receipt: Mapping[str, Any] | None = None,
     extraction_result_id: str | None = None,
     result_ref: str | None = None,
     persistence_status: Mapping[str, Any] | None = None,
@@ -588,6 +590,10 @@ def build_internal_extraction_result_event(
     if agent_key is not None:
         details["agent_key"] = agent_key
         internal["agent_key"] = agent_key
+    if adapter_key is not None:
+        internal["adapter_key"] = adapter_key
+    if execution_receipt is not None:
+        internal["execution_receipt"] = deepcopy(dict(execution_receipt))
     if extraction_result_id:
         details["extraction_result_id"] = extraction_result_id
         internal["extraction_result_id"] = extraction_result_id

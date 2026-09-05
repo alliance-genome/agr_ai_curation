@@ -255,12 +255,16 @@ def test_empty_profile_extraction_can_finalize_with_receipts(profile, monkeypatc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("finalize,populated", [(True, True), (True, False), (False, False)])
-async def test_direct_runner_consumes_backend_profile_finalization(profile, record, monkeypatch, finalize, populated):
+@pytest.mark.parametrize("finalize,populated,dispatch_failure", [
+    (True, True, False), (True, False, False), (False, False, False), (True, True, True),
+])
+async def test_direct_runner_consumes_backend_profile_finalization(
+    profile, record, monkeypatch, finalize, populated, dispatch_failure,
+):
     import json
     from types import SimpleNamespace
     from agr_ai_curation_alliance.tools import generic_builder_tools as tools
-    from src.lib.openai_agents import runner, extraction_builder_workspace as builder
+    from src.lib.openai_agents import runner, extraction_builder_workspace as builder, streaming_tools
     from src.lib.openai_agents.tools import evidence_workspace
     from src.lib.agent_studio.profile_tools import profile_bound_tool
 
@@ -270,6 +274,28 @@ async def test_direct_runner_consumes_backend_profile_finalization(profile, reco
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **kwargs: None)
     monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **kwargs: None)
     captured = {}
+
+    async def dispatch(payload, **kwargs):
+        captured["dispatch"] = kwargs
+        assert builder.get_active_extraction_builder_workspace() is captured["workspace"]
+        original = json.loads(payload)
+        profile.require_envelope(original, execution_receipt=captured["agent"].execution_receipt,
+                                 agent_key="ca_canonical")
+        if dispatch_failure:
+            raise runner.SpecialistOutputError(
+                specialist_name="Display only", output_type_name="profile", message="dispatch unavailable",
+            )
+        # The shared dispatcher returns DomainEnvelope shape, not extraction shape.
+        result = {**original, "extracted_objects": original["curatable_objects"],
+                  "validation_findings": [{"code": "validator_unavailable", "severity": "warning"}]}
+        del result["curatable_objects"]
+        captured["validated"] = result
+        streaming_tools.add_specialist_event({"type": "TOOL_COMPLETE", "details": {
+            "toolName": "dispatch_active_validator_bindings", "success": True,
+        }})
+        return json.dumps(result)
+
+    monkeypatch.setattr(runner, "_dispatch_domain_envelope_validators_for_chat", dispatch)
 
     class Result:
         # A model-authored replacement must never supersede builder output.
@@ -308,22 +334,49 @@ async def test_direct_runner_consumes_backend_profile_finalization(profile, reco
     agent = SimpleNamespace(name="Display only", agent_key="ca_canonical", model="test-model",
                             generic_profile=profile, tools=[tools.finalize_generic_extraction,
                                 profile_bound_tool(tools._stage_generic_object_impl, tools.stage_generic_object, profile)],
-                            output_type=None, execution_receipt={"agent_key": "ca_canonical", "revision": 1})
-    events = [event async for event in runner._run_agent_with_owned_resources(
+                            output_type=None, execution_receipt={"agent_key": "ca_canonical", "revision": 1},
+                            authenticated_groups=["curator-team"],
+                            curation_metadata={"launchable": True, "adapter_key": "generic"})
+    stream = runner._run_agent_with_owned_resources(
         SimpleNamespace(client=None, provider=None), agent=agent,
         input_items=[{"role": "user", "content": "Extract"}], user_id="user",
-        document_id=None, document_name=None, user_message="Extract", trace_id="direct-test",
-    )]
+        document_id="document-1", document_name=None, user_message="Extract", trace_id="direct-test",
+    )
+    events = []
+    if dispatch_failure:
+        with pytest.raises(runner.SpecialistOutputError, match="dispatch unavailable"):
+            async for event in stream:
+                events.append(event)
+        assert not any(event["type"] in {"STRUCTURED_RESULT", "INTERNAL_EXTRACTION_RESULT", "RUN_FINISHED"}
+                       for event in events)
+        with pytest.raises(RuntimeError, match="No active extraction builder workspace"):
+            builder.get_active_extraction_builder_workspace()
+        return
+    events = [event async for event in stream]
     workspace = captured["workspace"]
     assert workspace.agent_id == "ca_canonical" and workspace.generic_profile is profile
     if finalize:
         result = next(event["data"]["result"] for event in events if event["type"] == "STRUCTURED_RESULT")
-        assert len(result["curatable_objects"]) == int(populated)
+        assert result == captured["validated"]
+        assert len(result["extracted_objects"]) == int(populated)
         if populated:
-            assert result["curatable_objects"][0]["payload"]["attributes"] == record
+            assert result["extracted_objects"][0]["payload"]["attributes"] == record
         assert result["metadata"]["provenance"]["execution_receipt"] == agent.execution_receipt
+        internal = [event for event in events if event["type"] == "INTERNAL_EXTRACTION_RESULT"]
+        assert len(internal) == 1
+        assert internal[0]["internal"]["canonical_payload"] == result
+        assert internal[0]["internal"]["execution_receipt"] == agent.execution_receipt
+        assert internal[0]["internal"]["adapter_key"] == "generic"
+        assert captured["dispatch"]["execution_receipt"] == agent.execution_receipt
+        assert captured["dispatch"]["source_agent_key"] == "ca_canonical"
+        assert captured["dispatch"]["adapter_key"] == "generic"
+        assert captured["dispatch"]["runtime_context"].document_id == "document-1"
+        assert captured["dispatch"]["runtime_context"].authenticated_groups == ("curator-team",)
+        assert any(event["type"] == "TOOL_COMPLETE" and
+                   event["details"]["toolName"] == "dispatch_active_validator_bindings" for event in events)
         assert not any(event["type"] == "RUN_ERROR" for event in events)
     else:
+        assert "dispatch" not in captured
         assert any(event["type"] == "RUN_ERROR" for event in events)
         assert not any(event["type"] == "STRUCTURED_RESULT" for event in events)
 

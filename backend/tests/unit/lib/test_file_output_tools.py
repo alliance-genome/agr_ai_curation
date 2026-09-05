@@ -2,6 +2,8 @@
 
 Tests the tool implementation functions and their context variable integration.
 """
+import csv
+import io
 import json
 import importlib
 from typing import Any, Literal
@@ -182,6 +184,31 @@ class TestRawWriterRemoval:
         assert not forbidden & set(dir(file_output_tools))
 
 
+@pytest.mark.parametrize("output_format,delimiter", [("csv", ","), ("tsv", "\t")])
+def test_projection_file_headers_preserve_labels_and_internal_row_keys(output_format, delimiter):
+    from src.lib.flows.output_projection import FlowOutputColumnSpec, FlowOutputProjectionResult
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+
+    projection = FlowOutputProjectionResult(
+        format=output_format,
+        row_source="object",
+        columns=[
+            FlowOutputColumnSpec(key="paper_labels", header="Synonym, label\tname"),
+            FlowOutputColumnSpec(key="source"),
+        ],
+        rows=[{"source": "New in paper", "paper_labels": "w|white"}],
+        total_count=1,
+    )
+    content = _projection_content_for_file_type(output_format=output_format, projection=projection)
+    assert list(csv.reader(io.StringIO(content), delimiter=delimiter)) == [
+        ["Synonym, label\tname", "source"],
+        ["w|white", "New in paper"],
+    ]
+    assert json.loads(_projection_content_for_file_type(output_format="json", projection=projection)) == [
+        {"paper_labels": "w|white", "source": "New in paper"},
+    ]
+
+
 class TestSaveProjectedFileOutput:
     """Tests for structured projection-owned file saves."""
 
@@ -280,12 +307,12 @@ class TestSaveProjectedFileOutput:
         assert saved.file_size == second["size_bytes"]
         assert saved.file_hash == second["hash_sha256"]
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
-            "symbol\nDeltaGene\n"
+            "Symbol\nDeltaGene\n"
         )
         assert saved_tsv.agent_name == "tsv_formatter"
         assert saved_tsv.file_type == "tsv"
         assert Path(saved_tsv.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
-            "symbol\nDeltaGene\n"
+            "Symbol\nDeltaGene\n"
         )
 
     @pytest.mark.asyncio
@@ -460,7 +487,7 @@ class TestSaveProjectedFileOutput:
         assert Path(saved.file_path).parent == tmp_path / "outputs" / "structured" / trace_id
         assert saved.file_hash == result["hash_sha256"]
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
-            "symbol\nDeltaGene\n"
+            "Symbol\nDeltaGene\n"
         )
 
     @pytest.mark.asyncio
@@ -534,7 +561,7 @@ class TestSaveProjectedFileOutput:
         assert saved.file_metadata["descriptor"] == "gene_results"
         assert not first_path.exists()
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
-            "symbol\nDeltaGene\n"
+            "Symbol\nDeltaGene\n"
         )
 
     @pytest.mark.asyncio

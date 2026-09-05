@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -232,6 +233,71 @@ def test_chat_candidate_collection_prefers_builder_canonical_payload(monkeypatch
     assert candidate["agent_key"] == "gene-expression"
     assert candidate["metadata"]["builder_run_id"] == "trace-handoff"
     assert candidate["metadata"]["builder_candidate_ids"] == ["candidate-1"]
+
+
+@pytest.mark.parametrize("mismatched_agent", [False, True])
+def test_direct_profile_internal_event_preserves_adapter_and_receipt(monkeypatch, mismatched_agent):
+    from src.lib.curation_workspace import extraction_results
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+
+    agent_id = uuid4()
+    agent_key = f"ca_{agent_id}"
+    receipt = AgentExecutionReceipt.model_validate({
+        "agent_id": str(agent_id), "agent_key": agent_key,
+        "agent_revision_id": str(uuid4()), "revision": 1,
+        "fingerprint": "sha256:" + "a" * 64,
+        "output_contract": {
+            "output_state": "structured_extraction", "output_mode": "profile_bound_generic",
+            "generic_profile_ref": {"profile_id": str(uuid4()), "profile_revision_id": str(uuid4()),
+                                    "revision": 1, "fingerprint": "sha256:" + "b" * 64},
+        },
+    })
+    workspace = _workspace()
+    builder.stage_extraction_payload(
+        {"items": [{"label": "sample"}], "run_summary": {"candidate_count": 1}},
+        workspace=workspace, candidate_id="candidate-1",
+    )
+    event = builder.build_internal_extraction_result_event(
+        tool_name=agent_key, specialist_name="Saved profile",
+        finalization=workspace.finalize(candidate_ids=["candidate-1"]),
+        agent_key=f"ca_{uuid4()}" if mismatched_agent else agent_key,
+        adapter_key="generic", execution_receipt=receipt.model_dump(mode="json"),
+    )
+    def no_mutable_catalog(_agent_key):
+        pytest.fail("Pinned direct extraction must not resolve the unauthenticated mutable catalog")
+
+    monkeypatch.setattr(extraction_results, "_get_agent_curation_metadata", no_mutable_catalog)
+    persisted = []
+    monkeypatch.setattr(chat_common, "persist_extraction_results",
+                        lambda requests, **_kwargs: persisted.extend(requests))
+    if mismatched_agent:
+        with pytest.raises(ValueError, match="producing custom agent"):
+            chat_common._build_extraction_candidate_from_tool_event(
+                event, tool_agent_map={}, conversation_summary="test",
+            )
+        assert not persisted
+        return
+
+    candidate = chat_common._build_extraction_candidate_from_tool_event(
+        event, tool_agent_map={}, conversation_summary="test",
+    )
+    assert candidate is not None
+    assert candidate.execution_receipt == receipt
+    assert candidate.adapter_key == "generic"
+    for duplicate_type in ("STRUCTURED_RESULT", "TOOL_COMPLETE"):
+        assert chat_common._build_extraction_candidate_from_tool_event(
+            {**event, "type": duplicate_type}, tool_agent_map={}, conversation_summary="test",
+        ) is None
+    chat_common._persist_extraction_candidates(
+        candidates=[candidate], document_id=str(uuid4()), user_id="curator",
+        session_id="direct-profile", trace_id="trace-direct",
+        source_kind=chat_common.CurationExtractionSourceKind.CHAT,
+    )
+    assert len(persisted) == 1
+    assert persisted[0].execution_receipt == receipt
+    assert persisted[0].agent_key == agent_key
+    assert persisted[0].adapter_key == "generic"
+    assert persisted[0].candidate_count == 1
 
 
 class _DomainEnvelope(DomainEnvelopeExtractionResult):

@@ -25,6 +25,7 @@ function ClaudeDrawer({ id, open, fullWidth, onClose, children }: ClaudeDrawerPr
     <Drawer
       id={id}
       anchor="right"
+      sx={{ zIndex: (theme) => theme.zIndex.modal }}
       open={open}
       onClose={onClose}
       disableRestoreFocus

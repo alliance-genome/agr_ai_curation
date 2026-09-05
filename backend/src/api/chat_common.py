@@ -191,6 +191,8 @@ def _build_extraction_candidate_from_tool_event(
         if "canonical_payload" in internal_payload
         else internal_payload.get("tool_output"),
         agent_key=agent_key,
+        adapter_key=internal_payload.get("adapter_key"),
+        execution_receipt=internal_payload.get("execution_receipt"),
         conversation_summary=conversation_summary,
         metadata=candidate_metadata,
     )
@@ -410,6 +412,7 @@ def _persist_extraction_candidates(
                 document_id=document_id,
                 adapter_key=adapter_key,
                 agent_key=candidate.agent_key,
+                execution_receipt=candidate.execution_receipt,
                 source_kind=source_kind,
                 origin_session_id=session_id,
                 trace_id=trace_id,

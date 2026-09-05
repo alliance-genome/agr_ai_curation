@@ -3,6 +3,7 @@ import { webcrypto } from 'node:crypto'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Ref } from 'react'
+import { createTheme } from '@mui/material/styles'
 
 import AgentStudioPage from './AgentStudioPage'
 
@@ -1193,6 +1194,8 @@ describe('AgentStudioPage', () => {
 
       const dialog = await screen.findByRole('dialog', { name: 'AI Chat' })
       expect(dialog).toHaveAttribute('aria-modal', 'true')
+      // The AppBar sits at drawer + 1; the modal root must clear it, not just its paper.
+      expect(dialog.closest('.MuiDrawer-root')).toHaveStyle({ zIndex: createTheme().zIndex.modal })
       expect(launcher).toHaveAttribute('aria-expanded', 'true')
       expect(launcher).not.toHaveAccessibleDescription()
       expect(within(dialog).getByTestId('opus-chat')).toBe(chatBefore)
