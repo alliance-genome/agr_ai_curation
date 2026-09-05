@@ -44,6 +44,15 @@ def profiled_draft_payload(
         "object_type": "generic_object",
         "semantic_class": profile.contract.semantic_class,
     }
+    # Workspace projects every top-level profile field, including omitted
+    # optional answers, as a draft control. Its untouched None placeholder is
+    # not an explicit null in the authoritative envelope.
+    absent_optional_paths = set()
+    if base_payload is not None and isinstance(base_payload.get("attributes"), dict):
+        absent_optional_paths = {
+            "attributes." + field.key for field in profile.contract.fields
+            if not field.required and field.key not in base_payload["attributes"]
+        }
     paths: list[tuple[str | int, ...]] = []
     for field in sorted(fields, key=lambda item: (item.order, item.field_key)):
         path = field.metadata.get("source_field_path", field.field_key)
@@ -54,6 +63,9 @@ def profiled_draft_payload(
             if any(parts[:len(old)] == old or old[:len(parts)] == parts for old in paths):
                 raise ProfileIdentityError("Candidate fields cannot duplicate or overlap another field path")
             paths.append(parts)
+            if (path in absent_optional_paths and isinstance(field, CurationDraftField)
+                    and field.value is None and field.seed_value is None and not field.dirty):
+                continue
             set_payload_value(payload, path, deepcopy(field.value))
         except ValueError as exc:
             raise ProfileIdentityError(str(exc)) from exc

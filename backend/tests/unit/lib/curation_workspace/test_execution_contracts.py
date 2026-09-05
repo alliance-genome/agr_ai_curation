@@ -560,3 +560,43 @@ def test_persistence_checks_all_profiled_payloads_before_writes(extraction, meth
             results.persist_idempotent_extraction_results([request, invalid], db=db)
     db.add.assert_not_called()
     db.flush.assert_not_called()
+
+
+@pytest.mark.parametrize('schema', [{'kind': 'string'}, {'kind': 'object', 'fields': [
+    {'key': 'number', 'required': True, 'value_schema': {'kind': 'string'}}
+]}])
+@pytest.mark.parametrize('source_state,dirty,accepted', [
+    ('absent', False, True), ('absent', True, False), ('null', False, False),
+    ('present', False, False),
+])
+def test_projected_optional_placeholder_preserves_absence_only(extraction, schema, source_state, dirty, accepted):
+    from src.lib.curation_workspace.execution_contracts import profiled_draft_payload
+    from src.schemas.curation_workspace import CurationDraftField
+    db, receipt, _ = extraction
+    contract = GenericProfileContract.model_validate({
+        'name': 'Stocks', 'semantic_class': 'record', 'fields': [
+            {'key': 'count', 'required': True, 'value_schema': {'kind': 'integer'}},
+            {'key': 'supplier', 'required': False, 'nullable': False, 'value_schema': schema},
+        ],
+    })
+    receipt.output_contract.generic_profile_ref.fingerprint = contract.fingerprint()
+    db.get.return_value.fingerprint = contract.fingerprint()
+    db.get.return_value.contract = contract.model_dump(mode='json')
+    base = {'object_type': 'generic_object', 'class_key': 'generic:generic_object',
+            'semantic_class': 'record', 'attributes': {'count': 1}}
+    if source_state != 'absent':
+        base['attributes']['supplier'] = None if source_state == 'null' else (
+            'Provider' if schema['kind'] == 'string' else {'number': 'A:1'})
+    fields = [CurationDraftField(field_key='attributes.count', label='Count', value=1),
+              CurationDraftField(field_key='attributes.supplier', label='Supplier',
+                                 value=None, seed_value=None, dirty=dirty)]
+    before = deepcopy(base)
+    if accepted:
+        assert profiled_draft_payload(db, receipt, fields, base_payload=base) == base
+    else:
+        with pytest.raises(ProfileConformanceError):
+            profiled_draft_payload(db, receipt, fields, base_payload=base)
+    assert base == before
+    # Without an authoritative source, supplied null remains an explicit value.
+    with pytest.raises(ProfileConformanceError):
+        profiled_draft_payload(db, receipt, fields)
