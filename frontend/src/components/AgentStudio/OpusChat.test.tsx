@@ -522,6 +522,34 @@ describe('OpusChat', () => {
     expect(screen.queryByText(/"gene_id"/)).not.toBeInTheDocument()
   })
 
+  it('renders profile changes in the shared Workshop review with one Apply action', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+    const before = { mode: 'profile_bound_generic', schemaKey: '', profilePin: null,
+      profileContract: { name: 'Details', semantic_class: 'item', fields: [] } }
+    const after = { ...before, profileContract: { ...before.profileContract,
+      fields: [{ key: 'paper_labels', value_schema: { kind: 'array', items: { kind: 'string' } }, required: true, source_labels: ['Names in paper'] }] } }
+    const proposal = { contract_version: 'workshop_authoring_proposal.v1', success: true, valid: true, pending_user_approval: true,
+      base_draft_fingerprint: 'base', candidate_draft_fingerprint: 'candidate', findings: [], change_summary: 'Collect names',
+      diff: [{ kind: 'changed', path: 'custom_agent.output_contract', before, after }], candidate: { draft_name: 'Reader', draft_output: after } }
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TOOL_RESULT', tool_name: 'propose_workshop_draft_update', result: proposal }
+      yield { type: 'DONE' }
+    })
+    const apply = vi.fn().mockResolvedValue({ applied: true, message: 'Applied without saving.' })
+    render(<OpusChat context={{ active_tab: 'agent_workshop' }} onApplyWorkshopProposal={apply} />)
+    const input = screen.getByPlaceholderText('Ask about your workshop draft...')
+    fireEvent.change(input, { target: { value: 'Collect the names used in the paper.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+    expect(await screen.findByRole('region', { name: 'Output Structure candidate comparison' })).toBeInTheDocument()
+    expect(screen.getByText('Source: AI Chat')).toBeInTheDocument()
+    expect(screen.getByText(/Names in paper/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Apply to draft' })).not.toBeInTheDocument()
+    expect(apply).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }))
+    await waitFor(() => expect(apply).toHaveBeenCalledWith(proposal))
+    expect(await screen.findByText(/Proposal applied to the draft. It has not been saved/)).toBeInTheDocument()
+  })
+
   it.each(['Apply changes', 'Cancel', 'Escape', 'failure', 'invalid'])('requires complete Workshop review before %s', async (action) => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
     const proposal = {

@@ -452,6 +452,17 @@ def _output_contract_records(
             },
         )
     ]
+    for mode, name, description in [
+        ("profile_bound_generic", "Custom Output Structure", "Closed Generic Object attributes defined by an explicitly saved profile. Semantic validators require opted-in mappings; not a LinkML submission object."),
+        ("unprofiled_generic", "Flexible generic extraction", "Generic Objects without a fixed profile. Choose explicitly for exploratory attributes; not inferred from a missing schema."),
+    ]:
+        records.append(CapabilityRecord(
+            kind="output_contract", resource_id=mode, name=name, description=description,
+            detail={"contract_kind": mode, "output_schema_key": None,
+                    **({"draft_output": {"mode": mode, "schemaKey": "", "profilePin": None, "profileContract": None}}
+                       if mode == "profile_bound_generic" else {"output_contract": {"output_state": "structured_extraction", "output_mode": mode}}),
+                    "operation_limitations": ["Profile-bound output requires profile basics and a valid closed structure before Save."] if mode == "profile_bound_generic" else []},
+        ))
     by_schema: dict[str, list[CapabilityRecord]] = {}
     for agent in agents:
         domain_ref = agent.detail.get("domain_extraction_ref")

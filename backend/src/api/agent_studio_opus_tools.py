@@ -157,6 +157,28 @@ GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
     },
 }
 
+_WORKSHOP_OPERATION_SCHEMA = WorkshopOperation.model_json_schema()
+_WORKSHOP_OPERATION_DEFINITIONS = _WORKSHOP_OPERATION_SCHEMA.pop("$defs", {})
+
+INSPECT_WORKSHOP_PROFILE_TOOL = {
+    "name": "inspect_workshop_profile",
+    "description": (
+        "Read the active unsaved Output Structure, list accessible saved profiles, or read an exact saved revision. "
+        "validator_options discovers compatible opted-in capabilities for the current canonical fields; it does not attach validators. "
+        "preview generates neutral placeholder attributes, never paper evidence. Follow next_cursor using after. "
+        "These reads never select, modify or save a profile."
+    ),
+    "input_schema": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "action": {"type": "string", "enum": ["current", "list_saved", "saved_revision", "validator_options", "preview"]},
+            "profile_id": {"type": "string"}, "revision": {"type": "integer", "minimum": 1},
+            "after": {"type": "string"},
+        },
+        "required": ["action"],
+    },
+}
+
 PROPOSE_WORKSHOP_TOOL = {
     "name": "propose_workshop_draft_update",
     "description": (
@@ -164,14 +186,21 @@ PROPOSE_WORKSHOP_TOOL = {
         "Use for clear build/configure/edit requests without preliminary permission. "
         "Discover current authorized models/tools/outputs/groups through the live catalog. "
         "Preserve unrelated fields; clear_output explicitly chooses no structured output. "
-        "Curators review and Apply locally, then separately Save. Profile internals are "
-        "owned by the profile authoring extension and are not supported by these operations."
+        "Curators review and Apply locally, then separately Save. edit_profile supplies "
+        "typed basics, canonical field paths, nested fields, source labels and exact "
+        "validator mappings. Select profile_bound_generic first; set basics before fields. "
+        "For add_field/reorder_fields, field_path identifies the parent (empty means root); "
+        "other field actions identify the field. replace_field replaces its complete definition. "
+        "Reuse a saved structure with select_output and the output_resource_id returned by "
+        "inspect_workshop_profile(saved_revision); the backend reauthorizes that exact revision. "
+        "Never infer semantic validators by name or save on behalf of the curator."
     ),
     "input_schema": {
         "type": "object",
+        "$defs": _WORKSHOP_OPERATION_DEFINITIONS,
         "properties": {
             "base_draft_fingerprint": {"type": "string"},
-            "operations": {"type": "array", "items": WorkshopOperation.model_json_schema()},
+            "operations": {"type": "array", "items": _WORKSHOP_OPERATION_SCHEMA},
             "assumptions": {"type": "array", "items": {"type": "string"}},
             "change_summary": {"type": "string"},
         },
@@ -1244,6 +1273,7 @@ TOOL_METADATA_TOOLS = {
     "get_tool_details",
 }
 WORKSHOP_TOOLS = {
+    "inspect_workshop_profile",
     "refresh_workshop_prompt",
     "propose_workshop_draft_update",
 }
@@ -1301,6 +1331,7 @@ _BUILTIN_OPUS_TOOLS = (
     GET_STUDIO_CAPABILITY_DETAIL_TOOL,
     REFRESH_WORKSHOP_PROMPT_TOOL,
     PROPOSE_WORKSHOP_TOOL,
+    INSPECT_WORKSHOP_PROFILE_TOOL,
     REPORT_TOOL_FAILURE_TOOL,
     LIST_RECENT_CHATS_TOOL,
     SEARCH_CHAT_HISTORY_TOOL,

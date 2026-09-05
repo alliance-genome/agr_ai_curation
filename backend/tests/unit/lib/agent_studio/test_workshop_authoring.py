@@ -137,6 +137,156 @@ def test_complete_proposal_preserves_unrelated_fields_and_never_writes(db, base)
     db.flush.assert_not_called()
 
 
+def test_profile_edit_uses_shared_fingerprint_validation_and_repair_state(db, base):
+    base.draft_output = {"mode": "profile_bound_generic", "schemaKey": "", "profilePin": None,
+        "profileContract": {"name": "Details", "semantic_class": "record", "fields": []}}
+    base.draft_fingerprint = workshop_draft_fingerprint(base)
+    state = {}
+    added = propose(db, base, [{"operation": "edit_profile", "profile_edit": {
+        "action": "add_field", "field": {"key": "name", "value_schema": {"kind": "string"}},
+    }}], state)
+    assert added["valid"] and added["pending_user_approval"]
+    assert added["saved"] is False
+    assert {item["path"] for item in added["diff"]} == {"custom_agent.output_contract"}
+    invalid = propose(db, base, [{"operation": "edit_profile", "profile_edit": {
+        "action": "add_field", "field": {"key": "name", "value_schema": {"kind": "string"}},
+    }}], state)
+    assert not invalid["valid"] and not invalid["pending_user_approval"]
+    assert any(item["code"] == "invalid_output_contract" for item in invalid["findings"])
+    assert base.draft_output["profileContract"]["fields"] == []
+    db.commit.assert_not_called()
+
+
+def test_source_label_collision_can_be_repaired_and_removed_in_shared_proposal(db, base):
+    base.draft_output = {"mode": "profile_bound_generic", "schemaKey": "", "profilePin": None,
+        "profileContract": {"name": "Details", "semantic_class": "record", "fields": [
+            {"key": key, "value_schema": {"kind": "string"}} for key in ("name", "identifier")
+        ]}}
+    base.draft_fingerprint = workshop_draft_fingerprint(base)
+    state = {}
+    def labels(values):
+        return propose(db, base, [{"operation": "edit_profile", "profile_edit": {
+            "action": "set_source_labels", "field_path": ["name"], "source_labels": values,
+        }}], state)
+    invalid = labels(["identifier"])
+    assert not invalid["valid"] and not invalid["pending_user_approval"]
+    assert any("label identifies another canonical field" in item["message"] for item in invalid["findings"])
+    repaired = labels(["Paper name"])
+    assert repaired["valid"] and repaired["pending_user_approval"]
+    removed = labels([])
+    assert removed["valid"]
+    assert removed["candidate"]["draft_output"]["profileContract"]["fields"][0]["source_labels"] == []
+    assert not removed["saved"]
+    db.commit.assert_not_called()
+
+
+def test_profile_validation_findings_identify_contract_and_pin_paths(db, base):
+    base.draft_output = {"mode": "profile_bound_generic", "schemaKey": "", "profilePin": None,
+        "profileContract": {"name": "Details", "semantic_class": "record", "fields": [
+            {"key": "name", "required": "not-a-boolean", "value_schema": {"kind": "string"}},
+        ]}}
+    result = validate_workshop_context(db=db, workshop=base, user_id=1, active_group_ids=["TEAM"])
+    assert any(item.path == "custom_agent.output_contract.profileContract.fields[0].required"
+               for item in result.findings)
+    base.draft_output["profilePin"] = {"profile_id": "not-a-uuid"}
+    result = validate_workshop_context(db=db, workshop=base, user_id=1, active_group_ids=["TEAM"])
+    assert any(item.path == "custom_agent.output_contract.profilePin.profile_id"
+               for item in result.findings)
+    db.commit.assert_not_called()
+
+
+def test_multiturn_custom_record_fixture_preserves_pairing_and_explicit_unknowns(db, base, monkeypatch):
+    """Provisional reagent-style conversation, not curator-approved business semantics."""
+    from src.lib.agent_studio import capability_catalog
+    existing = capability_catalog.build_authorized_capability_catalog(
+        db=db, context=capability_catalog.CapabilityCatalogContext(user_id=1, active_group_ids=("TEAM",)),
+    )
+    monkeypatch.setattr(capability_catalog, "build_authorized_capability_catalog", lambda **_: [*existing,
+        capability_catalog.CapabilityRecord(kind="output_contract", resource_id="profile_bound_generic", name="Custom structure", description="",
+            detail={"draft_output": {"mode": "profile_bound_generic", "schemaKey": "", "profilePin": None, "profileContract": None}}),
+    ])
+    # "One record per reagent; collect every name used in the paper."
+    first = propose(db, base, [
+        {"operation": "select_output", "resource_id": "profile_bound_generic"},
+        {"operation": "edit_profile", "profile_edit": {"action": "set_basics", "basics": {
+            "name": "Provisional reagent details", "description": "One record per reagent (provisional)", "semantic_class": "reagent_detail"}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {
+            "key": "paper_labels", "required": True, "value_schema": {"kind": "array", "items": {"kind": "string"}}}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {
+            "key": "source_status", "value_schema": {"kind": "enum", "values": ["reported", "not_stated"]}}}},
+    ])
+    assert first["valid"], first["findings"]
+    applied = AgentWorkshopContext.model_validate(first["candidate"])
+    # "Status must exist, but may be unknown; keep source names and IDs paired."
+    second = propose(db, applied, [
+        {"operation": "edit_profile", "profile_edit": {"action": "replace_field", "field_path": ["source_status"], "field": {
+            "key": "source_status", "required": True, "nullable": True, "value_schema": {"kind": "enum", "values": ["reported", "not_stated"]}}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {
+            "key": "sources", "value_schema": {"kind": "array", "items": {"kind": "object", "fields": [
+                {"key": "name", "value_schema": {"kind": "string"}},
+                {"key": "identifier", "nullable": True, "value_schema": {"kind": "string"}},
+            ]}}}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "set_source_labels", "field_path": ["paper_labels"], "source_labels": ["Names used"]}},
+    ])
+    assert second["valid"], second["findings"]
+    profile = second["candidate"]["draft_output"]["profileContract"]
+    assert profile["fields"][1]["required"] and profile["fields"][1]["nullable"]
+    assert len(profile["fields"][2]["value_schema"]["items"]["fields"]) == 2
+    assert profile["validator_mappings"] == []  # No inference from biological names.
+    assert profile["fields"][0]["source_labels"] == ["Names used"]
+    assert not second["saved"] and base.draft_output is None
+    db.commit.assert_not_called()
+
+
+def test_select_saved_profile_uses_exact_authorized_revision_without_persistence(db, base, monkeypatch):
+    from uuid import uuid4
+    from src.lib.agent_studio import generic_profile_service
+    from src.schemas.generic_extraction_profile import GenericProfileContract
+    profile_id, revision_id = uuid4(), uuid4()
+    contract = GenericProfileContract(name="Shared structure", semantic_class="item", fields=[])
+    saved = SimpleNamespace(profile_id=profile_id, id=revision_id, revision=3,
+                            fingerprint=contract.fingerprint(), contract=contract.model_dump(mode="json"))
+    read = Mock(return_value=saved)
+    monkeypatch.setattr(generic_profile_service, "get_profile_revision", read)
+    result = propose(db, base, [{"operation": "select_output", "resource_id": f"profile:{profile_id}:3"}])
+    assert result["valid"], result["findings"]
+    output = result["candidate"]["draft_output"]
+    assert output["profilePin"] == {"profile_id": str(profile_id), "profile_revision_id": str(revision_id),
+                                    "revision": 3, "fingerprint": contract.fingerprint()}
+    assert output["profileContract"] == saved.contract
+    read.assert_any_call(db, profile_id, 3, 1)
+    assert not result["saved"] and base.draft_output is None
+    db.commit.assert_not_called()
+    read.side_effect = generic_profile_service.ProfileNotFoundError("Profile not found")
+    rejected = propose(db, base, [{"operation": "select_output", "resource_id": f"profile:{profile_id}:3"}])
+    assert not rejected["success"] and "candidate" not in rejected
+
+
+def test_mapping_proposal_uses_opted_in_exact_capability_and_retains_invalid_repair(db, base, monkeypatch):
+    from copy import deepcopy
+    from src.lib.agent_studio import profile_mapping_service
+    from .test_profile_mappings import fixture
+    raw, capability = fixture()
+    mapping = raw.pop("validator_mappings")[0]
+    base.draft_output = {"mode": "profile_bound_generic", "schemaKey": "", "profilePin": None, "profileContract": raw}
+    base.draft_fingerprint = workshop_draft_fingerprint(base)
+    monkeypatch.setattr(profile_mapping_service, "capability_catalog", lambda **_: [capability])
+    state = {}
+    result = propose(db, base, [{"operation": "edit_profile", "profile_edit": {"action": "set_mapping", "mapping": mapping}}], state)
+    assert result["valid"], result["findings"]
+    assert result["candidate"]["draft_output"]["profileContract"]["validator_mappings"][0]["capability_fingerprint"] == capability.fingerprint()
+    invalid = deepcopy(mapping)
+    invalid["inputs"]["mention"]["field_path"] = "attributes.Paper label"
+    rejected = propose(db, base, [{"operation": "edit_profile", "profile_edit": {"action": "set_mapping", "mapping": invalid}}], state)
+    assert not rejected["valid"] and not rejected["pending_user_approval"]
+    assert any("validator_mappings" in item["path"] for item in rejected["findings"])
+    repaired = propose(db, base, [{"operation": "edit_profile", "profile_edit": {"action": "set_mapping", "mapping": mapping}}], state)
+    assert repaired["valid"]
+    removed = propose(db, base, [{"operation": "edit_profile", "profile_edit": {"action": "remove_mapping", "mapping_id": mapping["mapping_id"]}}], state)
+    assert removed["valid"] and removed["candidate"]["draft_output"]["profileContract"]["validator_mappings"] == []
+    db.commit.assert_not_called()
+
+
 def test_new_blank_draft_can_be_built(db, base):
     base.draft_name = ""
     base.prompt_draft = ""

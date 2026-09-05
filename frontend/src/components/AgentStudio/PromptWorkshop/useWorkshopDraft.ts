@@ -31,6 +31,7 @@ import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import type { AgentExecutionRevision } from '@/types/agentExecution'
 import { getGenericProfile, getGenericProfileRevision, validateGenericProfile, type GenericProfileDetail, type ProfileMappingDiagnostic } from '@/services/genericProfileService'
 import { emptyOutputDraft, hydrateProfileOutput, outputDraftFromContract, outputDraftSavePayload, profileValidationIssues, type WorkshopOutputDraft } from './workshopOutputDraft'
+import { profileCandidateToDraft } from './profileEditorModel'
 import { useAuth } from '@/contexts/AuthContext'
 import { logger } from '@/services/logger'
 import { flushSync } from 'react-dom'
@@ -922,6 +923,7 @@ export function useWorkshopDraft({
   const [authoringUndo, setAuthoringUndo] = useState<{
     fields: DraftFields
     applied: string
+    profileSource: GenericProfileDetail | null
   } | null>(null)
 
   const applyAuthoringProposal = useCallback(async (proposal: WorkshopAuthoringProposal): Promise<FlowProposalApplyResult> => {
@@ -954,6 +956,17 @@ export function useWorkshopDraft({
       if (!validation.valid) {
         return { applied: false, message: validation.findings.map((item) => item.message).join(' ') }
       }
+      let nextProfileSource: GenericProfileDetail | null = null
+      const selectedPin = candidate.draft_output.profilePin
+      if (selectedPin) {
+        const [detail, revision] = await Promise.all([
+          getGenericProfile(selectedPin.profile_id),
+          getGenericProfileRevision(selectedPin.profile_id, selectedPin.revision),
+        ])
+        // Validate exact source identity without replacing the reviewed edits.
+        hydrateProfileOutput(candidate.draft_output, revision)
+        nextProfileSource = { ...detail, revision }
+      }
       if (!authoringMountedRef.current
         || workshopDraftKey(liveAuthoringRef.current.captureAuthoringContext()) !== beforeKey
         || liveAuthoringRef.current.saving) {
@@ -968,7 +981,9 @@ export function useWorkshopDraft({
         allowedGroupIds: candidate.draft_allowed_group_ids ?? [],
         modelId: candidate.draft_model_id ?? '', modelReasoning: candidate.draft_model_reasoning ?? '',
         toolIds: candidate.draft_tool_ids ?? [],
-        outputDraft: structuredClone(candidate.draft_output),
+        outputDraft: { ...structuredClone(candidate.draft_output),
+          profileContract: candidate.draft_output.profileContract
+            ? profileCandidateToDraft(candidate.draft_output.profileContract) : null },
         icon: candidate.draft_icon ?? '',
       }
       flushSync(() => applyDraft(nextFields, true))
@@ -1002,7 +1017,8 @@ export function useWorkshopDraft({
         }
         return { applied: false, message: 'Workshop validation failed. The proposal was not accepted.' }
       }
-      setAuthoringUndo({ fields: previousFields, applied: appliedKey })
+      setAuthoringUndo({ fields: previousFields, applied: appliedKey, profileSource })
+      setProfileSource(nextProfileSource)
       logger.info('Workshop proposal applied', { component: 'PromptWorkshop', action: 'proposal_apply' })
       setStatus('Applied AI changes to the draft. Review and Save when ready.')
       return { applied: true, message: 'Applied to the Workshop draft. Save remains separate.' }
@@ -1015,7 +1031,7 @@ export function useWorkshopDraft({
       applyingAuthoringRef.current = false
       setAuthoringBusy(false)
     }
-  }, [applyDraft])
+  }, [applyDraft, profileSource])
 
   const canUndoAuthoringProposal = Boolean(authoringUndo
     && authoringUndo.applied === workshopDraftKey(captureAuthoringContext()))
@@ -1026,6 +1042,7 @@ export function useWorkshopDraft({
     if (!authoringUndo || applyingAuthoringRef.current || liveAuthoringRef.current.saving
       || authoringUndo.applied !== workshopDraftKey(liveAuthoringRef.current.captureAuthoringContext())) return
     applyDraft(authoringUndo.fields, true)
+    setProfileSource(authoringUndo.profileSource)
     setAuthoringUndo(null)
     logger.info('Workshop proposal undone', { component: 'PromptWorkshop', action: 'proposal_undo' })
     setStatus('Undid the last AI change.')

@@ -1407,6 +1407,66 @@ describe('PromptWorkshop', () => {
     expect(handle.current!.captureAuthoringContext().draft_name).toBe(base.draft_name)
   })
 
+  it('applies a profile candidate through the shared adapter and undoes it without saving', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = structuredClone(base)
+    candidate.draft_output = { mode: 'profile_bound_generic', schemaKey: '', profilePin: null,
+      profileContract: { name: 'Collected details', semantic_class: 'item', fields: [
+        { key: 'paper_labels', required: true, nullable: false, source_labels: ['Paper names'], value_schema: { kind: 'array', items: { kind: 'string' } } },
+      ] } }
+    candidate.draft_output_schema_key = undefined
+    const proposal = { contract_version: 'workshop_authoring_proposal.v1' as const,
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base), candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Collect names', diff: [], findings: [] }
+    const applied = await act(async () => handle.current!.applyAuthoringProposal(proposal))
+    expect(applied.applied).toBe(true)
+    expect(handle.current!.captureAuthoringContext().draft_output).toEqual(candidate.draft_output)
+    expect(screen.getByRole('button', { name: /Output Structure, unsaved edits/ })).toBeInTheDocument()
+    const stale = await act(async () => handle.current!.applyAuthoringProposal(proposal))
+    expect(stale.applied).toBe(false)
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo AI changes' }))
+    expect(handle.current!.captureAuthoringContext().draft_output).toEqual(base.draft_output)
+    expect(candidate.draft_output.profileContract!.fields[0].source_labels).toEqual(['Paper names'])
+  })
+
+  it('saves an AI-selected exact profile pin without silently cloning its structure', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    const pin = { profile_id: 'shared-profile', profile_revision_id: 'shared-revision', revision: 3, fingerprint: 'sha256:exact' }
+    const contract = { name: 'Shared details', semantic_class: 'item', fields: [] }
+    const revision = { id: pin.profile_revision_id, profile_id: pin.profile_id, revision: pin.revision, fingerprint: pin.fingerprint, contract }
+    profileMocks.getGenericProfile.mockResolvedValue({ profile: { id: pin.profile_id }, revision, can_edit: false })
+    profileMocks.getGenericProfileRevision.mockResolvedValue(revision)
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = structuredClone(base)
+    candidate.draft_output = { mode: 'profile_bound_generic', schemaKey: '', profilePin: pin, profileContract: contract }
+    candidate.draft_output_schema_key = undefined
+    const result = await act(async () => handle.current!.applyAuthoringProposal({
+      contract_version: 'workshop_authoring_proposal.v1', candidate, change_summary: 'Reuse the shared structure', diff: [], findings: [],
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base), candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+    }))
+    expect(result.applied).toBe(true)
+    expect(profileMocks.getGenericProfileRevision).toHaveBeenCalledWith(pin.profile_id, 3)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalled())
+    const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
+    expect(payload.output_contract.generic_profile_ref).toEqual(pin)
+    expect(payload.new_generic_profile).toBeUndefined()
+    expect(payload.revise_generic_profile).toBeUndefined()
+  })
+
   it('rejects stale proposals and rolls back post-apply validation failure', async () => {
     Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
     const handle = createRef<WorkshopAuthoringContextHandle>()

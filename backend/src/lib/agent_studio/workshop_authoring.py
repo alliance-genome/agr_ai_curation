@@ -17,6 +17,7 @@ from src.lib.agent_studio.authoring_validation import (
     validate_custom_agent_authoring_draft,
 )
 from src.lib.agent_studio.models import AgentWorkshopContext
+from src.lib.agent_studio.profile_authoring import ProfileEdit, apply_profile_edit
 from src.lib.openai_agents.config import (
     get_agent_studio_workshop_proposal_max_operations,
     get_agent_studio_workshop_prompt_max_chars,
@@ -26,20 +27,21 @@ logger = logging.getLogger(__name__)
 
 
 class WorkshopOperation(BaseModel):
-    """One bounded general-agent action; profile internals are not writable."""
+    """One bounded editor action, including the typed profile extension."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     operation: Literal[
         "set_name", "set_description", "set_instructions", "set_group_instructions",
         "reset_group_instructions", "set_include_group_rules", "select_model",
         "add_tool", "remove_tool", "select_output", "clear_output", "set_icon",
-        "set_visibility", "set_allowed_groups",
+        "set_visibility", "set_allowed_groups", "edit_profile",
     ]
     text: str | None = None
     resource_id: str | None = None
     resource_ids: list[str] | None = None
     enabled: bool | None = None
     reasoning: str | None = None
+    profile_edit: ProfileEdit | None = None
 
 
 def workshop_save_candidate(workshop: AgentWorkshopContext) -> dict[str, Any]:
@@ -95,6 +97,11 @@ def normalize_workshop_candidate(workshop):
         raise ValueError("Editable instructions cannot contain inherited prompt layers.")
     service.reject_locked_prompt_markers(normalization.content, target="Custom instructions")
     candidate.prompt_draft = normalization.content
+    if candidate.draft_output and candidate.draft_output.get("profileContract") is not None:
+        from src.schemas.generic_extraction_profile import GenericProfileContract
+        candidate.draft_output["profileContract"] = GenericProfileContract.model_validate(
+            candidate.draft_output["profileContract"],
+        ).model_dump(mode="json")
     return candidate
 
 
@@ -115,6 +122,8 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
 
     candidate = workshop_save_candidate(workshop)
     findings = []
+    from src.lib.agent_studio.profile_mapping_service import ProfileMappingError
+    from src.lib.openai_agents.config import get_generic_profile_max_issues
     try:
         if workshop_save_candidate(normalize_workshop_candidate(workshop)) != candidate:
             raise ValueError("Noncanonical draft")
@@ -201,6 +210,7 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             code="unavailable_workshop_source", severity="error", path="custom_agent.identity",
             message="The agent source or inherited access changed. Reopen the draft and try again.",
         ))
+    output_validation_path = "custom_agent.output_contract"
     try:
         from src.lib.agent_studio.domain_output_contract import (
             require_no_output_without_builder_tools,
@@ -232,6 +242,40 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             require_no_output_without_builder_tools(output, candidate["tool_ids"])
         elif draft_output is None:
             require_no_output_without_builder_tools(initial_output_contract(candidate["output_schema_key"]), candidate["tool_ids"])
+        elif draft_output.get("mode") == "profile_bound_generic":
+            from src.lib.agent_studio.profile_mapping_service import validate_profile_mappings
+            from src.schemas.generic_extraction_profile import GenericProfileContract
+            from src.schemas.agent_execution_revision import GenericProfilePin
+            from src.lib.agent_studio.generic_profile_service import get_profile_revision
+            if candidate["output_schema_key"] or draft_output.get("schemaKey") or draft_output.get("domainExtractionRef"):
+                raise ValueError("Custom profiles cannot select a packaged schema or builder")
+            if draft_output.get("profilePin"):
+                output_validation_path = "custom_agent.output_contract.profilePin"
+                pin = GenericProfilePin.model_validate(draft_output["profilePin"])
+                saved = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+                if saved.id != pin.profile_revision_id or saved.fingerprint != pin.fingerprint:
+                    raise ValueError("The source profile revision pin does not match")
+            output_validation_path = "custom_agent.output_contract.profileContract"
+            profile = GenericProfileContract.model_validate(draft_output.get("profileContract"))
+            validate_profile_mappings(profile, active_group_ids=active_group_ids)
+        elif draft_output.get("mode") == "unprofiled_generic":
+            if candidate["output_schema_key"] or any(draft_output.get(key) for key in ("schemaKey", "profilePin", "profileContract", "domainExtractionRef")):
+                raise ValueError("Flexible generic output cannot retain a profile, schema or builder selection")
+        else:
+            raise ValueError("Choose an explicit supported output mode")
+    except ProfileMappingError as exc:
+        findings.extend(AuthoringValidationFinding(
+            code=issue["code"], severity="error", path=f"custom_agent.output_contract.profileContract.{issue['path']}",
+            message=issue["message"],
+        ) for issue in exc.issues[:get_generic_profile_max_issues()])
+    except ValidationError as exc:
+        findings.extend(AuthoringValidationFinding(
+            code="invalid_output_contract", severity="error",
+            path=output_validation_path + "".join(
+                f"[{part}]" if isinstance(part, int) else f".{part}" for part in issue["loc"]
+            ),
+            message=issue["msg"],
+        ) for issue in exc.errors(include_url=False, include_input=False)[:get_generic_profile_max_issues()])
     except ValueError as exc:
         findings.append(AuthoringValidationFinding(
             code="invalid_output_contract", severity="error", path="custom_agent.output_contract",
@@ -296,7 +340,9 @@ def apply_workshop_operations(base, operations, *, output_contracts=None):
     }
     for item in operations:
         op = WorkshopOperation.model_validate(item)
-        if op.operation in text_fields:
+        if op.operation == "edit_profile":
+            candidate.draft_output = apply_profile_edit(candidate.draft_output, _required(op.profile_edit, "profile_edit"))
+        elif op.operation in text_fields:
             setattr(candidate, text_fields[op.operation], _required(op.text, "text"))
         elif op.operation == "set_include_group_rules":
             candidate.include_group_rules = _required(op.enabled, "enabled")
@@ -318,6 +364,10 @@ def apply_workshop_operations(base, operations, *, output_contracts=None):
             if op.operation == "select_output" and output_contracts is not None and op.resource_id in output_contracts:
                 from src.schemas.agent_execution_revision import AgentOutputContract
 
+                if output_contracts[op.resource_id].get("mode") == "profile_bound_generic":
+                    candidate.draft_output_schema_key = None
+                    candidate.draft_output = deepcopy(output_contracts[op.resource_id])
+                    continue
                 selected = AgentOutputContract.model_validate(output_contracts[op.resource_id])
                 candidate.draft_output_schema_key = selected.output_schema_key
                 candidate.draft_output = {
@@ -368,13 +418,34 @@ def propose_workshop_update(*, db, base, tool_input, user_id, active_group_ids, 
             from src.lib.agent_studio.capability_catalog import CapabilityCatalogContext, build_authorized_capability_catalog
 
             output_contracts = {
-                record.resource_id: record.detail["output_contract"]
+                record.resource_id: record.detail.get("output_contract") or record.detail["draft_output"]
                 for record in build_authorized_capability_catalog(
                     db=db, context=CapabilityCatalogContext(user_id=user_id, active_group_ids=tuple(active_group_ids)),
                 )
                 if record.kind == "output_contract" and record.selectable
-                and record.availability == "available" and record.detail.get("output_contract") is not None
+                and record.availability == "available" and (record.detail.get("output_contract") is not None or record.detail.get("draft_output") is not None)
             }
+            # Saved profiles use the same output-selection operation. Resolve an
+            # exact authorized revision, never a moving head or a model-supplied contract.
+            from uuid import UUID
+            from src.lib.agent_studio.generic_profile_service import get_profile_revision
+            for item in operations:
+                if not isinstance(item, dict) or item.get("operation") != "select_output":
+                    continue
+                resource_id = item.get("resource_id")
+                if not isinstance(resource_id, str) or not resource_id.startswith("profile:"):
+                    continue
+                _, profile_id, revision_number = resource_id.split(":")
+                revision = int(revision_number)
+                if revision < 1:
+                    raise ValueError("Choose an exact saved profile revision")
+                saved = get_profile_revision(db, UUID(profile_id), revision, user_id)
+                output_contracts[resource_id] = {
+                    "mode": "profile_bound_generic", "schemaKey": "",
+                    "profilePin": {"profile_id": str(saved.profile_id), "profile_revision_id": str(saved.id),
+                                   "revision": saved.revision, "fingerprint": saved.fingerprint},
+                    "profileContract": deepcopy(saved.contract),
+                }
         candidate = apply_workshop_operations(working or base, operations, output_contracts=output_contracts)
         try:
             candidate = normalize_workshop_candidate(candidate)

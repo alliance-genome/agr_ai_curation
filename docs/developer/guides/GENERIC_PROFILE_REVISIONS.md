@@ -347,6 +347,31 @@ revision for each affected flow. Never reinterpret or rewrite an old pin.
 
 ## Output Structure dev walkthrough
 
+### AI-assisted authoring
+
+Workshop AI Chat uses the existing `propose_workshop_draft_update` review
+pipeline. Its `edit_profile` extension accepts typed basics, canonical field
+paths, field definitions, source labels and validator mappings. `add_field` and
+`reorder_fields` paths select the parent container (empty means root); other
+field actions select the field. `replace_field` supplies a complete replacement
+definition. Renaming/removing fields never retargets validator mappings silently.
+
+`inspect_workshop_profile` reads the current draft, accessible saved profiles,
+exact saved revisions, compatible validator options or neutral placeholder
+examples. A saved-revision response includes an `output_resource_id` usable by
+the existing `select_output` operation. The backend reauthorizes that exact
+revision; selecting it does not create a profile or follow a moving head.
+
+Proposals render through the Output Structure comparison inside the existing
+Workshop review dialog. Apply changes only the authoritative local draft and
+retains the shared stale checks and one-step undo. Save remains an explicit
+curator action. The extraction runtime has no profile-authoring operation.
+Custom profiles enforce structural conformance, not automatic semantic
+validation or LinkML/submission readiness. Mapping inspection must identify an
+opted-in compatible capability; biological field names alone never select one.
+
+### Review checklist
+
 Human UI feedback and Gillian's business semantics/UAT remain pending until
 they review the combined dev deployment. Use a new test agent/profile, not an
 original production flow. This checklist is not evidence of completed human UAT.

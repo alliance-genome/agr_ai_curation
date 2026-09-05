@@ -91,7 +91,8 @@ def test_catalog_keeps_none_distinct_and_future_extensions_discoverable(sources)
     indexed = {(item["kind"], item["resource_id"]): item for item in result["results"]}
     assert indexed[("output_contract", "none")]["selectable"] is True
     assert indexed[("validator_capability", "future_validator")]["selectable"] is False
-    assert not any(key == ("output_contract", "unprofiled_generic") for key in indexed)
+    assert indexed[("output_contract", "unprofiled_generic")]["selectable"] is True
+    assert indexed[("output_contract", "profile_bound_generic")]["selectable"] is True
 
 
 def test_schema_null_builder_is_an_explicit_output_capability(sources, monkeypatch):

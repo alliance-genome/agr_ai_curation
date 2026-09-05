@@ -3573,6 +3573,21 @@ async def _handle_tool_call(
             "message": result["message"],
         }
 
+    elif tool_name == "inspect_workshop_profile":
+        from src.lib.agent_studio.profile_authoring import ProfileInspection, inspect_workshop_profile
+
+        if not context or context.active_tab != "agent_workshop" or not context.agent_workshop or user_db_id is None:
+            return {"success": False, "error": "Open an authenticated Workshop draft first."}
+        try:
+            request = ProfileInspection.model_validate(tool_input)
+            with SessionLocal() as profile_db:
+                return {"success": True, **inspect_workshop_profile(
+                    profile_db, workshop=context.agent_workshop, user_id=user_db_id,
+                    active_group_ids=active_group_ids or [], request=request,
+                )}
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
     elif tool_name == "propose_workshop_draft_update":
         from src.lib.agent_studio.workshop_authoring import propose_workshop_update
 

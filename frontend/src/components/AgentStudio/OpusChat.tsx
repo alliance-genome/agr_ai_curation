@@ -57,6 +57,8 @@ import type {
 } from '@/types/promptExplorer'
 import type { FlowProposalApplyResult } from './FlowBuilder/types'
 import SuggestionDialog from './SuggestionDialog'
+import ProfileCandidateComparison from './PromptWorkshop/ProfileCandidateComparison'
+import type { WorkshopOutputDraft } from './PromptWorkshop/workshopOutputDraft'
 import { buildFlowVerificationPrompt } from './flowVerificationPrompt'
 
 const ChatContainer = styled(Box)(({ theme }) => ({
@@ -473,6 +475,11 @@ interface OpusChatProps {
   onStreamingChange?: (isStreaming: boolean) => void
 }
 
+
+function outputSelectionMetadata(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'profileContract'))
+}
 
 function formatFlowDiffValue(value: unknown): string {
   if (typeof value === 'string') return value
@@ -1758,6 +1765,23 @@ function OpusChat({
             }}
           >
             {pendingFlowProposal?.diff.map((entry, index) => (
+              pendingFlowProposal.contract_version === 'workshop_authoring_proposal.v1'
+                && entry.path === 'custom_agent.output_contract'
+                && pendingFlowProposal.candidate.draft_output?.profileContract
+                ? <Box component="li" key={`${entry.path}-${index}`} sx={{ mb: 0.75 }}>
+                  <Typography variant="body2">Output mode: {(entry.before as WorkshopOutputDraft | null)?.mode || 'none'} → {pendingFlowProposal.candidate.draft_output.mode}</Typography>
+                  <Box component="details">
+                    <summary>Exact output selection and revision pins</summary>
+                    <Typography component="pre" variant="caption" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>Before: {formatFlowDiffValue(outputSelectionMetadata(entry.before))}</Typography>
+                    <Typography component="pre" variant="caption" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>After: {formatFlowDiffValue(outputSelectionMetadata(entry.after))}</Typography>
+                  </Box>
+                  <ProfileCandidateComparison
+                    before={(entry.before as WorkshopOutputDraft | null)?.profileContract ?? null}
+                    candidate={pendingFlowProposal.candidate.draft_output.profileContract}
+                    origin="AI Chat" status="proposed" busy={flowProposalApplying}
+                  />
+                </Box>
+                :
               <Box component="li" key={`${entry.path}-${index}`} sx={{ mb: 0.75 }}>
                 <Chip
                   size="small"
