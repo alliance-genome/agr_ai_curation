@@ -1,0 +1,36 @@
+{
+  "assumptions": {
+    "status": "provisional_dev_only_not_curator_approved",
+    "record_boundary": "One reagent per document; identities and grouping require curator review.",
+    "paper_labels": "Exact paper labels in first-evidence order, preserving duplicates.",
+    "sources": "Multiple name/identifier pairs; identifier-only entries render the identifier. The not_stated fixture has no sources; contradictory status/source data requires review.",
+    "validation": "Structural conformance only; no reagent or stock semantic capability is invented."
+  },
+  "profile": {
+    "name": "Provisional reagent inventory — dev review",
+    "description": "Dev-only example. Record grouping, labels, source states and ordering await curator approval.",
+    "semantic_class": "reagent_inventory_item",
+    "fields": [
+      {"key": "paper_labels", "required": true, "source_labels": ["synonym"], "value_schema": {"kind": "array", "items": {"kind": "string"}}},
+      {"key": "source_status", "required": true, "value_schema": {"kind": "enum", "values": ["new_in_paper", "external", "not_stated"]}},
+      {"key": "sources", "nullable": true, "value_schema": {"kind": "array", "items": {"kind": "object", "fields": [
+        {"key": "name", "nullable": true, "value_schema": {"kind": "string"}},
+        {"key": "identifier", "nullable": true, "value_schema": {"kind": "string"}}
+      ]}}}
+    ],
+    "validator_mappings": []
+  },
+  "projection": {
+    "format": "tsv", "row_source": "object", "columns": [
+      {"key": "paper_labels", "transform": {"type": "join_list", "field_ref": "object.attribute.paper_labels", "separator": "|"}},
+      {"key": "source", "transform": {"type": "conditional", "field_ref": "object.attribute.source_status", "condition_op": "eq", "value": "new_in_paper",
+        "when_true": {"type": "literal", "value": "New in paper"},
+        "when_false": {"type": "pair_join", "field_refs": ["object.attribute.sources[].name", "object.attribute.sources[].identifier"], "separator": "|", "pair_separator": ":"}}}
+    ]
+  },
+  "cases": [
+    {"attributes": {"paper_labels": ["Example A", "Alias A", "Example A"], "source_status": "new_in_paper"}, "expected": {"paper_labels": "Example A|Alias A|Example A", "source": "New in paper"}},
+    {"attributes": {"paper_labels": ["Example B"], "source_status": "external", "sources": [{"name": "Collection", "identifier": "42"}, {"name": "Supplier"}, {"identifier": "ID-7"}]}, "expected": {"paper_labels": "Example B", "source": "Collection:42|Supplier|ID-7"}},
+    {"attributes": {"paper_labels": ["Example C"], "source_status": "not_stated", "sources": null}, "expected": {"paper_labels": "Example C", "source": ""}}
+  ]
+}

@@ -16,6 +16,7 @@ Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide
 5. **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain multiple agents together
 6. **[RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md)** - Run the RGD paper-review flow and review blockers or follow-ups
 7. **[Batch Processing](BATCH_PROCESSING.md)** - Process multiple documents through flows automatically
+8. **[Custom Output Structures](CUSTOM_OUTPUT_STRUCTURES.md)** - Define closed records in Workshop, review AI proposals, and understand saved revisions and validation
 
 ## What Can the AI Help With?
 
