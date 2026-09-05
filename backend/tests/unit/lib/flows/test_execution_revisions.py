@@ -551,3 +551,27 @@ def test_ai_proposal_serializes_exact_custom_receipt_for_browser_review():
         flow_context={}, name="Custom extraction", description="",
         definition=transported,
     )
+
+
+def test_projection_shape_findings_identify_fields_for_ai_repair(monkeypatch):
+    pin, db = profile_receipt_and_db()
+    install_resolver(monkeypatch, [pin])
+    definition = projection_flow(pin)
+    definition.nodes[-1].data.projection_plan = {
+        "format": "tsv", "row_source": "objects", "row_strategy": "one_per_object",
+        "columns": [{"header": "Count", "field_ref": "object.attribute.count"}],
+    }
+    original = definition.model_dump(mode="json")
+    result = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[])
+    paths = {finding.path for finding in result.findings}
+    prefix = "flow_definition.nodes.output.data.projection_plan"
+    assert paths == {f"{prefix}.row_source", f"{prefix}.row_strategy", f"{prefix}.columns.0.key"}
+    assert all(finding.fix_hint is not None and "formatter_projection_plan" in finding.fix_hint for finding in result.findings)
+    assert definition.model_dump(mode="json") == original
+    definition.nodes[-1].data.projection_plan = {
+        "format": "tsv", "row_source": "object", "row_strategy": "object",
+        "columns": [{"key": "count", "header": "Count", "field_ref": "object.attribute.count"}],
+    }
+    repaired = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[])
+    assert not repaired.findings
+    assert repaired.definition.nodes[1].data.execution_receipt == pin

@@ -739,6 +739,7 @@ prompts.
 - Filename metadata is runtime-owned. Use output_filename_template with built-ins such as {{input_filename_stem}} and {{timestamp}}; do not require document names or timestamps to exist as extraction fields
 - The formatter agent (chat_output, csv_formatter, tsv_formatter, json_formatter) should define HOW to present projected data
 - Formatter custom instructions should specify column headers, row source, filters, sorting, grouping, and omitted fields when needed
+- When the curator requests fixed saved columns or a deterministic saved mapping, search output_contract capabilities for formatter_projection_plan and read its complete json_schema before proposing update_step.projection_plan. Use the attached saved profile's declared field refs. Do not guess enum values, column keys or transform properties, and do not substitute instructions alone for a requested saved plan. Repair each precise projection validation finding before presenting Apply.
 - The runtime owns extraction, projection, serialization, file saving, and chat rendering; do not recommend model-authored file contents
 
 **Example flow for allele extraction:**

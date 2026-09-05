@@ -361,3 +361,21 @@ def test_catalog_reports_authorized_saved_revision_identity(sources, monkeypatch
     else:
         assert record.availability == "unavailable"
         assert record.detail["identity_contract"]["agent_revision_id"] is None
+
+
+def test_flow_catalog_exposes_canonical_projection_schema_for_read_only_discovery(sources):
+    from src.lib.flows.output_projection import FlowOutputProjectionPlan
+
+    records = catalog.build_authorized_capability_catalog(
+        db=object(),
+        context=catalog.CapabilityCatalogContext(user_id=7, active_tab="flows", artifact_kind="flow"),
+    )
+    plan = next(record for record in records if record.resource_id == "formatter_projection_plan")
+    assert plan.kind == "output_contract"
+    assert plan.selectable is False
+    assert plan.detail["json_schema"] == FlowOutputProjectionPlan.model_json_schema()
+    properties = plan.detail["json_schema"]["properties"]
+    assert "object" in properties["row_source"]["enum"]
+    assert "objects" not in properties["row_source"]["enum"]
+    assert "key" in plan.detail["json_schema"]["$defs"]["FlowOutputColumnSpec"]["required"]
+

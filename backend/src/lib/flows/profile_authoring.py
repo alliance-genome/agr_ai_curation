@@ -73,8 +73,15 @@ def profile_projection_findings(
             continue
         try:
             plan = FlowOutputProjectionPlan.model_validate(output.data.projection_plan)
-        except ValidationError:
-            finding(output.id, "invalid_profile_projection", "The saved formatter projection has an invalid shape.")
+        except ValidationError as exc:
+            for error in exc.errors(include_input=False, include_context=False, include_url=False):
+                suffix = ".".join(str(part) for part in error["loc"])
+                findings.append(AuthoringValidationFinding(
+                    code="invalid_profile_projection", severity="error", node_id=output.id,
+                    path=f"flow_definition.nodes.{output.id}.data.projection_plan" + (f".{suffix}" if suffix else ""),
+                    message=error["msg"],
+                    fix_hint="Inspect the formatter_projection_plan output contract schema and correct this field before saving.",
+                ))
             continue
         for ref in projection_plan_field_refs(plan):
             if not ref.startswith("object.attribute.") or ref in declared:

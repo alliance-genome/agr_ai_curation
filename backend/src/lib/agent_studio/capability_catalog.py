@@ -487,6 +487,21 @@ def _output_contract_records(
                        if mode == "profile_bound_generic" else {"output_contract": {"output_state": "structured_extraction", "output_mode": mode}}),
                     "operation_limitations": ["Profile-bound output requires profile basics and a valid closed structure before Save."] if mode == "profile_bound_generic" else []},
         ))
+    if context.artifact_kind == "flow":
+        from src.lib.flows.output_projection import FlowOutputProjectionPlan
+
+        records.append(CapabilityRecord(
+            kind="output_contract", resource_id="formatter_projection_plan",
+            name="Saved formatter projection plan",
+            description="Canonical CSV, TSV and JSON projection schema for saved flow output columns, field references and transforms such as pair_join.",
+            selectable=False,
+            compatibility={"artifact_kind": "flow", "contract_kind": "formatter_projection_plan"},
+            detail={
+                "contract_kind": "formatter_projection_plan",
+                "json_schema": FlowOutputProjectionPlan.model_json_schema(),
+                "usage": "Set the formatter node's projection_plan with update_step. This describes projection metadata over saved extraction fields; it is not an extraction output mode and cannot contain authored rows.",
+            },
+        ))
     by_schema: dict[str, list[CapabilityRecord]] = {}
     for agent in agents:
         domain_ref = agent.detail.get("domain_extraction_ref")
