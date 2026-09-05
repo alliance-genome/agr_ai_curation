@@ -276,3 +276,27 @@ def test_existing_lists_survive_metadata_edits_and_require_explicit_conversion()
     assert renamed["profileContract"]["fields"][0]["value_schema"] == output["profileContract"]["fields"][0]["value_schema"]
     converted = edit(renamed, action="update_field", field_path=["names"], field_update={"value_schema": {"kind": "string"}})
     assert converted["profileContract"]["fields"][0]["value_schema"] == {"kind": "string"}
+
+
+def test_validator_discovery_preserves_custom_pins_and_caller_without_mutating_draft(monkeypatch):
+    from src.lib.agent_studio import profile_mapping_options as service
+    from .test_profile_mappings import fixture
+    raw, capability = fixture()
+    mapping = raw["validator_mappings"][0]
+    mapping["capability_ref"]["binding_id"] += "--custom--" + str(uuid4())
+    mapping["inputs"]["mention"]["field_path"] = "attributes.removed_part"
+    workshop = AgentWorkshopContext(draft_output={"mode": "profile_bound_generic", "profileContract": raw})
+    before = deepcopy(workshop.draft_output)
+    options = {"capabilities": [{"metadata": {"origin": origin}} for origin in ("package", "custom_agent")],
+               "next_cursor": "next-page", "fields": []}
+    discover = Mock(return_value=options)
+    monkeypatch.setattr(service, "profile_mapping_options", discover)
+    result = inspect_workshop_profile(Mock(), workshop=workshop, user_id=42, active_group_ids=["GROUP_A"],
+                                      request=ProfileInspection(action="validator_options", after="page-two"))
+    assert result["capabilities"] == options["capabilities"] and result["next_cursor"] == "next-page"
+    assert discover.call_args.kwargs == {"user_id": 42, "active_group_ids": ["GROUP_A"], "after": "page-two"}
+    query_mapping = discover.call_args.args[0].validator_mappings[0]
+    assert query_mapping.capability_ref.model_dump() == mapping["capability_ref"]
+    assert query_mapping.capability_fingerprint == capability.fingerprint()
+    assert not query_mapping.inputs and not query_mapping.outputs
+    assert workshop.draft_output == before

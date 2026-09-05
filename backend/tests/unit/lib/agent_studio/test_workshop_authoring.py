@@ -278,19 +278,36 @@ def test_select_saved_profile_uses_exact_authorized_revision_without_persistence
     assert not rejected["success"] and "candidate" not in rejected
 
 
-def test_mapping_proposal_uses_opted_in_exact_capability_and_retains_invalid_repair(db, base, monkeypatch):
+@pytest.mark.parametrize("nested_custom", [False, True])
+def test_mapping_proposal_uses_opted_in_exact_capability_and_retains_invalid_repair(db, base, monkeypatch, nested_custom):
     from copy import deepcopy
     from src.lib.agent_studio import profile_mapping_service
     from .test_profile_mappings import fixture
     raw, capability = fixture()
     mapping = raw.pop("validator_mappings")[0]
+    if nested_custom:
+        from dataclasses import replace
+        from uuid import uuid4
+        pin = {"agent_id": str(uuid4()), "agent_key": "ca_saved", "revision_id": str(uuid4()), "fingerprint": "sha256:" + "a" * 64}
+        capability = replace(capability,
+            ref=capability.ref.model_copy(update={"binding_id": "lookup--custom--" + pin["revision_id"]}),
+            binding=replace(capability.binding, raw={**capability.binding.raw, "custom_validator": pin}))
+        raw["fields"] = [{"key": "parts", "required": True, "value_schema": {"kind": "object", "fields": raw["fields"]}}]
+        mapping.update(capability_ref=capability.ref.model_dump(), capability_fingerprint=capability.fingerprint(),
+                       inputs={"mention": {"field_path": "attributes.parts.paper_name"}},
+                       outputs={"identifier": "attributes.parts.resolved_id"})
     base.draft_output = {"mode": "profile_bound_generic", "schemaKey": "", "profilePin": None, "profileContract": raw}
     base.draft_fingerprint = workshop_draft_fingerprint(base)
     monkeypatch.setattr(profile_mapping_service, "capability_catalog", lambda **_: [capability])
     state = {}
     result = propose(db, base, [{"operation": "edit_profile", "profile_edit": {"action": "set_mapping", "mapping": mapping}}], state)
     assert result["valid"], result["findings"]
-    assert result["candidate"]["draft_output"]["profileContract"]["validator_mappings"][0]["capability_fingerprint"] == capability.fingerprint()
+    proposed_mapping = result["candidate"]["draft_output"]["profileContract"]["validator_mappings"][0]
+    assert proposed_mapping["capability_fingerprint"] == capability.fingerprint()
+    assert proposed_mapping["capability_ref"] == capability.ref.model_dump()
+    assert proposed_mapping["inputs"]["mention"]["field_path"] == mapping["inputs"]["mention"]["field_path"]
+    from src.schemas.generic_extraction_profile import normalize_profile_contract
+    assert result["candidate"]["draft_output"]["profileContract"]["fields"] == normalize_profile_contract(raw).model_dump(mode="json")["fields"]
     invalid = deepcopy(mapping)
     invalid["inputs"]["mention"]["field_path"] = "attributes.Paper label"
     rejected = propose(db, base, [{"operation": "edit_profile", "profile_edit": {"action": "set_mapping", "mapping": invalid}}], state)

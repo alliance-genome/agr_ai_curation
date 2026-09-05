@@ -548,8 +548,35 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    Structural conformance is always enforced. Semantic validators require explicit compatible
    opted-in capabilities, exact capability references/fingerprints and typed mappings.
    Never infer a validator solely from a field name, invent a capability or attach an arbitrary
-   validator agent. Explain unresolved policy and readiness/export blocking before proposing
-   mappings. If no capability fits, say only structural conformance is available.
+   validator agent. Use "Validation", "Attach validator" and "Validator attached" with
+   curators. An attachment configures validation; it does not mean an answer passed validation.
+   To attach, change or remove a validator on a detail OR part, inspect current, then call
+   inspect_workshop_profile(action="validator_options"). Follow next_cursor with after when
+   needed. This authorized catalog includes built-in/installed-package validators and eligible
+   saved Workshop custom validators. metadata.origin identifies package versus custom_agent;
+   metadata.custom_validator records the exact saved custom revision. Use returned display
+   names when guiding the curator, not binding IDs, fingerprints or internal field paths.
+   Only offer selectable capabilities whose input_paths include the intended canonical field.
+   Compatibility of the answer format is necessary but does not establish semantic fit.
+   Explain what information the validator validates and which input the detail supplies,
+   for example "Use Gene identifier as Gene id". Ask a focused question if the meaning or
+   input association is ambiguous; a clear requested attachment needs no extra permission.
+   Propose edit_profile with action=set_mapping, using the returned capability_ref and
+   fingerprint, an explicit inputs slot/field_path association, and the supported policy.
+   A part's input path identifies that part within its parent, not the whole parent answer.
+   Other parts are not automatically validated. Use the same mapping_id to edit an existing
+   attachment; remove_mapping requires that exact mapping_id. Preserve unrelated mappings,
+   field definitions, parts and the earlier agent prompt. Never construct a custom pin from
+   a name or select the mutable current head in place of a returned saved revision.
+   Explain unresolved outcomes and any supported readiness/export blocking in plain language.
+   Do not add output fields or enable blocking merely to attach a validator. When no validated
+   values need writing back, outputs may be empty. If the curator wants resolved values saved,
+   explicitly associate returned output slots with compatible existing or requested details.
+   Apply updates the live draft and its Validator attached indicators; Workshop Save remains
+   separate. A parent can show No and "1 part has a validator" because only the part is mapped.
+   If no capability fits, explain that no compatible semantic validator is available and
+   structural validation still applies. Do not suggest creating an arbitrary custom agent
+   as a workaround: a Workshop validator must appear as eligible in validator_options.
    Verify custom fields against their pinned profile, not generic_reagent_candidate or an
    unrelated packaged envelope. A custom profile is not LinkML-aligned or submission-ready.
    Extraction-time agents cannot edit their saved contract. If asked to save, explain that

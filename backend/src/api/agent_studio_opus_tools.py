@@ -164,7 +164,7 @@ INSPECT_WORKSHOP_PROFILE_TOOL = {
     "name": "inspect_workshop_profile",
     "description": (
         "Read the active unsaved Output Structure, list accessible saved profiles, or read an exact saved revision. "
-        "validator_options discovers compatible opted-in capabilities for the current canonical fields; it does not attach validators. "
+        "validator_options discovers authorized built-in/package and eligible saved Workshop custom validators for each detail or part. It returns compatible input_paths, display names, origin, exact capability_ref/fingerprint and custom revision pins; it does not attach validators. "
         "preview generates neutral placeholder attributes, never paper evidence. Follow next_cursor using after. "
         "current includes every current display_name, description, key, parent/part value_schema, required and nullable setting. "
         "Resolve user-facing names within their parent group to canonical field_path keys before proposing edits. "
@@ -190,7 +190,7 @@ PROPOSE_WORKSHOP_TOOL = {
         "Preserve unrelated fields; clear_output explicitly chooses no structured output. "
         "Curators review and Apply locally, then separately Save. edit_profile supplies "
         "typed item guidance, details, parts, canonical field paths, source labels and exact "
-        "validator mappings. Select profile_bound_generic first; set basics before fields. "
+        "validator mappings. Use inspect_workshop_profile(validator_options) first; set_mapping attaches or edits by mapping_id with the exact returned capability_ref/fingerprint and input slot/field_path. remove_mapping removes only its mapping_id. A part maps its own canonical path; sibling parts and parent mappings stay unchanged. Never replace a returned custom revision pin with a current head. Select profile_bound_generic first; set basics before fields. "
         "For add_field/reorder_fields, field_path identifies the parent (empty means root); "
         "other field actions identify the field. update_basics/basics_update changes only supplied "
         "name/description. update_field/field_update changes only supplied display_name, description, "

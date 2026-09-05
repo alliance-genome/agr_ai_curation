@@ -60,6 +60,13 @@ The details table, parts table and review show **Validator attached**. The paren
 separately reports how many parts have validators. “Yes” means an association is configured,
 not that an extracted answer passed validation. Structural validation always applies.
 
+You can also ask **AI Chat** to attach, change, or remove a validator. For example:
+“Attach my gene validator to the Gene identifier part of Gene details, and keep the
+other details unchanged.” The assistant uses the same available validator catalog and
+can explain the input association. Review its proposal and choose **Apply** to update
+the live draft and attachment indicators. **Save** remains a separate step. Asking for
+an attachment does not run validation on a paper or mean its answers are validated.
+
 Custom-package validators must declare a reusable input/output contract. Workshop custom
 validators are eligible when based on an opted-in packaged validator and retaining that
 validator's result schema. The attachment pins the custom agent's saved executable revision;
