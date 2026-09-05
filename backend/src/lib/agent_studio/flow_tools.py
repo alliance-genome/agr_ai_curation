@@ -3186,10 +3186,48 @@ def _get_current_flow_projection_plan_handler():
         section: str = "",
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
+        view: Literal["plan", "source_fields"] = "plan",
     ) -> Dict[str, Any]:
         resolved = _current_node(node_id)
         if resolved is None:
             return _flow_detail_error(f"Current flow has no node_id '{node_id}'")
+        if view == "source_fields":
+            state = resolved[1]
+            source_ids = {
+                source_id
+                for attachment in state[3].output_attachments
+                if attachment.output_node_id == str(node_id)
+                for source_id in attachment.source_node_ids
+            }
+            if not source_ids:
+                return _flow_detail_error("Select an output node with attached extraction sources.")
+            validation = _validate_exact_flow_for_current_user(
+                _flow_context_definition(state[0]), phase="proposal",
+            )
+            catalog = {
+                "sources": {
+                    source_id: validation.projection_fields_by_node[source_id]
+                    for source_id in sorted(source_ids)
+                    if source_id in validation.projection_fields_by_node
+                },
+                "findings": [finding.to_dict() for finding in validation.findings],
+                "usage": (
+                    "Use each field's ref verbatim in field_ref/field_refs; profile_path is "
+                    "a structure path, not a formatter reference. Omit source_keys and "
+                    "source_extraction_result_ids to use all attached sources. These selectors "
+                    "require runtime artifact identities, not a node output_key."
+                ),
+            }
+            return _exact_chunk_response(
+                tool="get_current_flow_projection_plan",
+                arguments={"node_id": str(node_id), "view": "source_fields"},
+                text=json.dumps(catalog, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+                limit=limit, cursor=cursor,
+                response_metadata={"success": True, "node_id": str(node_id),
+                                   "view": "source_fields", "encoding": "canonical_json"},
+            )
+        if view != "plan":
+            return _flow_detail_error("Unknown projection view; use plan or source_fields.")
         plan = _flow_node_data(resolved[0]).get("projection_plan")
         if not isinstance(plan, Mapping):
             return _flow_detail_error(f"Node '{node_id}' has no projection_plan")
@@ -3736,12 +3774,15 @@ Do not infer omitted details; use the returned bounded detail calls.""",
         name="get_current_flow_projection_plan",
         description=(
             "List projection_plan fields or retrieve one explicit field/JSON-Pointer "
-            "section as exact bounded canonical JSON. Follow next_call to reconstruct it."
+            "section as exact bounded canonical JSON. Use view=source_fields to discover "
+            "authorized exact saved-profile formatter refs before authoring a plan, even "
+            "when no plan exists. Follow next_call to reconstruct the complete result."
         ),
         input_schema={
             "type": "object",
             "properties": {
                 "node_id": {"type": "string"},
+                "view": {"type": "string", "enum": ["plan", "source_fields"]},
                 "field": {"type": "string"},
                 "section": {
                     "type": "string",

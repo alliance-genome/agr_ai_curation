@@ -84,6 +84,11 @@ def profile_projection_findings(
                 ))
             continue
         for ref in projection_plan_field_refs(plan):
+            if ref.startswith("attributes."):
+                finding(output.id, "invalid_projection_field_reference",
+                        f"'{ref}' is a structure path, not an executable formatter field reference. "
+                        "Read get_current_flow_projection_plan with view=source_fields and use each field's ref.")
+                continue
             if not ref.startswith("object.attribute.") or ref in declared:
                 continue
             if unprofiled:

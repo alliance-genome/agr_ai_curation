@@ -575,3 +575,21 @@ def test_projection_shape_findings_identify_fields_for_ai_repair(monkeypatch):
     repaired = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[])
     assert not repaired.findings
     assert repaired.definition.nodes[1].data.execution_receipt == pin
+
+
+@pytest.mark.parametrize("ref", ["attributes.count", "attributes.sources[].name", "attributes.typo"])
+@pytest.mark.parametrize("transform", [False, True])
+def test_structure_paths_are_not_executable_projection_references(monkeypatch, ref, transform):
+    pin, db = profile_receipt_and_db()
+    install_resolver(monkeypatch, [pin])
+    definition = projection_flow(pin, ref)
+    if transform:
+        definition.nodes[-1].data.projection_plan["columns"] = [{"key": "supplier", "transform": {
+            "type": "pair_join", "field_refs": [ref, "object.attribute.count"],
+        }}]
+    original = definition.model_dump(mode="json")
+    result = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[])
+    assert [finding.code for finding in result.findings] == ["invalid_projection_field_reference"]
+    assert "view=source_fields" in result.findings[0].message
+    assert result.entries_by_node["node_0"]["projection_fields"]
+    assert definition.model_dump(mode="json") == original

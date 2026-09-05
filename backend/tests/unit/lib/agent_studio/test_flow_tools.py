@@ -2144,3 +2144,50 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
     assert (
         "flow ends with an appropriate output agent" not in available_agents_description
     )
+
+
+def test_projection_source_catalog_reads_exact_authorized_draft_and_pages(monkeypatch):
+    from types import SimpleNamespace
+
+    flow = _inspection_flow()
+    flow["nodes"][2]["data"].pop("projection_plan")
+    flow_tools.set_current_flow_context(flow)
+    original = json.dumps(flow, sort_keys=True)
+    fields = [{"ref": "object.attribute.supplier.name", "profile_path": "attributes.supplier.name",
+               "label": 'Provider "name" ' * 30, "required": True, "nullable": False}]
+    calls = []
+
+    def validate(definition, *, phase):
+        calls.append((definition, phase))
+        return SimpleNamespace(projection_fields_by_node={
+            "extract": {"execution_receipt": {"agent_revision_id": "saved-revision"}, "fields": fields},
+            "unattached": {"fields": [{"ref": "private"}]},
+        }, findings=[])
+
+    monkeypatch.setattr(flow_tools, "_validate_exact_flow_for_current_user", validate)
+    handler = flow_tools._get_current_flow_projection_plan_handler()
+    arguments = {"node_id": "csv", "view": "source_fields", "limit": 300}
+    chunks = []
+    while True:
+        result = handler(**arguments)
+        assert result["success"]
+        chunks.append(result["content"])
+        if result["complete"]:
+            break
+        arguments = result["next_call"]["arguments"]
+        assert arguments["view"] == "source_fields"
+    catalog = json.loads("".join(chunks))
+    assert catalog["sources"] == {"extract": {"execution_receipt": {"agent_revision_id": "saved-revision"}, "fields": fields}}
+    assert "not a node output_key" in catalog["usage"]
+    assert len(calls) > 1
+    assert all(phase == "proposal" for _, phase in calls)
+    assert json.dumps(flow, sort_keys=True) == original
+
+
+def test_projection_source_catalog_does_not_bypass_unavailable_authorization(monkeypatch):
+    from types import SimpleNamespace
+    flow_tools.set_current_flow_context(_inspection_flow())
+    monkeypatch.setattr(flow_tools, "_validate_exact_flow_for_current_user", lambda *a, **k:
+                        SimpleNamespace(projection_fields_by_node={}, findings=[]))
+    result = flow_tools._get_current_flow_projection_plan_handler()(node_id="csv", view="source_fields")
+    assert json.loads(result["content"])["sources"] == {}
