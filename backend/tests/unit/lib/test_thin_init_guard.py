@@ -11,12 +11,17 @@ conflicts and missing-dependency issues in CI isolation.
 """
 
 import ast
+import os
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 _BACKEND_SRC = Path(__file__).resolve().parents[3] / "src"
 
 # Submodules known to pull in the OpenAI Agents SDK (agents.Agent / Runner / RunConfig)
-_AGENT_STUDIO_HEAVY = {"catalog_service", "flow_tools"}
+_AGENT_STUDIO_HEAVY = {"catalog_service", "flow_tools", "suggestion_service"}
 _CURATION_WS_HEAVY = {"curation_prep_service", "pipeline"}
 
 
@@ -127,11 +132,41 @@ class TestAgentStudioThinInit:
             "register_flow_tools", "set_workflow_user_context", "clear_workflow_user_context",
             "get_current_user_id", "get_current_user_email",
             "set_current_flow_context", "clear_current_flow_context", "FLOW_AGENT_IDS",
+            "SuggestionType", "PromptSuggestion", "SuggestionSubmission",
+            "submit_suggestion_sns", "SUBMIT_SUGGESTION_TOOL",
         }
         missing = expected_heavy - lazy_keys
         assert not missing, (
             f"_LAZY_IMPORTS is missing entries for: {missing}"
         )
+
+    @pytest.mark.parametrize("module", [
+        "agr_ai_curation_alliance.tools.agr_curation",
+        "agr_ai_curation_alliance.tools.generic_builder_tools",
+    ])
+    def test_extraction_tools_import_without_backend_sns(self, module):
+        """Use a fresh process so test collection cannot mask an eager AWS import."""
+        repo_root = _BACKEND_SRC.parents[1]
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join([
+            str(_BACKEND_SRC.parent),
+            str(_BACKEND_SRC),
+            str(repo_root / "packages" / "alliance" / "python" / "src"),
+        ])
+        completed = subprocess.run(
+            [sys.executable, "-c", (
+                "import importlib, sys\n"
+                "sys.modules['boto3'] = None\n"
+                "importlib.import_module(sys.argv[1])\n"
+                "assert 'src.lib.agent_studio.suggestion_service' not in sys.modules\n"
+            ), module],
+            cwd=_BACKEND_SRC.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 # -- curation_workspace ---------------------------------------------------

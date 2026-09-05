@@ -9,7 +9,7 @@ Provides services for exploring and analyzing agent prompts:
 """
 import importlib
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .models import (
     # Prompt catalog models
@@ -38,18 +38,20 @@ from .trace_context_service import (
     TraceNotFoundError,
     LangfuseUnavailableError,
 )
-from .suggestion_service import (
-    SuggestionType,
-    PromptSuggestion,
-    SuggestionSubmission,
-    submit_suggestion_sns,
-    SUBMIT_SUGGESTION_TOOL,
-)
+
+if TYPE_CHECKING:
+    from .suggestion_service import (
+        SuggestionType,
+        PromptSuggestion,
+        SuggestionSubmission,
+        submit_suggestion_sns,
+        SUBMIT_SUGGESTION_TOOL,
+    )
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Lazy accessors for heavy submodules (catalog_service, flow_tools)
+# Lazy accessors for heavy submodules (catalog, flow tools, SNS suggestions)
 # ---------------------------------------------------------------------------
 # These names were previously imported eagerly, pulling in the OpenAI Agents
 # SDK (agents.Agent) on every ``import agent_studio``.  They are now resolved
@@ -61,6 +63,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    # SNS is backend-only; isolated extraction tools import profile validation
+    # through this package without needing the AWS notification dependency.
+    "SuggestionType": (".suggestion_service", "SuggestionType"),
+    "PromptSuggestion": (".suggestion_service", "PromptSuggestion"),
+    "SuggestionSubmission": (".suggestion_service", "SuggestionSubmission"),
+    "submit_suggestion_sns": (".suggestion_service", "submit_suggestion_sns"),
+    "SUBMIT_SUGGESTION_TOOL": (".suggestion_service", "SUBMIT_SUGGESTION_TOOL"),
     # catalog_service
     "PromptCatalogService": (".catalog_service", "PromptCatalogService"),
     "get_prompt_catalog": (".catalog_service", "get_prompt_catalog"),
