@@ -1022,6 +1022,16 @@ def get_benchmark_api_enabled() -> bool:
     return _get_env_bool("BENCHMARK_API_ENABLED", False)
 
 
+def get_benchmark_environment_id() -> str:
+    """Non-secret operator-assigned execution target label, never a hostname."""
+    return os.getenv("BENCHMARK_ENVIRONMENT_ID", "").strip() or "unconfigured"
+
+
+def get_benchmark_catalog_max_response_bytes() -> int:
+    """Maximum encoded catalog, suite or normalized preview response size."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CATALOG_MAX_RESPONSE_BYTES", 1_048_576))
+
+
 def get_benchmark_execution_enabled() -> bool:
     """Whether this deployment may dispatch benchmark provider calls."""
     return _get_env_bool("BENCHMARK_EXECUTION_ENABLED", False)
@@ -1177,7 +1187,7 @@ def get_benchmark_max_input_bytes() -> int:
 
 
 def get_benchmark_admission_max_bytes() -> int:
-    """Maximum JSON request bytes for new benchmark work."""
+    """Maximum JSON request bytes for benchmark admission and plan preview."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_ADMISSION_MAX_BYTES", 1_048_576))
 
 

@@ -23,6 +23,7 @@ from src.api.benchmark_sources import (
     router as benchmark_sources_router,
 )
 from src.api.benchmark_jobs import router as benchmark_jobs_router
+from src.api.benchmark_catalog import router as benchmark_catalog_router
 from src.schemas.benchmark_job_examples import install_openapi_examples as install_benchmark_openapi_examples
 from src.api.admin import connections_router as admin_connections_router
 from src.api.admin import benchmarks_router as admin_benchmarks_router
@@ -921,6 +922,7 @@ def create_app() -> FastAPI:
     application.include_router(admin_benchmarks_router, tags=["Admin - Benchmarks"])
     application.include_router(benchmark_sources_router)
     application.include_router(benchmark_jobs_router)
+    application.include_router(benchmark_catalog_router)
     install_benchmark_openapi_examples(application)
 
     ensure_writable_directory(get_pdf_storage_path())

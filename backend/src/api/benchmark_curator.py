@@ -9,7 +9,7 @@ from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
 
 from src.api import auth as browser_auth
-from src.api.benchmark_auth import require_benchmark_run
+from src.api.benchmark_auth import require_benchmark_read, require_benchmark_run
 from src.lib.benchmarks.curator_authorization import authorize_benchmark_curator
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext, capture_curator_context
 from src.lib.benchmarks.observability import sanitized_benchmark_error
@@ -44,6 +44,27 @@ async def require_benchmark_curator(
         default=None, alias="X-Benchmark-Curator-Authorization",
         description="Ephemeral Bearer token for the execution target's configured AI Curation audience; not an ABC source token.",
     ),
+) -> BenchmarkCuratorContext:
+    """Run-authorized admission; human verification is shared with preview."""
+    return await verify_benchmark_curator(request, orchestration, curator_authorization)
+
+
+async def require_benchmark_read_curator(
+    request: Request,
+    orchestration: dict[str, Any] = Depends(require_benchmark_read),
+    curator_authorization: str | None = Header(
+        default=None, alias="X-Benchmark-Curator-Authorization",
+        description="Ephemeral target-audience human Bearer token, separate from orchestration and ABC source credentials.",
+    ),
+) -> BenchmarkCuratorContext:
+    """Read-only discovery uses precisely the same trusted human boundary."""
+    return await verify_benchmark_curator(request, orchestration, curator_authorization)
+
+
+async def verify_benchmark_curator(
+    request: Request,
+    orchestration: dict[str, Any],
+    curator_authorization: str | None,
 ) -> BenchmarkCuratorContext:
     """Return only a token-free receipt after provider and active-account checks.
 
