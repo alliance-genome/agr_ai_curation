@@ -48,6 +48,7 @@ from src.models.sql.curation_flow import CurationFlow
 from .adjudication import SupplementalAdjudicator, execute_direct_openai_adjudication
 from .loader import BenchmarkCatalog, BenchmarkCatalogError
 from .flow_results import load_flow_extractions
+from .flow_catalog import load_benchmark_flow_templates
 from .models import (
     BenchmarkCellExecutionResult,
     BenchmarkRoute,
@@ -247,13 +248,11 @@ async def execute_resolved_agent_cell(
     )
 
 
-def _flow_from_recipe(target_id: str) -> CurationFlow:
-    catalog = load_flow_recipe_catalog()
+def _flow_from_recipe(target_id: str, active_groups: list[str] | None = None) -> CurationFlow:
     matches = [
         recipe
-        for contribution in catalog.contributions
-        for recipe in contribution.manifest.recipes
-        if recipe.name == target_id
+        for recipe in load_benchmark_flow_templates(active_groups or [])
+        if recipe["name"] == target_id
     ]
     if len(matches) != 1:
         raise BenchmarkCatalogError(
@@ -261,14 +260,14 @@ def _flow_from_recipe(target_id: str) -> CurationFlow:
         )
     recipe = matches[0]
     definition = build_flow_definition_from_recipe(
-        steps=recipe.model_dump(exclude_none=True)["steps"],
-        task_instructions=recipe.description,
+        steps=recipe["steps"],
+        task_instructions=recipe["description"],
     )
     return CurationFlow(
         id=uuid5(NAMESPACE_URL, f"agr-benchmark-flow:{target_id}"),
         user_id=0,
-        name=recipe.name,
-        description=recipe.description,
+        name=recipe["name"],
+        description=recipe["description"],
         flow_definition=definition.model_dump(mode="json"),
         is_active=True,
     )
@@ -280,7 +279,7 @@ async def execute_flow_case(
     route: BenchmarkRoute,
     run_id: str,
 ) -> ExecutionResult:
-    flow = _flow_from_recipe(target_id)
+    flow = _flow_from_recipe(target_id, case_input.get("active_groups", []))
     output: Any = None
     terminal_seen = False
     async for event in execute_flow(
@@ -319,7 +318,7 @@ async def execute_resolved_flow_cell(
         raise ValueError("resolved flow execution requires a flow target")
     if "supervisor" not in cell.routes:
         raise ValueError("Frozen benchmark route plan has no slot 'supervisor'")
-    flow = _flow_from_recipe(cell.target.id)
+    flow = _flow_from_recipe(cell.target.id, case_input.get("active_groups", []))
     with benchmark_route_plan(cell.routes), capture_provider_usage(
         max_records=get_benchmark_max_invocations_per_cell(),
         max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),

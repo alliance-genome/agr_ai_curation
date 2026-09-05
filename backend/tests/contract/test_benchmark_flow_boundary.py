@@ -30,7 +30,7 @@ async def test_canary_invokes_execute_flow_and_consumes_terminal_result(monkeypa
             },
         }
 
-    monkeypatch.setattr(benchmark_runtime, "_flow_from_recipe", lambda _target_id: flow)
+    monkeypatch.setattr(benchmark_runtime, "_flow_from_recipe", lambda _target_id, _groups: flow)
     monkeypatch.setattr(benchmark_runtime, "execute_flow", fake_execute_flow)
 
     result = await benchmark_runtime.execute_flow_case(
@@ -118,10 +118,18 @@ async def test_resolved_cell_passes_independent_routes_and_returns_every_invocat
             )
         yield {"type": "FLOW_FINISHED", "data": {"status": "completed"}}
 
-    monkeypatch.setattr(benchmark_runtime, "_flow_from_recipe", lambda _id: flow)
+    monkeypatch.setattr(benchmark_runtime, "_flow_from_recipe", lambda _id, _groups: flow)
     monkeypatch.setattr(benchmark_runtime, "execute_flow", fake_execute_flow)
 
-    result = await benchmark_runtime.execute_resolved_flow_cell(cell, {}, "run-1")
+    document_id = str(uuid4())
+    def load_result(receipt, **scope):
+        assert receipt == {"status": "completed"}
+        assert scope == {"document_id": document_id, "user_id": "synthetic-curator", "run_id": "run-1"}
+        return {"records": []}
+    monkeypatch.setattr(benchmark_runtime, "load_flow_extractions", load_result)
+    result = await benchmark_runtime.execute_resolved_flow_cell(
+        cell, {"document_id": document_id, "user_id": "synthetic-curator"}, "run-1",
+    )
 
     assert captured["benchmark_routes"] == cell.routes
     assert [record.route_slot for record in result.invocations] == list(routes)

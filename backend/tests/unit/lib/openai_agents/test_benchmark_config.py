@@ -227,6 +227,35 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_artifact_secret_patterns() == ("secret-a", "secret-b")
 
 
+def test_lifecycle_api_and_event_limits(monkeypatch):
+    monkeypatch.delenv("BENCHMARK_API_ENABLED", raising=False)
+    assert config.get_benchmark_api_enabled() is False
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
+    assert config.get_benchmark_api_enabled() is True
+    limits = (
+        ("BENCHMARK_ADMISSION_MAX_BYTES", config.get_benchmark_admission_max_bytes, 1048576, 1),
+        ("BENCHMARK_CURATOR_AUTH_MAX_BYTES", config.get_benchmark_curator_auth_max_bytes, 8192, 1),
+        ("BENCHMARK_EVENT_RETENTION_COUNT", config.get_benchmark_event_retention_count, 10000, 1),
+        ("BENCHMARK_EVENT_HEARTBEAT_SECONDS", config.get_benchmark_event_heartbeat_seconds, 15, 0.1),
+        ("BENCHMARK_EVENT_REPLAY_BATCH_SIZE", config.get_benchmark_event_replay_batch_size, 250, 1),
+        (
+            "BENCHMARK_MAX_EVENT_CONNECTIONS_PER_PRINCIPAL",
+            config.get_benchmark_max_event_connections_per_principal,
+            5,
+            1,
+        ),
+    )
+    for variable, getter, default, minimum in limits:
+        monkeypatch.delenv(variable, raising=False)
+        assert getter() == default
+        monkeypatch.setenv(variable, "0")
+        assert getter() == minimum
+        monkeypatch.setenv(variable, "invalid")
+        assert getter() == default
+        monkeypatch.setenv(variable, "22")
+        assert getter() == 22
+
+
 def test_benchmark_oidc_defaults_and_overrides(monkeypatch):
     keys = (
         "BENCHMARK_OIDC_ISSUER_URL",

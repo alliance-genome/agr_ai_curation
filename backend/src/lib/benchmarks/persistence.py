@@ -12,12 +12,14 @@ from typing import Any, Generic, TypeVar
 from uuid import UUID, uuid4
 
 from sqlalchemy import case, delete, func, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from src.lib.benchmarks.models import BenchmarkSuite, ResolvedBenchmarkPlan
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
+    get_benchmark_event_retention_count,
     get_benchmark_max_envelope_bytes,
     get_benchmark_max_page_size,
 )
@@ -29,6 +31,7 @@ from src.models.sql.benchmark import (
     BenchmarkInvocation,
     BenchmarkInvocationStatus,
     BenchmarkJob,
+    BenchmarkJobIdempotency,
     BenchmarkJobInputSnapshot,
     BenchmarkJobStatus,
 )
@@ -67,7 +70,12 @@ class BenchmarkJobSummary:
     owner_subject: str
     status: BenchmarkJobStatus
     suite_id: str
+    suite_digest: str
+    catalog_digest: str
     plan_digest: str
+    config_digest: str
+    code_digest: str
+    inputs_digest: str
     total_cells: int
     queued_cells: int
     running_cells: int
@@ -157,13 +165,22 @@ class BenchmarkCancellationRequestedError(RuntimeError):
     """A worker reached provider dispatch after its job was cancelled."""
 
 
+class BenchmarkIdempotencyConflictError(ValueError):
+    """A caller reused one operation key for different immutable work."""
+
+
 def _job_summary(job: BenchmarkJob) -> BenchmarkJobSummary:
     return BenchmarkJobSummary(
         id=job.id,
         owner_subject=job.owner_subject,
         status=job.status,
         suite_id=job.suite_id,
+        suite_digest=job.suite_digest,
+        catalog_digest=job.catalog_digest,
         plan_digest=job.plan_digest,
+        config_digest=job.config_digest,
+        code_digest=job.code_digest,
+        inputs_digest=job.inputs_digest,
         total_cells=job.total_cells,
         queued_cells=job.queued_cells,
         running_cells=job.running_cells,
@@ -345,6 +362,88 @@ class BenchmarkRepository:
             )
         self.session.flush()
         return job
+
+    def reserve_idempotency(
+        self,
+        *,
+        owner_subject: str,
+        operation: str,
+        idempotency_key: str,
+        request_digest: str,
+        curator_context_digest: str,
+    ) -> tuple[BenchmarkJobIdempotency, bool]:
+        """Atomically reserve a key or lock and return its completed outcome."""
+
+        if operation not in {"submit", "rerun"}:
+            raise ValueError("unsupported benchmark idempotency operation")
+        inserted_id = self.session.scalar(
+            insert(BenchmarkJobIdempotency)
+            .values(
+                id=uuid4(),
+                owner_subject=owner_subject,
+                operation=operation,
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+                curator_context_digest=curator_context_digest,
+                outcome="pending",
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_benchmark_job_idempotency_owner_operation_key"
+            )
+            .returning(BenchmarkJobIdempotency.id)
+        )
+        if inserted_id is not None:
+            record = self.session.get(BenchmarkJobIdempotency, inserted_id)
+            if record is None:
+                raise RuntimeError("benchmark idempotency reservation disappeared")
+            return record, True
+
+        record = self.session.scalar(
+            select(BenchmarkJobIdempotency)
+            .where(
+                BenchmarkJobIdempotency.owner_subject == owner_subject,
+                BenchmarkJobIdempotency.operation == operation,
+                BenchmarkJobIdempotency.idempotency_key == idempotency_key,
+            )
+            .with_for_update()
+        )
+        if record is None:
+            raise RuntimeError("benchmark idempotency reservation is unavailable")
+        if (
+            record.request_digest != request_digest
+            or record.curator_context_digest != curator_context_digest
+        ):
+            raise BenchmarkIdempotencyConflictError(
+                "Idempotency key is already bound to a different request or curator context"
+            )
+        if record.outcome == "pending":
+            raise RuntimeError("benchmark idempotency reservation has no durable outcome")
+        return record, False
+
+    def accept_idempotency(
+        self, *, reservation: BenchmarkJobIdempotency, job_id: UUID
+    ) -> None:
+        if reservation.outcome != "pending":
+            raise ValueError("benchmark idempotency reservation is already complete")
+        reservation.outcome = "accepted"
+        reservation.job_id = job_id
+        self.session.flush()
+
+    def fail_idempotency(
+        self,
+        *,
+        reservation: BenchmarkJobIdempotency,
+        error_code: str,
+        error_message: str,
+        error_status: int,
+    ) -> None:
+        if reservation.outcome != "pending":
+            raise ValueError("benchmark idempotency reservation is already complete")
+        reservation.outcome = "failed"
+        reservation.error_code = error_code
+        reservation.error_message = error_message
+        reservation.error_status = error_status
+        self.session.flush()
 
     def list_jobs(
         self,
@@ -982,7 +1081,32 @@ class BenchmarkRepository:
         )
         self.session.add(event)
         self.session.flush()
+        self._prune_ordinary_events(job_id)
         return event
+
+    def _prune_ordinary_events(self, job_id: UUID) -> None:
+        """Bound ordinary replay history without removing preparation receipts."""
+
+        protected = (
+            "document_preparation.started",
+            "document_preparation.completed",
+        )
+        retained_ids = (
+            select(BenchmarkEvent.id)
+            .where(
+                BenchmarkEvent.job_id == job_id,
+                BenchmarkEvent.event_type.not_in(protected),
+            )
+            .order_by(BenchmarkEvent.sequence.desc(), BenchmarkEvent.id.desc())
+            .limit(get_benchmark_event_retention_count())
+        )
+        self.session.execute(
+            delete(BenchmarkEvent).where(
+                BenchmarkEvent.job_id == job_id,
+                BenchmarkEvent.event_type.not_in(protected),
+                BenchmarkEvent.id.not_in(retained_ids),
+            )
+        )
 
     def request_cancellation(
         self, *, job_id: UUID, owner_subject: str, requested_at: datetime
@@ -997,10 +1121,29 @@ class BenchmarkRepository:
         )
         if job is None:
             raise LookupError("benchmark job not found for owner")
-        if job.status != BenchmarkJobStatus.RUNNING:
-            raise ValueError("only a running benchmark job may request cancellation")
-        job.status = BenchmarkJobStatus.CANCEL_REQUESTED
-        job.cancel_requested_at = requested_at
+        if job.status in _TERMINAL_JOB_STATUSES or job.status == BenchmarkJobStatus.CANCEL_REQUESTED:
+            return job
+        if job.status == BenchmarkJobStatus.QUEUED:
+            self.session.execute(
+                update(BenchmarkCell)
+                .where(
+                    BenchmarkCell.job_id == job_id,
+                    BenchmarkCell.status == BenchmarkCellStatus.QUEUED,
+                )
+                .values(
+                    status=BenchmarkCellStatus.CANCELLED,
+                    completed_at=requested_at,
+                )
+            )
+            job.status = BenchmarkJobStatus.CANCELLED
+            job.cancel_requested_at = requested_at
+            job.completed_at = requested_at
+            self._refresh_job_counters(job_id)
+        elif job.status == BenchmarkJobStatus.RUNNING:
+            job.status = BenchmarkJobStatus.CANCEL_REQUESTED
+            job.cancel_requested_at = requested_at
+        else:
+            raise ValueError("benchmark job cannot be cancelled from its current state")
         self.session.flush()
         return job
 
@@ -1136,6 +1279,15 @@ class BenchmarkRepository:
             return False
         if job.status not in _TERMINAL_JOB_STATUSES:
             raise ValueError("only terminal benchmark jobs may be deleted")
+        has_reruns = self.session.scalar(
+            select(
+                select(BenchmarkJob.id)
+                .where(BenchmarkJob.rerun_of_job_id == job.id)
+                .exists()
+            )
+        )
+        if has_reruns:
+            raise ValueError("benchmark jobs with rerun lineage may not be deleted")
         has_preparation = self.session.scalar(
             select(select(BenchmarkEvent.id).where(
                 BenchmarkEvent.job_id == job.id,
