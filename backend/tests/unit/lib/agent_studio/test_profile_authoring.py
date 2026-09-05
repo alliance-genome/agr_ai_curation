@@ -29,10 +29,10 @@ def test_nested_pairing_required_nullable_and_aliases_preserve_source_pin():
     output["profilePin"] = {"profile_id": "unchanged"}
     before = deepcopy(output)
     output = edit(output, action="add_field", field={"key": "sources", "required": True, "nullable": False,
-        "value_schema": {"kind": "array", "items": {"kind": "object", "fields": []}}})
+        "value_schema": {"kind": "object", "fields": []}})
     output = edit(output, action="add_field", field_path=["sources"], field={"key": "name", "nullable": True, "value_schema": {"kind": "string"}})
     output = edit(output, action="set_source_labels", field_path=["sources", "name"], source_labels=["Source name"])
-    child = output["profileContract"]["fields"][0]["value_schema"]["items"]["fields"][0]
+    child = output["profileContract"]["fields"][0]["value_schema"]["fields"][0]
     assert child["source_labels"] == ["Source name"] and child["nullable"]
     assert output["profilePin"] == before["profilePin"]
     assert before["profileContract"]["fields"] == []
@@ -75,7 +75,7 @@ def test_shared_workshop_compiler_owns_combined_profile_and_general_changes():
     base = AgentWorkshopContext(draft_name="Original", draft_output=initial())
     candidate = apply_workshop_operations(base, [
         {"operation": "set_name", "text": "Renamed"},
-        {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {"key": "labels", "value_schema": {"kind": "array", "items": {"kind": "string"}}}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {"key": "labels", "value_schema": {"kind": "string"}}}},
     ])
     assert candidate.draft_name == "Renamed"
     assert candidate.draft_output is not None and base.draft_output is not None
@@ -89,20 +89,25 @@ def test_public_tool_schema_resolves_nested_profile_definitions_from_its_root():
     schema = PROPOSE_WORKSHOP_TOOL["input_schema"]
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(schema)
-    payload = {"base_draft_fingerprint": "sha256:fixture", "operations": [{
-        "operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {
-            "key": "sources", "value_schema": {"kind": "array", "items": {"kind": "object", "fields": [
+    payload = {"base_draft_fingerprint": "sha256:fixture", "operations": [
+        {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {
+            "key": "stock", "value_schema": {"kind": "object", "fields": [
                 {"key": "name", "value_schema": {"kind": "string"}},
-            ]}},
-        }},
-    }]}
+            ]},
+        }}},
+        {"operation": "edit_profile", "profile_edit": {"action": "update_field", "field_path": ["stock", "name"],
+         "field_update": {"description": "Keep the exact name.", "required": True, "nullable": False,
+                          "value_schema": {"kind": "enum", "values": ["a", "b"]}}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "update_basics", "basics_update": {"description": "Only stocks."}}},
+    ]}
     assert list(validator.iter_errors(payload)) == []
-    payload["operations"][0]["profile_edit"]["field"]["value_schema"]["items"]["fields"][0]["value_schema"]["kind"] = "arbitrary"
+    payload["operations"][1]["profile_edit"]["field_update"]["value_schema"]["kind"] = "arbitrary"
     assert list(validator.iter_errors(payload))
 
 
 def test_profile_inspection_is_read_only_and_preview_is_explicitly_placeholder():
-    output = edit(initial(), action="add_field", field={"key": "labels", "value_schema": {"kind": "array", "items": {"kind": "string"}}})
+    output = initial()
+    output["profileContract"]["fields"] = [{"key": "labels", "value_schema": {"kind": "array", "items": {"kind": "string"}}}]
     workshop = AgentWorkshopContext(draft_output=output)
     db = Mock()
     before = workshop.model_dump()
@@ -160,7 +165,8 @@ def test_workshop_policy_explains_record_boundaries_and_forbids_inferred_validat
         load_template=lambda: "Base guidance", list_model_definitions=lambda: [],
         get_prompt_catalog=lambda: None, prepare_trace_context=lambda _: None,
     )
-    for required in ["one-record boundary", "required (must exist)", "nullable", "source names and identifiers paired",
+    for required in ["one-record boundary", "required (must exist)", "nullable", "catalog number paired", "Always include", "update_field", "update_basics",
+                     "IN ADDITION TO", "Do not create arrays or repeating groups", "never put groups inside parts",
                      "Synonyms / source labels (not output fields)", "Never infer a validator solely from a field name",
                      "never invoke persistence or open its confirmation", "A null schema never implies open extraction",
                      "not LinkML-aligned or submission-ready", "Extraction-time agents cannot edit"]:
@@ -195,3 +201,78 @@ def test_profile_inspection_uses_existing_bounded_provider_result_and_recall(mon
     payload = json.loads(content)
     assert payload["status"] == "compacted_tool_result"
     assert payload["recall"]["turn"]["tool"] == "get_chat_turn"
+
+
+def test_targeted_settings_preserve_keys_siblings_prompts_and_source_pin():
+    base = AgentWorkshopContext(prompt_draft="Earlier extraction prompt", draft_output=initial())
+    base.draft_output["profilePin"] = {"profile_id": "keep-this-pin"}
+    base.draft_output = edit(base.draft_output, action="add_field", field={
+        "key": "stock", "display_name": "Stock", "value_schema": {"kind": "object", "fields": [
+            {"key": "name", "display_name": "Name", "description": "Keep exact spelling.",
+             "source_labels": ["Supplied name"], "value_schema": {"kind": "string"}},
+            {"key": "number", "display_name": "Stock number", "value_schema": {"kind": "string"}},
+        ]},
+    })
+    before = base.model_dump()
+    candidate = apply_workshop_operations(base, [
+        {"operation": "edit_profile", "profile_edit": {"action": "update_basics", "basics_update": {
+            "description": "Only living stocks; one record per distinct stock."}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "update_field", "field_path": ["stock", "number"],
+            "field_update": {"required": True, "nullable": True}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "update_field", "field_path": ["stock", "name"],
+            "field_update": {"display_name": "Supplier name"}}},
+    ])
+    result = candidate.draft_output
+    fields = result["profileContract"]["fields"][0]["value_schema"]["fields"]
+    assert fields[1]["required"] and fields[1]["nullable"]
+    assert not fields[0]["required"] and not fields[0]["nullable"]
+    assert fields[0]["key"] == "name" and fields[0]["source_labels"] == ["Supplied name"]
+    assert fields[0]["description"] == "Keep exact spelling."
+    assert result["profileContract"]["semantic_class"] == "item"
+    assert result["profilePin"] == base.draft_output["profilePin"]
+    assert candidate.prompt_draft == base.prompt_draft
+    assert base.model_dump() == before
+    cleared = edit(result, action="update_field", field_path=["stock", "number"],
+                   field_update={"required": False, "nullable": False, "description": ""})
+    number = cleared["profileContract"]["fields"][0]["value_schema"]["fields"][1]
+    assert not number["required"] and not number["nullable"] and number["description"] == ""
+
+
+@pytest.mark.parametrize("field_update", [{}, {"required": None}, {"key": "rename"}])
+def test_targeted_updates_reject_empty_null_or_identity_edits(field_update):
+    output = edit(initial(), action="add_field", field={"key": "name", "value_schema": {"kind": "string"}})
+    before = deepcopy(output)
+    with pytest.raises(ValueError):
+        edit(output, action="update_field", field_path=["name"], field_update=field_update)
+    assert output == before
+
+
+@pytest.mark.parametrize("schema", [
+    {"kind": "array", "items": {"kind": "string"}},
+    {"kind": "object", "fields": [{"key": "nested", "value_schema": {"kind": "object", "fields": []}}]},
+])
+def test_new_answer_shapes_reject_lists_and_parts_with_parts(schema):
+    output = initial()
+    before = deepcopy(output)
+    with pytest.raises(ValueError):
+        edit(output, action="add_field", field={"key": "stock", "value_schema": schema})
+    assert output == before
+
+
+def test_cannot_add_or_convert_a_part_into_another_group():
+    output = edit(initial(), action="add_field", field={"key": "stock", "value_schema": {"kind": "object", "fields": [
+        {"key": "number", "value_schema": {"kind": "string"}},
+    ]}})
+    with pytest.raises(ValueError, match="parts cannot contain"):
+        edit(output, action="add_field", field_path=["stock"], field={"key": "nested", "value_schema": {"kind": "object", "fields": []}})
+    with pytest.raises(ValueError, match="parts cannot contain"):
+        edit(output, action="update_field", field_path=["stock", "number"], field_update={"value_schema": {"kind": "object", "fields": []}})
+
+
+def test_existing_lists_survive_metadata_edits_and_require_explicit_conversion():
+    output = initial()
+    output["profileContract"]["fields"] = [{"key": "names", "value_schema": {"kind": "array", "items": {"kind": "string"}}}]
+    renamed = edit(output, action="update_field", field_path=["names"], field_update={"display_name": "Name"})
+    assert renamed["profileContract"]["fields"][0]["value_schema"] == output["profileContract"]["fields"][0]["value_schema"]
+    converted = edit(renamed, action="update_field", field_path=["names"], field_update={"value_schema": {"kind": "string"}})
+    assert converted["profileContract"]["fields"][0]["value_schema"] == {"kind": "string"}

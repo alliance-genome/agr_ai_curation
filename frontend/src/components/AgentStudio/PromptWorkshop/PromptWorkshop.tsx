@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
-import { Alert, Box, Button } from '@mui/material'
+import { Alert, Box, Button, Typography } from '@mui/material'
 import type { WorkshopAuthoringProposal } from '@/types/promptExplorer'
 import type { WorkshopContinuationOrigin, WorkshopSavedHandoff } from '@/types/promptExplorer'
 import type { FlowProposalApplyResult } from '../FlowBuilder/types'
@@ -27,7 +27,7 @@ import { NARROW_QUERY } from './workshopStyles'
 import WorkshopHeader from './WorkshopHeader'
 import WorkshopNav from './WorkshopNav'
 import WorkshopOutputSetup from './WorkshopOutputSetup'
-import OutputStructureEditor from './OutputStructureEditor'
+import OutputStructureWorkflow from './OutputStructureWorkflow'
 import SelectProfileDialog from './dialogs/SelectProfileDialog'
 import ProfileRevisionReview from './ProfileRevisionReview'
 import SavedExecutionSummary from './SavedExecutionSummary'
@@ -480,21 +480,22 @@ function PromptWorkshop({
             </>
           ) : visibleSection === 'output_structure' && draft.outputDraft.profileContract ? (
             <>
-            {draft.outputDraft.profilePin && <Alert severity="info">
-              Based on profile revision {draft.outputDraft.profilePin.revision}.{' '}
+            {draft.outputDraft.profilePin && <Typography variant="body2" color="text.secondary">
+              Saved version {draft.outputDraft.profilePin.revision}.{' '}
               {selectedCustomAgent && draft.profileCanEdit
-                ? 'Saving structure changes creates a new revision of this profile and this agent. Other agents and flows keep their saved pins.'
-                : 'Saving structure changes creates your own profile copy. The source profile and its consumers remain unchanged.'}
-            </Alert>}
-            <OutputStructureEditor value={draft.outputDraft.profileContract}
+                ? 'Your changes will be saved as a new version. Other agents and flows keep their current settings.'
+                : 'Saving creates your own copy of this structure.'}
+            </Typography>}
+            <OutputStructureWorkflow value={draft.outputDraft.profileContract}
+              onAskAI={onVerifyRequest ? () => onVerifyRequest(`Help me design the information collected by ${targetName} (${targetId}). Focus on the current output structure draft. Inspect my current draft, including its item guidance, detail names and parts. Help me add or edit details and parts using the current simple design. Ask a question only when my intent is unclear; otherwise propose concrete changes for review. Preserve unrelated settings and my earlier prompt.`) : undefined}
               disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
               onChange={(profileContract) => draft.setOutputDraft({ ...draft.outputDraft, profileContract })}
               onValidate={() => { void draft.validateOutputProfile() }}
               issues={draft.profileIssues} validating={draft.profileValidating} />
-            {draft.outputDraft.profilePin && <ProfileRevisionReview key={draft.outputDraft.profilePin.profile_id}
+            {draft.outputDraft.profilePin && <Box component="details" className="collection-disclosure"><summary>Version history &amp; other uses</summary><ProfileRevisionReview key={draft.outputDraft.profilePin.profile_id}
               disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
               value={draft.outputDraft} onLoadRevision={draft.selectOutputProfile}
-              onMakeCopy={() => draft.setOutputDraft({ ...draft.outputDraft, profilePin: null })} />}
+              onMakeCopy={() => draft.setOutputDraft({ ...draft.outputDraft, profilePin: null })} /></Box>}
             </>
           ) : section === 'prompt' ? (
             <PromptSection

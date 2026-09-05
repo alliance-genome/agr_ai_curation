@@ -35,9 +35,10 @@ def configure_profile_tools(tools: list[Any], profile: ResolvedGenericProfile) -
 
 
 def profile_runtime_instruction(profile: ResolvedGenericProfile) -> str:
-    return (
-        "This run is bound to the saved output structure " + profile.contract.name + ". "
-        "Its semantic class is " + profile.contract.semantic_class + ". "
+    contract = profile.contract
+    instructions = (
+        "This run is bound to the saved output structure " + contract.name + ". "
+        "Its semantic class is " + contract.semantic_class + ". "
         "Use only the canonical fields in stage_generic_object's closed attributes schema. "
         "Source labels describe paper terminology, not output keys. The runtime fixes "
         "generic:generic_object; do not choose another class, edit the profile, or put "
@@ -46,6 +47,17 @@ def profile_runtime_instruction(profile: ResolvedGenericProfile) -> str:
         "or discard the candidate. Finalize the retained candidate IDs with "
         "finalize_generic_extraction before responding, including an empty list when none qualify."
     )
+
+    if contract.description:
+        instructions += (
+            "\n\nAdditional curator guidance for this item type "
+            "(supplements the saved agent prompt and individual field instructions):\n"
+            + contract.description
+            + "\n\nApply this guidance when deciding what qualifies as an item and what "
+            "belongs in a separate record. Keep the saved field contract and evidence "
+            "requirements in force."
+        )
+    return instructions
 
 
 def profile_bound_tool(raw: Callable[..., Any], existing: Any, profile: ResolvedGenericProfile) -> Any:

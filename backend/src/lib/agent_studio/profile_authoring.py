@@ -10,7 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.schemas.generic_extraction_profile import ProfileField
+from src.schemas.generic_extraction_profile import ProfileField, ValueSchema
 from src.schemas.profile_validator_mapping import ProfileValidatorMapping
 
 
@@ -85,16 +85,62 @@ class ProfileBasics(BaseModel):
     semantic_class: str
 
 
+class ProfileBasicsUpdate(BaseModel):
+    """Curator-facing metadata only; the saved record class remains stable."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str | None = None
+    description: str | None = None
+
+
+class ProfileFieldUpdate(BaseModel):
+    """Only supplied settings change; identity, aliases and other settings stay intact."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    display_name: str | None = None
+    description: str | None = None
+    required: bool | None = None
+    nullable: bool | None = None
+    value_schema: ValueSchema | None = None
+
+
+def _settings_update(model):
+    updates = model.model_dump(mode="json", exclude_unset=True)
+    if not updates or any(value is None for value in updates.values()):
+        raise ValueError("Supply at least one setting; use empty text or false to clear a setting, not null")
+    return updates
+
+
+def _check_curator_answer(schema, *, is_part):
+    if schema["kind"] == "array":
+        raise ValueError("Use one answer per detail; lists and repeating answers are not supported in the simplified editor")
+    if schema["kind"] == "object":
+        if is_part:
+            raise ValueError("A part must use text, a number, yes/no or choices; parts cannot contain more parts")
+        for field in schema["fields"]:
+            _check_curator_answer(field["value_schema"], is_part=True)
+
+
+def _check_curator_parent(contract, path):
+    if not path:
+        return
+    if len(path) != 1:
+        raise ValueError("Parts cannot contain more parts")
+    parent = next((field for field in contract["fields"] if field["key"] == path[0]), None)
+    if parent is None or parent.get("value_schema", {}).get("kind") != "object":
+        raise ValueError("Add parts to a single answer with several parts, not a repeating answer")
+
+
 class ProfileEdit(BaseModel):
     """Paths are canonical field keys, never aliases or arbitrary JSON pointers."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     action: Literal[
-        "set_basics", "add_field", "replace_field", "remove_field", "reorder_fields",
+        "set_basics", "update_basics", "add_field", "replace_field", "update_field", "remove_field", "reorder_fields",
         "set_source_labels", "set_mapping", "remove_mapping",
     ]
     field_path: list[str] = Field(default_factory=list)
     basics: ProfileBasics | None = None
+    basics_update: ProfileBasicsUpdate | None = None
+    field_update: ProfileFieldUpdate | None = None
     field: ProfileField | None = None
     field_order: list[str] | None = None
     source_labels: list[str] | None = None
@@ -143,6 +189,8 @@ def apply_profile_edit(output, edit: ProfileEdit):
         result["profileContract"] = contract
     if edit.action == "set_basics":
         contract.update(_required(edit.basics, "basics").model_dump(mode="json"))
+    elif edit.action == "update_basics":
+        contract.update(_settings_update(_required(edit.basics_update, "basics_update")))
     elif edit.action in {"set_mapping", "remove_mapping"}:
         mappings = contract.setdefault("validator_mappings", [])
         if not isinstance(mappings, list) or any(not isinstance(item, dict) or not isinstance(item.get("mapping_id"), str) for item in mappings):
@@ -162,7 +210,10 @@ def apply_profile_edit(output, edit: ProfileEdit):
     elif edit.action in {"add_field", "reorder_fields"}:
         fields = _children(contract, edit.field_path)
         if edit.action == "add_field":
-            fields.append(_required(edit.field, "field").model_dump(mode="json"))
+            _check_curator_parent(contract, edit.field_path)
+            field = _required(edit.field, "field").model_dump(mode="json")
+            _check_curator_answer(field["value_schema"], is_part=bool(edit.field_path))
+            fields.append(field)
         else:
             order = _required(edit.field_order, "field_order")
             by_key = {field["key"]: field for field in fields}
@@ -179,7 +230,16 @@ def apply_profile_edit(output, edit: ProfileEdit):
         if edit.action == "remove_field":
             fields.pop(index)
         elif edit.action == "replace_field":
-            fields[index] = _required(edit.field, "field").model_dump(mode="json")
+            _check_curator_parent(contract, edit.field_path[:-1])
+            field = _required(edit.field, "field").model_dump(mode="json")
+            _check_curator_answer(field["value_schema"], is_part=len(edit.field_path) > 1)
+            fields[index] = field
+        elif edit.action == "update_field":
+            updates = _settings_update(_required(edit.field_update, "field_update"))
+            if "value_schema" in updates:
+                _check_curator_parent(contract, edit.field_path[:-1])
+                _check_curator_answer(updates["value_schema"], is_part=len(edit.field_path) > 1)
+            fields[index].update(updates)
         else:
             fields[index]["source_labels"] = list(_required(edit.source_labels, "source_labels"))
     # Cross-field collisions and stale mappings remain visible to the canonical

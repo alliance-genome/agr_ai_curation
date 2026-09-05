@@ -1,165 +1,193 @@
 import { useState } from 'react'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { GenericProfileContract } from '@/services/genericProfileService'
 import OutputStructureEditor, { type OutputStructureEditorProps } from './OutputStructureEditor'
 
 const initial: GenericProfileContract = {
   name: 'Example structure', semantic_class: 'record', fields: [
-    { key: 'title', display_name: 'Title', value_schema: { kind: 'string' } },
-    { key: 'sources', display_name: 'Sources', value_schema: { kind: 'array', items: {
+    { key: 'title', display_name: 'Title', description: 'Keep the wording from the paper.', source_labels: ['Paper heading'], value_schema: { kind: 'string' } },
+    { key: 'sources', display_name: 'Sources', nullable: true, value_schema: {
       kind: 'object', fields: [{ key: 'name', display_name: 'Source name', value_schema: { kind: 'string' } }],
-    } } },
+    } },
   ],
 }
-
 function Harness(props: Partial<OutputStructureEditorProps>) {
   const [value, setValue] = useState(props.value ?? structuredClone(initial))
-  return <><OutputStructureEditor {...props} value={value} onChange={(next) => { setValue(next); props.onChange?.(next) }}
-    issues={props.issues ?? []} onValidate={props.onValidate ?? (() => undefined)} />
-    <output aria-label="Current test draft">{JSON.stringify(value)}</output></>
+  return <><OutputStructureEditor {...props} value={value} onChange={(next) => { setValue(next); props.onChange?.(next) }} issues={props.issues ?? []} onValidate={props.onValidate ?? (() => undefined)} />
+    <output aria-label="Current draft">{JSON.stringify(value)}</output></>
 }
+const draft = (): GenericProfileContract => JSON.parse(screen.getByLabelText('Current draft').textContent!)
+function edit(name = 'Title') { fireEvent.click(screen.getByRole('button', { name: `Edit ${name}` })) }
 
-function draft(): GenericProfileContract {
-  return JSON.parse(screen.getByLabelText('Current test draft').textContent!)
-}
-
-function choose(label: string, option: string) {
-  fireEvent.mouseDown(screen.getByRole('combobox', { name: label }))
-  fireEvent.click(screen.getByRole('option', { name: option }))
-}
-
-describe('Output Structure editor', () => {
-  it('reviews the canonical draft and returns to a nested field without JSON or lost edits', () => {
+describe('Curator collection overview', () => {
+  it('starts a custom item type without reagent-specific fields or a technical class question', () => {
+    render(<Harness value={{ name: '', semantic_class: '', fields: [] }} />)
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Antibodies' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose details to collect' }))
+    expect(draft()).toMatchObject({ name: 'Antibodies', semantic_class: 'antibodies', fields: [] })
+    expect(screen.getByText('What do you want to know about each item?')).toBeVisible()
+    expect(screen.queryByLabelText('Record class')).not.toBeInTheDocument()
+  })
+  it('preserves existing internal class when naming a draft', () => {
+    render(<Harness value={{ name: '', semantic_class: 'saved_class', fields: initial.fields }} />)
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Reagents' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose details to collect' }))
+    expect(draft()).toMatchObject({ name: 'Reagents', semantic_class: 'saved_class', fields: initial.fields })
+  })
+  it('starts read-only with descriptions available through accessible help', () => {
     render(<Harness />)
-    const review = screen.getByRole('region', { name: 'Review before saving' })
-    expect(within(review).getAllByText(/May be absent.*Explicit unknown \(null\) not allowed/)).toHaveLength(3)
-    fireEvent.click(within(review).getByRole('button', { name: 'Change Source name' }))
-    expect(screen.getByRole('textbox', { name: 'Field name' })).toHaveFocus()
-    fireEvent.change(screen.getByRole('textbox', { name: 'Field name' }), { target: { value: 'Source detail' } })
-    expect(within(review).getByRole('button', { name: 'Change Source detail' })).toBeInTheDocument()
-    fireEvent.click(within(review).getByRole('button', { name: 'Change structure basics' }))
-    expect(screen.getByRole('textbox', { name: /Structure name/ })).toHaveFocus()
-    expect(draft().fields[1].value_schema).toMatchObject({ items: { fields: [{ display_name: 'Source detail' }] } })
-    expect(screen.getByRole('button', { name: 'Show technical JSON preview' })).toBeInTheDocument()
-  })
-
-  it('explains closed attributes and locked fields without requiring a JSON editor', () => {
-    render(<Harness />)
-    expect(screen.getByText(/Only defined fields are accepted/)).toBeInTheDocument()
-    expect(screen.getByText('Locked platform fields')).toBeInTheDocument()
-    expect(screen.getByText('Placeholder data, not paper evidence')).toBeInTheDocument()
-    expect(screen.getByLabelText('Field name')).toHaveValue('Title')
-    expect(screen.queryByRole('textbox', { name: /JSON/ })).not.toBeInTheDocument()
-    expect(screen.queryByText(/allow extra fields/i)).not.toBeInTheDocument()
-  })
-
-  it('keeps typed input and validates on blur, not on each keystroke', () => {
-    const validate = vi.fn()
-    render(<Harness onValidate={validate} />)
-    fireEvent.change(screen.getByLabelText('Field name'), { target: { value: 'Entered name' } })
-    expect(validate).not.toHaveBeenCalled()
-    fireEvent.blur(screen.getByLabelText('Field name'))
-    expect(validate).toHaveBeenCalledOnce()
-    expect(draft().fields[0].display_name).toBe('Entered name')
-  })
-
-  it('keeps required and nullable separate', () => {
-    render(<Harness />)
-    fireEvent.click(screen.getByRole('checkbox', { name: /Required/ }))
-    expect(draft().fields[0]).toMatchObject({ required: true })
-    expect(draft().fields[0].nullable).toBeUndefined()
-    fireEvent.click(screen.getByRole('checkbox', { name: /explicit unknown/ }))
-    expect(draft().fields[0]).toMatchObject({ required: true, nullable: true })
-  })
-
-  it('adds, duplicates and reorders using visible keyboard-operable buttons', () => {
-    render(<Harness value={{ ...initial, fields: [] }} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Add field' }))
-    fireEvent.change(screen.getByLabelText('Field name'), { target: { value: 'A detail' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }))
-    expect(draft().fields.map((field) => field.key)).toEqual(['new_field', 'new_field_copy'])
-    fireEvent.click(screen.getByRole('button', { name: 'Move up' }))
-    expect(draft().fields.map((field) => field.key)).toEqual(['new_field_copy', 'new_field'])
-    expect(screen.getByRole('button', { name: 'Move up' })).toBeDisabled()
-  })
-
-  it('edits child fields and preserves the surrounding repeating group', () => {
-    render(<Harness />)
-    fireEvent.click(within(screen.getByRole('list', { name: 'Custom fields' })).getByRole('button', { name: /Sources/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Add child field' }))
-    fireEvent.change(screen.getByLabelText('Field name'), { target: { value: 'Supplier' } })
-    const schema = draft().fields[1].value_schema
-    expect(schema).toMatchObject({ kind: 'array', items: { kind: 'object', fields: [
-      { key: 'name' }, { key: 'new_field', display_name: 'Supplier' },
-    ] } })
-  })
-
-  it('offers editable enum choices inside a list without JSON', () => {
-    render(<Harness />)
-    choose('Value kind', 'List of values')
-    choose('List item value kind', 'Choose from a list')
-    fireEvent.change(screen.getByLabelText('Allowed choices — one per line'), { target: { value: 'reported\nunknown' } })
-    expect(draft().fields[0].value_schema).toEqual({ kind: 'array', items: { kind: 'enum', values: ['reported', 'unknown'] } })
-  })
-
-  it('requires confirmation before replacing nested list fields and preserves them on cancel', () => {
-    render(<Harness />)
-    fireEvent.click(within(screen.getByRole('list', { name: 'Custom fields' })).getByRole('button', { name: /Sources/ }))
-    choose('List item value kind', 'Text')
-    expect(screen.getByRole('dialog', { name: 'Replace this value structure?' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(draft().fields[1]).toEqual(initial.fields[1])
-  })
-
-  it('confirms subtree removal and retains saved-version copy', () => {
-    render(<Harness />)
-    fireEvent.click(screen.getByRole('button', { name: 'Remove field' }))
-    const dialog = screen.getByRole('dialog', { name: 'Remove this field from the draft?' })
-    expect(within(dialog).getByText(/Saved revisions remain unchanged/)).toBeInTheDocument()
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove field' }))
-    expect(draft().fields.map((field) => field.key)).toEqual(['sources'])
-  })
-
-  it('shows source labels as aliases while the preview keeps one canonical key', () => {
-    render(<Harness />)
-    fireEvent.click(screen.getByText('Technical key and source labels'))
-    fireEvent.change(screen.getByLabelText('Synonyms / source labels (not output fields)'), { target: { value: 'Paper heading' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Show technical JSON preview' }))
-    expect(document.querySelector('pre')!.textContent).toContain('"title"')
-    expect(document.querySelector('pre')!.textContent).not.toContain('Paper heading')
-    expect(draft().fields[0].source_labels).toEqual(['Paper heading'])
-  })
-
-  it('announces linked errors without discarding the controlled draft', () => {
-    render(<Harness issues={[{ path: 'fields[1].value_schema.items.fields[0].key', code: 'key', message: 'Use a canonical key' }]} />)
-    fireEvent.click(screen.getByRole('button', { name: /Use a canonical key/ }))
-    expect(screen.getByLabelText('Field name')).toHaveValue('Source name')
-    expect(screen.getByLabelText('Output key')).toHaveFocus()
-    expect(screen.getByLabelText('Output key')).toHaveAccessibleDescription('Use a canonical key')
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'About Title' }))
+    expect(screen.getByText('Keep the wording from the paper.')).toBeVisible()
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
     expect(draft()).toEqual(initial)
   })
-
-  it('associates basic field errors with their inputs for assistive technology', () => {
-    render(<Harness issues={[
-      { path: 'name', code: 'required', message: 'Enter a structure name' },
-      { path: 'semantic_class', code: 'required', message: 'Enter a record class' },
-      { path: 'fields[0].display_name', code: 'invalid', message: 'Check the field name' },
-    ]} />)
-    expect(screen.getByRole('textbox', { name: /Structure name/ })).toBeInvalid()
-    expect(screen.getByRole('textbox', { name: /Structure name/ })).toHaveAccessibleDescription('Enter a structure name')
-    expect(screen.getByRole('textbox', { name: /Record class/ })).toHaveAccessibleDescription('Enter a record class')
-    expect(screen.getByRole('textbox', { name: 'Field name' })).toHaveAccessibleDescription('Check the field name')
+  it('renames a display field without changing its key or source aliases', () => {
+    const validate = vi.fn(); render(<Harness onValidate={validate} />); edit()
+    fireEvent.change(screen.getByLabelText('Detail name'), { target: { value: 'Paper title' } })
+    expect(validate).not.toHaveBeenCalled()
+    fireEvent.blur(screen.getByLabelText('Detail name'))
+    expect(validate).toHaveBeenCalledOnce()
+    expect(draft().fields[0]).toMatchObject({ key: 'title', display_name: 'Paper title', source_labels: ['Paper heading'] })
+    expect(screen.queryByLabelText('Output key')).not.toBeInTheDocument()
   })
-
-  it('disables value-kind selects recursively while saves own the draft', () => {
-    const changed = vi.fn()
-    render(<Harness disabled onChange={changed} value={{ ...initial, fields: [initial.fields[1]] }} />)
-    for (const select of screen.getAllByRole('combobox')) {
-      expect(select).toHaveAttribute('aria-disabled', 'true')
-      fireEvent.mouseDown(select)
+  it('requires an explicit action to edit extraction instructions', () => {
+    render(<Harness />); edit()
+    expect(screen.queryByLabelText('Instructions for the agent')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit instructions' }))
+    fireEvent.change(screen.getByLabelText('Instructions for the agent'), { target: { value: 'Preserve punctuation.' } })
+    expect(draft().fields[0].description).toBe('Preserve punctuation.')
+  })
+  it('generates unique keys from new names, including collisions with source aliases', () => {
+    render(<Harness value={{ ...initial, fields: [{ ...initial.fields[0], source_labels: ['Detail paper heading'] }] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add a detail' }))
+    fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: 'Paper heading' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
+    expect(draft().fields[1]).toMatchObject({ key: 'detail_paper_heading_2', display_name: 'Paper heading', source_labels: [], required: false, nullable: false })
+  })
+  it('keeps required and unknown-answer settings independent', () => {
+    render(<Harness />); edit('Sources')
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Ask for this in every record' }))
+    expect(draft().fields[1]).toMatchObject({ required: true, nullable: true })
+    fireEvent.click(screen.getByRole('button', { name: 'More field options' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Allow an empty answer if the paper doesn’t say' }))
+    expect(draft().fields[1]).toMatchObject({ required: true, nullable: false })
+  })
+  it('shows concrete formats and preserves nested data when replacement is canceled', () => {
+    render(<Harness />); edit('Sources')
+    expect(screen.getByRole('radio', { name: /An answer with several parts/ })).toBeChecked()
+    expect(screen.queryByRole('checkbox', { name: 'Collect more than one answer for this detail' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: /^Text/ }))
+    expect(screen.getByRole('dialog', { name: 'Replace this answer format?' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(draft()).toEqual(initial)
+  })
+  it('converts an existing list only after confirmation and preserves its choices', async () => {
+    const value: GenericProfileContract = { ...initial, fields: [{ key: 'status', display_name: 'Status', value_schema: { kind: 'array', items: { kind: 'enum', values: ['new', 'existing'] } } }] }
+    render(<Harness value={value} />); edit('Status')
+    expect(draft()).toEqual(value)
+    fireEvent.click(screen.getByRole('button', { name: 'Change to one answer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(draft()).toEqual(value)
+    fireEvent.click(await screen.findByRole('button', { name: 'Change to one answer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change format' }))
+    expect(draft().fields[0].value_schema).toEqual({ kind: 'enum', values: ['new', 'existing'] })
+    expect(screen.queryByRole('checkbox', { name: 'Collect more than one answer for this detail' })).not.toBeInTheDocument()
+  })
+  it('explains that item guidance supplements the existing agent prompt', () => {
+    render(<Harness />)
+    expect(screen.getByText(/in addition to your agent prompt and detail instructions/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit item description' }))
+    fireEvent.change(screen.getByLabelText('Additional guidance for this item type'), { target: { value: 'Include living stocks.' } })
+    expect(draft().description).toBe('Include living stocks.')
+    expect(screen.getByText(/Add a brief description to supplement your existing agent prompt/)).toBeVisible()
+  })
+  it('renders a recognizable empty table with headers and an empty row', () => {
+    render(<Harness value={{ ...initial, fields: [] }} />)
+    const table = screen.getByRole('table', { name: 'Details to collect' })
+    expect(within(table).getByRole('columnheader', { name: 'Detail' })).toBeVisible()
+    expect(within(table).getByRole('columnheader', { name: 'What to collect' })).toBeVisible()
+    expect(within(table).getByRole('columnheader', { name: 'Include' })).toBeVisible()
+    expect(within(table).getByText('No details yet')).toBeVisible()
+  })
+  it('edits nested values and updates the example without a separate review copy', async () => {
+    render(<Harness />); edit('Source name')
+    fireEvent.change(screen.getByLabelText('Detail name'), { target: { value: 'Supplier' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to all details' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Example record' }))
+    expect(within(screen.getByRole('tabpanel')).getByText('Supplier')).toBeVisible()
+    expect(draft().fields[1].value_schema).toMatchObject({ fields: [{ key: 'name', display_name: 'Supplier' }] })
+  })
+  it('confirms removal and preserves the rest of the collection', () => {
+    render(<Harness />); edit(); fireEvent.click(screen.getByRole('button', { name: 'More field options' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove field' }))
+    const dialog = screen.getByRole('dialog', { name: 'Remove this field from the draft?' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove field' }))
+    expect(draft().fields).toEqual([initial.fields[1]])
+  })
+  it('routes a nested error to its editor without losing the draft', async () => {
+    render(<Harness issues={[{ path: 'fields[1].value_schema.fields[0].description', code: 'invalid', message: 'Clarify this instruction' }]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Clarify this instruction' }))
+    expect(screen.getByRole('region', { name: 'Edit Source name' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('Instructions for the agent')).toHaveFocus())
+    expect(draft()).toEqual(initial)
+  })
+  it('keeps a new part in its parent and opens its editor only on request', () => {
+    render(<Harness />); edit('Sources')
+    fireEvent.click(screen.getByRole('button', { name: 'Add another part' }))
+    fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: 'Identifier' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
+    expect(screen.getByRole('region', { name: 'Edit Sources' })).toBeVisible()
+    expect(screen.queryByRole('region', { name: 'Edit Identifier' })).not.toBeInTheDocument()
+    expect(within(screen.getByRole('table', { name: 'Parts of Sources' })).getByRole('rowheader', { name: 'Identifier' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit part Identifier' }))
+    expect(screen.getByRole('region', { name: 'Edit Identifier' })).toBeVisible()
+    expect(screen.queryByRole('radio', { name: /An answer with several parts/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add another part' })).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /^Text/ })).toBeChecked()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Detail location' })).toHaveTextContent('Sources')
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include this part whenever the answer is included' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Done — back to Sources' })[0])
+    expect(screen.getByRole('region', { name: 'Edit Sources' })).toBeVisible()
+    expect(screen.getByRole('radio', { name: /An answer with several parts/ })).toBeChecked()
+    expect(draft().fields[1].value_schema).toMatchObject({ kind: 'object', fields: [{ key: 'name' }, { key: 'detail_identifier', required: true, value_schema: { kind: 'string' } }] })
+  })
+  it('shows an empty parts table and collects two required parts in the same answer', () => {
+    render(<Harness value={{ ...initial, fields: [{ key: 'stock', display_name: 'Stock', value_schema: { kind: 'object', fields: [] } }] }} />)
+    edit('Stock')
+    const table = screen.getByRole('table', { name: 'Parts of Stock' })
+    expect(within(table).getByRole('columnheader', { name: 'Part' })).toBeVisible()
+    expect(within(table).getByRole('columnheader', { name: /Always include/ })).toBeVisible()
+    expect(within(table).getByText('No parts yet')).toBeVisible()
+    for (const [index, name] of ['Supplier name', 'Catalog number'].entries()) {
+      fireEvent.click(screen.getByRole('button', { name: index ? 'Add another part' : 'Add the first part' }))
+      fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: name } })
+      fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
+      expect(screen.getByRole('region', { name: 'Edit Stock' })).toBeVisible()
+      expect(screen.queryByRole('region', { name: `Edit ${name}` })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('checkbox', { name: `Always include ${name} with this answer` }))
     }
-    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(draft().fields).toHaveLength(1)
+    expect(draft().fields[0].value_schema).toMatchObject({ kind: 'object', fields: [
+      { display_name: 'Supplier name', required: true },
+      { display_name: 'Catalog number', required: true },
+    ] })
+  })
+  it('explains always-include and missing answers without editing the draft', async () => {
+    render(<Harness />); edit('Sources')
+    fireEvent.click(screen.getByRole('button', { name: 'Help with Always include' }))
+    expect(screen.getByText('What does “Always include” mean?')).toBeVisible()
+    expect(screen.getByText(/The AI must not invent missing information/)).toBeVisible()
+    expect(draft()).toEqual(initial)
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByText('What does “Always include” mean?')).not.toBeInTheDocument())
+    expect(screen.getByRole('table', { name: 'Parts of Sources' })).toBeVisible()
+  })
+  it('disables mutation entry points while the parent owns the draft', () => {
+    const changed = vi.fn(); render(<Harness disabled onChange={changed} />)
+    for (const name of ['Edit Title', 'Edit Sources', 'Add a detail', 'Edit item description']) expect(screen.getByRole('button', { name })).toBeDisabled()
     expect(changed).not.toHaveBeenCalled()
   })
 })

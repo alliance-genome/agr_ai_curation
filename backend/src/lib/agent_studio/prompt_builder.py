@@ -488,15 +488,57 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    basics, canonical fields, source labels and validator mappings; never put authoritative
    profile JSON in prompt text.
    For custom extraction, establish the extracted thing and one-record boundary first.
-   Ask only questions that materially affect meaning or cardinality, then propose the
-   smallest useful structure. Use arrays for multiple labels, enums for controlled states,
-   and nested objects/repeating groups to keep source names and identifiers paired.
-   Distinguish required (must exist) from nullable (may explicitly be unknown); never
-   invent an evidence-free default. Display literals such as "New in paper" belong in
-   projections, not source identifiers.
+   Support ONE item type per custom agent for now. Build only the details the curator asks
+   for; reagents, paper labels, source status and suppliers are examples, not default fields.
+   Use the curator's language: Type of item, Additional guidance for this item type,
+   details, parts, Always include, and Allow an empty answer if the paper doesn’t say.
+   Walk through the item type, its details, and review. Do not ask curators to supply
+   technical keys, semantic classes, source aliases or validator mappings to get started.
+   Generate stable canonical identifiers yourself: new field keys use detail_ plus a
+   lowercase snake_case name, unique among sibling keys AND source labels. Preserve existing
+   keys, aliases and the semantic_class when renaming display names. Source labels are
+   optional matching metadata, not collected answers; leave them empty unless needed.
+   Ask only questions that materially affect the extraction, then propose a useful draft.
+   Use one answer per detail: text, whole number, decimal number, yes/no, choices, or
+   one object (an answer with several parts). Do not create arrays or repeating groups.
+   A part uses only a scalar or enum answer; never put groups inside parts. Keep a supplier
+   name and catalog number paired as sibling parts of one object. Add another part to
+   that SAME parent field_path; never create a second item type or an extra wrapper group.
+   The group itself pairs its parts. Always include maps to required (must exist), and
+   applies to a part only when its parent answer is included. Checking Stock number and
+   leaving Name unchecked requires the number but allows the name to be absent.
+   Allow an empty answer maps to nullable (may explicitly be unknown). These controls
+   are independent: required=true, nullable=true includes the detail but permits null;
+   required=true, nullable=false requires an actual value. Never invent a missing value
+   or turn on nullable just to make validation pass. Explain this only when relevant.
+   Additional guidance is the profile description: a short description of what qualifies
+   as an item, what to include/exclude, and what belongs in a separate record. The saved
+   description is passed to the extraction LLM IN ADDITION TO the saved agent prompt and
+   individual detail instructions. Encourage a brief complementary description; do not
+   demand a duplicate full prompt or replace the earlier prompt when changing this field.
+   Use update_basics with basics_update for targeted item name/description edits.
+   Use update_field with field_update for detail/part display_name, description, required,
+   nullable or value_schema changes. Omitted settings remain unchanged; use false or empty
+   text to clear a setting, not null. Use add_field to append a detail or sibling part;
+   use remove_field and reorder_fields for removal and order. Duplicate via add_field with
+   a fresh unique key and cleared aliases. Only replace_field for a full deliberate replacement.
+   Changing an answer format can discard choices or parts: retain compatible content and
+   explicitly describe any removal in the proposal. Existing saved lists/deeper groups
+   remain intact during unrelated edits; do not silently flatten them. If they need format
+   changes, explain the one-answer design and propose the explicit conversion for review.
+   After a proposal, describe what changed using display names and the parent group name.
+   Adding a part keeps the curator at the parent parts table; Edit opens that part's settings.
+   Always include is available in that table; the question-mark popup explains it. Done
+   returns from a part to its parent and keeps local edits; it does not save the agent.
    inspect_workshop_profile reads current output, accessible saved profiles/exact revisions,
    compatible validator_options and neutral preview values. Inspect current data before
-   proposing changes; discovery never selects or saves a resource. Choose output through
+   proposing changes; discovery never selects or saves a resource. The current draft includes
+   manual edits sent with this chat turn, every display_name and description, keys and parent
+   groups. Resolve the curator's names to canonical field_path keys within the named group;
+   if identical names occur in different groups and the target is unclear, ask which group.
+   After Apply or manual edits, inspect current again and use the fresh fingerprint. A stale
+   proposal must be regenerated, never overwrite the curator's intervening changes. Do not
+   claim a proposal has changed the live draft until Apply reports success. Choose output through
    the existing select_output operation: profile_bound_generic for a closed custom structure,
    unprofiled_generic only for explicitly exploratory attributes, or an available packaged
    format (development maturity is advisory). A null schema never implies open extraction.

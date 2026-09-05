@@ -205,13 +205,13 @@ def test_multiturn_custom_record_fixture_preserves_pairing_and_explicit_unknowns
         capability_catalog.CapabilityRecord(kind="output_contract", resource_id="profile_bound_generic", name="Custom structure", description="",
             detail={"draft_output": {"mode": "profile_bound_generic", "schemaKey": "", "profilePin": None, "profileContract": None}}),
     ])
-    # "One record per reagent; collect every name used in the paper."
+    # "One record per reagent; collect its name as written in the paper."
     first = propose(db, base, [
         {"operation": "select_output", "resource_id": "profile_bound_generic"},
         {"operation": "edit_profile", "profile_edit": {"action": "set_basics", "basics": {
             "name": "Provisional reagent details", "description": "One record per reagent (provisional)", "semantic_class": "reagent_detail"}}},
         {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {
-            "key": "paper_labels", "required": True, "value_schema": {"kind": "array", "items": {"kind": "string"}}}}},
+            "key": "paper_labels", "required": True, "value_schema": {"kind": "string"}}}},
         {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {
             "key": "source_status", "value_schema": {"kind": "enum", "values": ["reported", "not_stated"]}}}},
     ])
@@ -219,22 +219,38 @@ def test_multiturn_custom_record_fixture_preserves_pairing_and_explicit_unknowns
     applied = AgentWorkshopContext.model_validate(first["candidate"])
     # "Status must exist, but may be unknown; keep source names and IDs paired."
     second = propose(db, applied, [
-        {"operation": "edit_profile", "profile_edit": {"action": "replace_field", "field_path": ["source_status"], "field": {
-            "key": "source_status", "required": True, "nullable": True, "value_schema": {"kind": "enum", "values": ["reported", "not_stated"]}}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "update_field", "field_path": ["source_status"],
+            "field_update": {"required": True, "nullable": True}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "update_basics", "basics_update": {
+            "description": "Include only living stocks; one record per stock."}}},
         {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field": {
-            "key": "sources", "value_schema": {"kind": "array", "items": {"kind": "object", "fields": [
+            "key": "sources", "value_schema": {"kind": "object", "fields": [
                 {"key": "name", "value_schema": {"kind": "string"}},
                 {"key": "identifier", "nullable": True, "value_schema": {"kind": "string"}},
-            ]}}}}},
+            ]}}}},
         {"operation": "edit_profile", "profile_edit": {"action": "set_source_labels", "field_path": ["paper_labels"], "source_labels": ["Names used"]}},
     ])
     assert second["valid"], second["findings"]
     profile = second["candidate"]["draft_output"]["profileContract"]
     assert profile["fields"][1]["required"] and profile["fields"][1]["nullable"]
-    assert len(profile["fields"][2]["value_schema"]["items"]["fields"]) == 2
+    assert len(profile["fields"][2]["value_schema"]["fields"]) == 2
     assert profile["validator_mappings"] == []  # No inference from biological names.
     assert profile["fields"][0]["source_labels"] == ["Names used"]
     assert not second["saved"] and base.draft_output is None
+    current = AgentWorkshopContext.model_validate(second["candidate"])
+    third = propose(db, current, [
+        {"operation": "edit_profile", "profile_edit": {"action": "update_field", "field_path": ["sources", "identifier"],
+         "field_update": {"required": True, "nullable": False, "display_name": "Stock number"}}},
+        {"operation": "edit_profile", "profile_edit": {"action": "add_field", "field_path": ["sources"],
+         "field": {"key": "detail_provider", "display_name": "Provider", "value_schema": {"kind": "string"}}}},
+    ])
+    assert third["valid"], third["findings"]
+    contract = third["candidate"]["draft_output"]["profileContract"]
+    parts = contract["fields"][2]["value_schema"]["fields"]
+    assert [part["key"] for part in parts] == ["name", "identifier", "detail_provider"]
+    assert parts[1]["required"] and not parts[1]["nullable"]
+    assert contract["description"] == "Include only living stocks; one record per stock."
+    assert third["candidate"]["prompt_draft"] == base.prompt_draft
     db.commit.assert_not_called()
 
 

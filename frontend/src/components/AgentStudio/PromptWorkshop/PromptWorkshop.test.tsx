@@ -1473,6 +1473,51 @@ describe('PromptWorkshop', () => {
     expect(candidate.draft_output.profileContract!.fields[0].source_labels).toEqual(['Paper names'])
   })
 
+  it('shares live manual part edits with AI and applies the next parts proposal to the open editor', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = structuredClone(base)
+    candidate.draft_output = { mode: 'profile_bound_generic', schemaKey: '', profilePin: null,
+      profileContract: { name: 'Stocks', description: 'Only living stocks.', semantic_class: 'stock', fields: [
+        { key: 'stock_details', display_name: 'Stock details', value_schema: { kind: 'object', fields: [
+          { key: 'provider', display_name: 'Provider', value_schema: { kind: 'string' } },
+        ] } },
+      ] } }
+    candidate.draft_output_schema_key = undefined
+    const firstProposal = { contract_version: 'workshop_authoring_proposal.v1' as const,
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base), candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Collect stocks', diff: [], findings: [] }
+    await act(async () => handle.current!.applyAuthoringProposal(firstProposal))
+    fireEvent.click(screen.getByRole('button', { name: /Output Structure, unsaved edits/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Provider' }))
+    fireEvent.change(screen.getByLabelText('Detail name'), { target: { value: 'Supplier name' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Done — back to Stock details' })[0])
+    const live = handle.current!.captureAuthoringContext()
+    expect(live.draft_output?.profileContract?.fields[0].value_schema).toMatchObject({ fields: [
+      { key: 'provider', display_name: 'Supplier name' },
+    ] })
+    const next = structuredClone(live)
+    const stock = next.draft_output!.profileContract!.fields[0].value_schema
+    if (stock.kind !== 'object') throw new Error('Expected stock parts')
+    stock.fields.push({ key: 'detail_number', display_name: 'Stock number', required: true, nullable: false, value_schema: { kind: 'string' } })
+    const result = await act(async () => handle.current!.applyAuthoringProposal({
+      contract_version: 'workshop_authoring_proposal.v1', candidate: next,
+      base_draft_fingerprint: await fingerprintWorkshopDraft(live), candidate_draft_fingerprint: await fingerprintWorkshopDraft(next),
+      change_summary: 'Add stock number', diff: [], findings: [],
+    }))
+    expect(result.applied).toBe(true)
+    const table = screen.getByRole('table', { name: 'Parts of Stock details' })
+    expect(within(table).getByRole('rowheader', { name: 'Supplier name' })).toBeVisible()
+    expect(within(table).getByRole('checkbox', { name: 'Always include Stock number with this answer' })).toBeChecked()
+    expect(handle.current!.captureAuthoringContext().prompt_draft).toBe(base.prompt_draft)
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
+
   it('saves an AI-selected exact profile pin without silently cloning its structure', async () => {
     Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
     const handle = createRef<WorkshopAuthoringContextHandle>()
@@ -1566,9 +1611,11 @@ describe('PromptWorkshop', () => {
     const before = handle.current!.captureAuthoringContext()
     fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
     fireEvent.click(screen.getByRole('button', { name: 'Edit Output Structure' }))
-    fireEvent.change(screen.getByRole('textbox', { name: /Structure name/ }), { target: { value: 'Collected details' } })
-    fireEvent.change(screen.getByRole('textbox', { name: /Record class/ }), { target: { value: 'collected_detail' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add field' }))
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Collected details' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose details to collect' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add a detail' }))
+    fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: 'Name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
     const after = handle.current!.captureAuthoringContext()
     expect(after.draft_output?.profileContract?.name).toBe('Collected details')
     expect(after.draft_output?.profileContract?.fields).toHaveLength(1)
@@ -1579,25 +1626,23 @@ describe('PromptWorkshop', () => {
     const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledWith(expect.objectContaining({
-      new_generic_profile: expect.objectContaining({ name: 'Collected details', semantic_class: 'collected_detail' }),
+      new_generic_profile: expect.objectContaining({ name: 'Collected details', semantic_class: 'collected_details' }),
     })))
     expect(profileMocks.validateGenericProfile).toHaveBeenCalled()
-    const typeSelect = screen.getByRole('combobox', { name: 'Value kind', hidden: true })
-    expect(typeSelect).toHaveAttribute('aria-disabled', 'true')
-    fireEvent.mouseDown(typeSelect)
-    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    const textAnswer = screen.getByRole('radio', { name: /^Text/, hidden: true })
+    expect(textAnswer).toBeDisabled()
     expect(handle.current!.captureAuthoringContext().draft_output).toEqual(after.draft_output)
     await act(async () => saving.reject(new Error('Save unavailable')))
-    await waitFor(() => expect(typeSelect).not.toHaveAttribute('aria-disabled', 'true'))
+    await waitFor(() => expect(textAnswer).not.toBeDisabled())
   })
 
   it('carries a manually mapped validator through authoritative context, validation and Save without JSON', async () => {
     Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
     const capabilityRef = { package_id: 'example', package_version: '1', domain_pack_id: 'record', domain_pack_version: '1', binding_id: 'lookup' }
     profileMocks.getProfileMappingOptions.mockResolvedValue({
-      fields: [{ path: 'attributes.new_field', display_name: 'New field', value_schema: { kind: 'string' }, required: false, nullable: false, array_domains: [] }],
+      fields: [{ path: 'attributes.detail_new_field', display_name: 'New field', value_schema: { kind: 'string' }, required: false, nullable: false, array_domains: [] }],
       capabilities: [{ capability_ref: capabilityRef, fingerprint: 'sha256:exact', state: 'active', selectable: true, diagnostics: [],
-        input_paths: { mention: ['attributes.new_field'] }, output_paths: {},
+        input_paths: { mention: ['attributes.detail_new_field'] }, output_paths: {},
         metadata: { validator_binding_id: 'lookup', display_name: 'Identifier lookup',
           custom_profile_reuse: { enabled: true,
             inputs: { mention: { value_schema: { kind: 'string' }, required: true, nullable: false, allow_field: true, allow_constant: false, context_selector: null } },
@@ -1612,22 +1657,28 @@ describe('PromptWorkshop', () => {
     await waitForHeaderName('Gene Specialist (Custom)')
     fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
     fireEvent.click(screen.getByRole('button', { name: 'Edit Output Structure' }))
-    fireEvent.change(screen.getByRole('textbox', { name: /Structure name/ }), { target: { value: 'Mapped details' } })
-    fireEvent.change(screen.getByRole('textbox', { name: /Record class/ }), { target: { value: 'record' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add field' }))
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Mapped details' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose details to collect' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add a detail' }))
+    fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: 'New field' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to all details' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Additional checks' }))
     const before = handle.current!.captureAuthoringContext()
     fireEvent.click(screen.getByRole('button', { name: 'Find compatible validators' }))
     fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Find validators for canonical field' }))
-    fireEvent.click(screen.getByRole('option', { name: 'New field · attributes.new_field' }))
+    fireEvent.click(screen.getByRole('option', { name: 'New field · attributes.detail_new_field' }))
     fireEvent.click(screen.getByRole('button', { name: 'Map field to mention · Identifier lookup' }))
     const mapped = handle.current!.captureAuthoringContext()
     expect(mapped.draft_output?.profileContract?.validator_mappings).toEqual([{
       mapping_id: 'validator_1', capability_ref: capabilityRef, capability_fingerprint: 'sha256:exact',
-      inputs: { mention: { source: 'field', field_path: 'attributes.new_field' } }, outputs: {}, mode: 'whole',
+      inputs: { mention: { source: 'field', field_path: 'attributes.detail_new_field' } }, outputs: {}, mode: 'whole',
       policy: { unresolved: 'requires_curator_review', blocks_readiness: false },
     }])
     expect(await fingerprintWorkshopDraft(mapped)).not.toBe(await fingerprintWorkshopDraft(before))
     expect(screen.queryByRole('textbox', { name: /JSON/i })).not.toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Additional checks' }), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Additional checks' })).not.toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
@@ -1706,8 +1757,11 @@ describe('PromptWorkshop', () => {
     render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
     await waitForHeaderName('My Agent')
     fireEvent.click(screen.getByRole('button', { name: 'Edit Output Structure' }))
-    expect(screen.getByText(canEdit ? /Saving structure changes creates a new revision/ : /Saving structure changes creates your own profile copy/)).toBeInTheDocument()
-    fireEvent.change(screen.getByRole('textbox', { name: /Structure name/ }), { target: { value: 'Edited structure' } })
+    expect(screen.getByText(canEdit ? /Your changes will be saved as a new version/ : /Saving creates your own copy/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit item description' }))
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Edited structure' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Describe the items to extract' })).not.toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     const dialog = await screen.findByRole('dialog', { name: /Save as version/ })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
@@ -1722,7 +1776,7 @@ describe('PromptWorkshop', () => {
     }
     expect(payload.expected_revision_id).toBe(existing.execution_revision_id)
     await screen.findByText(/Profile changed since it was opened/)
-    expect(await screen.findByRole('textbox', { name: /Structure name/ })).toHaveValue('Edited structure')
+    expect(await screen.findByRole('heading', { name: 'Edited structure' })).toBeVisible()
   })
 
   it.each([false, true])('selects an existing profile only while the opening draft is current (stale=%s)', async (stale) => {
@@ -1750,7 +1804,7 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
       return
     }
-    await screen.findByRole('textbox', { name: /Structure name/ })
+    await screen.findByRole('heading', { name: 'Reusable details' })
     const pin = { profile_id: profile.id, profile_revision_id: revision.id, revision: 3, fingerprint: revision.fingerprint }
     expect(handle.current!.captureAuthoringContext().draft_output?.profilePin).toEqual(pin)
     expect(handle.current!.captureAuthoringContext().draft_description).toBe('Keep my purpose')

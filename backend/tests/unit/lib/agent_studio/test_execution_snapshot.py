@@ -157,3 +157,43 @@ def test_explicit_generic_output_captures_generic_curation_for_scratch_agent(mon
     ))
     assert saved.curation == {"adapter_key": "generic", "domain_pack_id": "generic", "launchable": True}
     assert saved.structured_finalization is None
+
+
+@pytest.mark.parametrize("description", [
+    "Extract one stock per paper. Include living stocks; exclude purified reagents.\nKeep distinct genotypes separate.",
+    "",
+])
+def test_item_guidance_supplements_saved_prompt_and_uses_pinned_description(monkeypatch, description):
+    from src.lib.agent_studio import custom_agent_service, catalog_service
+    from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
+    from src.lib.agent_studio.profile_tools import profile_runtime_instruction
+    from src.schemas.agent_execution_revision import GenericProfilePin
+    from src.schemas.generic_extraction_profile import GenericProfileContract
+
+    monkeypatch.setattr(custom_agent_service, "_system_managed_tool_ids", lambda *_: [])
+    monkeypatch.setattr(catalog_service, "_inherited_curation_definition_for_db_agent", lambda _: None)
+    contract = GenericProfileContract.model_validate({
+        "name": "Stocks", "description": description, "semantic_class": "stock",
+        "fields": [{"key": "stock_name", "description": "Keep the name as written.",
+                    "value_schema": {"kind": "string"}}],
+    })
+    pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                            fingerprint=contract.fingerprint())
+    profile = ResolvedGenericProfile(pin, contract)
+    saved = capture_execution_snapshot(None, agent(), AgentOutputContract(
+        output_state="structured_extraction", output_mode="profile_bound_generic", generic_profile_ref=pin,
+    ))
+    # Later authoring edits must not change the instructions used by a pinned run.
+    contract.description = "Different instructions in a later draft"
+    runtime = profile_runtime_instruction(profile)
+    rendered = saved_runtime_prompt_bundle(saved, runtime_context=runtime).render()
+    assert "Curator instructions" in rendered
+    assert "Different instructions in a later draft" not in rendered
+    assert "Use only the canonical fields" in rendered
+    assert "Do not coerce or invent missing values" in rendered
+    if description:
+        assert description in rendered
+        assert "supplements the saved agent prompt and individual field instructions" in rendered
+    else:
+        assert "Additional curator guidance for this item type" not in rendered
+    assert profile.attributes_schema()["properties"]["stock_name"]["description"] == "Keep the name as written."

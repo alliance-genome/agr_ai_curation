@@ -2,7 +2,15 @@
 
 Use **Agent Workshop → Output Structure** to describe the records your agent should extract. You do not need to write JSON.
 
-First decide what one record represents. For example, “one reagent per paper” differs from “one record for every mention.” Tell AI Chat which you mean; it can propose a first draft for you to review.
+First decide what one record represents. For example, “one reagent per paper” differs from “one record for every mention.” Add a brief description under **Additional guidance for this item type**. The extraction AI receives this saved description in addition to the agent prompt and individual detail instructions. Use it to clarify what to include, exclude, and treat as a separate record; you do not need to repeat your full prompt. AI Chat can also help you draft it.
+
+## Work with AI Chat
+
+AI Chat reads the current Workshop draft, including unsaved manual edits, detail names and parts. You can ask it to add a supplier name and stock number to the same answer, rename a detail, change its answer format or choices, edit extraction instructions, or change **Always include** and the empty-answer setting. It can also remove or reorder details and parts.
+
+For example: “Under Stock details, add Stock number as text and always include it. Keep Supplier name optional.” AI Chat proposes changes to that group while keeping unrelated settings and your earlier agent prompt. Review the changes and choose **Apply** to update the open editor. **Save** saves the agent separately. If you edit the draft while a proposal is pending, ask for a fresh proposal so your newer changes are preserved.
+
+The AI follows the same simple design: one item type, one answer per detail, and simple parts within a group. It preserves existing list or deeper-group definitions during unrelated edits and explains any proposed format conversion.
 
 ## Choose an output mode
 
@@ -13,7 +21,7 @@ First decide what one record represents. For example, “one reagent per paper�
 
 ## Build and review fields
 
-Give each field a clear name and select text, number, boolean, controlled choices, a list, or a group. Use repeating groups when values must stay paired, such as source names and identifiers.
+Give each detail a clear name and choose text, a number, yes/no, controlled choices, or an answer with several parts. The simplified editor collects one answer per detail: for example, one supplier with one catalog number. The parent detail shows a **Parts of …** table, including headers before any parts are added. Use **Add another part** to put a second detail in the same answer. Select **Always include** for each part that must be present whenever the parent answer is included. Each part uses a simple answer format, such as text, a number, or a choice; parts cannot contain further groups of parts. The editor does not offer a multiple-answer control. Previously saved list formats remain unchanged unless you explicitly convert them to one answer; existing extraction results are not rewritten.
 
 **Required** means a field must exist. **Nullable** means its value may be unknown (`null`). These are different: a required nullable field must appear, but may contain `null`. An optional field may be absent. Do not supply an invented value merely to satisfy a required field.
 
