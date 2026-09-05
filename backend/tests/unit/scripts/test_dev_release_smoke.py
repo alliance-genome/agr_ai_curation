@@ -1258,18 +1258,87 @@ def test_ask_streaming_chat_question_can_validate_runtime_default_model_without_
     assert "crb" in summary["response_preview"].lower()
 
 
+def _execution_receipt():
+    return {
+        "agent_id": "00000000-0000-0000-0000-000000000001",
+        "agent_key": "ca_test_agent",
+        "agent_revision_id": "00000000-0000-0000-0000-000000000002",
+        "revision": 1,
+        "fingerprint": "sha256:" + "a" * 64,
+        "output_contract": {"output_state": "none"},
+    }
+
+
+@pytest.mark.parametrize("wrong_agent", [False, True])
+def test_create_smoke_agent_reads_exact_created_revision(monkeypatch, wrong_agent):
+    smoke = _load_smoke_module()
+    receipt = _execution_receipt()
+    created = {"id": receipt["agent_id"], "agent_id": receipt["agent_key"], "name": "Smoke",
+               "execution_revision_id": receipt["agent_revision_id"]}
+    revision = {"id": receipt["agent_revision_id"], "agent_id": "wrong" if wrong_agent else receipt["agent_id"],
+                "revision": 1, "fingerprint": receipt["fingerprint"], "snapshot": {"output_contract": receipt["output_contract"]}}
+    calls = []
+    def request(method, url, **kwargs):
+        calls.append((method, url))
+        return SimpleNamespace(status_code=201 if method == "POST" else 200,
+                               json_body=created if method == "POST" else revision, text="fixture")
+    monkeypatch.setattr(smoke, "http_request", request)
+    created_agent = smoke.create_custom_agent(base_url="http://fixture", headers={}, model_id="fixture", checks=[])
+    if wrong_agent:
+        with pytest.raises(smoke.SmokeFailure, match="does not match"):
+            smoke.read_custom_agent_receipt(base_url="http://fixture", headers={}, custom_agent=created_agent)
+    else:
+        assert smoke.read_custom_agent_receipt(base_url="http://fixture", headers={}, custom_agent=created_agent) == receipt
+    assert calls[-1] == ("GET", f"http://fixture/api/agent-studio/custom-agents/{receipt['agent_id']}/execution-revisions/{receipt['agent_revision_id']}")
+
+
+def test_revision_read_failure_still_cleans_up_created_smoke_agent(monkeypatch):
+    smoke = _load_smoke_module()
+    args = smoke.parse_args(["--base-url", "http://fixture", "--skip-chat", "--skip-workspace",
+                             "--skip-batch", "--skip-sdk-pin-check", "--skip-provider-health",
+                             "--skip-user-info", "--allow-dev-mode-fallback"])
+    monkeypatch.setattr(smoke, "resolve_auth_context", lambda *_: SimpleNamespace(
+        evidence={}, used_api_key_auth=False, expected_auth_sub=None, expected_email=None,
+        headers={}, expected_provider_groups=(), mode="dev-mode"))
+    monkeypatch.setattr(smoke, "resolve_sample_pdf", lambda *_: Path(__file__))
+    monkeypatch.setattr(smoke, "ensure_worker_ready", lambda **_: None)
+    monkeypatch.setattr(smoke, "upload_pdf", lambda **_: ("existing-fixture", False))
+    monkeypatch.setattr(smoke, "wait_for_processing_complete", lambda **_: {"chunk_count": 1})
+    monkeypatch.setattr(smoke, "fetch_chunks", lambda **_: {"pagination": {"total_items": 1}})
+    monkeypatch.setattr(smoke, "fetch_download_info", lambda **_: {"pdf_available": True})
+    monkeypatch.setattr(smoke, "select_primary_text_artifact", lambda *_: ("source_markdown", False))
+    monkeypatch.setattr(smoke, "download_document_artifact", lambda **_: {})
+    receipt = _execution_receipt()
+    def request(method, url, **kwargs):
+        if method == "POST":
+            return SimpleNamespace(status_code=201, text="created", json_body={
+                "id": receipt["agent_id"], "agent_id": receipt["agent_key"], "name": "Smoke",
+                "execution_revision_id": receipt["agent_revision_id"]})
+        return SimpleNamespace(status_code=200 if url.endswith("/health") else 503, json_body={}, text="fixture")
+    monkeypatch.setattr(smoke, "http_request", request)
+    cleaned = []
+    monkeypatch.setattr(smoke, "cleanup_custom_agent", lambda **kwargs: cleaned.append(kwargs["custom_agent_id"]))
+    result = smoke.run(args)
+    assert result["overall_status"] == "fail"
+    assert "Executable revision read failed: 503" in result["error"]
+    assert cleaned == [receipt["agent_id"]]
+
+
 def test_build_flow_definition_keeps_release_smoke_flow_narrow():
     smoke = _load_smoke_module()
 
     flow_definition = smoke.build_flow_definition(
-        agent_id="ca-test-agent",
+        agent_id="ca_test_agent",
         agent_name="Test Agent",
+        execution_receipt=_execution_receipt(),
     )
 
     task_instructions = flow_definition["nodes"][0]["data"]["task_instructions"]
     step_goal = flow_definition["nodes"][1]["data"]["step_goal"]
 
     assert flow_definition["version"] == "1.1"
+    assert flow_definition["nodes"][1]["data"]["execution_receipt"] == _execution_receipt()
+    assert flow_definition["nodes"][1]["data"]["agent_revision_id"] == _execution_receipt()["agent_revision_id"]
     FlowDefinition.model_validate(flow_definition)
     assert "exactly one" in smoke.DEFAULT_FLOW_QUERY
     assert "crb/Crumbs" in smoke.DEFAULT_FLOW_QUERY

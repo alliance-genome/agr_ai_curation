@@ -1686,7 +1686,7 @@ def create_custom_agent(
     headers: Dict[str, str],
     model_id: str,
     checks: list[Dict[str, Any]],
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     payload = {
         "template_source": "gene_extractor",
         "name": f"Dev Release Smoke Agent {uuid4().hex[:8]}",
@@ -1721,10 +1721,39 @@ def create_custom_agent(
         "id": custom_agent_id,
         "agent_id": custom_agent_key,
         "name": custom_agent_name,
+        "execution_revision_id": response.json_body.get("execution_revision_id"),
     }
 
 
-def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
+def read_custom_agent_receipt(*, base_url: str, headers: Dict[str, str], custom_agent: Dict[str, Any]) -> Dict[str, Any]:
+    custom_agent_id = custom_agent["id"]
+    custom_agent_key = custom_agent["agent_id"]
+    revision_id = custom_agent.get("execution_revision_id")
+    require(isinstance(revision_id, str) and revision_id, "Custom agent create response missing executable revision")
+    revision_response = http_request(
+        "GET",
+        f"{base_url}/api/agent-studio/custom-agents/{custom_agent_id}/execution-revisions/{revision_id}",
+        headers=headers,
+    )
+    require(revision_response.status_code == 200 and isinstance(revision_response.json_body, dict),
+            f"Executable revision read failed: {revision_response.status_code}")
+    saved = revision_response.json_body
+    require(saved.get("id") == revision_id and saved.get("agent_id") == custom_agent_id,
+            "Executable revision does not match the newly created agent")
+    require(isinstance(saved.get("snapshot"), dict) and isinstance(saved["snapshot"].get("output_contract"), dict),
+            "Executable revision missing saved output contract")
+    return {
+        "agent_id": custom_agent_id,
+        "agent_key": custom_agent_key,
+        "agent_revision_id": revision_id,
+        "revision": saved["revision"],
+        "fingerprint": saved["fingerprint"],
+        "output_contract": saved["snapshot"]["output_contract"],
+    }
+
+
+def build_flow_definition(agent_id: str, agent_name: str, execution_receipt: Dict[str, Any]) -> Dict[str, Any]:
+    require(execution_receipt.get("agent_key") == agent_id, "Flow agent and executable receipt differ")
     return {
         "version": "1.1",
         "entry_node_id": "task_input_1",
@@ -1752,6 +1781,8 @@ def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
                 "data": {
                     "agent_id": agent_id,
                     "agent_display_name": agent_name,
+                    "agent_revision_id": execution_receipt["agent_revision_id"],
+                    "execution_receipt": execution_receipt,
                     "output_key": "final_output",
                     "step_goal": (
                         "Extract only crb/Crumbs from the loaded document, retain exactly one "
@@ -3171,13 +3202,14 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             evidence["resources"]["custom_agent_id"] = custom_agent["id"]
             evidence["resources"]["custom_agent_key"] = custom_agent["agent_id"]
 
+            receipt = read_custom_agent_receipt(base_url=base_url, headers=headers, custom_agent=custom_agent)
             print_step("Creating a smoke-test flow")
             flow_id = create_flow(
                 base_url=base_url,
                 headers=headers,
                 name=f"Dev Release Smoke Flow {uuid4().hex[:8]}",
                 description="Temporary dev release smoke flow",
-                flow_definition=build_flow_definition(custom_agent["agent_id"], custom_agent["name"]),
+                flow_definition=build_flow_definition(custom_agent["agent_id"], custom_agent["name"], receipt),
                 checks=checks,
                 step_name="create_flow",
             )
