@@ -2906,6 +2906,7 @@ def _persist_builder_finalization_for_supervisor(
 
     try:
         return persist_inline_validated_extraction_result(
+            execution_receipt=builder_workspace.execution_receipt,
             payload_json=builder_finalization.payload,
             document_id=document_id,
             agent_key=normalized_agent_key,

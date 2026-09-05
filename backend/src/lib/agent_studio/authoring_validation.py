@@ -75,6 +75,7 @@ class AuthoringValidationResult:
     phase: ValidationPhase
     findings: tuple[AuthoringValidationFinding, ...] = ()
     candidate: Any | None = field(default=None, compare=False, repr=False)
+    projection_fields_by_node: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def valid(self) -> bool:
@@ -92,6 +93,7 @@ class AuthoringValidationResult:
             "phase": self.phase,
             "valid": self.valid,
             "findings": [finding.to_dict() for finding in self.findings],
+            **({"projection_fields_by_node": self.projection_fields_by_node} if self.projection_fields_by_node else {}),
         }
 
 
@@ -328,6 +330,8 @@ def validate_flow_authoring_draft(
     hydrate_attachment_defaults: bool = True,
     enforce_agent_references: bool = True,
     enforce_agent_step_policy: bool = True,
+    entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
+    contract_findings: Sequence[AuthoringValidationFinding] = (),
 ) -> AuthoringValidationResult:
     """Validate one exact full ``FlowDefinition`` without writing or applying it."""
 
@@ -340,7 +344,7 @@ def validate_flow_authoring_draft(
             findings=tuple(_pydantic_flow_findings(exc, candidate)),
         )
 
-    findings: list[AuthoringValidationFinding] = []
+    findings: list[AuthoringValidationFinding] = list(contract_findings)
     stale_finding = _stale_draft_finding(
         context,
         path="flow_definition.draft_fingerprint",
@@ -369,7 +373,11 @@ def validate_flow_authoring_draft(
         agent_id = str(node.data.agent_id or "").strip()
         if not agent_id or agent_id == "task_input":
             continue
-        entry = resolve_agent(agent_id, context)
+        entry = (
+            entries_by_node[node.id]
+            if entries_by_node is not None and node.id in entries_by_node
+            else resolve_agent(agent_id, context)
+        )
         entries[node.id] = entry
         if not enforce_agent_references:
             continue
@@ -501,6 +509,11 @@ def validate_flow_authoring_draft(
         phase=phase,
         findings=tuple(findings),
         candidate=flow_definition,
+        projection_fields_by_node={
+            node_id: {"execution_receipt": entry.get("execution_receipt"), "fields": entry["projection_fields"]}
+            for node_id, entry in entries.items()
+            if entry is not None and "projection_fields" in entry
+        },
     )
 
 

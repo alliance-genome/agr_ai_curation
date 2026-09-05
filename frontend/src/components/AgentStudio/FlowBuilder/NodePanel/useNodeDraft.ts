@@ -8,7 +8,7 @@
  * variable, and validation attachment opt-outs.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { AgentMetadata } from '@/services/agentStudioService'
 import { validationAttachmentForPersistence } from '../types'
@@ -44,6 +44,7 @@ export const outputFileExtension = (agentId: string): 'csv' | 'tsv' | 'json' => 
 }
 
 export interface NodeDraftValues {
+  executionSelection: Pick<AgentNodeData, 'agent_revision_id' | 'execution_receipt'>
   customInstructions: string
   taskInstructions: string
   includeEvidence: boolean
@@ -78,6 +79,10 @@ export interface NodeDraft {
 
 function valuesFromNode(node: AgentNode, agentMetadata: Record<string, AgentMetadata>): NodeDraftValues {
   return {
+    executionSelection: node.data.agent_id.startsWith('ca_') ? {
+      agent_revision_id: node.data.agent_revision_id,
+      execution_receipt: node.data.execution_receipt,
+    } : {},
     customInstructions: node.data.custom_instructions || '',
     taskInstructions: node.data.task_instructions || '',
     includeEvidence: resolveOutputFormatterIncludeEvidence(
@@ -102,6 +107,9 @@ function joinPhrases(phrases: string[]): string {
 
 function summarizeChanges(initial: NodeDraftValues, current: NodeDraftValues, isTaskInput: boolean): string {
   const phrases: string[] = []
+  if (initial.executionSelection.agent_revision_id !== current.executionSelection.agent_revision_id) {
+    phrases.push('selected a different saved agent revision')
+  }
   if (isTaskInput) {
     if (initial.taskInstructions !== current.taskInstructions) phrases.push('changed the task instructions')
   } else if (initial.customInstructions !== current.customInstructions) {
@@ -135,11 +143,29 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
     [initialKey]
   )
   const [values, setValues] = useState<NodeDraftValues>(initial)
+  const previousSource = useRef({ nodeId: node.id, agentId: node.data.agent_id, initial })
 
-  // A new node, or the same node after Apply, resets the draft to what the node holds.
+  // A save acknowledgement may only hydrate the selected revision's receipt.
+  // Preserve unapplied edits in that case, including a different draft revision.
+  // Actual node/settings changes (including Apply) still reset the draft.
   useEffect(() => {
-    setValues(initial)
-  }, [initial])
+    const previous = previousSource.current
+    const receipt = initial.executionSelection.execution_receipt
+    const receiptOnly = previous.nodeId === node.id
+      && previous.agentId === node.data.agent_id
+      && !previous.initial.executionSelection.execution_receipt
+      && receipt?.agent_key === node.data.agent_id
+      && receipt.agent_revision_id === initial.executionSelection.agent_revision_id
+      && JSON.stringify({ ...initial, executionSelection: {
+        ...initial.executionSelection, execution_receipt: undefined,
+      } }) === JSON.stringify(previous.initial)
+    previousSource.current = { nodeId: node.id, agentId: node.data.agent_id, initial }
+    setValues((current) => receiptOnly
+      ? current.executionSelection.agent_revision_id === initial.executionSelection.agent_revision_id
+        ? { ...current, executionSelection: initial.executionSelection }
+        : current
+      : initial)
+  }, [initial, node.id, node.data.agent_id])
 
   const dirty = useMemo(() => JSON.stringify(values) !== JSON.stringify(initial), [values, initial])
   const changeSummary = useMemo(
@@ -191,6 +217,7 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
       ? resolveOutputFormatterIncludeEvidence(node.data.agent_id, agentMetadata, values.includeEvidence)
       : node.data.include_evidence
     return {
+      ...values.executionSelection,
       custom_instructions: values.customInstructions,
       include_evidence: includeEvidence,
       output_filename_template: supportsFileOutputNaming
@@ -218,6 +245,7 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
       ? resolveOutputFormatterIncludeEvidence(node.data.agent_id, agentMetadata, values.includeEvidence)
       : node.data.include_evidence
     return {
+      ...values.executionSelection,
       custom_instructions: values.customInstructions || undefined,
       include_evidence: includeEvidence,
       output_filename_template: supportsFileOutputNaming

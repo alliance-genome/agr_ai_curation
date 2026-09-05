@@ -1,3 +1,5 @@
+import type { AgentExecutionReceipt } from '../../types/agentExecution'
+
 export {
   DOMAIN_ENVELOPE_VALIDATION_STATUSES,
   EVIDENCE_ANCHOR_KINDS,
@@ -405,6 +407,7 @@ export interface CurationCandidate {
   secondary_label?: string | null
   conversation_summary?: string | null
   extraction_result_id?: string | null
+  execution_receipt?: AgentExecutionReceipt | null
   projection_ref?: DomainEnvelopeProjectionRef | null
   draft: CurationDraft
   evidence_anchors: CurationEvidenceRecord[]
@@ -524,6 +527,7 @@ export interface CurationSubmissionRecord {
 
 export interface CurationExtractionResultRecord {
   extraction_result_id: string
+  execution_receipt?: AgentExecutionReceipt | null
   document_id: string
   adapter_key?: string | null
   agent_key: string
@@ -559,6 +563,7 @@ export interface CurationSessionSummary {
 }
 
 export interface CurationReviewSession extends CurationSessionSummary {
+  execution_receipts?: AgentExecutionReceipt[]
   session_version: number
   extraction_results: CurationExtractionResultRecord[]
   latest_submission?: CurationSubmissionRecord | null
@@ -823,6 +828,7 @@ export interface CurationCandidateDecisionResponse {
 
 export interface CurationManualCandidateCreateRequest {
   session_id: string
+  agent_revision_id?: string | null
   adapter_key: string
   source?: CurationCandidateSource
   display_label?: string | null

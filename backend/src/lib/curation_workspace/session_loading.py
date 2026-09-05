@@ -17,6 +17,7 @@ SUMMARY_LOAD_OPTIONS = (
 
 DETAIL_LOAD_OPTIONS = (
     *SUMMARY_LOAD_OPTIONS,
+    selectinload(ReviewSessionModel.execution_revisions),
     selectinload(ReviewSessionModel.action_log_entries),
     selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.draft),
     selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.extraction_result),

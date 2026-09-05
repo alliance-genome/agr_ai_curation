@@ -5,7 +5,7 @@ import { webcrypto } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import FlowBuilder, { rebuildValidationGroupsFromEdges } from './FlowBuilder'
-import type { FlowAuthoringContextHandle, FlowResponse } from './types'
+import type { AgentNodeData, FlowAuthoringContextHandle, FlowResponse } from './types'
 import type { ChatContext, FlowAuthoringProposal } from '@/types/promptExplorer'
 import { fingerprintFlowDraft } from '../authoringContext'
 
@@ -32,6 +32,7 @@ const nodePanelMocks = vi.hoisted(() => ({
   takeLastLeaveOutcome: vi.fn(),
   dirty: false,
   reportDirty: null as null | ((dirty: boolean) => void),
+  apply: null as null | ((id: string, data: Partial<AgentNodeData>) => void),
 }))
 
 const reactFlowMocks = vi.hoisted(() => ({
@@ -208,11 +209,14 @@ vi.mock('./NodePanel', async (importOriginal) => {
       leaveGuardRef,
       node,
       onDraftDirtyChange,
+      onApply,
     }: {
       leaveGuardRef?: { current: unknown }
       node: { id: string; data: Record<string, unknown> }
       onDraftDirtyChange?: (dirty: boolean) => void
+      onApply: (id: string, data: Partial<AgentNodeData>) => void
     }) => {
+      nodePanelMocks.apply = onApply
       react.useEffect(() => {
         if (!leaveGuardRef) return
         const guard = {
@@ -224,7 +228,7 @@ vi.mock('./NodePanel', async (importOriginal) => {
         return () => {
           if (leaveGuardRef.current === guard) leaveGuardRef.current = null
         }
-      }, [leaveGuardRef])
+      }, [leaveGuardRef, node])
       react.useEffect(() => {
         nodePanelMocks.reportDirty = onDraftDirtyChange ?? null
         onDraftDirtyChange?.(nodePanelMocks.dirty)
@@ -783,6 +787,83 @@ describe('FlowBuilder', () => {
       name: 'Save this flow before continuing?',
     })).toBeInTheDocument()
     expect(screen.getByText('1 step')).toBeInTheDocument()
+  })
+
+  it('preserves a saved custom revision in state and the exact AI authoring snapshot', async () => {
+    const receipt = {
+      agent_id: '11111111-2222-4333-8444-555555555555', agent_key: 'ca_fixture',
+      agent_revision_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', revision: 4,
+      fingerprint: `sha256:${'a'.repeat(64)}`, output_contract: { output_state: 'none' as const },
+    }
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ flow_definition: {
+      version: '1.1', entry_node_id: 'task',
+      nodes: [
+        { id: 'task', type: 'task_input', position: { x: 0, y: 0 }, data: {
+          agent_id: 'task_input', agent_display_name: 'Task', task_instructions: 'Extract', output_key: 'task',
+        } },
+        { id: 'custom', type: 'agent', position: { x: 200, y: 0 }, data: {
+          agent_id: 'ca_fixture', agent_display_name: 'Custom', output_key: 'result',
+          agent_revision_id: receipt.agent_revision_id, execution_receipt: receipt,
+        } },
+      ], edges: [{ id: 'edge', source: 'task', target: 'custom' }],
+    } }))
+    const onFlowChange = vi.fn()
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    const { rerender } = render(<FlowBuilder onFlowChange={onFlowChange} authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+    rerender(<FlowBuilder flowId="flow-1" onFlowChange={onFlowChange} authoringContextRef={authoringRef} />)
+    await waitFor(() => expect(onFlowChange.mock.calls.at(-1)?.[0]?.nodes.find(
+      (node: { id: string }) => node.id === 'custom',
+    )).toEqual(expect.objectContaining({ agent_revision_id: receipt.agent_revision_id, execution_receipt: receipt })))
+    const captured = authoringRef.current!.captureAuthoringContext()
+    expect(captured.nodes.find((node) => node.id === 'custom')).toEqual(expect.objectContaining({
+      agent_revision_id: receipt.agent_revision_id, execution_receipt: receipt,
+    }))
+  })
+
+  it.each([false, true])('preserves edits during save acknowledgement (retarget=%s)', async (retarget) => {
+    const user = userEvent.setup()
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    const receipt = {
+      agent_id: 'agent-uuid', agent_key: 'ca_fixture', agent_revision_id: 'revision-old',
+      revision: 4, fingerprint: 'saved-fingerprint', output_contract: { output_state: 'none' as const },
+    }
+    const flow = buildFlowResponse()
+    flow.flow_definition.nodes.push({
+      id: 'custom', type: 'agent', position: { x: 200, y: 0 }, data: {
+        agent_id: 'ca_fixture', agent_display_name: 'Custom', output_key: 'result',
+        agent_revision_id: receipt.agent_revision_id,
+      },
+    })
+    flow.flow_definition.edges.push({ id: 'edge', source: 'node_0', target: 'custom' })
+    serviceMocks.getFlow.mockResolvedValue(flow)
+    let finishSave!: (response: FlowResponse) => void
+    serviceMocks.updateFlow.mockImplementation(() => new Promise<FlowResponse>((resolve) => { finishSave = resolve }))
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    const { rerender } = render(<FlowBuilder authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+    rerender(<FlowBuilder flowId="flow-1" authoringContextRef={authoringRef} />)
+    await waitFor(() => expect(authoringRef.current!.captureAuthoringContext().nodes.some((node) => node.id === 'custom')).toBe(true))
+    act(() => reactFlowMocks.onNodeClick?.({} as never, reactFlowMocks.nodes.find((node) => node.id === 'custom') as never))
+    await screen.findByTestId('node-panel-dock')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+    await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalledTimes(1))
+    act(() => nodePanelMocks.apply?.('custom', {
+      custom_instructions: 'Edited while saving',
+      ...(retarget ? { agent_revision_id: 'revision-new', execution_receipt: null } : {}),
+    }))
+    const submitted = serviceMocks.updateFlow.mock.calls[0][1].flow_definition
+    await act(async () => finishSave(buildFlowResponse({ flow_definition: {
+      ...submitted,
+      nodes: submitted.nodes.map((node: { id: string; data: AgentNodeData }) => node.id === 'custom'
+        ? { ...node, data: { ...node.data, execution_receipt: receipt } } : node),
+    } })))
+    await screen.findByText('Flow saved successfully')
+    const current = authoringRef.current!.captureAuthoringContext().nodes.find((node) => node.id === 'custom')!
+    expect(current.custom_instructions).toBe('Edited while saving')
+    expect(current.agent_revision_id).toBe(retarget ? 'revision-new' : 'revision-old')
+    expect(current.execution_receipt).toEqual(retarget ? null : receipt)
   })
 
   it('reports step_goal prompt_version and validation_groups in FlowState', async () => {

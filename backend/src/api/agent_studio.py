@@ -414,6 +414,7 @@ def _merge_custom_agents_into_catalog(
 
         prompt_info = PromptInfo(
             agent_id=custom_id,
+            agent_revision_id=(str(custom.execution_revision_id) if getattr(custom, "execution_revision_id", None) else None),
             agent_name=custom.name,
             description=custom.description or (
                 f"Custom agent from {template_name}" if template_name else "Custom scratch agent"

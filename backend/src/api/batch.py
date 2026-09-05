@@ -30,6 +30,8 @@ from ..models.sql import get_db, CurationFlow, PDFDocument
 from ..lib.observability.background_tasks import add_observed_background_task
 from ..lib.group_rules import get_groups_from_provider_groups
 from ..lib.agent_studio.agent_service import inaccessible_flow_agent_keys
+from ..lib.flows.execution_revisions import flow_execution_revision_findings, resolve_flow_execution_revisions
+from ..schemas.flows import FlowDefinition
 from ..models.sql.batch import BatchStatus, BatchDocumentStatus
 from ..models.sql.database import SessionLocal
 from ..schemas.batch import (
@@ -158,6 +160,13 @@ async def create_batch(
     active_group_ids = get_groups_from_provider_groups(
         user.get("cognito:groups", [])
     )
+    contract_findings = flow_execution_revision_findings(
+        db, flow.flow_definition or {}, user_id=db_user.id, active_group_ids=active_group_ids,
+    )
+    if contract_findings:
+        raise HTTPException(status_code=422, detail={
+            "code": "flow_execution_contract_invalid", "findings": contract_findings,
+        })
     if inaccessible_flow_agent_keys(
         db,
         flow.flow_definition or {},
@@ -167,7 +176,13 @@ async def create_batch(
         raise HTTPException(status_code=403, detail="Flow contains unavailable agents")
 
     # Validate flow is batch-compatible
-    validation = validate_flow_for_batch(flow.flow_definition)
+    revision_entries = (
+        resolve_flow_execution_revisions(db, FlowDefinition.model_validate(flow.flow_definition),
+            user_id=db_user.id, active_group_ids=active_group_ids).entries_by_node
+        if any(str(node.get("data", {}).get("agent_id", "")).startswith("ca_")
+               for node in flow.flow_definition.get("nodes", [])) else {}
+    )
+    validation = validate_flow_for_batch(flow.flow_definition, entries_by_node=revision_entries)
     if not validation.valid:
         raise HTTPException(
             status_code=400,
@@ -759,14 +774,24 @@ async def validate_flow_for_batch_endpoint(
     if not flow:
         raise HTTPException(status_code=404, detail="Flow not found")
 
+    active_group_ids = get_groups_from_provider_groups(user.get("cognito:groups", []))
+    contract_findings = flow_execution_revision_findings(
+        db, flow.flow_definition or {}, user_id=db_user.id, active_group_ids=active_group_ids,
+    )
+    if contract_findings:
+        raise HTTPException(status_code=422, detail={
+            "code": "flow_execution_contract_invalid", "findings": contract_findings,
+        })
     if inaccessible_flow_agent_keys(
-        db,
-        flow.flow_definition or {},
-        user_id=db_user.id,
-        active_group_ids=get_groups_from_provider_groups(
-            user.get("cognito:groups", [])
-        ),
+        db, flow.flow_definition or {}, user_id=db_user.id,
+        active_group_ids=active_group_ids,
     ):
         raise HTTPException(status_code=403, detail="Flow contains unavailable agents")
 
-    return validate_flow_for_batch(flow.flow_definition)
+    revision_entries = (
+        resolve_flow_execution_revisions(db, FlowDefinition.model_validate(flow.flow_definition),
+            user_id=db_user.id, active_group_ids=active_group_ids).entries_by_node
+        if any(str(node.get("data", {}).get("agent_id", "")).startswith("ca_")
+               for node in flow.flow_definition.get("nodes", [])) else {}
+    )
+    return validate_flow_for_batch(flow.flow_definition, entries_by_node=revision_entries)

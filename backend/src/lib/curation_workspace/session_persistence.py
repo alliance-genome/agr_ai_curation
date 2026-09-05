@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
+    CurationExtractionResultRecord,
+    DomainEnvelopeModel,
     CurationDraft as DraftModel,
     CurationEvidenceRecord as EvidenceRecordModel,
     CurationReviewSession as ReviewSessionModel,
@@ -32,6 +34,8 @@ from src.schemas.curation_workspace import (
     CurationCandidateStatus,
     FieldValidationResult,
 )
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
+from src.lib.curation_workspace.execution_contracts import require_extraction_conformance
 
 def _delete_session_validation_snapshots(
     db: Session,
@@ -84,8 +88,20 @@ def _persist_prepared_candidates(
 
     for candidate_input in sorted(candidates, key=lambda item: item.order):
         _validate_prepared_candidate_projection_ref(candidate_input)
+        source = None
+        if candidate_input.envelope_id is not None:
+            source = db.get(DomainEnvelopeModel, candidate_input.envelope_id)
+        elif candidate_input.extraction_result_id is not None:
+            source = db.get(CurationExtractionResultRecord, UUID(candidate_input.extraction_result_id))
+        raw_receipt = getattr(source, "execution_receipt", None)
+        receipt = AgentExecutionReceipt.model_validate(raw_receipt) if raw_receipt is not None else None
+        if receipt is not None and source is not None:
+            payload = source.envelope_json if candidate_input.envelope_id is not None else source.payload_json
+            require_extraction_conformance(db, receipt, payload, agent_key=receipt.agent_key)
         candidate_row = CurationCandidate(
             session_id=session_row.id,
+            agent_revision_id=receipt.agent_revision_id if receipt else None,
+            execution_receipt=receipt.model_dump(mode="json") if receipt else None,
             source=candidate_input.source,
             status=candidate_input.status,
             order=candidate_input.order,

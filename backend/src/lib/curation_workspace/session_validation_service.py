@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+from src.lib.curation_workspace.execution_contracts import require_candidate_conformance
 
 from src.lib.curation_workspace.adapter_registry import (
     resolve_curation_domain_envelope_validator_by_id,
@@ -162,6 +163,7 @@ def _compute_candidate_validation(
     runtime_context: ValidatorRuntimeContext | None = None,
     field_keys: Sequence[str] | None = None,
 ) -> CandidateValidationComputation:
+    require_candidate_conformance(db, candidate)
     requested_field_keys = set(field_keys or [])
     draft_fields = [
         CurationDraftFieldSchema.model_validate(field_payload)
@@ -704,6 +706,10 @@ def validate_session(
             detail=f"Unknown candidate(s) for session: {', '.join(sorted(unknown_candidate_ids))}",
         )
 
+    # Validate every selected contract before any candidate writes a snapshot
+    # or invokes a validator. A later invalid source must not partially apply.
+    for target_candidate_id in target_candidate_ids:
+        require_candidate_conformance(db, candidate_map[target_candidate_id])
     validated_at = datetime.now(timezone.utc)
     candidate_validations: list[CurationValidationSnapshotSchema] = []
     changed = False

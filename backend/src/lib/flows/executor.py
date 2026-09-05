@@ -113,6 +113,11 @@ from src.lib.flows.validation_attachments import validation_schedule_from_node_d
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
+from src.schemas.flows import FlowDefinition
+from src.lib.flows.execution_revisions import (
+    FlowExecutionRevisionError,
+    resolve_flow_execution_revisions,
+)
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
     get_active_visible_agent_metadata as get_agent_metadata,
@@ -738,12 +743,14 @@ def _build_terminal_flow_artifact_bundle(
                         )
                     ),
                 )
+        from src.lib.curation_workspace.execution_contracts import load_receipt_profile
         bundle = build_flow_output_artifact_bundle(
             completed_steps=scoped_steps,
             flow_name=flow_name,
             flow_run_id=flow_run_id,
             document_id=document_id,
             output_format=output_format,  # type: ignore[arg-type]
+            profile_resolver=load_receipt_profile,
         )
         if normalized_source_node_ids and len(bundle.artifacts) != len(
             normalized_source_node_ids
@@ -2435,6 +2442,7 @@ def _runtime_output_sources_by_node_id(
     flow: CurationFlow,
     *,
     db_user_id: int | None,
+    entries_by_node: dict[str, dict[str, Any] | None] | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Validate runtime output roles and return formatter→extractors bindings."""
 
@@ -2475,9 +2483,10 @@ def _runtime_output_sources_by_node_id(
                 if isinstance(source_data, Mapping)
                 else ""
             )
-            source_entry = _resolve_flow_agent_entry(
-                source_agent_id,
-                db_user_id=db_user_id,
+            source_entry = (
+                entries_by_node[source_node_id]
+                if entries_by_node is not None and source_node_id in entries_by_node
+                else _resolve_flow_agent_entry(source_agent_id, db_user_id=db_user_id)
             )
             if not agent_can_source_output_attachment(source_entry):
                 errors.append(
@@ -2491,7 +2500,11 @@ def _runtime_output_sources_by_node_id(
         agent_id = str(
             (node_data.get("agent_id") or "") if isinstance(node_data, Mapping) else ""
         )
-        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        entry = (
+            entries_by_node[node_id]
+            if entries_by_node is not None and node_id in entries_by_node
+            else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        )
         if _is_output_formatter_entry(entry) and node_id not in bindings:
             errors.append(
                 f"formatter node '{node_id}' must be connected as an output attachment "
@@ -2527,10 +2540,29 @@ def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
     return counts
 
 
+def _runtime_custom_entries(
+    flow: CurationFlow, *, db_user_id: int | None, active_groups: list[str] | None,
+) -> dict[str, dict[str, Any] | None]:
+    """Authorize every custom node before constructing any flow specialist."""
+    if not any(str(node.get("data", {}).get("agent_id", "")).startswith("ca_")
+               for node in flow.flow_definition.get("nodes", [])):
+        return {}
+    definition = FlowDefinition.model_validate(flow.flow_definition)
+    with SessionLocal() as db:
+        resolved = resolve_flow_execution_revisions(
+            db, definition, user_id=db_user_id, active_group_ids=list(active_groups or []),
+        )
+    blocking_findings = tuple(finding for finding in resolved.findings if finding.severity == "error")
+    if blocking_findings:
+        raise FlowExecutionRevisionError(blocking_findings)
+    return resolved.entries_by_node
+
+
 def flow_requires_document(
     flow: CurationFlow,
     *,
     db_user_id: Optional[int] = None,
+    active_groups: list[str] | None = None,
 ) -> bool:
     """Check if any agent in the flow requires a document.
 
@@ -2544,8 +2576,12 @@ def flow_requires_document(
     Returns:
         True if any agent in the flow requires a document, False otherwise
     """
-    for agent_id in get_flow_agent_ids(flow):
-        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+    custom_entries = _runtime_custom_entries(flow, db_user_id=db_user_id, active_groups=active_groups)
+    for node in _get_ordered_executable_nodes(flow):
+        node_id = str(node.get("id") or "")
+        agent_id = node.get("data", {}).get("agent_id")
+        entry = (custom_entries[node_id] if node_id in custom_entries
+                 else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id))
         if entry and entry.get("requires_document", False):
             return True
     return False
@@ -2599,11 +2635,13 @@ def get_all_agent_tools(
         (tools, created_tool_names, unavailable_steps, execution_state) where
         unavailable_steps contains skipped steps with reasons for UI warnings.
     """
+    custom_entries = _runtime_custom_entries(flow, db_user_id=db_user_id, active_groups=active_groups)
     nodes = _get_ordered_executable_nodes(flow)
     nodes_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
     output_source_by_node_id = _runtime_output_sources_by_node_id(
         flow,
         db_user_id=db_user_id,
+        entries_by_node=custom_entries,
     )
     agent_id_counts = _count_agent_ids(flow)
     all_tools = []
@@ -2666,6 +2704,7 @@ def get_all_agent_tools(
         step_number: int,
         curation_adapter_key: str | None,
         candidate_expected_from: list[str],
+        execution_receipt: dict[str, Any] | None,
         node_data: dict[str, Any],
         node_id: str,
     ):
@@ -2808,6 +2847,7 @@ def get_all_agent_tools(
                 build_extraction_envelope_candidate_with_evidence(
                     step_result,
                     agent_key=agent_id,
+                    execution_receipt=execution_receipt,
                     conversation_summary=flow_conversation_summary,
                     adapter_key=curation_adapter_key,
                     metadata={
@@ -3077,7 +3117,8 @@ def get_all_agent_tools(
             })
             continue
 
-        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        entry = (custom_entries[node_id] if node_id in custom_entries
+                 else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id))
         if not entry:
             logger.warning("[Flow Executor] Agent '%s' in flow but not resolvable, skipping", agent_id)
             unavailable_steps.append({
@@ -3282,6 +3323,10 @@ def get_all_agent_tools(
                 include_evidence=include_evidence,
             )
             agent_kwargs = dict(context)
+            if node_id in custom_entries:
+                receipt = entry["execution_receipt"]
+                agent_kwargs["execution_revision_id"] = receipt["agent_revision_id"]
+                agent_kwargs["execution_receipt"] = receipt
             if agent_id.startswith("ca_"):
                 agent_kwargs.pop("model_id_override", None)
                 agent_kwargs.pop("model_provider_override", None)
@@ -3380,6 +3425,7 @@ def get_all_agent_tools(
             node_data=data,
             curation_adapter_key=curation_adapter_key,
             candidate_expected_from=candidate_expected_from,
+            execution_receipt=entry.get("execution_receipt"),
             node_id=node_id,
         )
 
@@ -3434,7 +3480,12 @@ def build_supervisor_instructions(
         agent_id = data.get("agent_id")
 
         step_num += 1
-        resolved_entry = _resolve_flow_agent_entry(agent_id) if agent_id else None
+        # Custom display labels are saved on the node; do not read mutable custom
+        # metadata while rendering instructions after exact runtime authorization.
+        resolved_entry = (
+            _resolve_flow_agent_entry(agent_id)
+            if agent_id and not agent_id.startswith("ca_") else None
+        )
         agent_name = data.get("agent_display_name")
         if not agent_name and agent_id:
             agent_name = resolved_entry.get("name") if resolved_entry else None
@@ -3762,6 +3813,7 @@ def create_flow_supervisor(
     has_document = bool(document_id) and flow_requires_document(
         flow,
         db_user_id=db_user_id,
+        active_groups=active_groups,
     )
 
     # Build supervisor instructions with document awareness if applicable
@@ -3861,6 +3913,7 @@ def _persist_flow_extraction_candidates(
         requests.append(
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
+                execution_receipt=candidate.execution_receipt,
                 adapter_key=adapter_key,
                 agent_key=candidate.agent_key,
                 source_kind=CurationExtractionSourceKind.FLOW,

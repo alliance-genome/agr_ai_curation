@@ -8,6 +8,7 @@ import type { Ref } from 'react'
 import type { ValidationAttachmentOption } from '@/services/agentStudioService'
 import type { AgentBrowserRequest } from '../agentBrowserRequest'
 import type { FlowAuthoringProposal } from '@/types/promptExplorer'
+import type { AgentExecutionReceipt } from '@/types/agentExecution'
 
 export type { AgentBrowserRequest, AgentBrowserTab, AgentBrowserFocus } from '../agentBrowserRequest'
 
@@ -17,6 +18,7 @@ export type { AgentBrowserRequest, AgentBrowserTab, AgentBrowserFocus } from '..
 
 export interface AgentInfo {
   agent_id: string
+  agent_revision_id?: string | null
   agent_name: string
   description: string
   category: string
@@ -71,6 +73,8 @@ export interface FlowNodePosition {
 
 export interface FlowNodeData {
   agent_id: string
+  agent_revision_id?: string | null
+  execution_receipt?: AgentExecutionReceipt | null
   agent_display_name: string
   agent_description?: string
   /** Curator's task/request that initiates the flow (required for task_input nodes) */
@@ -237,6 +241,8 @@ export interface FlowState {
     type: NodeType
     position: FlowNodePosition
     agent_id: string
+    agent_revision_id?: string | null
+    execution_receipt?: AgentExecutionReceipt | null
     agent_display_name: string
     agent_description?: string
     task_instructions?: string

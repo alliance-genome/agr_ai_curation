@@ -187,6 +187,9 @@ class CurationReviewSession(Base):
         back_populates="session",
         order_by="CurationCandidate.order",
     )
+    execution_revisions: Mapped[list["CurationSessionAgentRevision"]] = relationship(
+        "CurationSessionAgentRevision", viewonly=True,
+    )
     validation_snapshots: Mapped[list["CurationValidationSnapshot"]] = relationship(
         "CurationValidationSnapshot",
         back_populates="session",
@@ -232,10 +235,29 @@ class CurationReviewSession(Base):
     )
 
 
+class CurationSessionAgentRevision(Base):
+    """All producing revisions retained by a session, including empty sources."""
+
+    __tablename__ = "curation_session_agent_revisions"
+    session_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True),
+        ForeignKey("curation_review_sessions.id", ondelete="CASCADE"), primary_key=True)
+    agent_revision_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True),
+        ForeignKey("agent_execution_revisions.id", ondelete="RESTRICT"), primary_key=True)
+    execution_receipt: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
 class CurationExtractionResultRecord(Base):
     """Persisted extraction envelope used to seed review sessions."""
 
     __tablename__ = "extraction_results"
+
+    agent_revision_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("agent_execution_revisions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    execution_receipt: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
 
     id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
@@ -308,6 +330,12 @@ class DomainEnvelopeModel(Base):
     """Revisioned semantic source of truth for domain-pack curation state."""
 
     __tablename__ = "domain_envelopes"
+
+    agent_revision_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True), ForeignKey("agent_execution_revisions.id", ondelete="RESTRICT"),
+        nullable=True, index=True,
+    )
+    execution_receipt: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
 
     envelope_id: Mapped[str] = mapped_column(String(), primary_key=True)
     revision: Mapped[int] = mapped_column(
@@ -397,6 +425,9 @@ class DomainEnvelopeModel(Base):
 
     __table_args__ = (
         CheckConstraint("revision >= 1", name="ck_domain_envelopes_revision"),
+        ForeignKeyConstraint(["session_id", "agent_revision_id"],
+            ["curation_session_agent_revisions.session_id", "curation_session_agent_revisions.agent_revision_id"],
+            name="fk_domain_envelopes_session_execution", ondelete="RESTRICT"),
         CheckConstraint(
             "session_id IS NOT NULL OR source_extraction_result_id IS NOT NULL",
             name="ck_domain_envelopes_owner_association",
@@ -731,6 +762,10 @@ class CurationCandidate(Base):
 
     __tablename__ = "curation_candidates"
 
+    agent_revision_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True),
+        ForeignKey("agent_execution_revisions.id", ondelete="RESTRICT"), nullable=True, index=True)
+    execution_receipt: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+
     id: Mapped[UUID] = mapped_column(
         PostgresUUID(as_uuid=True),
         primary_key=True,
@@ -843,6 +878,9 @@ class CurationCandidate(Base):
             deferrable=True,
             initially="DEFERRED",
         ),
+        ForeignKeyConstraint(["session_id", "agent_revision_id"],
+            ["curation_session_agent_revisions.session_id", "curation_session_agent_revisions.agent_revision_id"],
+            name="fk_curation_candidates_session_execution", ondelete="RESTRICT"),
         CheckConstraint('"order" >= 0', name="ck_curation_candidates_order"),
         CheckConstraint(
             "(envelope_id IS NULL AND object_id IS NULL AND envelope_revision IS NULL) "

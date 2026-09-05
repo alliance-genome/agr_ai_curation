@@ -761,6 +761,28 @@ def _validate_exact_flow_for_current_user(
         active_group_ids=get_current_active_group_ids(),
     )
     accessible_entries = _accessible_flow_agents()
+    # Exact custom revisions may differ between nodes and from today's palette.
+    # Resolve them separately without changing the curator's transient draft.
+    from pydantic import ValidationError
+    from src.schemas.flows import FlowDefinition
+    from src.models.sql.database import SessionLocal
+    from src.lib.flows.execution_revisions import resolve_flow_execution_revisions
+
+    node_entries = {}
+    contract_findings = ()
+    try:
+        parsed = FlowDefinition.model_validate(flow_definition)
+    except ValidationError:
+        parsed = None  # The canonical validator below supplies schema findings.
+    if parsed is not None and any(node.data.agent_id.startswith("ca_") for node in parsed.nodes):
+        with SessionLocal() as db:
+            resolved = resolve_flow_execution_revisions(
+                db, parsed, user_id=context.db_user_id,
+                active_group_ids=list(context.active_group_ids),
+            )
+        node_entries = resolved.entries_by_node
+        contract_findings = resolved.findings
+        flow_definition = resolved.definition
     resolved_entries: dict[str, Mapping[str, Any]] = {}
 
     def _resolve(agent_id: str, auth: AuthoringValidationContext):
@@ -772,6 +794,8 @@ def _validate_exact_flow_for_current_user(
         return entry
 
     def _apply_defaults(candidate: "FlowDefinition") -> "FlowDefinition":
+        if node_entries:
+            return apply_flow_validation_attachment_defaults(candidate, entries_by_node=node_entries)
         node_ids = {
             str(node.data.agent_id or "").strip()
             for node in candidate.nodes
@@ -799,6 +823,8 @@ def _validate_exact_flow_for_current_user(
         resolve_agent=_resolve,
         apply_attachment_defaults=_apply_defaults,
         phase=phase,
+        entries_by_node=node_entries,
+        contract_findings=contract_findings,
     )
 
 
@@ -1407,6 +1433,11 @@ def _compile_flow_operations(
                 "validation_attachments": [],
                 "validation_groups": [],
             }
+            if agent_id.startswith("ca_"):
+                revision_id = agent.get("agent_revision_id")
+                if not revision_id:
+                    raise _FlowProposalCompileError("Custom agent has no selectable executable revision.")
+                data["agent_revision_id"] = str(revision_id)
             if is_output:
                 data["include_evidence"] = bool(operation.get("include_evidence", True))
                 if operation.get("output_filename_template"):
@@ -1535,6 +1566,22 @@ def _compile_flow_operations(
                     if referenced_id != node_id
                 }
             )
+            continue
+
+        if op == "retarget_agent_revision":
+            from uuid import UUID
+
+            target = node_by_id(node_id)
+            if not str(target["data"].get("agent_id", "")).startswith("ca_"):
+                raise _FlowProposalCompileError("Only custom-agent nodes have executable revision pins.")
+            try:
+                revision_id = str(UUID(str(operation.get("agent_revision_id") or "")))
+            except ValueError as exc:
+                raise _FlowProposalCompileError("Select an exact executable revision UUID.") from exc
+            target["data"]["agent_revision_id"] = revision_id
+            target["data"].pop("execution_receipt", None)
+            # Exact validation below derives the new revision's own output/profile
+            # receipt. Never retain the previous profile alongside a new agent pin.
             continue
 
         if op == "update_step":
@@ -2640,6 +2687,20 @@ def _current_flow_findings(
         if finding is not None:
             findings.append(finding)
 
+    if any(str(_flow_node_data(node).get("agent_id", "")).startswith("ca_") for node in nodes):
+        from src.models.sql.database import SessionLocal
+        from src.lib.flows.execution_revisions import flow_execution_revision_findings
+
+        with SessionLocal() as db:
+            contract_findings = flow_execution_revision_findings(
+                db, _flow_context_definition(get_current_flow_context() or {}),
+                user_id=get_current_user_id(), active_group_ids=list(get_current_active_group_ids()),
+            )
+        findings.extend({
+            **finding, "severity": "CRITICAL",
+            "node_ids": [finding["node_id"]] if finding.get("node_id") else [],
+        } for finding in contract_findings)
+
     return findings
 
 
@@ -3347,6 +3408,7 @@ application-generated node IDs.""",
                                     "add_agent_step",
                                     "remove_step",
                                     "update_step",
+                                    "retarget_agent_revision",
                                     "connect_steps",
                                     "disconnect_steps",
                                     "reorder_control_steps",
@@ -3361,6 +3423,7 @@ application-generated node IDs.""",
                             },
                             "task_instructions": {"type": "string"},
                             "agent_id": {"type": "string"},
+                            "agent_revision_id": {"type": "string", "description": "Exact immutable custom-agent revision UUID for explicit retargeting."},
                             "step_ref": {
                                 "type": "string",
                                 "description": "Proposal-local semantic name for a newly added step.",

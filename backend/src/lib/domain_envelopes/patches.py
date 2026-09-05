@@ -25,8 +25,13 @@ from src.schemas.domain_envelope import (
     validate_field_path_syntax,
 )
 from src.schemas.domain_pack_metadata import DomainPackFieldDefinition
+from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
 
 _MISSING = object()
+
+
+def is_generic_attribute_path(path: str) -> bool:
+    return path == "attributes" or path.startswith("attributes.") or path.startswith("attributes[")
 
 
 class EnvelopeFieldPatchOperation(str, Enum):
@@ -83,12 +88,15 @@ def apply_curator_field_patch(
     current_revision: int,
     actor_id: str,
     registry: DomainPackValidationRegistry | None = None,
+    profile: ResolvedGenericProfile | None = None,
 ) -> EnvelopeFieldPatchResult:
     """Validate and apply one curator field edit to a domain envelope.
 
     The patch is accepted only when the expected revision matches, the object
-    exists, the field path is declared editable by the domain pack, the target
-    is not protected, and ``before`` matches the current object payload value.
+    exists, the field path is editable under the domain pack or bound profile,
+    and ``before`` matches the current object payload value. Profile attribute
+    edits require the exact saved pin and closed profile conformance; other
+    fields retain the domain pack's protected/editable policy.
     """
 
     validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(
@@ -139,7 +147,11 @@ def apply_curator_field_patch(
             domain_object.object_type,
             patch.field_path,
         )
-        if field_definition is None:
+        if profile is not None and is_generic_attribute_path(patch.field_path):
+            # The saved closed profile, not the global generic pack, owns these
+            # paths. Validate the replacement below before any history mutation.
+            profile.require_receipt(domain_object.metadata.get("generic_profile_ref", {}))
+        elif field_definition is None:
             errors.append(
                 f"field_path '{patch.field_path}' is not declared for object_type "
                 f"'{domain_object.object_type}'"
@@ -186,8 +198,15 @@ def apply_curator_field_patch(
     assert object_ref is not None
 
     staged_payload = copy.deepcopy(domain_object.payload)
+    if profile is not None and is_generic_attribute_path(patch.field_path):
+        staged_payload["attributes"] = profile.patch_attributes(
+            staged_payload.get("attributes", {}),
+            [{"field_path": patch.field_path, "value": patch.value}],
+            candidate_id=patch.object_id,
+        )
     try:
-        _set_payload_value(staged_payload, patch.field_path, patch.value)
+        if profile is None or not is_generic_attribute_path(patch.field_path):
+            set_payload_value(staged_payload, patch.field_path, patch.value)
     except ValueError as exc:
         rejected = _with_rejection_history(
             envelope=envelope,
@@ -405,7 +424,8 @@ def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
     return current
 
 
-def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> None:
+def set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> None:
+    """Set a canonical object/index path without coercion or sparse arrays."""
     _ensure_json_compatible(value, field_name="value")
     parts = parse_field_path(field_path)
     current: Any = payload

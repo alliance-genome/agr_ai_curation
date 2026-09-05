@@ -3,6 +3,8 @@
  * Mirrors the backend Pydantic models.
  */
 
+import type { AgentExecutionReceipt } from './agentExecution'
+
 // ============================================================================
 // Agent Documentation Types
 // ============================================================================
@@ -91,6 +93,7 @@ export interface CombinedPromptResponse {
 
 // Individual agent prompt information
 export interface PromptInfo {
+  agent_revision_id?: string | null
   agent_id: string
   agent_name: string
   description: string
@@ -296,6 +299,8 @@ export interface FlowContextDefinition {
     node_type: 'agent' | 'decision' | 'output' | 'task_input'
     position: { x: number; y: number }
     agent_id: string
+    agent_revision_id?: string | null
+    execution_receipt?: AgentExecutionReceipt | null
     agent_display_name: string
     agent_description?: string
     task_instructions?: string  // For task_input nodes

@@ -11,6 +11,7 @@ Defines data structures for:
 from typing import Annotated, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from datetime import datetime
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
 
 # ============================================================================
@@ -115,6 +116,7 @@ class PromptInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(..., description="Unique agent identifier (e.g., 'supervisor', 'gene_expression')")
+    agent_revision_id: Optional[str] = Field(None, description="Current immutable custom revision offered for explicit flow selection")
     agent_name: str = Field(..., description="Human-readable agent name")
     description: str = Field(..., description="Brief description of what the agent does")
     base_prompt: str = Field(..., description="Base prompt instructions (before group-rule injection)")
@@ -214,6 +216,8 @@ class FlowNodeContext(BaseModel):
     node_type: str = "agent"
     position: Dict[str, float]
     agent_id: str
+    agent_revision_id: Optional[str] = None
+    execution_receipt: Optional[AgentExecutionReceipt] = None
     agent_display_name: str
     agent_description: Optional[str] = None
     task_instructions: Optional[str] = None  # For task_input nodes

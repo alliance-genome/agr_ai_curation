@@ -504,7 +504,7 @@ async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
     monkeypatch.setattr(
         flows_api,
         "apply_flow_validation_attachment_defaults",
-        lambda flow_definition: flow_definition,
+        lambda flow_definition, *, entries_by_node=None: flow_definition,
     )
     monkeypatch.setattr(
         flows_api,
@@ -560,7 +560,7 @@ def test_unavailable_step_fixture_has_consistent_save_load_runtime_and_batch_dia
     monkeypatch.setattr(
         flows_api,
         "apply_flow_validation_attachment_defaults",
-        lambda flow_definition: flow_definition,
+        lambda flow_definition, *, entries_by_node=None: flow_definition,
     )
     monkeypatch.setattr(
         flows_api,

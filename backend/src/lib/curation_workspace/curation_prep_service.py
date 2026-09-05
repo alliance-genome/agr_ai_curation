@@ -426,6 +426,7 @@ def ensure_domain_envelope_materialization(
                     project_key=project_key,
                     envelope=envelope,
                     expected_revision=0,
+                    execution_receipt=extraction_result.execution_receipt,
                     document_id=extraction_result.document_id,
                     flow_run_id=extraction_result.flow_run_id,
                     adapter_key=adapter_key,

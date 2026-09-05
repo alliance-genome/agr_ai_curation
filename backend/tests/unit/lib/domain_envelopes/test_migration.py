@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.lib.curation_workspace.models import (
+    CurationSessionAgentRevision,
     CurationActionLogEntry,
     CurationCandidate,
     CurationDraft,
@@ -70,6 +71,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 TEST_TABLES = [
     PDFDocument.__table__,
     CurationReviewSession.__table__,
+    CurationSessionAgentRevision.__table__,
     CurationExtractionResultRecord.__table__,
     DomainEnvelopeModel.__table__,
     DomainEnvelopeObject.__table__,

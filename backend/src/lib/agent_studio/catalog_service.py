@@ -2319,6 +2319,10 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
         return {
             "agent_id": agent_id,
             "display_name": db_agent.name,
+            "agent_revision_id": (
+                str(db_agent.execution_revision_id)
+                if agent_id.startswith("ca_") and getattr(db_agent, "execution_revision_id", None) else None
+            ),
             "description": db_agent.description,
             "category": getattr(db_agent, "category", None)
             or (agent_definition.category if agent_definition is not None else None),

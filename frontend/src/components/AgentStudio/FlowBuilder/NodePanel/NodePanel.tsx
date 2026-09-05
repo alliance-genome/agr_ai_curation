@@ -45,6 +45,7 @@ import {
 } from '../agentMetadataUtils'
 import type { AgentBrowserRequest, AgentNode, AgentNodeData, OutputBindingView } from '../types'
 import AutomaticChecks from './AutomaticChecks'
+import ExecutionRevisionPicker from './ExecutionRevisionPicker'
 import NodePanelHeader from './NodePanelHeader'
 import type { NodePanelStatus } from './NodePanelHeader'
 import UnsavedEditsDialog from './UnsavedEditsDialog'
@@ -235,7 +236,9 @@ function NodePanel({
   const stepLabel = `Step ${stepNumber} of ${stepCount}`
   const stepDetail = isTaskInput
     ? 'task input'
-    : `${agentId}${node.data.prompt_version ? ` v${node.data.prompt_version}` : ''}`
+    : agentId.startsWith('ca_')
+      ? `${agentId} · ${draft.values.executionSelection.execution_receipt ? `revision ${draft.values.executionSelection.execution_receipt.revision}` : draft.values.executionSelection.agent_revision_id ? 'saved revision selected' : 'revision selection required'}`
+      : `${agentId}${node.data.prompt_version ? ` v${node.data.prompt_version}` : ''}`
 
   const fileExtension = outputFileExtension(agentId)
   const filenamePreviewPrefix = draft.values.outputFilenameMode === 'source_pdf'
@@ -275,6 +278,14 @@ function NodePanel({
       />
 
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 1.75, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {agentId.startsWith('ca_') && (
+          <ExecutionRevisionPicker
+            key={`${node.id}:${agentId}`}
+            agentKey={agentId}
+            selection={draft.values.executionSelection}
+            onChange={(selection) => draft.set('executionSelection', selection)}
+          />
+        )}
         {kind === 'input' && (
           <Section
             heading="Task instructions"

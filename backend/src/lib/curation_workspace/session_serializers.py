@@ -370,6 +370,7 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
 
     return CurationCandidatePayload(
         candidate_id=str(candidate.id),
+        execution_receipt=getattr(candidate, "execution_receipt", None),
         session_id=str(candidate.session_id),
         source=candidate.source,
         status=candidate.status,
@@ -509,6 +510,7 @@ def _extraction_records(session: ReviewSessionModel) -> list[CurationExtractionR
         extraction_results.append(
             CurationExtractionResultRecord(
                 extraction_result_id=str(extraction_result.id),
+                execution_receipt=getattr(extraction_result, "execution_receipt", None),
                 document_id=str(extraction_result.document_id),
                 adapter_key=extraction_result.adapter_key,
                 agent_key=extraction_result.agent_key,
@@ -567,6 +569,7 @@ def _session_detail(
     return CurationReviewSession(
         **summary_payload,
         session_version=session.session_version,
+        execution_receipts=[row.execution_receipt for row in getattr(session, "execution_revisions", [])],
         extraction_results=_extraction_records(session),
         latest_submission=latest_submission,
         submitted_at=session.submitted_at,
@@ -961,6 +964,7 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
     ]
     return CurationCandidatePayload(
         candidate_id=str(candidate.id),
+        execution_receipt=getattr(candidate, "execution_receipt", None),
         session_id=str(candidate.session_id),
         source=candidate.source,
         status=candidate.status,

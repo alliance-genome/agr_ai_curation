@@ -43,12 +43,12 @@ def domain_envelope_from_extraction_result(
 
     if is_canonical_domain_envelope_payload(payload):
         envelope = DomainEnvelope.model_validate(payload)
+        metadata = dict(envelope.metadata)
+        metadata.pop("execution_receipt", None)
+        metadata.update(_authoritative_source_metadata(extraction_result))
         return envelope.model_copy(
             update={
-                "metadata": {
-                    **dict(envelope.metadata),
-                    **_authoritative_source_metadata(extraction_result),
-                }
+                "metadata": metadata,
             }
         )
 
@@ -111,6 +111,8 @@ def _authoritative_source_metadata(
         "source_agent_key": extraction_result.agent_key,
         "source_adapter_key": resolve_extraction_adapter_key(extraction_result),
         "source_kind": extraction_result.source_kind.value,
+        **({"execution_receipt": extraction_result.execution_receipt.model_dump(mode="json")}
+           if extraction_result.execution_receipt else {}),
     }
 
 

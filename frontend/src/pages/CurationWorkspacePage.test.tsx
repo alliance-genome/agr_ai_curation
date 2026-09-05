@@ -743,6 +743,11 @@ describe('CurationWorkspacePage', () => {
   it('creates a manual object from the envelope work pane toolbar', async () => {
     const user = userEvent.setup()
     const workspace = buildEnvelopeWorkspace()
+    workspace.candidates[0].execution_receipt = {
+      agent_id: 'agent-1', agent_key: 'ca_agent-1', agent_revision_id: 'saved-revision-1',
+      revision: 2, fingerprint: 'sha256:fixture',
+      output_contract: { output_state: 'structured_extraction', output_mode: 'domain', output_schema_key: 'gene' },
+    }
     const templateField = workspace.candidates[0].draft.fields[0]
     workspace.candidates[0].draft.fields = [
       {
@@ -826,6 +831,7 @@ describe('CurationWorkspacePage', () => {
     await waitFor(() => {
       expect(serviceMocks.createManualCurationCandidate).toHaveBeenCalledWith({
         session_id: 'session-1',
+        agent_revision_id: 'saved-revision-1',
         adapter_key: 'entity_adapter',
         source: 'manual',
         display_label: 'manual gene',

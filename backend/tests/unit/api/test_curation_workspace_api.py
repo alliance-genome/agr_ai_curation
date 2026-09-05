@@ -80,6 +80,26 @@ def test_run_curation_mutation_rolls_back_helper_failure():
     assert db.rollback_calls == 1
 
 
+@pytest.mark.parametrize("identity", [False, True])
+def test_profile_failure_rolls_back_and_returns_structured_422(identity):
+    db = _TransactionSpy()
+    findings = [{"field_path": "attributes.count", "reason": "wrong_type"}]
+    error = (
+        module.ProfileIdentityError("Saved output structure does not match")
+        if identity else module.ProfileConformanceError(findings)
+    )
+    with pytest.raises(module.HTTPException) as caught:
+        module._run_curation_mutation(db, lambda: (_ for _ in ()).throw(error))
+    assert caught.value.status_code == 422
+    assert caught.value.detail["code"] == (
+        "output_structure_identity" if identity else "output_structure_conformance"
+    )
+    if not identity:
+        assert caught.value.detail["findings"] == findings
+    assert db.commit_calls == 0
+    assert db.rollback_calls == 1
+
+
 def _anchor() -> EvidenceAnchor:
     return EvidenceAnchor(
         anchor_kind=EvidenceAnchorKind.SNIPPET,

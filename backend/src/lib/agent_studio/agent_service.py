@@ -179,6 +179,7 @@ def inaccessible_flow_agent_keys(
     """Return referenced agent keys unavailable under the current auth snapshot."""
 
     inaccessible: List[str] = []
+    groups = list(active_group_ids)
     nodes = flow_definition.get("nodes", [])
     if not isinstance(nodes, list):
         return inaccessible
@@ -191,11 +192,28 @@ def inaccessible_flow_agent_keys(
         agent_key = str(data.get("agent_id") or "").strip()
         if not agent_key or agent_key == "task_input" or agent_key in inaccessible:
             continue
+        if agent_key.startswith("ca_"):
+            # Current visibility still applies, but saved executable policy is
+            # authoritative: an archived/edited head must not change a flow pin.
+            from src.lib.agent_studio.execution_revision_service import authorize_execution_receipt
+            from src.schemas.flows import FlowNodeData
+
+            try:
+                parsed = FlowNodeData.model_validate(data)
+                if parsed.agent_revision_id is None or parsed.execution_receipt is None:
+                    raise ValueError("Missing executable pin")
+                authorize_execution_receipt(
+                    db, parsed.execution_receipt.model_dump(mode="json"), user_id,
+                    active_group_ids=groups,
+                )
+            except ValueError:
+                inaccessible.append(agent_key)
+            continue
         if get_agent_by_key(
             db,
             agent_key,
             user_id=user_id,
-            active_group_ids=active_group_ids,
+            active_group_ids=groups,
         ) is None:
             inaccessible.append(agent_key)
     return inaccessible

@@ -8,6 +8,15 @@ export interface GenericProfilePin {
   fingerprint: string
 }
 
+export interface AgentExecutionReceipt {
+  agent_id: string
+  agent_key: string
+  agent_revision_id: string
+  revision: number
+  fingerprint: string
+  output_contract: AgentOutputContract
+}
+
 export type AgentOutputContract =
   | { output_state: 'none'; output_mode?: null; output_schema_key?: null; generic_profile_ref?: null }
   | { output_state: 'structured_extraction'; output_mode: 'domain'; output_schema_key: string; generic_profile_ref?: null }

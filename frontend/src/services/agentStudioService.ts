@@ -35,7 +35,7 @@ import {
   type ChatHistoryListResponse,
 } from '@/services/chatHistoryApi'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
-import type { AgentOutputContract, AgentExecutionRevision, AgentExecutionRevisionPage } from '@/types/agentExecution'
+import type { AgentOutputContract, AgentExecutionReceipt, AgentExecutionRevision, AgentExecutionRevisionPage } from '@/types/agentExecution'
 import type { GenericProfileContract } from '@/services/genericProfileService'
 
 const BASE_URL = '/api/agent-studio'
@@ -1170,6 +1170,20 @@ export async function updateFlow(
 }
 
 export interface FlowDraftValidationResponse {
+  projection_fields_by_node?: Record<string, {
+    execution_receipt: AgentExecutionReceipt
+    fields: Array<{
+      ref: string
+      profile_path: string
+      label: string
+      value_type: string
+      schema_kind: string
+      array_depth: number
+      required: boolean
+      nullable: boolean
+      enum_values: string[]
+    }>
+  }>
   artifact_kind: 'flow'
   phase: 'pre_apply' | 'post_apply'
   valid: boolean

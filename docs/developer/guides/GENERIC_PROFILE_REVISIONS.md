@@ -109,6 +109,67 @@ response-format compatibility mode is unnecessary for builder agents because the
 model `output_type` is intentionally `None`. Tests inspect the final SDK parameters
 after adapter/rebinding steps; this is distinct from live-provider smoke evidence.
 
+## Saved flows, results, and curator edits
+
+Each custom flow node selects an `agent_revision_id`. Its execution receipt is
+derived from that exact authorized revision; saving, loading, AI verification,
+chat/batch preflight, and execution do not substitute the mutable agent head.
+System nodes remain ID-based. A legacy custom node without a resolvable pin can
+be inspected with findings but cannot execute. `prompt_version` remains audit
+metadata, not an executable identity. Flows themselves remain mutable; there is
+no whole-flow snapshot or copied profile definition in node JSON.
+
+The node panel browses saved executable revisions with Apply/Cancel semantics.
+AI retargeting uses `retarget_agent_revision` with an explicit revision UUID and
+reverifies the resulting output contract. A save acknowledgement may hydrate the
+same revision's receipt without discarding newer unapplied panel edits.
+
+Extraction results and domain envelopes retain both the full execution receipt
+and a normalized revision foreign key. Reusing an idempotency identity with a
+different receipt is rejected. Workspace sessions can contain multiple source
+revisions: session membership records those revisions and each candidate retains
+its own source receipt. Manual candidates select an existing session revision;
+only an unambiguous single source is inferred. They cannot independently choose
+a profile or use the latest head.
+
+`curation_workspace/execution_contracts.py` applies the same closed profile checks
+at result persistence, envelope checkpoints, manual create/edit, validation/cache
+reuse, and submission/export payload construction. Nested curator attribute edits
+use the saved profile's `patch_attributes`, not global generic-pack declarations.
+The ordinary domain-pack protected/editable policy still owns non-attribute paths.
+Invalid profile edits return structured conformance/identity findings through the
+Workspace API without persisting partial candidate or envelope changes.
+Reset also rebuilds a profiled manual candidate's canonical payload from its
+validated seed fields. Historical receipt-less envelopes remain editable without
+inventing a revision. First materialization of a historical custom result requires
+a stored receipt-less source with matching producer and document; new custom
+extraction writes still require their exact receipt.
+
+## Profile-aware formatter projections
+
+The exact saved contract supplies recursive field discovery, including optional
+fields absent from every result. `attributes.sources[].name` is exposed through
+the existing `object.attribute.sources[].name` row-reference namespace. Field
+catalogs carry declared kinds, array depth, nullability, enum values, and source
+receipts. They are transient authoring/runtime metadata, not a second editable
+definition. Empty extractions still expose a catalog; they do not bypass existing
+canonical-object requirements for curation TSV exports.
+
+Array traversal retains every list level and missing/null slot. Parallel name
+and identifier arrays remain aligned for existing `pair_join` and conditional
+transforms; projection does not coerce or rewrite source values.
+
+Saved-flow verification rejects missing profile references and incompatible
+numeric predicates, including conditions inside columns. Intentional unprofiled
+generic sources report undeclared-field warnings without acquiring an invented
+schema. Runtime `source_keys` and `source_extraction_result_ids` are artifact
+identities, not graph node IDs; either selector can include a source. If attached
+profiles disagree about a numeric field and a plan explicitly selects runtime
+sources, authoring reports a deferred source-type warning rather than assuming
+which node the selector names. Runtime validation checks the declared types of
+the actual selected sources before export. Nonselective incompatible predicates
+remain authoring errors.
+
 ## Optional semantic validator mappings
 
 `validator_mappings` is a typed immutable part of a profile revision, not an

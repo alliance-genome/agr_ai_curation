@@ -14,7 +14,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.lib.domain_envelope_payload_hash import canonical_domain_envelope_payload_hash
+from src.lib.curation_workspace.execution_contracts import require_extraction_conformance
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.curation_workspace.models import (
+    CurationExtractionResultRecord,
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
     DomainEnvelopeObject,
@@ -96,6 +99,7 @@ class DomainEnvelopeCheckpointRequest:
     project_key: str
     envelope: DomainEnvelope
     expected_revision: int
+    execution_receipt: AgentExecutionReceipt | None = None
     document_id: str | UUID | None = None
     session_id: str | UUID | None = None
     flow_run_id: str | None = None
@@ -147,6 +151,32 @@ def write_domain_envelope_checkpoint(
         .where(DomainEnvelopeModel.envelope_id == envelope.envelope_id)
         .with_for_update()
     ).first()
+
+    stored_receipt = getattr(envelope_row, "execution_receipt", None) if envelope_row is not None else None
+    receipt = AgentExecutionReceipt.model_validate(stored_receipt) if stored_receipt is not None else request.execution_receipt
+    if envelope_row is not None and request.execution_receipt is not None and (
+        request.execution_receipt.model_dump(mode="json") != stored_receipt
+    ):
+        raise DomainEnvelopePersistenceError("An existing envelope cannot change its execution receipt")
+    receipt_json = receipt.model_dump(mode="json") if receipt is not None else None
+    if envelope.metadata.get("execution_receipt") != receipt_json:
+        raise DomainEnvelopePersistenceError("Envelope metadata must retain its authoritative execution receipt")
+    producer = receipt.agent_key if receipt else str(envelope.metadata.get("source_agent_key") or "")
+    historical_source = envelope_row is not None
+    if (receipt is None and not historical_source and producer.startswith("ca_")
+            and request.source_extraction_result_id is not None):
+        source = db.get(CurationExtractionResultRecord, _optional_uuid(
+            request.source_extraction_result_id, field_name="source_extraction_result_id",
+        ))
+        historical_source = (
+            source is not None and source.execution_receipt is None
+            and source.agent_revision_id is None and source.agent_key == producer
+            and source.document_id == _optional_uuid(request.document_id, field_name="document_id")
+        )
+    # Stored pre-receipt sources retain their historical semantics. A new
+    # custom extraction still requires a receipt; never infer today's head.
+    if receipt is not None or not historical_source:
+        require_extraction_conformance(db, receipt, envelope.model_dump(mode="json"), agent_key=producer)
 
     if envelope_row is None:
         if request.expected_revision != 0:
@@ -224,6 +254,8 @@ def write_domain_envelope_checkpoint(
     ).model_dump(mode="json")
 
     envelope_row.project_key = project_key
+    envelope_row.agent_revision_id = receipt.agent_revision_id if receipt else None
+    envelope_row.execution_receipt = receipt_json
     envelope_row.domain_pack_key = envelope.domain_pack_id
     envelope_row.domain_pack_version = envelope.domain_pack_version
     envelope_row.status = envelope.status

@@ -395,10 +395,12 @@ def _build_chat_formatter_bundle(
 
     try:
         from src.lib.flows.output_projection import build_extraction_result_artifact_bundle
+        from src.lib.curation_workspace.execution_contracts import load_receipt_profile
 
         bundle = build_extraction_result_artifact_bundle(
             extraction_results=records,
             bundle_name="Chat Extraction Results",
+            profile_resolver=load_receipt_profile,
             document_id=resolved_document_id,
         )
         latest_record = _latest_extraction_result(records)

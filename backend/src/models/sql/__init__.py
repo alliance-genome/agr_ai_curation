@@ -10,6 +10,7 @@ from .custom_agent import CustomAgentVersion
 from .generic_extraction_profile import GenericExtractionProfile, GenericExtractionProfileRevision
 from .profile_validator_capability import ProfileValidatorCapability, ProfileValidatorCapabilityReference
 from .curation_flow import CurationFlow
+from .curation_flow_agent_revision import CurationFlowAgentRevision
 from .database import Base, SessionLocal, engine, get_db
 from .file_output import FileOutput, FileType
 from .ontology import Ontology
@@ -43,6 +44,7 @@ __all__ = [
     "ProfileValidatorCapability",
     "ProfileValidatorCapabilityReference",
     "CurationFlow",
+    "CurationFlowAgentRevision",
     "FileOutput",
     "FileType",
     "SessionLocal",

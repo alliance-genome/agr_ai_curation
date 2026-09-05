@@ -594,7 +594,7 @@ def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
     monkeypatch.setattr(
         flows,
         "apply_flow_validation_attachment_defaults",
-        lambda flow_definition: flow_definition,
+        lambda flow_definition, **_kwargs: flow_definition,
     )
     monkeypatch.setattr(
         flows,

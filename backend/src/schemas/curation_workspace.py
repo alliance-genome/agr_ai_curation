@@ -6,6 +6,7 @@ interfaces rather than in the shared workspace substrate.
 """
 
 from __future__ import annotations
+from uuid import UUID
 
 from datetime import datetime
 from enum import Enum
@@ -21,6 +22,7 @@ from pydantic import (
 )
 
 from src.schemas.domain_envelope import validate_field_path_syntax
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
 
 class EvidenceAnchorKind(str, Enum):
@@ -1068,6 +1070,7 @@ class CurationCandidate(CurationWorkspaceBaseModel):
     """Curator-reviewable candidate with draft, evidence, and validation state."""
 
     candidate_id: str = Field(description="Candidate identifier")
+    execution_receipt: AgentExecutionReceipt | None = None
     session_id: str = Field(description="Owning session identifier")
     source: CurationCandidateSource = Field(description="Candidate origin")
     status: CurationCandidateStatus = Field(description="Current curator decision state")
@@ -1507,6 +1510,7 @@ class CurationExtractionResultRecord(CurationWorkspaceBaseModel):
     """Persisted extraction envelope contract used for replay and session bootstrap."""
 
     extraction_result_id: str = Field(description="Extraction result identifier")
+    execution_receipt: AgentExecutionReceipt | None = None
     document_id: str = Field(description="Document identifier")
     adapter_key: Optional[str] = Field(
         default=None,
@@ -1614,6 +1618,7 @@ class CurationReviewSession(CurationSessionSummary):
     """Detailed review session payload used by workspace responses and mutations."""
 
     session_version: int = Field(default=1, ge=1, description="Monotonic session version")
+    execution_receipts: list[AgentExecutionReceipt] = Field(default_factory=list)
     extraction_results: list[CurationExtractionResultRecord] = Field(
         default_factory=list,
         description="Extraction envelopes that seeded or influenced this session",
@@ -2187,6 +2192,10 @@ class CurationManualCandidateCreateRequest(CurationWorkspaceBaseModel):
     """Request contract for creating manual candidates inside a session."""
 
     session_id: str = Field(description="Owning session identifier")
+    agent_revision_id: UUID | None = Field(
+        default=None,
+        description="Exact source revision already retained by this session; required when several are available",
+    )
     adapter_key: str = Field(description="Adapter that will own the manual candidate")
     source: CurationCandidateSource = Field(
         default=CurationCandidateSource.MANUAL,
@@ -2437,6 +2446,7 @@ class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
     """Request contract for persisting structured extraction envelopes."""
 
     document_id: str = Field(description="Document identifier")
+    execution_receipt: AgentExecutionReceipt | None = None
     agent_key: str = Field(description="Agent or pipeline key that produced the envelope")
     source_kind: CurationExtractionSourceKind = Field(
         description="Execution surface that produced the envelope",
@@ -2488,6 +2498,10 @@ class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
     def validate_curation_prep_adapter_key(self) -> "CurationExtractionPersistenceRequest":
         """Require prep persistence payloads to retain a single adapter owner."""
 
+        if self.execution_receipt is not None and (
+            not self.agent_key.startswith("ca_") or self.execution_receipt.agent_key != self.agent_key
+        ):
+            raise ValueError("Extraction receipt must identify the producing custom agent")
         if self.agent_key == "curation_prep" and not str(self.adapter_key or "").strip():
             raise ValueError("Curation prep persistence requires exactly one adapter key.")
 

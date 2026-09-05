@@ -1,5 +1,8 @@
 """Flow validation for batch compatibility."""
 
+from collections.abc import Mapping
+from typing import Any
+
 from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
 from src.lib.executable_flow_graph import (
     ExecutableFlowTopologyError,
@@ -24,7 +27,9 @@ def has_batch_capability(agent_id: str, capability: str) -> bool:
     return capability in agent.get("batch_capabilities", [])
 
 
-def validate_flow_for_batch(flow_definition: dict) -> BatchValidationResponse:
+def validate_flow_for_batch(
+    flow_definition: dict, *, entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
+) -> BatchValidationResponse:
     """Validate a flow is compatible with batch processing.
 
     Rules:
@@ -45,7 +50,13 @@ def validate_flow_for_batch(flow_definition: dict) -> BatchValidationResponse:
         if node.get("id") not in control_node_ids:
             continue
         agent_id = node.get("data", {}).get("agent_id")
-        if agent_id and has_batch_capability(agent_id, "pdf_extraction"):
+        entry = entries_by_node.get(node.get("id")) if entries_by_node is not None else None
+        custom = bool(agent_id and agent_id.startswith("ca_"))
+        capable = (
+            bool(entry and "pdf_extraction" in entry.get("batch_capabilities", []))
+            if custom else bool(agent_id and has_batch_capability(agent_id, "pdf_extraction"))
+        )
+        if capable:
             has_pdf_agent = True
             break
 

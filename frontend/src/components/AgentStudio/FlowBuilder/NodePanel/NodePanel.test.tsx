@@ -11,6 +11,11 @@ import type { AgentNode } from '../types'
 import NodePanel from './NodePanel'
 import type { NodePanelLeaveGuard } from './NodePanel'
 
+const revisionMocks = vi.hoisted(() => ({ list: vi.fn() }))
+vi.mock('@/services/agentStudioService', () => ({
+  listAgentExecutionRevisions: revisionMocks.list,
+}))
+
 const metadataMocks = vi.hoisted(() => ({
   agents: {} as Record<string, unknown>,
 }))
@@ -94,6 +99,65 @@ function renderPanel(node: AgentNode, props: PanelProps = {}) {
 describe('NodePanel', () => {
   beforeEach(() => {
     metadataMocks.agents = extractionMetadata
+    revisionMocks.list.mockReset()
+  })
+
+  it('keeps revision selection local until Apply and restores the exact receipt on Cancel', async () => {
+    const user = userEvent.setup()
+    const oldReceipt = {
+      agent_id: 'agent-uuid', agent_key: 'ca_agent-uuid', agent_revision_id: 'revision-old',
+      revision: 1, fingerprint: 'old-fingerprint',
+      output_contract: { output_state: 'none' as const },
+    }
+    const nextContract = {
+      output_state: 'structured_extraction', output_mode: 'unprofiled_generic',
+    }
+    revisionMocks.list.mockResolvedValue({
+      revisions: [{ id: 'revision-new', agent_id: 'agent-uuid', revision: 2,
+        fingerprint: 'new-fingerprint', snapshot: { output_contract: nextContract } }],
+      next_before_revision: null,
+    })
+    const guard = createRef<NodePanelLeaveGuard>()
+    const { onApply } = renderPanel(buildNode({
+      agent_id: oldReceipt.agent_key, agent_revision_id: oldReceipt.agent_revision_id,
+      execution_receipt: oldReceipt,
+    }), { leaveGuardRef: guard })
+    expect(revisionMocks.list).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Choose a saved revision' }))
+    expect(revisionMocks.list).toHaveBeenCalledWith('agent-uuid', undefined)
+    await user.click(await screen.findByRole('radio', { name: 'Revision 2' }))
+    expect(onApply).not.toHaveBeenCalled()
+    expect(guard.current?.captureAuthoringDraft().data).toMatchObject({
+      agent_revision_id: 'revision-new', execution_receipt: { output_contract: nextContract },
+    })
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(guard.current?.captureAuthoringDraft().data.execution_receipt).toEqual(oldReceipt)
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    await user.click(screen.getByRole('radio', { name: 'Revision 2' }))
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onApply).toHaveBeenCalledWith('node_1', expect.objectContaining({
+      agent_revision_id: 'revision-new', execution_receipt: {
+        agent_id: 'agent-uuid', agent_key: 'ca_agent-uuid', agent_revision_id: 'revision-new',
+        revision: 2, fingerprint: 'new-fingerprint', output_contract: nextContract,
+      },
+    }))
+  })
+
+  it('preserves the draft selection when history fails and supports retry and pagination', async () => {
+    const user = userEvent.setup()
+    revisionMocks.list.mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce({ revisions: [], next_before_revision: 3 })
+      .mockResolvedValueOnce({ revisions: [], next_before_revision: null })
+    const guard = createRef<NodePanelLeaveGuard>()
+    renderPanel(buildNode({ agent_id: 'ca_agent-uuid', agent_revision_id: 'saved-pin' }), { leaveGuardRef: guard })
+    await user.click(screen.getByRole('button', { name: 'Choose a saved revision' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your selection has not changed')
+    expect(guard.current?.captureAuthoringDraft().data.agent_revision_id).toBe('saved-pin')
+    await user.click(screen.getByRole('button', { name: 'Retry loading revisions' }))
+    await user.click(await screen.findByRole('button', { name: 'Load older revisions' }))
+    expect(revisionMocks.list).toHaveBeenLastCalledWith('agent-uuid', 3)
+    expect(await screen.findByText('No accessible saved revisions were found.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
   })
 
   it('shows the step header and applies a check opt-out without the deprecated export flag', async () => {

@@ -174,6 +174,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
               .filter((agent) => agent.show_in_palette !== false)
               .map((agent) => ({
                 agent_id: agent.agent_id,
+                agent_revision_id: agent.agent_revision_id,
                 agent_name: agent.agent_name,
                 description: agent.description,
                 category: cat.category,
@@ -302,6 +303,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
       agentName: agent.agent_name,
       agentDescription: agent.description,
       promptVersion: agent.prompt_version,
+      agentRevisionId: agent.agent_revision_id,
     }))
     event.dataTransfer.effectAllowed = 'move'
   }

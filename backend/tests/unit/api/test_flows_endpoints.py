@@ -149,7 +149,7 @@ async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeyp
     owned = _flow(name="Owned")
     calls = []
 
-    def _hydrate(flow_definition):
+    def _hydrate(flow_definition, **_kwargs):
         calls.append(flow_definition.nodes[1].data.agent_id)
         hydrated = flow_definition.model_copy(deep=True)
         hydrated.nodes[1].data.validation_attachments = [
@@ -185,7 +185,7 @@ async def test_get_flow_reports_missing_agent_reference_on_read(monkeypatch):
     monkeypatch.setattr(
         flows,
         "apply_flow_validation_attachment_defaults",
-        lambda flow_definition: flow_definition,
+        lambda flow_definition, **_kwargs: flow_definition,
     )
     monkeypatch.setattr(
         flows,
@@ -286,11 +286,10 @@ def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warn
     response = flows._flow_to_response(owned)
 
     assert response.has_critical_issues is True
-    assert custom_agent_id in response.validation_warnings[0].message
-    if metadata_state == "missing_domain_pack":
-        assert "no longer declares validation attachments" in (
-            response.validation_warnings[0].message
-        )
+    # Legacy nodes have no executable pin, irrespective of current mutable metadata.
+    assert response.validation_warnings[0].code == "missing_execution_revision"
+    assert response.validation_warnings[0].node_id == "agent_1"
+    assert any(custom_agent_id in warning.message for warning in response.validation_warnings)
     attachments = response.flow_definition.nodes[1].data.validation_attachments
     assert [attachment.model_dump() for attachment in attachments] == inherited_attachments
     groups = response.flow_definition.nodes[1].data.validation_groups
@@ -437,6 +436,9 @@ async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch)
 async def test_create_flow_accepts_inherited_custom_agent_validation_attachments(
     monkeypatch,
 ):
+    from src.lib.flows import execution_revisions
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+
     class _DB:
         def __init__(self):
             self.added = None
@@ -470,33 +472,39 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
     ]
 
     custom_agent_id = "ca_00000000-0000-4000-8000-000000000001"
+    pin = AgentExecutionReceipt(
+        agent_id=uuid4(), agent_key=custom_agent_id, agent_revision_id=uuid4(),
+        revision=4, fingerprint="sha256:" + "a" * 64,
+        output_contract={"output_state": "structured_extraction", "output_mode": "domain",
+                         "output_schema_key": "GeneEnvelope"},
+    )
     custom_definition = _flow_definition()
     custom_definition["nodes"][1]["data"].update(
         {
             "agent_id": custom_agent_id,
             "agent_display_name": "Custom Extraction Agent",
+            "agent_revision_id": str(pin.agent_revision_id),
+            "execution_receipt": pin.model_dump(mode="json"),
             "validation_attachments": inherited_attachments,
         }
     )
 
-    metadata_calls = []
-
-    def _custom_agent_metadata(agent_id, **kwargs):
-        metadata_calls.append(kwargs)
-        return {
-            "agent_id": agent_id,
-            "curation": {
-                "adapter_key": "gene",
-                "domain_pack_id": "gene",
-                "launchable": True,
-            },
-        }
-
-    monkeypatch.setattr(
-        flows,
-        "get_active_visible_agent_metadata",
-        _custom_agent_metadata,
-    )
+    authorization_calls = []
+    def authorize(db, payload, user_id, **kwargs):
+        authorization_calls.append((user_id, kwargs))
+        assert payload == pin.model_dump(mode="json")
+        return pin
+    monkeypatch.setattr(execution_revisions, "authorize_execution_receipt", authorize)
+    monkeypatch.setattr(execution_revisions, "get_execution_revision", lambda *args, **kwargs: (
+        SimpleNamespace(id=pin.agent_revision_id),
+        SimpleNamespace(tool_ids=[], output_contract=pin.output_contract,
+                        structured_finalization=None, curation={
+                            "adapter_key": "gene", "domain_pack_id": "gene", "launchable": True,
+                        }),
+    ))
+    def reject_mutable_metadata(*args, **kwargs):
+        raise AssertionError("Pinned custom nodes must not use current metadata")
+    monkeypatch.setattr(flows, "get_active_visible_agent_metadata", reject_mutable_metadata)
     monkeypatch.setattr(
         flows,
         "get_groups_from_provider_groups",
@@ -524,10 +532,10 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
     assert persisted["agent_id"] == custom_agent_id
     assert persisted["validation_attachments"] == inherited_attachments
     assert response.flow_definition.nodes[1].data.validation_attachments
-    assert metadata_calls
-    assert all(
-        call["authenticated_groups"] == ["group-17"] for call in metadata_calls
-    )
+    assert persisted["execution_receipt"] == pin.model_dump(mode="json")
+    assert authorization_calls
+    assert all(user_id == 17 and call["active_group_ids"] == ["group-17"]
+               for user_id, call in authorization_calls)
 
 
 @pytest.mark.asyncio

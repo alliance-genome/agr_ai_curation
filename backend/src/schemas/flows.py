@@ -11,6 +11,7 @@ from typing import Any, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
 from src.lib.flow_contract_limits import (
@@ -157,8 +158,33 @@ class FlowNodeData(BaseModel):
     prompt_version: Optional[int] = Field(
         None,
         ge=1,
-        description="Pinned prompt version (None = use active)"
+        description="Legacy prompt audit metadata; not an executable revision pin"
     )
+    agent_revision_id: UUID | None = Field(
+        None, description="Exact immutable custom-agent revision; system nodes remain ID-based"
+    )
+    execution_receipt: AgentExecutionReceipt | None = Field(
+        None, description="Verified execution identity including the revision's own output contract"
+    )
+
+    @model_validator(mode="after")
+    def validate_execution_identity(self) -> "FlowNodeData":
+        """Check supplied identity without inventing a pin for a legacy draft.
+
+        Missing pins remain parseable for inspection/repair. The authorized flow
+        service must reject them before saving an executable custom node or running
+        it; schema parsing itself never consults a mutable agent head.
+        """
+        receipt = self.execution_receipt
+        if not self.agent_id.startswith("ca_"):
+            if self.agent_revision_id is not None or receipt is not None:
+                raise ValueError("System flow nodes cannot carry custom execution pins")
+        elif receipt is not None:
+            if receipt.agent_key != self.agent_id:
+                raise ValueError("Flow execution receipt agent does not match the node")
+            if receipt.agent_revision_id != self.agent_revision_id:
+                raise ValueError("Flow execution receipt revision does not match the node")
+        return self
 
     # Output configuration
     include_evidence: Optional[bool] = Field(
@@ -539,6 +565,9 @@ class FlowValidationWarning(BaseModel):
 
     type: Literal["CRITICAL", "WARNING"]
     message: str
+    code: str | None = None
+    node_id: str | None = None
+    path: str | None = None
 
 
 class FlowSummaryResponse(BaseModel):

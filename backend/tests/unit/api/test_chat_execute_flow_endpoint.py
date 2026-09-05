@@ -513,6 +513,27 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert calls["clear"] == ["session-flow-1"]
 
 
+def test_execute_flow_endpoint_returns_contract_findings_before_stream_registration(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(
+        id=flow_id, user_id=7, name="Unpinned flow", execution_count=0,
+        last_executed_at=None, flow_definition={"nodes": []},
+    )
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    finding = {"node_id": "custom_node", "code": "missing_execution_revision", "severity": "error"}
+    monkeypatch.setattr(chat, "flow_execution_revision_findings", lambda *args, **kwargs: [finding])
+    db = _DummyDB(flow=flow)
+    with pytest.raises(chat.HTTPException) as error:
+        asyncio.run(chat.execute_flow_endpoint(
+            request=chat.ExecuteFlowRequest(flow_id=flow_id, session_id="unpinned-flow"),
+            db=db, user={"sub": "auth-sub", "cognito:groups": []},
+        ))
+    assert error.value.status_code == 422
+    assert error.value.detail == {"code": "flow_execution_contract_invalid", "findings": [finding]}
+    assert db.commit_calls == 0
+    assert calls["register"] == []
+
+
 def test_execute_flow_endpoint_rechecks_saved_agent_access(monkeypatch):
     flow_id = uuid4()
     flow = SimpleNamespace(

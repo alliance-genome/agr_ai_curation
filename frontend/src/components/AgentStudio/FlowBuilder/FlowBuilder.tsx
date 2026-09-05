@@ -156,6 +156,12 @@ const flowNodeDataForPersistence = (data: AgentNodeData): FlowNodeData => {
   if (data.prompt_version !== undefined) {
     persisted.prompt_version = data.prompt_version
   }
+  if (data.agent_revision_id !== undefined) {
+    persisted.agent_revision_id = data.agent_revision_id
+  }
+  if (data.execution_receipt !== undefined) {
+    persisted.execution_receipt = data.execution_receipt
+  }
   if (data.include_evidence !== undefined) {
     persisted.include_evidence = data.include_evidence
   }
@@ -244,6 +250,8 @@ const flowStateDefinition = (state: FlowState): FlowDefinition => ({
       ...(node.step_goal !== undefined ? { step_goal: node.step_goal } : {}),
       ...(node.custom_instructions !== undefined ? { custom_instructions: node.custom_instructions } : {}),
       ...(node.prompt_version !== undefined ? { prompt_version: node.prompt_version } : {}),
+      ...(node.agent_revision_id !== undefined ? { agent_revision_id: node.agent_revision_id } : {}),
+      ...(node.execution_receipt !== undefined ? { execution_receipt: node.execution_receipt } : {}),
       ...(node.include_evidence !== undefined ? { include_evidence: node.include_evidence } : {}),
       ...(node.output_filename_template !== undefined
         ? { output_filename_template: node.output_filename_template }
@@ -1151,6 +1159,8 @@ function FlowBuilderInner({
         step_goal: n.data.step_goal,
         custom_instructions: n.data.custom_instructions,
         prompt_version: n.data.prompt_version,
+        agent_revision_id: n.data.agent_revision_id,
+        execution_receipt: n.data.execution_receipt,
         include_evidence: n.data.include_evidence,
         output_filename_template: n.data.output_filename_template,
         projection_plan: n.data.projection_plan,
@@ -1615,6 +1625,27 @@ function FlowBuilderInner({
       }
       setFlowUpdatedAt(savedFlow.updated_at)
 
+      // The server derives the complete receipt from a newly selected revision.
+      // Adopt that acknowledgement without overwriting edits made during save.
+      const savedNodes = new Map(savedFlow.flow_definition.nodes.map((node) => [node.id, node.data]))
+      const acknowledgedDefinition: FlowDefinition = {
+        ...flowDefinition,
+        nodes: flowDefinition.nodes.map((node) => {
+          const saved = savedNodes.get(node.id)
+          return saved?.execution_receipt && saved.agent_id === node.data.agent_id
+            && saved.agent_revision_id === node.data.agent_revision_id
+            ? { ...node, data: { ...node.data, execution_receipt: saved.execution_receipt } }
+            : node
+        }),
+      }
+      setNodes((current) => current.map((node) => {
+        const saved = savedNodes.get(node.id)
+        return saved?.execution_receipt && saved.agent_id === node.data.agent_id
+          && saved.agent_revision_id === node.data.agent_revision_id
+          ? { ...node, data: { ...node.data, execution_receipt: saved.execution_receipt } }
+          : node
+      }))
+
       const flowMutationReason = currentFlowId && !forceCreate ? 'updated' : 'created'
       await refreshFlowLists()
 
@@ -1627,7 +1658,7 @@ function FlowBuilderInner({
       setSavedBaseline({
         name: savedFlow.name,
         description: savedFlow.description || '',
-        definition: flowDefinition,
+        definition: acknowledgedDefinition,
       })
       notifyFlowListInvalidated({
         flowId: savedFlow.id,
@@ -1888,14 +1919,19 @@ function FlowBuilderInner({
       if (!data) return
 
       try {
-        const { type, agentId, agentName, agentDescription, promptVersion } = JSON.parse(data) as {
+        const { type, agentId, agentName, agentDescription, promptVersion, agentRevisionId } = JSON.parse(data) as {
           type: 'agent' | 'task_input'
           agentId: string
           agentName: string
           agentDescription: string
           promptVersion?: number
+          agentRevisionId?: string | null
         }
         if (type !== 'agent' && type !== 'task_input') return
+        if (agentId.startsWith('ca_') && !agentRevisionId) {
+          setSnackbar({ message: 'This custom agent has no saved executable revision. Save it in Workshop and refresh the catalog.', severity: 'error' })
+          return
+        }
 
         // Check if dropping task_input and one already exists
         if (type === 'task_input' || agentId === 'task_input') {
@@ -1940,6 +1976,7 @@ function FlowBuilderInner({
             task_instructions: isTaskInput ? '' : undefined,
             custom_instructions: '',
             prompt_version: promptVersion,
+            ...(agentId.startsWith('ca_') ? { agent_revision_id: agentRevisionId } : {}),
             include_evidence: isTaskInput
               ? undefined
               : resolveOutputFormatterIncludeEvidence(agentId, agentMetadata),

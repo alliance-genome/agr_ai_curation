@@ -37,6 +37,7 @@ from ..lib.flows.persisted_flow_migrations import (
     PersistedFlowMigrationError,
     migrate_persisted_flow_definition,
 )
+from ..lib.flows.execution_revisions import resolve_flow_execution_revisions
 from ..lib.agent_studio.catalog_service import (
     AGENT_REGISTRY,
     get_active_visible_agent_metadata,
@@ -103,6 +104,7 @@ def _validated_flow_definition_payload(
     enforce_agent_step_policy: bool = False,
     enforce_agent_references: bool = False,
     active_group_ids: list[str] | None = None,
+    db: Session | None = None,
 ) -> dict[str, Any]:
     """Return JSON accepted by the canonical exact-draft save validator."""
 
@@ -110,8 +112,16 @@ def _validated_flow_definition_payload(
         db_user_id=db_user_id,
         active_group_ids=active_group_ids,
     )
+    resolved = resolve_flow_execution_revisions(
+        db, flow_definition, user_id=db_user_id,
+        active_group_ids=list(active_group_ids or []),
+    )
 
     def _apply_defaults(candidate: FlowDefinition) -> FlowDefinition:
+        if resolved.entries_by_node:
+            return apply_flow_validation_attachment_defaults(
+                candidate, entries_by_node=resolved.entries_by_node,
+            )
         agent_registry, _ = _validation_attachment_agent_registry(
             candidate,
             db_user_id=db_user_id,
@@ -126,7 +136,7 @@ def _validated_flow_definition_payload(
 
     try:
         result = validate_flow_authoring_draft(
-            flow_definition,
+            resolved.definition,
             context=context,
             resolve_agent=lambda agent_id, auth: _flow_agent_policy_entry(
                 agent_id,
@@ -137,6 +147,8 @@ def _validated_flow_definition_payload(
             phase="save",
             enforce_agent_references=enforce_agent_references,
             enforce_agent_step_policy=enforce_agent_step_policy,
+            entries_by_node=resolved.entries_by_node,
+            contract_findings=resolved.findings,
         )
     except Exception:
         report_authoring_validation_engine_failure(
@@ -159,7 +171,7 @@ def _validated_flow_definition_payload(
             status_code=500,
             detail="Flow validation is temporarily unavailable",
         )
-    return validated_candidate.model_dump()
+    return validated_candidate.model_dump(mode="json")
 
 
 def _validated_flow_definition(
@@ -169,14 +181,21 @@ def _validated_flow_definition(
     enforce_agent_references: bool = False,
     active_group_ids: list[str] | None = None,
     tolerate_unresolvable_custom_agent_attachments: bool = False,
+    entries_by_node: dict[str, dict[str, Any] | None] | None = None,
 ) -> FlowDefinition:
     """Return a flow definition hydrated with metadata-backed validation defaults."""
 
-    agent_registry, unresolvable_custom_agent_ids = _validation_attachment_agent_registry(
-        flow_definition,
-        db_user_id=db_user_id,
-        active_group_ids=active_group_ids,
-    )
+    if entries_by_node is None:
+        agent_registry, unresolvable_custom_agent_ids = _validation_attachment_agent_registry(
+            flow_definition, db_user_id=db_user_id, active_group_ids=active_group_ids,
+        )
+        unresolved_nodes = {
+            node.id for node in flow_definition.nodes
+            if node.data.agent_id in unresolvable_custom_agent_ids
+        }
+    else:
+        agent_registry = None
+        unresolved_nodes = {node_id for node_id, entry in entries_by_node.items() if entry is None}
     validation_input = flow_definition
     preserved_unresolvable_data: dict[
         str,
@@ -186,11 +205,11 @@ def _validated_flow_definition(
         ],
     ] = {}
     preserved_edges = None
-    if tolerate_unresolvable_custom_agent_attachments and unresolvable_custom_agent_ids:
+    if tolerate_unresolvable_custom_agent_attachments and unresolved_nodes:
         validation_input = flow_definition.model_copy(deep=True)
         unresolvable_node_ids: set[str] = set()
         for node in validation_input.nodes:
-            if node.data.agent_id not in unresolvable_custom_agent_ids:
+            if node.id not in unresolved_nodes:
                 continue
             unresolvable_node_ids.add(node.id)
             preserved_unresolvable_data[node.id] = (
@@ -209,7 +228,11 @@ def _validated_flow_definition(
             )
         ]
     try:
-        if agent_registry is None:
+        if entries_by_node is not None:
+            validated = apply_flow_validation_attachment_defaults(
+                validation_input, entries_by_node=entries_by_node,
+            )
+        elif agent_registry is None:
             validated = apply_flow_validation_attachment_defaults(validation_input)
         else:
             validated = apply_flow_validation_attachment_defaults(
@@ -349,6 +372,7 @@ def _missing_flow_agent_reference_messages(
     *,
     db_user_id: int | None,
     active_group_ids: list[str] | None = None,
+    entries_by_node: dict[str, dict[str, Any] | None] | None = None,
 ) -> list[str]:
     """Return messages for flow nodes that reference unavailable agents."""
 
@@ -357,10 +381,12 @@ def _missing_flow_agent_reference_messages(
         agent_id = str(node.data.agent_id or "").strip()
         if not agent_id or agent_id == "task_input":
             continue
-        policy_entry = _flow_agent_policy_entry(
-            agent_id,
-            db_user_id=db_user_id,
-            active_group_ids=active_group_ids,
+        policy_entry = (
+            entries_by_node[node.id]
+            if entries_by_node is not None and node.id in entries_by_node
+            else _flow_agent_policy_entry(
+                agent_id, db_user_id=db_user_id, active_group_ids=active_group_ids,
+            )
         )
         if policy_entry is not None:
             curation = policy_entry.get("curation")
@@ -400,6 +426,7 @@ def _flow_to_response(
     flow: CurationFlow,
     *,
     active_group_ids: list[str] | None = None,
+    db: Session | None = None,
 ) -> FlowResponse:
     """Convert a stored flow to an API response with validation defaults hydrated."""
 
@@ -409,18 +436,28 @@ def _flow_to_response(
         )
     except PersistedFlowMigrationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    resolved = resolve_flow_execution_revisions(
+        db, FlowDefinition.model_validate(persisted_migration.definition),
+        user_id=flow.user_id, active_group_ids=list(active_group_ids or []),
+    )
     flow_definition = _validated_flow_definition(
-        FlowDefinition.model_validate(persisted_migration.definition),
+        resolved.definition,
         db_user_id=flow.user_id,
         active_group_ids=active_group_ids,
         tolerate_unresolvable_custom_agent_attachments=True,
+        entries_by_node=resolved.entries_by_node,
     )
     missing_references = _missing_flow_agent_reference_messages(
         flow_definition,
         db_user_id=flow.user_id,
         active_group_ids=active_group_ids,
+        entries_by_node=resolved.entries_by_node,
     )
-    validation_warnings = []
+    validation_warnings = [
+        FlowValidationWarning(type="CRITICAL" if finding.severity == "error" else "WARNING", message=finding.message,
+                              code=finding.code, node_id=finding.node_id, path=finding.path)
+        for finding in resolved.findings
+    ]
     if persisted_migration.changed:
         validation_warnings.append(
             FlowValidationWarning(
@@ -675,8 +712,16 @@ async def validate_flow_draft(
         expected_draft_fingerprint=request.expected_draft_fingerprint,
         current_draft_fingerprint=request.current_draft_fingerprint,
     )
+    resolved = resolve_flow_execution_revisions(
+        db, request.flow_definition, user_id=context.db_user_id,
+        active_group_ids=active_group_ids,
+    )
 
     def _apply_defaults(candidate: FlowDefinition) -> FlowDefinition:
+        if resolved.entries_by_node:
+            return apply_flow_validation_attachment_defaults(
+                candidate, entries_by_node=resolved.entries_by_node,
+            )
         agent_registry, _ = _validation_attachment_agent_registry(
             candidate,
             db_user_id=context.db_user_id,
@@ -691,7 +736,7 @@ async def validate_flow_draft(
 
     try:
         result = validate_flow_authoring_draft(
-            request.flow_definition,
+            resolved.definition,
             context=context,
             resolve_agent=lambda agent_id, auth: _flow_agent_policy_entry(
                 agent_id,
@@ -702,6 +747,8 @@ async def validate_flow_draft(
             phase=request.phase,
             enforce_agent_references=True,
             enforce_agent_step_policy=True,
+            entries_by_node=resolved.entries_by_node,
+            contract_findings=resolved.findings,
         )
     except Exception:
         report_authoring_validation_engine_failure(
@@ -737,6 +784,7 @@ async def get_flow(
 
     return _flow_to_response(
         flow,
+        db=db,
         active_group_ids=get_groups_from_provider_groups(
             user.get("cognito:groups", [])
         ),
@@ -768,6 +816,7 @@ async def create_flow(
             enforce_agent_references=True,
             enforce_agent_step_policy=True,
             active_group_ids=active_group_ids,
+            db=db,
         ),
     )
 
@@ -794,7 +843,7 @@ async def create_flow(
 
     logger.info("Created flow %s '%s' for user %s", flow.id, flow.name, db_user.id)
 
-    return _flow_to_response(flow, active_group_ids=active_group_ids)
+    return _flow_to_response(flow, active_group_ids=active_group_ids, db=db)
 
 
 @router.put("/{flow_id}", response_model=FlowResponse)
@@ -850,6 +899,7 @@ async def update_flow(
             enforce_agent_references=True,
             enforce_agent_step_policy=True,
             active_group_ids=active_group_ids,
+            db=db,
         )
         # CRITICAL: SQLAlchemy doesn't detect changes to mutable JSONB fields
         # We must explicitly flag it as modified for the UPDATE to be emitted
@@ -883,7 +933,7 @@ async def update_flow(
     else:
         logger.info('[Flow Update] No changes detected for flow %s', flow_id)
 
-    return _flow_to_response(flow, active_group_ids=active_group_ids)
+    return _flow_to_response(flow, active_group_ids=active_group_ids, db=db)
 
 
 @router.delete("/{flow_id}", response_model=OperationResult)

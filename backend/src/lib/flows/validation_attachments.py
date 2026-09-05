@@ -87,6 +87,7 @@ def apply_flow_validation_attachment_defaults(
     flow_definition: FlowDefinition,
     *,
     agent_registry: Mapping[str, Mapping[str, Any]] | None = None,
+    entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
 ) -> FlowDefinition:
     """Attach default validation selections to extraction nodes from metadata."""
 
@@ -103,10 +104,14 @@ def apply_flow_validation_attachment_defaults(
                 )
             continue
 
-        options = validation_attachment_options_for_agent(
-            node.data.agent_id,
-            agent_registry=agent_registry,
-        )
+        if entries_by_node is not None and node.id in entries_by_node:
+            entry = entries_by_node[node.id]
+            options = _options_for_agent_entry(entry) if entry is not None else ()
+        else:
+            options = validation_attachment_options_for_agent(
+                node.data.agent_id,
+                agent_registry=agent_registry,
+            )
         if not options:
             if node.data.validation_attachments:
                 raise FlowValidationAttachmentError(

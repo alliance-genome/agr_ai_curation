@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from copy import deepcopy
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -17,7 +18,11 @@ from sqlalchemy.pool import StaticPool
 
 from src.lib.curation_workspace import session_mutation_service as module
 from src.lib.curation_workspace import session_validation_service as validation_module
+from src.lib.agent_studio.profile_conformance import ProfileConformanceError, ProfileIdentityError, ResolvedGenericProfile
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
+from src.schemas.generic_extraction_profile import GenericProfileContract
 from src.lib.curation_workspace.models import (
+    CurationSessionAgentRevision,
     CurationActionLogEntry,
     CurationCandidate,
     CurationDraft,
@@ -71,6 +76,7 @@ TEST_TABLES = [
     User.__table__,
     PDFDocument.__table__,
     CurationReviewSession.__table__,
+    CurationSessionAgentRevision.__table__,
     CurationExtractionResultRecord.__table__,
     DomainEnvelopeModel.__table__,
     DomainEnvelopeObject.__table__,
@@ -459,6 +465,118 @@ def test_patch_envelope_field_refreshes_projection_without_legacy_payload(
         HistoryEventKind.FIELD_UPDATED,
         HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED,
     ]
+
+
+@pytest.mark.parametrize("path,before,value", [
+    ("attributes.details.count", 1, "2"),
+    ("attributes.details.count", 1, None),
+    ("attributes.details.unknown", None, "extra"),
+])
+def test_profile_patch_service_rejects_before_checkpoint_or_projection_mutation(
+    db_session, loaded_pack, monkeypatch, path, before, value,
+):
+    session, candidate = _create_session_with_envelope_projection(db_session)
+    contract = GenericProfileContract.model_validate({
+        "name": "Records", "semantic_class": "record", "fields": [
+            {"key": "details", "value_schema": {"kind": "object", "fields": [
+                {"key": "count", "required": True, "value_schema": {"kind": "integer"}},
+            ]}},
+        ],
+    })
+    receipt = AgentExecutionReceipt(
+        agent_id=uuid4(), agent_key="ca_fixture", agent_revision_id=uuid4(),
+        revision=1, fingerprint="sha256:" + "a" * 64,
+        output_contract={
+            "output_state": "structured_extraction", "output_mode": "profile_bound_generic",
+            "generic_profile_ref": {"profile_id": uuid4(), "profile_revision_id": uuid4(),
+                                    "revision": 1, "fingerprint": contract.fingerprint()},
+        },
+    )
+    profile = ResolvedGenericProfile(receipt.output_contract.generic_profile_ref, contract)
+    resolved = []
+
+    def resolve_saved_profile(db, saved_receipt):
+        assert db is db_session
+        assert saved_receipt == receipt
+        resolved.append(saved_receipt.agent_revision_id)
+        return profile
+
+    monkeypatch.setattr(module, "resolve_receipt_profile", resolve_saved_profile)
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
+    payload = deepcopy(envelope_row.envelope_json)
+    payload["extracted_objects"][0]["payload"]["attributes"] = {"details": {"count": 1}}
+    payload["extracted_objects"][0]["metadata"]["generic_profile_ref"] = profile.receipt
+    envelope_row.envelope_json = payload
+    envelope_row.execution_receipt = receipt.model_dump(mode="json")
+    envelope_row.agent_revision_id = receipt.agent_revision_id
+    db_session.commit()
+    original_draft = deepcopy(candidate.draft.fields)
+
+    with pytest.raises(ProfileConformanceError):
+        module.patch_envelope_field(
+            db_session, session.id,
+            _request(session.id, field_path=path, before=before, value=value),
+            {"sub": "curator-1"},
+        )
+
+    assert resolved == [receipt.agent_revision_id]
+    assert envelope_row.envelope_json == payload
+    assert envelope_row.revision == 1
+    assert candidate.envelope_revision == 1
+    assert candidate.draft.fields == original_draft
+    assert session.session_version == 1
+    assert db_session.scalars(select(DomainEnvelopeHistory)).all() == []
+    assert db_session.scalars(select(CurationActionLogEntry)).all() == []
+
+
+def test_historical_custom_envelope_remains_editable_without_inventing_receipt(db_session, loaded_pack):
+    session, _ = _create_session_with_envelope_projection(db_session)
+    row = db_session.get(DomainEnvelopeModel, "env-1")
+    payload = deepcopy(row.envelope_json)
+    payload["metadata"]["source_agent_key"] = "ca_historical"
+    row.envelope_json = payload
+    db_session.commit()
+
+    response = module.patch_envelope_field(
+        db_session, session.id, _request(session.id), {"sub": "curator-1"},
+    )
+    assert response.accepted
+    assert row.revision == 2
+    assert row.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "abc-2"
+    assert row.execution_receipt is None and row.agent_revision_id is None
+
+
+@pytest.mark.parametrize("source_case", ["historical", "missing", "different_producer", "different_document"])
+def test_first_historical_checkpoint_requires_matching_stored_source(db_session, loaded_pack, source_case):
+    session, _ = _create_session_with_envelope_projection(db_session)
+    source_id = uuid4()
+    if source_case != "missing":
+        db_session.add(CurationExtractionResultRecord(
+            id=source_id, document_id=session.document_id,
+            agent_key="ca_other" if source_case == "different_producer" else "ca_historical",
+            source_kind="chat", payload_json={}, candidate_count=0,
+            extraction_metadata={}, created_at=_now(),
+        ))
+        db_session.commit()
+    old = db_session.get(DomainEnvelopeModel, "env-1")
+    payload = deepcopy(old.envelope_json)
+    payload["envelope_id"] = "historical-materialization"
+    payload["metadata"]["source_agent_key"] = "ca_historical"
+    request = DomainEnvelopeCheckpointRequest(
+        project_key="agr", envelope=DomainEnvelope.model_validate(payload), expected_revision=0,
+        document_id=uuid4() if source_case == "different_document" else session.document_id,
+        session_id=session.id, adapter_key="fixture_adapter", source_extraction_result_id=source_id,
+    )
+    if source_case == "historical":
+        result = write_domain_envelope_checkpoint(db_session, request)
+        assert result.revision == 1
+        row = db_session.get(DomainEnvelopeModel, payload["envelope_id"])
+        assert row.execution_receipt is None and row.agent_revision_id is None
+        assert row.source_extraction_result_id == str(source_id)
+    else:
+        with pytest.raises(ProfileIdentityError, match="requires its exact execution receipt"):
+            write_domain_envelope_checkpoint(db_session, request)
+        assert db_session.get(DomainEnvelopeModel, payload["envelope_id"]) is None
 
 
 def test_patch_rejects_envelope_without_owning_session(db_session, loaded_pack):

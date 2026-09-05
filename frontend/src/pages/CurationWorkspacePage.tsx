@@ -511,6 +511,7 @@ function CurationWorkspacePageContent({
 
       const response = await createManualCurationCandidate({
         session_id: workspace.session.session_id,
+        agent_revision_id: templateCandidate.execution_receipt?.agent_revision_id,
         adapter_key: templateCandidate.adapter_key,
         source: 'manual',
         display_label: tag.entity_name.trim(),

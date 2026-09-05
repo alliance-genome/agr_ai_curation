@@ -1448,6 +1448,7 @@ def test_build_formatter_bundle_ignores_legacy_results_from_prior_sessions(monke
         document_id="doc-1",
         flow_run_id=None,
         conversation_summary="Extracted one fly strain.",
+        execution_receipt=None,
         metadata={},
         payload_json={
             "envelope_id": "generic-envelope-current",
@@ -1480,6 +1481,7 @@ def test_build_formatter_bundle_ignores_legacy_results_from_prior_sessions(monke
         document_id="doc-1",
         flow_run_id=None,
         conversation_summary="Legacy gene extraction.",
+        execution_receipt=None,
         metadata={},
         payload_json={
             "summary": "Legacy gene extraction",

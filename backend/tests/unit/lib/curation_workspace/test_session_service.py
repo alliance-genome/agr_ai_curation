@@ -32,6 +32,7 @@ from src.lib.curation_workspace import session_service as module
 from src.lib.curation_workspace import session_submission_service as submission_module
 from src.lib.curation_workspace import session_validation_service as validation_module
 from src.lib.curation_workspace.models import (
+    CurationSessionAgentRevision,
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
     CurationDraft as DraftModel,
@@ -118,6 +119,7 @@ TEST_TABLES = [
     User.__table__,
     PDFDocument.__table__,
     ReviewSessionModel.__table__,
+    CurationSessionAgentRevision.__table__,
     ExtractionResultModel.__table__,
     DomainEnvelopeModel.__table__,
     DomainEnvelopeObject.__table__,
@@ -1046,6 +1048,33 @@ def test_create_manual_candidate_persists_candidate_updates_session_and_logs_act
     ).all()
     assert len(action_log_rows) == 1
     assert action_log_rows[0].new_candidate_status == CurationCandidateStatus.PENDING
+
+
+def test_manual_candidate_persists_and_serializes_selected_session_receipt(db_session):
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+    document = _create_document(db_session)
+    result = _create_extraction_result(db_session, document_id=str(document.id), label="alpha")
+    session = _create_session_for_extraction(db_session, document_id=str(document.id), extraction_result_id=result.id)
+    receipt = AgentExecutionReceipt(
+        agent_id=uuid4(), agent_key="ca_fixture", agent_revision_id=uuid4(), revision=3,
+        fingerprint="sha256:" + "a" * 64,
+        output_contract={"output_state": "structured_extraction", "output_mode": "unprofiled_generic"},
+    )
+    db_session.add(CurationSessionAgentRevision(
+        session_id=session.id, agent_revision_id=receipt.agent_revision_id,
+        execution_receipt=receipt.model_dump(mode="json"),
+    ))
+    db_session.flush()
+    db_session.expire(session, ["execution_revisions"])
+    request = _build_manual_candidate_request(session_id=str(session.id)).model_copy(
+        update={"agent_revision_id": receipt.agent_revision_id},
+    )
+    response = module.create_manual_candidate(db_session, session.id, request, actor_claims={"sub": "user-1"})
+    assert response.candidate.execution_receipt == receipt
+    assert response.session.execution_receipts == [receipt]
+    row = db_session.get(CurationCandidate, UUID(response.candidate.candidate_id))
+    assert row.agent_revision_id == receipt.agent_revision_id
+    assert row.execution_receipt == receipt.model_dump(mode="json")
 
 
 def test_create_manual_candidate_rejects_non_manual_source(db_session):

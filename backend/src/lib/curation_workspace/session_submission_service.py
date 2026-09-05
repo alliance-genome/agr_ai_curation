@@ -21,6 +21,7 @@ from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_
 from src.lib.curation_workspace.extraction_results import (
     canonical_extraction_payload_hash,
 )
+from src.lib.curation_workspace.execution_contracts import require_candidate_conformance
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -1703,6 +1704,8 @@ def _base_submission_payload_context(
     ready_candidates: Sequence[CurationCandidate],
     session_validation: CurationValidationSnapshotSchema | None,
 ) -> dict[str, Any]:
+    for candidate in ready_candidates:
+        require_candidate_conformance(db, candidate)
     document = db.get(PDFDocument, session_row.document_id)
     warnings: list[str] = []
     if not ready_candidates:

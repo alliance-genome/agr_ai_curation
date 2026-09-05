@@ -41,6 +41,7 @@ from src.lib.flows.outcome import (
     flow_typed_output_transcript_values,
 )
 from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
+from src.lib.flows.execution_revisions import flow_execution_revision_findings
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -779,6 +780,13 @@ async def execute_flow_endpoint(
 
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
+    contract_findings = flow_execution_revision_findings(
+        db, flow.flow_definition or {}, user_id=db_user.id, active_group_ids=active_groups,
+    )
+    if contract_findings:
+        raise HTTPException(status_code=422, detail={
+            "code": "flow_execution_contract_invalid", "findings": contract_findings,
+        })
     if inaccessible_flow_agent_keys(
         db,
         flow.flow_definition or {},

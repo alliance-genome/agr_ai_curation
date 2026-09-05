@@ -3,6 +3,18 @@
 from src.lib.batch.validation import validate_flow_for_batch
 
 
+def test_custom_pdf_extraction_requires_exact_node_capability_not_registry(monkeypatch):
+    from src.lib.batch import validation
+
+    definition = _flow_ending_in("csv_formatter")
+    definition["nodes"][0]["data"]["agent_id"] = "ca_custom"
+    monkeypatch.setitem(validation.AGENT_REGISTRY, "ca_custom", {"batch_capabilities": ["pdf_extraction"]})
+    assert not validate_flow_for_batch(definition).valid
+    assert not validate_flow_for_batch(definition, entries_by_node={"1": None}).valid
+    assert validate_flow_for_batch(definition, entries_by_node={"1": {"batch_capabilities": ["pdf_extraction"]}}).valid
+    assert not validate_flow_for_batch(definition, entries_by_node={"1": {"batch_capabilities": []}}).valid
+
+
 def _flow_ending_in(exit_agent_id: str) -> dict:
     is_formatter = exit_agent_id.endswith("_formatter")
     return {

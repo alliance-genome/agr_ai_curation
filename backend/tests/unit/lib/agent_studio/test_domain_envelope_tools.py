@@ -22,6 +22,7 @@ from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 from src.lib.curation_workspace.models import (
+    CurationSessionAgentRevision,
     CurationCandidate,
     CurationExtractionResultRecord,
     CurationReviewSession,
@@ -65,6 +66,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 TEST_TABLES = [
     PDFDocument.__table__,
     CurationReviewSession.__table__,
+    CurationSessionAgentRevision.__table__,
     CurationExtractionResultRecord.__table__,
     DomainEnvelopeModel.__table__,
     DomainEnvelopeObject.__table__,

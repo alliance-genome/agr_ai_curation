@@ -204,7 +204,11 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
           <IconWrapper isTaskInput={isTaskInput}>{icon}</IconWrapper>
           <NodeHeaderText>
             <AgentName>{data.agent_display_name}</AgentName>
-            {data.prompt_version != null && (
+            {data.agent_id.startsWith('ca_') ? (
+              <VersionLabel variant="caption">
+                {data.execution_receipt ? `Revision ${data.execution_receipt.revision}` : data.agent_revision_id ? 'Saved revision selected' : 'Select a revision'}
+              </VersionLabel>
+            ) : data.prompt_version != null && (
               <VersionLabel variant="caption">v{data.prompt_version}</VersionLabel>
             )}
           </NodeHeaderText>

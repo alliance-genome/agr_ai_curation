@@ -5115,7 +5115,7 @@ class TestGetAllAgentToolsCreatedNames:
         assert "ask_pdf_step1_specialist" not in created_names
         assert "ask_pdf_step3_specialist" not in created_names
 
-    @patch("src.lib.flows.executor.get_agent_metadata")
+    @patch("src.lib.flows.executor._runtime_custom_entries")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_custom_agent_tool_names_are_sanitized(
@@ -5123,13 +5123,15 @@ class TestGetAllAgentToolsCreatedNames:
     ):
         """Custom agent IDs with hyphens should be normalized for tool naming."""
         custom_id = "ca_11111111-2222-3333-4444-555555555555"
-        mock_get_agent_metadata.return_value = {
+        mock_get_agent_metadata.return_value = {"n1": {
             "agent_id": custom_id,
+            "name": "Doug's Gene Agent",
             "display_name": "Doug's Gene Agent",
             "description": "Custom gene agent",
             "requires_document": False,
             "required_params": [],
-        }
+            "execution_receipt": {"agent_revision_id": "11111111-2222-3333-4444-555555555555"},
+        }}
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
 
@@ -5144,7 +5146,7 @@ class TestGetAllAgentToolsCreatedNames:
         assert "model_id_override" not in mock_get_agent.call_args.kwargs
         assert "model_provider_override" not in mock_get_agent.call_args.kwargs
 
-    @patch("src.lib.flows.executor.get_agent_metadata")
+    @patch("src.lib.flows.executor._runtime_custom_entries")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_empty_metadata_description_uses_fallback_tool_description(
@@ -5152,13 +5154,15 @@ class TestGetAllAgentToolsCreatedNames:
     ):
         """Empty metadata descriptions should fall back to 'Ask the <display_name>'."""
         custom_id = "ca_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        mock_get_agent_metadata.return_value = {
+        mock_get_agent_metadata.return_value = {"n1": {
             "agent_id": custom_id,
+            "name": "Gene Validation Agent (Custom)",
             "display_name": "Gene Validation Agent (Custom)",
             "description": "",
             "requires_document": False,
             "required_params": [],
-        }
+            "execution_receipt": {"agent_revision_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+        }}
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
 
