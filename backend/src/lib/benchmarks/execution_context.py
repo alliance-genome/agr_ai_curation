@@ -93,6 +93,17 @@ def require_current_curator_authorization(
     if current_principal is None or current_user is None:
         raise PermissionError("Current curator authorization is unavailable")
     current = capture_curator_context(current_principal, user=current_user)
+    return require_matching_curator_context(frozen, current=current)
+
+
+def require_matching_curator_context(
+    frozen: BenchmarkCuratorContext, *, current: BenchmarkCuratorContext,
+) -> BenchmarkCuratorContext:
+    """Compare already-authenticated receipts; this does not authenticate input.
+
+    The admission caller must establish current through the trusted human
+    dependency, never deserialize a purported current context from a request.
+    """
     if (
         current.subject != frozen.subject
         or current.auth_provider != frozen.auth_provider

@@ -345,7 +345,7 @@ async def test_resolved_flow_cell_passes_complete_routes_and_stable_invocations(
     }
     cell = _resolved_cell("flow", "flow-1", routes)
     captured = {}
-    monkeypatch.setattr(benchmark_runtime, "_flow_from_recipe", lambda _id: SimpleNamespace(id="flow-id"))
+    monkeypatch.setattr(benchmark_runtime, "_flow_from_recipe", lambda _id, _groups: SimpleNamespace(id="flow-id"))
 
     def load_results(completion, **kwargs):
         captured["result_scope"] = kwargs

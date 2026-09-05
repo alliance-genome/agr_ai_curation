@@ -446,3 +446,61 @@ class BenchmarkEvent(Base):
         CheckConstraint("jsonb_typeof(payload) = 'object'", name="ck_benchmark_events_payload_object"),
         Index("ix_benchmark_events_replay", "job_id", "sequence", "id"),
     )
+
+
+class BenchmarkJobIdempotency(Base):
+    """Immutable caller key reservation for one job-creation operation."""
+
+    __tablename__ = "benchmark_job_idempotency"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    owner_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    curator_context_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    job_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("benchmark_jobs.id", ondelete="SET NULL"),
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(512))
+    error_status: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_subject",
+            "operation",
+            "idempotency_key",
+            name="uq_benchmark_job_idempotency_owner_operation_key",
+        ),
+        CheckConstraint(
+            "operation IN ('submit', 'rerun')",
+            name="ck_benchmark_job_idempotency_operation",
+        ),
+        CheckConstraint(
+            "outcome IN ('pending', 'accepted', 'failed')",
+            name="ck_benchmark_job_idempotency_outcome",
+        ),
+        CheckConstraint(
+            "request_digest ~ '^sha256:[0-9a-f]{64}$' AND "
+            "curator_context_digest ~ '^sha256:[0-9a-f]{64}$'",
+            name="ck_benchmark_job_idempotency_digests",
+        ),
+        CheckConstraint(
+            "(outcome = 'pending' AND job_id IS NULL AND error_code IS NULL "
+            "AND error_message IS NULL AND error_status IS NULL) OR "
+            "(outcome = 'accepted' AND error_code IS NULL "
+            "AND error_message IS NULL AND error_status IS NULL) OR "
+            "(outcome = 'failed' AND job_id IS NULL AND error_code IS NOT NULL "
+            "AND error_message IS NOT NULL AND error_status BETWEEN 400 AND 599)",
+            name="ck_benchmark_job_idempotency_result",
+        ),
+        Index("ix_benchmark_job_idempotency_job", "job_id"),
+    )

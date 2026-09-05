@@ -13,6 +13,76 @@ tables.
 
 ## Ownership and lineage
 
+### Versioned read and control API
+
+`BENCHMARK_API_ENABLED` exposes `/api/v1/benchmarks/jobs` (default false).
+Read and control operations do not require provider execution enabled. New work
+additionally requires `BENCHMARK_EXECUTION_ENABLED`; workers independently need
+both execution and worker gates. Production Compose keeps all three false.
+
+The API and SSE transport settings are passed to the backend process; the
+dedicated worker receives the ordinary-event retention setting. Production
+hard-disables API admission and execution even if host environment overrides
+are present. Development API availability is independently configurable.
+
+The job list returns summaries without resolved plans or envelopes. Resume a
+page by passing `next_cursor.created_at` as `cursor_created_at` and
+`next_cursor.job_id` as `cursor_job_id`, retaining the same status filter.
+For `/{job_id}/cells`, pass `next_cursor.position` as `cursor_position` and
+`next_cursor.cell_id` as `cursor_cell_id`. Both cursor fields are required
+together; job timestamps require a timezone. `limit` is positive and capped by
+the configured repository maximum. Null `next_cursor` means the last page.
+
+`GET /{job_id}` returns the frozen plan and execution identity digests;
+`GET /{job_id}/cells/{cell_id}` returns the complete stored envelope and result
+digests. Running cells can have null result fields; unavailable does not mean
+an empty successful result. Reads require `benchmark:read` and always retain
+owner scope, including service-principal ownership.
+
+`GET /{job_id}/cells/{cell_id}/invocations` pages the cell's complete stored
+invocation telemetry. Pass `next_after_ordinal` as `after_ordinal` for the next
+page; null marks the current end. Clients inspecting active cells should refresh
+because new invocations can still arrive. Fields include requested/actual route,
+attempt and sequence, digests, status, latency, tokens and billed amount/unit/source.
+Unavailable fields stay null, including cost; measured zero stays zero. Decimal
+billing amounts serialize as strings to preserve precision. Preparation accounting
+remains distinct in durable preparation events, not invented target invocations.
+
+`POST /{job_id}/cancel` requires `benchmark:cancel` and returns the resulting
+job detail. Repeating cancellation of terminal or cancellation-requested work
+is idempotent. `DELETE /{job_id}` requires `benchmark:delete`; unknown,
+foreign-owned and already deleted jobs all return 204. Nonterminal jobs,
+prepared jobs and retained rerun ancestry return a sanitized 409
+`lifecycle_conflict`. It never removes document/vector resources. Prepared
+documents and their recovery receipts remain retained indefinitely.
+
+Lifecycle validation/not-found/conflict errors use
+`{"detail":{"code":"…","message":"…"}}` without echoing invalid inputs.
+
+`GET /{job_id}/events` returns `text/event-stream`. Durable rows use
+`event: benchmark.event`, JSON data containing the event type/payload/timestamp,
+and `id: <job UUID>:<sequence>`. Reconnect with that exact `Last-Event-ID`.
+`job.status` is a current status/counter projection without a durable event ID;
+terminal status closes the stream. Closing a browser connection never cancels
+execution or creates a rerun. Heartbeat comments use the configured interval.
+
+Expired replay history returns 410 `event_history_expired` with `resume_after`;
+refresh job/cell status, then reconnect with that cursor. A gap discovered after
+streaming starts is an explicit `stream.error` followed by close. The stream
+does not silently treat retained preparation receipts as proof that intervening
+ordinary events still exist. Ahead-of-history cursors return 409; malformed or
+wrong-job cursors return 422. Authorization is checked again for each subsequent
+batch. Authentication failure or database unavailability after headers produces
+a stream error, not a successful completion notification.
+
+`BENCHMARK_EVENT_RETENTION_COUNT` bounds ordinary history but never removes
+preparation start/completion recovery receipts. Replay batch size, heartbeat and
+per-principal/per-process connection count use their documented environment
+settings. Responses disable caching and proxy buffering. Connection slots are
+released on terminal completion, preflight failure and browser disconnect.
+
+### Persisted ownership
+
 `owner_subject` is the stable OIDC subject for either a user or service
 principal. Every repository read and destructive operation is scoped to that
 subject. A composite foreign key requires a rerun and its source job to have
@@ -194,6 +264,83 @@ Queued sibling cells remain claimable. Repeating interrupted work requires a
 new linked rerun job.
 
 ## Results, paging, and replay
+
+### Human admission boundary
+
+The submission dependency validates the actual AI Curation `auth_token` (or
+`cognito_token`) cookie through the configured application provider. Service
+callers instead supply an ephemeral `X-Benchmark-Curator-Authorization: Bearer …`
+credential for that same execution target audience. A portal login token issued
+for a different client is not implicitly trusted. Audience verification remains
+enabled; provisioning a new cross-client trust relationship is not part of this
+API implementation.
+
+Benchmark orchestration authorization remains separate. Non-service callers
+must match the curator's subject; only the existing verified Cognito M2M profile
+may have a distinct service owner. The ABC delegated-source header cannot
+establish human identity. Ambiguous cookie-plus-curator-header requests fail.
+`BENCHMARK_CURATOR_AUTH_MAX_BYTES` defaults to 8192 for the human credential.
+
+Admission captures only the existing token-free execution receipt, then checks
+current provider membership and an active local account. Unsupported provider
+lookups and unavailable authorization fail closed. The provider and SQL lookup
+run off the event loop with a thread-owned database session. Both new-job and
+rerun admission consume this boundary; the private portal bridge is separate.
+
+`POST /api/v1/benchmarks/jobs` accepts a `suite` and its resolved `plan`, with
+the same idempotency header and admission limits as rerun. New keys resolve
+authoritative routes from current visible database agents, configured models,
+and compatible installed flow templates. Catalog and execution share the normal
+curation flow filtering/resolution logic. Missing agent queries are rejected
+before input materialization. The submitted plan must match current resolution.
+
+The database reservation precedes catalog lookup and source materialization.
+Concurrent identical requests share one admission outcome; accepted retries
+return the original job without consulting the current catalog, sources, or
+snapshot storage. Inputs are frozen before cells become queueable. Source
+delegation is dropped before queue serialization. A failed materialization is
+recorded as a sanitized terminal admission failure, not a runnable job; retrying
+that key replays the failure. An intentional new attempt uses a new key.
+
+Different experiment keys may use the same paper concurrently. Snapshot receipt
+insertion converges on the existing owner/source/version/digest identity and
+verifies the winning immutable blob without overwriting its provenance.
+
+`POST /api/v1/benchmarks/jobs/{job_id}/rerun` accepts JSON `{"cell_ids": []}`
+(all failed cells) or an explicit list of failed-cell UUIDs from a terminal job.
+It requires `Idempotency-Key` (1–255 printable ASCII characters without spaces),
+run capability and fresh trusted human admission. The bounded JSON body is read
+only after authorization; `BENCHMARK_ADMISSION_MAX_BYTES` defaults to 1 MiB.
+Source credentials are rejected because reruns reuse immutable input snapshots.
+Success is 202 with `job_id`, `replayed`, and a `Location` status URL. An identical
+key/selection replays; a different selection conflicts. Original context/results
+are preserved, and extra newly granted groups do not change the rerun context.
+The parent job lock serializes rerun admission with guarded deletion.
+The configured cell limit applies to the resolved new selection, including
+empty-list/all-failed requests. Accepted replay is independent of subsequent
+limit changes; rejected new admissions retain their deterministic failure.
+
+Lifecycle HTTP errors use `{"detail":{"code":"...","message":"..."}}`.
+Authentication failures from shared dependencies are normalized within this
+versioned router; existing authentication headers are preserved. OpenAPI
+documents the error model, including validation errors instead of FastAPI's
+default request-echo schema. Expired event history adds `resume_after` to detail;
+the stream itself uses `stream.error` frames after response headers are sent.
+
+Caught catalog, current-curator authorization, and post-header event-stream
+dependency failures report through the canonical observability facades. Reports
+retain only an operation and exception type in a sanitized wrapper, with no
+raw provider/SQL text or chained sensitive exception. Expected authorization
+denials remain unreported 4xx responses. Public error envelopes and durable
+failed-admission replay remain unchanged.
+
+The PostgreSQL lifecycle acceptance suite exercises HTTP submission through
+worker claim/cell/invocation persistence and back through result/event APIs.
+Synthetic preparation/auth/provider adapters avoid live document or paid model
+work. It verifies normal document-ID/query inputs (not whole-paper inlining),
+token telemetry with unknown cost retained as null, and revoked curator access
+failing the cell before provider dispatch. These fixtures do not certify live
+preparation or provider connectivity.
 
 Successful cell envelopes are JSONB and are accepted only when their serialized
 UTF-8 JSON size is at most `BENCHMARK_MAX_ENVELOPE_BYTES` (default 10 MiB).

@@ -105,13 +105,18 @@ async def authorize_benchmark_curator(
     session_factory: Callable[..., Any] = SessionLocal,
 ) -> BenchmarkCuratorContext:
     """Recheck the provider and local active account without changing frozen groups."""
-    try:
-        principal = await asyncio.to_thread(_configured_current_principal, frozen)
+    def check_current() -> BenchmarkCuratorContext:
+        # Both provider I/O and synchronous SQL belong off the event loop.
+        # The session is created, used and closed by this one worker thread.
+        principal = _configured_current_principal(frozen)
         with session_factory() as session:
             return require_current_curator_authorization(
                 frozen, current_principal=principal,
                 current_user=session.get(User, frozen.db_user_id),
             )
+
+    try:
+        return await asyncio.to_thread(check_current)
     except Exception:
         # SDK exception text may contain account/provider details; do not put
         # it in persisted benchmark failure metadata or an exception chain.

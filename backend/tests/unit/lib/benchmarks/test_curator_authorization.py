@@ -1,3 +1,4 @@
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -116,6 +117,38 @@ async def test_lookup_failure_is_sanitized_and_cannot_reuse_frozen_claims(monkey
     assert "sensitive" not in str(error.value)
     assert error.value.__suppress_context__ is True
     factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_authorization_session_stays_in_one_worker_thread(monkeypatch):
+    event_loop_thread = threading.get_ident()
+    worker_threads = []
+    principal = lookup(context(), client())
+
+    def record_thread():
+        current = threading.get_ident()
+        assert current != event_loop_thread
+        worker_threads.append(current)
+
+    def current_principal(_):
+        record_thread()
+        return principal
+
+    def factory():
+        record_thread()
+        session = MagicMock()
+        session.__enter__.side_effect = lambda: (record_thread(), session)[1]
+        session.__exit__.side_effect = lambda *args: record_thread()
+        session.get.side_effect = lambda *args: (
+            record_thread(), User(id=42, auth_sub="synthetic-sub", is_active=True),
+        )[1]
+        return session
+
+    monkeypatch.setattr(authorization, "_configured_current_principal", current_principal)
+    frozen = context()
+    assert await authorization.authorize_benchmark_curator(frozen, session_factory=factory) is frozen
+    assert len(worker_threads) == 5
+    assert len(set(worker_threads)) == 1
 
 
 def test_unsupported_provider_does_not_construct_aws_client(monkeypatch):

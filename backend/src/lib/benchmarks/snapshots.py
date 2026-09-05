@@ -13,6 +13,7 @@ from typing import Annotated, Any, Protocol
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from pydantic import Field, RootModel
 
@@ -315,20 +316,19 @@ class BenchmarkSnapshotRepository:
         content = source.content.encode("utf-8")
         if len(content) != source.metadata.content_bytes or _digest(content) != source.digest:
             raise BenchmarkSnapshotError("Materialized input failed snapshot verification")
-        existing = self.session.scalar(
-            select(BenchmarkInputSnapshot).where(
-                BenchmarkInputSnapshot.owner_subject == owner_subject,
-                BenchmarkInputSnapshot.resolver_id == source.resolver,
-                BenchmarkInputSnapshot.source_reference == source.reference,
-                BenchmarkInputSnapshot.source_version == source.version,
-                BenchmarkInputSnapshot.digest == source.digest,
-            )
+        identity = select(BenchmarkInputSnapshot).where(
+            BenchmarkInputSnapshot.owner_subject == owner_subject,
+            BenchmarkInputSnapshot.resolver_id == source.resolver,
+            BenchmarkInputSnapshot.source_reference == source.reference,
+            BenchmarkInputSnapshot.source_version == source.version,
+            BenchmarkInputSnapshot.digest == source.digest,
         )
+        existing = self.session.scalar(identity)
         if existing is not None:
             self.read_verified(existing.id, owner_subject=owner_subject)
             return existing
         blob_reference = self.store.put(digest=source.digest, content=content)
-        snapshot = BenchmarkInputSnapshot(
+        values = dict(
             id=uuid4(),
             digest=source.digest,
             source_version=source.version,
@@ -341,8 +341,18 @@ class BenchmarkSnapshotRepository:
             service_principal=service_principal,
             blob_reference=blob_reference,
         )
-        self.session.add(snapshot)
-        self.session.flush()
+        snapshot = self.session.scalar(
+            insert(BenchmarkInputSnapshot).values(**values).on_conflict_do_nothing(
+                constraint="uq_benchmark_snapshot_owner_source_version_digest",
+            ).returning(BenchmarkInputSnapshot)
+        )
+        if snapshot is None:
+            # Different experiments may freeze the same paper concurrently.
+            # Keep the winning immutable receipt/provenance, never overwrite it.
+            snapshot = self.session.scalar(identity)
+            if snapshot is None:
+                raise BenchmarkSnapshotError("Concurrent snapshot receipt is unavailable")
+            self.read_verified(snapshot.id, owner_subject=owner_subject)
         return snapshot
 
     def freeze_plan(

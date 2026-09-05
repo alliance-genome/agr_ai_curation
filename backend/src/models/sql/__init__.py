@@ -9,6 +9,7 @@ from .benchmark import (
     BenchmarkInvocation,
     BenchmarkInvocationStatus,
     BenchmarkJob,
+    BenchmarkJobIdempotency,
     BenchmarkJobInputSnapshot,
     BenchmarkJobStatus,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "BenchmarkInvocation",
     "BenchmarkInvocationStatus",
     "BenchmarkJob",
+    "BenchmarkJobIdempotency",
     "BenchmarkJobInputSnapshot",
     "BenchmarkJobStatus",
     "Agent",

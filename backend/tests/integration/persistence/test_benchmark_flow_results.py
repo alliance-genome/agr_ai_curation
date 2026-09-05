@@ -108,7 +108,7 @@ async def test_result_resolution_enforces_all_execution_scope_filters(monkeypatc
             assert kwargs["user_id"] == owner
             yield {"type": "FLOW_FINISHED", "data": completion}
 
-        monkeypatch.setattr(runtime, "_flow_from_recipe", lambda _: SimpleNamespace(id=uuid4()))
+        monkeypatch.setattr(runtime, "_flow_from_recipe", lambda _target, _groups: SimpleNamespace(id=uuid4()))
         monkeypatch.setattr(runtime, "execute_flow", completed_flow)
         result = await runtime.execute_resolved_flow_cell(
             cell, {"document_id": scope["document_id"], "user_id": owner}, run_id

@@ -1017,9 +1017,45 @@ def get_benchmark_worker_enabled() -> bool:
     return _get_env_bool("BENCHMARK_WORKER_ENABLED", False)
 
 
+def get_benchmark_api_enabled() -> bool:
+    """Whether the stable deployment-local benchmark HTTP API is available."""
+    return _get_env_bool("BENCHMARK_API_ENABLED", False)
+
+
 def get_benchmark_execution_enabled() -> bool:
     """Whether this deployment may dispatch benchmark provider calls."""
     return _get_env_bool("BENCHMARK_EXECUTION_ENABLED", False)
+
+
+def get_benchmark_event_retention_count() -> int:
+    """Maximum ordinary replay events retained per job."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_EVENT_RETENTION_COUNT", 10_000))
+
+
+def get_benchmark_event_heartbeat_seconds() -> float:
+    """Seconds between server-sent-event heartbeat comments."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("BENCHMARK_EVENT_HEARTBEAT_SECONDS", 15.0),
+    )
+
+
+def get_benchmark_event_replay_batch_size() -> int:
+    """Maximum durable events loaded in one stream replay query."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_EVENT_REPLAY_BATCH_SIZE", 250),
+    )
+
+
+def get_benchmark_max_event_connections_per_principal() -> int:
+    """Maximum simultaneous lifecycle event streams for one API principal."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "BENCHMARK_MAX_EVENT_CONNECTIONS_PER_PRINCIPAL", 5
+        ),
+    )
 
 
 def get_benchmark_worker_concurrency() -> int:
@@ -1138,6 +1174,16 @@ def get_benchmark_max_input_bytes() -> int:
         1,
         _get_env_int_with_fallback("BENCHMARK_MAX_INPUT_BYTES", 52_428_800),
     )
+
+
+def get_benchmark_admission_max_bytes() -> int:
+    """Maximum JSON request bytes for new benchmark work."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_ADMISSION_MAX_BYTES", 1_048_576))
+
+
+def get_benchmark_curator_auth_max_bytes() -> int:
+    """Maximum UTF-8 bytes in the benchmark's ephemeral human credential."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CURATOR_AUTH_MAX_BYTES", 8_192))
 
 
 def get_benchmark_delegated_source_auth_max_bytes() -> int:
