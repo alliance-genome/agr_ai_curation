@@ -2481,6 +2481,19 @@ class CurationBenchmarkSnapshotCreateResponse(CurationWorkspaceBaseModel):
     download_path: str
 
 
+class CurationBenchmarkDestination(CurationWorkspaceBaseModel):
+    """Non-secret configured benchmark handoff destination."""
+
+    destination_id: str
+    label: str
+
+
+class CurationBenchmarkDestinationListResponse(CurationWorkspaceBaseModel):
+    """Configured destinations safe to display to authenticated curators."""
+
+    destinations: list[CurationBenchmarkDestination]
+
+
 class CurationBenchmarkHandoffRequest(CurationWorkspaceBaseModel):
     """Configured server-side destination selected by stable identifier only."""
 
@@ -2495,7 +2508,10 @@ class CurationBenchmarkHandoffResponse(CurationWorkspaceBaseModel):
     destination_id: str
     status: Literal["succeeded", "failed", "unknown"]
     receipt_id: Optional[str] = None
-    redirect_path: Optional[str] = None
+    redirect_path: Optional[str] = Field(
+        default=None,
+        description="Backend-approved absolute destination URL, present only after successful handoff",
+    )
 
 
 class CurationBenchmarkErrorDetail(CurationWorkspaceBaseModel):

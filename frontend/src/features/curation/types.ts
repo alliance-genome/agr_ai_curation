@@ -687,6 +687,40 @@ export interface CurationWorkspaceResponse {
   workspace: CurationWorkspace
 }
 
+export interface CurationBenchmarkDestination {
+  destination_id: string
+  label: string
+}
+
+export interface CurationBenchmarkDestinationListResponse {
+  destinations: CurationBenchmarkDestination[]
+}
+
+export interface CurationBenchmarkSnapshotCreateRequest {
+  expected_revision: number
+}
+
+export interface CurationBenchmarkSnapshotCreateResponse {
+  snapshot_id: string
+  schema_version: 'curation-benchmark-snapshot/v1'
+  envelope_revision: number
+  envelope_digest: string
+  download_path: string
+}
+
+export interface CurationBenchmarkHandoffRequest {
+  destination_id: string
+}
+
+export interface CurationBenchmarkHandoffResponse {
+  handoff_id: string
+  snapshot_id: string
+  destination_id: string
+  status: 'succeeded' | 'failed' | 'unknown'
+  receipt_id?: string | null
+  redirect_path?: string | null
+}
+
 export interface CurationSessionCreateRequest {
   document_id: string
   adapter_key: string

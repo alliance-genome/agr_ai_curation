@@ -33,6 +33,8 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.observability.runtime import report_runtime_exception
 from src.schemas.curation_workspace import (
+    CurationBenchmarkDestination,
+    CurationBenchmarkDestinationListResponse,
     CurationBenchmarkHandoffResponse,
     CurationBenchmarkSchemaReference,
     CurationBenchmarkSnapshotBundleV1,
@@ -45,6 +47,7 @@ from src.schemas.domain_envelope import DomainEnvelope, HistoryEventKind
 logger = logging.getLogger(__name__)
 SNAPSHOT_SCHEMA_VERSION = "curation-benchmark-snapshot/v1"
 _DESTINATION_FIELDS = {
+    "label",
     "sink_url",
     "token_url",
     "client_id",
@@ -87,6 +90,7 @@ def _report_handoff_failure(failure_code: str) -> None:
 
 @dataclass(frozen=True)
 class BenchmarkHandoffDestination:
+    label: str
     sink_url: str
     token_url: str
     client_id: str
@@ -306,6 +310,7 @@ def _destination_registry() -> dict[str, BenchmarkHandoffDestination]:
         if not prefix.startswith("/") or "?" in prefix or "#" in prefix:
             raise CurationBenchmarkSnapshotError(503, "handoff_configuration_invalid", "Configured redirect path policy is invalid")
         registry[destination_id] = BenchmarkHandoffDestination(
+            label=payload["label"],
             sink_url=sink_url,
             token_url=token_url,
             client_id=payload["client_id"],
@@ -317,12 +322,29 @@ def _destination_registry() -> dict[str, BenchmarkHandoffDestination]:
     return registry
 
 
+def list_benchmark_handoff_destinations() -> CurationBenchmarkDestinationListResponse:
+    """Return only display-safe destination identities for the curator UI."""
+
+    if not get_benchmark_snapshot_handoff_enabled():
+        return CurationBenchmarkDestinationListResponse(destinations=[])
+    registry = _destination_registry()
+    return CurationBenchmarkDestinationListResponse(
+        destinations=[
+            CurationBenchmarkDestination(destination_id=destination_id, label=destination.label)
+            for destination_id, destination in sorted(registry.items())
+        ]
+    )
+
+
 def _identity_digest(*parts: str) -> str:
     encoded = "\x1f".join(parts).encode("utf-8")
     return f"sha256:{sha256(encoded).hexdigest()}"
 
 
-def _handoff_response(attempt: CurationBenchmarkHandoffAttempt) -> CurationBenchmarkHandoffResponse:
+def _handoff_response(
+    attempt: CurationBenchmarkHandoffAttempt,
+    destination: BenchmarkHandoffDestination,
+) -> CurationBenchmarkHandoffResponse:
     public_status = "unknown" if attempt.status == "sending" else attempt.status
     return CurationBenchmarkHandoffResponse(
         handoff_id=str(attempt.id),
@@ -330,13 +352,17 @@ def _handoff_response(attempt: CurationBenchmarkHandoffAttempt) -> CurationBench
         destination_id=attempt.destination_id,
         status=public_status,
         receipt_id=attempt.receipt_id if public_status == "succeeded" else None,
-        redirect_path=attempt.redirect_path if public_status == "succeeded" else None,
+        redirect_path=(
+            f"{destination.allowed_redirect_origin}{attempt.redirect_path}"
+            if public_status == "succeeded" and attempt.redirect_path else None
+        ),
     )
 
 
 def _finish_attempt(
     db: Session,
     attempt: CurationBenchmarkHandoffAttempt,
+    destination: BenchmarkHandoffDestination,
     *,
     status: str,
     failure_code: str | None = None,
@@ -349,7 +375,7 @@ def _finish_attempt(
     attempt.redirect_path = redirect_path
     attempt.updated_at = datetime.now(timezone.utc)
     db.commit()
-    return _handoff_response(attempt)
+    return _handoff_response(attempt, destination)
 
 
 def _validated_redirect_path(redirect_url: str, destination: BenchmarkHandoffDestination) -> str:
@@ -424,8 +450,8 @@ async def handoff_benchmark_snapshot(
         if attempt.idempotency_key != idempotency_key:
             raise CurationBenchmarkSnapshotError(409, "handoff_replay_conflict", "Handoff replay identity conflicts with the reserved snapshot")
         if attempt.status == "sending":
-            return _finish_attempt(db, attempt, status="unknown", failure_code="prior_delivery_ambiguous")
-        return _handoff_response(attempt)
+            return _finish_attempt(db, attempt, destination, status="unknown", failure_code="prior_delivery_ambiguous")
+        return _handoff_response(attempt, destination)
 
     attempt = CurationBenchmarkHandoffAttempt(
         id=uuid4(),
@@ -447,13 +473,13 @@ async def handoff_benchmark_snapshot(
         )
         if reserved is None or reserved.idempotency_key != idempotency_key:
             raise CurationBenchmarkSnapshotError(409, "handoff_replay_conflict", "Handoff replay identity conflicts with the reserved snapshot") from None
-        return _handoff_response(reserved)
+        return _handoff_response(reserved, destination)
 
     client_secret = os.getenv(destination.client_secret_env, "")
     if not client_secret:
         logger.error("Benchmark snapshot handoff credential is unavailable")
         _report_handoff_failure("credential_unavailable")
-        return _finish_attempt(db, attempt, status="failed", failure_code="credential_unavailable")
+        return _finish_attempt(db, attempt, destination, status="failed", failure_code="credential_unavailable")
 
     timeout = get_benchmark_handoff_timeout_seconds()
     async with httpx.AsyncClient(
@@ -470,13 +496,13 @@ async def handoff_benchmark_snapshot(
             logger.warning("Benchmark snapshot handoff token request failed")
             _report_handoff_failure("token_request_failed")
             return _finish_attempt(
-                db, attempt, status="failed", failure_code="token_request_failed"
+                db, attempt, destination, status="failed", failure_code="token_request_failed"
             )
         if not token_response.is_success:
             logger.warning("Benchmark snapshot handoff token request failed")
             _report_handoff_failure("token_request_failed")
             return _finish_attempt(
-                db, attempt, status="failed", failure_code="token_request_failed"
+                db, attempt, destination, status="failed", failure_code="token_request_failed"
             )
         try:
             token_payload = token_response.json()
@@ -491,7 +517,7 @@ async def handoff_benchmark_snapshot(
             logger.warning("Benchmark snapshot handoff token response was invalid")
             _report_handoff_failure("token_response_invalid")
             return _finish_attempt(
-                db, attempt, status="failed", failure_code="token_response_invalid"
+                db, attempt, destination, status="failed", failure_code="token_response_invalid"
             )
         try:
             sink_response = await client.post(
@@ -509,7 +535,7 @@ async def handoff_benchmark_snapshot(
             )
             _report_handoff_failure("delivery_timeout")
             return _finish_attempt(
-                db, attempt, status="unknown", failure_code="delivery_timeout"
+                db, attempt, destination, status="unknown", failure_code="delivery_timeout"
             )
         except httpx.RequestError:
             logger.warning(
@@ -519,6 +545,7 @@ async def handoff_benchmark_snapshot(
             return _finish_attempt(
                 db,
                 attempt,
+                destination,
                 status="unknown",
                 failure_code="delivery_transport_error",
             )
@@ -526,7 +553,7 @@ async def handoff_benchmark_snapshot(
     if not sink_response.is_success:
         logger.warning("Benchmark snapshot handoff sink rejected the delivery")
         _report_handoff_failure("sink_rejected")
-        return _finish_attempt(db, attempt, status="failed", failure_code="sink_rejected")
+        return _finish_attempt(db, attempt, destination, status="failed", failure_code="sink_rejected")
     try:
         sink_payload = sink_response.json()
         receipt_id = sink_payload.get("receipt_id") if isinstance(sink_payload, dict) else None
@@ -537,11 +564,12 @@ async def handoff_benchmark_snapshot(
     except (TypeError, ValueError):
         logger.warning("Benchmark snapshot handoff receipt was invalid")
         _report_handoff_failure("receipt_invalid")
-        return _finish_attempt(db, attempt, status="failed", failure_code="receipt_invalid")
+        return _finish_attempt(db, attempt, destination, status="failed", failure_code="receipt_invalid")
 
     return _finish_attempt(
         db,
         attempt,
+        destination,
         status="succeeded",
         receipt_id=receipt_id,
         redirect_path=redirect_path,

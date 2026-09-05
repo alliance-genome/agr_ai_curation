@@ -5,10 +5,13 @@ import {
   buildCurationWorkspaceEnvelopeReviewRowsRequests,
   buildDomainEnvelopeReviewRowsPath,
   CurationWorkspaceRequestError,
+  createCurationBenchmarkSnapshot,
   executeCurationSubmission,
+  fetchBenchmarkDestinations,
   fetchCurationWorkspaceEnvelopeReviewRows,
   fetchDomainEnvelopeReviewRows,
   fetchSubmissionPreview,
+  handoffCurationBenchmarkSnapshot,
   patchCurationEnvelopeField,
 } from './curationWorkspaceService'
 
@@ -322,6 +325,69 @@ describe('curationWorkspaceService envelope review rows', () => {
   })
 })
 
+describe('curationWorkspaceService benchmark snapshot requests', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('fetches non-secret configured destinations', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      destinations: [{ destination_id: 'portal', label: 'Alliance Benchmark' }],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchBenchmarkDestinations()).resolves.toEqual({
+      destinations: [{ destination_id: 'portal', label: 'Alliance Benchmark' }],
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/curation-workspace/benchmark-destinations',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+  })
+
+  it('posts the displayed envelope revision and opaque destination ID', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        snapshot_id: 'snapshot-1',
+        schema_version: 'curation-benchmark-snapshot/v1',
+        envelope_revision: 4,
+        envelope_digest: 'sha256:digest',
+        download_path: '/api/curation-workspace/benchmark-snapshots/snapshot-1/download',
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        handoff_id: 'handoff-1',
+        snapshot_id: 'snapshot-1',
+        destination_id: 'portal',
+        status: 'unknown',
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const snapshot = await createCurationBenchmarkSnapshot('session 1', 'env 1', {
+      expected_revision: 4,
+    })
+    await handoffCurationBenchmarkSnapshot(snapshot.snapshot_id, { destination_id: 'portal' })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/curation-workspace/sessions/session%201/envelopes/env%201/benchmark-snapshots',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'POST',
+        body: JSON.stringify({ expected_revision: 4 }),
+      }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/curation-workspace/benchmark-snapshots/snapshot-1/handoffs',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'POST',
+        body: JSON.stringify({ destination_id: 'portal' }),
+      }),
+    )
+  })
+})
+
 describe('curationWorkspaceService submission requests', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -436,6 +502,7 @@ describe('curationWorkspaceService submission requests', () => {
 
     await executeCurationSubmission({
       session_id: 'session-1',
+      idempotency_key: 'submission-1',
       target_key: 'review_export_bundle',
       candidate_ids: ['candidate-1'],
       mode: 'direct_submit',
@@ -451,6 +518,7 @@ describe('curationWorkspaceService submission requests', () => {
         method: 'POST',
         body: JSON.stringify({
           session_id: 'session-1',
+          idempotency_key: 'submission-1',
           target_key: 'review_export_bundle',
           candidate_ids: ['candidate-1'],
           mode: 'direct_submit',

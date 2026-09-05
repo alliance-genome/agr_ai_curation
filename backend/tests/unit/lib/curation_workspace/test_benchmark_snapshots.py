@@ -196,6 +196,7 @@ def test_destination_registry_rejects_caller_selected_or_insecure_urls(monkeypat
         lambda: json.dumps(
             {
                 "portal": {
+                    "label": "Alliance Benchmark",
                     "sink_url": "http://private.example/snapshots",
                     "token_url": "https://auth.example/token",
                     "client_id": "sender",
@@ -245,6 +246,7 @@ class _HandoffDb:
 
 def _destination():
     return module.BenchmarkHandoffDestination(
+        label="Alliance Benchmark",
         sink_url="https://sink.example/api/snapshots",
         token_url="https://auth.example/oauth2/token",
         client_id="snapshot-sender",
@@ -253,6 +255,35 @@ def _destination():
         allowed_redirect_origin="https://portal.example",
         allowed_redirect_path_prefix="/comparisons",
     )
+
+
+def test_destination_list_exposes_only_sorted_ids_and_labels(monkeypatch):
+    monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_destination_registry",
+        lambda: {"zeta": _destination(), "alpha": _destination()},
+    )
+
+    result = module.list_benchmark_handoff_destinations()
+
+    assert result.model_dump() == {
+        "destinations": [
+            {"destination_id": "alpha", "label": "Alliance Benchmark"},
+            {"destination_id": "zeta", "label": "Alliance Benchmark"},
+        ]
+    }
+
+
+def test_destination_list_is_empty_when_handoff_is_disabled(monkeypatch):
+    monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: False)
+    monkeypatch.setattr(
+        module,
+        "_destination_registry",
+        lambda: (_ for _ in ()).throw(AssertionError("registry must not be loaded")),
+    )
+
+    assert module.list_benchmark_handoff_destinations().destinations == []
 
 
 @pytest.mark.asyncio
@@ -283,6 +314,8 @@ async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(mo
         db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1"
     )
     assert result.receipt_id == "receipt-1"
+    assert result.redirect_path == "https://portal.example/comparisons/receipt-1"
+    assert prior.redirect_path == "/comparisons/receipt-1"
 
     prior.idempotency_key = "sha256:" + "e" * 64
     with pytest.raises(module.CurationBenchmarkSnapshotError) as exc_info:
@@ -354,7 +387,7 @@ async def test_handoff_uses_server_credentials_exact_bytes_and_opaque_redirect(m
 
     assert result.status == "succeeded"
     assert result.receipt_id == "receipt-opaque"
-    assert result.redirect_path == "/comparisons/opaque"
+    assert result.redirect_path == "https://portal.example/comparisons/opaque"
     assert calls[1][1]["content"] == b'{"exact":true}'
     assert calls[1][1]["headers"]["Authorization"] == "Bearer fake-sensitive-token"
     assert calls[1][1]["headers"]["Idempotency-Key"].startswith("sha256:")
