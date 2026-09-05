@@ -110,7 +110,7 @@ def _curator_context():
 
     return BenchmarkCuratorContext(
         subject="synthetic-curator", auth_provider="oidc", db_user_id=42,
-        active_groups=("FB",),
+        active_groups=("group-alpha",),
     )
 
 
@@ -220,7 +220,7 @@ def test_curator_context_is_persisted_separately_and_immutable_while_queued():
         job = _create_job(db, owner="service:synthetic-portal", cells=1)
         assert job.curator_context == _curator_context().model_dump(mode="json")
         assert job.curator_context["subject"] != job.owner_subject
-        for replacement in (None, {**job.curator_context, "active_groups": ["WB"]}):
+        for replacement in (None, {**job.curator_context, "active_groups": ["group-beta"]}):
             with pytest.raises(DBAPIError, match="curator context is immutable"):
                 with db.begin_nested():
                     db.execute(

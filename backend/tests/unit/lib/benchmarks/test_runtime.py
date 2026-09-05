@@ -290,7 +290,7 @@ async def test_resolved_agent_uses_same_document_context_for_tools_and_runner(mo
             "messages": messages,
             "user_id": context.user_id,
             "db_user_id": 42,
-            "active_groups": ["FB"],
+            "active_groups": ["group-alpha"],
             "document_id": context.document_id,
             "document_name": context.document_name,
         },
@@ -300,9 +300,9 @@ async def test_resolved_agent_uses_same_document_context_for_tools_and_runner(mo
     for key, value in context.to_agent_kwargs().items():
         assert captured["agent"][key] == value
     assert captured["agent"]["db_user_id"] == 42
-    assert captured["agent"]["active_groups"] == ["FB"]
-    assert captured["agent"]["authenticated_groups"] == ["FB"]
-    assert captured["runner"]["active_groups"] == ["FB"]
+    assert captured["agent"]["active_groups"] == ["group-alpha"]
+    assert captured["agent"]["authenticated_groups"] == ["group-alpha"]
+    assert captured["runner"]["active_groups"] == ["group-alpha"]
     assert captured["runner"]["doc_context"] is context
     assert captured["runner"]["document_id"] == context.document_id
     assert captured["runner"]["document_name"] == context.document_name

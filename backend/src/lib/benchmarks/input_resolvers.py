@@ -17,6 +17,7 @@ from pydantic import Field, RootModel, ValidationError
 
 from src.lib.security.redaction import active_secret_redaction
 
+from .document_inputs import decode_frozen_document
 from .models import BenchmarkInputReference, FrozenStrictModel, ResolvedBenchmarkPlan
 
 _RESOLVER_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -497,15 +498,15 @@ class CheckedInFixtureResolver:
             )
         try:
             content = payload.decode("utf-8")
-            parsed = json.loads(content)
+            decode_frozen_document(payload, content_type="application/json")
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BenchmarkSourceError(
                 "source_unavailable", "Benchmark fixture is not valid UTF-8 JSON"
             ) from exc
-        if not isinstance(parsed, dict):
+        except ValueError as exc:
             raise BenchmarkSourceError(
-                "invalid_reference", "Benchmark fixture input must contain an object"
-            )
+                "invalid_reference", "Benchmark fixture must contain extracted document elements"
+            ) from exc
         digest = f"sha256:{hashlib.sha256(payload).hexdigest()}"
         provenance = BenchmarkSourceProvenance(
             resolver=self.resolver_id,

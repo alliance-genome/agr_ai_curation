@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from pydantic import Field, RootModel, ValidationError
 
 import src.services.benchmark_document_source as document_source
+from src.lib.benchmarks.document_inputs import decode_frozen_document
 from src.lib.benchmarks.input_resolvers import (
     BenchmarkInputResolverCatalog,
     BenchmarkSourceRequestContext,
@@ -66,7 +67,7 @@ def _reference(
 
 
 def test_checked_in_fixture_materializes_digest_verified_immutable_content(tmp_path):
-    payload = b'{"messages": [{"role": "user", "content": "fixture"}]}\n'
+    payload = b'[{"text": "fixture"}]\n'
     fixture = tmp_path / "cases" / "case-1" / "input.json"
     fixture.parent.mkdir(parents=True)
     fixture.write_bytes(payload)
@@ -99,6 +100,29 @@ def test_checked_in_fixture_materializes_digest_verified_immutable_content(tmp_p
         result.content = "changed"
 
 
+@pytest.mark.parametrize("payload", [b'{"messages": []}', b'[]', b'[{"text": 42}]'])
+def test_checked_in_fixture_rejects_non_document_content(tmp_path, payload):
+    (tmp_path / "document.json").write_bytes(payload)
+    catalog = BenchmarkInputResolverCatalog(
+        [CheckedInFixtureResolver(tmp_path, allowed_references={"document.json"})],
+        timeout_seconds=1,
+        max_input_bytes=1024,
+    )
+    with pytest.raises(BenchmarkSourceError) as exc_info:
+        asyncio.run(
+            catalog.materialize(
+                _reference(
+                    resolver="checked_in_fixture",
+                    reference="document.json",
+                    version="1",
+                    digest=_digest(payload),
+                ),
+                request_context=_context("operator"),
+            )
+        )
+    assert exc_info.value.code == "invalid_reference"
+
+
 def test_shipped_suite_fixture_references_materialize_with_checked_in_receipts():
     benchmark_root = REPOSITORY_ROOT / "packages" / "alliance" / "benchmarks"
     catalog = BenchmarkInputResolverCatalog(
@@ -124,6 +148,11 @@ def test_shipped_suite_fixture_references_materialize_with_checked_in_receipts()
             assert materialized.reference == case.input.reference
             assert materialized.version == case.input.version
             assert materialized.digest == case.input.digest
+            assert decode_frozen_document(
+                materialized.content.encode("utf-8"),
+                content_type=materialized.metadata.content_type,
+            )
+            assert case.user_query and case.user_query.strip()
 
 
 @pytest.mark.parametrize(
@@ -167,7 +196,7 @@ def test_common_input_schema_rejects_network_destinations():
 
 
 def test_checked_in_fixture_rejects_gold_fixture_even_beneath_root(tmp_path):
-    input_payload = b'{"messages": []}\n'
+    input_payload = b'[{"text": "fixture"}]\n'
     gold_payload = b'{"expected": []}\n'
     case_root = tmp_path / "cases" / "case-1"
     case_root.mkdir(parents=True)
@@ -226,7 +255,7 @@ def test_catalog_rejects_unknown_and_duplicate_resolvers(tmp_path):
 
 
 def test_checked_in_fixture_rejects_stale_digest_and_oversize(tmp_path):
-    payload = b'{"messages": []}\n'
+    payload = b'[{"text": "fixture"}]\n'
     path = tmp_path / "input.json"
     path.write_bytes(payload)
     reference = _reference(
@@ -404,7 +433,7 @@ def test_delegated_authorization_rejects_unsupported_and_multiple_identities(tmp
 
 
 def test_delegated_authorization_allows_mixed_plan_with_one_capable_resolver(tmp_path):
-    fixture = b'{"messages": []}\n'
+    fixture = b'[{"text": "fixture"}]\n'
     (tmp_path / "input.json").write_bytes(fixture)
 
     class RequiredResolver(_VersionedResolver):
@@ -467,12 +496,12 @@ def test_delegated_authorization_allows_mixed_plan_with_one_capable_resolver(tmp
 
 
 def test_materialized_plan_enforces_aggregate_byte_limit(tmp_path):
-    payload = b"{}"
+    payload = b'[{"text": "fixture"}]'
     (tmp_path / "input.json").write_bytes(payload)
     catalog = BenchmarkInputResolverCatalog(
         [CheckedInFixtureResolver(tmp_path, allowed_references={"input.json"})],
         timeout_seconds=1,
-        max_input_bytes=10,
+        max_input_bytes=len(payload),
     )
     plan = SimpleNamespace(
         plan_digest=_digest(b"plan"),
@@ -618,8 +647,8 @@ def test_catalog_verifies_registered_resolver_content_receipt():
 
 
 def test_materialize_plan_inputs_resolves_every_case_before_handoff(tmp_path):
-    first = b'{"messages": [{"content": "first"}]}\n'
-    second = b'{"messages": [{"content": "second"}]}\n'
+    first = b'[{"text": "first"}]\n'
+    second = b'[{"text": "second"}]\n'
     (tmp_path / "first.json").write_bytes(first)
     (tmp_path / "second.json").write_bytes(second)
     catalog = BenchmarkInputResolverCatalog(
@@ -671,12 +700,12 @@ def test_materialize_plan_inputs_resolves_every_case_before_handoff(tmp_path):
 
 
 def test_failed_plan_never_reaches_durable_snapshot_boundary(tmp_path):
-    payload = b"{}"
+    payload = b'[{"text": "fixture"}]'
     (tmp_path / "input.json").write_bytes(payload)
     catalog = BenchmarkInputResolverCatalog(
         [CheckedInFixtureResolver(tmp_path, allowed_references={"input.json"})],
         timeout_seconds=1,
-        max_input_bytes=10,
+        max_input_bytes=len(payload),
     )
     valid = _reference(
         resolver="checked_in_fixture",

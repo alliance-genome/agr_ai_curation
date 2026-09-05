@@ -63,7 +63,7 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
         session.commit()
         user_id = user.id
     curator = BenchmarkCuratorContext(
-        subject=subject, auth_provider="oidc", db_user_id=user_id, active_groups=("FB",),
+        subject=subject, auth_provider="oidc", db_user_id=user_id, active_groups=("group-alpha",),
     )
     monkeypatch.setattr(preparation, "get_pdf_storage_path", lambda: str(tmp_path))
     create = AsyncMock(return_value={"success": True})
@@ -193,8 +193,8 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
     try:
         def build_agent(agent_id, **runtime_input):
             assert agent_id == "extractor"
-            assert runtime_input["active_groups"] == ["FB"]
-            assert runtime_input["authenticated_groups"] == ["FB"]
+            assert runtime_input["active_groups"] == ["group-alpha"]
+            assert runtime_input["authenticated_groups"] == ["group-alpha"]
             assert runtime_input["db_user_id"] == user_id
             return SimpleNamespace(model=SimpleNamespace())
 

@@ -127,6 +127,9 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Benchmark identity integration verifies the shipped provider-group mapping.
+    Path("backend/tests/unit/lib/benchmarks/test_execution_context.py"),
+    Path("backend/tests/unit/lib/benchmarks/test_curator_authorization.py"),
     # Group-tool policy contract covers Alliance package/provider examples.
     Path("backend/tests/contract/alliance/agents/test_group_tool_policy_contract.py"),
     Path("backend/tests/unit/lib/agent_studio/test_group_tool_policy.py"),

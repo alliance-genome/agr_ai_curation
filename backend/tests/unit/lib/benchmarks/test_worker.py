@@ -16,7 +16,7 @@ from src.lib.benchmarks.worker import BenchmarkWorker, _report_failure
 async def test_worker_uses_prepared_identity_and_explicit_query_then_rechecks_authorization(monkeypatch):
     context = BenchmarkCuratorContext(
         subject="verified-curator", auth_provider="oidc", db_user_id=42,
-        active_groups=("FB",),
+        active_groups=("group-alpha",),
     )
     check = AsyncMock(return_value=context)
     monkeypatch.setattr("src.lib.benchmarks.worker.authorize_benchmark_curator", check)
@@ -32,7 +32,7 @@ async def test_worker_uses_prepared_identity_and_explicit_query_then_rechecks_au
     assert result == "synthetic-result"
     check.assert_awaited_once_with(context, session_factory=worker.session_factory)
     assert executor.call_args.args[1] == {
-        "user_id": "verified-curator", "db_user_id": 42, "active_groups": ["FB"],
+        "user_id": "verified-curator", "db_user_id": 42, "active_groups": ["group-alpha"],
         "document_id": str(prepared.document_id), "document_name": f"benchmark-{prepared.document_id}",
         "user_query": resolved.user_query,
         "messages": [{"role": "user", "content": resolved.user_query}],
