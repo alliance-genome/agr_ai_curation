@@ -713,16 +713,16 @@ def validate_custom_agent_authoring_draft(
                 fix_hint="Choose a current output contract or clear the field for the `none` contract.",
             )
         )
-    if schema_key is not None and not (
+    if schema_key is not None and (
         set(normalized_tool_ids) & set(sources.builder_finalization_tool_ids)
     ):
         findings.append(
             AuthoringValidationFinding(
-                code="missing_output_finalizer",
+                code="output_schema_with_finalize_tool",
                 severity="error",
                 path="custom_agent.tool_ids",
-                message="A structured output contract requires a compatible finalization tool.",
-                fix_hint="Attach the matching finalization tool or clear the output contract.",
+                message="A model-response schema cannot be combined with builder finalization tools.",
+                fix_hint="Choose a packaged builder format with no model schema, or remove the builder finalizer.",
             )
         )
 

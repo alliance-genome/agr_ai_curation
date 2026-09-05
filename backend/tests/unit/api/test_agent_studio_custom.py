@@ -20,6 +20,7 @@ from src.lib import http_errors
 @pytest.mark.parametrize("output", [
     {"output_contract": None},
     {"new_generic_profile": None},
+    {"revise_generic_profile": None},
     {"output_contract": {"output_state": "none"}, "output_schema_key": None},
 ])
 def test_output_transition_requests_reject_ambiguous_nulls(creating, output):
@@ -37,6 +38,39 @@ def test_output_transition_requests_accept_explicit_none_and_new_profile():
         name="Draft", new_generic_profile={"name": "Record", "semantic_class": "example", "fields": []},
     )
     assert created.new_generic_profile.semantic_class == "example"
+
+
+def test_profile_revision_edit_requires_one_explicit_complete_transition():
+    from src.api.agent_studio_custom import UpdateCustomAgentRequest, CreateCustomAgentRequest
+    edit = {
+        "base": {"profile_id": str(uuid.uuid4()), "profile_revision_id": str(uuid.uuid4()), "revision": 1, "fingerprint": "sha256:" + "a" * 64},
+        "contract": {"name": "Record", "semantic_class": "example", "fields": []},
+    }
+    assert UpdateCustomAgentRequest(revise_generic_profile=edit).revise_generic_profile.base.revision == 1
+    for other in [{"output_contract": {"output_state": "none"}}, {"new_generic_profile": edit["contract"]}, {"output_schema_key": None}]:
+        with pytest.raises(ValidationError):
+            UpdateCustomAgentRequest(revise_generic_profile=edit, **other)
+    with pytest.raises(ValidationError):
+        CreateCustomAgentRequest(name="Clone", revise_generic_profile=edit)
+
+
+def test_profile_revision_conflict_rolls_back_agent_save_and_returns_409(monkeypatch):
+    import src.api.agent_studio_custom as api
+    custom_agent = SimpleNamespace(id=uuid.uuid4())
+    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "get_custom_agent_for_user", lambda *args, **kwargs: custom_agent)
+    def conflict(**kwargs):
+        raise api.ProfileConflictError("Profile changed since it was opened")
+    monkeypatch.setattr(api, "update_custom_agent", conflict)
+    db = _db_mock()
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(api.update_custom_agent_endpoint(
+            custom_agent_id=custom_agent.id, request=api.UpdateCustomAgentRequest(name="Edited"),
+            user={"sub": "curator"}, db=db,
+        ))
+    assert caught.value.status_code == 409
+    db.rollback.assert_called_once()
+    db.commit.assert_not_called()
 
 
 class TestCustomAgentTestEndpoint:

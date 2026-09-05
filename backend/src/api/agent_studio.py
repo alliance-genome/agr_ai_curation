@@ -561,6 +561,8 @@ async def get_agent_templates_endpoint(
     user: Any = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> AgentTemplatesResponse:
+    from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
+
     try:
         rows = (
             db.query(UnifiedAgent)
@@ -584,6 +586,7 @@ async def get_agent_templates_endpoint(
                     tool_ids=list(agent.tool_ids or []),
                     allowed_group_ids=list(agent.allowed_group_ids),
                     output_schema_key=agent.output_schema_key,
+                    output_contract=initial_agent_output_contract(agent).model_dump(mode="json"),
                 )
                 for agent in rows
                 if _agent_record_is_group_accessible(agent, user)
@@ -782,6 +785,7 @@ async def get_registry_metadata(
         domain_envelope_metadata_catalog_by_agent,
     )
     from src.lib.flows.validation_attachments import validation_attachment_catalog_by_agent
+    from src.lib.agent_studio.domain_output_contract import domain_extraction_ref_for_agent
 
     validation_attachments_by_agent = validation_attachment_catalog_by_agent(AGENT_REGISTRY)
     domain_envelope_metadata_by_agent = domain_envelope_metadata_catalog_by_agent(AGENT_REGISTRY)
@@ -816,6 +820,7 @@ async def get_registry_metadata(
             frontend = entry.get("frontend", {})
             icon = frontend.get("icon", "❓")
 
+        domain_ref = domain_extraction_ref_for_agent(agent_id, active_group_ids=_authenticated_group_ids(user))
         agents[agent_id] = AgentMetadata(
             name=entry.get("name", agent_id),
             icon=icon,
@@ -829,6 +834,7 @@ async def get_registry_metadata(
             produces_flow_artifacts=_produces_flow_artifacts(entry),
             validation_attachments=validation_attachments_by_agent.get(agent_id, []),
             domain_envelope=domain_envelope_metadata_by_agent.get(agent_id),
+            domain_extraction_ref=domain_ref.model_dump(mode="json") if domain_ref else None,
         )
 
     # Include current user's custom agents when authenticated.

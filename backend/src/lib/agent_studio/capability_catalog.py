@@ -23,6 +23,7 @@ from src.lib.agent_studio.catalog_service import (
     tool_requires_document,
 )
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
+from src.lib.agent_studio.domain_output_contract import domain_extraction_ref_for_agent
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.config import list_groups, list_model_definitions
 from src.lib.config.schema_discovery import resolve_output_schema
@@ -249,6 +250,10 @@ def _agent_records(
         )
         effective_tool_ids = list(tool_resolution.tool_ids)
         domain_envelope = _domain_envelope_detail(agent)
+        domain_ref = (
+            domain_extraction_ref_for_agent(agent_id, active_group_ids=list(context.active_group_ids))
+            if agent.visibility == "system" else None
+        )
         output_schema_key = str(
             getattr(agent, "output_schema_key", "") or ""
         ).strip() or None
@@ -286,6 +291,7 @@ def _agent_records(
                     "version": int(getattr(agent, "version", 1) or 1),
                     "updated_at": getattr(agent, "updated_at", None),
                     "domain_envelope": domain_envelope,
+                    "domain_extraction_ref": domain_ref.model_dump(mode="json") if domain_ref else None,
                 },
             )
         )
@@ -440,6 +446,7 @@ def _output_contract_records(
             detail={
                 "output_schema_key": None,
                 "contract_kind": "none",
+                "output_contract": {"output_state": "none"},
                 "unprofiled_generic": False,
                 "operation_limitations": [],
             },
@@ -447,6 +454,30 @@ def _output_contract_records(
     ]
     by_schema: dict[str, list[CapabilityRecord]] = {}
     for agent in agents:
+        domain_ref = agent.detail.get("domain_extraction_ref")
+        if domain_ref is not None:
+            records.append(CapabilityRecord(
+                kind="output_contract",
+                resource_id=f"builder:{domain_ref['package_id']}:{domain_ref['agent_id']}",
+                name=agent.name,
+                description=agent.description,
+                authorization_scope=agent.authorization_scope,
+                compatibility={"active_tab": context.active_tab, "artifact_kind": context.artifact_kind,
+                               "contract_kind": "packaged_builder"},
+                detail={
+                    "contract_kind": "packaged_builder", "output_schema_key": None,
+                    "domain_extraction_ref": domain_ref,
+                    "output_contract": {"output_state": "structured_extraction", "output_mode": "domain",
+                                        "output_schema_key": None, "domain_extraction_ref": domain_ref},
+                    "provider_agent_ids": [agent.resource_id],
+                    "domain_envelopes": [agent.detail["domain_envelope"]] if agent.detail.get("domain_envelope") else [],
+                    "selection_requirements": [
+                        "Keep the selected package's matching builder finalizer and access/tool policy. "
+                        "Choosing this format does not grant tools. Start from its agent template when needed.",
+                        "Model output schema must remain null; the backend materializes this envelope.",
+                    ],
+                },
+            ))
         schema_key = str(agent.detail.get("output_schema_key") or "").strip()
         if schema_key:
             by_schema.setdefault(schema_key, []).append(agent)
@@ -476,11 +507,11 @@ def _output_contract_records(
                 detail={
                     "output_schema_key": schema_key,
                     "contract_kind": "registered_schema",
+                    "output_contract": {"output_state": "structured_extraction", "output_mode": "domain", "output_schema_key": schema_key},
                     "unprofiled_generic": False,
                     "provider_agent_ids": [provider.resource_id for provider in providers],
                     "selection_requirements": [
-                        "A compatible builder-finalization tool is required when this "
-                        "schema is assigned to a custom agent."
+                        "A model-response schema cannot be combined with builder-finalization tools."
                     ],
                     "domain_envelopes": envelope_facts,
                     "json_schema": schema.model_json_schema(),

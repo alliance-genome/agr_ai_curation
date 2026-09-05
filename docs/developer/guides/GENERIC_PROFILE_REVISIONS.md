@@ -60,6 +60,30 @@ Inline profile creation and the new agent revision share one transaction. Update
 requires `expected_revision_id` or the existing `expected_updated_at` guard;
 stale saves are rejected after locking the agent row.
 
+Updates can instead send `revise_generic_profile: {base, contract}`, where `base`
+is the full existing profile pin (profile UUID, revision UUID, number, fingerprint).
+This is an explicit third output transition, mutually exclusive with the other
+output fields. The profile service verifies the pin, current head and ownership;
+the new profile revision and new agent revision commit or roll back together.
+Profile conflicts return HTTP 409. Agents and flows already pinned to an older
+revision keep that pin. Create/clone requests cannot revise a source profile.
+
+Workshop loads the exact saved output revision and uses one authorable output
+draft for editing, dirty state, Save and AI fingerprints. The profile detail API
+exposes authenticated `can_edit` for UI guidance; Save still checks authorization.
+An unchanged profile retains its pin. Editing an owned profile on an existing
+agent sends the explicit revision transition; editing a shared/noneditable profile
+or saving an edited structure as a new agent creates a separate profile copy.
+Validation and save errors preserve the local draft.
+
+`POST /generic-profiles/{id}/revisions/{revision}/compare` compares a local
+contract against an authorized immutable revision without saving. Its response
+includes the exact base revision, proposed fingerprint and the same compatibility
+findings used by revision saves. Workshop marks comparisons stale after draft
+edits, requires confirmation before loading a compared revision, and offers a
+separate-copy action that preserves the edited contract until explicit Save.
+Compatibility is not semantic validation or submission readiness.
+
 Omitting output fields preserves the saved contract. Explicitly clearing the
 packaged-schema field selects `none`, not unprofiled generic. Clients must not
 send an incidental null schema on unrelated edits to a profile-bound agent.
@@ -145,6 +169,18 @@ inventing a revision. First materialization of a historical custom result requir
 a stored receipt-less source with matching producer and document; new custom
 extraction writes still require their exact receipt.
 
+## Saved consumer impact
+
+The Workshop revision panel loads `GET .../{profile_id}/consumers` on demand.
+It lists immutable agent configurations (current and historical) and normalized
+flow-node references across all revisions of that profile. Archived references
+remain inspectable. Current agent visibility, profile visibility, flow ownership,
+and each saved agent revision's group restrictions apply before keyset pagination;
+the ordinary exact-revision reader also verifies integrity. No inaccessible names
+or totals are returned. An empty authorized page does not prove global non-use.
+`GENERIC_PROFILE_LIST_PAGE_SIZE` bounds this read, as it does profile/revision lists.
+The view has no retarget action: saving a revision never updates other consumers.
+
 ## Profile-aware formatter projections
 
 The exact saved contract supplies recursive field discovery, including optional
@@ -209,6 +245,17 @@ limit. `POST .../validate` validates a complete unsaved draft without writes.
 saved revision and retained capability snapshots, reporting compatible,
 unsupported or unmapped without executing validators or asserting readiness.
 
+The manual editor uses `POST .../validator-options` with a typed draft to obtain
+canonical input/output field choices. It reuses the save-time path resolver and
+schema assignability rules, including inherited requiredness/nullability, explicit
+array domains and bounded provider fields. Catalog pagination uses the same
+configured page size. Options are suggestions for slots, not complete-mapping
+approval: the existing validation endpoint remains authoritative for required
+alternatives, shared array domain, provider scope, policy and overlapping writes.
+The UI invalidates choices after fields change and never rewrites an existing
+capability fingerprint. Constant values use typed controls, context selectors
+stay package-owned, and unavailable mappings remain inspectable/removable.
+
 Migration `h5c6d7e8f9a0` adds immutable capability audit snapshots and normalized
 foreign-key references. A deferred constraint rejects a saved profile mapping
 without its matching capability receipt. A package cannot reuse the same
@@ -264,8 +311,9 @@ Migrations `f3a4b5c6d7e8` and `g4b5c6d7e8f9` add these tables and create one tru
 baseline from each current custom-agent head, including archived heads. Template
 baselines load the actual database prompt cache; unavailable templates or invalid
 current configuration abort instead of inventing history. Legacy prompt-only
-rows never acquire fabricated historical model/tool settings. A null schema on
-migration remains `none`. Run migrations with the target deployment's package
+rows never acquire fabricated historical model/tool settings. A null response
+schema alone does not imply either ordinary output or extraction: the baseline
+uses the installed template's declared curation and actual builder tools. Run migrations with the target deployment's package
 configuration available. These migrations do not version flows or alter source
 documents/results.
 
@@ -273,3 +321,60 @@ The persistence suites `test_generic_profile_persistence.py` and
 `test_agent_execution_revision_persistence.py` exercise real PostgreSQL constraints,
 baseline capture, lifecycle/auth, snapshot restore/clone, stale saves, complete
 output transitions, and rollback in transactional private schemas.
+
+### Packaged builder output
+
+Domain output selects exactly one model-response schema or a
+`domain_extraction_ref` containing `package_id`, `agent_id`, and `domain_pack_id`.
+Packaged builders retain a null model-response schema: the backend finalizer
+materializes their envelope. Discovery and save use the exact installed
+package/agent identity and its declared domain. Save requires matching finalizer
+tools and preserves package access/tool policy; selecting a format does not
+grant tools. Start from the matching template when its managed tools are needed.
+Maturity labels remain advisory.
+
+The snapshot freezes the selected curation/finalization configuration, not the
+prompt parent's configuration. Tools remain deployment-owned. Absent builder
+references are omitted from serialized contracts so earlier immutable
+fingerprints remain unchanged. Fresh g4 bootstraps permit builder baselines
+before i6 pins flows; m0 upgrades older constraints without rewriting existing
+revisions or retargeting flow nodes.
+
+No-output configurations containing builder finalizers are rejected on save and
+execution. Historical contradictory revisions remain readable; repair by saving
+an explicit matching output configuration and deliberately selecting the new
+revision for each affected flow. Never reinterpret or rewrite an old pin.
+
+## Output Structure dev walkthrough
+
+Human UI feedback and Gillian's business semantics/UAT remain pending until
+they review the combined dev deployment. Use a new test agent/profile, not an
+original production flow. This checklist is not evidence of completed human UAT.
+
+1. In Workshop Setup, keep **No structured output**, then inspect the three
+   structured formats. A packaged builder may have a null response schema;
+   maturity is advisory and choosing a format never grants tools.
+2. Choose Custom Output Structure and edit name, record description and class.
+   With JSON closed, add text, enum and repeating-group fields; add a nested
+   child, duplicate, reorder and remove fields. Check required and nullable
+   independently. Locked platform fields must remain separate.
+3. Add **Synonyms / source labels (not output fields)**. The example must still
+   show only canonical keys and must identify its values as placeholders.
+4. Find compatible validators and explicitly select typed inputs, outputs and
+   allowed unresolved policy. No available capability means structural checks
+   still apply, not that the record is submission-ready.
+5. Use **Review before saving** and its Change actions to revisit basics,
+   nested fields and mappings. Edits must survive navigation with JSON closed.
+   Trigger a validation error and follow its link to the affected control.
+6. Save, reopen and edit a saved profile. Confirm the executable revision
+   identifies model, tools and exact output/profile pin. Compare/copy or load a
+   newer profile revision; other agents and flows must retain their pins.
+   Test a stale save and verify local edits remain available for recovery.
+7. Inspect consumer impact, including older revisions; archive copy must say
+   history is retained. Exercise loading failure/retry and pending-save locking.
+8. Repeat key actions using keyboard alone and at narrow and desktop widths:
+   visible focus, field-linked errors, stacked panels, readable long values and
+   no horizontal spreadsheet. Record actual browser dimensions and findings.
+9. Profile candidate comparison/adapter has deterministic proposed, applied,
+   canceled, stale and undone fixtures. Live AI Apply/Cancel/undo integration is
+   ALL-1034 on the shared ALL-1051 lifecycle, not a second editor save path.

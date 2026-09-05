@@ -115,6 +115,7 @@ function workshopAuthorableDraft(workshop: AgentWorkshopContext) {
     model_reasoning: workshop.draft_model_reasoning ?? '',
     tool_ids: [...(workshop.draft_tool_ids ?? [])].sort(compareUtf8),
     output_schema_key: workshop.draft_output_schema_key ?? '',
+    output_draft: workshop.draft_output ?? null,
   }
 }
 

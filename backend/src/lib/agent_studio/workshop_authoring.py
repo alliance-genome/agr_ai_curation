@@ -202,6 +202,43 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             message="The agent source or inherited access changed. Reopen the draft and try again.",
         ))
     try:
+        from src.lib.agent_studio.domain_output_contract import (
+            require_no_output_without_builder_tools,
+            resolve_domain_extraction_definition,
+            validate_domain_extraction_selection,
+        )
+        from src.schemas.agent_execution_revision import AgentOutputContract, initial_output_contract
+
+        draft_output = workshop.draft_output
+        if draft_output and draft_output.get("mode") in {"none", "domain"}:
+            schema = draft_output.get("schemaKey") or None
+            if schema != candidate["output_schema_key"]:
+                raise ValueError("The output draft and model-response schema selection disagree.")
+            output = AgentOutputContract.model_validate({
+                "output_state": "none" if draft_output["mode"] == "none" else "structured_extraction",
+                "output_mode": None if draft_output["mode"] == "none" else "domain",
+                "output_schema_key": schema,
+                "domain_extraction_ref": draft_output.get("domainExtractionRef"),
+                "generic_profile_ref": draft_output.get("profilePin"),
+            })
+            if output.domain_extraction_ref is not None:
+                definition = resolve_domain_extraction_definition(output.domain_extraction_ref)
+                validate_domain_extraction_selection(
+                    definition, tool_ids=candidate["tool_ids"],
+                    allowed_group_ids=candidate["allowed_group_ids"],
+                    group_tool_policy=dict(getattr(source, "group_tool_policy", None) or {}),
+                    active_group_ids=active_group_ids,
+                )
+            require_no_output_without_builder_tools(output, candidate["tool_ids"])
+        elif draft_output is None:
+            require_no_output_without_builder_tools(initial_output_contract(candidate["output_schema_key"]), candidate["tool_ids"])
+    except ValueError as exc:
+        findings.append(AuthoringValidationFinding(
+            code="invalid_output_contract", severity="error", path="custom_agent.output_contract",
+            message=str(exc),
+            fix_hint="Choose an available output format with matching tools and package access settings.",
+        ))
+    try:
         sources = service._agent_validation_sources(
             db, model_id=candidate["model_id"], tool_ids=candidate["tool_ids"],
             output_schema_key=candidate["output_schema_key"],
@@ -248,7 +285,7 @@ def _required(value, field):
     return value
 
 
-def apply_workshop_operations(base, operations):
+def apply_workshop_operations(base, operations, *, output_contracts=None):
     """Compile only named editor operations, preserving all other fields."""
 
     candidate = base.model_copy(deep=True)
@@ -272,6 +309,23 @@ def apply_workshop_operations(base, operations):
             candidate.draft_output_schema_key = (
                 _required(op.resource_id, "resource_id") if op.operation == "select_output" else None
             )
+            candidate.draft_output = {
+                "mode": "domain" if op.operation == "select_output" else "none",
+                "schemaKey": candidate.draft_output_schema_key or "",
+                "profilePin": None,
+                "profileContract": None,
+            }
+            if op.operation == "select_output" and output_contracts is not None and op.resource_id in output_contracts:
+                from src.schemas.agent_execution_revision import AgentOutputContract
+
+                selected = AgentOutputContract.model_validate(output_contracts[op.resource_id])
+                candidate.draft_output_schema_key = selected.output_schema_key
+                candidate.draft_output = {
+                    "mode": "none" if selected.output_state == "none" else selected.output_mode,
+                    "schemaKey": selected.output_schema_key or "", "profilePin": None, "profileContract": None,
+                }
+                if selected.domain_extraction_ref is not None:
+                    candidate.draft_output["domainExtractionRef"] = selected.domain_extraction_ref.model_dump(mode="json")
         elif op.operation in {"add_tool", "remove_tool"}:
             tool_id = _required(op.resource_id, "resource_id")
             tools = list(candidate.draft_tool_ids or [])
@@ -309,7 +363,19 @@ def propose_workshop_update(*, db, base, tool_input, user_id, active_group_ids, 
         return {"success": False, "error": "Provide a bounded, non-empty list of semantic operations."}
     working = state.get("candidate") if state.get("base") == fingerprint else None
     try:
-        candidate = apply_workshop_operations(working or base, operations)
+        output_contracts = {}
+        if any(isinstance(item, dict) and item.get("operation") == "select_output" for item in operations):
+            from src.lib.agent_studio.capability_catalog import CapabilityCatalogContext, build_authorized_capability_catalog
+
+            output_contracts = {
+                record.resource_id: record.detail["output_contract"]
+                for record in build_authorized_capability_catalog(
+                    db=db, context=CapabilityCatalogContext(user_id=user_id, active_group_ids=tuple(active_group_ids)),
+                )
+                if record.kind == "output_contract" and record.selectable
+                and record.availability == "available" and record.detail.get("output_contract") is not None
+            }
+        candidate = apply_workshop_operations(working or base, operations, output_contracts=output_contracts)
         try:
             candidate = normalize_workshop_candidate(candidate)
         except ValueError:
@@ -324,6 +390,8 @@ def propose_workshop_update(*, db, base, tool_input, user_id, active_group_ids, 
     )
     state.update(base=fingerprint, candidate=candidate)
     before, after = workshop_save_candidate(base), workshop_save_candidate(candidate)
+    before["output_contract"] = deepcopy(base.draft_output)
+    after["output_contract"] = deepcopy(candidate.draft_output)
     diff = [
         {"kind": "added" if not before[key] and value else "removed" if before[key] and not value else "changed",
          "path": f"custom_agent.{key}", "before": before[key], "after": value}

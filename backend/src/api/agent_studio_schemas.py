@@ -103,6 +103,7 @@ class AgentMetadata(BaseModel):
     produces_flow_artifacts: bool = False
     validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)
     domain_envelope: Optional[Dict[str, Any]] = None
+    domain_extraction_ref: Optional[Dict[str, str]] = None
     execution_metadata_error: Optional[str] = None
 
 
@@ -177,6 +178,7 @@ class AgentTemplateItem(BaseModel):
     tool_ids: List[str]
     allowed_group_ids: List[str] = Field(default_factory=list)
     output_schema_key: Optional[str] = None
+    output_contract: Optional[Dict[str, Any]] = None
 
 
 class GroupOption(BaseModel):

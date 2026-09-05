@@ -8,6 +8,12 @@ export interface GenericProfilePin {
   fingerprint: string
 }
 
+export interface DomainExtractionRef {
+  package_id: string
+  agent_id: string
+  domain_pack_id: string
+}
+
 export interface AgentExecutionReceipt {
   agent_id: string
   agent_key: string
@@ -18,10 +24,11 @@ export interface AgentExecutionReceipt {
 }
 
 export type AgentOutputContract =
-  | { output_state: 'none'; output_mode?: null; output_schema_key?: null; generic_profile_ref?: null }
-  | { output_state: 'structured_extraction'; output_mode: 'domain'; output_schema_key: string; generic_profile_ref?: null }
-  | { output_state: 'structured_extraction'; output_mode: 'profile_bound_generic'; output_schema_key?: null; generic_profile_ref: GenericProfilePin }
-  | { output_state: 'structured_extraction'; output_mode: 'unprofiled_generic'; output_schema_key?: null; generic_profile_ref?: null }
+  | { output_state: 'none'; output_mode?: null; output_schema_key?: null; generic_profile_ref?: null; domain_extraction_ref?: null }
+  | { output_state: 'structured_extraction'; output_mode: 'domain'; output_schema_key: string; generic_profile_ref?: null; domain_extraction_ref?: null }
+  | { output_state: 'structured_extraction'; output_mode: 'domain'; output_schema_key?: null; generic_profile_ref?: null; domain_extraction_ref: DomainExtractionRef }
+  | { output_state: 'structured_extraction'; output_mode: 'profile_bound_generic'; output_schema_key?: null; generic_profile_ref: GenericProfilePin; domain_extraction_ref?: null }
+  | { output_state: 'structured_extraction'; output_mode: 'unprofiled_generic'; output_schema_key?: null; generic_profile_ref?: null; domain_extraction_ref?: null }
 
 export interface AgentExecutionSnapshot {
   snapshot_version: 1

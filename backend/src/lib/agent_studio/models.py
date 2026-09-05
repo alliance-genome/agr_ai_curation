@@ -8,7 +8,7 @@ Defines data structures for:
 - Trace context for execution history
 """
 
-from typing import Annotated, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from datetime import datetime
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
@@ -286,6 +286,9 @@ class AgentWorkshopContext(BaseModel):
     draft_model_id: Optional[str] = None
     draft_model_reasoning: Optional[str] = None
     draft_output_schema_key: Optional[str] = None
+    # Local draft data may intentionally be incomplete. Save/conformance APIs
+    # validate it; context capture must preserve errors rather than normalize.
+    draft_output: Optional[Dict[str, Any]] = None
 
 
 class ChatContext(BaseModel):

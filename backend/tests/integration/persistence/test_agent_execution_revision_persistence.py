@@ -479,6 +479,63 @@ def test_workshop_create_update_profile_binding_and_atomic_rollback(execution_db
     assert db.scalar(sa.select(Agent).where(Agent.name == "Rolled back")) is None
 
 
+def test_workshop_profile_revision_is_atomic_and_keeps_other_agent_pins(execution_db, monkeypatch):
+    from src.lib.agent_studio import custom_agent_service as service, execution_snapshot
+    from src.lib.agent_studio.execution_revision_service import get_execution_revision
+    from src.lib.agent_studio.generic_profile_service import ProfileConflictError
+    from src.models.sql.generic_extraction_profile import GenericExtractionProfile, GenericExtractionProfileRevision
+
+    db, _, _, _ = execution_db
+    contract = {"name": "Details", "semantic_class": "detail", "fields": []}
+    profile_count = db.scalar(sa.select(sa.func.count()).select_from(GenericExtractionProfile))
+    head = service.create_custom_agent(
+        db, 1, "Profile editor", model_id="gpt-5.6-sol", custom_prompt="Extract details.",
+        include_group_rules=False, new_generic_profile=contract,
+    )
+    original_id = head.execution_revision_id
+    _, original = get_execution_revision(db, head.id, original_id, 1, active_group_ids=[])
+    base = original.output_contract.generic_profile_ref
+    other = service.create_custom_agent(
+        db, 1, "Pinned consumer", model_id="gpt-5.6-sol", custom_prompt="Extract details.",
+        include_group_rules=False, output_contract=original.output_contract,
+    )
+    service.update_custom_agent(db, head, expected_revision_id=original_id, revise_generic_profile={
+        "base": base, "contract": {**contract, "description": "Added context"},
+    })
+    saved_id = head.execution_revision_id
+    _, saved = get_execution_revision(db, head.id, saved_id, 1, active_group_ids=[])
+    pin = saved.output_contract.generic_profile_ref
+    assert pin.profile_id == base.profile_id
+    assert pin.revision == 2
+    assert pin.profile_revision_id != base.profile_revision_id
+    assert db.scalar(sa.select(sa.func.count()).select_from(GenericExtractionProfile)) == profile_count + 1
+    _, unchanged = get_execution_revision(db, other.id, other.execution_revision_id, 1, active_group_ids=[])
+    assert unchanged.output_contract == original.output_contract
+    assert db.get(GenericExtractionProfileRevision, base.profile_revision_id).contract["description"] == ""
+    with pytest.raises(ProfileConflictError, match="changed since"):
+        with db.begin_nested():
+            service.update_custom_agent(db, head, expected_revision_id=saved_id, revise_generic_profile={
+                "base": base, "contract": {**contract, "name": "Stale edit"},
+            })
+    with pytest.raises(ProfileConflictError, match="identity"):
+        with db.begin_nested():
+            service.update_custom_agent(db, head, expected_revision_id=saved_id, revise_generic_profile={
+                "base": pin.model_copy(update={"profile_revision_id": base.profile_revision_id}), "contract": contract,
+            })
+    with monkeypatch.context() as patch:
+        def fail_snapshot(*args, **kwargs):
+            raise RuntimeError("snapshot failure after profile revision")
+        patch.setattr(execution_snapshot, "capture_execution_snapshot", fail_snapshot)
+        with pytest.raises(RuntimeError, match="snapshot failure"):
+            with db.begin_nested():
+                service.update_custom_agent(db, head, expected_revision_id=saved_id, revise_generic_profile={
+                    "base": pin, "contract": {**contract, "description": "Must roll back"},
+                })
+    assert db.get(GenericExtractionProfile, base.profile_id).head_revision == 2
+    assert db.scalar(sa.select(sa.func.count()).select_from(GenericExtractionProfileRevision).where(GenericExtractionProfileRevision.profile_id == base.profile_id)) == 2
+    assert head.execution_revision_id == saved_id
+
+
 def test_clone_api_preserves_profile_pin_and_records_explicit_edits(execution_db, monkeypatch):
     import asyncio
     from types import SimpleNamespace
@@ -760,10 +817,10 @@ def test_normal_save_round_trips_all_output_modes_atomically(execution_db, monke
     db, agent_id, _, profile = execution_db
     head = db.get(Agent, agent_id)
     head.model_id = "gpt-5.6-sol"
-    head.tool_ids = ["finalize_allele_extraction"]
+    head.tool_ids = []
     # Catalog eligibility is tested separately; this test exercises the real
     # transaction, complete snapshot, output discrimination and relational FKs.
-    monkeypatch.setattr(service, "_system_managed_tool_ids", lambda *_args: ["finalize_allele_extraction"])
+    monkeypatch.setattr(service, "_system_managed_tool_ids", lambda *_args: [])
     monkeypatch.setattr(service, "_require_valid_custom_agent_draft", lambda *_args, **_kwargs: None)
     output_type = create_model("TestPackagedEnvelope", records=(list[str], ...))
     monkeypatch.setattr(assembly, "resolve_output_schema", lambda _key: output_type)

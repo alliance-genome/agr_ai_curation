@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
 from src.lib.agent_studio import generic_profile_service as service
+from src.lib.agent_studio.profile_compatibility import profile_compatibility
+from src.lib.agent_studio.profile_consumers import ProfileConsumerPage, list_profile_consumers
+from src.lib.agent_studio.profile_mapping_options import profile_mapping_options
 from src.lib.agent_studio.profile_mapping_service import (
     ProfileMappingError, capability_catalog, capability_issues, validate_profile_mappings,
 )
@@ -77,6 +80,7 @@ class ProfileDetailResponse(BaseModel):
     profile: ProfileSummary
     revision: ProfileRevisionResponse
     compatibility: list[dict[str, Any]] = Field(default_factory=list)
+    can_edit: bool
 
 
 class ProfileListResponse(BaseModel):
@@ -92,6 +96,12 @@ class ProfileRevisionListResponse(BaseModel):
 class ValidatedProfileResponse(BaseModel):
     contract: GenericProfileContract
     fingerprint: str
+
+
+class ProfileComparisonResponse(BaseModel):
+    base_revision: ProfileRevisionResponse
+    proposed_fingerprint: str
+    compatibility: list[dict[str, Any]]
 
 
 @contextmanager
@@ -119,11 +129,12 @@ def _profile_errors(db: Session):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _detail(profile, revision, compatibility=()) -> ProfileDetailResponse:
+def _detail(profile, revision, compatibility=(), *, user_id: int) -> ProfileDetailResponse:
     return ProfileDetailResponse(
         profile=ProfileSummary.model_validate(profile),
         revision=ProfileRevisionResponse.model_validate(revision),
         compatibility=list(compatibility),
+        can_edit=profile.owner_id == user_id and not profile.archived,
     )
 
 
@@ -144,7 +155,7 @@ def create_profile(
             active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
         )
         db.commit()
-        return _detail(profile, revision)
+        return _detail(profile, revision, user_id=user_id)
 
 
 @router.get("", response_model=ProfileListResponse)
@@ -195,6 +206,34 @@ def list_validator_capabilities(
         "selectable": not capability_issues(cap, groups), "diagnostics": capability_issues(cap, groups),
         "metadata": cap.binding.identity_details()} for cap in page],
         "next_cursor": page[-1].key() if len(capabilities) > size else None}
+
+
+@router.post("/validator-options")
+def get_validator_options(
+    contract: GenericProfileContract,
+    after: str | None = None,
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """Inspect canonical field choices for an unsaved draft, without writes."""
+    return profile_mapping_options(
+        contract, after=after,
+        active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
+    )
+
+
+@router.get("/{profile_id}/consumers", response_model=ProfileConsumerPage)
+def get_profile_consumers(
+    profile_id: UUID,
+    after: str | None = None,
+    user: dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+):
+    with _profile_errors(db):
+        user_id = set_global_user_from_cognito(db, user).id
+        return list_profile_consumers(
+            db, profile_id, user_id, after=after,
+            active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
+        )
 
 
 @router.get("/{profile_id}/revisions/{revision}/validator-mappings")
@@ -256,7 +295,7 @@ def get_profile(
         revision = service.get_profile_revision(
             db, profile_id, profile.head_revision, user_id, include_archived=True
         )
-        return _detail(profile, revision)
+        return _detail(profile, revision, user_id=user_id)
 
 
 @router.get(
@@ -281,6 +320,26 @@ def get_revision(
         )
 
 
+@router.post("/{profile_id}/revisions/{revision}/compare", response_model=ProfileComparisonResponse)
+def compare_revision(
+    profile_id: UUID,
+    contract: GenericProfileContract,
+    revision: int = Path(ge=1),
+    user: dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+):
+    """Compare a local draft with an authorized immutable revision, without saving."""
+    with _profile_errors(db):
+        user_id = set_global_user_from_cognito(db, user).id
+        base = service.get_profile_revision(db, profile_id, revision, user_id, include_archived=True)
+        validate_profile_mappings(contract, active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])))
+        return ProfileComparisonResponse(
+            base_revision=ProfileRevisionResponse.model_validate(base),
+            proposed_fingerprint=contract.fingerprint(),
+            compatibility=profile_compatibility(base.contract, contract),
+        )
+
+
 @router.post("/{profile_id}/revisions", response_model=ProfileDetailResponse)
 def revise_profile(
     profile_id: UUID,
@@ -299,7 +358,7 @@ def revise_profile(
             active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
         )
         db.commit()
-        return _detail(profile, revision, compatibility)
+        return _detail(profile, revision, compatibility, user_id=user_id)
 
 
 @router.post(
@@ -318,7 +377,7 @@ def clone_profile(
             active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
         )
         db.commit()
-        return _detail(profile, revision)
+        return _detail(profile, revision, user_id=user_id)
 
 
 @router.post("/{profile_id}/archive", response_model=ProfileSummary)

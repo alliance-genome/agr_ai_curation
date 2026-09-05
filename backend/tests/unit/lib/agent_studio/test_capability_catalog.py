@@ -94,6 +94,35 @@ def test_catalog_keeps_none_distinct_and_future_extensions_discoverable(sources)
     assert not any(key == ("output_contract", "unprofiled_generic") for key in indexed)
 
 
+def test_schema_null_builder_is_an_explicit_output_capability(sources, monkeypatch):
+    from src.schemas.agent_execution_revision import DomainExtractionRef
+
+    ref = DomainExtractionRef(package_id="fixture.package", agent_id="fixture_builder", domain_pack_id="fixture.domain")
+    calls = []
+    def resolve(agent_key, *, active_group_ids):
+        calls.append((agent_key, active_group_ids))
+        return ref if agent_key == "system_agent" else None
+    monkeypatch.setattr(catalog, "domain_extraction_ref_for_agent", resolve)
+    context = catalog.CapabilityCatalogContext(user_id=7, active_group_ids=("FB",))
+    records = catalog.build_authorized_capability_catalog(db=object(), context=context)
+    builders = [item for item in records if item.kind == "output_contract" and item.detail.get("contract_kind") == "packaged_builder"]
+    assert len(builders) == 1
+    builder = builders[0]
+    assert builder.resource_id == "builder:fixture.package:fixture_builder"
+    assert builder.detail["output_contract"] == {
+        "output_state": "structured_extraction", "output_mode": "domain",
+        "output_schema_key": None, "domain_extraction_ref": ref.model_dump(),
+    }
+    assert builder.selectable
+    assert calls == [("system_agent", ["FB"])]  # custom agents cannot advertise installed capabilities
+
+
+def test_unauthorized_builder_is_not_projected_as_an_output_choice(sources, monkeypatch):
+    monkeypatch.setattr(catalog, "domain_extraction_ref_for_agent", lambda *_args, **_kwargs: None)
+    records = catalog.build_authorized_capability_catalog(db=object(), context=catalog.CapabilityCatalogContext(user_id=7))
+    assert not any(item.detail.get("contract_kind") == "packaged_builder" for item in records)
+
+
 def test_detail_reauthorizes_fingerprint_and_uses_hash_addressed_chunks(sources):
     context = catalog.CapabilityCatalogContext(user_id=7)
     search = catalog.search_capabilities(

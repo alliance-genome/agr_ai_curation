@@ -35,7 +35,7 @@ from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.models.sql.agent import Agent as CustomAgent, ProjectMember
 from src.models.sql.custom_agent import CustomAgentVersion
 from src.models.sql.database import SessionLocal
-from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin, initial_output_contract
+from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin, GenericProfileRevisionDraft, initial_output_contract
 from src.schemas.generic_extraction_profile import GenericProfileContract
 
 
@@ -465,7 +465,7 @@ def _validate_requested_tool_ids(
     return normalized
 
 
-def _validate_envelope_output_requires_finalize_tool(
+def _validate_output_schema_excludes_finalize_tool(
     *,
     output_schema_key: Optional[str],
     tool_ids: List[str],
@@ -477,14 +477,13 @@ def _validate_envelope_output_requires_finalize_tool(
     builder_finalize_tools = sorted(
         set(_dedupe_tool_ids(tool_ids)) & _builder_finalization_tool_ids()
     )
-    if builder_finalize_tools:
+    if not builder_finalize_tools:
         return
 
     raise ValueError(
-        "Agents using an envelope output schema must include a builder finalize "
-        f"tool before saving. Output schema '{output_schema}' has no finalize_* "
-        "tool in tool_ids; add the appropriate builder-finalization tool or clear "
-        "the output schema."
+        f"Model-response schema '{output_schema}' cannot be combined with builder "
+        "finalization tools. Choose a packaged builder format with no model schema "
+        "or remove the builder finalizer."
     )
 
 
@@ -764,33 +763,47 @@ def _prepare_execution_update(db, agent, expected_revision_id, expected_updated_
     return agent.execution_revision_id, saved
 
 
-def _selected_output_schema(output_contract, new_generic_profile, schema, schema_provided):
-    if output_contract is not None and new_generic_profile is not None:
-        raise ValueError("Select an existing output contract or create a profile, not both")
-    if (output_contract is not None or new_generic_profile is not None) and schema_provided:
+def _selected_output_schema(output_contract, new_generic_profile, schema, schema_provided, revise_generic_profile=None):
+    transitions = (output_contract, new_generic_profile, revise_generic_profile)
+    if sum(value is not None for value in transitions) > 1:
+        raise ValueError("Choose exactly one output transition")
+    if any(value is not None for value in transitions) and schema_provided:
         raise ValueError("Use one output transition, not output_contract and output_schema_key together")
     if output_contract is not None:
         return AgentOutputContract.model_validate(output_contract).output_schema_key
-    if new_generic_profile is not None:
+    if new_generic_profile is not None or revise_generic_profile is not None:
         return None
     return schema
 
 
 def _record_execution_save(
     db, agent, *, expected_revision_id, output_contract=None, new_generic_profile=None,
+    revise_generic_profile=None,
     previous_output=None, previous_snapshot=None, schema_provided=False, notes=None,
     active_group_ids=(),
 ):
     from src.lib.agent_studio.execution_revision_service import append_execution_revision
     from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
-    from src.lib.agent_studio.generic_profile_service import create_profile
+    from src.lib.agent_studio.generic_profile_service import (
+        create_profile, get_profile_revision, revise_profile, ProfileConflictError,
+    )
 
-    if new_generic_profile is not None:
-        profile, revision = create_profile(
-            db, agent.user_id, new_generic_profile,
-            visibility=agent.visibility, project_id=agent.project_id,
-            active_group_ids=active_group_ids,
-        )
+    if new_generic_profile is not None or revise_generic_profile is not None:
+        if revise_generic_profile is not None:
+            edit = GenericProfileRevisionDraft.model_validate(revise_generic_profile)
+            previous = get_profile_revision(db, edit.base.profile_id, edit.base.revision, agent.user_id)
+            if previous.id != edit.base.profile_revision_id or previous.fingerprint != edit.base.fingerprint:
+                raise ProfileConflictError("The base profile revision identity does not match. Reload before saving.")
+            profile, revision, _ = revise_profile(
+                db, edit.base.profile_id, agent.user_id, edit.contract,
+                expected_revision=edit.base.revision, active_group_ids=active_group_ids,
+            )
+        else:
+            profile, revision = create_profile(
+                db, agent.user_id, new_generic_profile,
+                visibility=agent.visibility, project_id=agent.project_id,
+                active_group_ids=active_group_ids,
+            )
         selected = AgentOutputContract(
             output_state="structured_extraction", output_mode="profile_bound_generic",
             generic_profile_ref=GenericProfilePin(
@@ -800,11 +813,19 @@ def _record_execution_save(
         )
     elif output_contract is not None:
         selected = AgentOutputContract.model_validate(output_contract)
-    elif schema_provided or previous_output is None:
+    elif schema_provided:
         selected = initial_output_contract(agent.output_schema_key)
+    elif previous_output is None:
+        from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
+
+        selected = initial_agent_output_contract(agent)
     else:
         selected = previous_output
-    saved = capture_execution_snapshot(db, agent, selected)
+    saved = capture_execution_snapshot(db, agent, selected, active_group_ids=active_group_ids)
+    if selected.domain_extraction_ref is not None:
+        # A newly selected package can narrow the access floor. Retain it on
+        # the editable head too, so changing output later cannot erase it.
+        agent.inherited_allowed_group_ids = list(saved.inherited_allowed_group_ids)
     if previous_snapshot is not None:
         # Inherited policy belongs to the saved agent, not today's parent/tool
         # catalog. New selectable tools are validated separately at this save.
@@ -952,7 +973,7 @@ def create_custom_agent(
             output_schema_key_provided or output_schema_key is not None,
         )
     )
-    _validate_envelope_output_requires_finalize_tool(
+    _validate_output_schema_excludes_finalize_tool(
         output_schema_key=effective_output_schema_key,
         tool_ids=list(effective_tool_ids),
     )
@@ -1366,6 +1387,7 @@ def update_custom_agent(
     expected_revision_id: uuid.UUID | None = None,
     output_contract: AgentOutputContract | None = None,
     new_generic_profile: GenericProfileContract | None = None,
+    revise_generic_profile: GenericProfileRevisionDraft | None = None,
 ) -> CustomAgent:
     """Save a complete new executable revision with inherited policy preserved."""
     previous_revision_id, previous_snapshot = _prepare_execution_update(
@@ -1436,9 +1458,10 @@ def update_custom_agent(
             output_schema_key if output_schema_key_provided or output_schema_key is not None
             else custom_agent.output_schema_key,
             output_schema_key_provided or output_schema_key is not None,
+            revise_generic_profile=revise_generic_profile,
         )
     )
-    _validate_envelope_output_requires_finalize_tool(
+    _validate_output_schema_excludes_finalize_tool(
         output_schema_key=next_output_schema_key,
         tool_ids=list(next_tool_ids),
     )
@@ -1530,7 +1553,7 @@ def update_custom_agent(
         custom_agent.model_reasoning = model_reasoning
     if tool_ids is not None:
         custom_agent.tool_ids = next_tool_ids
-    if output_schema_key_provided or output_schema_key is not None or output_contract is not None or new_generic_profile is not None:
+    if output_schema_key_provided or output_schema_key is not None or output_contract is not None or new_generic_profile is not None or revise_generic_profile is not None:
         custom_agent.output_schema_key = next_output_schema_key
 
     if prompt_changed or group_overrides_changed or allowed_group_ids_changed:
@@ -1538,6 +1561,7 @@ def update_custom_agent(
     _record_execution_save(
         db, custom_agent, expected_revision_id=previous_revision_id,
         output_contract=output_contract, new_generic_profile=new_generic_profile,
+        revise_generic_profile=revise_generic_profile,
         previous_output=previous_output, previous_snapshot=previous_snapshot, notes=notes,
         schema_provided=output_schema_key_provided or output_schema_key is not None,
         active_group_ids=active_group_ids,

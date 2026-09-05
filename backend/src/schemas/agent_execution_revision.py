@@ -6,14 +6,14 @@ import hashlib
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from src.lib.agent_access import (
     normalize_allowed_group_ids,
     require_allowed_group_ids_narrowing,
 )
 from src.lib.group_tool_policy import parse_group_tool_policy
-from src.schemas.generic_extraction_profile import canonical_json
+from src.schemas.generic_extraction_profile import GenericProfileContract, canonical_json
 
 
 class RevisionContractModel(BaseModel):
@@ -27,6 +27,25 @@ class GenericProfilePin(RevisionContractModel):
     fingerprint: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
 
 
+class GenericProfileRevisionDraft(RevisionContractModel):
+    """Explicit edit intent, distinct from creating a new independent profile."""
+
+    base: GenericProfilePin
+    contract: GenericProfileContract
+
+
+class DomainExtractionRef(RevisionContractModel):
+    """Installed builder capability, distinct from an LLM response schema.
+
+    The execution snapshot freezes its curation and finalization configuration.
+    Tool implementations remain deployment-owned, like other saved tools.
+    """
+
+    package_id: str = Field(min_length=1, pattern=r"^\S+$")
+    agent_id: str = Field(min_length=1, pattern=r"^\S+$")
+    domain_pack_id: str = Field(min_length=1, pattern=r"^\S+$")
+
+
 class AgentOutputContract(RevisionContractModel):
     """An entire transition value, never a patch with overloaded nulls."""
 
@@ -36,6 +55,16 @@ class AgentOutputContract(RevisionContractModel):
     ) = None
     output_schema_key: str | None = None
     generic_profile_ref: GenericProfilePin | None = None
+    domain_extraction_ref: DomainExtractionRef | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_contract(self, handler):
+        result = handler(self)
+        # Absent builder identity must not change existing immutable receipts
+        # or snapshot fingerprints. Other fields retain their original nulls.
+        if self.domain_extraction_ref is None:
+            result.pop("domain_extraction_ref", None)
+        return result
 
     @model_validator(mode="after")
     def consistent(self) -> AgentOutputContract:
@@ -46,23 +75,28 @@ class AgentOutputContract(RevisionContractModel):
                     self.output_mode,
                     self.output_schema_key,
                     self.generic_profile_ref,
+                    self.domain_extraction_ref,
                 )
             ):
                 raise ValueError(
                     "No structured output cannot retain an extraction mode, schema or profile"
                 )
         elif self.output_mode == "domain":
-            if (
-                not self.output_schema_key
-                or not self.output_schema_key.strip()
-                or self.generic_profile_ref is not None
-            ):
+            schema = self.output_schema_key
+            if self.generic_profile_ref is not None or (
+                (schema is None) == (self.domain_extraction_ref is None)
+            ) or (schema is not None and not schema.strip()):
                 raise ValueError(
-                    "Domain output requires exactly one packaged schema and no profile"
+                    "Domain output requires exactly one packaged schema or builder capability and no profile"
                 )
-            self.output_schema_key = self.output_schema_key.strip()
+            if schema is not None:
+                self.output_schema_key = schema.strip()
         elif self.output_mode == "profile_bound_generic":
-            if self.generic_profile_ref is None or self.output_schema_key is not None:
+            if (
+                self.generic_profile_ref is None
+                or self.output_schema_key is not None
+                or self.domain_extraction_ref is not None
+            ):
                 raise ValueError(
                     "Profile-bound output requires an exact profile revision and no packaged schema"
                 )
@@ -70,6 +104,7 @@ class AgentOutputContract(RevisionContractModel):
             if (
                 self.output_schema_key is not None
                 or self.generic_profile_ref is not None
+                or self.domain_extraction_ref is not None
             ):
                 raise ValueError(
                     "Unprofiled generic output cannot retain a packaged schema or profile"
@@ -123,6 +158,14 @@ class AgentExecutionSnapshot(RevisionContractModel):
     def integrity(self) -> AgentExecutionSnapshot:
         from src.lib.prompts.assembly import prompt_bundle_from_manifest
 
+        domain_ref = self.output_contract.domain_extraction_ref
+        if domain_ref is not None and (
+            not self.curation
+            or self.curation.get("domain_pack_id") != domain_ref.domain_pack_id
+            or not self.curation.get("adapter_key")
+            or self.curation.get("launchable") is not True
+        ):
+            raise ValueError("Saved curation must match the selected packaged builder format")
         expected = (
             "sha256:" + hashlib.sha256(self.instructions.encode("utf-8")).hexdigest()
         )
@@ -181,10 +224,10 @@ class AgentExecutionSnapshot(RevisionContractModel):
 
 
 def initial_output_contract(output_schema_key: str | None) -> AgentOutputContract:
-    """Truthful current-head baseline: a missing packaged schema means none.
+    """Explicit model-schema selection, including a deliberate clear to none.
 
-    This is used for baseline creation only, never to reinterpret an existing
-    explicit profile/unprofiled revision.
+    Full agent baselines use initial_agent_output_contract to distinguish
+    declared builder extraction from an ordinary schema-null response.
     """
     if output_schema_key and output_schema_key.strip():
         return AgentOutputContract(

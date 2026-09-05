@@ -116,7 +116,7 @@ describe('Agent Studio authoring context fingerprints', () => {
       'sha256:f9f8664ca18901527a106d90c077ae0b52f2733a592531c7cd1110795a558b92'
     )
     await expect(fingerprintWorkshopDraft(adversarialWorkshopContext())).resolves.toBe(
-      'sha256:55e4d999b342e07877cb84ca6dafb6f05c852572ac4512d6a1d2491610afe235'
+      'sha256:63fee43c366577e95a0eb9382622d0d345f4bd98b6d467f2ed5be2c155780443'
     )
   })
 

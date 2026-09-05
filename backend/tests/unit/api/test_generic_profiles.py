@@ -44,6 +44,39 @@ def contract():
     }
 
 
+def test_consumer_endpoint_uses_authenticated_identity_and_cursor(client, monkeypatch):
+    http, db, _ = client
+    profile_id = uuid4()
+    read = MagicMock(return_value=api.ProfileConsumerPage(consumers=[], next_cursor=None, head_revision=2))
+    monkeypatch.setattr(api, "list_profile_consumers", read)
+    response = http.get(f"/api/agent-studio/generic-profiles/{profile_id}/consumers", params={"after": "flow/id/node"})
+    assert response.status_code == 200 and response.json()["head_revision"] == 2
+    read.assert_called_once_with(db, profile_id, 7, after="flow/id/node", active_group_ids=[])
+    db.commit.assert_not_called()
+
+
+def test_consumer_endpoint_hides_inaccessible_profile(client, monkeypatch):
+    http, db, _ = client
+    monkeypatch.setattr(api, "list_profile_consumers", MagicMock(side_effect=api.service.ProfileNotFoundError("hidden")))
+    response = http.get(f"/api/agent-studio/generic-profiles/{uuid4()}/consumers")
+    assert response.status_code == 404 and response.json() == {"detail": "Profile not found"}
+    db.commit.assert_not_called()
+
+
+def test_validator_options_validate_shape_and_never_save(client, monkeypatch):
+    http, db, _ = client
+    read = MagicMock(return_value={"fields": [], "capabilities": [], "next_cursor": None})
+    monkeypatch.setattr(api, "profile_mapping_options", read)
+    response = http.post("/api/agent-studio/generic-profiles/validator-options?after=opaque", json=contract())
+    assert response.status_code == 200
+    assert read.call_args.kwargs == {"active_group_ids": [], "after": "opaque"}
+    assert read.call_args.args[0].semantic_class == "example"
+    db.commit.assert_not_called()
+    bad = {**contract(), "fields": [{"key": "unknown", "value_schema": {"kind": "not_a_type"}}]}
+    assert http.post("/api/agent-studio/generic-profiles/validator-options", json=bad).status_code == 422
+    assert read.call_count == 1
+
+
 def rows():
     now = datetime.now(timezone.utc)
     profile_id = uuid4()
@@ -87,6 +120,47 @@ def test_create_uses_authenticated_identity_and_returns_canonical_contract(
     assert response.json()["revision"]["contract"]["fields"][0]["required"] is True
     assert response.json()["revision"]["fingerprint"].startswith("sha256:")
     db.commit.assert_called_once()
+
+
+@pytest.mark.parametrize("owner, archived, editable", [(7, False, True), (8, False, False), (7, True, False)])
+def test_detail_exposes_current_caller_edit_permission(client, monkeypatch, owner, archived, editable):
+    client, _, _ = client
+    profile, revision = rows()
+    profile.owner_id, profile.archived = owner, archived
+    monkeypatch.setattr(api.service, "get_profile", lambda *args, **kwargs: profile)
+    monkeypatch.setattr(api.service, "get_profile_revision", lambda *args, **kwargs: revision)
+    response = client.get(f"/api/agent-studio/generic-profiles/{profile.id}")
+    assert response.status_code == 200
+    assert response.json()["can_edit"] is editable
+
+
+def test_compare_revision_reports_contract_changes_without_saving(client, monkeypatch):
+    client, db, _ = client
+    profile, revision = rows()
+    get_revision = MagicMock(return_value=revision)
+    monkeypatch.setattr(api.service, "get_profile_revision", get_revision)
+    proposed = {**contract(), "fields": []}
+    response = client.post(f"/api/agent-studio/generic-profiles/{profile.id}/revisions/1/compare", json=proposed)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["base_revision"]["fingerprint"] == revision.fingerprint
+    assert body["proposed_fingerprint"] == api.GenericProfileContract.model_validate(proposed).fingerprint()
+    assert body["compatibility"][0]["code"] == "field_removed"
+    assert body["compatibility"][0]["breaking"] is True
+    assert get_revision.call_args.args == (db, profile.id, 1, 7)
+    db.commit.assert_not_called()
+    db.add.assert_not_called()
+
+
+def test_compare_revision_does_not_expose_an_inaccessible_profile(client, monkeypatch):
+    client, db, _ = client
+    def hidden(*args, **kwargs):
+        raise api.service.ProfileNotFoundError("Private resource")
+    monkeypatch.setattr(api.service, "get_profile_revision", hidden)
+    response = client.post(f"/api/agent-studio/generic-profiles/{uuid4()}/revisions/1/compare", json=contract())
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Profile not found"
+    db.commit.assert_not_called()
 
 
 def test_invalid_field_is_addressed_and_no_service_is_called(client, monkeypatch):

@@ -4,6 +4,7 @@
  */
 
 import type { AgentExecutionReceipt } from './agentExecution'
+import type { WorkshopOutputDraft } from '@/components/AgentStudio/PromptWorkshop/workshopOutputDraft'
 
 // ============================================================================
 // Agent Documentation Types
@@ -184,6 +185,7 @@ export interface AgentTemplate {
   tool_ids: string[]
   allowed_group_ids: string[]
   output_schema_key?: string
+  output_contract?: import('./agentExecution').AgentOutputContract
 }
 
 export interface GroupOption {
@@ -356,6 +358,8 @@ export interface AgentWorkshopContext {
   draft_model_id?: string
   draft_model_reasoning?: string
   draft_output_schema_key?: string
+  /** Complete local structure, including incomplete unsaved input; never an execution receipt. */
+  draft_output?: WorkshopOutputDraft
 }
 
 export interface WorkshopAuthoringProposal {

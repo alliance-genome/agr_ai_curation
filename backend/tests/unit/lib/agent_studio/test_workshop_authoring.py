@@ -15,6 +15,7 @@ from src.lib.agent_studio.custom_agent_service import custom_agent_name_exists
 from src.lib.agent_studio.workshop_authoring import (
     apply_workshop_operations, propose_workshop_update, validate_workshop_context,
 )
+from .test_domain_output_contract import installed_builder  # noqa: F401
 
 
 @pytest.fixture
@@ -49,12 +50,71 @@ def db(monkeypatch):
     return Mock()
 
 
-def propose(db, base, operations, state=None):
+def propose(db, base, operations, state=None, active_group_ids=None):
     return propose_workshop_update(
-        db=db, base=base, user_id=1, active_group_ids=["TEAM"],
+        db=db, base=base, user_id=1, active_group_ids=["TEAM"] if active_group_ids is None else active_group_ids,
         state={} if state is None else state,
         tool_input={"base_draft_fingerprint": base.draft_fingerprint, "operations": operations},
     )
+
+
+@pytest.fixture
+def builder_catalog(db, monkeypatch, installed_builder):  # noqa: F811
+    from dataclasses import replace
+    from src.lib.agent_studio import capability_catalog, custom_agent_service
+
+    installed_builder.access.allowed_group_ids = []
+    ref = {"package_id": "agr.alliance", "agent_id": "gene_extractor", "domain_pack_id": "agr.alliance.gene"}
+    existing = capability_catalog.build_authorized_capability_catalog(db=db, context=None)
+    key = "builder:agr.alliance:gene_extractor"
+    records = [*existing,
+        capability_catalog.CapabilityRecord(kind="tool", resource_id="finalize_gene_extraction", name="Finalize", description=""),
+        capability_catalog.CapabilityRecord(kind="output_contract", resource_id=key, name="Gene builder", description="",
+            detail={"contract_kind": "packaged_builder", "output_contract": {
+                "output_state": "structured_extraction", "output_mode": "domain", "output_schema_key": None,
+                "domain_extraction_ref": ref,
+            }}),
+    ]
+    monkeypatch.setattr(capability_catalog, "build_authorized_capability_catalog", lambda **_: records)
+    sources = custom_agent_service._agent_validation_sources(db)
+    monkeypatch.setattr(custom_agent_service, "_agent_validation_sources", lambda *_args, **_kwargs: replace(
+        sources, tools={**sources.tools, "finalize_gene_extraction": AgentToolValidationRecord("finalize_gene_extraction", True, True)},
+        builder_finalization_tool_ids=frozenset({"finalize_gene_extraction"}),
+    ))
+    return key, ref
+
+
+def test_builder_selection_uses_exact_catalog_contract_and_has_reviewable_diff(db, base, builder_catalog):
+    key, ref = builder_catalog
+    base.draft_tool_ids = ["finalize_gene_extraction"]
+    base.draft_output = {"mode": "domain", "schemaKey": "", "profilePin": None, "profileContract": None,
+                         "domainExtractionRef": {**ref, "agent_id": "old_builder"}}
+    base.draft_fingerprint = workshop_draft_fingerprint(base)
+    result = propose(db, base, [{"operation": "select_output", "resource_id": key}], active_group_ids=["FB"])
+    assert result["valid"] and result["pending_user_approval"], result["findings"]
+    candidate = AgentWorkshopContext.model_validate(result["candidate"])
+    assert candidate.draft_output_schema_key is None
+    assert candidate.draft_output["domainExtractionRef"] == ref
+    assert [item["path"] for item in result["diff"]] == ["custom_agent.output_contract"]
+    assert base.draft_output["domainExtractionRef"]["agent_id"] == "old_builder"
+    db.commit.assert_not_called()
+
+
+def test_builder_selection_without_matching_tools_is_retained_but_not_approvable(db, base, builder_catalog):
+    key, ref = builder_catalog
+    result = propose(db, base, [{"operation": "select_output", "resource_id": key}], active_group_ids=["FB"])
+    assert not result["valid"] and not result["pending_user_approval"]
+    assert result["candidate"]["draft_output"]["domainExtractionRef"] == ref
+    assert "invalid_output_contract" in {finding["code"] for finding in result["findings"]}
+    assert result["candidate"]["draft_tool_ids"] == []  # No automatic tool grants.
+
+
+def test_clear_output_with_builder_tools_cannot_be_approved(db, base, builder_catalog):
+    base.draft_tool_ids = ["finalize_gene_extraction"]
+    base.draft_fingerprint = workshop_draft_fingerprint(base)
+    result = propose(db, base, [{"operation": "clear_output"}])
+    assert not result["valid"] and not result["pending_user_approval"]
+    assert any("No structured output is incompatible" in item["message"] for item in result["findings"])
 
 
 def test_complete_proposal_preserves_unrelated_fields_and_never_writes(db, base):
@@ -166,7 +226,7 @@ def test_unsupported_or_malformed_operations_are_non_mutating(db, base, operatio
     ({"operation": "set_group_instructions", "resource_id": "TEAM", "text": "Generated runtime contract"}, "locked_prompt_layer"),
     ({"operation": "add_tool", "resource_id": "hidden"}, "unavailable_tool"),
     ({"operation": "set_allowed_groups", "resource_ids": ["UNKNOWN"]}, "unavailable_group"),
-    ({"operation": "select_output", "resource_id": "facts"}, "missing_output_finalizer"),
+    ({"operation": "select_output", "resource_id": "missing-contract"}, "unavailable_output_contract"),
     ({"operation": "select_model", "resource_id": "model-a", "reasoning": "invalid"}, "unsupported_reasoning_effort"),
 ])
 def test_canonical_findings_block_approval(db, base, operation, code):
@@ -217,6 +277,36 @@ def test_all_editor_operations_preserve_identity(base):
     assert result.include_group_rules is False
     assert result.group_prompt_overrides == {}
     assert result.draft_tool_ids == []
+
+
+@pytest.mark.parametrize("operation, mode, schema", [
+    ({"operation": "select_output", "resource_id": "facts"}, "domain", "facts"),
+    ({"operation": "clear_output"}, "none", ""),
+])
+def test_output_operations_replace_complete_output_draft_without_mutating_base(base, operation, mode, schema):
+    base.draft_output = {
+        "mode": "profile_bound_generic", "schemaKey": "", "profilePin": None,
+        "profileContract": {"name": "Draft", "semantic_class": "", "fields": []},
+    }
+    before = base.model_dump()
+    result = apply_workshop_operations(base, [operation])
+    assert result.draft_output == {
+        "mode": mode, "schemaKey": schema, "profilePin": None, "profileContract": None,
+    }
+    assert base.model_dump() == before
+
+
+def test_prompt_operation_preserves_incomplete_profile_and_its_fingerprint(base):
+    base.draft_output = {
+        "mode": "profile_bound_generic", "schemaKey": "", "profilePin": None,
+        "profileContract": {"name": "", "semantic_class": "", "fields": []},
+    }
+    result = apply_workshop_operations(base, [{"operation": "set_name", "text": "Updated"}])
+    assert result.draft_output == base.draft_output
+    fingerprint = workshop_draft_fingerprint(result)
+    result.draft_output["profileContract"]["fields"].append({"key": "", "value_schema": {"kind": "string"}})
+    assert workshop_draft_fingerprint(result) != fingerprint
+    assert base.draft_output["profileContract"]["fields"] == []
 
 
 def test_validation_phases_use_same_findings(db, base):

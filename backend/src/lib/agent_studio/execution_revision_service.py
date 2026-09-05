@@ -66,7 +66,7 @@ def baseline_current_execution_heads(db: Session) -> int:
     """
     from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
     from src.lib.prompts import cache
-    from src.schemas.agent_execution_revision import initial_output_contract
+    from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
 
     agents = db.execute(
         select(Agent)
@@ -83,8 +83,10 @@ def baseline_current_execution_heads(db: Session) -> int:
         if agent.user_id is None:
             raise ValueError("Cannot baseline a custom agent without its owner")
         saved = capture_execution_snapshot(
-            db, agent, initial_output_contract(agent.output_schema_key)
+            db, agent, initial_agent_output_contract(agent)
         )
+        if saved.output_contract.domain_extraction_ref is not None:
+            agent.inherited_allowed_group_ids = list(saved.inherited_allowed_group_ids)
         append_execution_revision(
             db, agent, saved, user_id=agent.user_id, expected_revision_id=None
         )

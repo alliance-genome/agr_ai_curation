@@ -65,7 +65,7 @@ export default function VersionsSection({ versions, currentRevisionId, hasAgent,
                             {' · '}{version.snapshot.output_contract.output_state === 'none'
                               ? 'No structured output'
                               : version.snapshot.output_contract.output_mode === 'domain'
-                                ? version.snapshot.output_contract.output_schema_key
+                                ? version.snapshot.output_contract.domain_extraction_ref?.domain_pack_id ?? version.snapshot.output_contract.output_schema_key
                                 : version.snapshot.output_contract.output_mode === 'profile_bound_generic'
                                   ? `Output structure v${version.snapshot.output_contract.generic_profile_ref.revision}`
                                   : 'Generic output (no structure)'}

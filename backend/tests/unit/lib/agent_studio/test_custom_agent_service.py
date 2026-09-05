@@ -480,7 +480,7 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
                 "record_evidence",
                 "finalize_allele_extraction",
             ],
-            output_schema_key="AlleleVariantExtractionEnvelope",
+            output_schema_key=None,
             category="Extraction",
             allowed_group_ids=[],
             group_tool_policy={
@@ -529,7 +529,7 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
     }
 
 
-def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch):
+def test_create_custom_agent_rejects_model_schema_with_finalize_tool(monkeypatch):
     import src.lib.agent_studio.custom_agent_service as service
 
     class FakeQuery:
@@ -558,7 +558,7 @@ def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
             model_id="gpt-5.5",
             model_temperature=0.1,
             model_reasoning="medium",
-            tool_ids=["search_document", "record_evidence"],
+            tool_ids=["search_document", "record_evidence", "finalize_allele_extraction"],
             output_schema_key="AlleleVariantExtractionEnvelope",
             category="Extraction",
             allowed_group_ids=[],
@@ -584,7 +584,7 @@ def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
         lambda: {"finalize_allele_extraction"},
     )
 
-    with pytest.raises(ValueError, match="envelope output schema.*finalize_\\* tool"):
+    with pytest.raises(ValueError, match="cannot be combined with builder"):
         service.create_custom_agent(
             db=FakeDB(),
             user_id=7,
@@ -628,7 +628,7 @@ def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
                 "record_evidence",
                 "finalize_allele_extraction",
             ],
-            output_schema_key="AlleleVariantExtractionEnvelope",
+            output_schema_key=None,
             category="Extraction",
             allowed_group_ids=[],
         ),
@@ -761,7 +761,7 @@ def test_update_custom_agent_rejects_unknown_tool_ids(monkeypatch):
         )
 
 
-def test_update_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch):
+def test_update_custom_agent_rejects_model_schema_with_finalize_tool(monkeypatch):
     import src.lib.agent_studio.custom_agent_service as service
 
     custom_agent = SimpleNamespace(
@@ -774,7 +774,7 @@ def test_update_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
         model_id="gpt-5.5",
         model_temperature=0.1,
         model_reasoning=None,
-        tool_ids=["search_document"],
+        tool_ids=["search_document", "finalize_allele_extraction"],
         output_schema_key="AlleleVariantExtractionEnvelope",
         template_source=None,
         allowed_group_ids=[],
@@ -787,7 +787,7 @@ def test_update_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
         lambda: {"finalize_allele_extraction"},
     )
 
-    with pytest.raises(ValueError, match="envelope output schema.*finalize_\\* tool"):
+    with pytest.raises(ValueError, match="cannot be combined with builder"):
         service.update_custom_agent(
             db=SimpleNamespace(),
             custom_agent=custom_agent,
@@ -844,7 +844,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
             "record_evidence",
             "finalize_allele_extraction",
         ],
-        output_schema_key="AlleleVariantExtractionEnvelope",
+        output_schema_key=None,
         template_source="allele_extractor",
         allowed_group_ids=[],
         inherited_allowed_group_ids=[],
@@ -904,7 +904,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
             "record_evidence",
             "finalize_allele_extraction",
         ],
-        output_schema_key="AlleleVariantExtractionEnvelope",
+        output_schema_key=None,
         template_source="allele_extractor",
         allowed_group_ids=[],
         inherited_allowed_group_ids=[],

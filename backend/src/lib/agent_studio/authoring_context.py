@@ -120,6 +120,7 @@ def workshop_draft_fingerprint(workshop: Any) -> str:
                     workshop.draft_tool_ids or [], key=lambda item: item.encode("utf-8")
                 ),
                 "output_schema_key": workshop.draft_output_schema_key or "",
+                "output_draft": workshop.draft_output,
             },
         }
     )
@@ -155,6 +156,7 @@ def workshop_authoring_metadata(workshop: Any) -> dict[str, Any]:
         "draft_model_id": workshop.draft_model_id,
         "draft_model_reasoning": workshop.draft_model_reasoning,
         "draft_output_schema_key": workshop.draft_output_schema_key,
+        "draft_output": workshop.draft_output,
     }
 
 

@@ -26,6 +26,12 @@ import {
 import { NARROW_QUERY } from './workshopStyles'
 import WorkshopHeader from './WorkshopHeader'
 import WorkshopNav from './WorkshopNav'
+import WorkshopOutputSetup from './WorkshopOutputSetup'
+import OutputStructureEditor from './OutputStructureEditor'
+import SelectProfileDialog from './dialogs/SelectProfileDialog'
+import ProfileRevisionReview from './ProfileRevisionReview'
+import SavedExecutionSummary from './SavedExecutionSummary'
+import { workshopDraftKey } from '../authoringContext'
 import WorkshopStartScreen from './WorkshopStartScreen'
 import SetupSection, { type EnvelopeSummary } from './SetupSection'
 import PromptSection from './PromptSection'
@@ -123,6 +129,8 @@ function PromptWorkshop({
   })
 
   const [section, setSection] = useState<WorkshopSection>('setup')
+  const [profilePickerBase, setProfilePickerBase] = useState<string | null>(null)
+  const visibleSection = section === 'output_structure' && draft.outputDraft.mode !== 'profile_bound_generic' ? 'setup' : section
   const [startScreenRequested, setStartScreenRequested] = useState(
     () => !(initialParentAgentId || '').trim() && !(initialCustomAgentId || '').trim()
   )
@@ -198,10 +206,10 @@ function PromptWorkshop({
     rootRef.current?.focus()
   }, [returnFocusToken])
 
-  const envelope = useMemo(
-    () => summarizeEnvelope(draft.domainEnvelopeAgentId ? agentMetadata[draft.domainEnvelopeAgentId] : undefined),
-    [agentMetadata, draft.domainEnvelopeAgentId]
-  )
+  const selectedOutputAgentId = useMemo(() => draft.outputDraft.mode === 'domain'
+    ? Object.keys(agentMetadata).find((id) => agentMetadata[id].output_schema_key === draft.outputDraft.schemaKey)
+    : undefined, [agentMetadata, draft.outputDraft.mode, draft.outputDraft.schemaKey])
+  const envelope = summarizeEnvelope(selectedOutputAgentId ? agentMetadata[selectedOutputAgentId] : undefined)
 
   const templateLabel = selectedTemplate?.name || parentAgent?.agent_name || ''
   const originLabel = (() => {
@@ -324,8 +332,8 @@ function PromptWorkshop({
     <Box
       component="fieldset"
       aria-label="Workshop draft"
-      disabled={draft.authoringBusy || draft.saving}
-      aria-busy={draft.authoringBusy}
+      disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+      aria-busy={draft.authoringBusy || draft.outputLoading}
       ref={rootRef}
       tabIndex={-1}
       sx={{
@@ -371,7 +379,8 @@ function PromptWorkshop({
         }}
       >
         <WorkshopNav
-          section={section}
+          section={visibleSection}
+          showOutputStructure={draft.outputDraft.mode === 'profile_bound_generic'}
           onSectionChange={setSection}
           dirty={dirty}
           toolCount={draft.selectedToolIds.length}
@@ -410,13 +419,16 @@ function PromptWorkshop({
             <Button onClick={() => void draft.undoAuthoringProposal()}>Undo AI changes</Button>
           )}
 
-          {showStartScreen ? (
+          {draft.outputLoading ? <Alert severity="info" role="status">Loading the saved executable revision and Output Structure…</Alert>
+          : draft.outputLoadError ? <Alert severity="error" action={<Button onClick={draft.retryOutputLoad}>Retry</Button>}>{draft.outputLoadError}</Alert>
+          : showStartScreen ? (
             <WorkshopStartScreen
               onChoose={handleChooseStart}
               hasTemplates={draft.templateOptions.length > 0}
               hasSavedAgents={draft.customAgents.length > 0}
             />
-          ) : section === 'setup' ? (
+          ) : visibleSection === 'setup' ? (
+            <>
             <SetupSection
               gettingStartedMode={gettingStartedMode}
               onModeChange={handleModeChange}
@@ -438,8 +450,8 @@ function PromptWorkshop({
               description={draft.description}
               onDescriptionChange={draft.setDescription}
               envelope={envelope}
-              onViewEnvelope={onViewEnvelope && draft.domainEnvelopeAgentId
-                ? () => onViewEnvelope(draft.domainEnvelopeAgentId)
+              onViewEnvelope={onViewEnvelope && selectedOutputAgentId
+                ? () => onViewEnvelope(selectedOutputAgentId)
                 : undefined}
               modelOptions={draft.modelOptions}
               selectedModelId={draft.selectedModelId}
@@ -456,6 +468,32 @@ function PromptWorkshop({
               selectableGroupOptions={draft.selectableGroupOptions}
               inheritedAllowedGroupIds={draft.inheritedAllowedGroupIds}
             />
+            <WorkshopOutputSetup value={draft.outputDraft} onChange={draft.setOutputDraft}
+              disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+              agents={agentMetadata} onEditStructure={() => setSection('output_structure')}
+              onChooseExisting={() => setProfilePickerBase(workshopDraftKey(draft.captureAuthoringContext()))} />
+            {selectedCustomAgent && draft.savedExecutionRevision && draft.savedExecutionRevision.id === selectedCustomAgent.execution_revision_id
+              && draft.savedExecutionRevision.agent_id === selectedCustomAgent.id
+              && <SavedExecutionSummary revision={draft.savedExecutionRevision} />}
+            </>
+          ) : visibleSection === 'output_structure' && draft.outputDraft.profileContract ? (
+            <>
+            {draft.outputDraft.profilePin && <Alert severity="info">
+              Based on profile revision {draft.outputDraft.profilePin.revision}.{' '}
+              {selectedCustomAgent && draft.profileCanEdit
+                ? 'Saving structure changes creates a new revision of this profile and this agent. Other agents and flows keep their saved pins.'
+                : 'Saving structure changes creates your own profile copy. The source profile and its consumers remain unchanged.'}
+            </Alert>}
+            <OutputStructureEditor value={draft.outputDraft.profileContract}
+              disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+              onChange={(profileContract) => draft.setOutputDraft({ ...draft.outputDraft, profileContract })}
+              onValidate={() => { void draft.validateOutputProfile() }}
+              issues={draft.profileIssues} validating={draft.profileValidating} />
+            {draft.outputDraft.profilePin && <ProfileRevisionReview key={draft.outputDraft.profilePin.profile_id}
+              disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+              value={draft.outputDraft} onLoadRevision={draft.selectOutputProfile}
+              onMakeCopy={() => draft.setOutputDraft({ ...draft.outputDraft, profilePin: null })} />}
+            </>
           ) : section === 'prompt' ? (
             <PromptSection
               parentCorePrompt={draft.parentCorePrompt}
@@ -586,6 +624,16 @@ function PromptWorkshop({
         onConfirm={handleRevertConfirm}
         onCancel={() => setPendingRevert(null)}
       />
+      {profilePickerBase !== null && <SelectProfileDialog onClose={() => setProfilePickerBase(null)}
+        onSelect={(profile) => {
+          if (profilePickerBase !== workshopDraftKey(draft.captureAuthoringContext()) || draft.authoringBusy || draft.saving) {
+            draft.setError('The Workshop draft changed while selecting a structure. Your edits are preserved; reopen the picker to try again.')
+          } else {
+            draft.selectOutputProfile(profile)
+            setSection('output_structure')
+          }
+          setProfilePickerBase(null)
+        }} />}
       <UnsavedChangesDialog
         open={Boolean(pendingGuardedAction)}
         onDiscard={() => {

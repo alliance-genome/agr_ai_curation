@@ -22,7 +22,7 @@ from src.schemas.agent_execution_revision import (
 
 
 def capture_execution_snapshot(
-    db, agent, output: AgentOutputContract
+    db, agent, output: AgentOutputContract, *, active_group_ids: list[str] | None = None,
 ) -> AgentExecutionSnapshot:
     """Resolve template-owned inputs at curator save time, not when a pin runs."""
     from src.lib.agent_studio import catalog_service
@@ -47,33 +47,58 @@ def capture_execution_snapshot(
             raise ValueError("Cannot snapshot an unavailable template")
     instructions = custom_main_prompt_for_parent(parent, agent.instructions)
     tools = list(agent.tool_ids or [])
+    from src.lib.agent_studio.domain_output_contract import require_no_output_without_builder_tools
+
+    require_no_output_without_builder_tools(output, tools)
     curation_definition = catalog_service._inherited_curation_definition_for_db_agent(
         agent
     )
     curation = catalog_service._curation_metadata_from_definition(curation_definition)
+    contract_definition = definition
+    inherited_groups = list(agent.inherited_allowed_group_ids)
+    if output.domain_extraction_ref is not None:
+        from src.lib.agent_studio.domain_output_contract import (
+            resolve_domain_extraction_definition,
+            validate_domain_extraction_selection,
+        )
+
+        contract_definition = resolve_domain_extraction_definition(output.domain_extraction_ref)
+        validate_domain_extraction_selection(
+            contract_definition, tool_ids=tools,
+            allowed_group_ids=list(agent.allowed_group_ids),
+            group_tool_policy=agent.group_tool_policy or {},
+            active_group_ids=active_group_ids,
+        )
+        curation = catalog_service._curation_metadata_from_definition(contract_definition)
+        selected_groups = contract_definition.access.allowed_group_ids
+        if selected_groups:
+            inherited_groups = (
+                [group for group in inherited_groups if group in selected_groups]
+                if inherited_groups else list(selected_groups)
+            )
     if output.output_state == "none":
         curation = None
     elif output.output_mode in {"profile_bound_generic", "unprofiled_generic"}:
         curation = {"adapter_key": "generic", "domain_pack_id": "generic", "launchable": True}
     finalization = None
     if (
-        definition is not None
+        contract_definition is not None
         and output.output_mode == "domain"
-        and output.output_schema_key == definition.output_schema
+        and output.output_schema_key == contract_definition.output_schema
     ):
-        finalization = deepcopy(definition.structured_finalization)
+        finalization = deepcopy(contract_definition.structured_finalization)
 
     # Generate the locked contract from this custom agent's selected tools/output,
     # not a parent's broader tool set or a packaged schema the curator cleared.
     effective = (
         replace(
-            definition,
+            contract_definition,
             tools=tools,
             output_schema=output.output_schema_key,
             structured_finalization=finalization,
             curation=CurationConfig(**curation) if curation is not None else CurationConfig(),
         )
-        if definition
+        if contract_definition
         else AgentDefinition(
             folder_name=agent.agent_key,
             agent_id=agent.agent_key,
@@ -148,7 +173,7 @@ def capture_execution_snapshot(
         system_managed_tool_ids=_system_managed_tool_ids(db, tools) if tools else [],
         group_tool_policy=deepcopy(agent.group_tool_policy or {}),
         allowed_group_ids=list(agent.allowed_group_ids),
-        inherited_allowed_group_ids=list(agent.inherited_allowed_group_ids),
+        inherited_allowed_group_ids=inherited_groups,
         group_rules_enabled=agent.group_rules_enabled,
         group_rules_component=agent.group_rules_component,
         group_prompt_overrides=overrides,

@@ -43,7 +43,7 @@ export function DeleteAgentDialog({ open, agentName, saving, onConfirm, onCancel
       <DialogTitle id="delete-agent-title">Delete agent?</DialogTitle>
       <DialogContent>
         <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
-          This deletes &ldquo;{agentName}&rdquo; and its version history. This action cannot be undone.
+          This archives &ldquo;{agentName}&rdquo; so it is no longer available for new use. Saved versions and their history are retained; existing references are not silently retargeted.
         </Typography>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>

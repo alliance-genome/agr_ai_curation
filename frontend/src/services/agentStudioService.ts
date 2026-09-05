@@ -35,7 +35,7 @@ import {
   type ChatHistoryListResponse,
 } from '@/services/chatHistoryApi'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
-import type { AgentOutputContract, AgentExecutionReceipt, AgentExecutionRevision, AgentExecutionRevisionPage } from '@/types/agentExecution'
+import type { AgentOutputContract, AgentExecutionReceipt, AgentExecutionRevision, AgentExecutionRevisionPage, GenericProfilePin } from '@/types/agentExecution'
 import type { GenericProfileContract } from '@/services/genericProfileService'
 
 const BASE_URL = '/api/agent-studio'
@@ -314,6 +314,7 @@ export interface AgentMetadata {
   supervisor_tool?: string
   validation_attachments?: ValidationAttachmentOption[]
   domain_envelope?: DomainEnvelopeMetadata | null
+  domain_extraction_ref?: import('@/types/agentExecution').DomainExtractionRef | null
 }
 
 /**
@@ -433,6 +434,7 @@ export interface CreateCustomAgentRequest {
 }
 
 export interface UpdateCustomAgentRequest {
+  revise_generic_profile?: { base: GenericProfilePin; contract: GenericProfileContract }
   visibility?: 'private' | 'project'
   expected_updated_at?: string
   expected_revision_id?: string

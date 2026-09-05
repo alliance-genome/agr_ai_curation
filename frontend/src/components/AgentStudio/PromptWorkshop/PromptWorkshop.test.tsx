@@ -23,6 +23,7 @@ const serviceMocks = vi.hoisted(() => ({
   validateWorkshopDraft: vi.fn(),
   createCustomAgent: vi.fn(),
   getWorkshopSavedReference: vi.fn(),
+  getAgentExecutionRevision: vi.fn(),
   deleteCustomAgent: vi.fn(),
   fetchAgentTemplates: vi.fn(),
   fetchModelOptions: vi.fn(),
@@ -39,6 +40,16 @@ const serviceMocks = vi.hoisted(() => ({
 const metadataMocks = vi.hoisted(() => ({
   agents: {} as Record<string, unknown>,
   refresh: vi.fn(),
+}))
+
+const profileMocks = vi.hoisted(() => ({ validateGenericProfile: vi.fn(), getGenericProfile: vi.fn(), getGenericProfileRevision: vi.fn(), listGenericProfiles: vi.fn(), getProfileMappingOptions: vi.fn() }))
+vi.mock('@/services/genericProfileService', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/genericProfileService')>(),
+  validateGenericProfile: profileMocks.validateGenericProfile,
+  getGenericProfile: profileMocks.getGenericProfile,
+  getGenericProfileRevision: profileMocks.getGenericProfileRevision,
+  listGenericProfiles: profileMocks.listGenericProfiles,
+  getProfileMappingOptions: profileMocks.getProfileMappingOptions,
 }))
 
 const authMocks = vi.hoisted(() => ({
@@ -249,7 +260,7 @@ async function saveFromHeader(note?: string): Promise<void> {
 }
 
 async function selectOption(comboboxName: string, optionName: string | RegExp): Promise<void> {
-  fireEvent.mouseDown(screen.getByRole('combobox', { name: comboboxName }))
+  fireEvent.mouseDown(await screen.findByRole('combobox', { name: comboboxName }))
   fireEvent.click(await screen.findByRole('option', { name: optionName }))
 }
 
@@ -391,6 +402,8 @@ describe('PromptWorkshop', () => {
     }
     metadataMocks.agents = {}
     Object.values(serviceMocks).forEach((mock) => mock.mockReset())
+    Object.values(profileMocks).forEach((mock) => mock.mockReset())
+    profileMocks.validateGenericProfile.mockResolvedValue({ fingerprint: 'validated' })
     metadataMocks.refresh.mockReset()
 
     metadataMocks.refresh.mockResolvedValue(undefined)
@@ -399,6 +412,9 @@ describe('PromptWorkshop', () => {
     serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates, group_options: groupOptions })
     serviceMocks.listToolIdeaRequests.mockResolvedValue({ tool_ideas: [], total: 0 })
     serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [], next_before_revision: null })
+    serviceMocks.getAgentExecutionRevision.mockImplementation(async (agentId: string, revisionId: string) => ({
+      ...buildVersion(2), id: revisionId, agent_id: agentId,
+    }))
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [], total: 0 })
     serviceMocks.createCustomAgent.mockResolvedValue(buildCustomAgent())
     serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: buildCustomAgent().agent_id })
@@ -1192,11 +1208,13 @@ describe('PromptWorkshop', () => {
   // ── Setup: envelope, model guidance, missing template ──
 
   it('shows the envelope as one line with a working View envelope link', async () => {
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: templates.map((template) => ({ ...template, output_schema_key: 'gene', output_contract: { output_state: 'structured_extraction', output_mode: 'domain', output_schema_key: 'gene' } })), group_options: groupOptions })
     metadataMocks.agents = {
       gene: {
         name: 'Gene Specialist',
         icon: 'G',
         category: 'Validation',
+        output_schema_key: 'gene',
         domain_envelope: buildDomainEnvelopeMetadata(),
       },
     }
@@ -1213,6 +1231,8 @@ describe('PromptWorkshop', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'View envelope' }))
     expect(onViewEnvelope).toHaveBeenCalledWith('gene')
+    fireEvent.click(screen.getByRole('radio', { name: 'No structured output' }))
+    expect(screen.queryByRole('button', { name: 'View envelope' })).not.toBeInTheDocument()
   }, 15000)
 
   it('opens a model-selection guidance request with AI Chat from the model helper line', async () => {
@@ -1435,6 +1455,215 @@ describe('PromptWorkshop', () => {
     await act(async () => validation.resolve({ valid: false, findings: [] }))
     expect((await applying).applied).toBe(false)
     expect(handle.current!.captureAuthoringContext().draft_name).toBe(base.draft_name)
+  })
+
+  it('edits a custom Output Structure in the authoritative draft and saves without JSON', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const saving = createDeferred<never>()
+    serviceMocks.createCustomAgent.mockReturnValueOnce(saving.promise)
+    profileMocks.validateGenericProfile.mockResolvedValue({ fingerprint: 'validated' })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    const leave = createRef<WorkshopLeaveGuard>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} leaveGuardRef={leave} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const before = handle.current!.captureAuthoringContext()
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Output Structure' }))
+    fireEvent.change(screen.getByRole('textbox', { name: /Structure name/ }), { target: { value: 'Collected details' } })
+    fireEvent.change(screen.getByRole('textbox', { name: /Record class/ }), { target: { value: 'collected_detail' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add field' }))
+    const after = handle.current!.captureAuthoringContext()
+    expect(after.draft_output?.profileContract?.name).toBe('Collected details')
+    expect(after.draft_output?.profileContract?.fields).toHaveLength(1)
+    expect(await fingerprintWorkshopDraft(after)).not.toBe(await fingerprintWorkshopDraft(before))
+    expect(screen.getByRole('button', { name: /Output Structure, unsaved edits/ })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /JSON/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledWith(expect.objectContaining({
+      new_generic_profile: expect.objectContaining({ name: 'Collected details', semantic_class: 'collected_detail' }),
+    })))
+    expect(profileMocks.validateGenericProfile).toHaveBeenCalled()
+    const typeSelect = screen.getByRole('combobox', { name: 'Value kind', hidden: true })
+    expect(typeSelect).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.mouseDown(typeSelect)
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(handle.current!.captureAuthoringContext().draft_output).toEqual(after.draft_output)
+    await act(async () => saving.reject(new Error('Save unavailable')))
+    await waitFor(() => expect(typeSelect).not.toHaveAttribute('aria-disabled', 'true'))
+  })
+
+  it('carries a manually mapped validator through authoritative context, validation and Save without JSON', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const capabilityRef = { package_id: 'example', package_version: '1', domain_pack_id: 'record', domain_pack_version: '1', binding_id: 'lookup' }
+    profileMocks.getProfileMappingOptions.mockResolvedValue({
+      fields: [{ path: 'attributes.new_field', display_name: 'New field', value_schema: { kind: 'string' }, required: false, nullable: false, array_domains: [] }],
+      capabilities: [{ capability_ref: capabilityRef, fingerprint: 'sha256:exact', state: 'active', selectable: true, diagnostics: [],
+        input_paths: { mention: ['attributes.new_field'] }, output_paths: {},
+        metadata: { validator_binding_id: 'lookup', display_name: 'Identifier lookup',
+          custom_profile_reuse: { enabled: true,
+            inputs: { mention: { value_schema: { kind: 'string' }, required: true, nullable: false, allow_field: true, allow_constant: false, context_selector: null } },
+            outputs: {}, policy: { unresolved_default: 'requires_curator_review', unresolved_allowed: ['requires_curator_review'], readiness_default: false, readiness_allowed: [false] },
+            required_any_inputs: [], supports_whole_array: false, supports_element_fanout: false, requires_evidence: false, provider_input_slots: {},
+          },
+        },
+      }], next_cursor: null,
+    })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Output Structure' }))
+    fireEvent.change(screen.getByRole('textbox', { name: /Structure name/ }), { target: { value: 'Mapped details' } })
+    fireEvent.change(screen.getByRole('textbox', { name: /Record class/ }), { target: { value: 'record' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add field' }))
+    const before = handle.current!.captureAuthoringContext()
+    fireEvent.click(screen.getByRole('button', { name: 'Find compatible validators' }))
+    fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Find validators for canonical field' }))
+    fireEvent.click(screen.getByRole('option', { name: 'New field · attributes.new_field' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Map field to mention · Identifier lookup' }))
+    const mapped = handle.current!.captureAuthoringContext()
+    expect(mapped.draft_output?.profileContract?.validator_mappings).toEqual([{
+      mapping_id: 'validator_1', capability_ref: capabilityRef, capability_fingerprint: 'sha256:exact',
+      inputs: { mention: { source: 'field', field_path: 'attributes.new_field' } }, outputs: {}, mode: 'whole',
+      policy: { unresolved: 'requires_curator_review', blocks_readiness: false },
+    }])
+    expect(await fingerprintWorkshopDraft(mapped)).not.toBe(await fingerprintWorkshopDraft(before))
+    expect(screen.queryByRole('textbox', { name: /JSON/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledWith(expect.objectContaining({
+      new_generic_profile: mapped.draft_output!.profileContract,
+    })))
+    expect(profileMocks.validateGenericProfile).toHaveBeenCalledWith(mapped.draft_output!.profileContract)
+  })
+
+  it('saves a manually selected packaged builder through the authoritative Workshop draft', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const saving = createDeferred<never>()
+    serviceMocks.createCustomAgent.mockReturnValueOnce(saving.promise)
+    const ref = { package_id: 'fixture.package', agent_id: 'builder', domain_pack_id: 'fixture.domain' }
+    metadataMocks.agents = { builder: { name: 'Packaged builder', icon: '', category: 'Extraction', output_schema_key: null, domain_extraction_ref: ref } }
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const before = handle.current!.captureAuthoringContext()
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Output format' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Packaged domain format' }))
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Domain format' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Packaged builder — support details unavailable' }))
+    const after = handle.current!.captureAuthoringContext()
+    expect(after.draft_output?.domainExtractionRef).toEqual(ref)
+    expect(after.draft_output_schema_key).toBeUndefined()
+    expect(after.draft_output?.schemaKey).toBe('')
+    expect(await fingerprintWorkshopDraft(after)).not.toBe(await fingerprintWorkshopDraft(before))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledWith(expect.objectContaining({
+      output_contract: { output_state: 'structured_extraction', output_mode: 'domain', output_schema_key: null, domain_extraction_ref: ref },
+    })))
+    expect(profileMocks.validateGenericProfile).not.toHaveBeenCalled()
+    for (const name of ['Output format', 'Domain format']) {
+      const select = screen.getByRole('combobox', { name, hidden: true })
+      expect(select).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.mouseDown(select)
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    }
+    expect(handle.current!.captureAuthoringContext().draft_output).toEqual(after.draft_output)
+    await act(async () => saving.reject(new Error('Save unavailable')))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Output format' })).not.toHaveAttribute('aria-disabled', 'true'))
+  })
+
+  it('initializes a builder template from its explicit output contract, not its null schema', async () => {
+    const ref = { package_id: 'fixture.package', agent_id: 'gene_builder', domain_pack_id: 'fixture.domain' }
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({
+      templates: templates.map((template) => ({ ...template, output_schema_key: null,
+        output_contract: { output_state: 'structured_extraction', output_mode: 'domain', domain_extraction_ref: ref } })),
+      group_options: groupOptions,
+    })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    expect(handle.current!.captureAuthoringContext().draft_output?.domainExtractionRef).toEqual(ref)
+    expect(screen.getByRole('radio', { name: 'Structured extraction' })).toBeChecked()
+    expect(screen.getByRole('combobox', { name: 'Domain format' })).toHaveTextContent('fixture.domain')
+  })
+
+  it.each([true, false])('saves a loaded profile as an exact revision edit only when editable (%s)', async (canEdit) => {
+    const existing = buildCustomAgent()
+    const pin = { profile_id: 'profile-id', profile_revision_id: 'profile-revision-2', revision: 2, fingerprint: 'sha256:profile' }
+    const contract = { name: 'Saved structure', semantic_class: 'record', fields: [] }
+    const revision = { id: pin.profile_revision_id, profile_id: pin.profile_id, revision: 2, fingerprint: pin.fingerprint, contract }
+    profileMocks.getGenericProfile.mockResolvedValue({ can_edit: canEdit, revision, profile: { id: pin.profile_id } })
+    profileMocks.getGenericProfileRevision.mockResolvedValue(revision)
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.getAgentExecutionRevision.mockImplementation(async () => ({
+      ...buildVersion(2), id: existing.execution_revision_id, agent_id: existing.id,
+      snapshot: { ...buildVersion(2).snapshot, output_contract: { output_state: 'structured_extraction', output_mode: 'profile_bound_generic', generic_profile_ref: pin } },
+    }))
+    serviceMocks.updateCustomAgent.mockRejectedValue(new Error('Profile changed since it was opened; compare or reload before saving'))
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    await waitForHeaderName('My Agent')
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Output Structure' }))
+    expect(screen.getByText(canEdit ? /Saving structure changes creates a new revision/ : /Saving structure changes creates your own profile copy/)).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('textbox', { name: /Structure name/ }), { target: { value: 'Edited structure' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save as version/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledOnce())
+    const payload = serviceMocks.updateCustomAgent.mock.calls[0][1]
+    if (canEdit) {
+      expect(payload.revise_generic_profile).toEqual({ base: pin, contract: { ...contract, name: 'Edited structure' } })
+      expect(payload).not.toHaveProperty('new_generic_profile')
+    } else {
+      expect(payload.new_generic_profile).toEqual({ ...contract, name: 'Edited structure' })
+      expect(payload).not.toHaveProperty('revise_generic_profile')
+    }
+    expect(payload.expected_revision_id).toBe(existing.execution_revision_id)
+    await screen.findByText(/Profile changed since it was opened/)
+    expect(await screen.findByRole('textbox', { name: /Structure name/ })).toHaveValue('Edited structure')
+  })
+
+  it.each([false, true])('selects an existing profile only while the opening draft is current (stale=%s)', async (stale) => {
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    const profile = { id: 'reuse-profile', name: 'Reusable details', head_revision: 3, semantic_class: 'detail' }
+    const revision = { id: 'reuse-revision-3', profile_id: profile.id, revision: 3, fingerprint: 'sha256:reuse',
+      contract: { name: 'Reusable details', semantic_class: 'detail', fields: [] } }
+    profileMocks.listGenericProfiles.mockResolvedValue({ profiles: [profile], next_cursor: null })
+    profileMocks.getGenericProfile.mockResolvedValue({ profile, revision, can_edit: false })
+    profileMocks.getGenericProfileRevision.mockResolvedValue(revision)
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Keep my purpose' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.click(screen.getByText('Advanced: reuse a saved structure'))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose existing Output Structure' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Reusable details · revision 3/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Use this revision' })).toBeEnabled())
+    if (stale) fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Changed during selection' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Use this revision' }))
+    if (stale) {
+      await screen.findByText(/draft changed while selecting a structure/)
+      expect(handle.current!.captureAuthoringContext().draft_description).toBe('Changed during selection')
+      expect(handle.current!.captureAuthoringContext().draft_output?.profilePin).toBeNull()
+      expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+      return
+    }
+    await screen.findByRole('textbox', { name: /Structure name/ })
+    const pin = { profile_id: profile.id, profile_revision_id: revision.id, revision: 3, fingerprint: revision.fingerprint }
+    expect(handle.current!.captureAuthoringContext().draft_output?.profilePin).toEqual(pin)
+    expect(handle.current!.captureAuthoringContext().draft_description).toBe('Keep my purpose')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledOnce())
+    const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
+    expect(payload.output_contract).toEqual({ output_state: 'structured_extraction', output_mode: 'profile_bound_generic', generic_profile_ref: pin })
+    expect(payload).not.toHaveProperty('new_generic_profile')
   })
 
   it('does not expose an Output Schema Key field anywhere in the workshop', async () => {

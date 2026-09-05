@@ -2752,7 +2752,7 @@ def get_generic_profile_max_depth() -> int:
 
 
 def get_generic_profile_list_page_size() -> int:
-    """Authorized profile listing page size; tune payload size for larger catalogs."""
+    """Profile/revision/consumer page size; tune payload size for larger catalogs."""
     return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_LIST_PAGE_SIZE", 50))
 
 

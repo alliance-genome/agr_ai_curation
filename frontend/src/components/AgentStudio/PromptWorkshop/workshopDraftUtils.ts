@@ -1,11 +1,12 @@
 import type { CustomAgent, ModelOption, PromptInfo, ToolIdeaRequest } from '@/types/promptExplorer'
+import { outputDraftEqual, type WorkshopOutputDraft } from './workshopOutputDraft'
 
 export const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
 export const DEFAULT_AGENT_ICON = '🔧'
 export const ALL_GROUPS_VALUE = '__all_groups__'
 
 export type GettingStartedMode = 'template' | 'scratch' | 'clone'
-export type WorkshopSection = 'setup' | 'prompt' | 'tools' | 'versions'
+export type WorkshopSection = 'setup' | 'output_structure' | 'prompt' | 'tools' | 'versions'
 export type WorkshopVisibility = 'private' | 'project'
 export type SaveState = 'idle' | 'saving' | 'saved' | 'failed'
 
@@ -21,7 +22,7 @@ export interface DraftFields {
   modelId: string
   modelReasoning: string
   toolIds: string[]
-  outputSchemaKey: string
+  outputDraft: WorkshopOutputDraft
   icon: string
 }
 
@@ -29,6 +30,7 @@ export interface DraftDirtyState {
   setup: boolean
   prompt: boolean
   tools: boolean
+  outputStructure: boolean
   /** Group ids whose override text differs from the snapshot. */
   groups: string[]
   any: boolean
@@ -60,7 +62,7 @@ export function changedOverrideGroups(
 
 export function computeDirtyState(current: DraftFields, saved: DraftFields | null): DraftDirtyState {
   if (!saved) {
-    return { setup: false, prompt: false, tools: false, groups: [], any: false }
+    return { setup: false, prompt: false, tools: false, outputStructure: false, groups: [], any: false }
   }
   const setup = current.name !== saved.name
     || current.description !== saved.description
@@ -69,16 +71,20 @@ export function computeDirtyState(current: DraftFields, saved: DraftFields | nul
     || !areStringArraysEqual(current.allowedGroupIds, saved.allowedGroupIds)
     || current.modelId !== saved.modelId
     || current.modelReasoning !== saved.modelReasoning
+    || current.outputDraft.mode !== saved.outputDraft.mode
+    || current.outputDraft.schemaKey !== saved.outputDraft.schemaKey
   const groups = changedOverrideGroups(current.groupPromptOverrides, saved.groupPromptOverrides)
   const prompt = current.customPrompt !== saved.customPrompt
     || current.includeGroupRules !== saved.includeGroupRules
   const tools = !areStringArraysEqual(current.toolIds, saved.toolIds)
+  const outputStructure = !outputDraftEqual(current.outputDraft, saved.outputDraft)
   return {
     setup,
     prompt,
     tools,
+    outputStructure,
     groups,
-    any: setup || prompt || tools || groups.length > 0,
+    any: setup || prompt || tools || outputStructure || groups.length > 0,
   }
 }
 
@@ -86,6 +92,7 @@ export function computeDirtyState(current: DraftFields, saved: DraftFields | nul
 export function describeChangedSections(dirty: DraftDirtyState): string[] {
   const sections: string[] = []
   if (dirty.setup) sections.push('Setup')
+  if (dirty.outputStructure) sections.push('Output Structure')
   if (dirty.prompt) sections.push('Your prompt')
   dirty.groups.forEach((groupId) => sections.push(`${groupId} instructions`))
   if (dirty.tools) sections.push('Tools')

@@ -281,9 +281,9 @@ def test_no_output_contract_is_valid_without_finalizer_and_not_generic():
     assert result.candidate.output_schema_key is None
 
 
-def test_structured_output_requires_available_contract_and_finalizer():
-    missing = _agent_result(_agent(output_schema_key="DemoEnvelope"))
-    valid = _agent_result(
+def test_model_response_schema_requires_available_contract_and_excludes_builder_finalizer():
+    valid = _agent_result(_agent(output_schema_key="DemoEnvelope"))
+    conflicting = _agent_result(
         _agent(
             output_schema_key="DemoEnvelope",
             tool_ids=["search", "finalize_demo"],
@@ -293,7 +293,7 @@ def test_structured_output_requires_available_contract_and_finalizer():
         _agent(output_schema_key="RetiredEnvelope", tool_ids=["finalize_demo"])
     )
 
-    assert [finding.code for finding in missing.errors] == ["missing_output_finalizer"]
+    assert [finding.code for finding in conflicting.errors] == ["output_schema_with_finalize_tool"]
     assert valid.valid
     assert "unavailable_output_contract" in {
         finding.code for finding in unavailable.errors

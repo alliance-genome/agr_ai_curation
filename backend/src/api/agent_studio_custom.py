@@ -45,7 +45,8 @@ from src.lib.agent_studio.models import AgentWorkshopContext
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.agent_access import is_resource_access_allowed
-from src.schemas.agent_execution_revision import AgentExecutionSnapshot, AgentOutputContract
+from src.schemas.agent_execution_revision import AgentExecutionSnapshot, AgentOutputContract, GenericProfileRevisionDraft
+from src.lib.agent_studio.generic_profile_service import ProfileConflictError
 from src.schemas.generic_extraction_profile import GenericProfileContract
 from src.lib.agent_studio.execution_revision_service import ExecutionRevisionConflictError
 
@@ -140,7 +141,7 @@ def _custom_agent_log_context(
 
 
 def _validate_output_transition_request(request):
-    explicit = request.model_fields_set & {"output_contract", "new_generic_profile"}
+    explicit = request.model_fields_set & {"output_contract", "new_generic_profile", "revise_generic_profile"}
     if len(explicit) > 1 or (explicit and "output_schema_key" in request.model_fields_set):
         raise ValueError("Choose exactly one output transition")
     if any(getattr(request, name) is None for name in explicit):
@@ -204,6 +205,7 @@ class UpdateCustomAgentRequest(BaseModel):
     allowed_group_ids: Optional[List[str]] = None
     output_contract: AgentOutputContract | None = None
     new_generic_profile: GenericProfileContract | None = None
+    revise_generic_profile: GenericProfileRevisionDraft | None = None
 
     @model_validator(mode="after")
     def explicit_output_transition(self):
@@ -666,6 +668,7 @@ async def update_custom_agent_endpoint(
             output_contract=request.output_contract,
             new_generic_profile=request.new_generic_profile,
             allow_empty_tool_ids=request.allow_empty_tool_ids,
+            revise_generic_profile=request.revise_generic_profile,
             notes=request.notes,
             allowed_group_ids=request.allowed_group_ids,
             active_group_ids=_authenticated_group_ids(user),
@@ -680,7 +683,7 @@ async def update_custom_agent_endpoint(
             exc=exc,
             log_message=f"Failed to update custom agent '{custom_agent_id}'",
         )
-    except ExecutionRevisionConflictError as exc:
+    except (ExecutionRevisionConflictError, ProfileConflictError) as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:

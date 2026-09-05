@@ -11,6 +11,7 @@ export interface WorkshopNavProps {
   dirty: DraftDirtyState
   toolCount: number
   versionCount: number
+  showOutputStructure?: boolean
   onAskClaude?: () => void
 }
 
@@ -67,10 +68,12 @@ export default function WorkshopNav({
   dirty,
   toolCount,
   versionCount,
+  showOutputStructure = false,
   onAskClaude,
 }: WorkshopNavProps) {
   const items: NavItem[] = [
     { key: 'setup', label: 'Setup', dirty: dirty.setup },
+    ...(showOutputStructure ? [{ key: 'output_structure' as const, label: 'Output Structure', dirty: dirty.outputStructure }] : []),
     { key: 'prompt', label: 'Prompt', dirty: dirty.prompt || dirty.groups.length > 0 },
     { key: 'tools', label: 'Tools', dirty: dirty.tools, hint: `${toolCount} attached` },
     { key: 'versions', label: 'Versions', dirty: false, hint: String(versionCount) },

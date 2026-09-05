@@ -7,7 +7,7 @@ function renderNav(overrides: Partial<WorkshopNavProps> = {}) {
   const props: WorkshopNavProps = {
     section: 'setup',
     onSectionChange: vi.fn(),
-    dirty: { setup: false, prompt: false, tools: false, groups: [], any: false },
+    dirty: { setup: false, prompt: false, tools: false, outputStructure: false, groups: [], any: false },
     toolCount: 3,
     versionCount: 6,
     onAskClaude: vi.fn(),
@@ -36,7 +36,7 @@ describe('WorkshopNav', () => {
   })
 
   it('flags sections with unsaved edits, including group overrides under Prompt', () => {
-    renderNav({ dirty: { setup: true, prompt: false, tools: true, groups: ['GROUP_A'], any: true } })
+    renderNav({ dirty: { setup: true, prompt: false, tools: true, outputStructure: false, groups: ['GROUP_A'], any: true } })
     expect(screen.getByRole('button', { name: 'Setup, unsaved edits' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Prompt, unsaved edits' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Tools, 3 attached, unsaved edits' })).toBeInTheDocument()

@@ -1759,6 +1759,9 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         execution_snapshot = AgentExecutionSnapshot.model_validate(
             execution_snapshot.model_dump(mode="json")
         )
+        from src.lib.agent_studio.domain_output_contract import require_no_output_without_builder_tools
+
+        require_no_output_without_builder_tools(execution_snapshot.output_contract, execution_snapshot.tool_ids)
         if any(
             key in kwargs
             for key in (

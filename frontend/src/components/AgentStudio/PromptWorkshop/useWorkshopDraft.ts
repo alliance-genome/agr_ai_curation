@@ -15,6 +15,7 @@ import type {
 import {
   createCustomAgent,
   getWorkshopSavedReference,
+  getAgentExecutionRevision,
   deleteCustomAgent,
   fetchAgentTemplates,
   fetchModelOptions,
@@ -28,6 +29,8 @@ import {
 } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import type { AgentExecutionRevision } from '@/types/agentExecution'
+import { getGenericProfile, getGenericProfileRevision, validateGenericProfile, type GenericProfileDetail, type ProfileMappingDiagnostic } from '@/services/genericProfileService'
+import { emptyOutputDraft, hydrateProfileOutput, outputDraftFromContract, outputDraftSavePayload, profileValidationIssues, type WorkshopOutputDraft } from './workshopOutputDraft'
 import { useAuth } from '@/contexts/AuthContext'
 import { logger } from '@/services/logger'
 import { flushSync } from 'react-dom'
@@ -119,6 +122,17 @@ export interface WorkshopDraft {
   selectedToolIds: string[]
   removeTool: (toolKey: string) => void
   applyToolSelection: (toolIds: string[]) => void
+  outputDraft: WorkshopOutputDraft
+  setOutputDraft: (value: WorkshopOutputDraft) => void
+  outputLoading: boolean
+  outputLoadError: string | null
+  profileCanEdit: boolean
+  savedExecutionRevision: AgentExecutionRevision | null
+  selectOutputProfile: (profile: GenericProfileDetail) => void
+  retryOutputLoad: () => void
+  profileIssues: ProfileMappingDiagnostic[]
+  profileValidating: boolean
+  validateOutputProfile: () => Promise<boolean>
 
   // Groups
   setGroupId: (value: string) => void
@@ -248,7 +262,31 @@ export function useWorkshopDraft({
   const [selectedModelId, setSelectedModelId] = useState('')
   const [selectedModelReasoning, setSelectedModelReasoning] = useState('')
   const [selectedToolIds, setSelectedToolIds] = useState<string[]>([])
-  const [outputSchemaKey, setOutputSchemaKey] = useState('')
+  const [outputDraft, setOutputDraft] = useState<WorkshopOutputDraft>(() => emptyOutputDraft())
+  const [outputLoading, setOutputLoading] = useState(false)
+  const [outputLoadError, setOutputLoadError] = useState<string | null>(null)
+  const [outputLoadAttempt, setOutputLoadAttempt] = useState(0)
+  const [profileSource, setProfileSource] = useState<GenericProfileDetail | null>(null)
+  const [savedExecutionRevision, setSavedExecutionRevision] = useState<AgentExecutionRevision | null>(null)
+  const profileCanEdit = Boolean(profileSource?.can_edit && profileSource.revision.id === outputDraft.profilePin?.profile_revision_id)
+  const outputSchemaKey = outputDraft.mode === 'domain' ? outputDraft.schemaKey : ''
+  const [profileValidation, setProfileValidation] = useState<{
+    draft: WorkshopOutputDraft; pending: boolean; issues: ProfileMappingDiagnostic[]
+  } | null>(null)
+  const profileValidationRequest = useRef(0)
+  const validateOutputProfile = useCallback(async () => {
+    if (outputDraft.mode !== 'profile_bound_generic' || !outputDraft.profileContract) return true
+    const request = ++profileValidationRequest.current
+    setProfileValidation({ draft: outputDraft, pending: true, issues: [] })
+    try {
+      await validateGenericProfile(outputDraft.profileContract)
+      if (request === profileValidationRequest.current) setProfileValidation({ draft: outputDraft, pending: false, issues: [] })
+      return true
+    } catch (error) {
+      if (request === profileValidationRequest.current) setProfileValidation({ draft: outputDraft, pending: false, issues: profileValidationIssues(error) })
+      return false
+    }
+  }, [outputDraft])
   const [icon, setIcon] = useState(DEFAULT_AGENT_ICON)
   const [groupId, setGroupId] = useState('')
   const [savedSnapshot, setSavedSnapshot] = useState<DraftFields | null>(null)
@@ -433,7 +471,7 @@ export function useWorkshopDraft({
     modelId: selectedModelId,
     modelReasoning: selectedModelReasoning,
     toolIds: selectedToolIds,
-    outputSchemaKey,
+    outputDraft,
     icon,
   }), [
     name,
@@ -446,13 +484,13 @@ export function useWorkshopDraft({
     selectedModelId,
     selectedModelReasoning,
     selectedToolIds,
-    outputSchemaKey,
+    outputDraft,
     icon,
   ])
 
   const dirty = useMemo(() => computeDirtyState(currentFields, savedSnapshot), [currentFields, savedSnapshot])
   const isNewDraft = !selectedCustomAgent
-  const canSave = !saving && (isNewDraft || dirty.any)
+  const canSave = !saving && !outputLoading && !outputLoadError && (isNewDraft || dirty.any)
 
   const applyDraft = useCallback((fields: DraftFields, preserveBaseline = false) => {
     setName(fields.name)
@@ -465,7 +503,7 @@ export function useWorkshopDraft({
     setSelectedModelId(fields.modelId)
     setSelectedModelReasoning(fields.modelReasoning)
     setSelectedToolIds(fields.toolIds)
-    setOutputSchemaKey(fields.outputSchemaKey)
+    setOutputDraft(fields.outputDraft)
     setIcon(fields.icon)
     if (!preserveBaseline) {
       setSavedSnapshot(fields)
@@ -651,10 +689,43 @@ export function useWorkshopDraft({
     // Hydrate only once model and template options are known, so the draft is
     // built once and a later options arrival cannot overwrite curator edits.
     if (!workshopOptionsLoaded) return
+    const hydrateSaved = (fields: Omit<DraftFields, 'outputDraft'>, source: CustomAgent) => {
+      let canceled = false
+      setOutputLoading(true)
+      setOutputLoadError(null)
+      void (async () => {
+        try {
+          if (!source.execution_revision_id) throw new Error('This agent has no executable revision to load.')
+          const revision = await getAgentExecutionRevision(source.id, source.execution_revision_id)
+          if (revision.id !== source.execution_revision_id || revision.agent_id !== source.id) throw new Error('The saved configuration identity changed. Reload the agent.')
+          let output = outputDraftFromContract(revision.snapshot.output_contract)
+          let sourceProfile: GenericProfileDetail | null = null
+          if (output.profilePin) {
+            const [detail, savedProfile] = await Promise.all([
+              getGenericProfile(output.profilePin.profile_id),
+              getGenericProfileRevision(output.profilePin.profile_id, output.profilePin.revision),
+            ])
+            output = hydrateProfileOutput(output, savedProfile)
+            sourceProfile = { ...detail, revision: savedProfile }
+          }
+          if (!canceled) {
+            setProfileSource(sourceProfile)
+            setSavedExecutionRevision(revision)
+            applyDraft({ ...fields, outputDraft: output })
+          }
+        } catch (error) {
+          if (!canceled) setOutputLoadError(error instanceof Error ? error.message : 'Could not load the saved Output Structure.')
+        } finally {
+          if (!canceled) setOutputLoading(false)
+        }
+      })()
+      return () => { canceled = true }
+    }
     if (!selectedCustomAgent) {
       if (gettingStartedMode === 'clone' && selectedCloneSource) {
         const cloneModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCloneSource.model_id)
-        applyDraft({
+        if (selectedCloneSource.template_source) setParentAgentId(selectedCloneSource.template_source)
+        return hydrateSaved({
           name: cloneDraftName(selectedCloneSource),
           description: selectedCloneSource.description || '',
           customPrompt: selectedCloneSource.custom_prompt,
@@ -665,16 +736,13 @@ export function useWorkshopDraft({
           modelId: cloneModelId,
           modelReasoning: resolveReasoningSelection(modelOptions, cloneModelId, selectedCloneSource.model_reasoning),
           toolIds: selectedCloneSource.tool_ids || [],
-          outputSchemaKey: selectedCloneSource.output_schema_key || '',
           icon: selectedCloneSource.icon || DEFAULT_AGENT_ICON,
-        })
-        if (selectedCloneSource.template_source) {
-          setParentAgentId(selectedCloneSource.template_source)
-        }
-        return
+        }, selectedCloneSource)
       }
 
       if (gettingStartedMode === 'scratch') {
+        setOutputLoading(false)
+        setOutputLoadError(null)
         applyDraft({
           name: '',
           description: '',
@@ -686,13 +754,15 @@ export function useWorkshopDraft({
           modelId: defaultModelId,
           modelReasoning: resolveReasoningSelection(modelOptions, defaultModelId),
           toolIds: [],
-          outputSchemaKey: '',
+          outputDraft: emptyOutputDraft(),
           icon: DEFAULT_AGENT_ICON,
         })
         return
       }
 
       const templateModelId = resolveModelSelection(modelOptions, defaultModelId, selectedTemplate?.model_id)
+      setOutputLoading(false)
+      setOutputLoadError(null)
       applyDraft({
         name: parentAgent ? `${parentAgent.agent_name} (Custom)` : '',
         description: '',
@@ -704,14 +774,17 @@ export function useWorkshopDraft({
         modelId: templateModelId,
         modelReasoning: resolveReasoningSelection(modelOptions, templateModelId),
         toolIds: selectedTemplate?.tool_ids || [],
-        outputSchemaKey: selectedTemplate?.output_schema_key || '',
+        outputDraft: selectedTemplate?.output_contract
+          ? outputDraftFromContract(selectedTemplate.output_contract)
+          : emptyOutputDraft(),
         icon: DEFAULT_AGENT_ICON,
       })
       return
     }
 
     const customModelId = resolveModelSelection(modelOptions, defaultModelId, selectedCustomAgent.model_id)
-    applyDraft({
+    if (selectedCustomAgent.template_source) setParentAgentId(selectedCustomAgent.template_source)
+    return hydrateSaved({
       name: selectedCustomAgent.name,
       description: selectedCustomAgent.description || '',
       customPrompt: selectedCustomAgent.custom_prompt || '',
@@ -722,12 +795,8 @@ export function useWorkshopDraft({
       modelId: customModelId,
       modelReasoning: resolveReasoningSelection(modelOptions, customModelId, selectedCustomAgent.model_reasoning),
       toolIds: selectedCustomAgent.tool_ids || [],
-      outputSchemaKey: selectedCustomAgent.output_schema_key || '',
       icon: selectedCustomAgent.icon || DEFAULT_AGENT_ICON,
-    })
-    if (selectedCustomAgent.template_source) {
-      setParentAgentId(selectedCustomAgent.template_source)
-    }
+    }, selectedCustomAgent)
   }, [
     applyDraft,
     workshopOptionsLoaded,
@@ -739,6 +808,7 @@ export function useWorkshopDraft({
     selectedCloneSource,
     selectedCustomAgent,
     selectedTemplate,
+    outputLoadAttempt,
   ])
 
   useEffect(() => {
@@ -805,6 +875,7 @@ export function useWorkshopDraft({
       draft_model_id: selectedModelId || undefined,
       draft_model_reasoning: selectedModelReasoning || undefined,
       draft_output_schema_key: outputSchemaKey || undefined,
+      draft_output: structuredClone(outputDraft),
     }
   }, [
     customPrompt,
@@ -817,6 +888,7 @@ export function useWorkshopDraft({
     inheritedAllowedGroupIds,
     name,
     outputSchemaKey,
+    outputDraft,
     parentAgent?.agent_name,
     parentAgentId,
     selectedAllowedGroupIds,
@@ -865,6 +937,7 @@ export function useWorkshopDraft({
         return { applied: false, message: 'The Workshop changed. Generate a fresh proposal.' }
       }
       const candidate = structuredClone(proposal.candidate)
+      if (!candidate.draft_output) return { applied: false, message: 'The proposal is missing the complete output draft. Generate a fresh proposal.' }
       if (await fingerprintWorkshopDraft(candidate) !== proposal.candidate_draft_fingerprint
         || candidate.custom_agent_id !== before.custom_agent_id
         || candidate.custom_agent_updated_at !== before.custom_agent_updated_at
@@ -894,7 +967,8 @@ export function useWorkshopDraft({
         visibility: candidate.draft_visibility ?? 'private',
         allowedGroupIds: candidate.draft_allowed_group_ids ?? [],
         modelId: candidate.draft_model_id ?? '', modelReasoning: candidate.draft_model_reasoning ?? '',
-        toolIds: candidate.draft_tool_ids ?? [], outputSchemaKey: candidate.draft_output_schema_key ?? '',
+        toolIds: candidate.draft_tool_ids ?? [],
+        outputDraft: structuredClone(candidate.draft_output),
         icon: candidate.draft_icon ?? '',
       }
       flushSync(() => applyDraft(nextFields, true))
@@ -1074,6 +1148,11 @@ export function useWorkshopDraft({
 
     let persistedAgent: CustomAgent | undefined
     try {
+      if (outputLoading || outputLoadError) throw new Error(outputLoadError || 'Wait for the saved Output Structure to load.')
+      if (!await validateOutputProfile()) throw new Error('Check the highlighted Output Structure fields before saving.')
+      const sourceContract = profileSource?.revision.id === outputDraft.profilePin?.profile_revision_id
+        ? profileSource?.revision.contract ?? null : savedSnapshot?.outputDraft.profileContract ?? null
+      const outputPayload = outputDraftSavePayload(outputDraft, sourceContract, !forceCreate && Boolean(selectedCustomAgentId) && profileCanEdit)
       const shouldCreate = forceCreate || !selectedCustomAgentId
       let savedIdentity: string | undefined
       if (!shouldCreate && selectedCustomAgentId) {
@@ -1088,10 +1167,8 @@ export function useWorkshopDraft({
           model_id: selectedModelId,
           model_reasoning: selectedModelReasoning,
           tool_ids: selectedToolIds,
-          // Omission preserves the explicit saved output contract, including a
-          // generic profile pin. Null is an intentional transition to none.
-          ...(outputSchemaKey !== (selectedCustomAgent?.output_schema_key || '')
-            ? { output_schema_key: outputSchemaKey || null } : {}),
+          ...outputPayload,
+          expected_revision_id: selectedCustomAgent?.execution_revision_id ?? undefined,
           icon: icon || undefined,
           notes: notes || undefined,
           allowed_group_ids: selectedAllowedGroupIds,
@@ -1120,8 +1197,7 @@ export function useWorkshopDraft({
           model_id: selectedModelId,
           model_reasoning: selectedModelReasoning,
           tool_ids: selectedToolIds,
-          ...(!cloneSource || outputSchemaKey !== (cloneSource.output_schema_key || '')
-            ? { output_schema_key: outputSchemaKey || null } : {}),
+          ...outputPayload,
           icon: icon || undefined,
           allowed_group_ids: selectedAllowedGroupIds,
         })
@@ -1170,7 +1246,13 @@ export function useWorkshopDraft({
     icon,
     includeGroupRules,
     name,
-    outputSchemaKey,
+    outputDraft,
+    outputLoading,
+    outputLoadError,
+    validateOutputProfile,
+    profileCanEdit,
+    profileSource,
+    savedSnapshot,
     parentAgentId,
     reloadAfterSave,
     selectedAllowedGroupIds,
@@ -1356,7 +1438,25 @@ export function useWorkshopDraft({
     selectedToolIds,
     removeTool,
     applyToolSelection,
+    outputDraft,
+    setOutputDraft,
+    profileIssues: profileValidation?.draft === outputDraft ? profileValidation.issues : [],
+    profileValidating: profileValidation?.draft === outputDraft && profileValidation.pending,
+    validateOutputProfile,
+    outputLoading,
+    outputLoadError,
+    retryOutputLoad: () => setOutputLoadAttempt((attempt) => attempt + 1),
+    profileCanEdit,
+    savedExecutionRevision,
 
+    selectOutputProfile: (profile) => {
+      const revision = profile.revision
+      setProfileSource(profile)
+      setOutputDraft(hydrateProfileOutput(outputDraftFromContract({
+        output_state: 'structured_extraction', output_mode: 'profile_bound_generic',
+        generic_profile_ref: { profile_id: revision.profile_id, profile_revision_id: revision.id, revision: revision.revision, fingerprint: revision.fingerprint },
+      }), revision))
+    },
     setGroupId,
     availableGroupIds,
     selectedGroupId,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ToolIdeaRequest } from '@/types/promptExplorer'
+import { emptyOutputDraft } from './workshopOutputDraft'
 import {
   changedOverrideGroups,
   computeDirtyState,
@@ -25,7 +26,7 @@ function buildFields(overrides: Partial<DraftFields> = {}): DraftFields {
     modelId: 'model-a',
     modelReasoning: 'medium',
     toolIds: ['search_document'],
-    outputSchemaKey: '',
+    outputDraft: emptyOutputDraft(),
     icon: 'x',
     ...overrides,
   }
@@ -49,7 +50,7 @@ describe('computeDirtyState', () => {
   it('reports clean when the draft matches the snapshot', () => {
     const fields = buildFields()
     const dirty = computeDirtyState(fields, { ...fields, toolIds: [...fields.toolIds] })
-    expect(dirty).toEqual({ setup: false, prompt: false, tools: false, groups: [], any: false })
+    expect(dirty).toEqual({ setup: false, prompt: false, tools: false, outputStructure: false, groups: [], any: false })
   })
 
   it('reports clean when there is no snapshot yet', () => {
