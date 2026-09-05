@@ -70,3 +70,47 @@ def test_provisional_profile_rejects_trace_style_contract_mismatch_without_mutat
     with pytest.raises(ProfileConformanceError):
         profile.require_attributes(attributes)
     assert attributes == before
+
+
+def test_typed_candidate_mismatch_then_explicit_profile_bound_success(scenario, monkeypatch):
+    from agr_ai_curation_alliance.tools import generic_builder_tools as tools
+    from src.lib.openai_agents import extraction_builder_workspace as builder
+
+    data, receipt, profile = scenario
+    case = deepcopy(data["contract_mismatch"])
+    original = deepcopy(case)
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_: None)
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **_: None)
+    arguments = {"label": case["label"], "attributes": case["attributes"],
+                 "evidence_record_ids": ["synthetic-evidence-1"],
+                 "classification_notes": ["Synthetic contract regression; no production content."]}
+    exploratory = builder.ExtractionBuilderWorkspace(run_id="typed-mismatch", domain_pack_id="generic")
+    token = builder.set_active_extraction_builder_workspace(exploratory)
+    try:
+        rejected = tools._stage_generic_object_impl(class_key=case["typed_class_key"], **arguments)
+        assert rejected.status == "error"
+        assert rejected.data["validation_issues"][0]["reason"] == case["expected_reason"]
+        assert not exploratory.candidates
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)
+
+    # A separately configured, saved-profile workspace is the repair, not a
+    # model-triggered fallback or mutation of the exploratory workspace.
+    configured = builder.ExtractionBuilderWorkspace(
+        run_id="profile-repair", domain_pack_id="generic", agent_id=receipt.agent_key,
+        generic_profile=profile,
+    )
+    token = builder.set_active_extraction_builder_workspace(configured)
+    try:
+        accepted = tools._stage_generic_object_impl(
+            class_key="generic:generic_object", semantic_class=profile.contract.semantic_class, **arguments,
+        )
+        assert accepted.status == "ok"
+        candidate = next(iter(configured.candidates.values()))
+        assert candidate.staged_fields["attributes"] == case["attributes"]
+        assert candidate.evidence_record_ids == ["synthetic-evidence-1"]
+        assert configured.generic_profile is profile
+        assert not exploratory.candidates
+        assert case == original
+    finally:
+        builder.reset_active_extraction_builder_workspace(token)

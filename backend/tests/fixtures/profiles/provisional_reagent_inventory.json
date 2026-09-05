@@ -6,6 +6,12 @@
     "sources": "Multiple name/identifier pairs; identifier-only entries render the identifier. The not_stated fixture has no sources; contradictory status/source data requires review.",
     "validation": "Structural conformance only; no reagent or stock semantic capability is invented."
   },
+  "contract_mismatch": {
+    "label": "Example A",
+    "typed_class_key": "generic:generic_reagent_candidate",
+    "attributes": {"paper_labels": ["Example A"], "source_status": "not_stated"},
+    "expected_reason": "attributes_not_supported_for_class"
+  },
   "profile": {
     "name": "Provisional reagent inventory — dev review",
     "description": "Dev-only example. Record grouping, labels, source states and ordering await curator approval.",

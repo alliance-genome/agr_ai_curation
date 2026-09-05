@@ -78,6 +78,48 @@ def extraction():
     return db, receipt, payload
 
 
+@pytest.mark.parametrize("existing_row", [False, True])
+def test_identical_payload_under_different_profile_cannot_reuse_result(extraction, existing_row):
+    from src.lib.curation_workspace import extraction_results as results
+    from src.schemas.curation_workspace import CurationExtractionPersistenceRequest, CurationExtractionSourceKind
+
+    db, receipt, payload = extraction
+    original = deepcopy(payload)
+    require_extraction_conformance(db, receipt, payload, agent_key=receipt.agent_key)
+    next_receipt = receipt.model_copy(deep=True)
+    next_receipt.agent_revision_id = uuid4()
+    next_receipt.revision = 2
+    next_receipt.fingerprint = "sha256:" + "b" * 64
+    next_pin = next_receipt.output_contract.generic_profile_ref
+    assert next_pin is not None
+    next_pin.profile_revision_id = uuid4()
+    next_pin.revision = 2
+    old_row = db.get.return_value
+    new_row = SimpleNamespace(**vars(old_row))
+    new_row.revision = 2
+    db.get.side_effect = lambda _model, key: new_row if key == next_pin.profile_revision_id else old_row
+    first = CurationExtractionPersistenceRequest(
+        document_id=str(uuid4()), adapter_key="generic", agent_key=receipt.agent_key,
+        source_kind=CurationExtractionSourceKind.FLOW, origin_session_id="profile-idempotency", flow_run_id="profile-run",
+        user_id="fixture-user", payload_json=payload, execution_receipt=receipt,
+        idempotency_key="profile-idempotency:1",
+        payload_hash=results.canonical_extraction_payload_hash(payload),
+    )
+    second = first.model_copy(update={"execution_receipt": next_receipt})
+    record = results._build_extraction_result_record(first)
+    db.execute.return_value.scalars.return_value.all.return_value = [record]
+    # Same-call collisions fail at receipt comparison. An existing-row retry
+    # fails even earlier: identical JSON still names the old pinned profile.
+    error = ProfileIdentityError if existing_row else results.ExtractionResultPayloadMismatchError
+    with pytest.raises(error):
+        results.persist_idempotent_extraction_results([second] if existing_row else [first, second], db=db)
+    db.add.assert_not_called()
+    db.flush.assert_not_called()
+    db.commit.assert_not_called()
+    assert payload == original
+    assert record.execution_receipt == receipt.model_dump(mode="json")
+
+
 @pytest.fixture(params=[False, True], ids=["manual", "envelope"])
 def review_candidate(extraction, request):
     from src.lib.curation_workspace.models import DomainEnvelopeModel
