@@ -15,11 +15,8 @@ from sqlalchemy.orm import Session
 from src.config import get_app_version
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents.config import (
-    get_benchmark_max_cases,
     get_benchmark_max_cells,
-    get_benchmark_max_configurations,
     get_benchmark_max_materialized_submission_bytes,
-    get_benchmark_max_repetitions,
 )
 from src.models.sql.benchmark import (
     BenchmarkCell,
@@ -44,6 +41,7 @@ from .input_resolvers import (
 from .loader import BenchmarkCatalogError
 from .models import BenchmarkRouteCatalog, BenchmarkSuite, ResolvedBenchmarkPlan
 from .observability import sanitized_benchmark_error
+from .planning import resolve_execution_plan
 from .persistence import BenchmarkRepository, canonical_digest
 from .snapshots import (
     BenchmarkSnapshotError,
@@ -51,7 +49,7 @@ from .snapshots import (
     BenchmarkSnapshotStore,
     configured_benchmark_snapshot_store,
 )
-from .suites import resolve_suite, validate_suite
+from .suites import validate_suite
 
 
 @dataclass(frozen=True)
@@ -93,20 +91,11 @@ def authoritative_plan(
 
     try:
         suite = validate_suite(suite_value)
-        resolved = resolve_suite(
-            suite,
-            catalog,
-            max_cases=get_benchmark_max_cases(),
-            max_configurations=get_benchmark_max_configurations(),
-            max_repetitions=get_benchmark_max_repetitions(),
-            max_cells=get_benchmark_max_cells(),
-        )
+        resolved = resolve_execution_plan(suite, catalog)
     except BenchmarkCatalogError as exc:
         raise BenchmarkLifecycleFailure(
             "invalid_plan", "Benchmark suite cannot be resolved", 422
         ) from exc
-    if any(case.target.kind == "agent" and not (case.user_query or "").strip() for case in resolved.cases):
-        raise BenchmarkLifecycleFailure("invalid_plan", "Agent benchmark cases require an explicit curator query", 422)
     if resolved != submitted_plan:
         raise BenchmarkLifecycleFailure(
             "plan_drift",

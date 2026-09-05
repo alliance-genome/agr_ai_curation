@@ -36,6 +36,7 @@ Start here for new developers:
 10. **[SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md)** -- Backend Sentry initialization, redaction, reporting facades, and dev smoke procedure
 11. **[BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md)** -- Durable worker leases, startup recovery, and idempotent document resume policy
 12. **[BENCHMARK_PERSISTENCE.md](guides/BENCHMARK_PERSISTENCE.md)** -- Durable benchmark jobs, lineage, lifecycle constraints, result storage, pagination, and replay
+13. **[BENCHMARK_CATALOG.md](guides/BENCHMARK_CATALOG.md)** -- Curator-consistent read-only catalog discovery, suite pagination and normalized plan preview
 
 ### Developer Guides
 

@@ -77,11 +77,13 @@ def test_benchmark_api_settings_reach_api_process(compose_path, backend_name, wo
         "false" if compose_path == COMPOSE_PATH else "${BENCHMARK_EXECUTION_ENABLED:-false}"
     )
     for name, default in (
+        ("BENCHMARK_CATALOG_MAX_RESPONSE_BYTES", 1048576),
         ("BENCHMARK_EVENT_HEARTBEAT_SECONDS", 15),
         ("BENCHMARK_EVENT_REPLAY_BATCH_SIZE", 250),
         ("BENCHMARK_MAX_EVENT_CONNECTIONS_PER_PRINCIPAL", 5),
     ):
         assert environment[name] == "${" + name + ":-" + str(default) + "}"
+    assert environment["BENCHMARK_ENVIRONMENT_ID"] == "${BENCHMARK_ENVIRONMENT_ID:-unconfigured}"
     assert "BENCHMARK_API_ENABLED" not in services[worker_name]["environment"]
 
 

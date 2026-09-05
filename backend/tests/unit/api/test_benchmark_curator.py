@@ -151,7 +151,10 @@ async def test_unavailable_authority_reports_only_sanitized_failure(boundary, mo
     with pytest.raises(HTTPException) as error:
         await admission.require_benchmark_curator(request("opaque-human-value"), {"sub": "curator"}, None)
     assert error.value.status_code == 503
-    assert error.value.detail["code"] == "curator_authorization_unavailable"
+    assert error.value.detail == {
+        "code": "curator_authorization_unavailable",
+        "message": "Verified current AI Curation curator authorization required",
+    }
     reporter.assert_called_once()
     captured = reporter.call_args.args[0]
     assert captured.__traceback__ is not None
@@ -170,3 +173,23 @@ async def test_authorization_denial_does_not_report_server_failure(boundary, mon
         await admission.require_benchmark_curator(request("cookie"), {"sub": "curator"}, None)
     assert error.value.status_code == 403
     reporter.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure,expected", [(None, 200), ("audience", 401), ("subject", 403), ("revoked", 403)])
+async def test_read_wrapper_preserves_current_human_verification(boundary, failure, expected):
+    owner = {"sub": "service:portal", "client_id": "portal", "token_use": "access"}
+    if failure == "audience":
+        boundary[0].validate_token.side_effect = InvalidAudienceError("private-token")
+    elif failure == "subject":
+        owner = {"sub": "another-human", "client_id": "cli", "token_use": "bearer"}
+    elif failure == "revoked":
+        boundary[2].side_effect = PermissionError("private-provider-detail")
+    if expected == 200:
+        receipt = await admission.require_benchmark_read_curator(request(), owner, "Bearer human-token")
+        assert receipt.subject == "curator" and receipt.db_user_id == 42
+    else:
+        with pytest.raises(HTTPException) as error:
+            await admission.require_benchmark_read_curator(request(), owner, "Bearer human-token")
+        assert error.value.status_code == expected
+        assert "private" not in str(error.value.detail)
