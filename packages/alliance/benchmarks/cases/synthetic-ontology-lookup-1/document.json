@@ -1,0 +1,11 @@
+[
+  {
+    "index": 0,
+    "type": "NarrativeText",
+    "text": "Synthetic experiment: the tested process was labeled with the deliberately synthetic ontology identifier SYNTH:0000001.",
+    "metadata": {
+      "page_number": 1,
+      "section_title": "Results"
+    }
+  }
+]

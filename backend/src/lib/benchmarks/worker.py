@@ -10,7 +10,9 @@ import logging
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
-from src.lib.benchmarks.models import ResolvedBenchmarkCell
+from src.lib.benchmarks.models import ResolvedBenchmarkCell, ResolvedBenchmarkPlan
+from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+from src.lib.benchmarks.curator_authorization import authorize_benchmark_curator
 from src.lib.benchmarks.persistence import (
     BenchmarkCancellationRequestedError,
     BenchmarkLeaseLostError,
@@ -21,10 +23,7 @@ from src.lib.benchmarks.runtime import (
     execute_resolved_agent_cell,
     execute_resolved_flow_cell,
 )
-from src.lib.benchmarks.snapshots import (
-    BenchmarkSnapshotRepository,
-    configured_benchmark_snapshot_store,
-)
+from src.lib.benchmarks.preparation_service import prepare_job_document
 from src.lib.openai_agents.config import (
     get_benchmark_cell_timeout_seconds,
     get_benchmark_execution_enabled,
@@ -251,7 +250,7 @@ class BenchmarkWorker:
             session.commit()
             return cell.id if cell is not None else None
 
-    def _load_cell(self, cell_id: UUID) -> tuple[BenchmarkCell, str, dict[str, Any]]:
+    def _load_cell(self, cell_id: UUID) -> tuple[BenchmarkCell, str | None]:
         with self.session_factory() as session:
             cell = session.get(BenchmarkCell, cell_id)
             if cell is None:
@@ -259,14 +258,45 @@ class BenchmarkWorker:
             job = session.get(BenchmarkJob, cell.job_id)
             if job is None:
                 raise LookupError("benchmark job not found")
-            content = BenchmarkSnapshotRepository(
-                session, configured_benchmark_snapshot_store()
-            ).read_verified(cell.input_snapshot_id, owner_subject=job.owner_subject)
-            parsed = json.loads(content)
-            if not isinstance(parsed, dict):
-                raise ValueError("frozen benchmark input must be a JSON object")
+            # Historical jobs have no recoverable human execution identity.
+            # Never substitute service ownership or document contents for it.
+            BenchmarkCuratorContext.model_validate_json(json.dumps(job.curator_context))
+            plan = ResolvedBenchmarkPlan.model_validate_json(json.dumps(job.resolved_plan))
+            planned = next((item for item in plan.cells if item.cell_id == cell.cell_key), None)
+            if planned is None:
+                raise ValueError("benchmark cell is absent from its frozen plan")
+            if cell.target_kind == "agent" and not (planned.user_query or "").strip():
+                raise ValueError("agent benchmark execution requires an explicit curator query")
             session.expunge(cell)
-            return cell, job.owner_subject, parsed
+            return cell, planned.user_query
+
+    async def _run_authorized_cell(
+        self, executor: Callable[..., Any], resolved: ResolvedBenchmarkCell,
+        run_id: str, cell: BenchmarkCell,
+    ) -> Any:
+        prepared, curator = await prepare_job_document(
+            job_id=cell.job_id, snapshot_id=cell.input_snapshot_id,
+            lease_owner=self.worker_id, session_factory=self.session_factory,
+        )
+        # Preparation may take time. Recheck current authorization immediately
+        # before the target, including when a prepared copy was reused.
+        await authorize_benchmark_curator(curator, session_factory=self.session_factory)
+        # Only durable, server-captured context supplies execution authorization.
+        # Frozen document bytes cannot select a user or grant groups.
+        runtime_input = {
+            "user_id": curator.subject,
+            "db_user_id": curator.db_user_id,
+            "active_groups": list(curator.active_groups),
+            "document_id": str(prepared.document_id),
+            "document_name": f"benchmark-{prepared.document_id}",
+            "user_query": resolved.user_query or "",
+            "messages": [{"role": "user", "content": resolved.user_query}] if resolved.user_query else [],
+        }
+        observer = _DurableInvocationObserver(
+            cell=cell, lease_owner=self.worker_id, session_factory=self.session_factory,
+        )
+        with observe_provider_invocations(observer):
+            return await executor(resolved, runtime_input, run_id)
 
     async def _heartbeat(self, job_id: UUID, cell_id: UUID, stopped: asyncio.Event) -> None:
         while not stopped.is_set():
@@ -292,7 +322,7 @@ class BenchmarkWorker:
         stopped: asyncio.Event | None = None
         heartbeat: asyncio.Task[None] | None = None
         try:
-            cell, _, case_input = self._load_cell(cell_id)
+            cell, user_query = self._load_cell(cell_id)
             resolved = ResolvedBenchmarkCell.model_validate(
                 {
                     "cell_id": cell.cell_key,
@@ -307,27 +337,18 @@ class BenchmarkWorker:
                         "digest": cell.input_digest,
                     },
                     "routes": cell.routes,
+                    "user_query": user_query,
                 }
-            )
-            observer = _DurableInvocationObserver(
-                cell=cell,
-                lease_owner=self.worker_id,
-                session_factory=self.session_factory,
             )
             stopped = asyncio.Event()
             heartbeat = asyncio.create_task(
                 self._heartbeat(cell.job_id, cell.id, stopped)
             )
-            with observe_provider_invocations(observer):
-                executor = (
-                    self.agent_executor
-                    if cell.target_kind == "agent"
-                    else self.flow_executor
-                )
-                outcome = await asyncio.wait_for(
-                    executor(resolved, case_input, str(cell.id)),
-                    timeout=self.cell_timeout_seconds,
-                )
+            executor = self.agent_executor if cell.target_kind == "agent" else self.flow_executor
+            outcome = await asyncio.wait_for(
+                self._run_authorized_cell(executor, resolved, str(cell.id), cell),
+                timeout=self.cell_timeout_seconds,
+            )
             if heartbeat.done():
                 heartbeat.result()
             if any(invocation.status == "failed" for invocation in outcome.invocations):

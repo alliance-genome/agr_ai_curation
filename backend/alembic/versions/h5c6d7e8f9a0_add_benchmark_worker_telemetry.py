@@ -44,7 +44,20 @@ def upgrade() -> None:
     )
     for column in invocation_columns:
         op.add_column("benchmark_invocations", column)
+    # Historical terminal invocations are immutable to runtime writers. The
+    # migration already holds the table's DDL lock; suspend only the three
+    # content guards for this backfill and restore them in this same transaction.
+    # A failed migration rolls back both the data and trigger-state changes.
+    content_guards = (
+        "trg_benchmark_invocations_terminal_update",
+        "trg_benchmark_invocations_running_cell",
+        "trg_benchmark_invocations_terminal_job_content",
+    )
+    for trigger in content_guards:
+        op.execute(f"ALTER TABLE benchmark_invocations DISABLE TRIGGER {trigger}")
     op.execute("UPDATE benchmark_invocations SET sequence = ordinal + 1")
+    for trigger in content_guards:
+        op.execute(f"ALTER TABLE benchmark_invocations ENABLE TRIGGER {trigger}")
     op.alter_column("benchmark_invocations", "sequence", nullable=False)
     op.create_check_constraint(
         "ck_benchmark_invocations_telemetry_values",

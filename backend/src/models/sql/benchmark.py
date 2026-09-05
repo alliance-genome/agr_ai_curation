@@ -132,6 +132,9 @@ class BenchmarkJob(Base):
     suite_id: Mapped[str] = mapped_column(String(128), nullable=False)
     suite_specification: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     resolved_plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # NULL identifies historical jobs whose human execution identity is unknown.
+    # New jobs must supply this at insertion; the migration enforces immutability.
+    curator_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     suite_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     catalog_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     plan_digest: Mapped[str] = mapped_column(String(71), nullable=False)
@@ -180,6 +183,10 @@ class BenchmarkJob(Base):
         CheckConstraint(
             "jsonb_typeof(resolved_plan) = 'object'",
             name="ck_benchmark_jobs_plan_object",
+        ),
+        CheckConstraint(
+            "curator_context IS NULL OR jsonb_typeof(curator_context) = 'object'",
+            name="ck_benchmark_jobs_curator_context_object",
         ),
         CheckConstraint(
             "total_cells > 0 AND queued_cells >= 0 AND running_cells >= 0 "

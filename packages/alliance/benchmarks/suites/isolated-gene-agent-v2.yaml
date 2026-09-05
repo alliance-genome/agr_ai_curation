@@ -2,12 +2,13 @@ schema_version: 2
 suite_id: isolated-gene-agent-v2
 cases:
   - case_id: synthetic-gene-lookup-1
+    user_query: "Look up the deliberately synthetic identifier SYNTH_GENE_001. Return an empty result when no authorized database record exists."
     target: {kind: agent, id: gene_validation}
     input:
       resolver: checked_in_fixture
-      reference: cases/synthetic-gene-lookup-1/input.json
+      reference: cases/synthetic-gene-lookup-1/document.json
       version: "1"
-      digest: sha256:be0974a67dbeb4f9c530c76628972f436ad15934ef6dcbc1ccb49aef96036e76
+      digest: sha256:f055f28a4e9a509f903007f13d15b8f0dfb2153f3d97b9c2b35cb5366eedad5b
 configurations:
   - configuration_id: sol
     routes:

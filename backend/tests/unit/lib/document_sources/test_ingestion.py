@@ -81,6 +81,60 @@ def _source_provenance(**overrides):
 
 
 @pytest.mark.asyncio
+async def test_shared_indexing_checks_owner_before_any_model_or_storage_work(monkeypatch):
+    monkeypatch.setattr(
+        ingestion, "_require_owned_document",
+        AsyncMock(side_effect=DocumentSourceIngestionError("Document owner mismatch")),
+    )
+    hierarchy = AsyncMock()
+    store = AsyncMock()
+    monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", hierarchy)
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", store)
+    with pytest.raises(DocumentSourceIngestionError, match="owner mismatch"):
+        await ingestion.index_owned_document_elements(
+            [{"text": "Synthetic paper", "metadata": {}}],
+            document_id="isolated-document",
+            user_id="owner-1",
+            owner_user_id=42,
+            weaviate_client=object(),
+            strategy=ChunkingStrategy.get_research_strategy(),
+        )
+    hierarchy.assert_not_awaited()
+    store.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_stage", ["hierarchy", "chunking", "figure_locators", "vector_storage"])
+async def test_shared_indexing_checkpoint_failure_stops_next_stage(monkeypatch, stop_stage):
+    monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+    monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
+    elements = [{"text": "Synthetic evidence", "metadata": {}}]
+    operations = {
+        "hierarchy": AsyncMock(return_value=(elements, {})),
+        "chunking": AsyncMock(return_value=[]),
+        "figure_locators": AsyncMock(return_value=[]),
+        "vector_storage": AsyncMock(),
+    }
+    monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", operations["hierarchy"])
+    monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", operations["chunking"])
+    monkeypatch.setattr("src.lib.pipeline.figure_locator_resolution.resolve_figure_locators", operations["figure_locators"])
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", operations["vector_storage"])
+
+    async def checkpoint(stage):
+        if stage == stop_stage:
+            raise RuntimeError("synthetic lease lost")
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        await ingestion.index_owned_document_elements(
+            elements, document_id="isolated-document", user_id="owner-1", owner_user_id=42,
+            weaviate_client=object(), strategy=ChunkingStrategy.get_research_strategy(),
+            stage_checkpoint=checkpoint,
+        )
+    operations[stop_stage].assert_not_awaited()
+    operations["vector_storage"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_ingest_provider_markdown_document_runs_pipeline(monkeypatch):
     monkeypatch.setattr(
         ingestion,

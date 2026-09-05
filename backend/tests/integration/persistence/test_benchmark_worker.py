@@ -51,6 +51,7 @@ from src.models.sql.benchmark import (
 from src.models.sql.database import SessionLocal
 from tests.integration.persistence.test_benchmark_repository import (
     _create_job,
+    _curator_context,
     _digest,
     _suite_and_plan,
 )
@@ -66,6 +67,21 @@ def migrated_database():
 
 @pytest.fixture(autouse=True)
 def worker_environment(monkeypatch):
+    async def synthetic_authorization(context, **kwargs):
+        return context
+
+    # This module exercises durable worker transactions using synthetic users;
+    # live provider/local account checks have their own focused regression suite.
+    monkeypatch.setattr(
+        "src.lib.benchmarks.worker.authorize_benchmark_curator", synthetic_authorization,
+    )
+    async def synthetic_preparation(**kwargs):
+        from types import SimpleNamespace
+        return SimpleNamespace(document_id=kwargs["snapshot_id"]), _curator_context()
+
+    # Transaction/dispatch fixtures use synthetic preparation. The preparation
+    # integration suite exercises the real coordinator, verified blobs and SQL.
+    monkeypatch.setattr("src.lib.benchmarks.worker.prepare_job_document", synthetic_preparation)
     monkeypatch.setenv("BENCHMARK_WORKER_ENABLED", "true")
     monkeypatch.setenv("BENCHMARK_EXECUTION_ENABLED", "true")
     monkeypatch.setenv("BENCHMARK_WORKER_LEASE_SECONDS", "300")
@@ -152,7 +168,7 @@ class _DelegatedReference(RootModel[str]):
 
 class _DelegatedResolver:
     resolver_id = "fixture"
-    reference_schema = _DelegatedReference
+    reference_schema: type[RootModel[str]] = _DelegatedReference
     delegated_authorization = DelegatedAuthorizationCapability.REQUIRED
 
     def __init__(self, content: bytes, *, fail: bool = False) -> None:
@@ -282,6 +298,7 @@ def test_successful_delegated_submission_never_serializes_token(tmp_path):
             )
             job = BenchmarkRepository(session).create_job(
                 owner_subject=owner,
+                curator_context=_curator_context(),
                 suite=suite,
                 plan=plan,
                 config_digest=_digest("e"),

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -20,6 +21,23 @@ from src.lib.pdf_jobs.upload_intake_service import (
 from src.models.document import ProcessingStatus
 from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.schemas.documents import DocumentUpdateRequest
+
+
+@pytest.mark.asyncio
+async def test_phantom_cleanup_preserves_benchmark_copy_before_vectors_exist(monkeypatch):
+    session = MagicMock()
+    session.query.return_value.filter.return_value.first.return_value = SimpleNamespace(id=42)
+    document = SimpleNamespace(id=uuid4(), viewer_mode="benchmark_frozen")
+    session.query.return_value.filter.return_value.all.return_value = [document]
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    connection = MagicMock()
+    pdf_collection = MagicMock()
+    pdf_collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_connection", lambda: connection)
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (MagicMock(), pdf_collection))
+    assert await documents.cleanup_phantom_documents({"sub": "synthetic-curator"}) == 0
+    session.delete.assert_not_called()
+    pdf_collection.data.delete_by_id.assert_not_called()
 
 
 class _FakeQuery:
@@ -117,7 +135,7 @@ def _patch_indexed_document_status(monkeypatch, status="completed"):
 @pytest.mark.asyncio
 async def test_verify_document_ownership_returns_document(monkeypatch):
     doc_id = str(uuid4())
-    owned_doc = SimpleNamespace(id=doc_id, user_id=10)
+    owned_doc = SimpleNamespace(id=doc_id, user_id=10, viewer_mode=None)
     session = _FakeSession(execute_doc=owned_doc)
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=10))
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
@@ -129,7 +147,7 @@ async def test_verify_document_ownership_returns_document(monkeypatch):
 @pytest.mark.asyncio
 async def test_verify_document_ownership_can_lock_document_row(monkeypatch):
     doc_id = str(uuid4())
-    owned_doc = SimpleNamespace(id=doc_id, user_id=10)
+    owned_doc = SimpleNamespace(id=doc_id, user_id=10, viewer_mode=None)
     session = _FakeSession(execute_doc=owned_doc)
     monkeypatch.setattr(
         documents,
@@ -156,7 +174,7 @@ async def test_verify_document_ownership_can_lock_document_row(monkeypatch):
 @pytest.mark.asyncio
 async def test_verify_document_ownership_rejects_cross_user(monkeypatch):
     doc_id = str(uuid4())
-    foreign_doc = SimpleNamespace(id=doc_id, user_id=999)
+    foreign_doc = SimpleNamespace(id=doc_id, user_id=999, viewer_mode=None)
     session = _FakeSession(execute_doc=foreign_doc)
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=10))
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))

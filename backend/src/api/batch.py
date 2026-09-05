@@ -185,6 +185,7 @@ async def create_batch(
     found_docs = db.query(PDFDocument).filter(
         PDFDocument.id.in_(request.document_ids),
         PDFDocument.user_id == db_user.id,
+        PDFDocument.viewer_mode.is_distinct_from("benchmark_frozen"),
     ).all()
 
     found_ids = {doc.id for doc in found_docs}

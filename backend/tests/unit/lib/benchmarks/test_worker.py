@@ -5,9 +5,48 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
+from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.benchmarks.persistence import BenchmarkLeaseLostError
 from src.lib.benchmarks.worker import BenchmarkWorker, _report_failure
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_prepared_identity_and_explicit_query_then_rechecks_authorization(monkeypatch):
+    context = BenchmarkCuratorContext(
+        subject="verified-curator", auth_provider="oidc", db_user_id=42,
+        active_groups=("group-alpha",),
+    )
+    check = AsyncMock(return_value=context)
+    monkeypatch.setattr("src.lib.benchmarks.worker.authorize_benchmark_curator", check)
+    prepared = SimpleNamespace(document_id=uuid4())
+    prepare = AsyncMock(return_value=(prepared, context))
+    monkeypatch.setattr("src.lib.benchmarks.worker.prepare_job_document", prepare)
+    executor = AsyncMock(return_value="synthetic-result")
+    worker = BenchmarkWorker()
+    resolved = MagicMock()
+    resolved.user_query = "Extract the requested evidence."
+    cell = MagicMock()
+    result = await worker._run_authorized_cell(executor, resolved, "run", cell)
+    assert result == "synthetic-result"
+    check.assert_awaited_once_with(context, session_factory=worker.session_factory)
+    assert executor.call_args.args[1] == {
+        "user_id": "verified-curator", "db_user_id": 42, "active_groups": ["group-alpha"],
+        "document_id": str(prepared.document_id), "document_name": f"benchmark-{prepared.document_id}",
+        "user_query": resolved.user_query,
+        "messages": [{"role": "user", "content": resolved.user_query}],
+    }
+    prepare.assert_awaited_once_with(
+        job_id=cell.job_id, snapshot_id=cell.input_snapshot_id,
+        lease_owner=worker.worker_id, session_factory=worker.session_factory,
+    )
+
+    check.side_effect = PermissionError("revoked")
+    executor.reset_mock()
+    with pytest.raises(PermissionError):
+        await worker._run_authorized_cell(executor, resolved, "run", cell)
+    executor.assert_not_called()
 
 
 @pytest.mark.parametrize(

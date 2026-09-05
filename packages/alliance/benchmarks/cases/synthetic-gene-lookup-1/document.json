@@ -1,0 +1,11 @@
+[
+  {
+    "index": 0,
+    "type": "NarrativeText",
+    "text": "Synthetic experiment: SYNTH_GENE_001 was examined as the experimental target.",
+    "metadata": {
+      "page_number": 1,
+      "section_title": "Results"
+    }
+  }
+]

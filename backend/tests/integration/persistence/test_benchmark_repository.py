@@ -105,6 +105,15 @@ def _suite_and_plan(cell_count: int = 3) -> tuple[BenchmarkSuite, ResolvedBenchm
     return suite, plan
 
 
+def _curator_context():
+    from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+
+    return BenchmarkCuratorContext(
+        subject="synthetic-curator", auth_provider="oidc", db_user_id=42,
+        active_groups=("group-alpha",),
+    )
+
+
 def _create_job(db, *, owner: str = "owner-a", cells: int = 3, rerun_of: UUID | None = None):
     suite, plan = _suite_and_plan(cells)
     snapshot_ids_by_case = {}
@@ -142,6 +151,7 @@ def _create_job(db, *, owner: str = "owner-a", cells: int = 3, rerun_of: UUID | 
     db.flush()
     return BenchmarkRepository(db).create_job(
         owner_subject=owner,
+        curator_context=_curator_context(),
         suite=suite,
         plan=plan,
         config_digest=_digest("e"),
@@ -203,6 +213,44 @@ def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
     return repository.complete_job(
         job_id=job_id, lease_owner=lease_owner, completed_at=now
     )
+
+
+def test_curator_context_is_persisted_separately_and_immutable_while_queued():
+    with SessionLocal() as db:
+        job = _create_job(db, owner="service:synthetic-portal", cells=1)
+        assert job.curator_context == _curator_context().model_dump(mode="json")
+        assert job.curator_context["subject"] != job.owner_subject
+        for replacement in (None, {**job.curator_context, "active_groups": ["group-beta"]}):
+            with pytest.raises(DBAPIError, match="curator context is immutable"):
+                with db.begin_nested():
+                    db.execute(
+                        update(BenchmarkJob).where(BenchmarkJob.id == job.id)
+                        .values(curator_context=replacement)
+                    )
+        db.rollback()
+
+
+@pytest.mark.parametrize("problem", ["missing_agent_query", "mismatched_query"])
+def test_job_admission_rejects_missing_or_inconsistent_curator_query(problem):
+    suite, plan = _suite_and_plan(1)
+    if problem == "missing_agent_query":
+        target = suite.cases[0].target.model_copy(update={"kind": "agent"})
+        suite = suite.model_copy(update={"cases": (suite.cases[0].model_copy(update={"target": target}),)})
+        plan = plan.model_copy(update={
+            "cases": (plan.cases[0].model_copy(update={"target": target}),),
+            "cells": (plan.cells[0].model_copy(update={"target": target}),),
+        })
+    else:
+        suite = suite.model_copy(update={
+            "cases": (suite.cases[0].model_copy(update={"user_query": "Curator request"}),),
+        })
+    with SessionLocal() as session:
+        with pytest.raises(ValueError, match="query"):
+            BenchmarkRepository(session).create_job(
+                owner_subject="synthetic-query-owner", curator_context=_curator_context(),
+                suite=suite, plan=plan, config_digest=_digest("e"), code_digest=_digest("f"),
+                inputs_digest=_digest("0"), snapshot_ids_by_case={},
+            )
 
 
 def test_repository_persists_plan_pages_without_envelopes_and_replays_events():
@@ -309,6 +357,7 @@ def test_job_cells_share_frozen_snapshot_and_snapshot_deletion_is_restricted():
         db.flush()
         job = BenchmarkRepository(db).create_job(
             owner_subject="snapshot-owner",
+            curator_context=_curator_context(),
             suite=suite,
             plan=repeated_plan,
             config_digest=_digest("e"),

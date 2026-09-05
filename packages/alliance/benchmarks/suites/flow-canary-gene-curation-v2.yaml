@@ -2,12 +2,13 @@ schema_version: 2
 suite_id: flow-canary-gene-curation-v2
 cases:
   - case_id: synthetic-gene-flow-canary-1
+    user_query: "Run the configured Gene Curation flow against a synthetic no-match input and preserve the terminal flow status."
     target: {kind: flow, id: Gene Curation}
     input:
       resolver: checked_in_fixture
-      reference: cases/synthetic-gene-flow-canary-1/input.json
+      reference: cases/synthetic-gene-flow-canary-1/document.json
       version: "1"
-      digest: sha256:27bc000dd85054acd375a82168ed6943c360da972a4a111bcd2894b2eb599cfa
+      digest: sha256:0154ef50b5ed2cd64f2fd82ca1ca0756c4a419f2183fba2b424b0706a9795a2c
 configurations:
   - configuration_id: all-sol
     routes:
