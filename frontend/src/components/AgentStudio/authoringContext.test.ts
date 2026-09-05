@@ -159,10 +159,10 @@ describe('Agent Studio authoring context fingerprints', () => {
       draft_description: 'Description',
       draft_icon: 'science',
       draft_visibility: 'private',
-      draft_allowed_group_ids: ['WB', 'FB'],
+      draft_allowed_group_ids: ['TEAM_B', 'TEAM_A'],
       inherited_allowed_group_ids: [],
       prompt_draft: 'Use exact evidence.',
-      group_prompt_overrides: { WB: 'Use WormBase conventions.' },
+      group_prompt_overrides: { TEAM_B: 'Use Team B conventions.' },
       include_group_rules: true,
       draft_tool_ids: ['search_document', 'read_chunk'],
       draft_output_schema_key: 'gene',
@@ -172,7 +172,7 @@ describe('Agent Studio authoring context fingerprints', () => {
 
     expect(captured.flow_draft_fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/)
     expect(captured.agent_workshop?.draft_fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/)
-    expect(captured.agent_workshop?.draft_allowed_group_ids).toEqual(['FB', 'WB'])
-    expect(context.agent_workshop.draft_allowed_group_ids).toEqual(['WB', 'FB'])
+    expect(captured.agent_workshop?.draft_allowed_group_ids).toEqual(['TEAM_A', 'TEAM_B'])
+    expect(context.agent_workshop.draft_allowed_group_ids).toEqual(['TEAM_B', 'TEAM_A'])
   })
 })

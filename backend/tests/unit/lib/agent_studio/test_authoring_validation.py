@@ -109,7 +109,7 @@ def _flow_result(
     return validate_flow_authoring_draft(
         candidate,
         context=AuthoringValidationContext.from_values(
-            db_user_id=7, active_group_ids=["RGD"]
+            db_user_id=7, active_group_ids=["TEAM_C"]
         ),
         resolve_agent=resolver,
         apply_attachment_defaults=hydrate,
@@ -191,7 +191,7 @@ def test_flow_validation_never_mutates_the_supplied_candidate():
 def test_pre_apply_rejects_a_stale_exact_draft_fingerprint():
     context = AuthoringValidationContext.from_values(
         db_user_id=7,
-        active_group_ids=["RGD"],
+        active_group_ids=["TEAM_C"],
         expected_draft_fingerprint="sha256:proposal",
         current_draft_fingerprint="sha256:current",
     )
@@ -229,7 +229,7 @@ def _agent_sources() -> AgentValidationSources:
             ),
         },
         output_schema_keys=frozenset({"DemoEnvelope"}),
-        group_ids=frozenset({"RGD", "MGI"}),
+        group_ids=frozenset({"TEAM_C", "TEAM_D"}),
         builder_finalization_tool_ids=frozenset({"finalize_demo"}),
     )
 
@@ -239,11 +239,11 @@ def _agent(**overrides):
         "name": "Draft agent",
         "description": "A complete general draft",
         "custom_prompt": "Inspect the input.",
-        "group_prompt_overrides": {"RGD": "Use RGD conventions."},
+        "group_prompt_overrides": {"TEAM_C": "Use TEAM_C conventions."},
         "icon": "🔧",
         "visibility": "private",
-        "allowed_group_ids": ["RGD"],
-        "inherited_allowed_group_ids": ["RGD", "MGI"],
+        "allowed_group_ids": ["TEAM_C"],
+        "inherited_allowed_group_ids": ["TEAM_C", "TEAM_D"],
         "include_group_rules": True,
         "model_id": "gpt-test",
         "model_reasoning": "high",
@@ -265,7 +265,7 @@ def _agent_result(
     return validate_custom_agent_authoring_draft(
         candidate,
         context=AuthoringValidationContext.from_values(
-            db_user_id=7, active_group_ids=["RGD"]
+            db_user_id=7, active_group_ids=["TEAM_C"]
         ),
         sources=_agent_sources(),
         phase=phase,
@@ -306,12 +306,12 @@ def test_model_response_schema_requires_available_contract_and_excludes_builder_
         ({"model_id": "retired"}, "unavailable_model", "custom_agent.model_id"),
         ({"model_reasoning": "max"}, "unsupported_reasoning_effort", "custom_agent.model_reasoning"),
         ({"tool_ids": ["retired"]}, "unavailable_tool", "custom_agent.tool_ids.0"),
-        ({"allowed_group_ids": ["WB"]}, "unavailable_group", "custom_agent.allowed_group_ids"),
+        ({"allowed_group_ids": ["TEAM_B"]}, "unavailable_group", "custom_agent.allowed_group_ids"),
         ({"allowed_group_ids": []}, "widened_inherited_access", "custom_agent.allowed_group_ids"),
         (
-            {"group_prompt_overrides": {"WB": "Use local rules."}},
+            {"group_prompt_overrides": {"TEAM_B": "Use local rules."}},
             "unavailable_group",
-            "custom_agent.group_prompt_overrides.WB",
+            "custom_agent.group_prompt_overrides.TEAM_B",
         ),
         (
             {"custom_prompt": "Copy the Platform Runtime Contract here."},

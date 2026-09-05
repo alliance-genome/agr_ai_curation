@@ -285,14 +285,14 @@ def test_exact_resolution_preserves_every_output_state_without_reading_head(monk
     authorize, lookup = install_resolver(monkeypatch, [pin])
     db = Mock()
     original = flow(pin)
-    result = module.resolve_flow_execution_revisions(db, original, user_id=7, active_group_ids=["RGD"])
+    result = module.resolve_flow_execution_revisions(db, original, user_id=7, active_group_ids=["TEAM_C"])
     assert not result.findings
     assert result.definition.nodes[1].data.execution_receipt == pin
     assert result.definition is not original
     assert result.entries_by_node["node_0"]["produces_flow_artifacts"] == (mode is not None)
     db.execute.assert_not_called()
-    authorize.assert_called_once_with(db, pin.model_dump(mode="json"), 7, active_group_ids=["RGD"])
-    lookup.assert_called_once_with(db, pin.agent_id, pin.agent_revision_id, 7, active_group_ids=["RGD"])
+    authorize.assert_called_once_with(db, pin.model_dump(mode="json"), 7, active_group_ids=["TEAM_C"])
+    lookup.assert_called_once_with(db, pin.agent_id, pin.agent_revision_id, 7, active_group_ids=["TEAM_C"])
 
 
 def test_same_agent_different_revisions_do_not_collapse(monkeypatch):
@@ -369,7 +369,7 @@ def test_executor_builds_each_exact_pin_without_mutable_metadata(monkeypatch):
     saved_flow.name = "Saved flow"
     saved_flow.flow_definition = flow(first, second).model_dump(mode="json")
     original = saved_flow.flow_definition.copy()
-    _, names = executor.get_all_agent_tools(saved_flow, db_user_id=7, active_groups=["RGD"])
+    _, names = executor.get_all_agent_tools(saved_flow, db_user_id=7, active_groups=["TEAM_C"])
     assert len(names) == 2
     assert [call.kwargs["execution_revision_id"] for call in build.call_args_list] == [
         str(first.agent_revision_id), str(second.agent_revision_id),
@@ -407,13 +407,13 @@ def test_shared_batch_and_chat_access_guard_checks_each_saved_receipt(monkeypatc
     monkeypatch.setattr(execution_revision_service, "authorize_execution_receipt", authorize)
     definition = flow(first, second).model_dump(mode="json")
     assert agent_service.inaccessible_flow_agent_keys(Mock(), definition, user_id=7,
-                                                     active_group_ids=iter(["RGD"])) == []
+                                                     active_group_ids=iter(["TEAM_C"])) == []
     assert authorize.call_count == 2
-    assert all(call.kwargs["active_group_ids"] == ["RGD"] for call in authorize.call_args_list)
+    assert all(call.kwargs["active_group_ids"] == ["TEAM_C"] for call in authorize.call_args_list)
     current_lookup.assert_not_called()
     authorize.side_effect = [first, ValueError("Unauthorized revision")]
     assert agent_service.inaccessible_flow_agent_keys(Mock(), definition, user_id=7,
-                                                     active_group_ids=["RGD"]) == ["ca_fixture"]
+                                                     active_group_ids=["TEAM_C"]) == ["ca_fixture"]
 
 
 def test_http_preflight_returns_safe_node_findings_and_never_floats():
@@ -439,7 +439,7 @@ def test_ai_exact_flow_verification_uses_pinned_nodes_not_palette(monkeypatch):
     install_resolver(monkeypatch, [pin])
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(Mock()))
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
-    monkeypatch.setattr(flow_tools, "get_current_active_group_ids", lambda: ["RGD"])
+    monkeypatch.setattr(flow_tools, "get_current_active_group_ids", lambda: ["TEAM_C"])
     monkeypatch.setattr(flow_tools, "_accessible_flow_agents", lambda: {})
     mutable = Mock(side_effect=AssertionError("Current palette must not resolve saved custom nodes"))
     monkeypatch.setattr(flow_tools, "resolve_live_flow_agent", mutable)

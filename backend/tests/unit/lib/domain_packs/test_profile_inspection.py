@@ -33,7 +33,7 @@ def inspected_profile(example, monkeypatch):
     monkeypatch.setattr("src.lib.curation_workspace.execution_contracts.resolve_receipt_profile", lambda *args: profile)
     monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog", lambda **kwargs: [capability])
     arguments = dict(agent_id=receipt.agent_key, agent_revision_id=str(receipt.agent_revision_id),
-                     session_factory=lambda: db, user_id=7, active_group_ids=["FB"])
+                     session_factory=lambda: db, user_id=7, active_group_ids=["TEAM_A"])
     return receipt, profile, arguments, db, authorization_calls
 
 
@@ -53,7 +53,7 @@ def test_profile_plan_summary_and_pages_keep_exact_revision(inspected_profile):
     binding = inspection.get_domain_pack_validation_plan(**arguments, section="validator_bindings")["items"][0]
     assert binding["available"]
     assert binding["profile_validator_mapping"] == profile.contract.validator_mappings[0].model_dump(mode="json")
-    assert authorization_calls == [(7, ["FB"])] * 3
+    assert authorization_calls == [(7, ["TEAM_A"])] * 3
     assert db.close.call_count == 3
 
 
@@ -98,8 +98,8 @@ def test_custom_catalog_projects_saved_profile_and_current_capability_access(ins
                         lambda *args, **kwargs: receipt)
     if not available:
         monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog", lambda **kwargs: [])
-    pin, result = metadata.custom_agent_revision_metadata(db, receipt.agent_key, 7, active_group_ids=["FB"])
-    assert pin == receipt and calls == [(7, ["FB"])]
+    pin, result = metadata.custom_agent_revision_metadata(db, receipt.agent_key, 7, active_group_ids=["TEAM_A"])
+    assert pin == receipt and calls == [(7, ["TEAM_A"])]
     assert result["execution_receipt"] == receipt.model_dump(mode="json")
     assert result["generic_profile_ref"] == profile.receipt
     assert result["schema_refs"] == [] and result["model_definitions"] == []
@@ -121,5 +121,5 @@ def test_custom_catalog_without_structured_output_does_not_consult_template(insp
     receipt = receipt.model_copy(update={"output_contract": AgentOutputContract(output_state="none")})
     monkeypatch.setattr("src.lib.agent_studio.execution_revision_service.current_execution_receipt",
                         lambda *args, **kwargs: receipt)
-    assert custom_agent_revision_metadata(db, receipt.agent_key, 7, active_group_ids=["FB"]) == (receipt, None)
+    assert custom_agent_revision_metadata(db, receipt.agent_key, 7, active_group_ids=["TEAM_A"]) == (receipt, None)
     assert calls == []

@@ -44,12 +44,12 @@ def test_flow_defaults_resolve_node_receipt_not_global_generic_bindings(example,
     node.data.execution_receipt = context.receipt
     hydrated = validation_attachments.apply_flow_validation_attachment_defaults(definition, entries_by_node={node.id: {
         "curation": {"domain_pack_id": "generic"}, "execution_receipt": context.receipt.model_dump(mode="json"),
-        "authenticated_group_ids": ["FB"],
+        "authenticated_group_ids": ["TEAM_A"],
     }})
     group, = hydrated.nodes[1].data.validation_groups
     assert group.binding_id == context.registry.bindings[0].binding_id
     assert group.state == "automatic"
-    assert groups == [("FB",)]
+    assert groups == [("TEAM_A",)]
 
 
 @pytest.mark.asyncio

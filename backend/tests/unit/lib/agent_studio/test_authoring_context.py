@@ -148,10 +148,10 @@ def test_chat_request_accepts_exact_flow_and_workshop_snapshots():
         draft_description="Description",
         draft_icon="science",
         draft_visibility="private",
-        draft_allowed_group_ids=["FB", "WB"],
+        draft_allowed_group_ids=["TEAM_A", "TEAM_B"],
         inherited_allowed_group_ids=[],
         prompt_draft="Use exact evidence.",
-        group_prompt_overrides={"WB": "Use WormBase conventions."},
+        group_prompt_overrides={"TEAM_B": "Use Team B conventions."},
         include_group_rules=True,
         draft_tool_ids=["read_chunk", "search_document"],
         draft_output_schema_key="gene",
@@ -171,7 +171,7 @@ def test_chat_request_accepts_exact_flow_and_workshop_snapshots():
     assert request.context.flow_definition.nodes[0].position == {"x": 250.0, "y": 100.0}
     assert request.context.agent_workshop is not None
     assert request.context.agent_workshop.group_prompt_overrides == {
-        "WB": "Use WormBase conventions."
+        "TEAM_B": "Use Team B conventions."
     }
 
 

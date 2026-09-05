@@ -114,7 +114,13 @@ def upgrade():
           FROM jsonb_array_elements(f.flow_definition->'nodes') WITH ORDINALITY AS n(node, ordinal)
           LEFT JOIN agents a ON a.agent_key = node #>> '{data,agent_id}' AND starts_with(a.agent_key, 'ca_')
           LEFT JOIN agent_execution_revisions r ON r.id = a.execution_revision_id AND r.agent_id = a.id
-        )) WHERE jsonb_typeof(f.flow_definition->'nodes') = 'array';
+        )) WHERE jsonb_typeof(f.flow_definition->'nodes') = 'array'
+          AND EXISTS (
+            SELECT 1 FROM jsonb_array_elements(f.flow_definition->'nodes') node
+            WHERE starts_with(COALESCE(node #>> '{data,agent_id}', ''), 'ca_')
+               OR node #>> '{data,agent_revision_id}' IS NOT NULL
+               OR node #>> '{data,execution_receipt}' IS NOT NULL
+          );
     """)
 
 

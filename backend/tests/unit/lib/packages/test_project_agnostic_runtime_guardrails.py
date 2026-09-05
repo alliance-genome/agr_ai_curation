@@ -126,6 +126,17 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Immutable execution migrations preserve the shipped Alliance group prompts
+    # and packaged builder identities, including historical access boundaries.
+    Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),
+    Path("backend/tests/integration/persistence/test_domain_output_contract_persistence.py"),
+    Path("backend/tests/unit/lib/agent_studio/test_domain_output_contract.py"),
+    # Exercise the installed Alliance builder catalog and opt-in gene/reference
+    # validator capabilities, not a fabricated validator for generic profiles.
+    Path("backend/tests/unit/lib/agent_studio/test_workshop_authoring.py"),
+    Path("backend/tests/unit/lib/agent_studio/test_profile_mappings.py"),
+    Path("backend/tests/unit/lib/domain_packs/test_profile_validation.py"),
+    Path("backend/tests/unit/lib/domain_packs/test_profile_materialization.py"),
     # Group-tool policy contract covers Alliance package/provider examples.
     Path("backend/tests/contract/alliance/agents/test_group_tool_policy_contract.py"),
     Path("backend/tests/unit/lib/agent_studio/test_group_tool_policy.py"),

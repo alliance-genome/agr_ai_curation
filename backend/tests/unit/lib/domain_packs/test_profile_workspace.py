@@ -37,7 +37,7 @@ def test_prep_checks_live_profile_access_without_open_generic_fallback(example, 
                             lambda *args, **kwargs: pytest.fail("Prep reran inline validators"))
     revision = pipeline._refresh_domain_envelope_validation_for_ref(
         db, SimpleNamespace(envelope_id=source.envelope_id, envelope_revision=1),
-        runtime_context=ValidatorRuntimeContext(authenticated_groups=("FB",)),
+        runtime_context=ValidatorRuntimeContext(authenticated_groups=("TEAM_A",)),
     )
     assert revision == 2
     saved = checkpoints[0].envelope

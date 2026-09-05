@@ -17,6 +17,7 @@ from .test_generic_profile_persistence import profile_db  # noqa: F401
 
 @pytest.fixture
 def consumers_db(execution_db, monkeypatch):  # noqa: F811
+    monkeypatch.setattr("src.lib.config.groups_loader.get_valid_group_ids", lambda: ["TEAM_A"])
     db, agent_id, other_id, profile = execution_db
     monkeypatch.setattr(custom_agent_service, "_system_managed_tool_ids", lambda *_: [])
     monkeypatch.setattr(service, "get_project_ids_for_user", lambda *_: [])
@@ -45,7 +46,7 @@ def consumers_db(execution_db, monkeypatch):  # noqa: F811
     _, second_profile, _ = generic_profile_service.revise_profile(
         db, profile.profile_id, 1, {**profile.contract, "description": "New revision"}, expected_revision=1,
     )
-    second = save(agent, second_profile, ["FB"])
+    second = save(agent, second_profile, ["TEAM_A"])
     flows = [CurationFlow(user_id=owner, name=name, flow_definition={"nodes": [], "edges": []})
              for owner, name in [(1, "Older pin"), (2, "Hidden flow"), (1, "Restricted pin")]]
     db.add_all(flows)
@@ -65,7 +66,7 @@ def test_consumer_history_flow_pins_and_group_filtering(consumers_db):
         ("agent", first.id, 1), ("flow", first.id, 1),
     ]
     assert all(not row.is_current_agent_revision for row in page.consumers)
-    visible = service.list_profile_consumers(db, profile.profile_id, 1, active_group_ids=["FB"])
+    visible = service.list_profile_consumers(db, profile.profile_id, 1, active_group_ids=["TEAM_A"])
     assert len(visible.consumers) == 4
     assert {row.name for row in visible.consumers} == {agent.name, "Older pin", "Restricted pin"}
     assert any(row.is_current_agent_revision and row.agent_revision_id == second.id for row in visible.consumers)
@@ -93,7 +94,7 @@ def test_archived_profiles_and_consumers_remain_inspectable(consumers_db):
     page = service.list_profile_consumers(db, profile.profile_id, 1, active_group_ids=[])
     assert len(page.consumers) == 2 and all(row.archived for row in page.consumers)
     with pytest.raises(generic_profile_service.ProfileNotFoundError):
-        service.list_profile_consumers(db, profile.profile_id, 3, active_group_ids=["FB"])
+        service.list_profile_consumers(db, profile.profile_id, 3, active_group_ids=["TEAM_A"])
 
 
 def test_project_membership_is_required_even_for_a_flow_owner(consumers_db, monkeypatch):

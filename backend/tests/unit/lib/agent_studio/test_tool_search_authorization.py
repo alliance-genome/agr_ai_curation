@@ -13,9 +13,10 @@ def _policy(name: str, *, visible=True, executable=True, groups=None):
 
 
 def test_compiler_filters_policy_before_declaration_and_is_deterministic(monkeypatch):
+    monkeypatch.setattr("src.lib.config.groups_loader.get_valid_group_ids", lambda: ["TEAM_C"])
     policies = [
         _policy("blocked", executable=False),
-        _policy("group_only", groups=["RGD"]),
+        _policy("group_only", groups=["TEAM_C"]),
     ]
     policy_service = SimpleNamespace(
         list_all=lambda _db: [_policy("blocked", executable=True)],

@@ -13,6 +13,14 @@ from src.lib.agent_studio.execution_snapshot import (
 from src.schemas.agent_execution_revision import AgentOutputContract
 
 
+@pytest.fixture(autouse=True)
+def configured_test_groups(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.config.groups_loader.get_valid_group_ids",
+        lambda: ["TEAM_A", "TEAM_B"],
+    )
+
+
 def agent():
     return SimpleNamespace(
         id=uuid4(),
@@ -26,8 +34,8 @@ def agent():
         model_temperature=0.0,
         model_reasoning=None,
         group_tool_policy={"rules": []},
-        allowed_group_ids=["FB"],
-        inherited_allowed_group_ids=["FB"],
+        allowed_group_ids=["TEAM_A"],
+        inherited_allowed_group_ids=["TEAM_A"],
         group_rules_enabled=False,
         group_prompt_overrides={},
     )
@@ -56,9 +64,9 @@ def test_capture_scratch_none_and_render_never_reads_mutable_head(monkeypatch):
     head.group_rules_enabled = True
     head.group_rules_component = "changed-component"
     head.template_source = "changed-template"
-    head.group_prompt_overrides = {"FB": "Changed"}
+    head.group_prompt_overrides = {"TEAM_A": "Changed"}
     head.group_tool_policy = {
-        "rules": [{"group_id": "FB", "tool_ids": ["changed-tool"]}]
+        "rules": [{"group_id": "TEAM_A", "tool_ids": ["changed-tool"]}]
     }
     monkeypatch.setattr(
         cache,
@@ -85,16 +93,16 @@ def test_group_layers_are_frozen_and_selected_per_run(monkeypatch):
     monkeypatch.setattr(
         catalog_service, "_inherited_curation_definition_for_db_agent", lambda _: None
     )
-    monkeypatch.setattr(groups_loader, "get_valid_group_ids", lambda: ["FB", "WB"])
+    monkeypatch.setattr(groups_loader, "get_valid_group_ids", lambda: ["TEAM_A", "TEAM_B"])
     head = agent()
     head.group_rules_enabled = True
-    head.group_prompt_overrides = {"FB": "Saved FB rules", "WB": "Saved WB rules"}
+    head.group_prompt_overrides = {"TEAM_A": "Saved TEAM_A rules", "TEAM_B": "Saved TEAM_B rules"}
     saved = capture_execution_snapshot(
         None, head, AgentOutputContract(output_state="none")
     )
-    head.group_prompt_overrides["FB"] = "Today's changed rules"
-    fb = saved_runtime_prompt_bundle(saved, active_groups=["FB"]).render()
-    assert "Saved FB rules" in fb and "Saved WB rules" not in fb
+    head.group_prompt_overrides["TEAM_A"] = "Today's changed rules"
+    fb = saved_runtime_prompt_bundle(saved, active_groups=["TEAM_A"]).render()
+    assert "Saved TEAM_A rules" in fb and "Saved TEAM_B rules" not in fb
     assert "Today's changed rules" not in fb
 
 

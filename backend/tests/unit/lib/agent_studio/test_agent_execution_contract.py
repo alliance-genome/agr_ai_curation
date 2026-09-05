@@ -14,6 +14,14 @@ from src.schemas.agent_execution_revision import (
 )
 
 
+@pytest.fixture(autouse=True)
+def configured_test_groups(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.config.groups_loader.get_valid_group_ids",
+        lambda: ["TEAM_A", "TEAM_B"],
+    )
+
+
 def profile_ref():
     return {
         "profile_id": str(uuid4()),
@@ -111,8 +119,8 @@ def snapshot():
         "tool_ids": ["read_document"],
         "system_managed_tool_ids": ["read_document"],
         "group_tool_policy": {"rules": []},
-        "allowed_group_ids": ["FB"],
-        "inherited_allowed_group_ids": ["FB"],
+        "allowed_group_ids": ["TEAM_A"],
+        "inherited_allowed_group_ids": ["TEAM_A"],
         "group_rules_enabled": False,
         "group_rules_component": None,
         "group_prompt_overrides": {},
@@ -148,7 +156,7 @@ def test_snapshot_preserves_zero_temperature_and_all_material_fields():
     [
         {"instructions": "Changed without updating the hash"},
         {"allowed_group_ids": []},
-        {"allowed_group_ids": ["WB"]},
+        {"allowed_group_ids": ["TEAM_B"]},
         {"tool_ids": []},
     ],
 )

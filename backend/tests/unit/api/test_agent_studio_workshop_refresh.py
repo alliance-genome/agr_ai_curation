@@ -140,8 +140,8 @@ async def test_refresh_workshop_metadata_chunks_exact_oversized_values(monkeypat
             getting_started_mode="clone",
             draft_name="Exact name",
             draft_description=description,
-            draft_allowed_group_ids=["WB", "FB"],
-            group_prompt_overrides={"WB": "rules", "FB": "other rules"},
+            draft_allowed_group_ids=["TEAM_B", "TEAM_A"],
+            group_prompt_overrides={"TEAM_B": "rules", "TEAM_A": "other rules"},
             draft_tool_ids=[f"tool-{index}" for index in range(40)],
             draft_output_schema_key="gene",
             draft_is_dirty=True,
@@ -170,7 +170,7 @@ async def test_refresh_workshop_metadata_chunks_exact_oversized_values(monkeypat
     metadata = json.loads("".join(chunks))
     assert metadata["draft_description"] == description
     assert metadata["draft_tool_ids"] == [f"tool-{index}" for index in range(40)]
-    assert metadata["group_prompt_override_ids"] == ["FB", "WB"]
+    assert metadata["group_prompt_override_ids"] == ["TEAM_A", "TEAM_B"]
 
 
 @pytest.mark.asyncio

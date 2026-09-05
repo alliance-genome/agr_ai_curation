@@ -97,6 +97,37 @@ def test_migration_pins_four_states_and_preserves_unresolved_and_system_nodes(fl
     assert flow.flow_definition["nodes"][4:] == nodes[4:]
 
 
+def test_migration_does_not_update_packaged_only_flows(flow_db):
+    db, agent, _, _ = flow_db
+    original = CurationFlow(user_id=1, name="Original packaged flow", flow_definition={
+        "nodes": [legacy_node("pdf_extraction")], "edges": [],
+    })
+    custom = CurationFlow(user_id=1, name="Custom baseline", flow_definition={
+        "nodes": [legacy_node(agent.agent_key)], "edges": [],
+    })
+    db.add_all([original, custom])
+    db.flush()
+    original_id, custom_id = original.id, custom.id
+    before = db.scalar(sa.text("SELECT row_to_json(f)::text FROM curation_flows f WHERE id = :id"), {"id": original_id})
+    # Witness every UPDATE, including no-op writes that would generate an
+    # audit entry on deployed databases. Content equality alone is insufficient.
+    db.execute(sa.text("""
+        CREATE TABLE flow_update_witness (flow_id uuid NOT NULL);
+        CREATE FUNCTION record_flow_update_witness() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO flow_update_witness VALUES (NEW.id);
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER record_flow_update_witness AFTER UPDATE ON curation_flows
+          FOR EACH ROW EXECUTE FUNCTION record_flow_update_witness();
+    """))
+    migrate(db)
+    assert db.execute(sa.text("SELECT flow_id FROM flow_update_witness")).scalars().all() == [custom_id]
+    assert db.scalar(sa.text("SELECT row_to_json(f)::text FROM curation_flows f WHERE id = :id"), {"id": original_id}) == before
+    assert db.get(CurationFlowAgentRevision, (original_id, "node_0")) is None
+    assert db.get(CurationFlowAgentRevision, (custom_id, "node_0")) is not None
+
+
 def pinned_flow(db, agent):
     receipt = current_execution_receipt(db, agent.agent_key, 1, active_group_ids=[])
     node = legacy_node(agent.agent_key)

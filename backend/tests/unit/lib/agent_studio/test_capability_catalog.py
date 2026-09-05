@@ -30,6 +30,12 @@ def _agent(agent_id: str, *, visibility: str, user_id: int | None = None):
 
 @pytest.fixture
 def sources(monkeypatch):
+    from src.lib.config import groups_loader
+
+    # Catalog extensions still load installed package definitions. Keep their
+    # configured groups while adding neutral groups for these policy fixtures.
+    configured_groups = groups_loader.get_valid_group_ids()
+    monkeypatch.setattr(groups_loader, "get_valid_group_ids", lambda: [*configured_groups, "TEAM_A", "TEAM_C"])
     agents = [
         _agent("system_agent", visibility="system"),
         _agent("ca_owned", visibility="private", user_id=7),
@@ -104,7 +110,7 @@ def test_schema_null_builder_is_an_explicit_output_capability(sources, monkeypat
         calls.append((agent_key, active_group_ids))
         return ref if agent_key == "system_agent" else None
     monkeypatch.setattr(catalog, "domain_extraction_ref_for_agent", resolve)
-    context = catalog.CapabilityCatalogContext(user_id=7, active_group_ids=("FB",))
+    context = catalog.CapabilityCatalogContext(user_id=7, active_group_ids=("TEAM_A",))
     records = catalog.build_authorized_capability_catalog(db=object(), context=context)
     builders = [item for item in records if item.kind == "output_contract" and item.detail.get("contract_kind") == "packaged_builder"]
     assert len(builders) == 1
@@ -115,7 +121,7 @@ def test_schema_null_builder_is_an_explicit_output_capability(sources, monkeypat
         "output_schema_key": None, "domain_extraction_ref": ref.model_dump(),
     }
     assert builder.selectable
-    assert calls == [("system_agent", ["FB"])]  # custom agents cannot advertise installed capabilities
+    assert calls == [("system_agent", ["TEAM_A"])]  # custom agents cannot advertise installed capabilities
 
 
 def test_unauthorized_builder_is_not_projected_as_an_output_choice(sources, monkeypatch):
@@ -225,7 +231,7 @@ def test_catalog_projects_live_models_tools_and_registered_output_contracts(
             curator_visible=True,
             allow_attach=True,
             allow_execute=True,
-            config={"allowed_group_ids": ["RGD"]},
+            config={"allowed_group_ids": ["TEAM_C"]},
         ),
         SimpleNamespace(
             tool_key="blocked_tool",
@@ -262,7 +268,7 @@ def test_catalog_projects_live_models_tools_and_registered_output_contracts(
     records = catalog.build_authorized_capability_catalog(
         db=object(),
         context=catalog.CapabilityCatalogContext(
-            user_id=7, active_group_ids=("RGD",)
+            user_id=7, active_group_ids=("TEAM_C",)
         ),
     )
     indexed = {(record.kind, record.resource_id): record for record in records}
