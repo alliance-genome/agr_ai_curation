@@ -16,9 +16,11 @@ def test_snapshot_handoff_openapi_exposes_only_the_reviewed_v1_shapes():
     )
     download_path = "/api/curation-workspace/benchmark-snapshots/{snapshot_id}/download"
     handoff_path = "/api/curation-workspace/benchmark-snapshots/{snapshot_id}/handoffs"
+    destinations_path = "/api/curation-workspace/benchmark-destinations"
     assert "post" in document["paths"][create_path]
     assert "get" in document["paths"][download_path]
     assert "post" in document["paths"][handoff_path]
+    assert "get" in document["paths"][destinations_path]
 
     schemas = document["components"]["schemas"]
     download_schema = document["paths"][download_path]["get"]["responses"]["200"][
@@ -66,3 +68,7 @@ def test_snapshot_handoff_openapi_exposes_only_the_reviewed_v1_shapes():
         "redirect_path",
     }
     assert "destination_url" not in str(schemas)
+    assert set(schemas["CurationBenchmarkDestination"]["properties"]) == {
+        "destination_id",
+        "label",
+    }

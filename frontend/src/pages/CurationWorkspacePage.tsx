@@ -37,6 +37,7 @@ import {
 import AddManualObjectDialog, {
   type ManualObjectDraft,
 } from '@/features/curation/workspace/AddManualObjectDialog'
+import BenchmarkSnapshotDialog from '@/features/curation/workspace/BenchmarkSnapshotDialog'
 import type {
   CurationCandidate,
   DomainEnvelopeValidationFindingProjection,
@@ -211,6 +212,7 @@ function CurationWorkspacePageContent({
   const [manualObjectCreating, setManualObjectCreating] = useState(false)
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
   const [submissionWipDialogOpen, setSubmissionWipDialogOpen] = useState(false)
+  const [benchmarkSnapshotDialogOpen, setBenchmarkSnapshotDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
   const [decidingCandidateIds, setDecidingCandidateIds] = useState<Set<string>>(new Set())
   const envelopeRowsQueryOptions = useMemo(
@@ -253,6 +255,15 @@ function CurationWorkspacePageContent({
   const expectedEnvelopeRevisions = useMemo(
     () => buildWorkspaceExpectedEnvelopeRevisions(candidates),
     [candidates],
+  )
+  const benchmarkEnvelopeOptions = useMemo(
+    () => Object.entries(expectedEnvelopeRevisions)
+      .map(([envelopeId, revision]) => ({ envelopeId, revision }))
+      .sort((left, right) => left.envelopeId.localeCompare(right.envelopeId)),
+    [expectedEnvelopeRevisions],
+  )
+  const hasUnsavedEnvelopeChanges = autosave.isDirty || candidates.some(
+    (candidate) => candidate.draft.fields.some((field) => field.dirty),
   )
   const horizontalGridModel = useMemo(
     () => buildHorizontalGridModel({ candidates, envelopeReviewRows: envelopeObjectRows }),
@@ -599,6 +610,22 @@ function CurationWorkspacePageContent({
                     queueRequest={queueNavigationState?.queueRequest}
                   />
                   <Button
+                    onClick={() => setBenchmarkSnapshotDialogOpen(true)}
+                    size="small"
+                    variant="outlined"
+                    sx={{
+                      borderRadius: 1,
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      letterSpacing: 0,
+                      minHeight: 32,
+                      py: 0.5,
+                      textTransform: 'none',
+                    }}
+                  >
+                    Send snapshot to Benchmark
+                  </Button>
+                  <Button
                     onClick={() => {
                       if (SUBMISSION_PREVIEW_ENABLED) {
                         setSubmissionDialogOpen(true)
@@ -668,6 +695,14 @@ function CurationWorkspacePageContent({
           session={workspace.session}
         />
       ) : null}
+
+      <BenchmarkSnapshotDialog
+        envelopes={benchmarkEnvelopeOptions}
+        hasUnsavedChanges={hasUnsavedEnvelopeChanges}
+        onClose={() => setBenchmarkSnapshotDialogOpen(false)}
+        open={benchmarkSnapshotDialogOpen}
+        sessionId={workspace.session.session_id}
+      />
 
       {/* Submission preview is intentionally disabled while the export/submit workflow is being rebuilt. */}
       <Dialog

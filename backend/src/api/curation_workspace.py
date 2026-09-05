@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
-from typing import Annotated, Callable, NoReturn, TypeVar
+from typing import Annotated, Any, Callable, NoReturn, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -21,6 +21,7 @@ from src.lib.curation_workspace.benchmark_snapshots import (
     CurationBenchmarkSnapshotError,
     create_benchmark_snapshot,
     handoff_benchmark_snapshot,
+    list_benchmark_handoff_destinations,
     load_benchmark_snapshot_bytes,
 )
 from src.lib.curation_workspace.curation_prep_invocation import (
@@ -81,6 +82,7 @@ from src.schemas.curation_workspace import (
     CurationCandidateValidationRequest,
     CurationCandidateValidationResponse,
     CurationBenchmarkErrorResponse,
+    CurationBenchmarkDestinationListResponse,
     CurationBenchmarkHandoffRequest,
     CurationBenchmarkHandoffResponse,
     CurationBenchmarkSnapshotBundleV1,
@@ -352,10 +354,25 @@ def _sanitized_snapshot_persistence_error(
         return sanitized
 
 
-_BENCHMARK_ERROR_RESPONSES = {
+_BENCHMARK_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     code: {"model": CurationBenchmarkErrorResponse}
     for code in (400, 404, 409, 413, 500, 503)
 }
+
+
+@router.get(
+    "/benchmark-destinations",
+    response_model=CurationBenchmarkDestinationListResponse,
+    responses=_BENCHMARK_ERROR_RESPONSES,
+)
+async def get_benchmark_destinations(
+    user: dict = get_auth_dependency(),
+) -> CurationBenchmarkDestinationListResponse:
+    _require_current_user_id(user)
+    try:
+        return list_benchmark_handoff_destinations()
+    except CurationBenchmarkSnapshotError as exc:
+        _raise_benchmark_error(exc)
 
 
 @router.post(

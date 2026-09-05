@@ -13,6 +13,8 @@ from src.schemas.curation_prep import (
     CurationPrepChatRunResponse,
 )
 from src.schemas.curation_workspace import (
+    CurationBenchmarkDestination,
+    CurationBenchmarkDestinationListResponse,
     CurationBenchmarkHandoffRequest,
     CurationBenchmarkHandoffResponse,
     CurationBenchmarkSnapshotCreateRequest,
@@ -59,6 +61,23 @@ class _TransactionSpy:
 
     def in_transaction(self):
         return True
+
+
+@pytest.mark.asyncio
+async def test_get_benchmark_destinations_returns_only_display_safe_configuration(monkeypatch):
+    expected = CurationBenchmarkDestinationListResponse(
+        destinations=[
+            CurationBenchmarkDestination(destination_id="portal", label="Alliance Benchmark")
+        ]
+    )
+    monkeypatch.setattr(module, "list_benchmark_handoff_destinations", lambda: expected)
+
+    result = await module.get_benchmark_destinations(user={"sub": "curator-1"})
+
+    assert result is expected
+    assert result.model_dump() == {
+        "destinations": [{"destination_id": "portal", "label": "Alliance Benchmark"}]
+    }
 
 
 @pytest.mark.asyncio

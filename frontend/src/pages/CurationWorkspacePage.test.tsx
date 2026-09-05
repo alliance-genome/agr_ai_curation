@@ -17,11 +17,14 @@ import CurationWorkspacePage from './CurationWorkspacePage'
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
   createManualCurationCandidate: vi.fn(),
+  createCurationBenchmarkSnapshot: vi.fn(),
   executeCurationSubmission: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
+  fetchBenchmarkDestinations: vi.fn(),
   fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
   fetchSubmissionPreview: vi.fn(),
   patchCurationEnvelopeField: vi.fn(),
+  handoffCurationBenchmarkSnapshot: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
   renderPdfViewer: vi.fn(),
   submitCurationCandidateDecision: vi.fn(),
@@ -54,11 +57,14 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
     return Array.from(requestsByKey.values())
   },
   createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
+  createCurationBenchmarkSnapshot: serviceMocks.createCurationBenchmarkSnapshot,
   executeCurationSubmission: serviceMocks.executeCurationSubmission,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
+  fetchBenchmarkDestinations: serviceMocks.fetchBenchmarkDestinations,
   fetchCurationWorkspaceEnvelopeReviewRows: serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
   fetchSubmissionPreview: serviceMocks.fetchSubmissionPreview,
   patchCurationEnvelopeField: serviceMocks.patchCurationEnvelopeField,
+  handoffCurationBenchmarkSnapshot: serviceMocks.handoffCurationBenchmarkSnapshot,
   submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
   updateCurationSession: serviceMocks.updateCurationSession,
   validateAllCurationSessionCandidates: serviceMocks.validateAllCurationSessionCandidates,
@@ -556,11 +562,17 @@ describe('CurationWorkspacePage', () => {
     HTMLElement.prototype.scrollIntoView = vi.fn()
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.createManualCurationCandidate.mockReset()
+    serviceMocks.createCurationBenchmarkSnapshot.mockReset()
     serviceMocks.executeCurationSubmission.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
+    serviceMocks.fetchBenchmarkDestinations.mockReset()
+    serviceMocks.fetchBenchmarkDestinations.mockResolvedValue({
+      destinations: [{ destination_id: 'portal', label: 'Alliance Benchmark' }],
+    })
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReset()
     serviceMocks.fetchSubmissionPreview.mockReset()
     serviceMocks.patchCurationEnvelopeField.mockReset()
+    serviceMocks.handoffCurationBenchmarkSnapshot.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.submitCurationCandidateDecision.mockReset()
@@ -958,6 +970,22 @@ describe('CurationWorkspacePage', () => {
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
+  })
+
+  it('offers benchmark snapshots for persisted pending envelopes regardless of validation state', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildEnvelopeWorkspace())
+
+    renderPage('/curation/session-1')
+
+    const action = await screen.findByRole('button', { name: 'Send snapshot to Benchmark' })
+    await userEvent.click(action)
+
+    expect(await screen.findByRole('dialog', { name: 'Send snapshot to Benchmark' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Persisted envelope' })).toHaveTextContent(
+      'tmem67-envelope · revision 4',
+    )
+    expect(screen.getByText(/Validation and approval status do not affect eligibility/)).toBeInTheDocument()
+    expect(serviceMocks.fetchBenchmarkDestinations).toHaveBeenCalledTimes(1)
   })
 
   it('shows a work-in-progress message instead of loading submission preview', async () => {
