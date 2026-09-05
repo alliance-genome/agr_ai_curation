@@ -38,15 +38,15 @@ def catalog(monkeypatch):
 
 def test_custom_pin_survives_head_advance_and_does_not_change_with_rename(catalog):
     base, agent, revision, saved, visible, authorize = catalog
-    first = custom_validator_capabilities([base], user_id=7, active_group_ids=['FB'])[0]
+    first = custom_validator_capabilities([base], user_id=7, active_group_ids=['GROUP_A'])[0]
     assert first.ref.binding_id.endswith(str(revision.id))
     assert first.binding.raw['custom_validator']['fingerprint'] == revision.fingerprint
     authorize.assert_called_once()
     assert authorize.call_args.args[3] == 7
-    assert authorize.call_args.kwargs['active_group_ids'] == ['FB']
+    assert authorize.call_args.kwargs['active_group_ids'] == ['GROUP_A']
     agent.name = 'Renamed lookup'
     visible.return_value = []  # archived or no longer the current head; explicitly saved pin remains discoverable
-    pinned = custom_validator_capabilities([base], user_id=7, active_group_ids=['FB'], references=[first.ref])[0]
+    pinned = custom_validator_capabilities([base], user_id=7, active_group_ids=['GROUP_A'], references=[first.ref])[0]
     assert pinned.fingerprint() == first.fingerprint()
     assert pinned.binding.display_name == 'Renamed lookup'
     assert not pinned.binding.batch_enabled
@@ -74,7 +74,7 @@ def test_no_caller_never_discovers_custom_agents(catalog):
 def test_dispatch_reauthorizes_exact_revision_and_rejects_changed_identity(monkeypatch):
     from src.lib.agent_studio import custom_profile_validators as service, catalog_service
     pin = {'agent_key': 'ca_saved', 'revision_id': str(uuid4()), 'fingerprint': 'sha256:expected'}
-    context = SimpleNamespace(user_id='request-sub', document_id='paper', authenticated_groups=('FB',))
+    context = SimpleNamespace(user_id='request-sub', document_id='paper', authenticated_groups=('GROUP_A',))
     resolve = MagicMock(return_value=7)
     monkeypatch.setattr(service, 'runtime_validator_user_id', resolve)
     agent = SimpleNamespace(execution_receipt={'fingerprint': pin['fingerprint']})
@@ -83,7 +83,7 @@ def test_dispatch_reauthorizes_exact_revision_and_rejects_changed_identity(monke
     assert service.build_custom_validator_agent(pin, context) is agent
     resolve.assert_called_with('request-sub')
     build.assert_called_once_with('ca_saved', execution_revision_id=pin['revision_id'], db_user_id=7,
-                                  user_id='request-sub', document_id='paper', authenticated_groups=['FB'])
+                                  user_id='request-sub', document_id='paper', authenticated_groups=['GROUP_A'])
     agent.execution_receipt['fingerprint'] = 'sha256:changed'
     with pytest.raises(ValueError, match='fingerprint'):
         service.build_custom_validator_agent(pin, context)

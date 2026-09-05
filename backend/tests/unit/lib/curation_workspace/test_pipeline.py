@@ -249,7 +249,8 @@ def _make_envelope_prep_output(*, review_row_count: int = 1) -> CurationPrepAgen
 
 @pytest.fixture(autouse=True)
 def _stub_domain_envelope_review_row_materializer(monkeypatch):
-    def _fake_materialize(_db, envelope_id, *, revision=None, materializer=None, active_group_ids=()):
+    def _fake_materialize(_db, envelope_id, *, revision=None, materializer=None, active_group_ids=(), user_id=None):
+        assert user_id == "user-1"
         row_count = int(str(envelope_id).rsplit("-", 1)[-1])
         envelope_revision = revision or 1
         rows = []
@@ -830,7 +831,8 @@ metadata:
         prep_output=prep_output,
     )
 
-    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None, active_group_ids=()):
+    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None, active_group_ids=(), user_id=None):
+        assert user_id == "user-1"
         assert envelope_id == "env-validation-1"
         assert revision == 2
         envelope_row = db.get(DomainEnvelopeModel, envelope_id)
@@ -966,7 +968,8 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
         prep_output=prep_output,
     )
 
-    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None, active_group_ids=()):
+    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None, active_group_ids=(), user_id=None):
+        assert user_id == "user-1"
         assert db is db_session
         assert envelope_id == "env-review-1"
         assert revision == 4

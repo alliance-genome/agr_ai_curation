@@ -177,7 +177,7 @@ async def test_get_chat_prep_preview_maps_value_error_to_sanitized_http_400(monk
 
 @pytest.mark.asyncio
 async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: MagicMock(id=7))
     expected = DomainEnvelopeReviewRowsResponse(
         envelope_id="env-1",
         envelope_revision=2,
@@ -186,7 +186,8 @@ async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeyp
     )
     captured: dict[str, object] = {}
 
-    def _materialize(db, envelope_id, *, revision=None, active_group_ids=()):
+    def _materialize(db, envelope_id, *, revision=None, active_group_ids=(), user_id=None):
+        captured["user_id"] = user_id
         captured["db"] = db
         captured["envelope_id"] = envelope_id
         captured["revision"] = revision
@@ -202,6 +203,7 @@ async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeyp
         db=object(),
     )
 
+    assert captured["user_id"] == 7
     assert response is expected
     assert captured["envelope_id"] == "env-1"
     assert captured["revision"] == 2
