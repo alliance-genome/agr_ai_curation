@@ -1,6 +1,7 @@
 """Trusted human admission, separate from orchestration and source credentials."""
 
-from typing import Any
+import logging
+from typing import Any, NoReturn
 
 from anyio.to_thread import run_sync
 from fastapi import Depends, Header, HTTPException, Request
@@ -11,10 +12,23 @@ from src.api import auth as browser_auth
 from src.api.benchmark_auth import require_benchmark_run
 from src.lib.benchmarks.curator_authorization import authorize_benchmark_curator
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext, capture_curator_context
+from src.lib.benchmarks.observability import sanitized_benchmark_error
+from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import get_benchmark_curator_auth_max_bytes
 from src.lib.security.redaction import active_secret_redaction
 from src.models.sql.database import SessionLocal
 from src.models.sql.user import User
+
+logger = logging.getLogger(__name__)
+
+
+def _unavailable(exc: Exception, operation: str) -> NoReturn:
+    raise_sanitized_http_exception(
+        logger, status_code=503,
+        detail=_failure(503, "curator_authorization_unavailable").detail,
+        log_message="Benchmark curator authorization unavailable",
+        exc=sanitized_benchmark_error(operation, type(exc).__name__),
+    )
 
 
 def _failure(status: int, code: str) -> HTTPException:
@@ -54,8 +68,8 @@ async def require_benchmark_curator(
             principal = provider.extract_principal(await provider.validate_token(token))
     except InvalidTokenError:
         raise _failure(401, "invalid_curator_authorization") from None
-    except Exception:
-        raise _failure(503, "curator_authorization_unavailable") from None
+    except Exception as exc:
+        _unavailable(exc, "curator_token_validation")
     finally:
         del token, cookie, curator_authorization
 
@@ -80,5 +94,5 @@ async def require_benchmark_curator(
         return await authorize_benchmark_curator(context)
     except PermissionError:
         raise _failure(403, "curator_authorization_required") from None
-    except Exception:
-        raise _failure(503, "curator_authorization_unavailable") from None
+    except Exception as exc:
+        _unavailable(exc, "curator_current_authorization")

@@ -72,6 +72,55 @@ async def test_catalog_change_does_not_revalidate_accepted_replay(monkeypatch, c
 
 
 @pytest.mark.asyncio
+async def test_catalog_failure_reports_sanitized_error_and_keeps_durable_replay(monkeypatch):
+    value = _payload()
+    plan = resolve_suite(validate_suite(value), _catalog(), max_cases=100,
+                         max_configurations=100, max_repetitions=100, max_cells=10000)
+    session = MagicMock()
+    session.__enter__.return_value = session
+    reservation = SimpleNamespace(outcome="pending")
+    repository = Mock()
+    repository.reserve_idempotency.return_value = (reservation, True)
+    monkeypatch.setattr(lifecycle, "BenchmarkRepository", Mock(return_value=repository))
+    catalog = Mock(side_effect=ValueError("private-paper-content sql-parameters bearer-value"))
+    monkeypatch.setattr("src.lib.benchmarks.runtime_catalog.build_curator_route_catalog", catalog)
+    reporter = Mock()
+    monkeypatch.setattr(lifecycle, "report_runtime_exception", reporter)
+    materialize = AsyncMock()
+    monkeypatch.setattr(lifecycle, "materialize_plan_inputs", materialize)
+    arguments: dict[str, Any] = dict(
+        session_factory=Mock(return_value=session), owner_subject="owner", service_principal="owner",
+        idempotency_key="same-request", suite_value=value, submitted_plan=plan,
+        route_catalog=None, input_catalog=Mock(), source_context=Mock(), snapshot_store=Mock(),
+        curator_context=BenchmarkCuratorContext(
+            subject="curator", auth_provider="oidc", db_user_id=1, active_groups=(),
+        ),
+    )
+    with pytest.raises(lifecycle.BenchmarkLifecycleFailure) as error:
+        await lifecycle.submit_job(**arguments)
+    assert error.value.code == "catalog_unavailable" and error.value.status_code == 503
+    failure = repository.fail_idempotency.call_args.kwargs
+    assert failure["error_code"] == "catalog_unavailable"
+    session.commit.assert_called_once()
+    captured = reporter.call_args.args[0]
+    assert captured.__traceback__ is not None
+    assert captured.__context__ is None and captured.__cause__ is None
+    for sensitive in ("private-paper-content", "sql-parameters", "bearer-value"):
+        assert sensitive not in str(captured) + str(failure) + str(error.value)
+    reservation.outcome = "failed"
+    reservation.error_code = failure["error_code"]
+    reservation.error_message = failure["error_message"]
+    reservation.error_status = failure["error_status"]
+    repository.reserve_idempotency.return_value = (reservation, False)
+    with pytest.raises(lifecycle.BenchmarkLifecycleFailure) as replay:
+        await lifecycle.submit_job(**arguments)
+    assert replay.value.code == "catalog_unavailable"
+    catalog.assert_called_once()
+    reporter.assert_called_once()
+    materialize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_duplicate_wait_keeps_loop_live_and_session_thread_owned(monkeypatch):
     main_thread = threading.get_ident()
     first_materializing = asyncio.Event()

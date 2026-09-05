@@ -20,6 +20,11 @@ Read and control operations do not require provider execution enabled. New work
 additionally requires `BENCHMARK_EXECUTION_ENABLED`; workers independently need
 both execution and worker gates. Production Compose keeps all three false.
 
+The API and SSE transport settings are passed to the backend process; the
+dedicated worker receives the ordinary-event retention setting. Production
+hard-disables API admission and execution even if host environment overrides
+are present. Development API availability is independently configurable.
+
 The job list returns summaries without resolved plans or envelopes. Resume a
 page by passing `next_cursor.created_at` as `cursor_created_at` and
 `next_cursor.job_id` as `cursor_job_id`, retaining the same status filter.
@@ -321,6 +326,13 @@ versioned router; existing authentication headers are preserved. OpenAPI
 documents the error model, including validation errors instead of FastAPI's
 default request-echo schema. Expired event history adds `resume_after` to detail;
 the stream itself uses `stream.error` frames after response headers are sent.
+
+Caught catalog, current-curator authorization, and post-header event-stream
+dependency failures report through the canonical observability facades. Reports
+retain only an operation and exception type in a sanitized wrapper, with no
+raw provider/SQL text or chained sensitive exception. Expected authorization
+denials remain unreported 4xx responses. Public error envelopes and durable
+failed-admission replay remain unchanged.
 
 The PostgreSQL lifecycle acceptance suite exercises HTTP submission through
 worker claim/cell/invocation persistence and back through result/event APIs.

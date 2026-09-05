@@ -1,6 +1,6 @@
 """Human admission never treats orchestration/source authority as identity."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from fastapi import HTTPException
@@ -136,3 +136,37 @@ async def test_provider_boundary_scrubs_bare_credentials(boundary):
     boundary[0].validate_token.side_effect = validate
     await admission.require_benchmark_curator(request("opaque-human-value"), {"sub": "curator"}, None)
     assert redact_secrets("opaque-human-value") == "opaque-human-value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["token", "account"])
+async def test_unavailable_authority_reports_only_sanitized_failure(boundary, monkeypatch, caplog, stage):
+    reporter = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.http_errors.report_runtime_exception", reporter)
+    raw = RuntimeError("private-paper-content opaque-human-value sql-parameters")
+    if stage == "token":
+        boundary[0].validate_token.side_effect = raw
+    else:
+        boundary[2].side_effect = raw
+    with pytest.raises(HTTPException) as error:
+        await admission.require_benchmark_curator(request("opaque-human-value"), {"sub": "curator"}, None)
+    assert error.value.status_code == 503
+    assert error.value.detail["code"] == "curator_authorization_unavailable"
+    reporter.assert_called_once()
+    captured = reporter.call_args.args[0]
+    assert captured.__traceback__ is not None
+    assert captured.__context__ is None and captured.__cause__ is None
+    assert "RuntimeError" in str(captured)
+    for sensitive in ("private-paper-content", "opaque-human-value", "sql-parameters"):
+        assert sensitive not in str(captured) + str(error.value.detail) + caplog.text
+
+
+@pytest.mark.asyncio
+async def test_authorization_denial_does_not_report_server_failure(boundary, monkeypatch):
+    reporter = Mock()
+    monkeypatch.setattr("src.lib.http_errors.report_runtime_exception", reporter)
+    boundary[2].side_effect = PermissionError("revoked")
+    with pytest.raises(HTTPException) as error:
+        await admission.require_benchmark_curator(request("cookie"), {"sub": "curator"}, None)
+    assert error.value.status_code == 403
+    reporter.assert_not_called()

@@ -86,3 +86,32 @@ async def test_reauthorization_failure_blocks_next_private_batch_and_releases_sl
     reader.assert_called_once()
     authorize.assert_awaited_once()
     assert subject not in events._connections
+
+
+@pytest.mark.asyncio
+async def test_stream_dependency_failure_reports_sanitized_error_and_releases_slot(monkeypatch):
+    subject = str(uuid4())
+    request = SimpleNamespace(headers={}, is_disconnected=AsyncMock(return_value=False))
+    batch = events.EventBatch(
+        summary=None, events=({"sequence": 1, "payload": {}},), latest_sequence=2,
+    )
+    monkeypatch.setattr(events, "read_event_batch", Mock(side_effect=[
+        batch, RuntimeError("private-paper-content sql-parameters bearer-value"),
+    ]))
+    monkeypatch.setattr(events, "require_benchmark_read", AsyncMock(return_value={"sub": subject}))
+    reporter = Mock()
+    monkeypatch.setattr(events, "report_runtime_exception", reporter)
+    response = await events.create_event_response(request, uuid4(), subject)
+    sent = []
+    async def send(message):
+        sent.append(message)
+    await response({"type": "http", "asgi": {"spec_version": "2.4"}}, AsyncMock(), send)
+    body = b"".join(message.get("body", b"") for message in sent).decode()
+    assert "event: stream.error" in body and "stream_unavailable" in body
+    reporter.assert_called_once()
+    captured = reporter.call_args.args[0]
+    assert captured.__traceback__ is not None
+    assert captured.__context__ is None and captured.__cause__ is None
+    for sensitive in ("private-paper-content", "sql-parameters", "bearer-value"):
+        assert sensitive not in str(captured) + body + str(reporter.call_args.kwargs)
+    assert subject not in events._connections

@@ -15,6 +15,8 @@ from sqlalchemy import func, select, text
 
 from src.api.benchmark_auth import require_benchmark_read
 from src.lib.benchmarks.persistence import BenchmarkJobSummary, BenchmarkRepository
+from src.lib.benchmarks.observability import sanitized_benchmark_error
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents.config import (
     get_benchmark_event_heartbeat_seconds,
     get_benchmark_event_replay_batch_size,
@@ -151,7 +153,11 @@ async def create_event_response(request: Request, job_id: UUID, subject: str):
             except HTTPException as exc:
                 yield _frame("stream.error", exc.detail)
                 return
-            except Exception:
+            except Exception as exc:
+                report_runtime_exception(
+                    sanitized_benchmark_error("event_stream", type(exc).__name__),
+                    component="benchmark_events", operation="event_stream",
+                )
                 yield _frame("stream.error", {"code": "stream_unavailable"})
                 return
 

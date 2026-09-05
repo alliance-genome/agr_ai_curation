@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.config import get_app_version
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents.config import (
     get_benchmark_max_cases,
     get_benchmark_max_cells,
@@ -42,6 +43,7 @@ from .input_resolvers import (
 )
 from .loader import BenchmarkCatalogError
 from .models import BenchmarkRouteCatalog, BenchmarkSuite, ResolvedBenchmarkPlan
+from .observability import sanitized_benchmark_error
 from .persistence import BenchmarkRepository, canonical_digest
 from .snapshots import (
     BenchmarkSnapshotError,
@@ -242,7 +244,11 @@ def _submit_job(
             from .runtime_catalog import build_curator_route_catalog
             try:
                 route_catalog = build_curator_route_catalog(session, curator_context)
-            except Exception:
+            except Exception as exc:
+                report_runtime_exception(
+                    sanitized_benchmark_error("catalog_resolution", type(exc).__name__),
+                    component="benchmark_lifecycle", operation="catalog_resolution",
+                )
                 raise BenchmarkLifecycleFailure("catalog_unavailable", "Benchmark route catalog is unavailable", 503) from None
         suite, plan = authoritative_plan(
             suite_value=suite_value,

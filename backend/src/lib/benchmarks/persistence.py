@@ -1142,8 +1142,6 @@ class BenchmarkRepository:
         elif job.status == BenchmarkJobStatus.RUNNING:
             job.status = BenchmarkJobStatus.CANCEL_REQUESTED
             job.cancel_requested_at = requested_at
-        else:
-            raise ValueError("benchmark job cannot be cancelled from its current state")
         self.session.flush()
         return job
 
