@@ -16,9 +16,12 @@ from src.schemas.agent_execution_revision import (
 
 @pytest.fixture(autouse=True)
 def configured_test_groups(monkeypatch):
+    from src.lib.config import groups_loader
+
+    configured_groups = groups_loader.get_valid_group_ids()
     monkeypatch.setattr(
-        "src.lib.config.groups_loader.get_valid_group_ids",
-        lambda: ["TEAM_A", "TEAM_B"],
+        groups_loader, "get_valid_group_ids",
+        lambda: [*configured_groups, "TEAM_A", "TEAM_B"],
     )
 
 

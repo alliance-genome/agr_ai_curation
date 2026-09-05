@@ -17,7 +17,10 @@ from .test_generic_profile_persistence import profile_db  # noqa: F401
 
 @pytest.fixture
 def consumers_db(execution_db, monkeypatch):  # noqa: F811
-    monkeypatch.setattr("src.lib.config.groups_loader.get_valid_group_ids", lambda: ["TEAM_A"])
+    from src.lib.config import groups_loader
+
+    configured_groups = groups_loader.get_valid_group_ids()
+    monkeypatch.setattr(groups_loader, "get_valid_group_ids", lambda: [*configured_groups, "TEAM_A"])
     db, agent_id, other_id, profile = execution_db
     monkeypatch.setattr(custom_agent_service, "_system_managed_tool_ids", lambda *_: [])
     monkeypatch.setattr(service, "get_project_ids_for_user", lambda *_: [])

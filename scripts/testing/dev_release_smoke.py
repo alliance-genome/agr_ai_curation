@@ -1702,14 +1702,12 @@ def create_custom_agent(
         json_body=payload,
         timeout=30.0,
     )
-    require(
-        response.status_code == 201 and isinstance(response.json_body, dict),
-        f"Unexpected custom agent create response: {response.status_code} {response.text}",
-    )
+    if response.status_code != 201 or not isinstance(response.json_body, dict):
+        raise SmokeFailure(f"Unexpected custom agent create response: {response.status_code} {response.text}")
     custom_agent_id = str(response.json_body.get("id", "")).strip()
     custom_agent_key = str(response.json_body.get("agent_id", "")).strip()
     custom_agent_name = str(response.json_body.get("name", "")).strip()
-    require(custom_agent_id and custom_agent_key and custom_agent_name, f"Malformed custom agent response: {response.text}")
+    require(bool(custom_agent_id and custom_agent_key and custom_agent_name), f"Malformed custom agent response: {response.text}")
     append_check(
         checks,
         step="create_custom_agent",
@@ -1729,14 +1727,15 @@ def read_custom_agent_receipt(*, base_url: str, headers: Dict[str, str], custom_
     custom_agent_id = custom_agent["id"]
     custom_agent_key = custom_agent["agent_id"]
     revision_id = custom_agent.get("execution_revision_id")
-    require(isinstance(revision_id, str) and revision_id, "Custom agent create response missing executable revision")
+    if not isinstance(revision_id, str) or not revision_id:
+        raise SmokeFailure("Custom agent create response missing executable revision")
     revision_response = http_request(
         "GET",
         f"{base_url}/api/agent-studio/custom-agents/{custom_agent_id}/execution-revisions/{revision_id}",
         headers=headers,
     )
-    require(revision_response.status_code == 200 and isinstance(revision_response.json_body, dict),
-            f"Executable revision read failed: {revision_response.status_code}")
+    if revision_response.status_code != 200 or not isinstance(revision_response.json_body, dict):
+        raise SmokeFailure(f"Executable revision read failed: {revision_response.status_code}")
     saved = revision_response.json_body
     require(saved.get("id") == revision_id and saved.get("agent_id") == custom_agent_id,
             "Executable revision does not match the newly created agent")

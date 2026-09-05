@@ -100,6 +100,7 @@ def test_capture_uses_selected_builder_not_inherited_curation(monkeypatch, insta
     monkeypatch.setattr(catalog_service, "_inherited_curation_definition_for_db_agent", lambda _: None)
     head = agent()
     head.tool_ids = ["finalize_gene_extraction"]
+    head.allowed_group_ids = ["FB"]
     head.inherited_allowed_group_ids = []
     output = AgentOutputContract(output_state="structured_extraction", output_mode="domain", domain_extraction_ref=DomainExtractionRef(**BUILDER))
     saved = capture_execution_snapshot(None, head, output, active_group_ids=["FB"])
@@ -202,6 +203,8 @@ def test_none_with_builder_tools_rejects_save_and_historical_execution(installed
 
     head = agent()
     none = AgentOutputContract(output_state="none")
+    head.allowed_group_ids = ["FB"]
+    head.inherited_allowed_group_ids = ["FB"]
     monkeypatch.setattr(catalog_service, "_inherited_curation_definition_for_db_agent", lambda _: None)
     saved = capture_execution_snapshot(None, head, none)
     head.tool_ids = ["finalize_gene_extraction"]
