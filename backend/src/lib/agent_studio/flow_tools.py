@@ -1347,7 +1347,7 @@ def _proposal_candidate_payload(candidate: "FlowDefinition") -> Dict[str, Any]:
     """Serialize a validated candidate in save-equivalent transport form."""
 
     return _save_equivalent_flow_payload(
-        candidate.model_dump(exclude_none=True, exclude_unset=True)
+        candidate.model_dump(mode="json", exclude_none=True, exclude_unset=True)
     )
 
 

@@ -22,6 +22,9 @@ from src.lib.agent_studio.catalog_service import (
     has_tool_binding,
     tool_requires_document,
 )
+from src.lib.agent_studio.execution_revision_service import (
+    ExecutionRevisionNotFoundError, get_execution_revision,
+)
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.agent_studio.domain_output_contract import domain_extraction_ref_for_agent
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
@@ -266,6 +269,30 @@ def _agent_records(
             ),
             "category": category,
         }
+        identity_contract = {
+            "phase": "saved_agent_id",
+            "agent_revision_id": None,
+            "profile_revision_id": None,
+        }
+        selectable = True
+        revision_id = getattr(agent, "execution_revision_id", None)
+        if agent_id.startswith("ca_") and revision_id is not None:
+            try:
+                revision, saved = get_execution_revision(
+                    db, agent.id, revision_id, context.user_id,
+                    active_group_ids=list(context.active_group_ids),
+                )
+            except ExecutionRevisionNotFoundError:
+                selectable = False
+            else:
+                profile_pin = saved.output_contract.generic_profile_ref
+                identity_contract = {
+                    "phase": "saved_agent_revision",
+                    "agent_revision_id": str(revision.id),
+                    "profile_revision_id": (
+                        str(profile_pin.profile_revision_id) if profile_pin else None
+                    ),
+                }
         records.append(
             CapabilityRecord(
                 kind="agent",
@@ -273,15 +300,12 @@ def _agent_records(
                 name=str(agent.name),
                 description=str(getattr(agent, "description", "") or ""),
                 authorization_scope=_authorization_scope(agent, context.user_id),
-                selectable=True,
+                selectable=selectable,
+                availability="available" if selectable else "unavailable",
                 compatibility=compatibility,
                 detail={
                     "agent_id": agent_id,
-                    "identity_contract": {
-                        "phase": "saved_agent_id",
-                        "agent_revision_id": None,
-                        "profile_revision_id": None,
-                    },
+                    "identity_contract": identity_contract,
                     "visibility": str(agent.visibility),
                     "allowed_group_ids": list(agent.allowed_group_ids or []),
                     "model_id": str(agent.model_id),

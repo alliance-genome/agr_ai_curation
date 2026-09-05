@@ -509,3 +509,26 @@ def test_batch_capability_derives_from_saved_output_and_tools(monkeypatch, mode,
     monkeypatch.setattr(catalog_service, "_required_context_for_tool_ids", lambda _tools: ["document_id"])
     result = module.resolve_flow_execution_revisions(Mock(), flow(pin), user_id=7, active_group_ids=[])
     assert result.entries_by_node["node_0"]["batch_capabilities"] == expected
+
+
+def test_ai_proposal_serializes_exact_custom_receipt_for_browser_review():
+    import json
+    from src.lib.agent_studio import flow_tools
+
+    pin = receipt("profile_bound_generic")
+    original = flow(pin)
+    candidate = flow_tools._proposal_candidate_payload(original)
+    fingerprint = flow_tools._flow_candidate_fingerprint(
+        flow_context={}, name="Custom extraction", description="",
+        definition=candidate,
+    )
+    transported = json.loads(json.dumps(candidate))
+    restored = FlowDefinition.model_validate(transported)
+    assert fingerprint.startswith("sha256:")
+    assert transported["nodes"][1]["data"]["agent_revision_id"] == str(pin.agent_revision_id)
+    assert restored.nodes[1].data.execution_receipt == pin
+    assert original.nodes[1].data.execution_receipt == pin
+    assert fingerprint == flow_tools._flow_candidate_fingerprint(
+        flow_context={}, name="Custom extraction", description="",
+        definition=transported,
+    )

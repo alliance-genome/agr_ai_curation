@@ -323,3 +323,41 @@ def test_search_cannot_return_a_nonadvancing_empty_page(sources, monkeypatch):
             db=object(), context=catalog.CapabilityCatalogContext(user_id=7),
             kinds=["agent"], query="system_agent",
         )
+
+
+@pytest.mark.parametrize("accessible", [True, False])
+def test_catalog_reports_authorized_saved_revision_identity(sources, monkeypatch, accessible):
+    from uuid import uuid4
+
+    agent = sources[1]
+    agent.id = uuid4()
+    agent.execution_revision_id = uuid4()
+    profile_revision_id = uuid4()
+    calls = []
+
+    def resolve(db, agent_id, revision_id, user_id, *, active_group_ids):
+        calls.append((agent_id, revision_id, user_id, active_group_ids))
+        if not accessible:
+            raise catalog.ExecutionRevisionNotFoundError("Unavailable")
+        return SimpleNamespace(id=revision_id), SimpleNamespace(
+            output_contract=SimpleNamespace(generic_profile_ref=SimpleNamespace(
+                profile_revision_id=profile_revision_id,
+            )),
+        )
+
+    monkeypatch.setattr(catalog, "get_execution_revision", resolve)
+    records = catalog._agent_records(
+        object(), catalog.CapabilityCatalogContext(user_id=7, active_group_ids=("TEAM_A",)),
+    )
+    record = next(item for item in records if item.resource_id == agent.agent_key)
+    assert calls == [(agent.id, agent.execution_revision_id, 7, ["TEAM_A"])]
+    assert record.selectable is accessible
+    if accessible:
+        assert record.detail["identity_contract"] == {
+            "phase": "saved_agent_revision",
+            "agent_revision_id": str(agent.execution_revision_id),
+            "profile_revision_id": str(profile_revision_id),
+        }
+    else:
+        assert record.availability == "unavailable"
+        assert record.detail["identity_contract"]["agent_revision_id"] is None
