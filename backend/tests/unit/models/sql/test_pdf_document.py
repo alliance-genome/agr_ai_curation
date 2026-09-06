@@ -1,6 +1,8 @@
 """Tests for PDFDocument SQLAlchemy model."""
 from sqlalchemy import CheckConstraint
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Mapped
+from sqlalchemy.schema import AddConstraint
 
 from src.models.sql.pdf_document import PDFDocument
 
@@ -67,6 +69,19 @@ class TestPDFDocumentModel:
         )
 
         assert str(constraint.sqltext) == "page_count > 0"
+
+    def test_artifact_digest_constraint_compiles_for_postgres_and_sqlite(self):
+        constraint = next(
+            element
+            for element in PDFDocument.__table__.constraints
+            if isinstance(element, CheckConstraint)
+            and element.name == "ck_pdf_documents_converted_artifact_sha256"
+        )
+
+        for dialect, operator in ((postgresql.dialect(), "~"), (sqlite.dialect(), "REGEXP")):
+            ddl = str(AddConstraint(constraint).compile(dialect=dialect))
+            assert "source_converted_artifact_sha256 IS NULL" in ddl
+            assert f"source_converted_artifact_sha256 {operator} '^[0-9a-f]{{64}}$'" in ddl
 
     def test_literature_provenance_defaults_to_none(self):
         """Local PDF uploads should not require upstream source provenance."""

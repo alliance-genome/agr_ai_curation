@@ -106,8 +106,8 @@ class PDFDocument(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "source_converted_artifact_sha256 IS NULL OR "
-            "source_converted_artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            source_converted_artifact_sha256.is_(None)
+            | source_converted_artifact_sha256.regexp_match("^[0-9a-f]{64}$"),
             name="ck_pdf_documents_converted_artifact_sha256",
         ),
         CheckConstraint(
