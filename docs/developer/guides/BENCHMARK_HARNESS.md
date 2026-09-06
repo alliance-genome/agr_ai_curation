@@ -120,6 +120,80 @@ The public application registers three resolvers at startup:
   immutable snapshot. It requires the matching digest and source version and
   performs no remote source contact.
 
+### Transfer saved canonical contents
+
+Both endpoints below require `benchmark:source:read` and `BENCHMARK_ENABLED`.
+They reject `X-Benchmark-Delegated-Source-Authorization`, including on otherwise
+authorized requests: saved-byte transfer does not access ABC or another original
+source. They create no jobs and grant no execution permission. Normal submission
+still requires the run capability and verified initiating curator.
+
+`POST /api/v1/benchmarks/sources/snapshots` accepts **raw UTF-8 bytes**, not an
+object wrapping `content`, an arbitrary source reference, or an upload URL:
+
+```http
+POST /api/v1/benchmarks/sources/snapshots
+Authorization: Bearer <source-read credential>
+Content-Type: text/markdown
+X-Benchmark-Content-Digest: sha256:<64 lowercase hex>
+
+# Results
+The exact saved paper text goes here.
+```
+
+Supported media types are `text/plain`, `text/markdown`, `application/json`
+(the existing nonempty pipeline-element list), and `application/xml` (the
+installed scientific-document parser). Optional `; charset=utf-8` is accepted;
+compressed bodies and other encodings are not. The server authenticates before
+reading the bounded body, verifies its SHA-256, and validates it with the same
+document decoder used for frozen execution. It stores the **original bytes**,
+without newline, Unicode, or Markdown normalization.
+
+Success is HTTP 200 with the existing `FrozenBenchmarkInputSnapshot` receipt.
+Its server-generated provenance has resolver `uploaded_document`, source version
+`1`, and a sorted compact JSON reference:
+
+```json
+{"content_type":"text/markdown","digest":"sha256:<verified digest>","schema":"uploaded_document/v1"}
+```
+
+This records an authenticated upload, not verified ABC/local-document provenance,
+paper identity, or an execution context. Original corpus provenance stays with
+the caller. `uploaded_document` is a receipt namespace, not a registered resolver;
+reuse the receipt through `frozen_snapshot`. Content type participates in upload
+identity, so the same bytes interpreted under different types do not reuse the
+wrong receipt. Repeated/concurrent equivalent uploads by the same owner reuse a
+verified immutable receipt; another owner receives separate metadata.
+
+`GET /api/v1/benchmarks/sources/snapshots/{snapshot_id}/content` returns the exact
+verified bytes of an owned snapshot, including snapshots produced by the existing
+materialize endpoint. It returns the stored Content-Type, Content-Length,
+`X-Benchmark-Content-Digest`, attachment disposition and `nosniff`; it returns no
+filesystem path, blob reference, or signed storage URL. Compare the returned bytes
+and digest with the original receipt before retaining them as corpus contents.
+All transfer responses and errors use `Cache-Control: no-store`. Missing and
+other-owner snapshots both return 404 before any blob read.
+
+`BENCHMARK_MAX_INPUT_BYTES` bounds uploads, downloads, and actual blob reads;
+`BENCHMARK_SOURCE_TIMEOUT_SECONDS` also bounds receiving an upload body. Bad
+digests return 409, oversized inputs 413, unsupported media/encoding 415,
+invalid documents 422, upload receive timeouts 408, and unavailable/corrupt
+storage 503. Source errors use `{"detail":{"error":"<code>","message":"<safe text>"}}`.
+Unknown upload outcomes can be recovered by repeating the exact same bytes and
+content type; never infer that a lost response means no snapshot was created.
+
+For execution, use the returned `snapshot_id` as reference and retain the receipt's
+`source_version` and digest:
+
+```json
+{"resolver":"frozen_snapshot","reference":"<snapshot UUID>","version":"1","digest":"sha256:<verified digest>"}
+```
+
+The version above is `1` only for a new uploaded-document receipt. Snapshots
+materialized from other sources retain those sources' original versions. Snapshot
+IDs and service ownership are local to the selected target; transferring corpus
+bytes to another target creates that target's own uploaded receipt.
+
 All three resolvers read at most `BENCHMARK_MAX_INPUT_BYTES`, recompute the digest
 from the exact returned bytes, and fail when the requested identity is stale.
 `BENCHMARK_SOURCE_TIMEOUT_SECONDS` bounds the complete resolver call. URLs,

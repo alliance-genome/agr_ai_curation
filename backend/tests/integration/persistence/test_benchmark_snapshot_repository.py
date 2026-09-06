@@ -175,7 +175,7 @@ def test_snapshot_metadata_deduplicates_per_owner_and_blob_across_owners(
         db.rollback()
 
         (tmp_path / first.blob_reference).write_bytes(b"tampered")
-        with pytest.raises(BenchmarkSnapshotError, match="integrity"):
+        with pytest.raises(BenchmarkSnapshotError, match="integrity|read limit"):
             repository.read_verified(first.id, owner_subject="owner-a")
     finally:
         db.rollback()

@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import asyncio
+import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any, NoReturn
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.api.benchmark_auth import require_benchmark_source_read
@@ -21,7 +27,11 @@ from src.lib.benchmarks.input_resolvers import (
     BenchmarkSourceError,
     CheckedInFixtureResolver,
     DelegatedSourceAuthorization,
+    BenchmarkSourceMetadata,
+    BenchmarkSourceProvenance,
+    MaterializedBenchmarkInput,
 )
+from src.lib.benchmarks.document_inputs import decode_frozen_document
 from src.lib.benchmarks.loader import BenchmarkCatalogError
 from src.lib.benchmarks.models import BenchmarkInputReference
 from src.lib.benchmarks.suites import load_checked_in_suites
@@ -41,7 +51,9 @@ from src.lib.openai_agents.config import (
     get_benchmark_source_timeout_seconds,
 )
 from src.services.benchmark_document_source import LocalDocumentResolver
-from src.models.sql.database import get_db
+from src.models.sql.benchmark import BenchmarkInputSnapshot
+from src.models.sql.database import get_db, SessionLocal
+from src.schemas.benchmark_sources import BenchmarkSnapshotUploadMetadata
 
 
 class BenchmarkSourceRoute(APIRoute):
@@ -52,15 +64,19 @@ class BenchmarkSourceRoute(APIRoute):
 
         async def custom_handler(request: Request):
             try:
-                return await original_handler(request)
-            except RequestValidationError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "error": "invalid_reference",
-                        "message": "Benchmark input reference is invalid",
-                    },
-                ) from exc
+                response = await original_handler(request)
+            except RequestValidationError:
+                pass
+            except HTTPException as exc:
+                exc.headers = {**(exc.headers or {}), "Cache-Control": "no-store"}
+                raise
+            else:
+                response.headers["Cache-Control"] = "no-store"
+                return response
+            # Validation values must not survive in chained exceptions.
+            raise HTTPException(422, {
+                "error": "invalid_reference", "message": "Benchmark input reference is invalid",
+            }, headers={"Cache-Control": "no-store"})
 
         return custom_handler
 
@@ -253,6 +269,143 @@ async def materialize_benchmark_source(
             log_message="Benchmark input snapshot could not be committed",
             exc=exc,
         )
+
+
+def _transfer_error(status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status, {"error": code, "message": message},
+                         headers={"Cache-Control": "no-store"})
+
+
+def _require_saved_byte_transfer(request: Request) -> None:
+    if not get_benchmark_enabled():
+        raise _transfer_error(404, "missing_source", "Benchmark API is disabled")
+    if _DELEGATED_HEADER in request.headers:
+        raise _transfer_error(400, "unexpected_delegated_authorization",
+                              "Saved input transfer does not accept source credentials")
+
+
+def _freeze_uploaded_content(
+    content: bytes, metadata: BenchmarkSnapshotUploadMetadata, owner: str, service: str,
+) -> FrozenBenchmarkInputSnapshot:
+    digest = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    if digest != metadata.digest:
+        raise _transfer_error(409, "digest_conflict", "Uploaded input digest does not match")
+    try:
+        decode_frozen_document(content, content_type=metadata.content_type)
+        text_content = content.decode("utf-8")
+    except Exception:
+        pass
+    else:
+        # This provenance attests only to bytes uploaded by the authenticated
+        # owner. It never claims authorization against an original source.
+        reference = json.dumps({
+            "schema": "uploaded_document/v1", "content_type": metadata.content_type,
+            "digest": digest,
+        }, sort_keys=True, separators=(",", ":"))
+        provenance = BenchmarkSourceProvenance(
+            resolver="uploaded_document", reference=reference, version="1", digest=digest,
+        )
+        source = MaterializedBenchmarkInput(
+            resolver=provenance.resolver, reference=reference, version="1", digest=digest,
+            content=text_content,
+            metadata=BenchmarkSourceMetadata(content_type=metadata.content_type,
+                                             content_bytes=len(content)),
+            provenance=provenance,
+        )
+        try:
+            with SessionLocal() as db:
+                repository = BenchmarkSnapshotRepository(db, configured_benchmark_snapshot_store())
+                snapshot = repository.freeze_input(source, owner_subject=owner,
+                                                    service_principal=service)
+                receipt = repository.receipt(snapshot)
+                db.commit()
+                return receipt
+        except (BenchmarkSnapshotError, SQLAlchemyError, OSError):
+            pass
+        raise _transfer_error(503, "source_unavailable", "Benchmark input could not be stored")
+    raise _transfer_error(422, "invalid_document", "Uploaded input is not a supported document")
+
+
+@router.post(
+    "/snapshots", response_model=FrozenBenchmarkInputSnapshot,
+    openapi_extra={"requestBody": {"required": True, "content": {
+        media: {"schema": {"type": "string", "format": "binary"}}
+        for media in ("text/plain", "text/markdown", "application/json", "application/xml")
+    }}},
+)
+async def upload_benchmark_snapshot(
+    request: Request,
+    content_digest: str = Header(alias="X-Benchmark-Content-Digest", pattern=r"^sha256:[0-9a-f]{64}$"),
+    principal: dict[str, Any] = Depends(require_benchmark_source_read),
+) -> FrozenBenchmarkInputSnapshot:
+    """Freeze exact UTF-8 bytes, with server-derived uploaded-content provenance."""
+    _require_saved_byte_transfer(request)
+    media, separator, parameter = request.headers.get("content-type", "").partition(";")
+    if (separator and parameter.strip().lower() != "charset=utf-8"
+            or request.headers.get("content-encoding", "identity") != "identity"):
+        raise _transfer_error(415, "invalid_content_type", "Unsupported upload encoding")
+    try:
+        metadata = BenchmarkSnapshotUploadMetadata.model_validate({
+            "content_type": media.strip().lower(), "digest": content_digest,
+        })
+    except ValueError:
+        pass
+    else:
+        maximum = get_benchmark_max_input_bytes()
+        body = bytearray()
+        try:
+            async with asyncio.timeout(get_benchmark_source_timeout_seconds()):
+                async for chunk in request.stream():
+                    if len(body) + len(chunk) > maximum:
+                        raise _transfer_error(413, "oversize_payload", "Uploaded input exceeds limit")
+                    body.extend(chunk)
+        except TimeoutError:
+            pass
+        else:
+            return await asyncio.to_thread(
+                _freeze_uploaded_content, bytes(body), metadata,
+                str(principal["sub"]), str(principal["client_id"]),
+            )
+        raise _transfer_error(408, "source_timeout", "Uploaded input was not received in time")
+    raise _transfer_error(415, "invalid_content_type", "Unsupported document content type")
+
+
+def _read_snapshot_content(snapshot_id: UUID, owner: str, maximum: int) -> Response:
+    try:
+        with SessionLocal() as db:
+            snapshot = db.scalar(select(BenchmarkInputSnapshot).where(
+                BenchmarkInputSnapshot.id == snapshot_id,
+                BenchmarkInputSnapshot.owner_subject == owner,
+            ))
+            if snapshot is None:
+                raise _transfer_error(404, "missing_source", "Frozen benchmark input was not found")
+            if snapshot.content_bytes > maximum:
+                raise _transfer_error(413, "oversize_payload", "Frozen benchmark input exceeds limit")
+            repository = BenchmarkSnapshotRepository(db, configured_benchmark_snapshot_store())
+            content = repository.read_verified(snapshot_id, owner_subject=owner, max_bytes=maximum)
+            return Response(content, media_type=snapshot.content_type, headers={
+                "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": 'attachment; filename="benchmark-input"',
+                "X-Benchmark-Content-Digest": snapshot.digest,
+            })
+    except (BenchmarkSnapshotError, SQLAlchemyError, OSError):
+        pass
+    raise _transfer_error(503, "source_unavailable", "Frozen benchmark input could not be read")
+
+
+@router.get("/snapshots/{snapshot_id}/content", response_class=Response, responses={
+    200: {"description": "Exact verified canonical bytes (never a blob URL)", "content": {
+        "application/octet-stream": {"schema": {"type": "string", "format": "binary"}},
+    }},
+})
+async def download_benchmark_snapshot(
+    snapshot_id: UUID, request: Request,
+    principal: dict[str, Any] = Depends(require_benchmark_source_read),
+) -> Response:
+    """Read owner-scoped canonical bytes, without a source lookup or blob URL."""
+    _require_saved_byte_transfer(request)
+    return await asyncio.to_thread(_read_snapshot_content, snapshot_id,
+                                   str(principal["sub"]), get_benchmark_max_input_bytes())
 
 
 __all__ = [
