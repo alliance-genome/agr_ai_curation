@@ -2207,3 +2207,37 @@ def test_projection_source_catalog_does_not_bypass_unavailable_authorization(mon
                         SimpleNamespace(projection_fields_by_node={}, findings=[]))
     result = flow_tools._get_current_flow_projection_plan_handler()(node_id="csv", view="source_fields")
     assert json.loads(result["content"])["sources"] == {}
+
+
+@pytest.mark.parametrize("export_blocking", [False, True])
+def test_validator_proposal_matches_editor_persistence_fingerprint(export_blocking):
+    """Runtime export policy must not change the draft token when Apply serializes it."""
+    from copy import deepcopy
+    from src.schemas.flows import FlowDefinition
+
+    definition = FlowDefinition.model_validate({
+        "version": "1.1", "entry_node_id": "task", "edges": [],
+        "nodes": [{"id": "task", "type": "task_input", "position": {"x": 0, "y": 0},
+                   "data": {"agent_id": "task_input", "agent_display_name": "Instructions",
+                            "output_key": "task_input", "task_instructions": "Extract genes.",
+                            "validation_attachments": [{
+                                "attachment_id": "gene:identity", "domain_pack_id": "gene",
+                                "validator_id": "gene-validator", "state": "active", "scope": "field",
+                                "export_blocking": export_blocking, "enabled": True,
+                                "curator_label": "Validate gene identity", "when_off": "Keep the paper name.",
+                            }]}}],
+    })
+    candidate = flow_tools._proposal_candidate_payload(definition)
+    # Reproduce the browser's validationAttachmentForPersistence adapter.
+    applied = deepcopy(candidate)
+    for node in applied["nodes"]:
+        for attachment in node["data"].get("validation_attachments", []):
+            attachment.pop("export_blocking", None)
+    context = {"flow_name": "Gene flow", "flow_description": ""}
+    def fingerprint(payload):
+        return flow_tools._flow_candidate_fingerprint(
+            flow_context=context, name="Gene flow", description="", definition=payload,
+        )
+    assert fingerprint(candidate) == fingerprint(applied)
+    assert candidate["nodes"][0]["data"]["validation_attachments"][0]["curator_label"] == "Validate gene identity"
+    assert definition.nodes[0].data.validation_attachments[0].export_blocking is export_blocking

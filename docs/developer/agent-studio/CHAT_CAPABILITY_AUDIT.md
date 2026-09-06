@@ -65,6 +65,7 @@ A capability needs a provider-visible tool, working dispatch, current authentica
 - Source reads and search share a path boundary; regressions cover deployment files, private paths, symlinks and explicit search globs.
 - Chat actions are prepared without side effects, reauthorized on click and rejected when the draft, tab, source or saved revision changes. Lifecycle actions wait for Save/authoring/hydration and explicitly reset discarded drafts even for the same source.
 - Focused frontend regressions cover readable proposals, Apply conflicts, action buttons, same-source resets, pending Save, tab changes during validation and exact-step return with repeated uses of the same agent.
+- Live dev discovery: internal attachment export policy was removed by the browser but included in proposal fingerprints. The compiler now emits the same persistence form; both flag values fail the regression before the fix and pass afterward. Focused corrective backend gate: 133 passed.
 - GPT-6 Astra medium pre-deploy review: ACCEPT after lifecycle fixes. Combined frontend/build/type results and deployed conversational evidence are recorded in the linked ticket/workpad; code review alone does not establish live acceptance.
 
 ## Deliberate UI boundaries

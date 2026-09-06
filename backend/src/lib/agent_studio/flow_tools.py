@@ -1340,6 +1340,10 @@ def _save_equivalent_flow_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
             # Runtime validation groups are derived from canonical attachment
             # edges and are intentionally not part of Flow Builder persistence.
             data.pop("validation_groups", None)
+            # Match validationAttachmentForPersistence in the browser: export
+            # blocking is runtime policy, not an editable persisted selection.
+            for attachment in data.get("validation_attachments") or []:
+                attachment.pop("export_blocking", None)
     return payload
 
 
