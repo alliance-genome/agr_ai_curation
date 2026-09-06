@@ -87,3 +87,12 @@ that disables temperature; unsupported reasoning levels fail configuration.
 Prompt guidance follows OpenAI's [Astra migration and prompting guide](https://developers.openai.com/api/docs/guides/latest-model),
 reviewed September 6, 2026, while retaining curator-controlled Apply/Save and
 one-decision-at-a-time authoring.
+
+
+Validated Flow/Workshop proposals terminate the SDK turn at curator review,
+without requiring an extra model response. Invalid proposals remain repairable
+within the same turn. This prevents a valid last-turn proposal from being lost
+to the model-turn limit. Small authorized capability details are returned whole
+within the existing provider size bound; larger details retain hash-addressed
+pagination. Draft design should reuse existing settings and avoid fetching empty
+prompts or runtime tool schemas that are irrelevant to the requested fields.

@@ -130,6 +130,20 @@ def test_unauthorized_builder_is_not_projected_as_an_output_choice(sources, monk
     assert not any(item.detail.get("contract_kind") == "packaged_builder" for item in records)
 
 
+def test_small_capability_detail_is_complete_in_one_authorized_call(sources):
+    context = catalog.CapabilityCatalogContext(user_id=7)
+    search = catalog.search_capabilities(db=object(), context=context, kinds=["agent"])
+    item = search["results"][0]
+    detail = catalog.get_capability_detail(
+        db=object(), context=context, kind=item["kind"], resource_id=item["resource_id"],
+        catalog_fingerprint=search["catalog_fingerprint"],
+    )
+    assert detail["view"] == "complete"
+    assert detail["detail"]
+    assert detail["next_call"] is None
+    assert detail["authorization"] == "reauthorized"
+
+
 def test_detail_reauthorizes_fingerprint_and_uses_hash_addressed_chunks(sources):
     context = catalog.CapabilityCatalogContext(user_id=7)
     search = catalog.search_capabilities(

@@ -492,3 +492,110 @@ def test_forced_tool_run_closes_owned_resources_when_runtime_construction_fails(
             },
         )
     ]
+
+
+@pytest.mark.parametrize("tool_name,contract", [
+    ("propose_workshop_draft_update", "workshop_authoring_proposal.v1"),
+    ("propose_flow_draft_update", "flow_authoring_proposal.v1"),
+])
+def test_proposal_review_stops_only_after_valid_repair(tool_name, contract):
+    state = runtime.AgentStudioRunState(trace_id="review-test")
+    output = {"contract_version": contract, "success": False, "valid": False, "pending_user_approval": False}
+    async def executor(*_args):
+        return runtime.ToolExecutionResult(full_output=dict(output), provider_output="bounded result")
+    tool = runtime._build_function_tool(_tool_definition(tool_name), executor=executor, state=state, defer_loading=False)
+    behavior = runtime._proposal_review_behavior(state)
+    asyncio.run(tool.on_invoke_tool(SimpleNamespace(tool_call_id="invalid"), '{}'))
+    assert behavior(None, []).is_final_output is False
+    output.update(success=True, valid=True, pending_user_approval=True)
+    asyncio.run(tool.on_invoke_tool(SimpleNamespace(tool_call_id="repaired"), '{}'))
+    result = behavior(None, [])
+    assert result.is_final_output is True
+    assert 'Apply changes' in result.final_output
+    assert 'Nothing has been saved' in result.final_output
+    output.update(pending_user_approval=False)
+    asyncio.run(tool.on_invoke_tool(SimpleNamespace(tool_call_id="no_change"), '{}'))
+    assert behavior(None, []).is_final_output is False
+
+
+def test_sdk_accepts_review_on_last_allowed_model_turn_without_another_request():
+    from agents import Agent, Model, ModelResponse, RunConfig, Runner, Usage
+    from openai.types.responses import ResponseFunctionToolCall
+
+    class ProposalModel(Model):
+        calls = 0
+        async def get_response(self, *args, **kwargs):
+            self.calls += 1
+            assert self.calls == 1
+            return ModelResponse(output=[ResponseFunctionToolCall(
+                id="fc_review", call_id="review", name="propose_workshop_draft_update",
+                arguments='{}', type="function_call",
+            )], usage=Usage(), response_id="response-review")
+        async def stream_response(self, *args, **kwargs):
+            raise AssertionError("This regression exercises the SDK turn-limit boundary")
+            yield
+
+    state = runtime.AgentStudioRunState(trace_id="last-turn")
+    async def executor(*_args):
+        return runtime.ToolExecutionResult(full_output={
+            "contract_version": "workshop_authoring_proposal.v1", "success": True,
+            "valid": True, "pending_user_approval": True,
+        }, provider_output='{"valid":true}')
+    tool = runtime._build_function_tool(_tool_definition("propose_workshop_draft_update"),
+        executor=executor, state=state, defer_loading=False)
+    model = ProposalModel()
+    result = asyncio.run(Runner.run(Agent(name="Review", model=model, tools=[tool],
+        tool_use_behavior=runtime._proposal_review_behavior(state)), "Make a draft",
+        max_turns=1, run_config=RunConfig(tracing_disabled=True)))
+    assert model.calls == 1
+    assert 'Apply changes' in result.final_output
+
+
+def test_streamed_invalid_then_valid_proposal_finishes_on_last_turn(monkeypatch):
+    from agents import Model, RunConfig
+    from openai.types.responses import Response, ResponseCompletedEvent, ResponseFunctionToolCall
+
+    class ProposalModel(Model):
+        calls = 0
+        async def get_response(self, *args, **kwargs):
+            raise AssertionError("Must exercise streaming")
+        async def stream_response(self, *args, **kwargs):
+            self.calls += 1
+            assert self.calls <= 2
+            response = Response.model_construct(
+                id=f"response-{self.calls}", created_at=0, model="gpt-6-astra",
+                object="response", status="completed", usage=None,
+                output=[ResponseFunctionToolCall(
+                    id=f"fc_{self.calls}", call_id=f"call_{self.calls}",
+                    name="propose_workshop_draft_update", arguments='{}', type="function_call",
+                )],
+            )
+            yield ResponseCompletedEvent(type="response.completed", sequence_number=0, response=response)
+
+    model = ProposalModel()
+    state = runtime.AgentStudioRunState(trace_id="streamed-review")
+    async def executor(*_args):
+        valid = model.calls == 2
+        return runtime.ToolExecutionResult(full_output={
+            "contract_version": "workshop_authoring_proposal.v1", "success": valid,
+            "valid": valid, "pending_user_approval": valid,
+        }, provider_output='{"valid":' + str(valid).lower() + '}')
+    tool = runtime._build_function_tool(_tool_definition("propose_workshop_draft_update"),
+        executor=executor, state=state, defer_loading=False)
+    provider = SimpleNamespace(get_model=lambda _name: model)
+    monkeypatch.setattr(runtime, 'build_owned_openai_responses_resources', lambda: SimpleNamespace(provider=provider))
+    monkeypatch.setattr(runtime, '_run_config', lambda **_kwargs: RunConfig(model_provider=provider, tracing_disabled=True))
+    async def close(*_args, **_kwargs): pass
+    monkeypatch.setattr(runtime, 'close_owned_openai_resources', close)
+    async def collect():
+        return [event async for event in runtime.stream_agent_studio_run(
+            instructions="Prepare one change", input_items=[{"role":"user","content":"Stocks and source"}],
+            tools=[tool], state=state, session_id="test", user_id="test", max_turns=2,
+            model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100),
+        )]
+    events = asyncio.run(collect())
+    results = [event for event in events if event['type'] == 'TOOL_RESULT']
+    assert [event['result']['valid'] for event in results] == [False, True]
+    assert events[-1]['type'] == 'TEXT_DELTA'
+    assert 'Apply changes' in events[-1]['delta']
+    assert model.calls == 2

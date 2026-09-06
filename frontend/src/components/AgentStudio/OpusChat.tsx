@@ -406,6 +406,9 @@ function formatToolResult(result: Record<string, unknown> | undefined): string |
     }
     return `✓ ${count} row${count !== 1 ? 's' : ''} returned`
   }
+  if (result.contract_version === 'workshop_authoring_proposal.v1' && result.valid === false) {
+    return 'Needs revision before Apply'
+  }
   if (result.status === 'error' || result.success === false) {
     return `✗ Error: ${result.message || result.error || 'Unknown error'}`
   }

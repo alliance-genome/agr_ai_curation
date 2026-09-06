@@ -877,6 +877,12 @@ def get_capability_detail(
         maximum=get_agent_studio_provider_tool_result_inline_max_chars(),
     )
     if start is None:
+        inline = {
+            **common, "view": "complete", "detail": record.exact_detail(),
+            "complete": True, "next_call": None,
+        }
+        if len(serialized) <= requested_cap and _provider_chars(inline) <= get_agent_studio_provider_tool_result_inline_max_chars():
+            return inline
         return {
             **common,
             "view": "summary",

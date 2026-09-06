@@ -664,6 +664,7 @@ describe('OpusChat', () => {
     expect(await screen.findByRole('dialog', { name: 'Review agent changes' })).toBeInTheDocument()
     if (action === 'invalid') {
       expect(screen.getByText('Choose an authorized tool.')).toBeInTheDocument()
+      expect(screen.queryByText(/Unknown error/)).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Apply changes' })).toBeDisabled()
       expect(onApplyWorkshopProposal).not.toHaveBeenCalled()
       return

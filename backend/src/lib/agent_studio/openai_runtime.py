@@ -22,6 +22,7 @@ from agents import (
     RunConfig,
     Runner,
     ToolSearchTool,
+    ToolsToFinalOutputResult,
     tool_namespace,
 )
 from openai import BadRequestError
@@ -91,6 +92,7 @@ class AgentStudioRunState:
     trace_id: str
     assistant_text_parts: list[str] = field(default_factory=list)
     executed_tools: list[ExecutedTool] = field(default_factory=list)
+    review_message: str | None = None
     response_id: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
@@ -192,6 +194,17 @@ def _build_function_tool(
                 output=result.full_output,
             )
         )
+        state.review_message = None
+        expected = {
+            "propose_workshop_draft_update": "workshop_authoring_proposal.v1",
+            "propose_flow_draft_update": "flow_authoring_proposal.v1",
+        }.get(name)
+        output = result.full_output
+        if (expected and isinstance(output, Mapping)
+                and output.get("contract_version") == expected
+                and output.get("success") is True and output.get("valid") is True
+                and output.get("pending_user_approval") is True):
+            state.review_message = "Your change is ready for review. Choose Apply changes to update the draft, or Cancel. Nothing has been saved."
         return result.provider_output
 
     return FunctionTool(
@@ -378,6 +391,16 @@ def _tracked_agent_span(**kwargs: Any):
                 )
 
 
+def _proposal_review_behavior(state: AgentStudioRunState):
+    """A validated proposal is the end of this turn: the curator must review it."""
+    def finish_at_review(_context: Any, tool_results: list[Any]) -> ToolsToFinalOutputResult:
+        return ToolsToFinalOutputResult(
+            is_final_output=state.review_message is not None,
+            final_output=state.review_message,
+        )
+    return finish_at_review
+
+
 async def stream_agent_studio_run(
     *,
     instructions: str,
@@ -405,6 +428,7 @@ async def stream_agent_studio_run(
             model=AGENT_STUDIO_OPENAI_MODEL,
             model_settings=model_settings,
             tools=tools,
+            tool_use_behavior=_proposal_review_behavior(state),
         )
         pending_calls: dict[str, tuple[str, dict[str, Any]]] = {}
         with gen_ai_conversation_scope(session_id):
@@ -486,10 +510,11 @@ async def stream_agent_studio_run(
                             ),
                             "call_id": call_id,
                         }
-                if not state.assistant_text:
+                if state.review_message or not state.assistant_text:
                     final_output = getattr(result, "final_output", None)
                     if isinstance(final_output, str) and final_output:
                         state.assistant_text_parts.append(final_output)
+                        yield {"type": "TEXT_DELTA", "delta": final_output}
                 _capture_terminal_metadata(result, state)
     finally:
         await close_owned_openai_resources(

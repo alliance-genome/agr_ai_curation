@@ -169,7 +169,7 @@ GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
     "name": "get_studio_capability_detail",
     "description": (
         "Reauthorize one catalog result and retrieve its exact hash-addressed "
-        "detail in bounded chunks. Follow the returned next_call exactly."
+        "detail inline when it fits, otherwise in bounded chunks. Follow next_call only when detail is incomplete."
     ),
     "input_schema": {
         "type": "object",
