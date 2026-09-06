@@ -7,9 +7,10 @@ from datetime import datetime
 from decimal import Decimal
 import re
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -31,21 +32,24 @@ class FrozenStrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
 
+def _reject_network_reference(value: str) -> str:
+    if "://" in value:
+        raise ValueError("benchmark input references must not be network URLs")
+    return value
+
+
+BenchmarkOpaqueReference = Annotated[
+    str, Field(min_length=1, max_length=1024), AfterValidator(_reject_network_reference),
+]
+
+
 class BenchmarkInputReference(FrozenStrictModel):
     """Typed immutable provenance; resolver behavior is owned by ALL-979."""
 
     resolver: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
-    reference: str = Field(min_length=1, max_length=1024)
+    reference: BenchmarkOpaqueReference
     version: str = Field(min_length=1, max_length=255)
     digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-
-    @field_validator("reference")
-    @classmethod
-    def reject_network_destination(cls, value: str) -> str:
-        if "://" in value:
-            raise ValueError("benchmark input references must not be network URLs")
-        return value
-
 
 class BenchmarkExecutionTarget(FrozenStrictModel):
     """Immutable agent or flow target used by suite v2 and resolved plans."""

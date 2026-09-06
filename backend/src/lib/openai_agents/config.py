@@ -1208,6 +1208,16 @@ def get_benchmark_source_timeout_seconds() -> float:
     )
 
 
+def get_benchmark_source_discovery_max_choices() -> int:
+    """Maximum paper or artifact choices returned by one discovery request."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_SOURCE_DISCOVERY_MAX_CHOICES", 50))
+
+
+def get_benchmark_source_selection_max_bytes() -> int:
+    """Maximum UTF-8 bytes per source query, locator, cursor, reference or label."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_SOURCE_SELECTION_MAX_BYTES", 4096))
+
+
 def get_benchmark_max_input_bytes() -> int:
     """Maximum canonical UTF-8 bytes per resolver input or snapshot transfer."""
     return max(

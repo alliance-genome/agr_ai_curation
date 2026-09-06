@@ -215,6 +215,40 @@ contract. Credential-free resolvers never receive the opaque bearer, and the
 credential is discarded after synchronous materialization rather than persisted
 or sent to a worker.
 
+### Discovering and preparing a new source
+
+Registered adapters may implement `DiscoverableBenchmarkSource` and
+`PreparableBenchmarkSource`. These capabilities are optional; unsupported
+operations fail with `unsupported_operation`, without calling materialization.
+Both routes require the same source-read service authorization and request-local
+delegated source header as `/materialize`. They do not execute a provider.
+
+`POST /api/v1/benchmarks/sources/discover` accepts a resolver plus exactly one
+of `query` (identifier/title search) or `locator` (paper navigation), and an
+optional opaque `cursor`. Its page contains `paper` choices with a label and
+navigation locator, or `artifact` choices with a label and either a preparable
+opaque reference or an `unavailable_reason`. `next_cursor` is null at the end.
+Only the selected paper requires artifact discovery; search must not eagerly
+download files or request conversion. Adapters validate navigation locators;
+preparable references also pass the registered artifact reference schema.
+
+`POST /api/v1/benchmarks/sources/prepare` accepts only `resolver` and `reference`.
+The adapter revalidates source membership and streams bounded bytes once. The
+catalog verifies returned identity, version, digest, byte count, provenance and
+supported UTF-8 document structure before freezing through the existing snapshot
+repository. The response is `FrozenBenchmarkInputSnapshot`; its existing
+owner/service-scoped content-download route returns the retained bytes. An
+ambiguous storage response is not permission for an automatic POST retry.
+
+`BENCHMARK_SOURCE_DISCOVERY_MAX_CHOICES` bounds page size;
+`BENCHMARK_SOURCE_SELECTION_MAX_BYTES` bounds each selection/label string.
+Artifact references additionally retain the existing non-URL, 1,024-character
+contract. Source operations use `BENCHMARK_SOURCE_TIMEOUT_SECONDS` and prepared
+documents use `BENCHMARK_MAX_INPUT_BYTES`; adapters must enforce the byte limit
+while streaming, not only after buffering. Credentials remain ephemeral and
+must never appear in choices, snapshots or error payloads. The existing
+hash-pinned `/materialize` contract is unchanged.
+
 Submission implementations must call
 `materialize_and_freeze_plan_inputs(...)` before creating queueable jobs or
 cells. The function validates delegated resolver selection, resolves and verifies
