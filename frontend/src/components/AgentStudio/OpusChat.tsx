@@ -1,3 +1,4 @@
+import { ChatMarkdown } from './ChatMarkdown'
 /**
  * OpusChat Component
  *
@@ -965,7 +966,7 @@ function OpusChat({
     setMessages(newMessages)
     if (!messageOverride) setInput('')  // Only clear input if not using override
     setIsStreaming(true)
-    setStreamStatus('Preparing AI Chat context…')
+    setStreamStatus('Reading your current draft…')
 
     // Add empty assistant message to stream into
     setMessages((prev) => [
@@ -1004,17 +1005,17 @@ function OpusChat({
             return updated
           })
         } else if (event.type === 'TOOL_SEARCH') {
-          setStreamStatus('Finding relevant capabilities…')
+          setStreamStatus('Finding the right tools for your request…')
         } else if (event.type === 'TOOL_SEARCH_RESULT') {
           setStreamStatus(
             event.loaded_tool_count === 0
-              ? 'No additional capabilities were needed.'
-              : 'Relevant capabilities are ready.',
+              ? 'Working with the information already available…'
+              : 'Ready to work on your request…',
           )
         } else if (event.type === 'PROVIDER_CONTEXT_PREFLIGHT') {
-          setStreamStatus('Preparing AI Chat context…')
+          setStreamStatus('Reading your current draft…')
         } else if (event.type === 'TOOL_USE' || event.type === 'TOOL_RESULT') {
-          setStreamStatus('Using an authorized capability…')
+          setStreamStatus('Working on your request…')
           if (!handleToolEvent(event)) break
         } else if (
           event.type === 'CONTEXT_OVERFLOW'
@@ -1668,7 +1669,7 @@ function OpusChat({
                       </Typography>
                     </Box>
                   )}
-                  <Typography variant="body2">{msg.content}</Typography>
+                  {msg.role === 'assistant' ? <ChatMarkdown>{msg.content}</ChatMarkdown> : <Typography variant="body2">{msg.content}</Typography>}
                 </MessageBubble>
               </Box>
             ))}

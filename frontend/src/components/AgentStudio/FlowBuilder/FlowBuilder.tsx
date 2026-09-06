@@ -766,6 +766,7 @@ function FlowBuilderInner({
   onFlowChange,
   onVerifyRequest,
   onOpenAgent,
+  onOutputHelp,
   active = true,
   authoringContextRef,
 }: FlowBuilderProps) {
@@ -2713,6 +2714,7 @@ function FlowBuilderInner({
                   onHide={panelMode === 'drawer' ? onPaneClick : () => setNodePanelCollapsed(true)}
                   onTaskInstructionsAuthored={() => setTaskInstructionsDefaultOnly(false)}
                   onOpenAgent={onOpenAgent}
+                  onOutputHelp={onOutputHelp}
                   leaveGuardRef={nodePanelGuardRef}
                   onDraftDirtyChange={setNodePanelDraftDirty}
                 />

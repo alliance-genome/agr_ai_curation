@@ -1114,6 +1114,7 @@ Agent ID: ${agentId}`
                     onFlowChange={handleFlowChange}
                     onVerifyRequest={handleVerifyRequest}
                     onOpenAgent={openAgentBrowser}
+                    onOutputHelp={handleDiscussWithClaude}
                     active={activeTab === 'flows'}
                     authoringContextRef={flowAuthoringContextRef}
                   />

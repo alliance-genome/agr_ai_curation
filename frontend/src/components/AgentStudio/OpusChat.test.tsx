@@ -1033,11 +1033,11 @@ describe('OpusChat', () => {
     fireEvent.change(input, { target: { value: 'Check available capabilities.' } })
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Finding relevant capabilities…')
+    expect(await screen.findByRole('status')).toHaveTextContent('Finding the right tools for your request…')
     expect(screen.queryByText(/tool name/i)).not.toBeInTheDocument()
 
     releaseSearchResult()
-    expect(await screen.findByRole('status')).toHaveTextContent('No additional capabilities were needed.')
+    expect(await screen.findByRole('status')).toHaveTextContent('Working with the information already available…')
 
     releaseDone()
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())

@@ -205,5 +205,10 @@ def test_flow_authoring_guidance_preserves_incremental_choices_and_explicit_over
         "After Cancel or a failed Apply",
         "explicit Save",
         "pre-made agent",
+        "never interpret that as\n  no output step",
+        "what the output should contain, not just its file type",
+        "custom_instructions",
+        "compare the curator's requested information",
+        "changing its prompt alone does not extend its fixed",
     ):
         assert instruction in prompt

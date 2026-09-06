@@ -86,3 +86,17 @@ describe('NodePanelDock', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
+
+
+it('keeps unapplied text when opening chat changes the panel between dock and drawer', async () => {
+  const user = userEvent.setup()
+  const props = { collapsed: false, areaWidth: 1200, railLabel: 'Output', onExpand: vi.fn(), onClose: vi.fn() }
+  const { rerender } = render(<NodePanelDock {...props} mode="docked"><input aria-label="Draft output instructions" defaultValue="" /></NodePanelDock>)
+  const input = screen.getByRole('textbox', { name: 'Draft output instructions' })
+  await user.type(input, 'One row per stock')
+  rerender(<NodePanelDock {...props} mode="drawer"><input aria-label="Draft output instructions" defaultValue="" /></NodePanelDock>)
+  expect(screen.getByRole('textbox')).toBe(input)
+  expect(input).toHaveValue('One row per stock')
+  rerender(<NodePanelDock {...props} mode="docked"><input aria-label="Draft output instructions" defaultValue="" /></NodePanelDock>)
+  expect(screen.getByRole('textbox')).toBe(input)
+})

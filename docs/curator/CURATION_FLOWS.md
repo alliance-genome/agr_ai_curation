@@ -138,6 +138,10 @@ A custom validation agent placed after an extraction step shows which step it at
 
 A formatter step shows which step's results it formats, a switch to include the supporting evidence in the output, and, for file formatters, the file name choice: the paper's file name, a custom prefix, or the formatter's own name. An example file name is shown beneath the choice.
 
+Use **What should this output contain? → Output instructions** to describe the columns, column order, what counts as one row, and how to show missing values. For chat output, describe the summary or table you want. These instructions apply to this output step in addition to the flow instructions. Choose **Apply** to update the draft, then save the flow.
+
+**Need help with your output? Chat with AI** opens help for that exact step and keeps your unapplied edits. If the step already has a saved column layout, ask AI Chat to update it when changing columns. Choose a file output or chat output before finishing a flow. A formatter can arrange the information collected upstream; ask for a custom extraction agent when your requested fields are absent from a pre-made agent’s structure.
+
 **Output variable**
 
 Every step names its saved result for later steps and exports. The default name is fine for most flows. To rename it, open **Output variable** at the bottom of the panel. Names can contain letters, numbers, and underscores. Example: `validated_genes`

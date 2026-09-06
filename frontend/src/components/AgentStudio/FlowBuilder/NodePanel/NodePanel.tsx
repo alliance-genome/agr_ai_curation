@@ -95,6 +95,7 @@ export interface NodePanelProps {
   onHide: () => void
   onTaskInstructionsAuthored?: () => void
   onOpenAgent?: (request: AgentBrowserRequest) => void
+  onOutputHelp?: (agentId: string, agentName: string, prompt: string) => void
   leaveGuardRef?: Ref<NodePanelLeaveGuard>
   onDraftDirtyChange?: (dirty: boolean) => void
 }
@@ -143,6 +144,7 @@ function NodePanel({
   onHide,
   onTaskInstructionsAuthored,
   onOpenAgent,
+  onOutputHelp,
   leaveGuardRef,
   onDraftDirtyChange,
 }: NodePanelProps) {
@@ -416,6 +418,23 @@ function NodePanel({
               )}
               label="Include the supporting evidence in the output"
             />
+          </Section>
+        )}
+
+        {kind === 'output' && (
+          <Section heading="What should this output contain?" action={<OptionalMark />}
+            help="Instructions for this output step only, in addition to your flow instructions. Use information collected by the earlier steps.">
+            <TextField fullWidth multiline minRows={4} size="small"
+              label="Output instructions"
+              placeholder="For example: One row per allele. Include allele name, confirmed identifier and supporting quote, in that order. Leave missing identifiers blank."
+              helperText="For a file, describe the columns and what makes one row. For chat, describe the summary or table you want."
+              value={draft.values.customInstructions}
+              onChange={(event) => draft.set('customInstructions', event.target.value)} sx={textFieldSx} />
+            {node.data.projection_plan && <Typography variant="body2" sx={{ mt: 1 }}>This output has a saved column layout. Use AI Chat to update that layout when changing columns.</Typography>}
+            {onOutputHelp && <Button sx={{ mt: 1, textTransform: 'none' }} onClick={() => onOutputHelp(
+              agentId, node.data.agent_display_name,
+              `Help me design the output for the ${node.data.agent_display_name} step in this flow (internal step reference: ${node.id}; use its visible name in your reply). Ask what columns or summary I need and what should count as one row. Inspect the current flow and its source fields before suggesting changes. Keep my current draft instructions, and propose output-step instructions for my review. If there is a saved column layout, inspect it and update it to match the agreed columns. If a requested field is not collected, explain the extraction change needed first.`,
+            )}>Need help with your output? Chat with AI</Button>}
           </Section>
         )}
 

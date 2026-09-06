@@ -244,6 +244,22 @@ describe('NodePanel', () => {
     }))
   })
 
+  it('edits output instructions and opens AI help without discarding the draft', async () => {
+    const user = userEvent.setup()
+    const onOutputHelp = vi.fn()
+    const node = buildNode({ agent_id: 'tsv_formatter', agent_display_name: 'TSV File Formatter', custom_instructions: 'Keep one row per allele.', validation_attachments: undefined })
+    const { onApply } = renderPanel(node, { onOutputHelp })
+    const instructions = screen.getByRole('textbox', { name: 'Output instructions' })
+    await user.clear(instructions)
+    await user.type(instructions, 'Columns: allele name, identifier. Leave missing IDs blank.')
+    await user.click(screen.getByRole('button', { name: 'Need help with your output? Chat with AI' }))
+    expect(onOutputHelp).toHaveBeenCalledWith('tsv_formatter', 'TSV File Formatter', expect.stringContaining('internal step reference: node_1'))
+    expect(instructions).toHaveValue('Columns: allele name, identifier. Leave missing IDs blank.')
+    expect(onApply).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onApply).toHaveBeenCalledWith('node_1', expect.objectContaining({ custom_instructions: 'Columns: allele name, identifier. Leave missing IDs blank.' }))
+  })
+
   it('names the extraction step a custom validator attaches to', () => {
     const node = buildNode({ agent_id: 'custom_validator', agent_display_name: 'Custom validator', validation_attachments: undefined })
     renderPanel(node, { validatorAttachment: { sourceLabel: 'Gene Extractor', sourceStep: 2, replacesLabel: 'Gene lookup' } })
