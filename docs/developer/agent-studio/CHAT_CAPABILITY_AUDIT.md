@@ -72,3 +72,9 @@ A capability needs a provider-visible tool, working dispatch, current authentica
 ## Deliberate UI boundaries
 
 Chat can prepare edits, open existing controls and explain their effect. Applying a proposal changes the draft; Save persists it. Historical restore, destructive management and Save confirmation use their existing explicit UI controls. Inspection never silently loads or changes an editor. Runtime findings require accessible run evidence; saved configuration and source code alone cannot establish whether a validator ran or why it rejected a value.
+
+## Dev usability refinements
+
+Successful Flow and Workshop proposal Apply schedules one Chat follow-up after the updated draft renders. The follow-up captures current editor context and asks the agent to continue the discussed next step, or briefly confirm completion. Cancellation, validation failure, and failed Apply do not continue. A changed tab/session or another active send supersedes the pending follow-up. Apply still changes only the draft; Save remains explicit. The review button displays Preparing while the proposal response streams and Applying during the editor operation.
+
+Workshop Start now promotes Custom data extraction. It selects an available template declaring unprofiled generic output, retains its tools/model settings, initializes a fresh profile-bound structure, and opens the item-type wizard. Help distinguishes custom records from standard Alliance structures. Support labels use installed extraction metadata and model/object/schema definition states; an active domain pack alone does not establish readiness.

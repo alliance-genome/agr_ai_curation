@@ -478,6 +478,22 @@ describe('PromptWorkshop', () => {
     expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
   })
 
+  it('starts custom extraction directly with the template tools and a fresh editable structure', async () => {
+    const catalog = buildCatalog()
+    catalog.categories[0].agents[0].agent_id = 'pdf_extraction'
+    catalog.categories[0].agents[0].agent_name = 'General PDF Extraction Agent'
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: [{ ...templates[0], agent_id: 'pdf_extraction', name: 'General PDF Extraction Agent', output_contract: { output_mode: 'unprofiled_generic' } }], group_options: [] })
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={catalog} authoringContextRef={ref} />)
+    const start = await screen.findByRole('button', { name: /^Custom data extraction/ })
+    await waitFor(() => expect(start).toBeEnabled())
+    fireEvent.click(start)
+    expect(await screen.findByText('What do you want to extract?')).toBeInTheDocument()
+    await waitFor(() => expect(ref.current?.captureAuthoringContext().draft_output?.mode).toBe('profile_bound_generic'))
+    expect(ref.current?.captureAuthoringContext().draft_tool_ids).toContain('search_document')
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+  })
+
   it.each(['reset', 'saving'])('protects scratch lifecycle during %s', async (mode) => {
     const ref = createRef<WorkshopAuthoringContextHandle>()
     render(<PromptWorkshop catalog={buildCatalog()} authoringContextRef={ref} />)

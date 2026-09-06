@@ -541,6 +541,12 @@ function OpusChat({
   const [isSubmittingDirect, setIsSubmittingDirect] = useState(false)
   const [submissionSent, setSubmissionSent] = useState(false)
   const [flowProposalApplying, setFlowProposalApplying] = useState(false)
+  const proposalApplyInFlightRef = useRef(false)
+  const sendInFlightRef = useRef(false)
+  const [applyContinuation, setApplyContinuation] = useState<{
+    activeTab: ChatContext['active_tab']; sessionId: string | null | undefined
+  } | null>(null)
+  const consumedApplyContinuationRef = useRef<typeof applyContinuation>(null)
   const [flowProposalError, setFlowProposalError] = useState<string | null>(null)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
@@ -897,7 +903,7 @@ function OpusChat({
   // Handle sending a message (optionally with a specific message text for auto-send)
   const handleSend = useCallback(async (messageOverride?: string) => {
     const messageText = messageOverride || input.trim()
-    if (!messageText || isStreaming) return
+    if (!messageText || isStreaming || sendInFlightRef.current) return
     setPendingFlowProposal(null)
 
     // Calling the provider starts with a synchronous copy of editor state; its
@@ -905,6 +911,7 @@ function OpusChat({
     const contextPromise = captureContext
       ? captureContext()
       : Promise.resolve(context)
+    sendInFlightRef.current = true
 
     pendingToolCallIdsRef.current.clear()
 
@@ -1031,6 +1038,7 @@ function OpusChat({
         return updated
       })
     } finally {
+      sendInFlightRef.current = false
       pendingToolCallIdsRef.current.clear()
       setStreamStatus(null)
       setIsStreaming(false)
@@ -1088,6 +1096,20 @@ function OpusChat({
       onDiscussMessageSent?.()
     }
   }, [discussMessage, isStreaming, onDiscussMessageSent])
+
+  // Wait for the successful Apply render before capturing the editor again.
+  // A newer user turn, navigation or session change supersedes this follow-up.
+  useEffect(() => {
+    if (!applyContinuation || consumedApplyContinuationRef.current === applyContinuation) return
+    consumedApplyContinuationRef.current = applyContinuation
+    setApplyContinuation(null)
+    if (isStreaming || sendInFlightRef.current
+      || context?.active_tab !== applyContinuation.activeTab
+      || durableSessionId !== applyContinuation.sessionId) return
+    void handleSendRef.current?.(
+      'The changes are applied to the draft. Continue with the next step we discussed; if this request is complete, briefly confirm that.',
+    )
+  }, [applyContinuation, context?.active_tab, durableSessionId, isStreaming])
 
   // Handle key press
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -1205,7 +1227,7 @@ function OpusChat({
 
 
   const handleApplyFlowProposal = useCallback(async () => {
-    if (isStreaming || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')) return
+    if (isStreaming || proposalApplyInFlightRef.current || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')) return
     const isWorkshop = pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
     if (!pendingFlowProposal || (isWorkshop ? !onApplyWorkshopProposal : !onApplyFlowProposal)) {
       setSnackbar({
@@ -1215,6 +1237,7 @@ function OpusChat({
       })
       return
     }
+    proposalApplyInFlightRef.current = true
     setFlowProposalApplying(true)
     setFlowProposalError(null)
     try {
@@ -1233,14 +1256,16 @@ function OpusChat({
             timestamp: new Date().toISOString(),
           },
         ])
+        setApplyContinuation({ activeTab: context?.active_tab, sessionId: durableSessionId })
       }
     } catch (error) {
       logger.error('Could not finish applying authoring proposal', error as Error, { component: 'OpusChat' })
       setFlowProposalError('We could not confirm this change. Review your current draft and ask AI Chat to refresh before trying again. Nothing was saved.')
     } finally {
+      proposalApplyInFlightRef.current = false
       setFlowProposalApplying(false)
     }
-  }, [isStreaming, onApplyFlowProposal, onApplyWorkshopProposal, pendingFlowProposal, setMessages, setPendingFlowProposal])
+  }, [context?.active_tab, durableSessionId, isStreaming, onApplyFlowProposal, onApplyWorkshopProposal, pendingFlowProposal, setMessages, setPendingFlowProposal])
 
   const handleCancelFlowProposal = useCallback(() => {
     logger.info('Canceled transient authoring proposal', {
@@ -1888,9 +1913,12 @@ function OpusChat({
             disabled={isStreaming || flowProposalApplying || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
               || (pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
               ? !onApplyWorkshopProposal : !onApplyFlowProposal)}
-            startIcon={flowProposalApplying ? <CircularProgress size={16} color="inherit" /> : undefined}
+            aria-busy={isStreaming || flowProposalApplying}
+            startIcon={isStreaming || flowProposalApplying
+              ? <CircularProgress size={16} sx={{ color: 'primary.main' }} aria-label={flowProposalApplying ? 'Applying changes' : 'Preparing changes'} />
+              : undefined}
           >
-            {flowProposalApplying ? 'Applying…' : 'Apply changes'}
+            {flowProposalApplying ? 'Applying…' : isStreaming ? 'Preparing…' : 'Apply changes'}
           </Button>
         </DialogActions>
       </Dialog>

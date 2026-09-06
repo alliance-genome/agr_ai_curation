@@ -268,6 +268,16 @@ function PromptWorkshop({
     setSection('setup')
   })
 
+  const customExtractionTemplate = draft.templateOptions.find((template) =>
+    template.output_contract?.output_mode === 'unprofiled_generic',
+  )
+  const handleCustomExtraction = () => {
+    if (!customExtractionTemplate) return
+    draft.startDraft('template', customExtractionTemplate.agent_id)
+    setStartScreenRequested(false)
+    setSection('output_structure')
+  }
+
   const handleChooseStart = (mode: GettingStartedMode) => {
     draft.startDraft(mode)
     setStartScreenRequested(false)
@@ -495,6 +505,8 @@ function PromptWorkshop({
           : showStartScreen ? (
             <WorkshopStartScreen
               onChoose={handleChooseStart}
+              onCustomExtraction={customExtractionTemplate ? handleCustomExtraction : undefined}
+              agents={agentMetadata}
               hasTemplates={draft.templateOptions.length > 0}
               hasSavedAgents={draft.customAgents.length > 0}
             />

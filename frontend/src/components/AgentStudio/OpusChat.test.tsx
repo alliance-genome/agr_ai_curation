@@ -71,6 +71,52 @@ describe('OpusChat', () => {
     })
   })
 
+  it.each(['flows', 'agent_workshop'] as const)('continues once after Apply in %s with the updated draft and shows both busy states', async (activeTab) => {
+    let finishStream!: () => void
+    const streaming = new Promise<void>((resolve) => { finishStream = resolve })
+    let finishApply!: (value: { applied: boolean; message: string }) => void
+    const applying = new Promise<{ applied: boolean; message: string }>((resolve) => { finishApply = resolve })
+    const workshop = activeTab === 'agent_workshop'
+    const proposal = {
+      contract_version: workshop ? 'workshop_authoring_proposal.v1' : 'flow_authoring_proposal.v1',
+      success: true, valid: true, pending_user_approval: true,
+      base_draft_fingerprint: 'sha256:base', candidate_draft_fingerprint: 'sha256:candidate',
+      change_summary: 'Update instructions', findings: [], diff: [],
+      candidate: workshop ? { draft_name: 'Reader' } : { name: 'Flow', description: '', flow_definition: { nodes: [], edges: [] } },
+    }
+    serviceMocks.streamOpusChat.mockImplementationOnce(async function* () {
+      yield { type: 'TOOL_RESULT', tool_name: workshop ? 'propose_workshop_draft_update' : 'propose_flow_draft_update', result: proposal }
+      await streaming
+      yield { type: 'DONE' }
+    }).mockImplementation(async function* () { yield { type: 'DONE' } })
+    let current: ChatContext = { active_tab: activeTab, flow_name: 'Before Apply' }
+    const captureContext = vi.fn(async () => current)
+    const apply = vi.fn(async () => {
+      const result = await applying
+      current = { active_tab: activeTab, flow_name: 'After Apply' }
+      return result
+    })
+    render(<OpusChat context={current} captureContext={captureContext}
+      onApplyFlowProposal={apply} onApplyWorkshopProposal={apply} />)
+    const input = screen.getByPlaceholderText(workshop ? 'Ask about your workshop draft...' : 'Ask about flows...')
+    fireEvent.change(input, { target: { value: 'Update the instructions, then help with the next step.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+    expect(await screen.findByRole('progressbar', { name: 'Preparing changes' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Preparing…/ })).toBeDisabled()
+    finishStream()
+    const button = await screen.findByRole('button', { name: 'Apply changes' })
+    await waitFor(() => expect(button).toBeEnabled())
+    fireEvent.click(button)
+    expect(await screen.findByRole('progressbar', { name: 'Applying changes' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Applying…/ })).toBeDisabled()
+    finishApply({ applied: true, message: 'Applied to draft.' })
+    await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2))
+    expect(serviceMocks.streamOpusChat.mock.calls[1][1]).toEqual(current)
+    expect(JSON.stringify(serviceMocks.streamOpusChat.mock.calls[1][0])).toContain('Continue with the next step we discussed')
+    expect(apply).toHaveBeenCalledTimes(1)
+    expect(captureContext).toHaveBeenCalledTimes(2)
+  })
+
   it('sends an explicit Flow continuation with current context and permits a later retry', async () => {
     serviceMocks.streamOpusChat.mockImplementation(async function* () { yield { type: 'DONE' } })
     const context: ChatContext = { active_tab: 'flows', flow_name: 'Preserved Flow' }
@@ -597,11 +643,11 @@ describe('OpusChat', () => {
       diff: [{ kind: 'changed', path: 'custom_agent.name', before: 'Original', after: 'Revised' }],
       candidate: { draft_name: 'Revised', prompt_draft: 'Private candidate instructions' },
     }
-    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+    serviceMocks.streamOpusChat.mockImplementationOnce(async function* () {
       yield { type: 'TOOL_RESULT', tool_name: 'propose_workshop_draft_update', result: proposal }
       if (action === 'failure') yield { type: 'ERROR', message: 'Turn failed after proposal' }
       yield { type: 'DONE' }
-    })
+    }).mockImplementation(async function* () { yield { type: 'DONE' } })
     const onApplyWorkshopProposal = vi.fn().mockResolvedValue({ applied: true, message: 'Applied without saving.' })
     const snapshot = vi.fn()
     render(<OpusChat context={{ active_tab: 'agent_workshop' }}
@@ -712,12 +758,14 @@ describe('OpusChat', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
       expect(await screen.findByText(/Your current draft has been kept; nothing was saved/)).toBeVisible()
       expect(screen.queryByText(/editor draft was not changed/)).not.toBeInTheDocument()
+      expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(1)
       return
     }
     fireEvent.click(screen.getByRole('button', { name: decision }))
     if (decision === 'Cancel') {
       expect(onApplyFlowProposal).not.toHaveBeenCalled()
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Review this flow change' })).not.toBeInTheDocument())
+      expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(1)
       return
     }
     await waitFor(() => expect(onApplyFlowProposal).toHaveBeenCalledWith(expect.objectContaining({

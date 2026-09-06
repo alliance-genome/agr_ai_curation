@@ -198,7 +198,7 @@ export interface WorkshopDraft {
   // Actions
   handleNew: () => void
   /** Detach from the open agent (if any) and start a fresh draft in the given mode. */
-  startDraft: (mode: GettingStartedMode) => void
+  startDraft: (mode: GettingStartedMode, customExtractionTemplateId?: string) => void
   handleSave: (options?: SaveOptions, selfExclusionConfirmed?: boolean) => Promise<void>
   handleDeleteById: (agent: CustomAgent) => Promise<void>
   handleRevert: (version: AgentExecutionRevision) => Promise<void>
@@ -238,6 +238,7 @@ export function useWorkshopDraft({
   )
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
   const [draftResetGeneration, setDraftResetGeneration] = useState(0)
+  const [customExtractionTemplateId, setCustomExtractionTemplateId] = useState<string>()
   const [chatCloneSource, setChatCloneSource] = useState<CustomAgent>()
   const chatCloneSourceRef = useRef(chatCloneSource)
   chatCloneSourceRef.current = chatCloneSource
@@ -781,7 +782,9 @@ export function useWorkshopDraft({
         modelId: templateModelId,
         modelReasoning: resolveReasoningSelection(modelOptions, templateModelId),
         toolIds: selectedTemplate?.tool_ids || [],
-        outputDraft: selectedTemplate?.output_contract
+        outputDraft: customExtractionTemplateId === parentAgentId
+          ? emptyOutputDraft('profile_bound_generic')
+          : selectedTemplate?.output_contract
           ? outputDraftFromContract(selectedTemplate.output_contract)
           : emptyOutputDraft(),
         icon: DEFAULT_AGENT_ICON,
@@ -817,6 +820,8 @@ export function useWorkshopDraft({
     selectedTemplate,
     outputLoadAttempt,
     draftResetGeneration,
+    customExtractionTemplateId,
+    parentAgentId,
   ])
 
   useEffect(() => {
@@ -1078,6 +1083,7 @@ export function useWorkshopDraft({
   }, [customAgents])
 
   const handleNew = useCallback(() => {
+    setCustomExtractionTemplateId(undefined)
     setDraftResetGeneration((generation) => generation + 1)
     if (selectedCustomAgent) {
       setCloneSourceAgentId(selectedCustomAgent.id)
@@ -1090,7 +1096,14 @@ export function useWorkshopDraft({
     setStatus('Creating a new custom agent draft')
   }, [selectedCustomAgent])
 
-  const startDraft = useCallback((mode: GettingStartedMode) => {
+  const selectParentAgent = useCallback((agentId: string) => {
+    setCustomExtractionTemplateId(undefined)
+    setParentAgentId(agentId)
+  }, [])
+
+  const startDraft = useCallback((mode: GettingStartedMode, extractionTemplateId?: string) => {
+    setCustomExtractionTemplateId(extractionTemplateId)
+    if (extractionTemplateId) setParentAgentId(extractionTemplateId)
     setDraftResetGeneration((generation) => generation + 1)
     if (selectedCustomAgent) {
       setCloneSourceAgentId(selectedCustomAgent.id)
@@ -1433,7 +1446,7 @@ export function useWorkshopDraft({
 
     gettingStartedMode,
     parentAgentId,
-    setParentAgentId,
+    setParentAgentId: selectParentAgent,
     parentAgent,
     selectedTemplate,
     templateMissing,
