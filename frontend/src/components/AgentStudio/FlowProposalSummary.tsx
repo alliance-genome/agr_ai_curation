@@ -157,10 +157,14 @@ export default function FlowProposalSummary({ proposal }: { proposal: FlowAuthor
       continue
     }
     if (entry.path.startsWith('flow_definition.edges.')) {
-      const edge = edges.find((item) => entry.path === `flow_definition.edges.${item.id}`)
+      const edge = edges.find((item) => entry.path === `flow_definition.edges.${item.id}`
+        || entry.path.startsWith(`flow_definition.edges.${item.id}.`))
       if (edge) {
         const name = (id: string) => nodes.find((item) => item.id === id)?.data.agent_display_name || 'step'
-        changes.push({ title: `Connect ${name(edge.source)} to ${name(edge.target)}`, details: [] })
+        const added = entry.path === `flow_definition.edges.${edge.id}` && entry.kind === 'added'
+        changes.push({ title: added
+          ? `Connect ${name(edge.source)} to ${name(edge.target)}`
+          : `Update the connection from ${name(edge.source)} to ${name(edge.target)}`, details: [] })
       } else {
         changes.push({ title: entry.kind === 'removed' ? 'Remove a connection between steps' : 'Update a connection between steps', details: [] })
       }

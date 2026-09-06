@@ -1354,17 +1354,30 @@ def _save_equivalent_flow_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
     """Project a raw or validated definition like the Flow Builder save adapter."""
 
     payload = deepcopy(dict(payload))
+
+    def omit_null_properties(value: dict[str, Any]) -> None:
+        # CRUD returns typed optional defaults as null; proposal serialization
+        # omits them. Do not descend into receipts or free-form authored values.
+        for key in [key for key, item in value.items() if item is None]:
+            value.pop(key)
+
+    omit_null_properties(payload)
     if payload.get("task_instructions_default_only") is not True:
         payload.pop("task_instructions_default_only", None)
+    for edge in payload.get("edges", []):
+        omit_null_properties(edge)
     for node in payload.get("nodes", []):
+        omit_null_properties(node)
         data = node.get("data")
         if isinstance(data, dict):
+            omit_null_properties(data)
             # Runtime validation groups are derived from canonical attachment
             # edges and are intentionally not part of Flow Builder persistence.
             data.pop("validation_groups", None)
             # Match validationAttachmentForPersistence in the browser: export
             # blocking is runtime policy, not an editable persisted selection.
             for attachment in data.get("validation_attachments") or []:
+                omit_null_properties(attachment)
                 attachment.pop("export_blocking", None)
     return payload
 

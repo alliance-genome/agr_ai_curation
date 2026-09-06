@@ -80,3 +80,12 @@ describe('FlowProposalSummary', () => {
   })
 
 })
+
+
+it('distinguishes removing a connection setting from removing the connection', () => {
+  const change = proposal([{ kind: 'removed', path: 'flow_definition.edges.connection.condition', before: 'has_results' }])
+  change.candidate.flow_definition.edges = [{ id: 'connection', source: 'extract', target: 'output' }]
+  render(<FlowProposalSummary proposal={change} />)
+  expect(screen.getByText('Update the connection from Gene expression to step')).toBeVisible()
+  expect(screen.queryByText('Remove a connection between steps')).not.toBeInTheDocument()
+})

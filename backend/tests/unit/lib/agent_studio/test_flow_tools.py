@@ -2241,3 +2241,25 @@ def test_validator_proposal_matches_editor_persistence_fingerprint(export_blocki
     assert fingerprint(candidate) == fingerprint(applied)
     assert candidate["nodes"][0]["data"]["validation_attachments"][0]["curator_label"] == "Validate gene identity"
     assert definition.nodes[0].data.validation_attachments[0].export_blocking is export_blocking
+
+
+def test_saved_flow_null_defaults_do_not_report_removed_connections_or_settings():
+    from src.schemas.flows import FlowDefinition
+
+    saved = FlowDefinition.model_validate({
+        "version": "1.1", "entry_node_id": "task",
+        "nodes": [
+            {"id": "task", "type": "task_input", "position": {"x": 0, "y": 0},
+             "data": {"agent_id": "task_input", "agent_display_name": "Instructions", "output_key": "task_input", "task_instructions": "Extract genes."}},
+            {"id": "extract", "type": "agent", "position": {"x": 0, "y": 100},
+             "data": {"agent_id": "pdf_extraction", "agent_display_name": "Extractor", "output_key": "items",
+                      "projection_plan": {"missing_value": None}}},
+        ],
+        "edges": [{"id": "edge_1", "source": "task", "target": "extract"}],
+    }).model_dump(mode="json")
+    assert saved["edges"][0]["condition"] is None
+    before = flow_tools._save_equivalent_flow_payload(saved)
+    candidate = flow_tools._proposal_candidate_payload(FlowDefinition.model_validate(saved))
+    assert flow_tools._exact_flow_diff(before, candidate) == []
+    assert before["nodes"][1]["data"]["projection_plan"]["missing_value"] is None
+    assert saved["edges"][0]["condition"] is None
