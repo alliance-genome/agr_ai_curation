@@ -30,6 +30,8 @@ def test_model_settings_pin_openai_reasoning_serial_tools_and_shared_retry():
     )
 
     assert settings.reasoning.effort == "medium"
+    assert settings.temperature is None
+    assert settings.top_p is None
     assert settings.tool_choice == "save_flow"
     assert settings.parallel_tool_calls is False
     assert settings.truncation == "auto"
@@ -326,7 +328,7 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch):
     ]
     assert translated[-1]["result"] == {"success": True}
     assert translated[-2]["tool_name"] == "save_flow"
-    assert captured["agent"].model == "gpt-5.6-sol"
+    assert captured["agent"].model == "gpt-6-astra"
     assert captured["max_turns"] == 5
     assert captured["run_config"].model_provider is provider
     assert "input_preview" not in captured["sentry"]

@@ -59,6 +59,16 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
     )
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "_get_all_opus_tools", lambda _context=None: [])
+    # Error-stream tests isolate the provider from the database-backed policy catalog.
+    def authorized_tools(context, **_kwargs):
+        definitions = tuple(api_module._get_all_opus_tools(context))
+        return api_module.AuthorizedToolUniverse(
+            definitions=definitions,
+            authorized_names=frozenset(item["name"] for item in definitions),
+            fingerprint="sha256:" + "a" * 64, candidate_count=len(definitions),
+            filtered_count=0,
+        )
+    monkeypatch.setattr(api_module, "_get_openai_authorized_tool_definitions", authorized_tools)
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)
     monkeypatch.setattr(api_module, "set_current_flow_context", lambda _flow_context: None)
@@ -131,7 +141,7 @@ def _assert_provider_context_preflight(event: dict) -> None:
     assert event["trace_id"] == "12345678-1234-5678-1234-567812345678"
     assert event["operation"] == "agents_sdk_run"
     assert event["provider"] == "openai"
-    assert event["model"] == "gpt-5.6-sol"
+    assert event["model"] == "gpt-6-astra"
     assert event["model_live"] is True
     assert event["payload_summary"]["json_chars"] > 0
 
@@ -334,7 +344,7 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
         "phase": "agents_sdk_run",
         "provider": "openai",
     }
-    assert runtime_reports[0][1]["context"] == {"model": "gpt-5.6-sol"}
+    assert runtime_reports[0][1]["context"] == {"model": "gpt-6-astra"}
 
 
 def test_chat_with_opus_sanitizes_api_errors(monkeypatch):

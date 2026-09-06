@@ -1784,6 +1784,16 @@ def get_agent_studio_endpoint_timeout_seconds() -> float:
     return max(1.0, _get_env_float_with_fallback("AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS", 30.0))
 
 
+def get_agent_studio_openai_model() -> str:
+    """Dedicated Chat model; does not change extraction or routing defaults."""
+    return os.getenv("AGENT_STUDIO_OPENAI_MODEL", "gpt-6-astra").strip()
+
+
+def get_agent_studio_reasoning_effort() -> str:
+    """Chat reasoning, validated against the selected model by its runtime."""
+    return os.getenv("AGENT_STUDIO_REASONING_EFFORT", "medium").strip().lower()
+
+
 def get_agent_studio_openai_max_turns() -> int:
     """Maximum Agents SDK turns for one Agent Studio authoring response."""
 

@@ -11,7 +11,7 @@ import json
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Sequence, cast
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 
 from agents import (
     Agent,
@@ -27,14 +27,17 @@ from agents import (
 from openai import BadRequestError
 from openai.types.responses import ResponseTextDeltaEvent
 
-from src.lib.config.models_loader import get_default_model as get_default_catalog_model
+from src.lib.config.models_loader import get_model as get_catalog_model
 from src.lib.observability.sentry import (
     gen_ai_conversation_scope,
     gen_ai_invoke_agent_span,
     set_redacted_ai_span_data,
     set_sentry_span_status,
 )
-from src.lib.openai_agents.config import ReasoningEffort, build_model_settings
+from src.lib.openai_agents.config import (
+    ReasoningEffort, build_model_settings, get_agent_studio_openai_model,
+    get_agent_studio_reasoning_effort, require_model_reasoning_effort,
+)
 from src.lib.openai_agents.langfuse_client import is_openai_agents_tracing_enabled
 from src.lib.openai_agents.runner import (
     build_owned_openai_responses_resources,
@@ -43,24 +46,17 @@ from src.lib.openai_agents.runner import (
 
 logger = logging.getLogger(__name__)
 
-_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
-
-
 def resolve_agent_studio_model() -> tuple[str, ReasoningEffort]:
-    """Resolve Agent Studio from the canonical default model catalog entry."""
-
-    model = get_default_catalog_model()
+    """Resolve the dedicated Chat model using canonical capability metadata."""
+    model = get_catalog_model(get_agent_studio_openai_model())
     if model is None:
-        raise ValueError("Agent Studio requires a default model in the model catalog")
+        raise ValueError("Agent Studio requires a registered Chat model")
     if model.provider.strip().lower() != "openai":
-        raise ValueError("Agent Studio requires the default model catalog entry to use OpenAI")
-
-    reasoning = (model.default_reasoning or "").strip().lower()
-    if reasoning not in _REASONING_EFFORTS:
-        raise ValueError(
-            "Agent Studio requires a valid default_reasoning on the default model catalog entry"
-        )
-    return model.model_id, cast(ReasoningEffort, reasoning)
+        raise ValueError("Agent Studio requires the Chat model to use OpenAI")
+    reasoning = require_model_reasoning_effort(
+        model.model_id, get_agent_studio_reasoning_effort(),
+    )
+    return model.model_id, reasoning
 
 
 AGENT_STUDIO_OPENAI_MODEL, AGENT_STUDIO_REASONING_EFFORT = resolve_agent_studio_model()
