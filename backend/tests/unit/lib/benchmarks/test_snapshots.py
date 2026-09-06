@@ -1,6 +1,7 @@
 """Canonical benchmark snapshot store integrity tests."""
 
 import hashlib
+from io import BytesIO
 
 import pytest
 
@@ -31,7 +32,7 @@ def test_filesystem_store_deduplicates_and_survives_reopen(tmp_path):
 
     assert first == second
     assert FileSystemBenchmarkSnapshotStore(tmp_path).read(
-        blob_reference=first
+        blob_reference=first, max_bytes=len(content)
     ) == content
     assert len(tuple(tmp_path.rglob(digest.removeprefix("sha256:") + "*"))) == 1
 
@@ -74,8 +75,12 @@ def test_s3_store_requires_and_reuses_exact_private_object_version():
             self.response = {"Error": {"Code": code}}
 
     class Body:
-        def read(self):
+        def read(self, maximum):
+            assert maximum == len(content) + 1
             return content
+
+        def close(self):
+            pass
 
     class Client:
         put_requests = []
@@ -115,7 +120,7 @@ def test_s3_store_requires_and_reuses_exact_private_object_version():
     assert len(client.put_requests) == 1
     assert client.put_requests[0]["Bucket"] == "private-bucket"
     assert client.put_requests[0]["IfNoneMatch"] == "*"
-    assert store.read(blob_reference=first) == content
+    assert store.read(blob_reference=first, max_bytes=len(content)) == content
     assert client.get_request is not None
     assert client.get_request["VersionId"] == "private-version-1"
 
@@ -152,3 +157,30 @@ def test_s3_store_fails_closed_without_real_enabled_versioning(
     )
     with pytest.raises(BenchmarkSnapshotError, match=message):
         store.put(digest=_digest(content), content=content)
+
+
+def test_stores_bound_reads_and_close_s3_body(tmp_path):
+    store = FileSystemBenchmarkSnapshotStore(tmp_path)
+    content = b"synthetic saved input"
+    reference = store.put(digest=_digest(content), content=content)
+    with pytest.raises(BenchmarkSnapshotError, match="read limit"):
+        store.read(blob_reference=reference, max_bytes=3)
+
+    class Body(BytesIO):
+        requested = []
+
+        def read(self, size=-1):
+            self.requested.append(size)
+            assert size == 4  # The store may read only cap+1, not the entire blob.
+            return super().read(size)
+
+    body = Body(content)
+
+    class Client:
+        def get_object(self, **kwargs):
+            return {"Body": body}
+
+    s3 = S3BenchmarkSnapshotStore(Client(), bucket="private", prefix="inputs")
+    with pytest.raises(BenchmarkSnapshotError, match="read limit"):
+        s3.read(blob_reference="s3://private/inputs/sha256/synthetic?versionId=one", max_bytes=3)
+    assert body.closed and body.requested == [4]

@@ -1201,7 +1201,7 @@ def get_benchmark_cli_poll_timeout_seconds() -> float:
 
 
 def get_benchmark_source_timeout_seconds() -> float:
-    """Maximum time allowed for one registered source materialization."""
+    """Maximum time for source materialization or receiving a raw snapshot upload."""
     return max(
         0.1,
         _get_env_float_with_fallback("BENCHMARK_SOURCE_TIMEOUT_SECONDS", 30.0),
@@ -1209,7 +1209,7 @@ def get_benchmark_source_timeout_seconds() -> float:
 
 
 def get_benchmark_max_input_bytes() -> int:
-    """Maximum UTF-8 bytes accepted from one registered input resolver."""
+    """Maximum canonical UTF-8 bytes per resolver input or snapshot transfer."""
     return max(
         1,
         _get_env_int_with_fallback("BENCHMARK_MAX_INPUT_BYTES", 52_428_800),
