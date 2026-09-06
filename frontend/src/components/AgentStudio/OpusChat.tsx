@@ -525,6 +525,13 @@ function OpusChat({
     () => resolveOpusConversationKey(context, durableSessionIdProp, sourceSessionId),
     [context, durableSessionIdProp, sourceSessionId]
   )
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  const activeConversationKeyRef = useRef(conversationKey)
+  activeConversationKeyRef.current = conversationKey
   const [sharedSnapshot, setSharedSnapshot] = useState<SharedOpusChatState>(() =>
     getSharedOpusChatState(conversationKey, initialConversation, durableSessionIdProp)
   )
@@ -536,6 +543,8 @@ function OpusChat({
   const durableSessionId = sharedSnapshot.durableSessionId
   const pendingFlowProposal = sharedSnapshot.pendingFlowProposal
   const [input, setInput] = useState('')
+  const [startingNewChat, setStartingNewChat] = useState(false)
+  const startingNewChatRef = useRef(false)
   const [toolCallsExpanded, setToolCallsExpanded] = useState<{ [key: number]: boolean }>({})  // Track expanded state per message
   const [suggestionDialogOpen, setSuggestionDialogOpen] = useState(false)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
@@ -688,6 +697,35 @@ function OpusChat({
       .filter((message) => Boolean(message.content && message.content.trim()))
     onConversationSnapshotChange(snapshot)
   }, [messages, onConversationSnapshotChange])
+
+  const handleNewChat = async () => {
+    if (!onDurableSessionIdChange || startingNewChatRef.current || sendInFlightRef.current
+      || isStreaming || flowProposalApplying || workshopActionBusy || isSubmittingDirect) return
+    startingNewChatRef.current = true
+    setStartingNewChat(true)
+    try {
+      const session = await createAgentStudioSession()
+      if (!mountedRef.current || activeConversationKeyRef.current !== conversationKey) return
+      // Seed a separate state: migrating here would copy the previous transcript.
+      getSharedOpusChatState(session.session_id, [], session.session_id)
+      setPendingFlowProposal(null)
+      setPendingWorkshopAction(null)
+      setApplyContinuation(null)
+      setInput('')
+      setToolCallsExpanded({})
+      setFlowProposalError(null)
+      setWorkshopActionError(null)
+      setFeedbackMenuAnchor(null)
+      preserveCurrentConversationSessionRef.current = session.session_id
+      onConversationSnapshotChange?.([])
+      onDurableSessionIdChange(session.session_id)
+    } catch {
+      setSnackbar({ open: true, severity: 'error', message: 'Could not start a new chat. Your current conversation is still here. Please try again.' })
+    } finally {
+      startingNewChatRef.current = false
+      setStartingNewChat(false)
+    }
+  }
 
   const ensureDurableSessionId = useCallback(async (): Promise<string> => {
     if (durableSessionId) {
@@ -906,7 +944,7 @@ function OpusChat({
   // Handle sending a message (optionally with a specific message text for auto-send)
   const handleSend = useCallback(async (messageOverride?: string) => {
     const messageText = messageOverride || input.trim()
-    if (!messageText || isStreaming || sendInFlightRef.current) return
+    if (!messageText || isStreaming || sendInFlightRef.current || startingNewChatRef.current) return
     setPendingFlowProposal(null)
 
     // Calling the provider starts with a synchronous copy of editor state; its
@@ -1150,6 +1188,7 @@ function OpusChat({
 
   // Handle direct AI-assisted submission (bypasses chat UI)
   const handleDirectSubmission = useCallback(async (additionalComment?: string) => {
+    if (startingNewChatRef.current) return
     setIsSubmittingDirect(true)
 
     try {
@@ -1230,7 +1269,7 @@ function OpusChat({
 
 
   const handleApplyFlowProposal = useCallback(async () => {
-    if (isStreaming || proposalApplyInFlightRef.current || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')) return
+    if (startingNewChatRef.current || isStreaming || proposalApplyInFlightRef.current || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')) return
     const isWorkshop = pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
     if (!pendingFlowProposal || (isWorkshop ? !onApplyWorkshopProposal : !onApplyFlowProposal)) {
       setSnackbar({
@@ -1337,7 +1376,7 @@ function OpusChat({
     setInput(prompt)
   }
 
-  const feedbackDisabled = messages.length === 0 || isStreaming || isSubmittingDirect
+  const feedbackDisabled = startingNewChat || messages.length === 0 || isStreaming || isSubmittingDirect
   const feedbackMenuOpen = Boolean(feedbackMenuAnchor)
   const closeFeedbackMenu = () => setFeedbackMenuAnchor(null)
   const hideLabel = variant === 'drawer' ? 'Close AI Chat' : 'Hide AI Chat'
@@ -1359,7 +1398,7 @@ function OpusChat({
             size="small"
             variant="outlined"
             label={durableSeedLabel}
-            sx={{ height: 20, fontSize: '0.7rem', maxWidth: 220 }}
+            sx={{ height: 20, fontSize: '0.7rem', maxWidth: 220, minWidth: 0, flexShrink: 1 }}
           />
         ) : selectedChipLabel ? (
           <Chip
@@ -1375,6 +1414,13 @@ function OpusChat({
           />
         ) : null}
         <Box sx={{ ml: 'auto', display: 'flex', gap: 0.25, alignItems: 'center', flexShrink: 0 }}>
+          {onDurableSessionIdChange && <Tooltip title="Start a fresh conversation. Your editor draft stays as it is, and previous conversations remain in Chat History.">
+            <span><Button size="small" onClick={() => void handleNewChat()}
+              disabled={startingNewChat || isStreaming || flowProposalApplying || workshopActionBusy || isSubmittingDirect}
+              aria-busy={startingNewChat}
+              startIcon={startingNewChat ? <CircularProgress size={14} /> : undefined}
+              sx={{ whiteSpace: 'nowrap', minWidth: 0, px: 1, textTransform: 'none' }}>New chat</Button></span>
+          </Tooltip>}
           <Tooltip title="Send feedback to the developers">
             <HeaderIconButton
               size="small"
@@ -1630,10 +1676,10 @@ function OpusChat({
               <Box sx={{ alignSelf: 'flex-start', py: 1 }}>
                 <Typography variant="body2" sx={{ mb: 1 }}>Continue in the Workshop. Saving still needs your confirmation.</Typography>
                 {workshopActionError && <Alert severity="warning" sx={{ mb: 1 }}>{workshopActionError}</Alert>}
-                <Button variant="outlined" disabled={isStreaming || workshopActionBusy}
+                <Button variant="outlined" disabled={startingNewChat || isStreaming || workshopActionBusy}
                   onClick={async () => {
                     const action = sharedSnapshot.pendingWorkshopAction
-                    if (!action || workshopActionBusy) return
+                    if (!action || workshopActionBusy || startingNewChatRef.current) return
                     setWorkshopActionBusy(true)
                     setWorkshopActionError(null)
                     try {
@@ -1680,7 +1726,7 @@ function OpusChat({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyPress}
-          disabled={isStreaming}
+          disabled={isStreaming || startingNewChat}
           size="small"
           inputRef={inputRef}
           sx={{
@@ -1694,7 +1740,7 @@ function OpusChat({
             <IconButton
               color="primary"
               onClick={() => handleSend()}
-              disabled={!input.trim() || isStreaming}
+              disabled={!input.trim() || isStreaming || startingNewChat}
               sx={{
                 backgroundColor: 'primary.main',
                 color: 'primary.contrastText',
@@ -1913,7 +1959,7 @@ function OpusChat({
           <Button
             onClick={() => void handleApplyFlowProposal()}
             variant="contained"
-            disabled={isStreaming || flowProposalApplying || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
+            disabled={startingNewChat || isStreaming || flowProposalApplying || pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
               || (pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
               ? !onApplyWorkshopProposal : !onApplyFlowProposal)}
             aria-busy={isStreaming || flowProposalApplying}

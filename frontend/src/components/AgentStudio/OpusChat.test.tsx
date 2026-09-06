@@ -35,6 +35,96 @@ describe('OpusChat', () => {
     })
   })
 
+  it('starts a separate chat while preserving the editor context and previous conversation', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    serviceMocks.createAgentStudioSession.mockResolvedValue({ session_id: 'fresh-chat' })
+    serviceMocks.streamOpusChat.mockImplementation(async function* () { yield { type: 'DONE' } })
+    const context: ChatContext = { active_tab: 'flows', flow_name: 'Unsaved stock flow' }
+    function Harness() {
+      const [session, setSession] = useState('old-chat')
+      return <>
+        <button onClick={() => setSession('old-chat')}>Reopen previous</button>
+        <OpusChat context={context} durableSessionId={session}
+          sourceSessionId="old-chat" initialConversation={[{ role: 'user', content: 'Previous discussion' }]}
+          onDurableSessionIdChange={setSession} />
+      </>
+    }
+    render(<Harness />)
+    expect(screen.getByText('Previous discussion')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await waitFor(() => expect(screen.queryByText('Previous discussion')).not.toBeInTheDocument())
+    const input = screen.getByPlaceholderText('Ask about flows...')
+    fireEvent.change(input, { target: { value: 'Help with this draft' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+    await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledWith(
+      [expect.objectContaining({ role: 'user', content: 'Help with this draft' })], context, 'fresh-chat'))
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen previous' }))
+    expect(await screen.findByText('Previous discussion')).toBeInTheDocument()
+  })
+
+  it('shows progress and blocks duplicate resets and sending while the new chat is created', async () => {
+    let finish!: (value: { session_id: string }) => void
+    serviceMocks.createAgentStudioSession.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    const changeSession = vi.fn()
+    render(<OpusChat context={{ active_tab: 'flows' }} durableSessionId="old-chat"
+      onDurableSessionIdChange={changeSession} />)
+    const button = screen.getByRole('button', { name: 'New chat' })
+    fireEvent.click(button)
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    expect(within(button).getByRole('progressbar')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask about flows...')).toBeDisabled()
+    fireEvent.click(button)
+    expect(serviceMocks.createAgentStudioSession).toHaveBeenCalledTimes(1)
+    finish({ session_id: 'fresh-chat' })
+    await waitFor(() => expect(changeSession).toHaveBeenCalledWith('fresh-chat'))
+  })
+
+  it('blocks an old Workshop action during reset and ignores completion after unmount', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    let finish!: (value: { session_id: string }) => void
+    serviceMocks.createAgentStudioSession.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TOOL_RESULT', tool_name: 'request_workshop_action', result: {
+        success: true, contract_version: 'workshop_action.v1',
+        request: { action: 'open_agent', agent_id: 'ca_stock' }, label: 'Open Stock reader',
+      } }
+      yield { type: 'DONE' }
+    })
+    const changeSession = vi.fn()
+    const open = vi.fn()
+    const { unmount } = render(<OpusChat context={{ active_tab: 'flows' }} durableSessionId="old-chat"
+      onWorkshopAction={open} onDurableSessionIdChange={changeSession} />)
+    const input = screen.getByPlaceholderText('Ask about flows...')
+    fireEvent.change(input, { target: { value: 'Edit stock reader' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+    const action = await screen.findByRole('button', { name: 'Open Stock reader' })
+    await waitFor(() => expect(action).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    expect(action).toBeDisabled()
+    fireEvent.click(action)
+    expect(open).not.toHaveBeenCalled()
+    unmount()
+    finish({ session_id: 'fresh-chat' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(changeSession).not.toHaveBeenCalled()
+  })
+
+  it('keeps the current conversation and unsent message when creating a chat fails', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    serviceMocks.createAgentStudioSession.mockRejectedValue(new Error('Unavailable'))
+    const changeSession = vi.fn()
+    render(<OpusChat context={{ active_tab: 'flows' }} durableSessionId="old-chat"
+      initialConversation={[{ role: 'user', content: 'Previous discussion' }]}
+      onDurableSessionIdChange={changeSession} />)
+    fireEvent.change(screen.getByPlaceholderText('Ask about flows...'), { target: { value: 'Unsent message' } })
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    expect(await screen.findByText(/Could not start a new chat/)).toBeInTheDocument()
+    expect(screen.getByText('Previous discussion')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask about flows...')).toHaveValue('Unsent message')
+    expect(changeSession).not.toHaveBeenCalled()
+  })
+
   it('uses the send-time context capture rather than the render projection', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
