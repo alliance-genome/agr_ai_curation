@@ -13,6 +13,7 @@ from sqlalchemy import select
 from src.lib.agent_studio.execution_revision_service import (
     get_execution_revision, list_execution_revisions,
 )
+from src.lib.agent_studio.generic_profile_service import get_profile_revision
 from src.lib.openai_agents.config import get_tool_page_default_limit
 from src.models.sql.curation_flow import CurationFlow
 
@@ -83,6 +84,15 @@ def inspect_saved_resource(db, *, user_id: int, active_group_ids: list[str], req
         db, agent_id, _id(request.revision_id, "revision"), user_id,
         active_group_ids=active_group_ids,
     )
+    output_profile = None
+    pin = saved.output_contract.generic_profile_ref
+    if pin is not None:
+        # get_execution_revision has already verified this exact profile pin and
+        # the caller's access. Use the same authorized read for its field details.
+        profile = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+        output_profile = {"profile_id": str(pin.profile_id), "revision_id": str(profile.id),
+                          "revision": profile.revision, "fingerprint": profile.fingerprint,
+                          "contract": profile.contract}
     return {"saved": True, "loaded_in_editor": False, "agent_id": str(agent_id),
             "revision_id": str(row.id), "revision": row.revision, "fingerprint": row.fingerprint,
-            "snapshot": saved.model_dump(mode="json")}
+            "snapshot": saved.model_dump(mode="json"), "output_profile": output_profile}

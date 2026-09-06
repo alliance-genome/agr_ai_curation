@@ -29,7 +29,7 @@ A capability needs a provider-visible tool, working dispatch, current authentica
 | Explain a validator's purpose, inputs and limitations | capability detail; get_domain_pack_validation_plan; saved revision read | Distinguish structural conformance, semantic findings and submission readiness |
 | Explain an actual validation failure | trace/evidence/domain review tools | Audit exact run access and scope; configuration alone cannot prove why a run failed |
 | Reuse a saved structure | list_saved/saved_revision then select_output | Existing reauthorization of exact profile revision |
-| Inspect saved agent versions and compare settings | new inspect_saved_studio_resource agent_revisions/agent_revision | Implemented typed service-backed read; preserves exact revision and access arguments |
+| Inspect saved agent versions and compare settings | new inspect_saved_studio_resource agent_revisions/agent_revision | Implemented typed service-backed read; includes the exact pinned custom structure and preserves revision/access arguments |
 | List or inspect saved flows | new inspect_saved_studio_resource list_flows/flow | Implemented owner/active filters and bounded continuation; never loads editor |
 | Inspect platform code while editing | search_codebase/read_source_file | Enabled across authoring tabs; source-only path policy excludes deployment/private files |
 | Create from scratch or a template; clone an agent | Workshop start screen and draft.startDraft | request_workshop_action opens scratch/template/authorized clone drafts; no persistence until explicit Save |
@@ -62,7 +62,7 @@ A capability needs a provider-visible tool, working dispatch, current authentica
 
 - 297 focused backend tests pass across tools, authenticated dispatch, source reads, saved resources, action reauthorization, nested field mappings, proposal validation and exact revision retargeting.
 - Database inspection is typed, rejects arbitrary SQL/write actions, scopes saved flows to the authenticated owner, uses existing revision authorization, and runs inside a PostgreSQL read-only transaction.
-- Source reads and search share a path boundary; regressions cover deployment files, private paths, symlinks and explicit search globs.
+- Source reads and search share a path boundary; regressions cover deployment files, private paths, symlinks and explicit search globs. Live testing exposed incorrect glob anchoring outside the repository cwd; both search modes now run from the source root, with four real-rg regressions. Saved revision inspection includes its authorized pinned profile so field questions do not require editor navigation.
 - Chat actions are prepared without side effects, reauthorized on click and rejected when the draft, tab, source or saved revision changes. Lifecycle actions wait for Save/authoring/hydration and explicitly reset discarded drafts even for the same source.
 - Focused frontend regressions cover readable proposals, Apply conflicts, action buttons, same-source resets, pending Save, tab changes during validation and exact-step return with repeated uses of the same agent.
 - Live dev discovery: internal attachment export policy was removed by the browser but included in proposal fingerprints. The compiler now emits the same persistence form; both flag values fail the regression before the fix and pass afterward. Focused corrective backend gate: 133 passed.

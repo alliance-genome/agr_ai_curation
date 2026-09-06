@@ -58,6 +58,7 @@ def test_flow_search_is_owned_bounded_and_continuable(monkeypatch):
 def test_exact_revision_read_preserves_saved_identity_and_access_arguments(monkeypatch):
     agent, revision = uuid4(), uuid4()
     saved = MagicMock()
+    saved.output_contract.generic_profile_ref = None
     saved.model_dump.return_value = {"custom_prompt": "Original prompt"}
     read = MagicMock(return_value=(SimpleNamespace(id=revision, revision=2, fingerprint="exact"), saved))
     monkeypatch.setattr(inspection, "get_execution_revision", read)
@@ -114,3 +115,30 @@ def test_raw_sql_and_write_actions_are_not_tool_inputs():
     for data in ({"action": "list_flows", "sql": "SELECT * FROM users"}, {"action": "save_flow"}):
         with pytest.raises(ValidationError):
             inspection.SavedResourceInspection.model_validate(data)
+
+
+@pytest.mark.parametrize("authorized", [True, False])
+def test_saved_revision_includes_only_its_authorized_pinned_structure(monkeypatch, authorized):
+    db, agent, revision, profile_id, profile_revision = MagicMock(), uuid4(), uuid4(), uuid4(), uuid4()
+    saved = MagicMock()
+    saved.output_contract.generic_profile_ref = SimpleNamespace(profile_id=profile_id, revision=3)
+    saved.model_dump.return_value = {"output_contract": "exact saved contract"}
+    read = MagicMock(return_value=(SimpleNamespace(id=revision, revision=2, fingerprint="agent-pin"), saved))
+    profile = SimpleNamespace(id=profile_revision, revision=3, fingerprint="profile-pin",
+                              contract={"description": "Only experimental genes", "fields": [{"key": "gene"}]})
+    read_profile = MagicMock(return_value=profile)
+    monkeypatch.setattr(inspection, "get_execution_revision", read)
+    monkeypatch.setattr(inspection, "get_profile_revision", read_profile)
+    request = inspection.SavedResourceInspection(action="agent_revision", agent_id=str(agent), revision_id=str(revision))
+    if not authorized:
+        read.side_effect = ValueError("Unavailable saved revision")
+        with pytest.raises(ValueError, match="Unavailable"):
+            inspection.inspect_saved_resource(db, user_id=7, active_group_ids=[], request=request)
+        read_profile.assert_not_called()
+        return
+    result = inspection.inspect_saved_resource(db, user_id=7, active_group_ids=[], request=request)
+    read_profile.assert_called_once_with(db, profile_id, 3, 7, include_archived=True)
+    assert result["output_profile"] == {"profile_id": str(profile_id), "revision_id": str(profile_revision),
+                                        "revision": 3, "fingerprint": "profile-pin", "contract": profile.contract}
+    assert result["loaded_in_editor"] is False
+    db.commit.assert_not_called()

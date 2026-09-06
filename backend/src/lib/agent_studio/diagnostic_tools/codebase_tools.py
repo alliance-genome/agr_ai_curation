@@ -136,12 +136,13 @@ def _require_rg() -> str:
 def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iterable[Dict[str, Any]]:
     """Yield file path matches using rg."""
     rg_path = _require_rg()
-    command = [rg_path, "--files", str(root)]
+    command = [rg_path, "--files", "."]
     if path_glob:
         command.extend(["-g", path_glob])
     try:
         completed = subprocess.run(
             command,
+            cwd=root,
             capture_output=True,
             text=True,
             check=False,
@@ -181,10 +182,11 @@ def _iter_content_matches(
     ]
     if path_glob:
         command.extend(["-g", path_glob])
-    command.extend(["--", query, str(root)])
+    command.extend(["--", query, "."])
     try:
         completed = subprocess.run(
             command,
+            cwd=root,
             capture_output=True,
             text=True,
             check=False,

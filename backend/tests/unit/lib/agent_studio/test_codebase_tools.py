@@ -309,3 +309,19 @@ def test_search_filters_private_paths_even_when_explicitly_globbed(tmp_path, mon
         subprocess.CompletedProcess(args=args[0], returncode=0, stdout=output, stderr=""))
     result = codebase_tools.search_codebase(query="src" if mode == "files" else "marker", search_mode=mode, path_glob="**/*")
     assert [row["path"] for row in result["results"]] == ["backend/src/public.py"]
+
+
+@pytest.mark.parametrize("search_mode", ["files", "content"])
+@pytest.mark.parametrize("path_glob", ["backend/src/**/*.py", "backend/src/demo.py"])
+def test_search_globs_are_relative_to_repository_from_another_working_directory(tmp_path, monkeypatch, search_mode, path_glob):
+    repo = tmp_path / "repo"
+    source = repo / "backend/src/demo.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("class GenericProfileContract: pass\n")
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo))
+    monkeypatch.chdir(tmp_path)
+    result = codebase_tools.search_codebase(
+        query="demo" if search_mode == "files" else "GenericProfileContract",
+        search_mode=search_mode, path_glob=path_glob,
+    )
+    assert [item["path"] for item in result["results"]] == ["backend/src/demo.py"]
