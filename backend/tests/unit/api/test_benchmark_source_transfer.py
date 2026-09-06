@@ -9,10 +9,14 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from src.api import benchmark_sources as api
 from src.api.benchmark_auth import require_benchmark_source_read
+from src.lib import http_errors
+from src.lib.benchmarks.observability import BenchmarkOperationError
 from src.lib.benchmarks.snapshots import BenchmarkSnapshotError, BenchmarkSnapshotRepository
+from src.schemas.benchmark_sources import BenchmarkSnapshotUploadMetadata
 
 
 def digest(content):
@@ -146,18 +150,72 @@ def test_unknown_owner_checked_before_store_and_safe_storage_error(transfer, mon
     assert response.status_code == 404 and response.headers["cache-control"] == "no-store"
 
 
-def test_upload_storage_failure_has_no_paper_exception_chain(transfer, monkeypatch):
+@pytest.mark.parametrize("operation", ["upload", "download"])
+@pytest.mark.parametrize("failure_type", ["storage", "database"])
+def test_storage_failures_report_only_sanitized_errors(
+    transfer, monkeypatch, caplog, operation, failure_type,
+):
+    client, _ = transfer
+    sensitive = "synthetic private paper and SQL parameter"
+    reports = []
+    closed = []
+
+    def report(exc, **context):
+        reports.append((exc, context))
+        return True
+
     def broken():
-        raise BenchmarkSnapshotError("private paper material")
+        if failure_type == "database":
+            raise IntegrityError("INSERT " + sensitive, {"content": sensitive}, ValueError(sensitive))
+        raise BenchmarkSnapshotError(sensitive)
 
+    monkeypatch.setattr(http_errors, "report_runtime_exception", report)
+    monkeypatch.setattr(Session, "__exit__", lambda _self, *args: closed.append(args[0]))
+    monkeypatch.setattr(Session, "scalar", lambda *_: SimpleNamespace(content_bytes=15), raising=False)
     monkeypatch.setattr(api, "configured_benchmark_snapshot_store", broken)
-    from src.schemas.benchmark_sources import BenchmarkSnapshotUploadMetadata
-
     with pytest.raises(HTTPException) as caught:
-        api._freeze_uploaded_content(b"synthetic paper", BenchmarkSnapshotUploadMetadata(
-            content_type="text/plain", digest=digest(b"synthetic paper")), "owner", "client")
-    assert caught.value.__context__ is None and caught.value.__cause__ is None
-    assert "private paper" not in str(caught.value)
+        if operation == "upload":
+            api._freeze_uploaded_content(b"synthetic paper", BenchmarkSnapshotUploadMetadata(
+                content_type="text/plain", digest=digest(b"synthetic paper")), "owner", "client")
+        else:
+            api._read_snapshot_content(uuid4(), "owner", 4096)
+    assert caught.value.status_code == 503
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is reports[0][0]
+    assert len(reports) == 1 and len(closed) == 1
+    reported, context = reports[0]
+    assert isinstance(reported, BenchmarkOperationError)
+    assert reported.__traceback__ is not None
+    assert reported.__context__ is None and reported.__cause__ is None
+    assert f"snapshot_{operation}" in str(reported)
+    assert context["component"] == "api" and context["context"]["status_code"] == 503
+    records = [record for record in caplog.records if record.name == api.logger.name]
+    assert len(records) == 1 and records[0].sentry_skip_event is True
+    assert records[0].exc_info[1] is reported
+    assert sensitive not in caplog.text + str(reports) + str(caught.value)
+
+    # The actual route preserves its no-store error contract after reporting.
+    if operation == "upload":
+        response = client.post("/api/v1/benchmarks/sources/snapshots", content=b"synthetic paper",
+                               headers={"Content-Type": "text/plain",
+                                        "X-Benchmark-Content-Digest": digest(b"synthetic paper")})
+    else:
+        response = client.get(f"/api/v1/benchmarks/sources/snapshots/{uuid4()}/content")
+    assert response.status_code == 503 and response.headers["cache-control"] == "no-store"
+    assert response.json()["detail"] == caught.value.detail
+    assert len(reports) == 2 and len(closed) == 2
+    assert sensitive not in response.text + caplog.text + str(reports)
+
+
+def test_validation_and_missing_owner_do_not_report_server_failures(transfer, monkeypatch):
+    client, _ = transfer
+    monkeypatch.setattr(http_errors, "report_runtime_exception",
+                        lambda *_args, **_kwargs: pytest.fail("Expected 4xx must not be reported"))
+    monkeypatch.setattr(Session, "scalar", lambda *_: None, raising=False)
+    assert client.post("/api/v1/benchmarks/sources/snapshots", content=b"paper", headers={
+        "Content-Type": "text/plain", "X-Benchmark-Content-Digest": digest(b"different"),
+    }).status_code == 409
+    assert client.get(f"/api/v1/benchmarks/sources/snapshots/{uuid4()}/content").status_code == 404
 
 
 def test_transfer_openapi_describes_raw_body_and_binary_download(transfer):

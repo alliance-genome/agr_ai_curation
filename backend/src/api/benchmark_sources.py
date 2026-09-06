@@ -34,6 +34,7 @@ from src.lib.benchmarks.input_resolvers import (
 from src.lib.benchmarks.document_inputs import decode_frozen_document
 from src.lib.benchmarks.loader import BenchmarkCatalogError
 from src.lib.benchmarks.models import BenchmarkInputReference
+from src.lib.benchmarks.observability import sanitized_benchmark_error
 from src.lib.benchmarks.suites import load_checked_in_suites
 from src.lib.benchmarks.snapshots import (
     BenchmarkSnapshotError,
@@ -320,9 +321,15 @@ def _freeze_uploaded_content(
                 receipt = repository.receipt(snapshot)
                 db.commit()
                 return receipt
-        except (BenchmarkSnapshotError, SQLAlchemyError, OSError):
-            pass
-        raise _transfer_error(503, "source_unavailable", "Benchmark input could not be stored")
+        except (BenchmarkSnapshotError, SQLAlchemyError, OSError) as exc:
+            error_type = type(exc).__name__
+        raise_sanitized_http_exception(
+            logger,
+            status_code=503,
+            detail={"error": "source_unavailable", "message": "Benchmark input could not be stored"},
+            log_message="Uploaded benchmark snapshot could not be stored",
+            exc=sanitized_benchmark_error("snapshot_upload", error_type),
+        )
     raise _transfer_error(422, "invalid_document", "Uploaded input is not a supported document")
 
 
@@ -388,9 +395,15 @@ def _read_snapshot_content(snapshot_id: UUID, owner: str, maximum: int) -> Respo
                 "Content-Disposition": 'attachment; filename="benchmark-input"',
                 "X-Benchmark-Content-Digest": snapshot.digest,
             })
-    except (BenchmarkSnapshotError, SQLAlchemyError, OSError):
-        pass
-    raise _transfer_error(503, "source_unavailable", "Frozen benchmark input could not be read")
+    except (BenchmarkSnapshotError, SQLAlchemyError, OSError) as exc:
+        error_type = type(exc).__name__
+    raise_sanitized_http_exception(
+        logger,
+        status_code=503,
+        detail={"error": "source_unavailable", "message": "Frozen benchmark input could not be read"},
+        log_message="Frozen benchmark snapshot could not be read",
+        exc=sanitized_benchmark_error("snapshot_download", error_type),
+    )
 
 
 @router.get("/snapshots/{snapshot_id}/content", response_class=Response, responses={
