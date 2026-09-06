@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from enum import Enum
@@ -11,11 +11,18 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Annotated, Protocol, runtime_checkable
+from typing import Annotated, Protocol, TypeVar, runtime_checkable
 
 from pydantic import Field, RootModel, ValidationError
 
 from src.lib.security.redaction import active_secret_redaction
+from src.lib.openai_agents.config import get_benchmark_source_discovery_max_choices
+from src.schemas.benchmark_sources import (
+    BenchmarkSourceArtifactChoice,
+    BenchmarkSourceDiscoveryPage,
+    BenchmarkSourceDiscoveryRequest,
+    BenchmarkSourcePreparationRequest,
+)
 
 from .document_inputs import decode_frozen_document
 from .models import BenchmarkInputReference, FrozenStrictModel, ResolvedBenchmarkPlan
@@ -158,6 +165,29 @@ class BenchmarkInputResolver(Protocol):
     ) -> MaterializedBenchmarkInput: ...
 
 
+@runtime_checkable
+class DiscoverableBenchmarkSource(Protocol):
+    """Optional metadata-only navigation on a registered resolver."""
+
+    async def discover(
+        self, selection: BenchmarkSourceDiscoveryRequest, *, max_choices: int,
+        request_context: BenchmarkSourceRequestContext,
+    ) -> BenchmarkSourceDiscoveryPage: ...
+
+
+@runtime_checkable
+class PreparableBenchmarkSource(Protocol):
+    """Optional initial download, without an invented expected digest."""
+
+    async def prepare(
+        self, validated_reference: str, *, max_bytes: int,
+        request_context: BenchmarkSourceRequestContext,
+    ) -> MaterializedBenchmarkInput: ...
+
+
+_SourceResult = TypeVar("_SourceResult")
+
+
 class BenchmarkInputResolverCatalog:
     """Immutable allowlist of resolver implementations registered at startup."""
 
@@ -217,7 +247,10 @@ class BenchmarkInputResolverCatalog:
 
     def validate_delegated_selection(
         self,
-        references: Iterable[BenchmarkInputReference],
+        references: Iterable[
+            BenchmarkInputReference | BenchmarkSourceDiscoveryRequest
+            | BenchmarkSourcePreparationRequest
+        ],
         request_context: BenchmarkSourceRequestContext,
     ) -> None:
         """Fail before I/O unless one credential maps to exactly one resolver identity."""
@@ -253,6 +286,96 @@ class BenchmarkInputResolverCatalog:
                 "missing_delegated_authorization",
                 "Delegated source authorization is required for the selected source",
             )
+
+    def _selection_resolver(self, selection, request_context):
+        resolver = self._resolvers.get(selection.resolver)
+        if resolver is None:
+            raise BenchmarkSourceError("unknown_resolver", "Benchmark input resolver is not registered")
+        self.validate_delegated_selection((selection,), request_context)
+        return resolver
+
+    async def _invoke_selection(
+        self, operation: Awaitable[_SourceResult], context: BenchmarkSourceRequestContext,
+    ) -> _SourceResult:
+        credential = context.delegated_authorization
+        failure = None
+        with credential.redaction_scope() if credential is not None else nullcontext():
+            try:
+                return await asyncio.wait_for(operation, timeout=self._timeout_seconds)
+            except BenchmarkSourceError as exc:
+                messages = {
+                    "invalid_reference": "Benchmark input reference is invalid",
+                    "forbidden_source": "The selected benchmark source denied access",
+                    "missing_source": "The selected benchmark source was not found",
+                    "oversize_payload": "Benchmark source exceeds the configured limit",
+                    "source_unavailable": "Benchmark input source is unavailable",
+                }
+                code = exc.code if exc.code in messages else "source_unavailable"
+                failure = BenchmarkSourceError(code, messages[code])
+            except Exception:
+                failure = BenchmarkSourceError("source_unavailable", "Benchmark input source is unavailable")
+        # Raise outside the adapter exception handler: do not retain its payload.
+        raise failure
+
+    async def discover(
+        self, selection: BenchmarkSourceDiscoveryRequest, *,
+        request_context: BenchmarkSourceRequestContext,
+    ) -> BenchmarkSourceDiscoveryPage:
+        resolver = self._selection_resolver(selection, request_context)
+        if not isinstance(resolver, DiscoverableBenchmarkSource):
+            raise BenchmarkSourceError("unsupported_operation", "Source discovery is not supported")
+        page = await self._invoke_selection(
+            resolver.discover(selection, max_choices=get_benchmark_source_discovery_max_choices(),
+                              request_context=request_context), request_context,
+        )
+        try:
+            # Revalidate even constructed model instances from trusted adapters.
+            page = BenchmarkSourceDiscoveryPage.model_validate(page.model_dump())
+            for choice in page.choices:
+                if isinstance(choice, BenchmarkSourceArtifactChoice) and choice.reference is not None:
+                    resolver.reference_schema.model_validate(choice.reference)
+            return page
+        except Exception:
+            pass
+        raise BenchmarkSourceError("source_unavailable", "Source discovery returned an invalid page")
+
+    async def prepare(
+        self, selection: BenchmarkSourcePreparationRequest, *,
+        request_context: BenchmarkSourceRequestContext,
+    ) -> MaterializedBenchmarkInput:
+        resolver = self._selection_resolver(selection, request_context)
+        if not isinstance(resolver, PreparableBenchmarkSource):
+            raise BenchmarkSourceError("unsupported_operation", "Source preparation is not supported")
+        validated = None
+        try:
+            validated = resolver.reference_schema.model_validate(selection.reference).root
+        except (ValidationError, ValueError):
+            pass
+        if validated is None:
+            raise BenchmarkSourceError("invalid_reference", "Benchmark input reference is invalid")
+        result = await self._invoke_selection(
+            resolver.prepare(validated, max_bytes=self._max_input_bytes,
+                             request_context=request_context), request_context,
+        )
+        try:
+            result = MaterializedBenchmarkInput.model_validate(result.model_dump())
+            # These are actual returned pins, not expectations invented before I/O.
+            pins = BenchmarkInputReference(resolver=selection.resolver, reference=selection.reference,
+                                           version=result.version, digest=result.digest)
+        except Exception:
+            pass
+        else:
+            verified = self._verify_materialized(pins, result)
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(decode_frozen_document, verified.content.encode("utf-8"),
+                                      content_type=verified.metadata.content_type),
+                    timeout=self._timeout_seconds,
+                )
+                return verified
+            except Exception:
+                pass
+        raise BenchmarkSourceError("source_unavailable", "Source preparation returned an invalid document")
 
     async def materialize(
         self,
@@ -350,6 +473,11 @@ class BenchmarkInputResolverCatalog:
                 "source_unavailable", "Benchmark resolver returned an invalid result"
             )
 
+        return self._verify_materialized(reference, result)
+
+    def _verify_materialized(
+        self, reference: BenchmarkInputReference, result: MaterializedBenchmarkInput,
+    ) -> MaterializedBenchmarkInput:
         verification_failure: BenchmarkSourceError | None = None
         try:
             if (
@@ -530,6 +658,8 @@ class CheckedInFixtureResolver:
 
 
 __all__ = [
+    "DiscoverableBenchmarkSource",
+    "PreparableBenchmarkSource",
     "BenchmarkInputResolver",
     "BenchmarkInputResolverCatalog",
     "BenchmarkSourceRequestContext",

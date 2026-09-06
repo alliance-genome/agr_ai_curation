@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -105,6 +106,71 @@ class FakeABCLiteratureHTTPService:
 
 def json_response(status_code: int, payload: Any) -> httpx.Response:
     return httpx.Response(status_code=status_code, json=payload)
+
+
+@pytest.mark.asyncio
+async def test_search_delegation_is_request_local_and_preserves_default_auth() -> None:
+    service_token, curator_token = uuid4().hex, uuid4().hex
+    fake_http = FakeAsyncClient([json_response(200, {"results": []}) for _ in range(2)])
+    client = ABCLiteratureClient(
+        ABCLiteratureClientConfig(
+            base_url="https://literature.example/api/",
+            auth_mode=ABCLiteratureAuthMode.STATIC_BEARER,
+            bearer_token=service_token,
+        ),
+        http_client=fake_http,  # type: ignore[arg-type]
+    )
+    query = {"query": "synthetic paper", "limit": 2}
+    assert await client.search_references(query, request_bearer_token=curator_token) == {
+        "results": []
+    }
+    await client.search_references(query)
+    assert [request["headers"] for request in fake_http.requests] == [
+        {"Authorization": f"Bearer {curator_token}"},
+        {"Authorization": f"Bearer {service_token}"},
+    ]
+    for request in fake_http.requests:
+        assert request["method"] == "POST"
+        assert request["url"] == "https://literature.example/api/search/references/"
+        assert request["json"] == query
+        assert "request_bearer_token" not in request
+    assert client.config.bearer_token == service_token
+
+
+@pytest.mark.asyncio
+async def test_search_delegation_does_not_acquire_service_credentials() -> None:
+    curator_token = uuid4().hex
+    fake_http = FakeAsyncClient([json_response(200, {"results": []})])
+    client = ABCLiteratureClient(
+        ABCLiteratureClientConfig(
+            base_url="https://literature.example/api/",
+            auth_mode=ABCLiteratureAuthMode.COGNITO_CLIENT_CREDENTIALS,
+        ),
+        http_client=fake_http,  # type: ignore[arg-type]
+    )
+    await client.search_references({"limit": 1}, request_bearer_token=curator_token)
+    assert len(fake_http.requests) == 1
+    assert fake_http.requests[0]["headers"] == {"Authorization": f"Bearer {curator_token}"}
+
+
+@pytest.mark.asyncio
+async def test_denied_search_does_not_retry_or_expose_token_or_response(caplog) -> None:
+    curator_token, private_content = uuid4().hex, uuid4().hex
+    fake_http = FakeAsyncClient([json_response(403, {"detail": private_content})])
+    client = ABCLiteratureClient(
+        ABCLiteratureClientConfig(base_url="https://literature.example/api/"),
+        http_client=fake_http,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ABCLiteratureHTTPError) as caught:
+        await client.search_references({"limit": 1}, request_bearer_token=curator_token)
+    assert caught.value.status_code == 403
+    assert caught.value.endpoint == "/search/references/"
+    assert caught.value.__context__ is None
+    assert len(fake_http.requests) == 1
+    for secret in (curator_token, private_content):
+        assert secret not in str(caught.value)
+        assert secret not in repr(caught.value)
+        assert secret not in caplog.text
 
 
 @pytest.mark.asyncio

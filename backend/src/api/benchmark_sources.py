@@ -54,7 +54,12 @@ from src.lib.openai_agents.config import (
 from src.services.benchmark_document_source import LocalDocumentResolver
 from src.models.sql.benchmark import BenchmarkInputSnapshot
 from src.models.sql.database import get_db, SessionLocal
-from src.schemas.benchmark_sources import BenchmarkSnapshotUploadMetadata
+from src.schemas.benchmark_sources import (
+    BenchmarkSnapshotUploadMetadata,
+    BenchmarkSourceDiscoveryPage,
+    BenchmarkSourceDiscoveryRequest,
+    BenchmarkSourcePreparationRequest,
+)
 
 
 class BenchmarkSourceRoute(APIRoute):
@@ -90,6 +95,7 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 _ERROR_STATUS = {
+    "unsupported_operation": 422,
     "invalid_reference": 422,
     "unknown_resolver": 422,
     "forbidden_source": 403,
@@ -222,6 +228,60 @@ def _raise_source_error(exc: BenchmarkSourceError) -> NoReturn:
             exc=_sanitized_source_error(exc),
         )
     raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/discover", response_model=BenchmarkSourceDiscoveryPage)
+async def discover_benchmark_sources(
+    request: Request, payload: BenchmarkSourceDiscoveryRequest,
+    principal: dict[str, Any] = Depends(require_benchmark_source_read),
+) -> BenchmarkSourceDiscoveryPage:
+    """Navigate source metadata; never download, convert or freeze on selection."""
+    if not get_benchmark_enabled():
+        raise HTTPException(status_code=404, detail="Benchmark API is disabled")
+    try:
+        context = delegated_source_request_context(request, principal_subject=str(principal["sub"]))
+        return await _catalog(request).discover(payload, request_context=context)
+    except BenchmarkSourceError as exc:
+        _raise_source_error(exc)
+
+
+def _freeze_prepared_source(
+    source: MaterializedBenchmarkInput, owner: str, service: str,
+) -> FrozenBenchmarkInputSnapshot:
+    """Own the complete database transaction off the event loop."""
+    try:
+        with SessionLocal() as db:
+            repository = BenchmarkSnapshotRepository(db, configured_benchmark_snapshot_store())
+            snapshot = repository.freeze_input(source, owner_subject=owner, service_principal=service)
+            receipt = repository.receipt(snapshot)
+            db.commit()
+            return receipt
+    except (BenchmarkSnapshotError, SQLAlchemyError, OSError) as exc:
+        error_type = type(exc).__name__
+    raise_sanitized_http_exception(
+        logger, status_code=503,
+        detail={"error": "source_unavailable", "message": "Benchmark input could not be stored"},
+        log_message="Prepared benchmark snapshot could not be stored",
+        exc=sanitized_benchmark_error("snapshot_prepare", error_type),
+    )
+
+
+@router.post("/prepare", response_model=FrozenBenchmarkInputSnapshot)
+async def prepare_benchmark_source(
+    request: Request, payload: BenchmarkSourcePreparationRequest,
+    principal: dict[str, Any] = Depends(require_benchmark_source_read),
+) -> FrozenBenchmarkInputSnapshot:
+    """Download once, derive and verify initial pins, then retain exact source bytes."""
+    if not get_benchmark_enabled():
+        raise HTTPException(status_code=404, detail="Benchmark API is disabled")
+    try:
+        context = delegated_source_request_context(request, principal_subject=str(principal["sub"]))
+        source = await _catalog(request).prepare(payload, request_context=context)
+    except BenchmarkSourceError as exc:
+        _raise_source_error(exc)
+    return await asyncio.to_thread(
+        _freeze_prepared_source, source, context.principal_subject, str(principal["client_id"]),
+    )
 
 
 @router.post("/materialize", response_model=FrozenBenchmarkInputSnapshot)

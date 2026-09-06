@@ -94,6 +94,64 @@ def test_exact_round_trip_frozen_reuse_and_other_owner_denial(transfer, monkeypa
     assert client.get(path).status_code == 404
 
 
+def test_preparation_freezes_original_provenance_and_downloads_exact_bytes(transfer, monkeypatch):
+    from pydantic import RootModel
+    from src.lib.benchmarks.input_resolvers import (
+        BenchmarkInputResolverCatalog, DelegatedAuthorizationCapability, MaterializedBenchmarkInput,
+    )
+
+    client, principal, _ = transfer
+    content = '[{"text":"Synthetic α observation\\r\\n"}]\r\n'
+    digest = "sha256:" + hashlib.sha256(content.encode()).hexdigest()
+    calls = []
+
+    class Resolver:
+        resolver_id = "synthetic_preparable"
+        reference_schema = RootModel[str]
+        delegated_authorization = DelegatedAuthorizationCapability.REQUIRED
+
+        async def prepare(self, reference, *, max_bytes, request_context):
+            calls.append((reference, request_context.principal_subject))
+            assert request_context.delegated_authorization is not None
+            assert max_bytes >= len(content.encode())
+            provenance = {"resolver": self.resolver_id, "reference": reference,
+                          "version": "source-v3", "digest": digest}
+            return MaterializedBenchmarkInput(
+                **provenance, content=content, provenance=provenance,
+                metadata={"content_type": "application/json", "content_bytes": len(content.encode())},
+            )
+
+        async def materialize(self, *args, **kwargs):
+            pytest.fail("No duplicate download through materialize")
+
+    catalog = BenchmarkInputResolverCatalog([Resolver()], timeout_seconds=1, max_input_bytes=4096)
+    monkeypatch.setattr(api, "_catalog", lambda *_: catalog)
+    response = client.post("/api/v1/benchmarks/sources/prepare",
+                           json={"resolver": "synthetic_preparable", "reference": "artifact-1"},
+                           headers={"X-Benchmark-Delegated-Source-Authorization": "Bearer synthetic"})
+    assert response.status_code == 200, response.text
+    receipt = response.json()
+    assert receipt["digest"] == digest and receipt["source_version"] == "source-v3"
+    assert receipt["sanitized_provenance"] == {
+        "resolver": "synthetic_preparable", "reference": "artifact-1",
+        "version": "source-v3", "digest": digest,
+    }
+    path = f"/api/v1/benchmarks/sources/snapshots/{receipt['snapshot_id']}/content"
+    downloaded = client.get(path)
+    assert downloaded.status_code == 200 and downloaded.content == content.encode()
+    assert calls == [("artifact-1", principal["sub"])]
+    with SessionLocal() as db:
+        saved = db.scalar(select(BenchmarkInputSnapshot).where(
+            BenchmarkInputSnapshot.owner_subject == principal["sub"],
+        ))
+        assert saved.source_reference == "artifact-1"
+        assert saved.service_principal == principal["client_id"]
+    client.app.dependency_overrides[require_benchmark_source_read] = lambda: {
+        "sub": "service:different-service", "client_id": "different-service",
+    }
+    assert client.get(path).status_code == 404
+
+
 def test_upload_identity_includes_media_and_corruption_fails_closed(transfer, monkeypatch):
     client, principal, root = transfer
     content = b'[{"text":"A synthetic scientific observation."}]'

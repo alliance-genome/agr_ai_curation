@@ -120,8 +120,17 @@ class ABCLiteratureClient:
             request_bearer_token=request_bearer_token,
         )
 
-    async def search_references(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        return await self._post_json("/search/references/", json_payload=payload)
+    async def search_references(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        request_bearer_token: str | None = None,
+    ) -> Mapping[str, Any]:
+        return await self._post_json(
+            "/search/references/",
+            json_payload=payload,
+            request_bearer_token=request_bearer_token,
+        )
 
     async def lookup_referencefile_by_md5(
         self,
@@ -207,8 +216,11 @@ class ABCLiteratureClient:
         path: str,
         *,
         json_payload: Mapping[str, Any],
+        request_bearer_token: str | None = None,
     ) -> Mapping[str, Any]:
-        response = await self._request("POST", path, json=json_payload)
+        response = await self._request(
+            "POST", path, json=json_payload, request_bearer_token=request_bearer_token
+        )
         return self._parse_json_object(response, path)
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
