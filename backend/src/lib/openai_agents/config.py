@@ -1170,6 +1170,31 @@ def get_benchmark_root() -> str:
     return os.getenv("BENCHMARK_ROOT", "").strip()
 
 
+def get_benchmark_cli_request_timeout_seconds() -> float:
+    """Socket timeout for the API-only developer CLI."""
+    return _get_env_float_with_fallback("BENCHMARK_CLI_REQUEST_TIMEOUT_SECONDS", 30.0)
+
+
+def get_benchmark_cli_max_response_bytes() -> int:
+    """Bound each decoded JSON response and SSE frame in the developer CLI."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CLI_MAX_RESPONSE_BYTES", 10_485_760))
+
+
+def get_benchmark_cli_event_reconnect_attempts() -> int:
+    """Additional observation connections after the first stream; never POST retries."""
+    return max(0, _get_env_int_with_fallback("BENCHMARK_CLI_EVENT_RECONNECT_ATTEMPTS", 3))
+
+
+def get_benchmark_cli_poll_interval_seconds() -> float:
+    """Delay between observation reconnects or explicitly enabled status polls."""
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_CLI_POLL_INTERVAL_SECONDS", 5.0))
+
+
+def get_benchmark_cli_poll_timeout_seconds() -> float:
+    """Maximum duration of explicitly enabled polling fallback."""
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_CLI_POLL_TIMEOUT_SECONDS", 3600.0))
+
+
 def get_benchmark_source_timeout_seconds() -> float:
     """Maximum time allowed for one registered source materialization."""
     return max(
