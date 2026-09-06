@@ -463,6 +463,8 @@ async def post_benchmark_snapshot_handoff(
             snapshot_id=snapshot_id,
             destination_id=request.destination_id,
             current_user_id=_require_current_user_id(user),
+            sender_issuer=user.get("iss"),
+            sender_subject=user.get("sub"),
         )
     except CurationBenchmarkSnapshotError as exc:
         if db.in_transaction():

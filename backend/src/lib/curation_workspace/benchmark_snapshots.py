@@ -26,6 +26,7 @@ from src.lib.curation_workspace.models import (
     DomainEnvelopeModel,
 )
 from src.lib.openai_agents.config import (
+    get_benchmark_handoff_max_identity_bytes,
     get_benchmark_handoff_timeout_seconds,
     get_benchmark_max_snapshot_bytes,
     get_benchmark_snapshot_handoff_destinations_json,
@@ -46,6 +47,7 @@ from src.schemas.domain_envelope import DomainEnvelope, HistoryEventKind
 
 logger = logging.getLogger(__name__)
 SNAPSHOT_SCHEMA_VERSION = "curation-benchmark-snapshot/v1"
+SENDER_ASSERTION_VERSION = "1"
 _DESTINATION_FIELDS = {
     "label",
     "sink_url",
@@ -71,6 +73,30 @@ class CurationBenchmarkSnapshotError(RuntimeError):
 
 class _BenchmarkHandoffFailure(RuntimeError):
     """Sanitized outbound handoff failure safe for logs and Sentry."""
+
+
+def _require_sender_identity(issuer: Any, subject: Any) -> tuple[str, str]:
+    """Validate server-owned identity for its bounded HTTP-header representation."""
+    if (
+        not all(
+            isinstance(value, str) and value and value.isascii()
+            and all(33 <= ord(char) <= 126 for char in value)
+            for value in (issuer, subject)
+        )
+        or len(issuer) + len(subject) > get_benchmark_handoff_max_identity_bytes()
+    ):
+        raise CurationBenchmarkSnapshotError(
+            403, "verified_sender_required", "Verified curator identity is required for remote handoff"
+        )
+    return issuer, subject
+
+
+def _matches_sender(attempt: CurationBenchmarkHandoffAttempt, issuer: str, subject: str) -> bool:
+    return (
+        attempt.sender_version == SENDER_ASSERTION_VERSION
+        and attempt.sender_issuer == issuer
+        and attempt.sender_subject == subject
+    )
 
 
 def _report_handoff_failure(failure_code: str) -> None:
@@ -416,6 +442,8 @@ async def handoff_benchmark_snapshot(
     snapshot_id: UUID,
     destination_id: str,
     current_user_id: str,
+    sender_issuer: str | None,
+    sender_subject: str | None,
 ) -> CurationBenchmarkHandoffResponse:
     """Reserve and deliver one immutable bundle without automatic retries."""
 
@@ -430,6 +458,8 @@ async def handoff_benchmark_snapshot(
         raise CurationBenchmarkSnapshotError(404, "snapshot_not_found", "Snapshot was not found")
     _require_session_access(db, snapshot.session_id, current_user_id)
 
+    sender_issuer, sender_subject = _require_sender_identity(sender_issuer, sender_subject)
+
     replay_key = _identity_digest(
         destination_id,
         snapshot.envelope_id,
@@ -440,6 +470,9 @@ async def handoff_benchmark_snapshot(
         snapshot.envelope_id,
         str(snapshot.envelope_revision),
         snapshot.envelope_digest,
+        SENDER_ASSERTION_VERSION,
+        sender_issuer,
+        sender_subject,
     )
     attempt = db.scalars(
         select(CurationBenchmarkHandoffAttempt)
@@ -447,7 +480,7 @@ async def handoff_benchmark_snapshot(
         .with_for_update()
     ).first()
     if attempt is not None:
-        if attempt.idempotency_key != idempotency_key:
+        if attempt.idempotency_key != idempotency_key or not _matches_sender(attempt, sender_issuer, sender_subject):
             raise CurationBenchmarkSnapshotError(409, "handoff_replay_conflict", "Handoff replay identity conflicts with the reserved snapshot")
         if attempt.status == "sending":
             return _finish_attempt(db, attempt, destination, status="unknown", failure_code="prior_delivery_ambiguous")
@@ -459,6 +492,9 @@ async def handoff_benchmark_snapshot(
         destination_id=destination_id,
         replay_key=replay_key,
         idempotency_key=idempotency_key,
+        sender_version=SENDER_ASSERTION_VERSION,
+        sender_issuer=sender_issuer,
+        sender_subject=sender_subject,
         status="sending",
     )
     db.add(attempt)
@@ -471,7 +507,7 @@ async def handoff_benchmark_snapshot(
                 CurationBenchmarkHandoffAttempt.replay_key == replay_key
             )
         )
-        if reserved is None or reserved.idempotency_key != idempotency_key:
+        if reserved is None or reserved.idempotency_key != idempotency_key or not _matches_sender(reserved, sender_issuer, sender_subject):
             raise CurationBenchmarkSnapshotError(409, "handoff_replay_conflict", "Handoff replay identity conflicts with the reserved snapshot") from None
         return _handoff_response(reserved, destination)
 
@@ -527,6 +563,9 @@ async def handoff_benchmark_snapshot(
                     "Authorization": f"Bearer {access_token}",
                     "Content-Type": "application/json",
                     "Idempotency-Key": idempotency_key,
+                    "X-Curation-Benchmark-Sender-Version": SENDER_ASSERTION_VERSION,
+                    "X-Curation-Benchmark-Sender-Issuer": sender_issuer,
+                    "X-Curation-Benchmark-Sender-Subject": sender_subject,
                 },
             )
         except httpx.TimeoutException:

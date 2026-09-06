@@ -9,10 +9,13 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from src.lib.curation_workspace import benchmark_snapshots as module
 from src.lib.observability.sentry import _redact_runtime_exception_context
 from src.schemas.domain_envelope import DomainEnvelopeStatus
+
+SENDER = {"sender_issuer": "https://identity.example.org/pool", "sender_subject": "curator-1"}
 
 
 class _ScalarRows:
@@ -287,7 +290,8 @@ def test_destination_list_is_empty_when_handoff_is_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(monkeypatch):
+@pytest.mark.parametrize("fresh_snapshot", [False, True])
+async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(monkeypatch, fresh_snapshot):
     snapshot = SimpleNamespace(
         id=uuid4(), session_id=uuid4(), envelope_id="env-1", envelope_revision=7,
         envelope_digest="sha256:" + "d" * 64, created_by_id="curator-1",
@@ -295,12 +299,13 @@ async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(mo
     )
     replay_key = module._identity_digest("portal", "env-1", "7")
     idempotency_key = module._identity_digest(
-        "portal", "env-1", "7", snapshot.envelope_digest
+        "portal", "env-1", "7", snapshot.envelope_digest, "1", SENDER["sender_issuer"], SENDER["sender_subject"]
     )
     prior = SimpleNamespace(
-        id=uuid4(), snapshot_id=snapshot.id, destination_id="portal",
+        id=uuid4(), snapshot_id=uuid4() if fresh_snapshot else snapshot.id, destination_id="portal",
         replay_key=replay_key, idempotency_key=idempotency_key, status="succeeded",
         receipt_id="receipt-1", redirect_path="/comparisons/receipt-1",
+        sender_version="1", **SENDER,
     )
     db = _HandoffDb(
         snapshot,
@@ -311,18 +316,138 @@ async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(mo
     monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
 
     result = await module.handoff_benchmark_snapshot(
-        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1"
+        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
     )
     assert result.receipt_id == "receipt-1"
     assert result.redirect_path == "https://portal.example/comparisons/receipt-1"
     assert prior.redirect_path == "/comparisons/receipt-1"
+    assert result.snapshot_id == str(prior.snapshot_id)
+
+    # Even a matching delivery key must not bypass persisted identity checks.
+    for changed in (
+        {"sender_issuer": "https://another.invalid"},
+        {"sender_subject": "other-curator"},
+        {"sender_version": None, "sender_issuer": None, "sender_subject": None},
+    ):
+        for field, value in changed.items():
+            setattr(prior, field, value)
+        with pytest.raises(module.CurationBenchmarkSnapshotError) as rejected:
+            await module.handoff_benchmark_snapshot(
+                db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
+            )
+        assert rejected.value.error == "handoff_replay_conflict"
+        prior.sender_version = "1"
+        prior.sender_issuer = SENDER["sender_issuer"]
+        prior.sender_subject = SENDER["sender_subject"]
 
     prior.idempotency_key = "sha256:" + "e" * 64
     with pytest.raises(module.CurationBenchmarkSnapshotError) as exc_info:
         await module.handoff_benchmark_snapshot(
-            db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1"
+            db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
         )
     assert exc_info.value.error == "handoff_replay_conflict"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", ["matching", "issuer", "subject", "historical"])
+async def test_reservation_race_checks_sender_without_resending(monkeypatch, identity):
+    snapshot = SimpleNamespace(
+        id=uuid4(), session_id=uuid4(), envelope_id="env-1", envelope_revision=7,
+        envelope_digest="sha256:" + "d" * 64, created_by_id="curator-1",
+    )
+    reserved = SimpleNamespace(
+        id=uuid4(), snapshot_id=uuid4(), destination_id="portal",
+        idempotency_key=module._identity_digest(
+            "portal", "env-1", "7", snapshot.envelope_digest, "1",
+            SENDER["sender_issuer"], SENDER["sender_subject"],
+        ),
+        status="succeeded", receipt_id="original-receipt",
+        redirect_path="/comparisons/original-receipt", sender_version="1", **SENDER,
+    )
+    if identity == "issuer":
+        reserved.sender_issuer = "https://other.example"
+    elif identity == "subject":
+        reserved.sender_subject = "other-curator"
+    elif identity == "historical":
+        reserved.sender_version = reserved.sender_issuer = reserved.sender_subject = None
+
+    class RaceDb(_HandoffDb):
+        rolled_back = False
+
+        def commit(self):
+            raise IntegrityError("reservation", {}, Exception("unique replay key"))
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def scalar(self, _statement):
+            assert self.rolled_back
+            return reserved
+
+    db = RaceDb(snapshot, SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"))
+    monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
+    monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **kwargs: pytest.fail("must not resend"))
+    if identity == "matching":
+        result = await module.handoff_benchmark_snapshot(
+            db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
+        )
+        assert result.receipt_id == "original-receipt"
+        assert result.snapshot_id == str(reserved.snapshot_id)
+    else:
+        with pytest.raises(module.CurationBenchmarkSnapshotError) as rejected:
+            await module.handoff_benchmark_snapshot(
+                db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
+            )
+        assert rejected.value.status_code == 409
+        assert rejected.value.error == "handoff_replay_conflict"
+    assert db.rolled_back
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing_identity", "wrong_owner", "lost_session_access"])
+async def test_handoff_denial_precedes_reservation_and_network(monkeypatch, failure):
+    snapshot = SimpleNamespace(id=uuid4(), session_id=uuid4(), created_by_id="curator-1")
+    session = SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1")
+    sender = dict(SENDER)
+    if failure == "missing_identity":
+        sender["sender_issuer"] = None
+    elif failure == "wrong_owner":
+        snapshot.created_by_id = "other-curator"
+    else:
+        session.created_by_id = "other-curator"
+    db = _HandoffDb(snapshot, session)
+    monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
+    monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
+    monkeypatch.setattr(db, "scalars", lambda statement: pytest.fail("must not reserve"))
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **kwargs: pytest.fail("must not send"))
+    with pytest.raises(module.CurationBenchmarkSnapshotError):
+        await module.handoff_benchmark_snapshot(
+            db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **sender
+        )
+    assert db.added is None
+
+
+@pytest.mark.parametrize("issuer,subject", [
+    (None, "curator-1"), ("https://identity.example", None), ("", "curator-1"),
+    ({"iss": "bad"}, "curator-1"), ("https://identity.example", 5),
+    ("https://identity.example\r\ninjected: yes", "curator-1"),
+    ("https://identity.example", "non-ascii-\u00e9"),
+])
+def test_sender_identity_rejects_missing_or_unsafe_header_values(issuer, subject):
+    with pytest.raises(module.CurationBenchmarkSnapshotError) as error:
+        module._require_sender_identity(issuer, subject)
+    assert error.value.error == "verified_sender_required"
+    assert error.value.status_code == 403
+
+
+def test_sender_identity_bound_is_environment_configurable(monkeypatch):
+    issuer, subject = SENDER.values()
+    monkeypatch.setenv("BENCHMARK_HANDOFF_MAX_IDENTITY_BYTES", str(len(issuer) + len(subject)))
+    assert module._require_sender_identity(issuer, subject) == (issuer, subject)
+    monkeypatch.setenv("BENCHMARK_HANDOFF_MAX_IDENTITY_BYTES", str(len(issuer) + len(subject) - 1))
+    with pytest.raises(module.CurationBenchmarkSnapshotError):
+        module._require_sender_identity(issuer, subject)
 
 
 class _Response:
@@ -383,6 +508,7 @@ async def test_handoff_uses_server_credentials_exact_bytes_and_opaque_redirect(m
         snapshot_id=snapshot.id,
         destination_id="portal",
         current_user_id="curator-1",
+        **SENDER,
     )
 
     assert result.status == "succeeded"
@@ -391,6 +517,11 @@ async def test_handoff_uses_server_credentials_exact_bytes_and_opaque_redirect(m
     assert calls[1][1]["content"] == b'{"exact":true}'
     assert calls[1][1]["headers"]["Authorization"] == "Bearer fake-sensitive-token"
     assert calls[1][1]["headers"]["Idempotency-Key"].startswith("sha256:")
+    assert calls[1][1]["headers"]["X-Curation-Benchmark-Sender-Version"] == "1"
+    assert calls[1][1]["headers"]["X-Curation-Benchmark-Sender-Issuer"] == SENDER["sender_issuer"]
+    assert calls[1][1]["headers"]["X-Curation-Benchmark-Sender-Subject"] == SENDER["sender_subject"]
+    assert db.added.sender_issuer == SENDER["sender_issuer"]
+    assert db.added.sender_subject == SENDER["sender_subject"]
 
 
 @pytest.mark.asyncio
@@ -438,7 +569,7 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
     )
 
     result = await module.handoff_benchmark_snapshot(
-        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1"
+        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
     )
     assert result.status == "unknown"
     assert db.added is not None
@@ -465,7 +596,7 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
 
     db.prior = db.added
     replay = await module.handoff_benchmark_snapshot(
-        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1"
+        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
     )
     assert replay.status == "unknown"
     assert call_count == 2
@@ -508,7 +639,7 @@ async def test_token_failure_is_sanitized_and_persisted_failed(monkeypatch, capl
     caplog.set_level("WARNING", logger=module.logger.name)
 
     result = await module.handoff_benchmark_snapshot(
-        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1"
+        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
     )
 
     assert result.status == "failed"
