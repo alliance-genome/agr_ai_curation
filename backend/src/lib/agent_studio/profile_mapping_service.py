@@ -62,13 +62,16 @@ def capability_catalog(
         if not pack.package_id or not pack.package_version:
             continue  # No package/version identity means no reusable capability.
         for binding in registry.bindings:
+            # Explicit reuse opts in the validator, not the surrounding submission
+            # envelope. An active resolver can serve custom fields while that
+            # envelope is still in development; deprecated packs stay unavailable.
             if binding.custom_profile_reuse is None:
                 continue
             reason = ""
             ref = binding.validator_agent
             agent = get_agent_definition_for_package(ref.package_id, ref.agent_id) if ref else None
-            if binding.state is not ValidationBindingState.ACTIVE or pack.metadata.status.value != "active":
-                reason = "Binding or domain pack is not active"
+            if binding.state is not ValidationBindingState.ACTIVE or pack.metadata.status.value == "deprecated":
+                reason = "Binding is not active or domain pack is deprecated"
             elif agent is None:
                 reason = "Package validator implementation is unavailable"
             elif not agent.output_schema or not is_domain_validator_result_schema(resolve_output_schema(agent.output_schema)):

@@ -630,7 +630,13 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    field definitions, parts and the earlier agent prompt. Never construct a custom pin from
    a name or select the mutable current head in place of a returned saved revision.
    Explain unresolved outcomes and any supported readiness/export blocking in plain language.
-   Do not add output fields or enable blocking merely to attach a validator. When no validated
+   Use the catalog policy defaults; do not invent optional blocking or weaken a fixed blocking
+   requirement. Explain a fixed review requirement before proposing the attachment. Distinguish
+   minimum lookup inputs from optional species, sibling-field and evidence context. Do not ask
+   curators to add a paper-quote field when the capability does not require evidence. Where an
+   optional package context selector supplies useful evidence, map it as context rather than
+   copying evidence into a custom field. Missing optional context is not a reason to refuse lookup.
+   Do not add output fields merely to attach a validator. When no validated
    values need writing back, outputs may be empty. If the curator wants resolved values saved,
    explicitly associate returned output slots with compatible existing or requested details.
    Apply updates the live draft and its Validator attached indicators; Workshop Save remains

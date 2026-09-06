@@ -216,3 +216,22 @@ def test_fixed_package_selectors_cannot_be_replaced_by_profile_input():
     cap = replace(cap, binding=replace(cap.binding, custom_profile_reuse=reuse))
     raw["validator_mappings"][0]["inputs"]["mention"] = {"source": "context"}
     assert validate_profile_mappings(raw, capabilities=[cap]) == [cap]
+
+
+@pytest.mark.parametrize("pack_status,available", [("active", True), ("in_development", True), ("deprecated", False)])
+def test_reusable_active_validator_lifecycle_is_separate_from_envelope(pack_status, available):
+    from dataclasses import replace
+    from src.lib.agent_studio.profile_mapping_service import capability_catalog, capability_issues
+    from src.lib.flows.validation_attachments import domain_pack_validation_registries
+    from src.schemas.domain_pack_metadata import DomainPackStatus
+    registry = next(registry for registry in domain_pack_validation_registries().values()
+                    if registry.domain_pack.pack_id == "agr.alliance.allele")
+    pack = replace(registry.domain_pack, metadata=registry.domain_pack.metadata.model_copy(
+        update={"status": DomainPackStatus(pack_status)}))
+    cap, = capability_catalog([replace(registry, domain_pack=pack)], active_group_ids=["MGI"])
+    assert cap.available is available
+    assert bool(capability_issues(cap, ["MGI"])) is not available
+    # Pack lifecycle alone never activates an under-development binding.
+    inactive = replace(cap.binding, state=ValidationBindingState.UNDER_DEVELOPMENT)
+    cap, = capability_catalog([replace(registry, domain_pack=pack, bindings=(inactive,))], active_group_ids=["MGI"])
+    assert not cap.available

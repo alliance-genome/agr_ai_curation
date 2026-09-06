@@ -351,3 +351,43 @@ def test_custom_revision_survives_compilation_and_uses_normal_dispatch_finalizat
     assert result.accepted_result.resolved_values == {'identifier': 'AGR:123'}
     assert result.accepted_result.validator_binding_id == binding.binding_id
     assert saved_agent.tools == []
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("with_context", [False, True])
+def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nested, with_context):
+    from src.lib.agent_studio.profile_mapping_service import capability_catalog, capability_issues
+    raw, _, pack = example
+    cap = next(cap for cap in capability_catalog(active_group_ids=["MGI"])
+               if cap.ref.domain_pack_id == "agr.alliance.allele"
+               and cap.ref.binding_id == "allele_mention_reference_validation")
+    assert not capability_issues(cap, ["MGI"])
+    # Optional custom details and parts can supply the lookup input.
+    raw["fields"][0]["required"] = False
+    raw["fields"][0]["nullable"] = True
+    prefix = "attributes.stock" if nested else "attributes"
+    if nested:
+        raw["fields"] = [{"key": "stock", "value_schema": {"kind": "object", "fields": raw["fields"]}}]
+    inputs = {"mention": {"field_path": prefix + ".paper_name"}}
+    if with_context:
+        inputs.update(taxon={"source": "constant", "value": "NCBITaxon:10090"},
+                      evidence_quote={"source": "context"})
+    raw["validator_mappings"][0].update(
+        capability_ref=cap.ref.model_dump(), capability_fingerprint=cap.fingerprint(),
+        inputs=inputs, outputs={"curie": prefix + ".resolved_id"},
+        policy={"unresolved": "requires_curator_review", "blocks_readiness": True})
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap], active_group_ids=["MGI"])
+    assert not context.unavailable
+    attributes = {"paper_name": "MGI:2175911"}
+    if nested:
+        attributes = {"stock": attributes}
+    match, = context.registry.match_bindings(envelope(attributes))
+    built = build_domain_validation_request(match)
+    assert built.request is not None
+    assert built.request.selected_inputs["mention"] == "MGI:2175911"
+    assert built.request.validator_agent.agent_id == "allele_validation"
+    assert built.request.expected_result_fields == {"curie": prefix + ".resolved_id"}
+    assert not built.request.selected_inputs.get("evidence_quote")
+    if with_context:
+        assert built.request.selected_inputs["taxon"] == "NCBITaxon:10090"

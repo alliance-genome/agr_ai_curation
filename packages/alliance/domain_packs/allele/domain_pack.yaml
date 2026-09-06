@@ -451,7 +451,7 @@ metadata:
       - validator_id: allele_mention_reference_validation
         display_name: Allele mention lookup
         curator_label: Confirm each allele mention in the Alliance records
-        description: Checks that each allele named in the paper matches an Alliance allele record and fills in the allele identifier, symbol, and species. A record cannot be submitted until its allele is confirmed.
+        description: Validate an allele identifier, symbol, or description against Alliance records, with species and paper evidence as optional context. Ambiguous matches remain unresolved and require curator review before readiness or export.
         definition_notes:
           - Runs through the package-scoped allele validator binding, validating extracted allele mention text against Alliance allele rows and materializing allele identifier, symbol, and taxon fields.
           - Blocking and required, with no curator opt-out.
@@ -462,9 +462,33 @@ metadata:
   validator_bindings:
     active:
       - binding_id: allele_mention_reference_validation
-        display_name: Allele mention reference validation
+        custom_profile_reuse:
+          enabled: true
+          inputs:
+            mention: {value_schema: {kind: string}, nullable: true}
+            normalized_hint: {value_schema: {kind: string}, nullable: true}
+            associated_gene: {value_schema: {kind: string}, nullable: true, allow_constant: true}
+            taxon: {value_schema: {kind: string}, nullable: true, allow_constant: true}
+            source_mentions: {value_schema: {kind: array, items: {kind: string}}, nullable: true}
+            evidence_quote:
+              value_schema: {kind: string}
+              nullable: true
+              allow_field: false
+              context_selector: {source: evidence_record, path: verified_quote, required: false, context_only: true}
+          required_any_inputs: [[mention]]
+          outputs:
+            curie: {value_schema: {kind: string}, result_path: curie}
+            symbol: {value_schema: {kind: string}, result_path: symbol}
+            taxon: {value_schema: {kind: string}, result_path: taxon}
+          policy:
+            unresolved_default: requires_curator_review
+            unresolved_allowed: [requires_curator_review]
+            readiness_default: true
+            readiness_allowed: [true]
+          supports_element_fanout: true
+        display_name: Allele validation
         curator_label: Confirm each allele mention in the Alliance records
-        description: Checks that each allele named in the paper matches an Alliance allele record and fills in the allele identifier, symbol, and species. A record cannot be submitted until its allele is confirmed.
+        description: Validate an allele identifier, symbol, or description against Alliance records, with species and paper evidence as optional context. Ambiguous matches remain unresolved and require curator review before readiness or export.
         definition_notes:
           - Runs through the package-scoped allele validator binding, validating extracted allele mention text against Alliance allele rows and materializing allele identifier, symbol, and taxon fields.
           - Blocking and required, with no curator opt-out.
@@ -482,6 +506,7 @@ metadata:
           mention:
             source: payload
             path: mention.text
+            required: false
           normalized_hint:
             source: payload
             path: mention.normalized_hint
@@ -503,7 +528,7 @@ metadata:
           evidence_quote:
             source: evidence_record
             path: verified_quote
-            required: true
+            required: false
             context_only: true
         expected_result_fields:
           curie: allele.primary_external_id

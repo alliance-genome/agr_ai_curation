@@ -74,3 +74,23 @@ later prompt edits do not change an existing attachment. Current visibility, gro
 package availability and executable tool permissions are enforced again at runtime.
 A custom agent without a supported validator contract is not offered merely because it is
 named “validator.” There is currently no supported stock/supplier/catalog-number validator.
+
+### Validate an allele
+
+Choose **Allele validation** for a text detail containing an allele identifier,
+symbol or short description. This also works for an individual part of an answer.
+Map that detail to **Mention**. Species (**Taxon**) and an associated gene can be
+supplied from another detail or as a fixed value when known. Paper evidence is
+optional context for this lookup; you do not need to add a quote field.
+
+The validator searches Alliance allele records. An identifier may identify a
+single record directly. A description such as “Ccr2 knockout” can match several
+alleles, so it remains unresolved unless the available information distinguishes
+one. Unresolved results require curator review and block readiness/export under
+this validator's policy. Attaching it is optional.
+
+A confirmed identity does not establish that the allele should be curated from
+the paper or that a custom record is ready for Alliance submission. Extraction
+still retains paper evidence. The allele submission envelope remains in development.
+Saved custom validators based on the allele validator can also be selected when
+they retain its supported result contract and you have access to them.
