@@ -2,7 +2,6 @@
 from sqlalchemy import CheckConstraint
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Mapped
-from sqlalchemy.schema import AddConstraint
 
 from src.models.sql.pdf_document import PDFDocument
 
@@ -79,7 +78,7 @@ class TestPDFDocumentModel:
         )
 
         for dialect, operator in ((postgresql.dialect(), "~"), (sqlite.dialect(), "REGEXP")):
-            ddl = str(AddConstraint(constraint).compile(dialect=dialect))
+            ddl = str(constraint.sqltext.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
             assert "source_converted_artifact_sha256 IS NULL" in ddl
             assert f"source_converted_artifact_sha256 {operator} '^[0-9a-f]{{64}}$'" in ddl
 
