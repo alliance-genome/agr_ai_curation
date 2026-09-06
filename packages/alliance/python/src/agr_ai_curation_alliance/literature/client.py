@@ -177,14 +177,71 @@ class ABCLiteratureClient:
         referencefile_id: int | str,
         *,
         request_bearer_token: str | None = None,
+        max_bytes: int | None = None,
     ) -> bytes:
+        """Download exact file bytes, optionally enforcing a caller-owned size limit."""
+        if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
+            raise ABCLiteratureConfigError("Download byte limit must be a positive integer")
         referencefile_id_path = self._path_segment(referencefile_id)
+        path = f"/reference/referencefile/download_file/{referencefile_id_path}"
+        if max_bytes is not None:
+            return await self._download_bounded(path, max_bytes, request_bearer_token)
         response = await self._request(
             "GET",
-            f"/reference/referencefile/download_file/{referencefile_id_path}",
+            path,
             request_bearer_token=request_bearer_token,
         )
         return response.content
+
+    async def _download_bounded(
+        self, path: str, max_bytes: int, request_bearer_token: str | None,
+    ) -> bytes:
+        headers = await self._request_auth_headers(request_bearer_token)
+        # Raw identity bytes avoid allocating decompressed content before the cap.
+        headers["Accept-Encoding"] = "identity"
+        failure: ABCLiteratureHTTPError
+        try:
+            async with self._http_client.stream(
+                "GET", f"{self._base_url}{path}", headers=headers, follow_redirects=False,
+            ) as response:
+                if not response.is_success:
+                    raise ABCLiteratureHTTPError(
+                        f"ABC Literature returned HTTP {response.status_code}",
+                        status_code=response.status_code, endpoint=path,
+                    )
+                if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+                    raise ABCLiteratureResponseError("Unexpected download content encoding")
+                declared = response.headers.get("content-length")
+                if declared is not None:
+                    if not declared.isascii() or not declared.isdecimal():
+                        raise ABCLiteratureResponseError("Invalid download content length")
+                    # Compare decimal strings to avoid converting untrusted huge integers.
+                    length = declared.lstrip("0") or "0"
+                    bound = str(max_bytes)
+                    if len(length) > len(bound) or (len(length) == len(bound) and length > bound):
+                        raise ABCLiteratureHTTPError(
+                            "ABC Literature download exceeds byte limit",
+                            status_code=413, endpoint=path,
+                        )
+                content = bytearray()
+                async for chunk in response.aiter_raw():
+                    if len(chunk) > max_bytes - len(content):
+                        raise ABCLiteratureHTTPError(
+                            "ABC Literature download exceeds byte limit",
+                            status_code=413, endpoint=path,
+                        )
+                    content.extend(chunk)
+                return bytes(content)
+        except httpx.TimeoutException:
+            failure = ABCLiteratureHTTPError(
+                "ABC Literature request timed out", status_code=504, endpoint=path,
+            )
+        except httpx.RequestError:
+            failure = ABCLiteratureHTTPError(
+                "ABC Literature request failed", status_code=502, endpoint=path,
+            )
+        # Do not retain a transport exception containing request headers or data.
+        raise failure
 
     async def request_referencefile_conversion(
         self,
@@ -226,13 +283,7 @@ class ABCLiteratureClient:
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         endpoint = f"{self._base_url}{path}"
         headers = dict(kwargs.pop("headers", {}) or {})
-        request_bearer_token = str(
-            kwargs.pop("request_bearer_token", "") or ""
-        ).strip()
-        if request_bearer_token:
-            headers["Authorization"] = f"Bearer {request_bearer_token}"
-        else:
-            headers.update(await self._auth_headers())
+        headers.update(await self._request_auth_headers(kwargs.pop("request_bearer_token", None)))
 
         try:
             response = await self._http_client.request(
@@ -262,6 +313,12 @@ class ABCLiteratureClient:
             )
 
         return response
+
+    async def _request_auth_headers(self, request_bearer_token: str | None) -> dict[str, str]:
+        token = str(request_bearer_token or "").strip()
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+        return await self._auth_headers()
 
     async def _auth_headers(self) -> dict[str, str]:
         auth_mode = self.config.auth_mode
