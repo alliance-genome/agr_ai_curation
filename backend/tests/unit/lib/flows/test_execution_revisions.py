@@ -602,3 +602,71 @@ def test_structure_paths_are_not_executable_projection_references(monkeypatch, r
     assert "view=source_fields" in result.findings[0].message
     assert result.entries_by_node["node_0"]["projection_fields"]
     assert definition.model_dump(mode="json") == original
+
+
+@pytest.mark.parametrize("new_has_attachments", [True, False])
+def test_ai_retarget_reconciles_revision_attachments_without_changing_other_uses(monkeypatch, new_has_attachments):
+    from contextlib import nullcontext
+    from src.lib.agent_studio import flow_tools
+    from src.lib.domain_packs.validation_registry import ValidationAttachmentOption, ValidationBindingState
+    from src.lib.flows import validation_attachments as attachments
+    from src.models.sql import database
+    from src.schemas.flows import FlowValidationAttachmentSelection
+
+    old, new = receipt("profile_bound_generic"), receipt("profile_bound_generic")
+    new.agent_id = old.agent_id
+    install_resolver(monkeypatch, [old, new])
+    revision_entry = module._revision_entry
+    monkeypatch.setattr(module, "_revision_entry", lambda *args: {
+        **revision_entry(*args), "curation": {"domain_pack_id": "generic"},
+    })
+    db = Mock()
+    db.execute.return_value.scalar_one_or_none.return_value = old.agent_id
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(db))
+    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
+    monkeypatch.setattr(flow_tools, "get_current_active_group_ids", lambda: [])
+    monkeypatch.setattr(flow_tools, "_accessible_flow_agents", lambda: {})
+
+    def option(key):
+        return ValidationAttachmentOption(attachment_id=key, domain_pack_id="generic", domain_pack_version="1",
+            validator_id=key, validator_binding_id=key, state=ValidationBindingState.ACTIVE, scope="object",
+            default_enabled=True, allow_opt_out=True, curator_label=f"Validate {key}")
+
+    stable, previous, replacement = option("stable"), option("previous-profile"), option("new-profile")
+    def options(entry):
+        if entry["execution_receipt"]["agent_revision_id"] == str(new.agent_revision_id):
+            return (stable, replacement) if new_has_attachments else ()
+        return (stable, previous)
+    monkeypatch.setattr(attachments, "_options_for_agent_entry", options)
+    original = flow(old, old)
+    for node in original.nodes[1:]:
+        node.data.validation_attachments = [
+            FlowValidationAttachmentSelection(**item.to_dict(), enabled=item != stable)
+            for item in (stable, previous)
+        ]
+    context = {**original.model_dump(mode="json"), "flow_draft_fingerprint": "base", "flow_name": "Revision test"}
+    monkeypatch.setattr(flow_tools, "get_current_flow_context", lambda: context)
+    token = flow_tools._current_flow_proposal.set({})
+    try:
+        result = flow_tools._propose_flow_draft_update_handler()(base_draft_fingerprint="base",
+            operations=[{"operation": "retarget_agent_revision", "node_id": "node_0",
+                         "agent_revision_id": str(new.agent_revision_id)}], change_summary="Update this step only")
+    finally:
+        flow_tools._current_flow_proposal.reset(token)
+    assert result["valid"], result.get("findings")
+    candidate = FlowDefinition.model_validate(result["candidate"]["flow_definition"])
+    assert candidate.nodes[1].data.agent_revision_id == new.agent_revision_id
+    assert candidate.nodes[1].data.execution_receipt == new
+    selections = {item.attachment_id: item.enabled for item in candidate.nodes[1].data.validation_attachments}
+    assert selections == ({"stable": False, "new-profile": True} if new_has_attachments else {})
+    assert candidate.nodes[2].data.agent_revision_id == old.agent_revision_id
+    assert {item.attachment_id: item.enabled for item in candidate.nodes[2].data.validation_attachments} == {
+        "stable": False, "previous-profile": True}
+    assert candidate.edges == original.edges
+    assert len(candidate.nodes) == len(original.nodes)
+    assert original.nodes[1].data.agent_revision_id == old.agent_revision_id
+    assert flow_tools._validate_exact_flow_for_current_user(candidate, phase="pre_apply").valid
+    # Ordinary validation must continue rejecting stale/unknown selections.
+    candidate.nodes[1].data.validation_attachments.append(
+        FlowValidationAttachmentSelection(**previous.to_dict(), enabled=True))
+    assert not flow_tools._validate_exact_flow_for_current_user(candidate, phase="pre_apply").valid

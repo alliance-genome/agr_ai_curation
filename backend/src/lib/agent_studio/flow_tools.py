@@ -753,6 +753,7 @@ def _validate_exact_flow_for_current_user(
     flow_definition: Dict[str, Any] | "FlowDefinition",
     *,
     phase: Literal["proposal", "pre_apply", "post_apply", "save"],
+    retargeted_node_ids: frozenset[str] = frozenset(),
 ):
     """Run the canonical exact-draft validator with live request authorization."""
 
@@ -795,6 +796,27 @@ def _validate_exact_flow_for_current_user(
 
     def _apply_defaults(candidate: "FlowDefinition") -> "FlowDefinition":
         if node_entries:
+            # Only an explicit revision retarget may retire attachment identities.
+            # Resolve the exact authorized revision first; retain opt-outs for
+            # identities it still declares and let canonical hydration add new ones.
+            if retargeted_node_ids:
+                from src.lib.flows.validation_attachments import validation_attachment_options_for_agent
+
+                candidate = candidate.model_copy(deep=True)
+                for node in candidate.nodes:
+                    entry = node_entries.get(node.id)
+                    if node.id not in retargeted_node_ids or entry is None:
+                        continue
+                    option_ids = {
+                        option.attachment_id
+                        for option in validation_attachment_options_for_agent(
+                            node.data.agent_id, agent_registry={node.data.agent_id: entry},
+                        )
+                    }
+                    node.data.validation_attachments = [
+                        selection for selection in node.data.validation_attachments
+                        if selection.attachment_id in option_ids
+                    ]
             return apply_flow_validation_attachment_defaults(candidate, entries_by_node=node_entries)
         node_ids = {
             str(node.data.agent_id or "").strip()
@@ -1367,9 +1389,10 @@ def _compile_flow_operations(
     operations: Sequence[Mapping[str, Any]],
     accessible_agents: Mapping[str, Mapping[str, Any]],
     semantic_refs: Dict[str, str],
-) -> None:
-    """Apply semantic operations while owning all graph mechanics in application code."""
+) -> frozenset[str]:
+    """Apply operations and identify nodes whose revision attachments need refreshing."""
 
+    retargeted_node_ids: set[str] = set()
     nodes = candidate["nodes"]
     edges = candidate["edges"]
     def resolve_node_ref(value: Any) -> str:
@@ -1588,6 +1611,7 @@ def _compile_flow_operations(
             except ValueError as exc:
                 raise _FlowProposalCompileError("Select an exact executable revision UUID.") from exc
             target["data"]["agent_revision_id"] = revision_id
+            retargeted_node_ids.add(str(target["id"]))
             target["data"].pop("execution_receipt", None)
             # Exact validation below derives the new revision's own output/profile
             # receipt. Never retain the previous profile alongside a new agent pin.
@@ -1756,6 +1780,8 @@ def _compile_flow_operations(
 
         raise _FlowProposalCompileError(f"Unsupported flow proposal operation '{op}'.")
 
+    return frozenset(retargeted_node_ids)
+
 
 def _propose_flow_draft_update_handler():
     """Create the pure, request-local semantic Flow Builder proposal handler."""
@@ -1814,7 +1840,7 @@ def _propose_flow_draft_update_handler():
         metadata = deepcopy(proposal_state["metadata"])
         semantic_refs = deepcopy(proposal_state.get("semantic_refs", {}))
         try:
-            _compile_flow_operations(
+            retargeted_node_ids = _compile_flow_operations(
                 candidate=candidate,
                 metadata=metadata,
                 operations=operations,
@@ -1841,7 +1867,8 @@ def _propose_flow_draft_update_handler():
 
         try:
             validation = _validate_exact_flow_for_current_user(
-                candidate, phase="proposal"
+                candidate, phase="proposal",
+                **({"retargeted_node_ids": retargeted_node_ids} if retargeted_node_ids else {}),
             )
         except Exception:
             report_authoring_validation_engine_failure(
