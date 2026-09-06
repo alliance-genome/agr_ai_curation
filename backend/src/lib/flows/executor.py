@@ -32,6 +32,8 @@ from uuid import uuid4
 
 from agents import Agent, RunContextWrapper, function_tool
 from sqlalchemy.orm import Session
+from src.lib.curation_workspace.execution_provenance import capture_source_document
+from src.schemas.execution_provenance import ExtractionExecutionContext
 from src.lib.context import (
     get_current_flow_output_attachment,
     get_current_run_config,
@@ -2693,6 +2695,17 @@ def get_all_agent_tools(
                 document_id=document_id,
                 document_name=document_name,
             )
+            execution_context = ExtractionExecutionContext(
+                captured_at=datetime.now(timezone.utc),
+                source_kind="flow",
+                flow_id=str(flow.id),
+                step_id=node_id,
+                agent_key=agent_id,
+                executed_query=resolved_query,
+                document=await asyncio.to_thread(
+                    capture_source_document, document_id, user_id
+                ),
+            )
             output_filename_descriptor = _resolve_output_filename_descriptor(
                 output_filename_template=node_data.get("output_filename_template"),
                 template_variables=template_variables,
@@ -2813,6 +2826,7 @@ def get_all_agent_tools(
                         "flow_name": flow.name,
                         "step": step_number,
                         "agent_name": agent_name,
+                        "execution_context": execution_context.model_dump(mode="json"),
                         **({"document_name": document_name} if document_name else {}),
                         **validation_schedule_metadata,
                     },

@@ -91,6 +91,32 @@ def _envelope_row(*, revision=7, status=DomainEnvelopeStatus.EXTRACTED):
     )
 
 
+def test_snapshot_exports_persisted_versioned_execution_context(monkeypatch):
+    from datetime import datetime, timezone
+    from src.schemas.execution_provenance import ExtractionExecutionContext, SourceDocumentProvenance
+
+    monkeypatch.setattr(module, "get_benchmark_max_snapshot_bytes", lambda: 100_000)
+    envelope = _envelope_row()
+    context = ExtractionExecutionContext(
+        captured_at=datetime.now(timezone.utc), source_kind="flow", flow_id="flow-1",
+        step_id="extract", agent_key="example", executed_query="Original curator request",
+        document=SourceDocumentProvenance(document_id=envelope.document_id),
+    ).model_dump(mode="json")
+    envelope.envelope_json["execution_context"] = context
+    db = _SnapshotDb(envelope=envelope)
+    module.create_benchmark_snapshot(
+        db, session_id=uuid4(), envelope_id=envelope.envelope_id,
+        expected_revision=7, current_user_id="curator-1",
+    )
+    bundle = json.loads(db.added.bundle_json)
+    assert bundle["envelope"]["execution_context"] == context
+    assert context["schema_version"] == "extraction-execution-context/v1"
+    # The snapshot path reads the persisted envelope, not current flow/document config.
+    assert bundle["envelope_digest"] == "sha256:" + sha256(
+        module.canonical_json_bytes(bundle["envelope"])
+    ).hexdigest()
+
+
 @pytest.mark.parametrize(
     ("modified_event", "expected_state"),
     [(None, "ai_untouched"), ("accepted-event", "curator_modified")],

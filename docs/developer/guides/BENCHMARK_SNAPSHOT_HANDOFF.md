@@ -33,7 +33,38 @@ remains explicitly unconfirmed and is not automatically retried; the JSON
 snapshot remains downloadable. Delivery success does not mean scoring completed.
 Long-running comparison progress and accuracy belong to the private portal.
 
-## Initiating curator identity
+## Extraction and document provenance
+
+New flow extractions and builder-finalized chat extractions retain a server-owned
+`envelope.execution_context` with schema version `extraction-execution-context/v1`.
+It records the query supplied to the specialist before execution, the agent key,
+capture time, flow/step identity where applicable, and available document identity.
+This is the specialist query, not a claim to capture every system prompt, tool
+response, provider setting, or instruction in the conversation.
+
+Document identity includes the original document UUID and, when available, the
+provider, canonical reference CURIE, converted-artifact ID and SHA256. The hash
+covers exact downloaded converted-artifact bytes, before UTF-8 decoding, figure
+enrichment or image stripping. It does not hash the PDF, parsed chunks, figure
+sidecars or extraction output. Migration `m0n1o2p3q4r5` adds the nullable source
+digest; it does not backfill historical documents or perform downloads.
+
+The initial envelope checkpoint accepts only explicitly supplied server context.
+Later validator and curator checkpoints preserve it; model payloads cannot replace
+it. Snapshot export uses that saved context, not current flow or document metadata.
+The existing outer `curation-benchmark-snapshot/v1` contract carries it inside its
+envelope JSON, so no second outer bundle format is needed. The envelope digest
+includes exported context; the extraction-output hash remains a separate identity.
+
+Historical snapshots remain byte-identical. Missing context or reference identity
+stays missing, including custom/local PDF uploads without an imported artifact.
+Consumers must not infer requested species or sections from output, turn a flow ID
+into a benchmark task version, or fill missing fields from selected reference data.
+This capture is evidence for comparison applicability, not a complete benchmark
+task binding or approval of a reference set. Portal-side paper association and
+reference review remain separate from source identity.
+
+## Initiating curator identity (transport)
 
 Handoffs require the initiating curator's issuer and subject from validated
 authentication claims. Development and API-key identities without a verified

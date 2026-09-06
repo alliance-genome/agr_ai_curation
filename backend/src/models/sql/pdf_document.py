@@ -76,6 +76,8 @@ class PDFDocument(Base):
     )
     source_external_ids: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     source_md5: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # SHA256 of the exact downloaded converted artifact, before text processing.
+    source_converted_artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_file_class: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_file_extension: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_artifact_status: Mapped[str | None] = mapped_column(
@@ -103,6 +105,11 @@ class PDFDocument(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "source_converted_artifact_sha256 IS NULL OR "
+            "source_converted_artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_pdf_documents_converted_artifact_sha256",
+        ),
         CheckConstraint(
             "file_size > 0",
             name="ck_pdf_documents_file_size",

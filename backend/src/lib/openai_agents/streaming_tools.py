@@ -40,6 +40,9 @@ from agents import (
 )
 from pydantic import ValidationError
 
+from src.lib.curation_workspace.execution_provenance import capture_source_document
+from src.schemas.execution_provenance import ExtractionExecutionContext
+
 from .audit_labels import build_specialist_internal_friendly_name
 from .config import (
     get_batching_nudge_threshold,
@@ -2905,6 +2908,7 @@ def _persist_builder_finalization_for_supervisor(
     adapter_key: str | None,
     agent_key: str | None,
     trace_id: str | None,
+    execution_context: ExtractionExecutionContext | None = None,
 ) -> InlineExtractionPersistenceResult:
     document_id = str(builder_workspace.document_id or "").strip()
     normalized_adapter_key = str(adapter_key or "").strip()
@@ -2953,6 +2957,10 @@ def _persist_builder_finalization_for_supervisor(
             metadata={
                 "specialist_name": specialist_name,
                 "domain_pack_id": builder_workspace.domain_pack_id,
+                "execution_context": (
+                    execution_context.model_dump(mode="json")
+                    if execution_context is not None else None
+                ),
             },
         )
     except SpecialistOutputError:
@@ -4675,6 +4683,21 @@ async def run_specialist_with_events(
     # workspace is bound to this run". This mirrors the supervisor's ordering in runner.py
     # (bind, then run). trace_run is established earlier in the supervisor flow, so the
     # builder run_id still matches the real trace_id.
+    execution_context = None
+    if inline_chat_persistence and builder_materializer_agent and runtime_canonical_agent_key:
+        source_workspace = _active_builder_workspace_or_none()
+        execution_context = ExtractionExecutionContext(
+            captured_at=datetime.now(timezone.utc),
+            source_kind="chat",
+            step_id=tool_name,
+            agent_key=runtime_canonical_agent_key,
+            executed_query=input_text,
+            document=await asyncio.to_thread(
+                capture_source_document,
+                source_workspace.document_id if source_workspace is not None else None,
+                get_current_user_id(),
+            ),
+        )
     evidence_workspace_token = set_active_evidence_records(live_evidence_records)
     trace_run = get_current_extraction_trace_run()
     parent_builder_workspace = _active_builder_workspace_or_none()
@@ -6227,6 +6250,7 @@ async def run_specialist_with_events(
                 adapter_key=runtime_curation_adapter_key,
                 agent_key=runtime_canonical_agent_key,
                 trace_id=trace_run.trace_id if trace_run is not None else None,
+                execution_context=execution_context,
             )
             handoff = _build_supervisor_extraction_handoff(
                 tool_name=tool_name,

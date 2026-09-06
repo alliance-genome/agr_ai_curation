@@ -1444,6 +1444,8 @@ def _mock_executor_agent_metadata(monkeypatch):
         "src.lib.flows.executor.get_agent_metadata",
         lambda agent_id: _metadata_from_registry(agent_id),
     )
+    # These runtime tests use synthetic document IDs and no SQL document store.
+    monkeypatch.setattr("src.lib.flows.executor.capture_source_document", lambda *_: None)
 
 
 class TestDbUserIdPropagation:
@@ -2742,11 +2744,21 @@ class TestGetAllAgentToolsStepOrderRuntime:
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_flow_step_query_ignores_supervisor_tool_argument(
-        self, mock_get_agent, mock_streaming
+        self, mock_get_agent, mock_streaming, monkeypatch
     ):
         """Step input is rebuilt from flow/task state, not the tool-call argument."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         invocations = []
+        captured_contexts = []
+        builder = _executor_module().build_extraction_envelope_candidate_with_evidence
+
+        def capture_builder(*args, **kwargs):
+            captured_contexts.append(kwargs["metadata"]["execution_context"])
+            return builder(*args, **kwargs)
+
+        monkeypatch.setattr(
+            _executor_module(), "build_extraction_envelope_candidate_with_evidence", capture_builder
+        )
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -2775,6 +2787,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert "supervisor-query" not in invocations[0]
         assert "Original flow input" in invocations[0]
         assert "Extract gene assertions." in invocations[0]
+        assert captured_contexts[0]["executed_query"] == invocations[0]
+        assert captured_contexts[0]["step_id"] == "n1"
+        flow.flow_definition["nodes"][1]["data"]["step_goal"] = "Changed after execution"
+        assert "Changed after execution" not in captured_contexts[0]["executed_query"]
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
