@@ -53,36 +53,19 @@ model returned by provider telemetry. In particular, an OpenRouter request may
 report the upstream provider that served it; that actual route is evidence, not a
 rewrite of the requested route. Missing actual-route telemetry remains missing.
 
-## Validate Without Model Calls
+## Developer CLI
 
-Validation loads every reference and expands the bounded case/route matrix. It
-does not construct an agent, call a provider, or execute a flow.
-
-```bash
-BENCHMARK_ROOT=packages/alliance/benchmarks \
-  python scripts/run_benchmarks.py --validate
-BENCHMARK_ROOT=packages/alliance/benchmarks \
-  python scripts/run_benchmarks.py --dry-run \
-  --profile isolated-gene-agent-v1 \
-  --case synthetic-gene-lookup-1 \
-  --provider openai \
-  --model gpt-5.6-sol
-```
-
-## Execute
-
-Set `BENCHMARK_ENABLED=true` only in a developer benchmark environment with the
-intended provider credentials and dependencies. Execution uses the same service
-contract from the CLI and the admin API:
+The CLI uses only the asynchronous API, not this guide's legacy in-process
+runner. See [Benchmark CLI](BENCHMARK_CLI.md) for commands, credentials and
+recovery behavior. Old profile/provider override and dry-run flags are removed.
+The remaining legacy API/engine removal is separately owned.
 
 ```bash
-BENCHMARK_ENABLED=true \
-  BENCHMARK_ROOT=packages/alliance/benchmarks \
-  python scripts/run_benchmarks.py \
-  --profile isolated-gene-agent-v1 \
-  --provider openai \
-  --model gpt-5.6-sol
+python scripts/run_benchmarks.py catalog targets
+python scripts/run_benchmarks.py validate --request preview.json
 ```
+
+## Legacy admin API (not the CLI protocol)
 
 The protected API exposes profile and case discovery, dry-run validation, and
 targeted execution below `/api/admin/benchmarks`. Profile discovery, case
