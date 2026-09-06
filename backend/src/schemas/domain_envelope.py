@@ -23,6 +23,8 @@ from pydantic import (
     model_validator,
 )
 
+from src.schemas.execution_provenance import ExtractionExecutionContext
+
 _FIELD_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*")
 _LIST_INDEX_PATTERN = re.compile(r"^\[(\d+)\]")
 
@@ -563,6 +565,10 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
             "Server-owned authenticated context. The checkpoint writer replaces "
             "payload-supplied values and is the only authority for this field."
         ),
+    )
+    execution_context: Optional[ExtractionExecutionContext] = Field(
+        default=None,
+        description="Original server-captured execution context, preserved by checkpoint writes",
     )
     metadata: dict[str, Any] = Field(
         default_factory=dict,

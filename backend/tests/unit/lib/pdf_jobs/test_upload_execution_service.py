@@ -1,7 +1,9 @@
 """Unit tests for upload execution orchestration service."""
 
 import asyncio
+import hashlib
 import inspect
+from unittest.mock import AsyncMock, Mock
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast, get_type_hints
@@ -634,9 +636,11 @@ async def test_dispatch_upload_execution_tracks_upload_and_queues_task():
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_markdown_downloads_with_curator_token_and_marks_completed(monkeypatch):
+@pytest.mark.parametrize("markdown", ["# Title\n\nBody", "\ufeff # Résults\r\n\r\nβ cells.  \r\n"])
+async def test_execute_provider_markdown_downloads_with_curator_token_and_marks_completed(monkeypatch, markdown):
     tracker = _Tracker()
     provider = _Provider()
+    provider.payload = markdown.encode("utf-8")
     ingestion_calls = []
     progress_updates = []
     completed_events = []
@@ -679,6 +683,8 @@ async def test_execute_provider_markdown_downloads_with_curator_token_and_marks_
             source_provenance={
                 "provider": "fake_provider",
                 "access_scope": "global",
+                "converted_artifact_id": "stale-artifact",
+                "converted_artifact_sha256": "0" * 64,
             },
         )
     )
@@ -695,7 +701,11 @@ async def test_execute_provider_markdown_downloads_with_curator_token_and_marks_
     assert ingestion_request.document_id == "doc-provider"
     assert ingestion_request.user_id == "user-provider"
     assert ingestion_request.document_owner_user_id == 42
-    assert ingestion_request.markdown == "# Title\n\nBody"
+    assert ingestion_request.markdown == markdown
+    assert ingestion_request.source_provenance["converted_artifact_id"] == "markdown-1"
+    assert ingestion_request.source_provenance["converted_artifact_sha256"] == hashlib.sha256(
+        provider.payload
+    ).hexdigest()
     assert ingestion_request.filename == "paper.pdf"
     assert progress_updates[0]["message"] == "Downloading converted Markdown"
     assert progress_updates[1]["message"] == "Ingesting converted Markdown"
@@ -2049,7 +2059,7 @@ async def test_provider_access_denial_marks_failed_when_saved_pdf_is_missing(
 
 @pytest.mark.asyncio
 async def test_sync_provider_source_import_failure_updates_owned_document(monkeypatch):
-    document = SimpleNamespace(source_import_status="pending")
+    document = SimpleNamespace(source_import_status="pending", source_converted_artifact_sha256="a" * 64)
     session = SimpleNamespace(
         statement=None,
         commit_calls=0,
@@ -2090,6 +2100,7 @@ async def test_sync_provider_source_import_failure_updates_owned_document(monkey
         UUID(request.document_id),
     }
     assert document.source_import_status == "failed"
+    assert document.source_converted_artifact_sha256 is None
     assert session.commit_calls == 1
     assert session.rollback_calls == 0
     assert session.close_calls == 1
@@ -2132,6 +2143,36 @@ async def test_sync_provider_source_import_failure_rejects_missing_or_other_owne
 
 
 @pytest.mark.asyncio
+async def test_provider_markdown_invalid_utf8_never_reaches_ingestion(monkeypatch):
+    provider = _Provider(payload=b"\xffinvalid UTF-8")
+    ingest = AsyncMock()
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(),
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=ingest,
+    )
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **kwargs: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **kwargs: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **kwargs: None)
+    monkeypatch.setattr(service_module, "update_document_status", AsyncMock())
+    monkeypatch.setattr(service, "_report_execution_failure", Mock())
+    monkeypatch.setattr(service, "_sync_provider_markdown_sql_failure", AsyncMock())
+    failed = AsyncMock()
+    monkeypatch.setattr(service, "_mark_failed_and_sync_tracker", failed)
+    await service._execute_provider_markdown_unbounded(
+        ProviderMarkdownExecutionRequest(
+            document_id="doc-provider", job_id="job-provider", user_id="user-provider",
+            owner_user_id=42, filename="paper.pdf", converted_artifact_id="markdown-1",
+            curator_token="curator-token", source_provenance={"provider": "fake_provider"},
+            file_path=Path("/tmp/paper.pdf"),
+        )
+    )
+    ingest.assert_not_awaited()
+    failed.assert_awaited_once()
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
 async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denied(
     monkeypatch,
     tmp_path,
@@ -2144,6 +2185,7 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
     completed_events = []
     failed_events = []
     source_import_failures = []
+    ingest = AsyncMock()
 
     async def _sync_source_import_failure(self, request):
         source_import_failures.append(request.document_id)
@@ -2154,7 +2196,7 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
             _pipeline_result(success=True, document_id="doc-provider")
         ),
         document_source_provider_factory=lambda: provider,
-        provider_markdown_ingestion_fn=lambda *_args, **_kwargs: None,
+        provider_markdown_ingestion_fn=ingest,
     )
 
     monkeypatch.setattr(service_module, "get_connection", lambda: "weaviate-client")
@@ -2199,6 +2241,7 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
     )
 
     assert source_import_failures == ["doc-provider"]
+    ingest.assert_not_awaited()
     assert completed_events[-1] == {
         "job_id": "job-provider",
         "message": "Processing completed",

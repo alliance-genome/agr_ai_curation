@@ -389,9 +389,10 @@ def upgrade() -> None:
             # longer accepted by the strict runtime model. Preserve those payloads
             # instead of blocking a schema-only ownership upgrade.
             hash_payload = dict(envelope_payload)
-        # Authenticated context is server-owned checkpoint state, not part of the
+        # Runtime context is server-owned checkpoint state, not part of the
         # extracted source payload identity used by runtime checkpointing.
         hash_payload.pop("authenticated_context", None)
+        hash_payload.pop("execution_context", None)
         connection.execute(
             sa.text(
                 """

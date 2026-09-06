@@ -7,6 +7,8 @@ from typing import Any, Iterable, Sequence
 
 from sqlalchemy.orm import Session
 
+from src.schemas.execution_provenance import ExtractionExecutionContext
+
 from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.domain_envelope_normalization import (
@@ -431,6 +433,13 @@ def ensure_domain_envelope_materialization(
                     adapter_key=adapter_key,
                     source_extraction_result_id=extraction_result.extraction_result_id,
                     source_payload_hash=source_payload_hash,
+                    execution_context=(
+                        ExtractionExecutionContext.model_validate(
+                            extraction_result.metadata["execution_context"]
+                        )
+                        if extraction_result.metadata.get("execution_context") is not None
+                        else None
+                    ),
                 ),
             )
             envelope_revision = checkpoint.revision

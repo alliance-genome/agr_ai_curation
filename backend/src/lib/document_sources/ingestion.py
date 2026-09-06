@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -87,6 +88,16 @@ async def ingest_provider_markdown_document(
     )
     markdown = _require_non_empty_preserving_text("markdown", request.markdown)
     source_provenance = _require_ingestable_provenance(request.source_provenance)
+    # Validate the server-captured artifact identity before any ingestion effects.
+    # Strict UTF-8 decode/encode preserves BOM, line endings and surrounding whitespace.
+    artifact_digest = request.source_provenance.get("converted_artifact_sha256")
+    if (
+        not source_provenance.get("converted_artifact_id")
+        or not isinstance(artifact_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", artifact_digest) is None
+        or hashlib.sha256(markdown.encode("utf-8")).hexdigest() != artifact_digest
+    ):
+        raise DocumentSourceIngestionError("Converted artifact identity does not match supplied Markdown")
 
     try:
         await _require_owned_document(document_id, user_id, owner_user_id)
@@ -409,6 +420,7 @@ async def _persist_ingestion_metadata(
         document.source_provider_converted_artifact_id = source_provenance.get(
             "converted_artifact_id"
         )
+        document.source_converted_artifact_sha256 = source_provenance["converted_artifact_sha256"]
         document.source_external_ids = source_provenance.get("external_ids")
         document.source_md5 = source_provenance.get("source_md5")
         document.source_file_class = source_provenance.get("file_class")
