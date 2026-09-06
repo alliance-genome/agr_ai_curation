@@ -59,12 +59,18 @@ async function sha256(value: unknown): Promise<string> {
   return `sha256:${hex}`
 }
 
+// Match Pydantic's exclude_none for typed flow properties. Do not recurse into
+// receipts, projections or attachment dictionaries: their explicit nulls matter.
+function omitNullProperties<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null)) as T
+}
+
 function normalizeFlowDefinition(definition: FlowContextDefinition): FlowContextDefinition {
   return {
-    ...definition,
+    ...omitNullProperties(definition),
     nodes: [...definition.nodes]
       .map((node) => ({
-        ...node,
+        ...omitNullProperties(node),
         validation_attachments: node.validation_attachments
           ? [...node.validation_attachments].sort((left, right) => (
               compareUtf8(String(left.attachment_id ?? ''), String(right.attachment_id ?? ''))
@@ -77,7 +83,7 @@ function normalizeFlowDefinition(definition: FlowContextDefinition): FlowContext
           : undefined,
       }))
       .sort((left, right) => compareUtf8(left.id, right.id)),
-    edges: [...definition.edges].sort((left, right) => compareUtf8(left.id, right.id)),
+    edges: definition.edges.map(omitNullProperties).sort((left, right) => compareUtf8(left.id, right.id)),
   }
 }
 

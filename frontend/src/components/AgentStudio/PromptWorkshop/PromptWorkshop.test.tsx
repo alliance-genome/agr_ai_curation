@@ -499,7 +499,7 @@ describe('PromptWorkshop', () => {
       expect(ref.current?.captureAuthoringContext().draft_name).toBe('Draft in progress')
       await act(async () => pending.resolve(buildCustomAgent()))
     } else {
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeEnabled())
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled())
       await act(async () => { expect(ref.current?.runChatAction(action)).toBe(true) })
       await waitFor(() => {
         expect(ref.current?.captureAuthoringContext().draft_name).toBe('')

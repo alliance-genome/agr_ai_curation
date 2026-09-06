@@ -188,3 +188,25 @@ describe('Agent Studio authoring context fingerprints', () => {
     expect(context.agent_workshop.draft_allowed_group_ids).toEqual(['TEAM_B', 'TEAM_A'])
   })
 })
+
+it('normalizes empty saved-flow properties like the server without losing nested nulls', async () => {
+  const clean = adversarialFlowContext()
+  const reopened: ChatContext = JSON.parse(JSON.stringify(clean))
+  // Flow CRUD includes explicit null defaults that the typed ChatContext hash omits.
+  Object.assign(reopened.flow_definition!, { task_instructions_default_only: null })
+  Object.assign(reopened.flow_definition!.nodes[0], {
+    agent_description: null, task_instructions: null, step_goal: null,
+    custom_instructions: null, prompt_version: null, agent_revision_id: null,
+    execution_receipt: null, include_evidence: null, output_filename_template: null,
+  })
+  Object.assign(reopened.flow_definition!.edges[0], { satisfies_binding_id: null, replaces_attachment_id: null })
+  expect(await fingerprintFlowDraft(reopened)).toBe(await fingerprintFlowDraft(clean))
+  const captured = await fingerprintAuthoringContext(reopened)
+  expect(captured.flow_definition!.nodes.find(node => node.id === 'a')).not.toHaveProperty('step_goal')
+  // Values inside arbitrary authored data are significant, even when null.
+  const withNullData: ChatContext = JSON.parse(JSON.stringify(clean))
+  withNullData.flow_definition!.nodes[0].projection_plan = { chosen_value: null }
+  const withoutNullData: ChatContext = JSON.parse(JSON.stringify(withNullData))
+  withoutNullData.flow_definition!.nodes[0].projection_plan = {}
+  expect(await fingerprintFlowDraft(withNullData)).not.toBe(await fingerprintFlowDraft(withoutNullData))
+})
