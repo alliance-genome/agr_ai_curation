@@ -313,3 +313,27 @@ def test_invalid_runtime_overrides_report_duplicate_selections():
     message = str(exc_info.value)
     assert "invalid_overrides.yaml" in message
     assert "selections" in message
+
+
+@pytest.mark.parametrize("source", [
+    "flag: true\nmissing: null\ncount: 3\ntext: |\n  First line\n  Second line\n",
+    "base: &base {kind: string}\ncopy: *base\n",
+])
+def test_fast_contract_parser_preserves_safe_yaml_values(tmp_path, source):
+    import yaml
+    from src.lib.packages.manifest_loader import _load_yaml_mapping
+    path = tmp_path / "contract.yaml"
+    path.write_text(source)
+    assert _load_yaml_mapping(path) == yaml.safe_load(source)
+
+
+@pytest.mark.parametrize("source", [
+    "value: !!python/object/apply:builtins.str [unsafe]",
+    "value: [unfinished",
+])
+def test_fast_contract_parser_rejects_unsafe_tags_and_malformed_yaml(tmp_path, source):
+    from src.lib.packages.manifest_loader import PackageContractError, _load_yaml_mapping
+    path = tmp_path / "contract.yaml"
+    path.write_text(source)
+    with pytest.raises(PackageContractError, match="Invalid YAML"):
+        _load_yaml_mapping(path)
