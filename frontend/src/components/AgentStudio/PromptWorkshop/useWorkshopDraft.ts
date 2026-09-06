@@ -96,6 +96,7 @@ export interface WorkshopDraft {
   cloneSourceAgentId: string
   setCloneSourceAgentId: (agentId: string) => void
   selectedCloneSource: CustomAgent | undefined
+  setChatCloneSource: (agent: CustomAgent) => void
   isNewDraft: boolean
 
   // Fields
@@ -236,6 +237,10 @@ export function useWorkshopDraft({
     initialParentAgentId ? 'template' : 'scratch',
   )
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
+  const [draftResetGeneration, setDraftResetGeneration] = useState(0)
+  const [chatCloneSource, setChatCloneSource] = useState<CustomAgent>()
+  const chatCloneSourceRef = useRef(chatCloneSource)
+  chatCloneSourceRef.current = chatCloneSource
   const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
   const [cloneSourceAgentId, setCloneSourceAgentId] = useState<string>('')
   const [versions, setVersions] = useState<AgentExecutionRevision[]>([])
@@ -332,7 +337,8 @@ export function useWorkshopDraft({
     customAgents.find((agent) => agent.id === selectedCustomAgentId)
   )
   const selectedCloneSource = useStableAgentRecord(
-    customAgents.find((agent) => agent.id === cloneSourceAgentId)
+    (chatCloneSource?.id === cloneSourceAgentId ? chatCloneSource : undefined)
+      || customAgents.find((agent) => agent.id === cloneSourceAgentId)
   )
   const templateMissing = useMemo(() => {
     const source = selectedCustomAgent?.template_source
@@ -612,12 +618,12 @@ export function useWorkshopDraft({
         ))
         setCloneSourceAgentId((prev) => {
           const stillExists = response.custom_agents.some((agent) => agent.id === prev)
-          if (stillExists) return prev
+          if (stillExists || chatCloneSourceRef.current?.id === prev) return prev
           return templateAlignedAgentId || response.custom_agents[0].id
         })
       } else {
         setSelectedCustomAgentId('')
-        setCloneSourceAgentId('')
+        setCloneSourceAgentId((prev) => chatCloneSourceRef.current?.id === prev ? prev : '')
         setVersions([])
       }
     } catch (err) {
@@ -810,6 +816,7 @@ export function useWorkshopDraft({
     selectedCustomAgent,
     selectedTemplate,
     outputLoadAttempt,
+    draftResetGeneration,
   ])
 
   useEffect(() => {
@@ -1062,6 +1069,7 @@ export function useWorkshopDraft({
   }, [dirty.any])
 
   const selectCustomAgent = useCallback((agentId: string) => {
+    setDraftResetGeneration((generation) => generation + 1)
     setSelectedCustomAgentId(agentId)
     setSaveState('idle')
     setLastSavedAt(null)
@@ -1070,6 +1078,7 @@ export function useWorkshopDraft({
   }, [customAgents])
 
   const handleNew = useCallback(() => {
+    setDraftResetGeneration((generation) => generation + 1)
     if (selectedCustomAgent) {
       setCloneSourceAgentId(selectedCustomAgent.id)
     }
@@ -1082,6 +1091,7 @@ export function useWorkshopDraft({
   }, [selectedCustomAgent])
 
   const startDraft = useCallback((mode: GettingStartedMode) => {
+    setDraftResetGeneration((generation) => generation + 1)
     if (selectedCustomAgent) {
       setCloneSourceAgentId(selectedCustomAgent.id)
     }
@@ -1225,12 +1235,17 @@ export function useWorkshopDraft({
       }
       setSaveState('saved')
       setLastSavedAt(Date.now())
+      const origin = continuationOrigin?.node_id && continuationOrigin.agent_id !== savedIdentity
+        ? { flow_id: continuationOrigin.flow_id, flow_draft_fingerprint: continuationOrigin.flow_draft_fingerprint }
+        : continuationOrigin
       onSavedHandoff?.({
         // Only a fresh authorized catalog can emit an actionable saved identity.
         status: savedIdentity ? 'ready' : 'catalog_unavailable',
         saved_agent_id: savedIdentity,
         saved_custom_agent_id: savedIdentity ? persistedAgent.id : undefined,
-        origin: continuationOrigin,
+        saved_agent_revision_id: savedIdentity ? persistedAgent.execution_revision_id || undefined : undefined,
+        saved_agent_name: persistedAgent.name,
+        origin,
       })
     } catch (err) {
       if (persistedAgent) {
@@ -1429,6 +1444,7 @@ export function useWorkshopDraft({
     cloneSourceAgentId,
     setCloneSourceAgentId,
     selectedCloneSource,
+    setChatCloneSource,
     isNewDraft,
 
     name,

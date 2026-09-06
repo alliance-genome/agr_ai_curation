@@ -11,6 +11,8 @@ const serviceMocks = vi.hoisted(() => ({
   fetchPromptCatalog: vi.fn(),
   cloneAgentToWorkshop: vi.fn(),
   getWorkshopSavedReference: vi.fn(),
+  validateWorkshopAction: vi.fn(),
+  getWorkshopCloneSource: vi.fn(),
 }))
 
 const historyMocks = vi.hoisted(() => ({
@@ -18,7 +20,7 @@ const historyMocks = vi.hoisted(() => ({
   useChatHistoryTranscriptQuery: vi.fn(),
 }))
 
-const workshopMockState = vi.hoisted(() => ({ dirty: false }))
+const workshopMockState = vi.hoisted(() => ({ dirty: false, deferActionValidation: false }))
 
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/features/history/useChatHistoryQuery', () => historyMocks)
@@ -34,6 +36,8 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     durableSessionId,
     sourceSessionId,
     onApplyWorkshopProposal,
+    onWorkshopAction,
+    captureContext,
     onDurableSessionIdChange,
     onConversationSnapshotChange,
     verifyMessage,
@@ -48,6 +52,8 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     initialConversation?: SnapshotMessage[]
     durableSessionId?: string | null
     sourceSessionId?: string
+    onWorkshopAction?: (action: import('@/types/promptExplorer').WorkshopAction) => Promise<void>
+    captureContext?: () => Promise<import('@/types/promptExplorer').ChatContext>
     onApplyWorkshopProposal?: (proposal: import('@/types/promptExplorer').WorkshopAuthoringProposal) => Promise<unknown>
     onDurableSessionIdChange?: (sessionId: string) => void
     onConversationSnapshotChange?: (
@@ -83,6 +89,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
       onConversationSnapshotChange?.(snapshot)
     }, [snapshot, onConversationSnapshotChange])
 
+    const [actionError, setActionError] = React.useState('')
     return (
     <div data-testid="opus-chat">
       Opus
@@ -94,6 +101,22 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
       <button onClick={() => onStreamingChange?.(true)}>start-streaming</button>
       <button onClick={() => onStreamingChange?.(false)}>stop-streaming</button>
       <div data-testid="opus-chat-context">{JSON.stringify(context ?? {})}</div>
+      <div data-testid="workshop-action-error">{actionError}</div>
+      <button onClick={async () => {
+        const captured = await captureContext?.()
+        if (!captured) return
+        const selected = captured.flow_definition?.nodes.find((node) => node.id === 'extract')
+        const action: import('@/types/promptExplorer').WorkshopAction = {
+          success: true, contract_version: 'workshop_action.v1', request: { action: 'open_agent', agent_id: selected?.agent_id, node_id: selected?.id },
+          label: 'Open Stock reader', source: { agent_id: selected?.agent_id || '', name: 'Stock reader', updated_at: 'now', agent_revision_id: 'old-revision' },
+          origin: { flow_id: captured.flow_id, flow_draft_fingerprint: captured.flow_draft_fingerprint || '', node_id: selected?.id, agent_id: selected?.agent_id, agent_revision_id: selected?.agent_revision_id },
+          active_tab: 'flows', flow_draft_fingerprint: captured.flow_draft_fingerprint || null,
+          workshop_draft_fingerprint: captured.agent_workshop?.draft_fingerprint || null,
+          saved: false, message: 'Nothing saved.',
+        }
+        if (!workshopMockState.deferActionValidation) serviceMocks.validateWorkshopAction.mockResolvedValue(action)
+        try { await onWorkshopAction?.(action) } catch (error) { setActionError(String(error)) }
+      }}>open-flow-agent-in-workshop</button>
       <div data-testid="opus-chat-initial-conversation">
         {(initialConversation ?? []).map((message) => message.content).join('|') || 'none'}
       </div>
@@ -255,6 +278,7 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
   }) {
     const [incomingPrompt, setIncomingPrompt] = React.useState('')
     React.useImperativeHandle(authoringContextRef, () => ({
+      runChatAction: () => true,
       captureAuthoringContext: () => ({
         prompt_draft: incomingPrompt, custom_agent_id: 'ca_integration_saved',
         draft_is_dirty: workshopMockState.dirty,
@@ -276,7 +300,7 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
         <div data-testid="continuation-origin">{continuationOrigin?.flow_draft_fingerprint}</div>
         <button onClick={() => onSavedHandoff?.({
           status: 'ready', saved_agent_id: 'ca_integration_saved',
-          saved_custom_agent_id: 'saved-uuid', origin: continuationOrigin,
+          saved_custom_agent_id: 'saved-uuid', saved_agent_revision_id: 'saved-revision', origin: continuationOrigin,
         })}>emit-confirmed-save</button>
         custom:{initialCustomAgentId || 'none'} parent:{initialParentAgentId || 'none'} incoming:{incomingPrompt || 'none'} conversation:{(opusConversation ?? []).map((message) => message.content).join('|') || 'none'}
         <button type="button" onClick={() => onViewEnvelope?.('gene')}>view-envelope</button>
@@ -414,9 +438,10 @@ describe('AgentStudioPage', () => {
     vi.clearAllMocks()
     localStorage.clear()
     workshopMockState.dirty = false
+    workshopMockState.deferActionValidation = false
     flowBuilderInstances.draft = undefined
     Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto })
-    serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: 'ca_integration_saved' })
+    serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: 'ca_integration_saved', agent_revision_id: 'saved-revision', name: 'Saved agent' })
     mockViewportWidth(1440)
     serviceMocks.fetchPromptCatalog.mockResolvedValue(EMPTY_CATALOG)
     serviceMocks.cloneAgentToWorkshop.mockResolvedValue({
@@ -425,6 +450,62 @@ describe('AgentStudioPage', () => {
     })
     historyMocks.useChatHistoryDetailQuery.mockReturnValue(buildEmptyHistoryQueryResult())
     historyMocks.useChatHistoryTranscriptQuery.mockReturnValue(buildEmptyHistoryQueryResult())
+  })
+
+  it('preserves the selected tab when it changes during Chat action validation', async () => {
+    await renderStudio()
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+    fireEvent.click(await screen.findByText('emit-flow-context'))
+    workshopMockState.deferActionValidation = true
+    let finishValidation: (() => void) | undefined
+    serviceMocks.validateWorkshopAction.mockImplementation((request, context) => new Promise((resolve) => {
+      const selected = context.flow_definition.nodes.find((node: { id: string }) => node.id === 'extract')
+      finishValidation = () => resolve({
+        success: true, contract_version: 'workshop_action.v1', request,
+        label: 'Open Stock reader', source: { agent_id: selected.agent_id, name: 'Stock reader', updated_at: 'now', agent_revision_id: 'old-revision' },
+        origin: { flow_id: context.flow_id, flow_draft_fingerprint: context.flow_draft_fingerprint, node_id: selected.id, agent_id: selected.agent_id, agent_revision_id: selected.agent_revision_id },
+        active_tab: 'flows', flow_draft_fingerprint: context.flow_draft_fingerprint || null,
+        workshop_draft_fingerprint: context.agent_workshop?.draft_fingerprint || null,
+        saved: false, message: 'Nothing saved.',
+      })
+    }))
+    fireEvent.click(screen.getByText('open-flow-agent-in-workshop'))
+    await waitFor(() => expect(finishValidation).toBeDefined())
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
+    await act(async () => finishValidation!())
+    expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByTestId('prompt-workshop')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workshop-action-error')).toHaveTextContent('your edits have been kept')
+  })
+
+  it.each(['ready', 'newer_head'])('returns an edited custom agent to its exact originating step: %s', async (outcome) => {
+    await renderStudio()
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+    fireEvent.click(await screen.findByText('emit-flow-context'))
+    const first = flowBuilderInstances.draft!.nodes[0]
+    first.agent_id = 'ca_integration_saved'
+    first.agent_revision_id = 'old-revision'
+    flowBuilderInstances.draft!.nodes.push({ ...first, id: 'another-use', output_key: 'other' })
+    const unchanged = JSON.stringify(flowBuilderInstances.draft)
+    fireEvent.click(screen.getByText('open-flow-agent-in-workshop'))
+    await screen.findByTestId('prompt-workshop')
+    expect(screen.getByTestId('workshop-action-error')).toBeEmptyDOMElement()
+    fireEvent.click(screen.getByText('emit-confirmed-save'))
+    const review = await screen.findByRole('button', { name: 'Review in Flow' })
+    if (outcome === 'newer_head') serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: 'ca_integration_saved', agent_revision_id: 'someone-elses-later-save', name: 'Stock reader' })
+    fireEvent.click(review)
+    if (outcome === 'ready') {
+      await waitFor(() => expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('retarget_agent_revision'))
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('only flow step extract')
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('saved-revision')
+    } else {
+      await screen.findByText('The agent handoff needs a fresh catalog or flow review before continuation.')
+      expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-active', 'false')
+    }
+    expect(JSON.stringify(flowBuilderInstances.draft)).toBe(unchanged)
+    expect(serviceMocks.cloneAgentToWorkshop).not.toHaveBeenCalled()
   })
 
   it.each(['ready', 'revoked', 'wrong_identity', 'flow_changed', 'workshop_changed', 'edit_during_lookup'])(

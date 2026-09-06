@@ -250,14 +250,13 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
     )
 
 
-def test_codebase_tools_are_agents_only():
-    agents_context = _chat_context(active_tab="agents")
-    flows_context = _chat_context(active_tab="flows")
-
-    assert api_module._is_tool_allowed_for_context("search_codebase", agents_context) is True
-    assert api_module._is_tool_allowed_for_context("read_source_file", agents_context) is True
-    assert api_module._is_tool_allowed_for_context("search_codebase", flows_context) is False
-    assert api_module._is_tool_allowed_for_context("read_source_file", flows_context) is False
+@pytest.mark.parametrize("tab", ["agents", "flows", "agent_workshop"])
+def test_source_inspection_is_available_while_authoring(tab):
+    context = _chat_context(active_tab=tab)
+    for name in ("search_codebase", "read_source_file"):
+        assert api_module._is_tool_allowed_for_context(name, context) is True
+    tools = {tool["name"] for tool in api_module._get_all_opus_tools(context)}
+    assert {"search_codebase", "read_source_file"} <= tools
 
 
 def test_every_registered_aggregate_trace_and_log_tool_exposes_bounded_continuation():

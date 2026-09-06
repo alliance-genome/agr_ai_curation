@@ -376,12 +376,39 @@ export interface WorkshopAuthoringProposal {
 export interface WorkshopContinuationOrigin {
   flow_id?: string
   flow_draft_fingerprint: string
+  node_id?: string
+  agent_id?: string
+  agent_revision_id?: string | null
+}
+
+export interface WorkshopActionRequest {
+  action: 'open_agent' | 'new_agent' | 'save' | 'save_as' | 'show_section' | 'return_to_flow'
+  agent_id?: string
+  node_id?: string
+  mode?: 'scratch' | 'template' | 'clone'
+  section?: 'setup' | 'output_structure' | 'prompt' | 'tools' | 'versions' | 'tool_request' | 'manage'
+}
+
+export interface WorkshopAction {
+  success: true
+  contract_version: 'workshop_action.v1'
+  request: WorkshopActionRequest
+  label: string
+  source: { agent_id: string; name: string; updated_at: string; agent_revision_id: string | null } | null
+  origin: WorkshopContinuationOrigin | null
+  active_tab: string
+  flow_draft_fingerprint: string | null
+  workshop_draft_fingerprint: string | null
+  saved: false
+  message: string
 }
 
 export interface WorkshopSavedHandoff {
   status: 'ready' | 'stale_origin' | 'catalog_unavailable'
   saved_agent_id?: string
   saved_custom_agent_id?: string
+  saved_agent_revision_id?: string
+  saved_agent_name?: string
   origin?: WorkshopContinuationOrigin
 }
 

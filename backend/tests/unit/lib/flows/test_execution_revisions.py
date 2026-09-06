@@ -485,12 +485,21 @@ def test_ai_retarget_discards_old_receipt_and_resolves_new_revision(monkeypatch)
     old, new = receipt("profile_bound_generic"), receipt("unprofiled_generic")
     new.agent_id = old.agent_id
     candidate = flow(old).model_dump(mode="json")
+    from copy import deepcopy
+    other_use = deepcopy(candidate["nodes"][1])
+    other_use["id"] = "other_use"
+    other_use["data"]["output_key"] = "other_result"
+    candidate["nodes"].append(other_use)
+    original_other_use = deepcopy(other_use)
     flow_tools._compile_flow_operations(candidate=candidate, metadata={}, semantic_refs={}, accessible_agents={},
         operations=[{"operation": "retarget_agent_revision", "node_id": "node_0",
                      "agent_revision_id": str(new.agent_revision_id)}])
     data = candidate["nodes"][1]["data"]
     assert data["agent_revision_id"] == str(new.agent_revision_id)
     assert "execution_receipt" not in data
+    assert candidate["nodes"][2] == original_other_use
+    assert len(candidate["nodes"]) == 3
+    candidate["nodes"].pop()  # Existing resolver assertions below concern the changed path.
     install_resolver(monkeypatch, [new])
     db = Mock()
     db.execute.return_value.scalar_one_or_none.return_value = new.agent_id

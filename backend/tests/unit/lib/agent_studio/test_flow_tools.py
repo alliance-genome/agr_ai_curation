@@ -1451,7 +1451,23 @@ def test_flow_proposal_compiles_semantic_operations_without_database_writes(
         if isolated_tool_context:
             return copy_context().run(handler, **kwargs)
         return handler(**kwargs)
+    instructions_only = propose(
+        base_draft_fingerprint=base_fingerprint,
+        change_summary="Set the initial extraction instructions.",
+        operations=[{
+            "operation": "update_flow",
+            "task_instructions": "Extract every gene mentioned in the paper.",
+        }],
+    )
+    assert instructions_only["valid"] is True
+    assert instructions_only["pending_user_approval"] is True
+    assert len(instructions_only["candidate"]["flow_definition"]["nodes"]) == 1
+    assert instructions_only["candidate"]["flow_definition"]["edges"] == []
+    assert {change["path"] for change in instructions_only["diff"]} == {
+        "flow_definition.nodes.node_0.data.task_instructions"
+    }
     result = propose(
+        reset_candidate=True,
         base_draft_fingerprint=base_fingerprint,
         change_summary="Build a gene extraction flow.",
         operations=[

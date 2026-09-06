@@ -112,6 +112,28 @@ Create workflows by dragging agents onto a canvas and connecting them:
 - Adjust, per flow, which optional automatic checks run on an extraction step
 - Reach each agent's guide, envelope, and prompts from the step panel's "About this agent" row
 
+### Build a flow with AI Chat
+
+Choose **Help build a flow**, or describe what you want to extract from a paper.
+AI Chat starts with your initial instructions: what to collect and any special
+rules about what to include or leave out. Agree on that before choosing an agent.
+
+Next, choose a pre-made agent or create a custom agent in Workshop. If you are
+unsure and a pre-made agent fits your task, start there. AI Chat then helps with
+any extra instructions, validation choices and the output you want, one decision
+at a time. You can also explicitly ask it to prepare a complete flow at once.
+
+Each proposed change has a short review showing what will change. Important
+notes, removed steps and disabled validation remain visible. **Technical details**
+contains the complete configuration changes if you need them. **Apply changes**
+updates your draft; **Save** stores it. You can undo an applied change before
+making further edits. Cancel dismisses the proposal and keeps the current draft.
+If Apply reports a conflict, review the draft and ask AI Chat to refresh; it
+preserves edits made while validation was running.
+
+Automatic validators run when the flow extracts data. Including a validator does
+not mean that extracted results have already passed validation.
+
 **Verify with AI Chat (Important!)**
 
 Before running a flow, click the **"Verify with AI Chat"** button. AI Chat will:

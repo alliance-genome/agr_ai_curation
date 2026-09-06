@@ -35,6 +35,29 @@ _RESULT_MAX_CHARS = min(
 )
 _LONG_LINE_CHUNK_MAX_CHARS = get_codebase_long_line_chunk_max_chars()
 
+# Inspect application source, not the deployment filesystem. In particular,
+# config/connections.yaml, .env, uploads and execution artifacts are not source.
+_SOURCE_PREFIXES = (
+    "backend/src/", "backend/tests/", "frontend/src/", "docs/", "scripts/",
+    "packages/", "config/agents/",
+)
+_SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".yaml", ".yml", ".json", ".css", ".sh", ".toml"}
+_SOURCE_ROOT_FILES = {"README.md", "AGENTS.md", "backend/main.py", "config/README.md"}
+
+
+def _is_source_path(path: str) -> bool:
+    """Use the same source boundary for direct reads and search results."""
+    relative = Path(path)
+    if any(part.startswith(".") or part.lower() in {
+        "node_modules", "__pycache__", "secrets", "credentials", "uploads", "file_outputs",
+    } for part in relative.parts):
+        return False
+    if relative.stem.lower() in {"credentials", "secrets", "connections"}:
+        return False
+    return path in _SOURCE_ROOT_FILES or (
+        path.startswith(_SOURCE_PREFIXES) and relative.suffix.lower() in _SOURCE_SUFFIXES
+    )
+
 
 def _serialized_chars(value: Dict[str, Any]) -> int:
     """Measure the exact JSON representation used for provider continuation."""
@@ -85,6 +108,8 @@ def _resolve_repo_path(path: str) -> Path:
         candidate.relative_to(root)
     except ValueError as exc:
         raise ValueError("path must stay within the repository root") from exc
+    if not _is_source_path(str(candidate.relative_to(root))):
+        raise ValueError("Only application source and documentation can be inspected; deployment files and private data are unavailable")
     return candidate
 
 
@@ -130,7 +155,7 @@ def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iter
     lowered = query.lower()
     for raw_line in completed.stdout.splitlines():
         relative = _normalize_rg_path(root, raw_line.strip())
-        if lowered in relative.lower():
+        if _is_source_path(relative) and lowered in relative.lower():
             yield {"path": relative}
 
 
@@ -156,7 +181,7 @@ def _iter_content_matches(
     ]
     if path_glob:
         command.extend(["-g", path_glob])
-    command.extend([query, str(root)])
+    command.extend(["--", query, str(root)])
     try:
         completed = subprocess.run(
             command,
@@ -179,6 +204,8 @@ def _iter_content_matches(
         data = payload["data"]
         path_text = data["path"]["text"]
         relative = _normalize_rg_path(root, path_text)
+        if not _is_source_path(relative):
+            continue
         yield {
             "path": relative,
             "line_number": data["line_number"],

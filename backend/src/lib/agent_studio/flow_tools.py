@@ -3406,8 +3406,11 @@ def register_flow_tools() -> None:
         description="""Compile semantic Flow Builder changes for curator review.
 
 Use this tool for a clear request to build, fix, or revise the exact current
-Flow Builder draft. Do not ask for preliminary permission when the requested
-outcome is clear. The application resolves authorized agents and generates node
+Flow Builder draft. In guided creation, propose only the current agreed decision:
+initial instructions first, then the chosen agent, then other requested steps.
+Use update_flow alone for an instructions-only first draft. Do not bundle an
+entire flow unless explicitly requested. A clear curator choice authorizes that
+proposal without another permission question. The application resolves authorized agents and generates node
 IDs, edge IDs, output keys, positions, defaults, and the exact graph. Never ask
 the curator or model to supply those mechanics.
 

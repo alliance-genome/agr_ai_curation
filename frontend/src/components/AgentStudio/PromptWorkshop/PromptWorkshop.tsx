@@ -6,6 +6,7 @@ import type { FlowProposalApplyResult } from '../FlowBuilder/types'
 
 import type {
   AgentWorkshopContext,
+  WorkshopAction,
   CustomAgent,
   PromptCatalog,
   ToolIdeaConversationEntry,
@@ -63,6 +64,7 @@ export interface WorkshopLeaveGuard {
 export interface WorkshopAuthoringContextHandle {
   captureAuthoringContext: () => AgentWorkshopContext
   applyAuthoringProposal: (proposal: WorkshopAuthoringProposal) => Promise<FlowProposalApplyResult>
+  runChatAction: (action: WorkshopAction, cloneSource?: CustomAgent) => boolean
 }
 
 interface GuardedAction {
@@ -72,6 +74,9 @@ interface GuardedAction {
 
 interface PromptWorkshopProps {
   catalog: PromptCatalog
+  initialChatAction?: WorkshopAction
+  initialChatCloneSource?: CustomAgent
+  onInitialChatActionComplete?: () => void
   continuationOrigin?: WorkshopContinuationOrigin
   onSavedHandoff?: (handoff: WorkshopSavedHandoff) => void
   initialParentAgentId?: string | null
@@ -107,6 +112,9 @@ function summarizeEnvelope(metadata: AgentMetadata | undefined): EnvelopeSummary
 
 function PromptWorkshop({
   catalog,
+  initialChatAction,
+  initialChatCloneSource,
+  onInitialChatActionComplete,
   continuationOrigin,
   onSavedHandoff,
   initialParentAgentId,
@@ -145,6 +153,7 @@ function PromptWorkshop({
   const [pendingRevert, setPendingRevert] = useState<(typeof draft.versions)[number] | null>(null)
   const [pendingGuardedAction, setPendingGuardedAction] = useState<GuardedAction | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const handledInitialChatActionRef = useRef<WorkshopAction | undefined>(undefined)
   const [returnFocusToken, setReturnFocusToken] = useState(0)
 
   const {
@@ -185,18 +194,7 @@ function PromptWorkshop({
   }, [dirty.any])
 
   useImperativeHandle(leaveGuardRef, () => ({ requestLeave }), [requestLeave])
-  useImperativeHandle(
-    authoringContextRef,
-    () => ({
-      captureAuthoringContext: draft.captureAuthoringContext,
-      applyAuthoringProposal: async (proposal) => {
-        const result = await draft.applyAuthoringProposal(proposal)
-        if (result.applied) setStartScreenRequested(false)
-        return result
-      },
-    }),
-    [draft.captureAuthoringContext, draft.applyAuthoringProposal]
-  )
+
 
   // After "Keep editing" on a leave request, the dialog hands focus back to the
   // element that opened it (a page tab). Bring it back into the Workshop instead.
@@ -300,6 +298,77 @@ function PromptWorkshop({
     if (!draft.canSave) return
     setSaveDialogOpen(true)
   }
+
+  const runChatAction = useCallback((action: WorkshopAction, cloneSource?: CustomAgent): boolean => {
+    if (draft.loading || draft.saving || draft.authoringBusy || draft.outputLoading) return false
+    const request = action.request
+    if (request.action === 'open_agent' || request.action === 'new_agent') {
+      const source = action.source
+      const custom = source?.agent_id.startsWith('ca_')
+        ? (request.mode === 'clone' && cloneSource?.agent_id === source.agent_id ? cloneSource : undefined)
+          || draft.customAgents.find((agent) => agent.agent_id === source.agent_id) : undefined
+      if (source && (source.agent_id.startsWith('ca_')
+        ? !custom || custom.execution_revision_id !== source.agent_revision_id
+        : !draft.templateOptions.some((template) => template.agent_id === source.agent_id))) return false
+      if (request.action === 'open_agent') {
+        if (!custom) return false
+        draft.selectCustomAgent(custom.id)
+      } else {
+        if (!request.mode) return false
+        draft.startDraft(request.mode)
+        if (request.mode === 'template' && source) draft.setParentAgentId(source.agent_id)
+        if (request.mode === 'clone' && custom) {
+          draft.setChatCloneSource(custom)
+          draft.setCloneSourceAgentId(custom.id)
+        }
+      }
+      setStartScreenRequested(false)
+      setSection('setup')
+      setFocusOriginToken((token) => token + 1)
+      return true
+    }
+    if (request.action === 'save') {
+      if (!draft.canSave) return false
+      setSaveDialogOpen(true)
+    } else if (request.action === 'save_as') {
+      setSaveAsDialogOpen(true)
+    } else if (request.action === 'show_section') {
+      if (!request.section) return false
+      if (request.section === 'tool_request') setToolRequestOpen(true)
+      else if (request.section === 'manage') setManageDialogOpen(true)
+      else {
+        if (request.section === 'output_structure' && draft.outputDraft.mode !== 'profile_bound_generic') return false
+        setSection(request.section)
+        setStartScreenRequested(false)
+      }
+    } else return false
+    return true
+  }, [draft])
+
+  useImperativeHandle(
+    authoringContextRef,
+    () => ({
+      runChatAction,
+      captureAuthoringContext: draft.captureAuthoringContext,
+      applyAuthoringProposal: async (proposal) => {
+        const result = await draft.applyAuthoringProposal(proposal)
+        if (result.applied) setStartScreenRequested(false)
+        return result
+      },
+    }),
+    [draft.captureAuthoringContext, draft.applyAuthoringProposal, runChatAction]
+  )
+
+  useEffect(() => {
+    if (!initialChatAction || handledInitialChatActionRef.current === initialChatAction
+      || draft.loading || draft.saving || draft.authoringBusy || draft.outputLoading
+      || draft.modelOptions.length === 0) return
+    handledInitialChatActionRef.current = initialChatAction
+    if (!runChatAction(initialChatAction, initialChatCloneSource)) {
+      draft.setError('The requested agent changed or is unavailable. Ask AI Chat to reopen it from the current catalog.')
+    }
+    onInitialChatActionComplete?.()
+  }, [initialChatAction, initialChatCloneSource, onInitialChatActionComplete, runChatAction, draft])
 
   const handleSaveConfirm = (note: string) => {
     setSaveDialogOpen(false)
@@ -439,7 +508,8 @@ function PromptWorkshop({
               onTemplateChange={handleTemplateChange}
               missingTemplateId={templateMissing ? selectedCustomAgent?.template_source || null : null}
               templateAllowedGroupIds={selectedTemplate?.allowed_group_ids || []}
-              customAgents={draft.customAgents}
+              customAgents={draft.selectedCloneSource && !draft.customAgents.some((agent) => agent.id === draft.selectedCloneSource?.id)
+                ? [...draft.customAgents, draft.selectedCloneSource] : draft.customAgents}
               cloneSourceAgentId={draft.cloneSourceAgentId}
               onCloneSourceChange={draft.setCloneSourceAgentId}
               isExistingAgent={Boolean(selectedCustomAgent)}

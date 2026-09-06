@@ -15,6 +15,8 @@ from src.lib.agent_studio.capability_catalog import CAPABILITY_KINDS
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.flow_tools import register_flow_tools
 from src.lib.agent_studio.workshop_authoring import WorkshopOperation
+from src.lib.agent_studio.saved_resource_inspection import SavedResourceInspection
+from src.lib.agent_studio.workshop_actions import WorkshopActionRequest
 from src.lib.chat_history_repository import (
     ALL_CHAT_KINDS_SENTINEL,
     ASSISTANT_CHAT_KIND,
@@ -131,6 +133,36 @@ SEARCH_STUDIO_CAPABILITIES_TOOL = {
         },
         "required": [],
     },
+}
+
+INSPECT_SAVED_STUDIO_RESOURCE_TOOL = {
+    "name": "inspect_saved_studio_resource",
+    "description": (
+        "Read authorized saved database records without changing or opening an editor. "
+        "list_flows searches your saved flows by name; flow reads one exact owned saved flow. "
+        "agent_revisions lists accessible immutable custom-agent revisions; agent_revision reads "
+        "the exact saved prompt, model, tools, output and access settings for a revision. "
+        "Use a Flow step's exact revision pin when explaining its behavior, never today's head. "
+        "Use get_current_flow or refresh_workshop_prompt for unsaved edits. Follow next_call. "
+        "Compare records to explain changes; these reads never restore, save, retarget or execute work."
+    ),
+    "input_schema": SavedResourceInspection.model_json_schema(),
+}
+
+WORKSHOP_ACTION_TOOL = {
+    "name": "request_workshop_action",
+    "description": (
+        "Offer a curator a direct button to open an owned custom agent for editing, start a scratch/template/clone draft, "
+        "open a Workshop section, open the explicit Save/Save As dialog, or review a saved agent back in its flow. "
+        "Discover the source agent in the authorized catalog first. When editing from a flow, use its exact node_id; "
+        "the return path preserves that step instead of adding a duplicate. Opening edits the current saved agent, "
+        "which may be newer than the flow's pinned revision; explain this distinction. "
+        "show_section supports setup, output_structure, prompt, tools, versions, tool_request and manage. "
+        "These actions never save or delete data themselves and preserve the existing unsaved-changes guard. "
+        "After the curator clicks, inspect the fresh Workshop context before proposing edits. Do not claim the action "
+        "already happened. Use propose_workshop_draft_update for field, part, prompt, model, tool or validator changes."
+    ),
+    "input_schema": WorkshopActionRequest.model_json_schema(),
 }
 
 GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
@@ -1325,10 +1357,12 @@ FLOW_CREATION_TOOLS = {
     "get_flow_templates",
     "get_available_agents",
 }
-AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
+SOURCE_INSPECTION_TOOLS = {
     "search_codebase",
     "read_source_file",
 }
+SAVED_RESOURCE_TOOLS = {"inspect_saved_studio_resource"}
+WORKSHOP_ACTION_TOOLS = {"request_workshop_action"}
 CAPABILITY_CATALOG_TOOLS = {
     "search_studio_capabilities",
     "get_studio_capability_detail",
@@ -1336,6 +1370,8 @@ CAPABILITY_CATALOG_TOOLS = {
 
 _BUILTIN_OPUS_TOOLS = (
     SUGGESTION_TOOL,
+    INSPECT_SAVED_STUDIO_RESOURCE_TOOL,
+    WORKSHOP_ACTION_TOOL,
     SEARCH_STUDIO_CAPABILITIES_TOOL,
     GET_STUDIO_CAPABILITY_DETAIL_TOOL,
     REFRESH_WORKSHOP_PROMPT_TOOL,
@@ -1448,7 +1484,10 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
             )
         )
 
-    if tool_name in AGENTS_ONLY_DIAGNOSTIC_TOOLS or tool_name in _package_agent_only_diagnostic_tools():
+    if tool_name in SOURCE_INSPECTION_TOOLS or tool_name in SAVED_RESOURCE_TOOLS or tool_name in WORKSHOP_ACTION_TOOLS:
+        return active_tab in {"agents", "flows", "agent_workshop"}
+
+    if tool_name in _package_agent_only_diagnostic_tools():
         return active_tab == "agents"
 
     if tool_name == "get_prompt" or tool_name in TOOL_METADATA_TOOLS:

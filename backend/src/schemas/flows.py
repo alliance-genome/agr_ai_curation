@@ -65,6 +65,8 @@ class FlowValidationAttachmentSelection(BaseModel):
     field_path: Optional[str] = Field(None, max_length=255)
     field_type: Optional[str] = Field(None, max_length=100)
     label: Optional[str] = Field(None, max_length=500)
+    curator_label: Optional[str] = None
+    when_off: Optional[str] = None
     description: Optional[str] = Field(None, max_length=2000)
     definition_state: Optional[str] = Field(None, max_length=100)
     blocked_by: Optional[str] = Field(None, max_length=255)

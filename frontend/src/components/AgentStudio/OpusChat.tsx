@@ -5,6 +5,7 @@
  * Includes tool support for suggestion submission.
  */
 
+import FlowProposalSummary from './FlowProposalSummary'
 import { useState, useRef, useEffect, useCallback, useMemo, type Ref, type SetStateAction } from 'react'
 import {
   Box,
@@ -54,6 +55,7 @@ import type {
   ToolIdeaConversationEntry,
   WorkshopAuthoringProposal,
   FlowAuthoringProposal,
+  WorkshopAction,
 } from '@/types/promptExplorer'
 import type { FlowProposalApplyResult } from './FlowBuilder/types'
 import SuggestionDialog from './SuggestionDialog'
@@ -168,6 +170,7 @@ interface SharedOpusChatState {
   durableSessionId: string | null
   /** Process-local only; never reconstructed from durable chat history. */
   pendingFlowProposal: FlowAuthoringProposal | WorkshopAuthoringProposal | null
+  pendingWorkshopAction: WorkshopAction | null
 }
 
 const OPUS_DRAFT_CONVERSATION_KEY = 'agent-studio:draft'
@@ -200,6 +203,7 @@ function getSharedOpusChatState(
     streamStatus: null,
     durableSessionId: initialDurableSessionId ?? null,
     pendingFlowProposal: null,
+    pendingWorkshopAction: null,
   }
   sharedOpusChatStates.set(resolvedKey, nextState)
   return nextState
@@ -463,6 +467,7 @@ interface OpusChatProps {
   /** Apply a reviewed transient flow proposal to the in-memory editor draft. */
   onApplyFlowProposal?: (proposal: FlowAuthoringProposal) => Promise<FlowProposalApplyResult>
   onApplyWorkshopProposal?: (proposal: WorkshopAuthoringProposal) => Promise<FlowProposalApplyResult>
+  onWorkshopAction?: (action: WorkshopAction) => Promise<void>
   /** Shell placement: side panel (hide control) or narrow-width drawer (close control) */
   variant?: 'panel' | 'drawer'
   /** DOM id of the shell container the hide/close control toggles (aria-controls) */
@@ -506,6 +511,7 @@ function OpusChat({
   onConversationSnapshotChange,
   onApplyFlowProposal,
   onApplyWorkshopProposal,
+  onWorkshopAction,
   variant = 'panel',
   panelId,
   onHide,
@@ -521,6 +527,8 @@ function OpusChat({
   )
   const messages = sharedSnapshot.messages
   const isStreaming = sharedSnapshot.isStreaming
+  const [workshopActionBusy, setWorkshopActionBusy] = useState(false)
+  const [workshopActionError, setWorkshopActionError] = useState<string | null>(null)
   const streamStatus = sharedSnapshot.streamStatus
   const durableSessionId = sharedSnapshot.durableSessionId
   const pendingFlowProposal = sharedSnapshot.pendingFlowProposal
@@ -533,6 +541,7 @@ function OpusChat({
   const [isSubmittingDirect, setIsSubmittingDirect] = useState(false)
   const [submissionSent, setSubmissionSent] = useState(false)
   const [flowProposalApplying, setFlowProposalApplying] = useState(false)
+  const [flowProposalError, setFlowProposalError] = useState<string | null>(null)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -580,6 +589,10 @@ function OpusChat({
       ...current,
       pendingFlowProposal: proposal,
     }))
+  }, [conversationKey])
+
+  const setPendingWorkshopAction = useCallback((action: WorkshopAction | null) => {
+    emitSharedOpusChatState(conversationKey, (current) => ({ ...current, pendingWorkshopAction: action }))
   }, [conversationKey])
 
   const setStreamStatus = useCallback((nextStatus: SetStateAction<string | null>) => {
@@ -761,6 +774,12 @@ function OpusChat({
       }
 
       const toolResult = event.result as Record<string, unknown>
+      if (event.tool_name === 'request_workshop_action' && toolResult.success === true
+        && toolResult.contract_version === 'workshop_action.v1' && typeof toolResult.label === 'string'
+        && toolResult.request && typeof toolResult.request === 'object') {
+        setWorkshopActionError(null)
+        setPendingWorkshopAction(toolResult as unknown as WorkshopAction)
+      }
       const displayToolResult = ['propose_flow_draft_update', 'propose_workshop_draft_update'].includes(event.tool_name ?? '')
         ? {
             contract_version: toolResult.contract_version,
@@ -844,14 +863,15 @@ function OpusChat({
               && typeof (candidate as Record<string, unknown>).description === 'string'
               && typeof (candidate as Record<string, unknown>).flow_definition === 'object')
         if (proposalReady) {
+          setFlowProposalError(null)
           setPendingFlowProposal(toolResult as unknown as FlowAuthoringProposal | WorkshopAuthoringProposal)
           setMessages((prev) => [
             ...prev,
             {
               role: 'system',
               content: toolResult.valid === false
-                ? 'The Workshop proposal has blocking validation findings. Review them and request a repair; the draft is unchanged.'
-                : `AI Chat prepared a validated ${isWorkshop ? 'Workshop' : 'Flow Builder'} proposal. Review the exact changes, then Apply or Cancel. Save remains manual.`,
+                ? 'This agent change needs attention. Review the notes and ask AI Chat to fix it before applying.'
+                : 'A change is ready for your review. Apply it to your draft, or cancel. Nothing has been saved.',
               timestamp: new Date().toISOString(),
             },
           ])
@@ -872,7 +892,7 @@ function OpusChat({
       }
     }
     return true
-  }, [setMessages, setPendingFlowProposal])
+  }, [setMessages, setPendingFlowProposal, setPendingWorkshopAction])
 
   // Handle sending a message (optionally with a specific message text for auto-send)
   const handleSend = useCallback(async (messageOverride?: string) => {
@@ -1196,11 +1216,13 @@ function OpusChat({
       return
     }
     setFlowProposalApplying(true)
+    setFlowProposalError(null)
     try {
       const result = pendingFlowProposal.contract_version === 'workshop_authoring_proposal.v1'
         ? await onApplyWorkshopProposal!(pendingFlowProposal)
         : await onApplyFlowProposal!(pendingFlowProposal)
       setSnackbar({ open: true, message: result.message, severity: result.applied ? 'success' : 'error' })
+      if (!result.applied) setFlowProposalError(result.message)
       if (result.applied) {
         setPendingFlowProposal(null)
         setMessages((prev) => [
@@ -1212,6 +1234,9 @@ function OpusChat({
           },
         ])
       }
+    } catch (error) {
+      logger.error('Could not finish applying authoring proposal', error as Error, { component: 'OpusChat' })
+      setFlowProposalError('We could not confirm this change. Review your current draft and ask AI Chat to refresh before trying again. Nothing was saved.')
     } finally {
       setFlowProposalApplying(false)
     }
@@ -1228,7 +1253,7 @@ function OpusChat({
       ...prev,
       {
         role: 'system',
-        content: 'Proposal canceled; the editor draft was not changed.',
+        content: 'Proposal dismissed. Your current draft has been kept; nothing was saved.',
         timestamp: new Date().toISOString(),
       },
     ])
@@ -1245,7 +1270,7 @@ function OpusChat({
   // Flow-specific suggestions (shown when on flows tab)
   const flowQuickActions = [
     { label: 'Verify my flow', prompt: buildFlowVerificationPrompt() },
-    { label: 'Help build a flow', prompt: 'I want to build a new curation flow. Please help me design it starting with Initial Instructions. What should I define in my initial instructions, and what agents should follow?' },
+    { label: 'Help build a flow', prompt: 'Help me build a flow one step at a time. Start by helping me describe what to extract from the paper. Let us agree on the initial instructions before choosing an agent or adding other steps.' },
     { label: 'Optimize my flow', prompt: 'Can you suggest optimizations for my current flow? I want to make sure it\'s efficient and well-designed.' },
   ]
 
@@ -1573,6 +1598,28 @@ function OpusChat({
                 </MessageBubble>
               </Box>
             ))}
+            {sharedSnapshot.pendingWorkshopAction && onWorkshopAction && (
+              <Box sx={{ alignSelf: 'flex-start', py: 1 }}>
+                <Typography variant="body2" sx={{ mb: 1 }}>Continue in the Workshop. Saving still needs your confirmation.</Typography>
+                {workshopActionError && <Alert severity="warning" sx={{ mb: 1 }}>{workshopActionError}</Alert>}
+                <Button variant="outlined" disabled={isStreaming || workshopActionBusy}
+                  onClick={async () => {
+                    const action = sharedSnapshot.pendingWorkshopAction
+                    if (!action || workshopActionBusy) return
+                    setWorkshopActionBusy(true)
+                    setWorkshopActionError(null)
+                    try {
+                      await onWorkshopAction(action)
+                      setPendingWorkshopAction(null)
+                    } catch (error) {
+                      setWorkshopActionError(error instanceof Error ? error.message : 'Please ask AI Chat for a fresh action.')
+                    } finally { setWorkshopActionBusy(false) }
+                  }}>
+                  {workshopActionBusy ? 'Opening…' : sharedSnapshot.pendingWorkshopAction.label}
+                </Button>
+                <Button color="inherit" disabled={workshopActionBusy} onClick={() => setPendingWorkshopAction(null)}>Dismiss</Button>
+              </Box>
+            )}
             {isStreaming && (
               <Box
                 role="status"
@@ -1702,37 +1749,37 @@ function OpusChat({
       <Dialog
         open={Boolean(pendingFlowProposal)}
         onClose={flowProposalApplying ? undefined : handleCancelFlowProposal}
-        maxWidth="md"
+        maxWidth={pendingFlowProposal?.contract_version === 'flow_authoring_proposal.v1' ? 'sm' : 'md'}
         fullWidth
         aria-labelledby="flow-proposal-review-title"
       >
         <DialogTitle id="flow-proposal-review-title">
           {pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
-            ? 'Review Workshop Proposal' : 'Review Flow Builder Proposal'}
+            ? 'Review agent changes' : 'Review this flow change'}
         </DialogTitle>
         <DialogContent>
+          {flowProposalError && <Alert severity="error" sx={{ mb: 1.5 }}>{flowProposalError}</Alert>}
           <DialogContentText sx={{ mb: 1.5 }}>
-            Review the exact draft changes below. Apply changes only updates the in-memory
-            editor draft; you must still use Save to persist it.
+            Apply updates your draft. You can undo it before making further edits.
+            Save when you are ready.
           </DialogContentText>
           {pendingFlowProposal?.change_summary && (
-            <Alert severity="info" sx={{ mb: 1.5 }}>
+            <Typography variant="body1" fontWeight={600} sx={{ mb: 1.5, overflowWrap: 'anywhere' }}>
               {pendingFlowProposal.change_summary}
-            </Alert>
+            </Typography>
           )}
-          <Alert severity={pendingFlowProposal?.findings.some((finding) => finding.severity === 'error') ? 'error' : 'success'}
-            sx={{ mb: 1.5 }} role="status" aria-live="polite">
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }} role="status" aria-live="polite">
             {pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
-              ? 'Canonical validation found blocking issues. Request a repaired proposal before applying.'
-              : `Canonical validation passed with ${pendingFlowProposal?.findings.length ?? 0} non-blocking findings.`}
-          </Alert>
+              ? 'This change needs attention before you can apply it. Ask AI Chat to fix the issues below.'
+              : (pendingFlowProposal?.findings.length ? 'Ready to apply. Please review the notes below.' : 'Ready to apply to your draft.')}
+          </Typography>
           {pendingFlowProposal?.findings.map((finding, index) => (
             <Alert
               key={`${finding.code}-${finding.path}-${index}`}
               severity={finding.severity === 'warning' ? 'warning' : finding.severity === 'error' ? 'error' : 'info'}
               sx={{ mb: 1 }}
             >
-              {finding.message} ({finding.path})
+              {finding.message}
             </Alert>
           ))}
           {pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1' && (
@@ -1745,6 +1792,11 @@ function OpusChat({
               ))}
             </>
           )}
+          {pendingFlowProposal?.contract_version === 'flow_authoring_proposal.v1' && (
+            <FlowProposalSummary proposal={pendingFlowProposal} />
+          )}
+          <Box component="details" open={pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1' || undefined} sx={{ mt: 2 }}>
+            <Box component="summary" sx={{ cursor: 'pointer', py: 1, color: 'text.secondary', fontSize: '0.875rem' }}>Technical details</Box>
           <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
             Exact changes ({pendingFlowProposal?.diff.length ?? 0})
           </Typography>
@@ -1823,6 +1875,7 @@ function OpusChat({
                 )}
               </Box>
             ))}
+          </Box>
           </Box>
         </DialogContent>
         <DialogActions>

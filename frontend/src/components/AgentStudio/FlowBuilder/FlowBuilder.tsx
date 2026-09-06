@@ -267,6 +267,16 @@ const flowStateDefinition = (state: FlowState): FlowDefinition => ({
   edges: state.edges.map((edge) => ({ ...edge })),
 })
 
+// Compare curator-owned state, not validation groups rebuilt from attachments/edges.
+// Keep identity, positions and unapplied node-panel edits in the conflict guard.
+const flowEditKey = (state: FlowState): string => {
+  const { isDirty: _isDirty, nodes, ...rest } = state
+  return canonicalAuthoringJson({
+    ...rest,
+    nodes: nodes.map(({ validation_groups: _groups, ...node }) => node),
+  })
+}
+
 const flowDefinitionContext = (definition: FlowDefinition): FlowContextDefinition => ({
   version: definition.version,
   task_instructions_default_only: definition.task_instructions_default_only,
@@ -1249,7 +1259,7 @@ function FlowBuilderInner({
       return { applied: false, reason: 'invalid', message: 'This flow proposal format is not supported.' }
     }
     const captured = liveAuthoringRef.current.captureAuthoringContext()
-    const capturedKey = canonicalAuthoringJson(captured)
+    const capturedKey = flowEditKey(captured)
     const capturedDefinition = flowStateDefinition(captured)
     const currentFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
       captured,
@@ -1320,7 +1330,7 @@ function FlowBuilderInner({
 
     if (!authoringMountedRef.current
       || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading
-      || canonicalAuthoringJson(liveAuthoringRef.current.captureAuthoringContext()) !== capturedKey) {
+      || flowEditKey(liveAuthoringRef.current.captureAuthoringContext()) !== capturedKey) {
       return { applied: false, reason: 'stale', message: 'The flow changed during validation. Ask AI Chat to refresh it.' }
     }
 
@@ -1354,9 +1364,9 @@ function FlowBuilderInner({
     setProposalUndo(null)
     flushSync(() => applyDefinitionToEditor(requestedDraft))
     const actualAppliedDraft = currentEditorDraftRef.current
-    const appliedKey = canonicalAuthoringJson(liveAuthoringRef.current.captureAuthoringContext())
+    const appliedKey = flowEditKey(liveAuthoringRef.current.captureAuthoringContext())
     const appliedDraftStillCurrent = () => authoringMountedRef.current
-      && canonicalAuthoringJson(liveAuthoringRef.current.captureAuthoringContext()) === appliedKey
+      && flowEditKey(liveAuthoringRef.current.captureAuthoringContext()) === appliedKey
     try {
       const actualAppliedFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
         captured,

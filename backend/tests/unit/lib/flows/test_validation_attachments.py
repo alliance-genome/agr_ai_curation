@@ -527,3 +527,24 @@ def test_validation_schedule_rejects_unexpected_attachment_types():
         match="Unexpected validation attachment type: object",
     ):
         validation_schedule_from_node_data({"validation_attachments": [object()]})
+
+
+def test_curator_wording_survives_canonical_defaults_and_saved_roundtrip(monkeypatch):
+    from dataclasses import replace
+
+    option = replace(
+        _option("subject_gene"),
+        curator_label="Validate the gene named in the paper",
+        when_off="Keep the extracted gene name without database validation.",
+    )
+    monkeypatch.setattr(
+        validation_attachments_module,
+        "validation_attachment_options_for_agent",
+        lambda agent_id, **kwargs: (option,) if agent_id == "disease_extractor" else (),
+    )
+    hydrated = apply_flow_validation_attachment_defaults(_flow_definition())
+    reopened = FlowDefinition.model_validate_json(hydrated.model_dump_json())
+    selection = reopened.nodes[1].data.validation_attachments[0].model_dump()
+    assert selection["curator_label"] == option.curator_label
+    assert selection["when_off"] == option.when_off
+    assert selection["enabled"] is True

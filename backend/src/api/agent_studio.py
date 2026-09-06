@@ -1368,7 +1368,7 @@ _DOMAIN_ENVELOPE_TOOLS = opus_tools.DOMAIN_ENVELOPE_TOOLS
 _WORKSHOP_TOOLS = opus_tools.WORKSHOP_TOOLS
 _TRACE_TOOLS = opus_tools.TRACE_TOOLS
 _FLOW_TOOLS = opus_tools.FLOW_TOOLS
-_AGENTS_ONLY_DIAGNOSTIC_TOOLS = opus_tools.AGENTS_ONLY_DIAGNOSTIC_TOOLS
+_SOURCE_INSPECTION_TOOLS = opus_tools.SOURCE_INSPECTION_TOOLS
 _CAPABILITY_CATALOG_TOOLS = opus_tools.CAPABILITY_CATALOG_TOOLS
 
 
@@ -1410,6 +1410,10 @@ def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
         return "studio_history", "Conversation recall, feedback, and failure reporting"
     if tool_name in _CAPABILITY_CATALOG_TOOLS:
         return "studio_capabilities", "Live authenticated Agent Studio resource discovery"
+    if tool_name in opus_tools.SAVED_RESOURCE_TOOLS:
+        return "studio_saved_work", "Read-only inspection of authorized saved flows and agent revisions"
+    if tool_name in opus_tools.WORKSHOP_ACTION_TOOLS:
+        return "workshop_actions", "Curator-controlled Workshop navigation and Save dialogs"
     if tool_name in _DOMAIN_ENVELOPE_TOOLS:
         return "domain_review", "Domain envelope, validation, and export-readiness inspection"
     if tool_name in _WORKSHOP_TOOLS:
@@ -1443,7 +1447,7 @@ def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
         }:
             return "trace_payload", "Exact trace payload and reconstruction inspection"
         return "trace_evidence", "Detailed extraction trace, payload, and evidence reconstruction"
-    if tool_name in _AGENTS_ONLY_DIAGNOSTIC_TOOLS:
+    if tool_name in _SOURCE_INSPECTION_TOOLS:
         return "source_diagnostics", "Bounded source-code diagnostics for Agent Studio"
     if tool_name in opus_tools.TOOL_METADATA_TOOLS or tool_name == "get_prompt":
         return "agent_catalog", "Agent prompt and callable-tool catalog inspection"
@@ -3572,6 +3576,38 @@ async def _handle_tool_call(
             "suggestion_id": result["suggestion_id"],
             "message": result["message"],
         }
+
+    elif tool_name == "request_workshop_action":
+        from src.lib.agent_studio.workshop_actions import WorkshopActionRequest, prepare_workshop_action
+
+        if user_db_id is None:
+            return {"success": False, "error": "Authenticated Workshop access is unavailable."}
+        try:
+            request = WorkshopActionRequest.model_validate(tool_input)
+            with SessionLocal() as action_db:
+                return prepare_workshop_action(action_db, context=context, user_id=user_db_id,
+                                               active_group_ids=active_group_ids or [], request=request)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
+    elif tool_name == "inspect_saved_studio_resource":
+        from sqlalchemy import text
+        from src.lib.agent_studio.saved_resource_inspection import SavedResourceInspection, inspect_saved_resource
+
+        if user_db_id is None:
+            return {"success": False, "error": "Authenticated saved-work access is unavailable."}
+        try:
+            request = SavedResourceInspection.model_validate(tool_input)
+            with SessionLocal() as inspection_db:
+                # Enforce the read-only contract in PostgreSQL as well as in the
+                # typed handler. Closing the session rolls back the transaction.
+                inspection_db.execute(text("SET TRANSACTION READ ONLY"))
+                return {"success": True, **inspect_saved_resource(
+                    inspection_db, user_id=user_db_id,
+                    active_group_ids=active_group_ids or [], request=request,
+                )}
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
 
     elif tool_name == "inspect_workshop_profile":
         from src.lib.agent_studio.profile_authoring import ProfileInspection, inspect_workshop_profile

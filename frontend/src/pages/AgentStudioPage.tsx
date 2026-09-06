@@ -54,7 +54,7 @@ import {
   useChatHistoryDetailQuery,
   useChatHistoryTranscriptQuery,
 } from '@/features/history/useChatHistoryQuery'
-import { cloneAgentToWorkshop, fetchPromptCatalog, getWorkshopSavedReference } from '@/services/agentStudioService'
+import { cloneAgentToWorkshop, fetchPromptCatalog, getWorkshopSavedReference, validateWorkshopAction, getWorkshopCloneSource } from '@/services/agentStudioService'
 import {
   AGENT_STUDIO_CHAT_HISTORY_KIND,
   buildRestorableChatMessages,
@@ -71,6 +71,8 @@ import type {
   WorkshopContinuationOrigin,
   WorkshopSavedHandoff,
   FlowAuthoringProposal,
+  WorkshopAction,
+  CustomAgent,
 } from '@/types/promptExplorer'
 
 type TabValue = 'agents' | 'flows' | 'agent_workshop'
@@ -156,6 +158,9 @@ function AgentStudioPage() {
   const flowAuthoringContextRef = useRef<FlowAuthoringContextHandle | null>(null)
   const [workshopContinuationOrigin, setWorkshopContinuationOrigin] = useState<WorkshopContinuationOrigin>()
   const [workshopSavedHandoff, setWorkshopSavedHandoff] = useState<WorkshopSavedHandoff>()
+  const [initialWorkshopAction, setInitialWorkshopAction] = useState<WorkshopAction>()
+  const [initialChatCloneSource, setInitialChatCloneSource] = useState<CustomAgent>()
+  const requestedWorkshopOriginRef = useRef<WorkshopContinuationOrigin | null | undefined>(undefined)
   const [continuingToFlow, setContinuingToFlow] = useState(false)
   const continuationBusyRef = useRef(false)
   const continuationMountedRef = useRef(true)
@@ -645,6 +650,11 @@ function AgentStudioPage() {
     previousAuthoringTabRef.current = activeTab
     if (activeTab !== 'agent_workshop' || previousTab === 'agent_workshop') return
     setWorkshopSavedHandoff(undefined)
+    if (requestedWorkshopOriginRef.current !== undefined) {
+      setWorkshopContinuationOrigin(requestedWorkshopOriginRef.current || undefined)
+      requestedWorkshopOriginRef.current = undefined
+      return
+    }
     setWorkshopContinuationOrigin(undefined)
     if (previousTab === 'flows') {
       void captureChatContext().then((captured) => {
@@ -703,16 +713,30 @@ function AgentStudioPage() {
         setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
         return
       }
-      if (reference.agent_id !== handoff.saved_agent_id) {
+      if (reference.agent_id !== handoff.saved_agent_id
+        || !handoff.saved_agent_revision_id
+        || reference.agent_revision_id !== handoff.saved_agent_revision_id) {
         setWorkshopSavedHandoff({ ...handoff, status: 'catalog_unavailable' })
         return
+      }
+      const origin = handoff.origin
+      if (origin.node_id) {
+        const node = context.flow_definition?.nodes.find((item) => item.id === origin.node_id)
+        if (!node || node.agent_id !== origin.agent_id
+          || node.agent_revision_id !== origin.agent_revision_id
+          || reference.agent_id !== origin.agent_id) {
+          setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
+          return
+        }
       }
       setActiveTab('flows')
       safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'flows', {
         owner: 'preferences', key: AGENT_STUDIO_TAB_KEY,
       })
       showClaude()
-      setDiscussMessage(`Propose adding the saved agent ${reference.agent_id} to my current Flow draft. Recheck its current authenticated catalog entry, preserve unrelated steps and settings, and use propose_flow_draft_update to show me the exact change for review. Do not save or execute the flow. Ask only if the insertion point is materially ambiguous.`)
+      setDiscussMessage(origin.node_id
+        ? `Propose updating only flow step ${origin.node_id} to the saved revision ${reference.agent_revision_id} of agent ${reference.agent_id}. Use retarget_agent_revision in propose_flow_draft_update. Preserve the step identity, connections and unrelated settings. Do not add a duplicate, update other uses, save or execute the flow. Explain the change using the agent name ${reference.name}.`
+        : `Propose adding the saved agent ${reference.agent_id}, exact revision ${reference.agent_revision_id}, to my current Flow draft. Recheck its authenticated catalog entry, preserve unrelated steps and settings, and use propose_flow_draft_update to show the exact change for review. Do not save or execute the flow. Ask only if the insertion point is materially ambiguous.`)
       setWorkshopSavedHandoff(undefined)
     } catch {
       if (continuationMountedRef.current && continuationLiveRef.current.workshopSavedHandoff === handoff) {
@@ -721,6 +745,68 @@ function AgentStudioPage() {
     } finally {
       continuationBusyRef.current = false
       if (continuationMountedRef.current) setContinuingToFlow(false)
+    }
+  }
+
+  const handleWorkshopAction = async (action: WorkshopAction) => {
+    if (isClaudeStreaming) throw new Error('Wait for AI Chat to finish before opening this action.')
+    const stillOnOrigin = () => continuationMountedRef.current
+      && continuationLiveRef.current.activeTab === action.active_tab
+      && !continuationLiveRef.current.isClaudeStreaming
+    const before = await captureChatContext()
+    if (!stillOnOrigin() || before.active_tab !== action.active_tab
+      || (before.flow_draft_fingerprint || null) !== action.flow_draft_fingerprint
+      || (before.agent_workshop?.draft_fingerprint || null) !== action.workshop_draft_fingerprint) {
+      throw new Error('Your work changed since this action was offered. Ask AI Chat to use your current draft.')
+    }
+    const fresh = await validateWorkshopAction(action.request, before)
+    if (!stillOnOrigin() || canonicalAuthoringJson(fresh) !== canonicalAuthoringJson(action)
+      || canonicalAuthoringJson(await captureChatContext()) !== canonicalAuthoringJson(before)
+      || !stillOnOrigin()) {
+      throw new Error('The agent or draft changed. Ask AI Chat for a fresh action; your edits have been kept.')
+    }
+    const opensDraft = action.request.action === 'open_agent' || action.request.action === 'new_agent'
+    if (opensDraft) {
+      const cloneSource = action.request.mode === 'clone' && action.source
+        ? await getWorkshopCloneSource(action.source.agent_id.replace(/^ca_/, '')) : undefined
+      if (cloneSource && (cloneSource.agent_id !== action.source?.agent_id
+        || cloneSource.execution_revision_id !== action.source.agent_revision_id)) {
+        throw new Error('The clone source changed. Ask AI Chat for a fresh action.')
+      }
+      if (!await confirmLeaveWorkshop()) throw new Error('Your current Workshop draft is still open.')
+      if (!stillOnOrigin() || canonicalAuthoringJson(await captureChatContext()) !== canonicalAuthoringJson(before)
+        || !stillOnOrigin()) {
+        throw new Error('Your draft changed. Ask AI Chat for a fresh action.')
+      }
+      const nextOrigin = action.origin || (action.request.action === 'new_agent' && workshopContinuationOrigin
+        ? { flow_id: workshopContinuationOrigin.flow_id, flow_draft_fingerprint: workshopContinuationOrigin.flow_draft_fingerprint }
+        : undefined)
+      if (activeTab === 'agent_workshop') {
+        if (!workshopAuthoringContextRef.current?.runChatAction(action, cloneSource)) {
+          throw new Error('The Workshop is still loading this agent. Please try again.')
+        }
+      } else {
+        requestedWorkshopOriginRef.current = nextOrigin || null
+        setAgentWorkshopTemplateSource(null)
+        setAgentWorkshopCustomAgentId(null)
+        setInitialChatCloneSource(cloneSource)
+        setInitialWorkshopAction(action)
+        applyTab('agent_workshop')
+      }
+      setWorkshopSavedHandoff(undefined)
+      setWorkshopContinuationOrigin(nextOrigin)
+      showClaude()
+      return
+    }
+    if (action.request.action === 'return_to_flow') {
+      if (workshopSavedHandoff?.status !== 'ready' || !workshopSavedHandoff.origin) {
+        throw new Error('Save this agent first, then use Review in Flow to review its saved revision.')
+      }
+      await handleContinueInFlow()
+      return
+    }
+    if (!workshopAuthoringContextRef.current?.runChatAction(action)) {
+      throw new Error('This Workshop action is not available yet. Review the current draft first.')
     }
   }
 
@@ -886,6 +972,7 @@ Agent ID: ${agentId}`
       onConversationSnapshotChange={handleConversationSnapshotChange}
       onApplyFlowProposal={handleApplyFlowProposal}
       onApplyWorkshopProposal={handleApplyWorkshopProposal}
+      onWorkshopAction={handleWorkshopAction}
       variant={variant}
       panelId={panelId}
       onHide={hideClaude}
@@ -1043,7 +1130,7 @@ Agent ID: ${agentId}`
                       </Button>
                     ) : undefined}>
                     {workshopSavedHandoff.status === 'ready'
-                      ? `Saved agent ${workshopSavedHandoff.saved_agent_id} is available in the refreshed catalog.`
+                      ? `${workshopSavedHandoff.saved_agent_name || 'Your agent'} is saved. Review its use in your flow when ready.`
                       : 'The agent handoff needs a fresh catalog or flow review before continuation.'}
                   </Alert>
                 )}
@@ -1059,6 +1146,9 @@ Agent ID: ${agentId}`
                   onViewEnvelope={handleWorkshopViewEnvelope}
                   leaveGuardRef={workshopLeaveGuardRef}
                   authoringContextRef={workshopAuthoringContextRef}
+                  initialChatAction={initialWorkshopAction}
+                  initialChatCloneSource={initialChatCloneSource}
+                  onInitialChatActionComplete={() => setInitialWorkshopAction(undefined)}
                 />
                 </>
               )}

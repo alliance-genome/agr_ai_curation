@@ -42,6 +42,8 @@ from src.lib.agent_studio.custom_agent_service import (
 from src.lib.agent_studio.authoring_validation import AuthoringValidationError
 from src.lib.agent_studio.profile_mapping_service import ProfileMappingError
 from src.lib.agent_studio.models import AgentWorkshopContext
+from src.lib.agent_studio.models import ChatContext, ChatRequest
+from src.lib.agent_studio.workshop_actions import WorkshopActionRequest, prepare_workshop_action
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.agent_access import is_resource_access_allowed
@@ -256,6 +258,13 @@ class CustomAgentResponse(BaseModel):
 
 class WorkshopSavedReference(BaseModel):
     agent_id: str
+    agent_revision_id: str
+    name: str
+
+
+class WorkshopActionValidationRequest(BaseModel):
+    context: ChatContext
+    action: WorkshopActionRequest
 
 
 class ListCustomAgentsResponse(BaseModel):
@@ -433,6 +442,27 @@ async def validate_workshop_draft_endpoint(
     ).to_dict()
 
 
+@router.post("/authoring-actions/validate")
+async def validate_workshop_action(
+    request: WorkshopActionValidationRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reauthorize a Chat action immediately before the curator opens its UI."""
+    from src.models.sql.user import User
+    db_user = db.query(User).filter(User.auth_sub == user.get("sub")).one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=403, detail="Authoring access is unavailable")
+    try:
+        ChatRequest(messages=[], context=request.context)
+        return prepare_workshop_action(
+            db, context=request.context, user_id=db_user.id,
+            active_group_ids=_authenticated_group_ids(user), request=request.action,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/{custom_agent_id}/authoring-reference", response_model=WorkshopSavedReference)
 async def get_workshop_saved_reference(
     custom_agent_id: UUID,
@@ -452,11 +482,13 @@ async def get_workshop_saved_reference(
             active_tab="flows", artifact_kind="flow",
         ),
     )
-    if not any(record.kind == "agent" and record.resource_id == agent_id and record.selectable
-               and record.availability == "available" and record.compatibility.get("flow_selectable")
-               for record in records):
+    record = next((record for record in records
+                   if record.kind == "agent" and record.resource_id == agent_id and record.selectable
+                   and record.availability == "available" and record.compatibility.get("flow_selectable")), None)
+    revision_id = record.detail.get("identity_contract", {}).get("agent_revision_id") if record else None
+    if record is None or not revision_id:
         raise HTTPException(status_code=409, detail="The saved agent is not available in the current flow catalog")
-    return WorkshopSavedReference(agent_id=agent_id)
+    return WorkshopSavedReference(agent_id=agent_id, agent_revision_id=revision_id, name=record.name)
 
 
 @router.post("", response_model=CustomAgentResponse, status_code=201)
@@ -607,6 +639,25 @@ async def list_custom_agents_endpoint(
             detail="Custom agent query is invalid",
             log_message="Failed to list custom agents",
         )
+
+
+@router.get("/{custom_agent_id}/clone-source", response_model=CustomAgentResponse)
+async def get_workshop_clone_source(
+    custom_agent_id: UUID,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CustomAgentResponse:
+    """Read a visible source for a new clone draft without creating an agent."""
+    from src.models.sql.user import User
+    db_user = db.query(User).filter(User.auth_sub == user.get("sub")).one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=403, detail="Authoring access is unavailable")
+    try:
+        source = get_custom_agent_visible_to_user(db, custom_agent_id, db_user.id)
+        _require_custom_agent_group_access(source, user)
+        return _as_response_payload(source)
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+        _raise_custom_agent_lookup_http_exception(exc=exc, log_message="Could not read Workshop clone source")
 
 
 @router.get("/{custom_agent_id}", response_model=CustomAgentResponse)

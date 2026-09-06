@@ -950,18 +950,18 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
 def test_core_agent_studio_policy_does_not_own_package_diagnostic_ids():
     text = (REPO_ROOT / AGENT_STUDIO_OPUS_TOOLS_PATH).read_text(encoding="utf-8")
     module = ast.parse(text)
-    agents_only_assignment = next(
+    source_inspection_assignment = next(
         node
         for node in module.body
         if isinstance(node, ast.Assign)
         and any(
             isinstance(target, ast.Name)
-            and target.id == "AGENTS_ONLY_DIAGNOSTIC_TOOLS"
+            and target.id == "SOURCE_INSPECTION_TOOLS"
             for target in node.targets
         )
     )
 
-    assert ast.literal_eval(agents_only_assignment.value) == {
+    assert ast.literal_eval(source_inspection_assignment.value) == {
         "search_codebase",
         "read_source_file",
     }

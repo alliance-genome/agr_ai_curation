@@ -618,6 +618,7 @@ def test_saved_reference_requires_fresh_authorized_flow_catalog(db, monkeypatch,
         capability_catalog.CapabilityRecord(
             kind="agent", resource_id=agent_id, name="Saved", description="",
             compatibility={"flow_selectable": True},
+            detail={"identity_contract": {"agent_revision_id": "22222222-2222-2222-2222-222222222222"}},
         ),
     ] if available else [])
     monkeypatch.setattr(capability_catalog, "build_authorized_capability_catalog", catalog)

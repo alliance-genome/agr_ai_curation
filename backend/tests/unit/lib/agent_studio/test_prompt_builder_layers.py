@@ -184,3 +184,26 @@ def test_flow_context_requires_complete_targeted_verification_evidence(monkeypat
     assert "method/PDF-level `get_tool_details(tool_id, agent_id)`" in prompt
     assert "Output agents are attachment branches with ordered `source_steps`" in prompt
     assert "Duplicate `output_key` is HIGH unless authoritative validation" in prompt
+
+
+def test_flow_authoring_guidance_preserves_incremental_choices_and_explicit_override(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.prompt_builder.build_package_diagnostic_tools_prompt",
+        lambda: "DIAGNOSTIC TOOLS",
+    )
+    prompt = build_opus_system_prompt(
+        ChatContext.model_validate({"active_tab": "flows"}),
+        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        list_model_definitions=lambda: [],
+        get_prompt_catalog=lambda: None,
+        prepare_trace_context=lambda _trace_id: None,
+    )
+    for instruction in (
+        "guide a conversation one decision at a time",
+        "just Initial Instructions",
+        "explicitly requests a complete",
+        "After Cancel or a failed Apply",
+        "explicit Save",
+        "pre-made agent",
+    ):
+        assert instruction in prompt

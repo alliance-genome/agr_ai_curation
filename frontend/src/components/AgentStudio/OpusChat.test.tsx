@@ -550,6 +550,41 @@ describe('OpusChat', () => {
     expect(await screen.findByText(/Proposal applied to the draft. It has not been saved/)).toBeInTheDocument()
   })
 
+  it.each(['open', 'dismiss', 'stale'])('offers a curator-controlled Workshop action: %s', async (decision) => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn(), writable: true })
+    const action = {
+      success: true, contract_version: 'workshop_action.v1', request: { action: 'open_agent', agent_id: 'ca_stock', node_id: 'stock' },
+      label: 'Open Stock reader', source: { agent_id: 'ca_stock', name: 'Stock reader', updated_at: 'now', agent_revision_id: 'revision-2' },
+      origin: { flow_draft_fingerprint: 'flow-fingerprint', node_id: 'stock', agent_id: 'ca_stock', agent_revision_id: 'revision-1' },
+      active_tab: 'flows', flow_draft_fingerprint: 'flow-fingerprint', workshop_draft_fingerprint: null,
+      saved: false, message: 'Nothing saved.',
+    }
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TOOL_RESULT', tool_name: 'request_workshop_action', result: action }
+      yield { type: 'DONE' }
+    })
+    const open = vi.fn().mockResolvedValue(undefined)
+    if (decision === 'stale') open.mockRejectedValue(new Error('Your draft changed; ask for a fresh action.'))
+    render(<OpusChat context={{ active_tab: 'flows' }} onWorkshopAction={open} />)
+    const input = screen.getByPlaceholderText('Ask about flows...')
+    fireEvent.change(input, { target: { value: 'Edit this stock reader' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+    const button = await screen.findByRole('button', { name: 'Open Stock reader' })
+    await waitFor(() => expect(button).toBeEnabled())
+    expect(open).not.toHaveBeenCalled()
+    if (decision === 'dismiss') {
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+      expect(open).not.toHaveBeenCalled()
+    } else {
+      fireEvent.click(button)
+      await waitFor(() => expect(open).toHaveBeenCalledWith(action))
+    }
+    if (decision === 'stale') {
+      expect(await screen.findByText('Your draft changed; ask for a fresh action.')).toBeInTheDocument()
+      expect(button).toBeEnabled()
+    } else await waitFor(() => expect(screen.queryByRole('button', { name: 'Open Stock reader' })).not.toBeInTheDocument())
+  })
+
   it.each(['Apply changes', 'Cancel', 'Escape', 'failure', 'invalid'])('requires complete Workshop review before %s', async (action) => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
     const proposal = {
@@ -580,9 +615,9 @@ describe('OpusChat', () => {
       expect(onApplyWorkshopProposal).not.toHaveBeenCalled()
       return
     }
-    expect(await screen.findByRole('dialog', { name: 'Review Workshop Proposal' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'Review agent changes' })).toBeInTheDocument()
     if (action === 'invalid') {
-      expect(screen.getByText('Choose an authorized tool. (custom_agent.tool_ids)')).toBeInTheDocument()
+      expect(screen.getByText('Choose an authorized tool.')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Apply changes' })).toBeDisabled()
       expect(onApplyWorkshopProposal).not.toHaveBeenCalled()
       return
@@ -600,7 +635,7 @@ describe('OpusChat', () => {
     expect(JSON.stringify(snapshot.mock.calls)).not.toContain('Private candidate instructions')
   })
 
-  it.each(['Apply changes', 'Cancel'])('requires explicit review of a transient flow proposal: %s', async (decision) => {
+  it.each(['Apply changes', 'Cancel', 'failed Apply', 'unavailable Apply'])('requires explicit review of a transient flow proposal: %s', async (decision) => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -650,23 +685,39 @@ describe('OpusChat', () => {
       applied: true,
       message: 'Proposal applied to the draft. Save remains manual.',
     })
+    if (decision === 'failed Apply') onApplyFlowProposal.mockResolvedValue({
+      applied: false, message: 'Your latest edits were preserved.',
+    })
+    if (decision === 'unavailable Apply') onApplyFlowProposal.mockRejectedValue(new Error('Connection lost'))
     render(<OpusChat context={{ active_tab: 'flows' }} onApplyFlowProposal={onApplyFlowProposal} />)
 
     const input = screen.getByPlaceholderText('Ask about flows...')
     fireEvent.change(input, { target: { value: 'Build a gene flow.' } })
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 
-    expect(await screen.findByRole('dialog', { name: 'Review Flow Builder Proposal' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'Review this flow change' })).toBeInTheDocument()
     expect(screen.getByText('Add gene extraction after Initial Instructions.')).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Proposed flow changes' })).toHaveTextContent('Initial instructions: Extract genes.')
+    expect(screen.getByText('Technical details').closest('details')).not.toHaveAttribute('open')
+    fireEvent.click(screen.getByText('Technical details'))
     expect(screen.getByText('flow_definition.nodes.node_0.data.task_instructions')).toBeInTheDocument()
     expect(screen.getByText('Old instructions')).toBeInTheDocument()
     expect(screen.getAllByText('Extract genes.')).not.toHaveLength(0)
     expect(onApplyFlowProposal).not.toHaveBeenCalled()
 
+    if (decision === 'failed Apply' || decision === 'unavailable Apply') {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }))
+      const message = decision === 'failed Apply' ? /Your latest edits were preserved/ : /We could not confirm this change/
+      await waitFor(() => expect(within(screen.getByRole('dialog')).getByText(message)).toBeVisible())
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(await screen.findByText(/Your current draft has been kept; nothing was saved/)).toBeVisible()
+      expect(screen.queryByText(/editor draft was not changed/)).not.toBeInTheDocument()
+      return
+    }
     fireEvent.click(screen.getByRole('button', { name: decision }))
     if (decision === 'Cancel') {
       expect(onApplyFlowProposal).not.toHaveBeenCalled()
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Review Flow Builder Proposal' })).not.toBeInTheDocument())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Review this flow change' })).not.toBeInTheDocument())
       return
     }
     await waitFor(() => expect(onApplyFlowProposal).toHaveBeenCalledWith(expect.objectContaining({

@@ -217,7 +217,7 @@ def test_search_codebase_recovers_one_minified_match_in_bounded_exact_chunks(tmp
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     long_line = 'const payload = "' + ('🧬\\"' * 4_000) + '";'
-    rg_payload = {"type": "match", "data": {"path": {"text": str(repo_root / "bundle.js")},
+    rg_payload = {"type": "match", "data": {"path": {"text": str(repo_root / "frontend/src/bundle.js")},
                   "lines": {"text": long_line + "\n"}, "line_number": 1}}
     monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
     monkeypatch.setattr(codebase_tools, "_RESULT_MAX_CHARS", 1_200)
@@ -250,12 +250,13 @@ def test_read_source_file_recovers_minified_line_with_executable_continuations(t
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     long_line = "{" + ('\"🧬\":\"値\",' * 2_000) + "}"
-    (repo_root / "minified.json").write_text(long_line + "\nnext\n", encoding="utf-8")
+    (repo_root / "backend/src").mkdir(parents=True)
+    (repo_root / "backend/src/minified.json").write_text(long_line + "\nnext\n", encoding="utf-8")
     monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
     monkeypatch.setattr(codebase_tools, "_RESULT_MAX_CHARS", 1_100)
     monkeypatch.setattr(codebase_tools, "_LONG_LINE_CHUNK_MAX_CHARS", 800)
     chunks = []
-    arguments = {"path": "minified.json", "start_line": 1, "end_line": 1}
+    arguments = {"path": "backend/src/minified.json", "start_line": 1, "end_line": 1}
     while True:
         result = codebase_tools.read_source_file(**arguments)
         assert len(json.dumps(result, default=str)) <= 1_100
@@ -272,3 +273,39 @@ def test_read_source_file_recovers_minified_line_with_executable_continuations(t
             break
         arguments = result["next_call"]["arguments"]
     assert "".join(chunks) == long_line
+
+
+@pytest.mark.parametrize("path", [".env", "config/connections.yaml", "backend/src/.env", "file_outputs/result.json", "packages/demo/credentials.json", ".git/config"])
+def test_source_inspection_rejects_deployment_and_private_files(tmp_path, monkeypatch, path):
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("private-marker")
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(tmp_path))
+    with pytest.raises(ValueError, match="Only application source"):
+        codebase_tools.read_source_file(path)
+
+
+def test_source_read_rejects_symlink_to_private_file(tmp_path, monkeypatch):
+    (tmp_path / "backend/src").mkdir(parents=True)
+    (tmp_path / ".env").write_text("private-marker")
+    (tmp_path / "backend/src/public.py").symlink_to(tmp_path / ".env")
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(tmp_path))
+    with pytest.raises(ValueError, match="Only application source"):
+        codebase_tools.read_source_file("backend/src/public.py")
+
+
+@pytest.mark.parametrize("mode", ["content", "files"])
+def test_search_filters_private_paths_even_when_explicitly_globbed(tmp_path, monkeypatch, mode):
+    monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(tmp_path))
+    monkeypatch.setattr(codebase_tools.shutil, "which", lambda _: "/usr/bin/rg")
+    paths = ["config/connections.yaml", "backend/src/.env", "backend/src/public.py"]
+    if mode == "files":
+        output = "\n".join(paths)
+    else:
+        output = "\n".join(json.dumps({"type": "match", "data": {
+            "path": {"text": path}, "lines": {"text": "marker"}, "line_number": 1,
+        }}) for path in paths)
+    monkeypatch.setattr(codebase_tools.subprocess, "run", lambda *args, **kwargs:
+        subprocess.CompletedProcess(args=args[0], returncode=0, stdout=output, stderr=""))
+    result = codebase_tools.search_codebase(query="src" if mode == "files" else "marker", search_mode=mode, path_glob="**/*")
+    assert [row["path"] for row in result["results"]] == ["backend/src/public.py"]

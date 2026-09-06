@@ -535,7 +535,7 @@ describe('FlowBuilder', () => {
     expect(dirtyEvent.defaultPrevented).toBe(true)
   })
 
-  it.each(['normal', 'pre_apply', 'post_apply', 'post_failure'] as const)('preserves exact flow Apply/Undo across %s validation', async (editDuring) => {
+  it.each(['normal', 'instructions_only', 'automatic_validation', 'pre_apply', 'post_apply', 'post_failure'] as const)('preserves exact flow Apply/Undo across %s validation', async (editDuring) => {
     const user = userEvent.setup()
     const authoringRef = React.createRef<FlowAuthoringContextHandle>()
     render(<FlowBuilder authoringContextRef={authoringRef} />)
@@ -543,8 +543,8 @@ describe('FlowBuilder', () => {
     const captured = authoringRef.current!.captureAuthoringContext()
     const toContext = (definition: FlowAuthoringProposal['candidate']['flow_definition']): ChatContext => ({
       flow_id: captured.flowId,
-      flow_name: definition.nodes.length > 1 ? 'Gene flow' : captured.flowName,
-      flow_description: definition.nodes.length > 1 ? 'Extract genes.' : captured.flowDescription,
+      flow_name: 'Gene flow',
+      flow_description: 'Extract genes.',
       flow_updated_at: captured.flowUpdatedAt,
       flow_definition: {
         version: definition.version,
@@ -600,6 +600,21 @@ describe('FlowBuilder', () => {
       ],
       edges: [{ id: 'edge_1', source: 'node_0', target: 'node_1', role: 'control_flow' }],
     }
+    if (editDuring === 'instructions_only') {
+      candidateDefinition.nodes = [candidateDefinition.nodes[0]]
+      candidateDefinition.edges = []
+    }
+    if (editDuring === 'automatic_validation') {
+      candidateDefinition.nodes[1].data.validation_attachments = [{
+        attachment_id: 'gene:identity', domain_pack_id: 'gene', validator_id: 'gene-validator',
+        validator_binding_id: 'identity', label: 'Gene identity validation', state: 'active',
+        curator_label: 'Validate gene identity', when_off: 'Keep the name from the paper.',
+        scope: 'field', required: true, blocking: false, default_enabled: true,
+        allow_opt_out: true, enabled: true,
+      }]
+      // Production proposals omit derived groups. Applying the edges hydrates them.
+      expect(candidateDefinition.nodes[1].data.validation_groups).toBeUndefined()
+    }
     const proposal: FlowAuthoringProposal = {
       contract_version: 'flow_authoring_proposal.v1',
       base_draft_fingerprint: await fingerprintFlowDraft({
@@ -650,7 +665,7 @@ describe('FlowBuilder', () => {
     expect(screen.getByText('1 step')).toBeInTheDocument()
     expect(serviceMocks.validateFlowDraft).not.toHaveBeenCalled()
 
-    if (editDuring !== 'normal') {
+    if (!['normal', 'automatic_validation', 'instructions_only'].includes(editDuring)) {
       let finishValidation!: () => void
       serviceMocks.validateFlowDraft.mockImplementation((_, phase) => {
         const result = { artifact_kind: 'flow', phase, valid: true, findings: [] }
@@ -683,11 +698,27 @@ describe('FlowBuilder', () => {
       return
     }
 
-    await act(async () => {
-      result = await authoringRef.current!.applyAuthoringProposal(proposal)
-    })
+    if (editDuring === 'automatic_validation') {
+      let finishValidation!: () => void
+      serviceMocks.validateFlowDraft.mockImplementation((_, phase) => {
+        const result = { artifact_kind: 'flow', phase, valid: true, findings: [] }
+        return phase === 'post_apply'
+          ? new Promise((resolve) => { finishValidation = () => resolve(result) })
+          : Promise.resolve(result)
+      })
+      let pending!: ReturnType<FlowAuthoringContextHandle['applyAuthoringProposal']>
+      act(() => { pending = authoringRef.current!.applyAuthoringProposal(proposal) })
+      await waitFor(() => expect(finishValidation).toBeDefined())
+      await waitFor(() => expect(authoringRef.current!.captureAuthoringContext().nodes[1].validation_groups).toHaveLength(1))
+      await act(async () => { finishValidation(); result = await pending })
+    } else {
+      await act(async () => {
+        result = await authoringRef.current!.applyAuthoringProposal(proposal)
+      })
+    }
     expect(result).toEqual(expect.objectContaining({ applied: true }))
-    await screen.findByText('2 steps')
+    await screen.findByText(editDuring === 'instructions_only' ? '1 step' : '2 steps')
+    expect(authoringRef.current!.captureAuthoringContext().nodes[0].task_instructions).toBe('Extract genes.')
     expect(serviceMocks.createFlow).not.toHaveBeenCalled()
     expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
     expect(serviceMocks.validateFlowDraft).toHaveBeenNthCalledWith(
@@ -707,6 +738,10 @@ describe('FlowBuilder', () => {
 
     await user.click(screen.getByRole('button', { name: 'Undo AI Chat flow proposal' }))
     await screen.findByText('1 step')
+    if (editDuring === 'instructions_only') {
+      expect(authoringRef.current!.captureAuthoringContext().nodes[0].task_instructions).toBe(captured.nodes[0].task_instructions)
+      return
+    }
 
     serviceMocks.validateFlowDraft
       .mockResolvedValueOnce({

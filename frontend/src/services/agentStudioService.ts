@@ -22,6 +22,8 @@ import type {
   GroupOption,
   ToolIdeaRequest,
   ToolIdeaConversationEntry,
+  WorkshopAction,
+  WorkshopActionRequest,
 } from '@/types/promptExplorer'
 import { readCurationApiError } from '@/features/curation/services/api'
 import { logger } from '@/services/logger'
@@ -609,9 +611,24 @@ export async function updateCustomAgent(
   return response.json()
 }
 
-export async function getWorkshopSavedReference(customAgentId: string): Promise<{ agent_id: string }> {
+export async function getWorkshopSavedReference(customAgentId: string): Promise<{ agent_id: string; agent_revision_id: string; name: string }> {
   const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/authoring-reference`)
   if (!response.ok) throw new Error('The saved agent is not available in the current flow catalog.')
+  return response.json()
+}
+
+export async function validateWorkshopAction(action: WorkshopActionRequest, context: ChatContext): Promise<WorkshopAction> {
+  const response = await fetch(`${BASE_URL}/custom-agents/authoring-actions/validate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, context }),
+  })
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
+export async function getWorkshopCloneSource(customAgentId: string): Promise<CustomAgent> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/clone-source`)
+  if (!response.ok) throw new Error(await readCurationApiError(response))
   return response.json()
 }
 

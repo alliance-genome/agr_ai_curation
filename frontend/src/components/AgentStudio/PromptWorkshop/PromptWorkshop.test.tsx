@@ -436,6 +436,79 @@ describe('PromptWorkshop', () => {
 
   // ── Start screen and origin ──
 
+  it.each(['open_agent', 'clone', 'shared_clone'])('opens a Chat-requested %s draft without saving', async (mode) => {
+    const agent = buildCustomAgent()
+    const clone = mode !== 'open_agent'
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: mode === 'shared_clone' ? [] : [agent], total: mode === 'shared_clone' ? 0 : 1 })
+    const action: import('@/types/promptExplorer').WorkshopAction = {
+      success: true, contract_version: 'workshop_action.v1',
+      request: clone ? { action: 'new_agent', mode: 'clone', agent_id: agent.agent_id } : { action: 'open_agent', agent_id: agent.agent_id },
+      source: { agent_id: agent.agent_id, name: agent.name, updated_at: agent.updated_at, agent_revision_id: agent.execution_revision_id || null },
+      label: 'Open agent', origin: null, active_tab: 'agents', flow_draft_fingerprint: null, workshop_draft_fingerprint: null,
+      saved: false, message: 'Nothing saved.',
+    }
+    const complete = vi.fn()
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialChatAction={action} initialChatCloneSource={mode === 'shared_clone' ? agent : undefined} onInitialChatActionComplete={complete} authoringContextRef={ref} />)
+    await waitFor(() => expect(complete).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      const draft = ref.current?.captureAuthoringContext()
+      if (clone) {
+        expect(draft?.getting_started_mode).toBe('clone')
+        expect(draft?.clone_source_agent_id).toBe(agent.agent_id)
+        expect(draft?.custom_agent_id).toBeFalsy()
+      } else expect(draft?.custom_agent_id).toBe(agent.agent_id)
+      expect(draft?.prompt_draft).toBe(agent.custom_prompt)
+    })
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Discard this name' } })
+    gotoSection('Prompt')
+    fireEvent.change(screen.getByLabelText('Your prompt'), { target: { value: 'Discard this prompt' } })
+    await act(async () => { expect(ref.current?.runChatAction(action, mode === 'shared_clone' ? agent : undefined)).toBe(true) })
+    await waitFor(() => {
+      expect(ref.current?.captureAuthoringContext().draft_name).not.toBe('Discard this name')
+      expect(ref.current?.captureAuthoringContext().prompt_draft).toBe(agent.custom_prompt)
+    })
+    if (!clone) return
+    const saveAction = { ...action, request: { action: 'save' as const } }
+    await act(async () => { expect(ref.current?.runChatAction(saveAction)).toBe(true) })
+    expect(await screen.findByRole('dialog', { name: /Save/ })).toBeInTheDocument()
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it.each(['reset', 'saving'])('protects scratch lifecycle during %s', async (mode) => {
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} authoringContextRef={ref} />)
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Draft in progress' } })
+    gotoSection('Prompt')
+    fireEvent.change(screen.getByLabelText('Your prompt'), { target: { value: 'Draft instructions' } })
+    const action: import('@/types/promptExplorer').WorkshopAction = {
+      success: true, contract_version: 'workshop_action.v1', request: { action: 'new_agent', mode: 'scratch' },
+      label: 'Start agent draft', source: null, origin: null, active_tab: 'agent_workshop',
+      flow_draft_fingerprint: null, workshop_draft_fingerprint: null, saved: false, message: 'Nothing saved.',
+    }
+    if (mode === 'saving') {
+      const pending = createDeferred<CustomAgent>()
+      serviceMocks.createCustomAgent.mockReturnValue(pending.promise)
+      await saveFromHeader()
+      await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
+      expect(ref.current?.runChatAction(action)).toBe(false)
+      expect(ref.current?.captureAuthoringContext().draft_name).toBe('Draft in progress')
+      await act(async () => pending.resolve(buildCustomAgent()))
+    } else {
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeEnabled())
+      await act(async () => { expect(ref.current?.runChatAction(action)).toBe(true) })
+      await waitFor(() => {
+        expect(ref.current?.captureAuthoringContext().draft_name).toBe('')
+        expect(ref.current?.captureAuthoringContext().prompt_draft).toBe('')
+      })
+      expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    }
+  })
+
   it('opens on the start screen and lands on Setup with the chosen origin', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
 
@@ -564,6 +637,7 @@ describe('PromptWorkshop', () => {
     expect(onSavedHandoff).toHaveBeenCalledWith({
       status: 'ready', saved_agent_id: buildCustomAgent().agent_id,
       saved_custom_agent_id: buildCustomAgent().id, origin,
+      saved_agent_revision_id: buildCustomAgent().execution_revision_id, saved_agent_name: buildCustomAgent().name,
     })
   }, 15000)
 
