@@ -28,6 +28,23 @@ server-side access gate. A `403` from `download_file` is final for that curator.
 
 ## Access Rules
 
+### Bounded benchmark downloads
+
+The Alliance client's `download_referencefile` accepts an optional `max_bytes`
+keyword for callers that must enforce a size limit before retaining a paper.
+Benchmark adapters supply their existing configured input-byte limit; the client
+does not introduce a separate limit or import backend configuration.
+
+Bounded downloads preserve exact bytes, request identity encoding, reject other
+content encodings and redirects, check declared size when present, and stop as
+soon as actual streamed bytes exceed the limit. Overflow raises the existing
+sanitized `ABCLiteratureHTTPError` with status 413. Responses are closed on
+success, failure and cancellation, without retrying or changing credentials.
+Callers that omit the keyword retain their existing download behavior.
+
+This transport option does not select artifacts, approve benchmark references,
+request conversion, or change the access rules below.
+
 AI Curation must select converted text only after it has an authorized
 source/main PDF artifact.
 
