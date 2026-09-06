@@ -32,3 +32,31 @@ no migration or browser-supplied redirect origin is needed. Unknown delivery
 remains explicitly unconfirmed and is not automatically retried; the JSON
 snapshot remains downloadable. Delivery success does not mean scoring completed.
 Long-running comparison progress and accuracy belong to the private portal.
+
+## Initiating curator identity
+
+Handoffs require the initiating curator's issuer and subject from validated
+authentication claims. Development and API-key identities without a verified
+issuer cannot send a handoff. The server checks current snapshot ownership and
+session access before sending or recovering a receipt.
+
+The immutable JSON body and its digest are unchanged. Alongside the existing
+service OAuth authorization, the sender supplies these server-generated headers:
+
+- `X-Curation-Benchmark-Sender-Version: 1`
+- `X-Curation-Benchmark-Sender-Issuer`: validated issuer
+- `X-Curation-Benchmark-Sender-Subject`: validated subject
+
+No human bearer token, email, or other raw authentication claims are forwarded.
+`BENCHMARK_HANDOFF_MAX_IDENTITY_BYTES` bounds the combined issuer/subject header
+size; both values must contain only non-whitespace printable ASCII characters.
+The receiver must accept these assertions only from an authorized sending
+service, then bind access to the exact issuer and subject. A receipt URL does not
+grant ownership. Receiver enforcement is a separate private-portal integration.
+
+Durable attempts record the sender identity, which also participates in the
+delivery idempotency key. Re-exporting the same envelope revision after a reload
+can create a new snapshot UUID; the same sender recovers the original receipt
+and snapshot ID without resending. A different sender or a historical attempt
+without recorded identity fails closed with a replay conflict. The migration
+retains historical receipts without assigning them to whoever visits next.

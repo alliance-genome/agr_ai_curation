@@ -21,6 +21,10 @@ def test_snapshot_handoff_openapi_exposes_only_the_reviewed_v1_shapes():
     assert "get" in document["paths"][download_path]
     assert "post" in document["paths"][handoff_path]
     assert "get" in document["paths"][destinations_path]
+    denied_schema = document["paths"][handoff_path]["post"]["responses"]["403"][
+        "content"
+    ]["application/json"]["schema"]
+    assert denied_schema == {"$ref": "#/components/schemas/CurationBenchmarkErrorResponse"}
 
     schemas = document["components"]["schemas"]
     download_schema = document["paths"][download_path]["get"]["responses"]["200"][

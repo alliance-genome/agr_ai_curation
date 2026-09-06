@@ -498,6 +498,9 @@ class CurationBenchmarkHandoffAttempt(Base):
     destination_id: Mapped[str] = mapped_column(String(), nullable=False)
     replay_key: Mapped[str] = mapped_column(String(71), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(71), nullable=False)
+    sender_version: Mapped[str | None] = mapped_column(String(), nullable=True)
+    sender_issuer: Mapped[str | None] = mapped_column(String(), nullable=True)
+    sender_subject: Mapped[str | None] = mapped_column(String(), nullable=True)
     status: Mapped[str] = mapped_column(String(), nullable=False)
     receipt_id: Mapped[str | None] = mapped_column(String(), nullable=True)
     redirect_path: Mapped[str | None] = mapped_column(String(), nullable=True)
@@ -522,6 +525,13 @@ class CurationBenchmarkHandoffAttempt(Base):
         UniqueConstraint(
             "replay_key",
             name="uq_curation_benchmark_handoff_attempts_replay_key",
+        ),
+        CheckConstraint(
+            "(sender_version IS NULL AND sender_issuer IS NULL AND sender_subject IS NULL) OR "
+            "(sender_version IS NOT NULL AND sender_version = '1' "
+            "AND sender_issuer IS NOT NULL AND sender_issuer <> '' "
+            "AND sender_subject IS NOT NULL AND sender_subject <> '')",
+            name="ck_curation_benchmark_handoff_sender_identity",
         ),
         UniqueConstraint(
             "idempotency_key",

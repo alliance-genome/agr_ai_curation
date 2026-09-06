@@ -356,7 +356,7 @@ def _sanitized_snapshot_persistence_error(
 
 _BENCHMARK_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     code: {"model": CurationBenchmarkErrorResponse}
-    for code in (400, 404, 409, 413, 500, 503)
+    for code in (400, 403, 404, 409, 413, 500, 503)
 }
 
 
@@ -463,6 +463,8 @@ async def post_benchmark_snapshot_handoff(
             snapshot_id=snapshot_id,
             destination_id=request.destination_id,
             current_user_id=_require_current_user_id(user),
+            sender_issuer=user.get("iss"),
+            sender_subject=user.get("sub"),
         )
     except CurationBenchmarkSnapshotError as exc:
         if db.in_transaction():

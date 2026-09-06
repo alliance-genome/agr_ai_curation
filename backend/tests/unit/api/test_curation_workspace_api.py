@@ -250,6 +250,8 @@ async def test_post_benchmark_handoff_accepts_only_destination_id(monkeypatch):
             "snapshot_id": snapshot_id,
             "destination_id": "portal",
             "current_user_id": "curator-1",
+            "sender_issuer": "https://identity.example.org/pool",
+            "sender_subject": "curator-1",
         }
         return CurationBenchmarkHandoffResponse(
             handoff_id=str(uuid4()),
@@ -264,7 +266,7 @@ async def test_post_benchmark_handoff_accepts_only_destination_id(monkeypatch):
     result = await module.post_benchmark_snapshot_handoff(
         snapshot_id,
         CurationBenchmarkHandoffRequest(destination_id="portal"),
-        user={"sub": "curator-1"},
+        user={"sub": "curator-1", "iss": "https://identity.example.org/pool"},
         db=_TransactionSpy(),
     )
     assert result.redirect_path == "/comparisons/opaque"

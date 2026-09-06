@@ -1004,6 +1004,11 @@ def get_benchmark_handoff_timeout_seconds() -> float:
     )
 
 
+def get_benchmark_handoff_max_identity_bytes() -> int:
+    """Maximum combined bytes of verified issuer and subject transport metadata."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_HANDOFF_MAX_IDENTITY_BYTES", 4096))
+
+
 def get_benchmark_max_snapshot_bytes() -> int:
     """Maximum canonical bytes stored and delivered for one curation snapshot."""
     return max(

@@ -41,6 +41,7 @@ async def test_get_user_from_cookie_api_key_bypass(monkeypatch):
     assert result["sub"] == "api-key-bot"
     assert result["email"] == "bot@example.org"
     assert "developers" in result["groups"]
+    assert "iss" not in result
 
 
 @pytest.mark.asyncio
@@ -51,6 +52,7 @@ async def test_get_user_from_cookie_dev_mode(monkeypatch):
     result = await auth_api._get_user_from_cookie_impl(_request(), SecurityScopes())
     assert result["sub"] == "dev-user-123"
     assert "developers" in result["groups"]
+    assert "iss" not in result
 
 
 @pytest.mark.asyncio
@@ -78,14 +80,15 @@ async def test_get_user_from_cookie_requires_cookie_when_configured(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_get_user_from_cookie_provider_success(monkeypatch):
+@pytest.mark.parametrize("issuer", ["https://identity.example.org/pool", None])
+async def test_get_user_from_cookie_provider_success(monkeypatch, issuer):
     monkeypatch.delenv("TESTING_API_KEY", raising=False)
     monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
     monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
 
     class _Provider:
         async def validate_token(self, _token):
-            return {"ok": True}
+            return {"iss": issuer, "private_claim": "not-for-user-context"}
 
         def extract_principal(self, _claims):
             return SimpleNamespace(
@@ -99,12 +102,17 @@ async def test_get_user_from_cookie_provider_success(monkeypatch):
     monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
 
     result = await auth_api._get_user_from_cookie_impl(
-        _request(cookies={"auth_token": "jwt-123"}),
+        _request(
+            cookies={"auth_token": "jwt-123"},
+            headers={"X-Curation-Benchmark-Sender-Issuer": "https://spoof.invalid"},
+        ),
         SecurityScopes(),
     )
     assert result["sub"] == "user-123"
     assert result["provider"] == "cognito"
     assert "devs" in result["groups"]
+    assert result["iss"] == issuer
+    assert "private_claim" not in result
 
 
 @pytest.mark.parametrize(
