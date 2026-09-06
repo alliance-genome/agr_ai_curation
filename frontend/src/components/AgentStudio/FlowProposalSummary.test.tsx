@@ -89,3 +89,18 @@ it('distinguishes removing a connection setting from removing the connection', (
   expect(screen.getByText('Update the connection from Gene expression to step')).toBeVisible()
   expect(screen.queryByText('Remove a connection between steps')).not.toBeInTheDocument()
 })
+
+
+it('does not describe default-off catalog entries as validators the proposal turned off', () => {
+  const added = proposal([])
+  added.candidate.flow_definition.nodes[0].data.validation_attachments = [{
+    attachment_id: 'metadata', domain_pack_id: 'gene', validator_id: 'metadata', label: 'Gene metadata',
+    state: 'active', scope: 'field', required: false, blocking: false,
+    default_enabled: false, allow_opt_out: false, enabled: false,
+    curator_label: 'Confirm gene metadata', when_off: '',
+  }]
+  added.diff = [{ kind: 'added', path: 'flow_definition.nodes.extract', after: added.candidate.flow_definition.nodes[0] }]
+  render(<FlowProposalSummary proposal={added} />)
+  expect(screen.getByText('Add Gene expression')).toBeVisible()
+  expect(screen.queryByText(/Validation turned off/)).not.toBeInTheDocument()
+})

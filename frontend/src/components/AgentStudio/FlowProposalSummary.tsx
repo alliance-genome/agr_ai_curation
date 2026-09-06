@@ -142,7 +142,7 @@ export default function FlowProposalSummary({ proposal }: { proposal: FlowAuthor
         const validators = node.data.validation_attachments?.filter((attachment) => attachment.state === 'active' && attachment.enabled) ?? []
         if (validators.length) details.add(`${validators.length} automatic validators included. Results will be validated when the flow runs.`)
         for (const attachment of node.data.validation_attachments ?? []) {
-          if (attachment.state === 'active' && !attachment.enabled) details.add(`Validation turned off: ${attachment.curator_label || attachment.label || 'Validator'}`)
+          if (attachment.state === 'active' && attachment.default_enabled && !attachment.enabled) details.add(`Validation turned off: ${attachment.curator_label || attachment.label || 'Validator'}`)
         }
         if (node.data.projection_plan) projectionDetails('projection_plan', undefined, node.data.projection_plan, node.data.projection_plan).forEach((detail) => details.add(detail))
         if (node.data.include_evidence === false) details.add('Supporting evidence will be left out of the download.')
