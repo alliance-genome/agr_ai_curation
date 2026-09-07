@@ -1,0 +1,5 @@
+# Narrow overlay on docker-compose.test.yml; this is not another test stack.
+# The running canary and its dependencies have no external network route.
+networks:
+  test-network:
+    internal: true
