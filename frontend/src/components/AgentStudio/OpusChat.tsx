@@ -570,7 +570,6 @@ function OpusChat({
   const appliedSourceConversationRef = useRef<string | null>(
     sourceSessionId && initialConversation?.length ? sourceSessionId : null
   )
-  const preserveCurrentConversationSessionRef = useRef<string | null>(null)
   const sessionCreatePromiseRef = useRef<Promise<string> | null>(null)
   const pendingToolCallIdsRef = useRef(new Set<string>())
 
@@ -667,20 +666,14 @@ function OpusChat({
       return
     }
 
-    const shouldPreserveCurrentConversation =
-      preserveCurrentConversationSessionRef.current === sourceSessionId
-
-    setMessages((currentMessages) => {
-      appliedSourceConversationRef.current = sourceSessionId
-      preserveCurrentConversationSessionRef.current = null
-
-      if (shouldPreserveCurrentConversation && currentMessages.length > 0) {
-        return currentMessages
-      }
-
-      return buildDisplayMessages(initialConversation)
-    })
-  }, [initialConversation, sourceSessionId])
+    appliedSourceConversationRef.current = sourceSessionId
+    // History can arrive after we reattach to a live conversation on navigation.
+    // Seed an empty session, but never replace its newer messages, tool results,
+    // or proposal confirmations with an older persisted transcript.
+    setMessages((currentMessages) => currentMessages.length > 0
+      ? currentMessages
+      : buildDisplayMessages(initialConversation))
+  }, [initialConversation, sourceSessionId, setMessages])
 
   useEffect(() => {
     onStreamingChange?.(isStreaming)
@@ -717,7 +710,6 @@ function OpusChat({
       setFlowProposalError(null)
       setWorkshopActionError(null)
       setFeedbackMenuAnchor(null)
-      preserveCurrentConversationSessionRef.current = session.session_id
       onConversationSnapshotChange?.([])
       onDurableSessionIdChange(session.session_id)
     } catch {
@@ -736,7 +728,6 @@ function OpusChat({
     if (!sessionCreatePromiseRef.current) {
       sessionCreatePromiseRef.current = createAgentStudioSession()
         .then((session) => {
-          preserveCurrentConversationSessionRef.current = session.session_id
           syncDurableSessionId(session.session_id, { notifyParent: true })
           return session.session_id
         })
@@ -1823,7 +1814,7 @@ function OpusChat({
       {/* Process-local review surface for Flow Builder proposals. */}
       <Dialog
         open={Boolean(pendingFlowProposal)}
-        onClose={flowProposalApplying ? undefined : handleCancelFlowProposal}
+        disableEscapeKeyDown
         maxWidth={pendingFlowProposal?.contract_version === 'flow_authoring_proposal.v1' ? 'sm' : 'md'}
         fullWidth
         aria-labelledby="flow-proposal-review-title"

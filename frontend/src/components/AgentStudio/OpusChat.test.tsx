@@ -500,6 +500,47 @@ describe('OpusChat', () => {
     expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the live transcript when older saved history arrives after returning to Studio', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'Keep the supplier optional.' }
+      yield { type: 'DONE' }
+    })
+    const context: ChatContext = { active_tab: 'agents', session_id: 'returning-session' }
+    const seed = [{ role: 'user' as const, content: 'Make a stock extractor.' }]
+    const first = render(<OpusChat context={context} durableSessionId="returning-session"
+      sourceSessionId="returning-session" initialConversation={seed} />)
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), { target: { value: 'Include a supplier.' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Ask about prompts...'), { key: 'Enter', code: 'Enter' })
+    expect(await screen.findByText('Keep the supplier optional.')).toBeInTheDocument()
+    first.unmount()
+
+    const returned = render(<OpusChat context={context} durableSessionId="returning-session" />)
+    expect(screen.getByText('Keep the supplier optional.')).toBeInTheDocument()
+    returned.rerender(<OpusChat context={context} durableSessionId="returning-session"
+      sourceSessionId="returning-session" initialConversation={seed} />)
+    expect(screen.getByText('Include a supplier.')).toBeInTheDocument()
+    expect(screen.getByText('Keep the supplier optional.')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), { target: { value: 'Continue with the flow.' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Ask about prompts...'), { key: 'Enter', code: 'Enter' })
+    await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2))
+    expect(serviceMocks.streamOpusChat.mock.calls[1][0]).toEqual([
+      ...seed,
+      { role: 'user', content: 'Include a supplier.' },
+      { role: 'assistant', content: 'Keep the supplier optional.' },
+      { role: 'user', content: 'Continue with the flow.' },
+    ])
+  })
+
+  it('hydrates an empty resumed chat when its saved transcript arrives later', () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    const context: ChatContext = { active_tab: 'agents', session_id: 'cold-session' }
+    const view = render(<OpusChat context={context} durableSessionId="cold-session" />)
+    view.rerender(<OpusChat context={context} durableSessionId="cold-session"
+      sourceSessionId="cold-session" initialConversation={[{ role: 'user', content: 'Saved request.' }]} />)
+    expect(screen.getByText('Saved request.')).toBeInTheDocument()
+  })
+
   it('reuses an existing durable Agent Studio session instead of minting another one', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
@@ -721,7 +762,7 @@ describe('OpusChat', () => {
     } else await waitFor(() => expect(screen.queryByRole('button', { name: 'Open Stock reader' })).not.toBeInTheDocument())
   })
 
-  it.each(['Apply changes', 'Cancel', 'Escape', 'failure', 'invalid'])('requires complete Workshop review before %s', async (action) => {
+  it.each(['Apply changes', 'Cancel', 'Escape', 'backdrop', 'failure', 'invalid'])('requires complete Workshop review before %s', async (action) => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
     const proposal = {
       contract_version: 'workshop_authoring_proposal.v1',
@@ -764,8 +805,15 @@ describe('OpusChat', () => {
     expect(onApplyWorkshopProposal).not.toHaveBeenCalled()
     if (action === 'Escape') {
       fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' })
+    } else if (action === 'backdrop') {
+      fireEvent.mouseDown(screen.getByRole('dialog').parentElement!)
+      fireEvent.click(screen.getByRole('dialog').parentElement!)
     } else {
       fireEvent.click(screen.getByRole('button', { name: action }))
+    }
+    if (action === 'Escape' || action === 'backdrop') {
+      expect(screen.getByRole('dialog', { name: 'Review agent changes' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     }
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(onApplyWorkshopProposal).toHaveBeenCalledTimes(action === 'Apply changes' ? 1 : 0)
