@@ -12,6 +12,8 @@ REMOVED_FILES = (
     "backend/src/lib/benchmarks/loader.py",
     "backend/src/lib/benchmarks/scoring.py",
     "backend/src/lib/benchmarks/service.py",
+    "backend/tests/unit/lib/benchmarks/fixtures/deterministic_score_v1.json",
+    "backend/tests/unit/lib/benchmarks/fixtures/provider_usage.json",
 )
 REMOVED_SETTINGS = (
     "BENCHMARK_ADJUDICATION_",
