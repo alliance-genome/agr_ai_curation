@@ -208,7 +208,7 @@ def _run_to_terminal(db, job_id: UUID) -> BenchmarkJob:
             status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now,
             generated_envelope={"schema_version": "1", "records": [{"position": cell.position}]},
-            result={"schema_version": "1", "records": [{"position": cell.position}]},
+            result={"output": {"schema_version": "1", "records": [{"position": cell.position}]}, "invocations": []},
         )
     return repository.complete_job(
         job_id=job_id, lease_owner=lease_owner, completed_at=now
@@ -467,7 +467,7 @@ def test_terminal_cell_seals_invocations_and_requires_settled_invocations():
             status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now,
             generated_envelope={"ok": True},
-            result={"ok": True},
+            result={"output": {"ok": True}, "invocations": []},
         )
         db.commit()
 
@@ -613,7 +613,7 @@ def test_envelope_limit_terminal_immutability_rerun_lineage_and_cascade(monkeypa
                 status=BenchmarkCellStatus.SUCCEEDED,
                 completed_at=now,
                 generated_envelope=boundary_envelope,
-                result=boundary_envelope,
+                result={"output": boundary_envelope, "invocations": []},
             )
         monkeypatch.setenv("BENCHMARK_MAX_ENVELOPE_BYTES", "16")
         finished_cell = repository.finish_cell(
@@ -622,7 +622,7 @@ def test_envelope_limit_terminal_immutability_rerun_lineage_and_cascade(monkeypa
             status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now,
             generated_envelope=boundary_envelope,
-            result=boundary_envelope,
+            result={"output": boundary_envelope, "invocations": []},
         )
         assert finished_cell.envelope_size_bytes == 16
         repository.complete_job(
@@ -869,7 +869,7 @@ def test_expired_cell_is_failed_once_while_queued_sibling_remains_claimable():
             status=BenchmarkCellStatus.SUCCEEDED,
             completed_at=now + timedelta(seconds=3),
             generated_envelope=envelope,
-            result=envelope["records"],
+            result={"output": envelope, "invocations": []},
         )
         terminal = repository.complete_job(
             job_id=job.id,

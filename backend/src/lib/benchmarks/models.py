@@ -286,7 +286,7 @@ class ProviderUsage(StrictModel):
 
 
 class BenchmarkCellExecutionResult(StrictModel):
-    """Ephemeral worker handoff for one resolved suite-v2 cell."""
+    """Worker outcome retained verbatim as a successful suite-v2 cell artifact."""
 
     output: Any
     invocations: list[ProviderUsage]

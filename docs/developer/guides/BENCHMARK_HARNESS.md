@@ -11,6 +11,31 @@ The API is disabled by default. `BENCHMARK_ENABLED` gates source routes,
 `BENCHMARK_EXECUTION_ENABLED` gates provider execution. Enabling discovery does
 not enable execution.
 
+## Immutable result retrieval
+
+`GET /api/v1/benchmarks/jobs/{job_id}/cells/{cell_id}/result` returns the exact
+canonical UTF-8 JSON bytes produced by a successful cell, including its output
+and invocation outcomes. It requires benchmark-read capability and the job's
+owner identity. Hash the response body directly with SHA-256 and compare it to
+`X-Benchmark-Result-Digest` (`sha256:<hex>`); parsing and reserializing JSON can
+change numeric representations. Identity and format headers are
+`X-Benchmark-Job-ID`, `X-Benchmark-Cell-ID`, `X-Benchmark-Attempt-Count` and
+`X-Benchmark-Artifact-Version` (currently `1`). Responses use `Cache-Control: no-store`.
+
+Cell detail exposes the authoritative `attempt_count` in every state, including
+failure or cancellation without provider invocation records. Paginated invocation
+telemetry remains available through the existing invocation endpoint.
+
+Nonterminal cells return `409 result_not_terminal`. Failed/cancelled cells and
+historical successful rows whose full result was not retained return
+`409 result_artifact_unavailable`. Historical digests are preserved; unavailable
+results are never reconstructed. Corrupt artifacts return
+`503 result_artifact_corrupt`. `BENCHMARK_MAX_RESULT_ARTIFACT_BYTES` bounds stored
+and returned body bytes (default 16 MiB); lowering it can make an older artifact
+return `413 result_artifact_oversize`. Authorization and the database byte bound
+apply before content is loaded. Artifacts share terminal-cell immutability and
+the existing explicit job deletion lifecycle.
+
 ## Suite and catalog contract
 
 Suites under `BENCHMARK_ROOT/suites` use `schema_version: 2`. Each case names an

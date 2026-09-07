@@ -1324,6 +1324,14 @@ def get_benchmark_max_envelope_bytes() -> int:
     )
 
 
+def get_benchmark_max_result_artifact_bytes() -> int:
+    """Maximum canonical result bytes stored and returned for one cell."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_MAX_RESULT_ARTIFACT_BYTES", 16_777_216),
+    )
+
+
 def get_benchmark_default_page_size() -> int:
     """Default number of benchmark persistence records returned per page."""
     return max(

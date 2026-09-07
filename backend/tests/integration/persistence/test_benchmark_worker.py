@@ -409,6 +409,15 @@ def test_failed_cell_does_not_stop_sibling_and_exposes_no_partial_envelope():
             assert cells[1].generated_envelope is not None
             assert cells[1].envelope_digest is not None
             assert cells[1].result_digest is not None
+            artifact = BenchmarkRepository(session).get_result_artifact(
+                cell_id=cells[1].id, job_id=job_id, owner_subject=owner,
+            )
+            assert artifact.digest == cells[1].result_digest
+            assert artifact.digest == "sha256:" + hashlib.sha256(artifact.content).hexdigest()
+            outcome = BenchmarkCellExecutionResult.model_validate_json(artifact.content)
+            assert outcome.output == cells[1].generated_envelope
+            assert outcome.invocations
+            assert artifact.attempt_count == cells[1].attempt_count
             assert len(invocations) == 2
             assert invocations[0].failure == {
                 "category": "provider_error",

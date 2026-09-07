@@ -136,6 +136,7 @@ CELL_SUMMARY = {
     "started_at": None, "completed_at": None,
 }
 CELL = {
+    "attempt_count": 0,
     "summary": CELL_SUMMARY, "target_kind": "agent", "target_id": "extractor",
     "routes": SUBMIT["plan"]["cells"][0]["routes"],
     "input_resolver": "checked_in_fixture", "input_reference": "case-1.json",
