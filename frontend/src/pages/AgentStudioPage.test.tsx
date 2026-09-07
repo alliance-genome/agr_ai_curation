@@ -509,6 +509,42 @@ describe('AgentStudioPage', () => {
     expect(serviceMocks.cloneAgentToWorkshop).not.toHaveBeenCalled()
   })
 
+  it.each(['ready', 'streaming', 'manual', 'changed'])(
+    'resumes a saved-agent handoff on returning to Flows only when appropriate: %s', async outcome => {
+      render(<MemoryRouter><AgentStudioPage /></MemoryRouter>)
+      await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalled())
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      fireEvent.click(await screen.findByText('emit-flow-context'))
+      const original = JSON.stringify(flowBuilderInstances.draft)
+      if (outcome !== 'manual') fireEvent.click(screen.getByText('simulate-live-conversation'))
+      fireEvent.click(screen.getByRole('tab', { name: 'Agent Workshop' }))
+      await waitFor(() => expect(screen.getByTestId('continuation-origin')).toHaveTextContent('sha256:'))
+      fireEvent.click(screen.getByText('emit-confirmed-save'))
+      await screen.findByRole('button', { name: 'Review in Flow' })
+      if (outcome === 'streaming') fireEvent.click(screen.getByText('start-streaming'))
+      if (outcome === 'changed') workshopMockState.dirty = true
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      if (outcome === 'streaming') {
+        expect(serviceMocks.getWorkshopSavedReference).not.toHaveBeenCalled()
+        fireEvent.click(screen.getByText('stop-streaming'))
+      }
+      if (outcome === 'manual') {
+        expect(serviceMocks.getWorkshopSavedReference).not.toHaveBeenCalled()
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('none')
+      } else if (outcome === 'changed') {
+        expect(await screen.findByText(/The saved agent needs a fresh review/)).toBeVisible()
+        expect(serviceMocks.getWorkshopSavedReference).not.toHaveBeenCalled()
+      } else {
+        await waitFor(() => expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('propose_flow_draft_update'))
+        expect(serviceMocks.getWorkshopSavedReference).toHaveBeenCalledTimes(1)
+        fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
+        fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+        expect(serviceMocks.getWorkshopSavedReference).toHaveBeenCalledTimes(1)
+      }
+      expect(JSON.stringify(flowBuilderInstances.draft)).toBe(original)
+    },
+  )
+
   it.each(['ready', 'revoked', 'wrong_identity', 'flow_changed', 'workshop_changed', 'edit_during_lookup'])(
     'integrates Workshop Save with reviewed Flow continuation: %s', async (outcome) => {
       render(<MemoryRouter><AgentStudioPage /></MemoryRouter>)

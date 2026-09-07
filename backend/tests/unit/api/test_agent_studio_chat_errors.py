@@ -651,3 +651,39 @@ def test_capability_catalog_dependency_failure_is_reported_without_resource_leak
         "artifact_kind": "agent",
     }
     assert "ca_not_authorized" not in str(result)
+
+
+def test_stop_is_owned_turn_scoped_and_persists_partial_response(monkeypatch):
+    _configure_chat_endpoint(monkeypatch, RuntimeError('unused'))
+    saved = []
+    monkeypatch.setattr(api_module, '_persist_completed_agent_studio_turn',
+        lambda **kwargs: saved.append(kwargs) or SimpleNamespace(trace_id='trace-stopped'))
+
+    async def scenario():
+        started = asyncio.Event()
+        async def runtime(**kwargs):
+            kwargs['state'].assistant_text_parts.append('Partial useful answer')
+            yield {'type': 'TEXT_DELTA', 'delta': 'Partial useful answer'}
+            started.set()
+            await kwargs['cancel_event'].wait()
+        monkeypatch.setattr(api_module, 'stream_agent_studio_run', runtime)
+        response = await api_module.chat_with_opus(_chat_request(), user={'sub': 'owner'})
+        consumer = asyncio.create_task(_consume_stream(response))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        request = api_module.StopAgentStudioRequest(session_id='agent-studio-session-1', turn_id='opus-turn-1')
+        with pytest.raises(HTTPException) as forbidden:
+            await api_module.stop_agent_studio_chat(request, user={'sub': 'someone-else'})
+        assert forbidden.value.status_code == 403
+        with pytest.raises(HTTPException) as stale:
+            await api_module.stop_agent_studio_chat(request.model_copy(update={'turn_id': 'older-turn'}), user={'sub': 'owner'})
+        assert stale.value.status_code == 409
+        run = await api_module.executable_run_manager.get_active_session_run(request.session_id)
+        assert not run.cancel_event.is_set()
+        assert await api_module.stop_agent_studio_chat(request, user={'sub': 'owner'}) == {'status': 'stopping'}
+        events = await asyncio.wait_for(consumer, timeout=2)
+        assert events[-1]['type'] == 'INCOMPLETE'
+        assert events[-1]['error_source'] == 'cancelled'
+        assert saved[0]['assistant_message'] == 'Partial useful answer'
+        assert saved[0]['payload_json']['interrupted'] is True
+        assert run.status == 'cancelled'
+    asyncio.run(scenario())

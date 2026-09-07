@@ -7,9 +7,10 @@ remain application concerns supplied by the API layer.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 
@@ -411,9 +412,13 @@ async def stream_agent_studio_run(
     user_id: str,
     max_turns: int,
     model_settings: ModelSettings,
+    cancel_event: asyncio.Event | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run the SDK-owned authoring loop and emit provider-neutral Studio events."""
 
+    if cancel_event is not None and cancel_event.is_set():
+        return
+    cancellation_task: asyncio.Task | None = None
     resources = build_owned_openai_responses_resources()
     try:
         run_config = _run_config(
@@ -453,6 +458,11 @@ async def stream_agent_studio_run(
                     max_turns=max_turns,
                     run_config=run_config,
                 )
+                if cancel_event is not None:
+                    async def stop_when_requested():
+                        await cancel_event.wait()
+                        result.cancel()
+                    cancellation_task = asyncio.create_task(stop_when_requested())
                 async for event in result.stream_events():
                     if getattr(event, "type", None) == "raw_response_event":
                         data = getattr(event, "data", None)
@@ -510,13 +520,17 @@ async def stream_agent_studio_run(
                             ),
                             "call_id": call_id,
                         }
-                if state.review_message or not state.assistant_text:
+                if not (cancel_event is not None and cancel_event.is_set()) and (state.review_message or not state.assistant_text):
                     final_output = getattr(result, "final_output", None)
                     if isinstance(final_output, str) and final_output:
                         state.assistant_text_parts.append(final_output)
                         yield {"type": "TEXT_DELTA", "delta": final_output}
                 _capture_terminal_metadata(result, state)
     finally:
+        if cancellation_task is not None:
+            cancellation_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cancellation_task
         await close_owned_openai_resources(
             resources,
             trace_id=state.trace_id,

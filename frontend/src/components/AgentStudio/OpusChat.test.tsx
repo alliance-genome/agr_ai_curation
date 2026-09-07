@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 
@@ -20,6 +20,7 @@ const DISEASE_VALIDATOR: PromptInfo = {
 const serviceMocks = vi.hoisted(() => ({
   createAgentStudioSession: vi.fn(),
   streamOpusChat: vi.fn(),
+  stopAgentStudioChat: vi.fn(),
 }))
 
 vi.mock('@/services/agentStudioService', () => serviceMocks)
@@ -33,6 +34,91 @@ describe('OpusChat', () => {
       created_at: '2026-04-23T00:00:00Z',
       updated_at: '2026-04-23T00:00:00Z',
     })
+  })
+
+  it('stops the original run after returning to Studio, keeps partial text, and permits another message', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    let stopped!: () => void
+    const stopGate = new Promise<void>(resolve => { stopped = resolve })
+    serviceMocks.stopAgentStudioChat.mockImplementation(async () => { stopped() })
+    serviceMocks.streamOpusChat.mockImplementationOnce(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'A useful partial answer.', session_id: 'stop-session', turn_id: 'turn-1' }
+      await stopGate
+      yield { type: 'INCOMPLETE', message: 'Stopped at your request.', error_source: 'cancelled', session_id: 'stop-session', turn_id: 'turn-1' }
+    }).mockImplementation(async function* () { yield { type: 'DONE', session_id: 'stop-session', turn_id: 'turn-2' } })
+    const context: ChatContext = { active_tab: 'agents', session_id: 'stop-session' }
+    const first = render(<OpusChat context={context} durableSessionId="stop-session" />)
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), { target: { value: 'Explain this flow.' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Ask about prompts...'), { key: 'Enter', code: 'Enter' })
+    expect(await screen.findByText('A useful partial answer.')).toBeInTheDocument()
+    first.unmount()
+    render(<OpusChat context={context} durableSessionId="stop-session" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Stop AI Chat' }))
+    expect(await screen.findByText('Stopped. You can send another message when ready.')).toBeInTheDocument()
+    expect(screen.getByText('A useful partial answer.')).toBeInTheDocument()
+    expect(serviceMocks.stopAgentStudioChat).toHaveBeenCalledWith('stop-session', 'turn-1')
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop AI Chat' })).not.toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), { target: { value: 'Keep it brief.' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Ask about prompts...'), { key: 'Enter', code: 'Enter' })
+    await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2))
+    expect(serviceMocks.streamOpusChat.mock.calls[1][0]).toContainEqual({ role: 'assistant', content: 'A useful partial answer.' })
+  })
+
+  it('can stop while preparing the request without starting a model stream', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    const captureContext = vi.fn(() => new Promise<ChatContext>(() => {}))
+    render(<OpusChat context={{ active_tab: 'agents' }} captureContext={captureContext} durableSessionId="preflight-session" />)
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), { target: { value: 'Explain this flow.' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Ask about prompts...'), { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop AI Chat' }))
+    expect(await screen.findByText('Stopped. You can send another message when ready.')).toBeInTheDocument()
+    expect(serviceMocks.streamOpusChat).not.toHaveBeenCalled()
+    expect(serviceMocks.stopAgentStudioChat).not.toHaveBeenCalled()
+    expect(screen.getByPlaceholderText('Ask about prompts...')).toBeEnabled()
+  })
+
+  it('does not let a stopped request with delayed session creation replace a new chat', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    let finishOriginal!: (value: { session_id: string }) => void
+    serviceMocks.createAgentStudioSession.mockImplementationOnce(() => new Promise(resolve => { finishOriginal = resolve }))
+      .mockResolvedValueOnce({ session_id: 'new-chat-session' })
+    function Harness() {
+      const [session, setSession] = useState<string | null>(null)
+      return <><div data-testid="selected-session">{session}</div><OpusChat context={{ active_tab: 'agents' }}
+        durableSessionId={session} onDurableSessionIdChange={setSession} /></>
+    }
+    render(<Harness />)
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), { target: { value: 'Original request.' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Ask about prompts...'), { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop AI Chat' }))
+    await screen.findByText('Stopped. You can send another message when ready.')
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await waitFor(() => expect(screen.getByTestId('selected-session')).toHaveTextContent('new-chat-session'))
+    await act(async () => { finishOriginal({ session_id: 'original-session' }) })
+    expect(screen.getByTestId('selected-session')).toHaveTextContent('new-chat-session')
+    expect(screen.queryByText('Original request.')).not.toBeInTheDocument()
+    expect(serviceMocks.streamOpusChat).not.toHaveBeenCalled()
+  })
+
+  it('keeps Stop retryable when cancellation fails', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    let stopped!: () => void
+    const stopGate = new Promise<void>(resolve => { stopped = resolve })
+    serviceMocks.stopAgentStudioChat.mockRejectedValueOnce(new Error('offline'))
+      .mockImplementationOnce(async () => { stopped() })
+    serviceMocks.streamOpusChat.mockImplementationOnce(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'Working answer.', session_id: 'retry-stop', turn_id: 'turn-1' }
+      await stopGate
+      yield { type: 'INCOMPLETE', message: 'Stopped.', error_source: 'cancelled', session_id: 'retry-stop', turn_id: 'turn-1' }
+    })
+    render(<OpusChat context={{ active_tab: 'agents' }} durableSessionId="retry-stop" />)
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), { target: { value: 'Explain this flow.' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Ask about prompts...'), { key: 'Enter', code: 'Enter' })
+    expect(await screen.findByText('Working answer.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop AI Chat' }))
+    expect(await screen.findByText('Could not stop AI Chat. Please try Stop again.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop AI Chat' }))
+    expect(await screen.findByText('Stopped. You can send another message when ready.')).toBeInTheDocument()
   })
 
   it('starts a separate chat while preserving the editor context and previous conversation', async () => {
@@ -793,6 +879,11 @@ describe('OpusChat', () => {
       return
     }
     expect(await screen.findByRole('dialog', { name: 'Review agent changes' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Changes to your draft' })).toBeVisible()
+    const technicalDetails = screen.getByText('Technical details').closest('details')!
+    expect(technicalDetails).not.toHaveAttribute('open')
+    expect(screen.getByText(/Inherited access floor/)).not.toBeVisible()
+
     if (action === 'invalid') {
       expect(screen.getByText('Choose an authorized tool.')).toBeInTheDocument()
       expect(screen.queryByText(/Unknown error/)).not.toBeInTheDocument()

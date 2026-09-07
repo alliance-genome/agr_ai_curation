@@ -689,6 +689,8 @@ function AgentStudioPage() {
   continuationLiveRef.current = { activeTab, workshopSavedHandoff, isClaudeStreaming, sessionId: effectiveDurableSessionId }
 
   const handleContinueInFlow = async () => {
+    const returnFromTab = activeTab
+    const returnSessionId = effectiveDurableSessionId
     const handoff = workshopSavedHandoff
     if (continuationBusyRef.current || isClaudeStreaming || handoff?.status !== 'ready'
       || !handoff.origin || !handoff.saved_agent_id || !handoff.saved_custom_agent_id) return
@@ -707,7 +709,8 @@ function AgentStudioPage() {
     setContinuingToFlow(true)
     try {
       const context = await captureChatContext()
-      if (!continuationMountedRef.current || continuationLiveRef.current.activeTab !== 'agent_workshop'
+      if (!continuationMountedRef.current || continuationLiveRef.current.activeTab !== returnFromTab
+        || continuationLiveRef.current.sessionId !== returnSessionId
         || continuationLiveRef.current.workshopSavedHandoff !== handoff) return
       if (context.flow_draft_fingerprint !== handoff.origin.flow_draft_fingerprint) {
         setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
@@ -715,7 +718,7 @@ function AgentStudioPage() {
       }
       const reference = await getWorkshopSavedReference(handoff.saved_custom_agent_id)
       const live = continuationLiveRef.current
-      if (!continuationMountedRef.current || live.activeTab !== 'agent_workshop'
+      if (!continuationMountedRef.current || live.activeTab !== returnFromTab || live.sessionId !== returnSessionId
         || live.workshopSavedHandoff !== handoff) return
       if (live.isClaudeStreaming || canonicalAuthoringJson(captureDrafts()) !== beforeKey) {
         setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
@@ -755,6 +758,25 @@ function AgentStudioPage() {
       if (continuationMountedRef.current) setContinuingToFlow(false)
     }
   }
+
+  const continueInFlowRef = useRef(handleContinueInFlow)
+  continueInFlowRef.current = handleContinueInFlow
+  const lastResumeTabRef = useRef(activeTab)
+  const pendingFlowReturnRef = useRef(false)
+  useEffect(() => {
+    const previousTab = lastResumeTabRef.current
+    lastResumeTabRef.current = activeTab
+    if (previousTab !== activeTab) {
+      // Returning after saving an agent for this flow is the handoff gesture.
+      // Ordinary tab browsing, or manual work without a chat, must not send a turn.
+      pendingFlowReturnRef.current = previousTab === 'agent_workshop' && activeTab === 'flows'
+        && Boolean(workshopContinuationOrigin) && opusConversation.length > 0
+    }
+    if (!pendingFlowReturnRef.current || activeTab !== 'flows' || isClaudeStreaming) return
+    if (workshopSavedHandoff?.status !== 'ready' || !workshopSavedHandoff.origin) return
+    pendingFlowReturnRef.current = false
+    void continueInFlowRef.current()
+  }, [activeTab, isClaudeStreaming, workshopSavedHandoff, workshopContinuationOrigin, opusConversation.length])
 
   const handleWorkshopAction = async (action: WorkshopAction) => {
     if (isClaudeStreaming) throw new Error('Wait for AI Chat to finish before opening this action.')
@@ -1117,6 +1139,11 @@ Agent ID: ${agentId}`
                   hidden={activeTab !== 'flows'}
                   sx={{ height: '100%', minHeight: 0, '&[hidden]': { display: 'none' } }}
                 >
+                  {activeTab === 'flows' && workshopSavedHandoff && workshopSavedHandoff.status !== 'ready' && (
+                    <Alert severity="warning" action={<Button color="inherit" onClick={() => applyTab('agent_workshop')}>Review agent</Button>}>
+                      The saved agent needs a fresh review before AI Chat can continue this flow. Your flow has been kept.
+                    </Alert>
+                  )}
                   <FlowBuilder
                     key={draftOwner?.uid}
                     recoveryOwnerId={draftOwner?.uid}

@@ -599,3 +599,44 @@ def test_streamed_invalid_then_valid_proposal_finishes_on_last_turn(monkeypatch)
     assert events[-1]['type'] == 'TEXT_DELTA'
     assert 'Apply changes' in events[-1]['delta']
     assert model.calls == 2
+
+
+def test_stop_cancels_sdk_while_waiting_and_finishes_cleanup(monkeypatch):
+    async def scenario():
+        stop = asyncio.Event()
+        started = asyncio.Event()
+        drained = asyncio.Event()
+        closed = []
+        calls = []
+        class Result:
+            last_response_id = None
+            context_wrapper = None
+            final_output = None
+            def cancel(self):
+                calls.append('cancel')
+                drained.set()
+            async def stream_events(self):
+                started.set()
+                await drained.wait()
+                if False:
+                    yield None
+        monkeypatch.setattr(runtime.Runner, 'run_streamed', lambda *_args, **_kwargs: Result())
+        resources = SimpleNamespace(provider=object())
+        monkeypatch.setattr(runtime, 'build_owned_openai_responses_resources', lambda: resources)
+        monkeypatch.setattr(runtime, '_run_config', lambda **_kwargs: None)
+        monkeypatch.setattr(runtime, '_tracked_agent_span', lambda **_kwargs: nullcontext())
+        async def close(*_args, **_kwargs): closed.append(True)
+        monkeypatch.setattr(runtime, 'close_owned_openai_resources', close)
+        async def consume():
+            return [event async for event in runtime.stream_agent_studio_run(
+                instructions='help', input_items=[], tools=[], state=runtime.AgentStudioRunState(trace_id='test'),
+                session_id='session', user_id='owner', max_turns=2,
+                model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100), cancel_event=stop,
+            )]
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(started.wait(), timeout=2)
+        stop.set()
+        assert await asyncio.wait_for(task, timeout=2) == []
+        assert calls == ['cancel']
+        assert closed == [True]
+    asyncio.run(scenario())

@@ -15,6 +15,12 @@ class ChatRequest(BaseModel):
     context: Optional[ChatContext] = None
 
 
+class StopAgentStudioRequest(BaseModel):
+    """Stop exactly one owned Studio turn; stale requests cannot stop a later turn."""
+
+    session_id: str = Field(min_length=1)
+    turn_id: str = Field(min_length=1)
+
 class CatalogResponse(BaseModel):
     """Response for prompt catalog."""
 

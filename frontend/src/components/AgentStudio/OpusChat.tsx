@@ -7,6 +7,7 @@ import { ChatMarkdown } from './ChatMarkdown'
  */
 
 import FlowProposalSummary from './FlowProposalSummary'
+import { workshopProposalWarnings } from './workshopProposalWarnings'
 import { useState, useRef, useEffect, useCallback, useMemo, type Ref, type SetStateAction } from 'react'
 import {
   Box,
@@ -34,6 +35,7 @@ import {
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
 import SendIcon from '@mui/icons-material/Send'
+import StopIcon from '@mui/icons-material/Stop'
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 import LightbulbIcon from '@mui/icons-material/Lightbulb'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
@@ -45,6 +47,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import {
   createAgentStudioSession,
   streamOpusChat,
+  stopAgentStudioChat,
 } from '@/services/agentStudioService'
 import { logger } from '@/services/logger'
 import ModelessFeedbackSurface from '@/components/Feedback/ModelessFeedbackSurface'
@@ -167,6 +170,8 @@ interface DisplayMessage {
 interface SharedOpusChatState {
   messages: DisplayMessage[]
   isStreaming: boolean
+  isStopping: boolean
+  stop: (() => void) | null
   streamStatus: string | null
   durableSessionId: string | null
   /** Process-local only; never reconstructed from durable chat history. */
@@ -201,6 +206,8 @@ function getSharedOpusChatState(
   const nextState: SharedOpusChatState = {
     messages: buildDisplayMessages(initialConversation),
     isStreaming: false,
+    isStopping: false,
+    stop: null,
     streamStatus: null,
     durableSessionId: initialDurableSessionId ?? null,
     pendingFlowProposal: null,
@@ -728,7 +735,10 @@ function OpusChat({
     if (!sessionCreatePromiseRef.current) {
       sessionCreatePromiseRef.current = createAgentStudioSession()
         .then((session) => {
-          syncDurableSessionId(session.session_id, { notifyParent: true })
+          syncDurableSessionId(session.session_id, {
+            notifyParent: mountedRef.current && activeConversationKeyRef.current === conversationKey
+              && !startingNewChatRef.current,
+          })
           return session.session_id
         })
         .finally(() => {
@@ -737,7 +747,7 @@ function OpusChat({
     }
 
     return sessionCreatePromiseRef.current
-  }, [durableSessionId, syncDurableSessionId])
+  }, [conversationKey, durableSessionId, syncDurableSessionId])
 
   // Reference for auto-sending verify message
   const handleSendRef = useRef<(messageText: string) => Promise<void>>()
@@ -975,13 +985,52 @@ function OpusChat({
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
+    let stopRequested = false
+    let turnFinished = false
+    let streamStarted = false
+    let stopTarget: { sessionId: string; turnId: string } | null = null
+    let stopSent = false
+    let stopBeforeStart!: (value: null) => void
+    const stoppedBeforeStart = new Promise<null>((resolve) => { stopBeforeStart = resolve })
+    const showStopped = () => {
+      setPendingFlowProposal(null)
+      setPendingWorkshopAction(null)
+      setMessages((prev) => [...prev.filter((message) => message.role !== 'assistant' || message.content || message.toolCalls?.length), {
+        role: 'system', content: 'Stopped. You can send another message when ready.', timestamp: new Date().toISOString(),
+      }])
+    }
+    const requestStop = async () => {
+      stopRequested = true
+      emitSharedOpusChatState(conversationKey, current => ({ ...current, isStopping: true }))
+      if (!streamStarted) { stopBeforeStart(null); return }
+      if (!stopTarget || stopSent) return
+      stopSent = true
+      try {
+        await stopAgentStudioChat(stopTarget.sessionId, stopTarget.turnId)
+      } catch {
+        if (turnFinished) return
+        stopSent = false
+        stopRequested = false
+        emitSharedOpusChatState(conversationKey, current => ({ ...current, isStopping: false }))
+        setMessages(prev => [...prev, { role: 'system', content: 'Could not stop AI Chat. Please try Stop again.', timestamp: new Date().toISOString() }])
+      }
+    }
+    emitSharedOpusChatState(conversationKey, current => ({ ...current, stop: () => { void requestStop() }, isStopping: false }))
     try {
-      const [activeSessionId, sendContext] = await Promise.all([
-        ensureDurableSessionId(),
-        contextPromise,
+      const prepared = await Promise.race([
+        Promise.all([ensureDurableSessionId(), contextPromise]),
+        stoppedBeforeStart,
       ])
-
+      if (!prepared || stopRequested) { showStopped(); return }
+      const [activeSessionId, sendContext] = prepared
+      streamStarted = true
       for await (const event of streamOpusChat(apiMessages, sendContext, activeSessionId)) {
+        stopTarget = { sessionId: event.session_id, turnId: event.turn_id }
+        if (stopRequested && !stopSent) void requestStop()
+        if (event.type === 'INCOMPLETE' && event.error_source === 'cancelled') {
+          showStopped()
+          break
+        }
         if (event.type === 'TEXT_DELTA' && event.delta) {
           setStreamStatus(null)
           setMessages((prev) => {
@@ -1071,12 +1120,16 @@ function OpusChat({
         return updated
       })
     } finally {
+      turnFinished = true
       sendInFlightRef.current = false
       pendingToolCallIdsRef.current.clear()
       setStreamStatus(null)
       setIsStreaming(false)
+      emitSharedOpusChatState(conversationKey, current => ({ ...current, stop: null, isStopping: false }))
     }
   }, [
+    conversationKey,
+    setPendingWorkshopAction,
     captureContext,
     input,
     messages,
@@ -1727,7 +1780,13 @@ function OpusChat({
             },
           }}
         />
-        <Tooltip title="Send message">
+        {isStreaming ? (
+          <Button variant="contained" startIcon={sharedSnapshot.isStopping ? <CircularProgress size={16} color="inherit" /> : <StopIcon />}
+            disabled={sharedSnapshot.isStopping} onClick={() => sharedSnapshot.stop?.()}
+            aria-label="Stop AI Chat" aria-busy={sharedSnapshot.isStopping} sx={{ minWidth: 92, alignSelf: 'flex-end' }}>
+            {sharedSnapshot.isStopping ? 'Stopping…' : 'Stop'}
+          </Button>
+        ) : <Tooltip title="Send message">
           <span>
             <IconButton
               color="primary"
@@ -1747,7 +1806,7 @@ function OpusChat({
               {isStreaming ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
             </IconButton>
           </span>
-        </Tooltip>
+        </Tooltip>}
       </InputContainer>
 
       {/* Confirmation surface for AI-Assisted Submission */}
@@ -1825,21 +1884,25 @@ function OpusChat({
         </DialogTitle>
         <DialogContent>
           {flowProposalError && <Alert severity="error" sx={{ mb: 1.5 }}>{flowProposalError}</Alert>}
-          <DialogContentText sx={{ mb: 1.5 }}>
-            Apply updates your draft. You can undo it before making further edits.
-            Save when you are ready.
+          <DialogContentText sx={{ mb: 2 }}>
+            Apply updates your draft. Use Save afterward to keep the changes in your account.
           </DialogContentText>
           {pendingFlowProposal?.change_summary && (
-            <Typography variant="body1" fontWeight={600} sx={{ mb: 1.5, overflowWrap: 'anywhere' }}>
-              {pendingFlowProposal.change_summary}
+            <Box component="section" aria-label="Changes to your draft" sx={{ mb: 2, p: 2, borderRadius: 2,
+              bgcolor: theme => alpha(theme.palette.primary.main, 0.12),
+              borderLeft: 4, borderColor: 'primary.main' }}>
+              <Typography variant="subtitle2" color="text.primary" sx={{ mb: 0.75 }}>Changes to your draft</Typography>
+              <Typography variant="body1" fontWeight={600} sx={{ overflowWrap: 'anywhere' }}>
+                {pendingFlowProposal.change_summary}
+              </Typography>
+            </Box>
+          )}
+          {pendingFlowProposal?.findings.some(finding => finding.severity === 'error') && (
+            <Typography variant="body2" sx={{ mb: 1.5 }} role="status">
+              Ask AI Chat to resolve the issues below before applying.
             </Typography>
           )}
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }} role="status" aria-live="polite">
-            {pendingFlowProposal?.findings.some((finding) => finding.severity === 'error')
-              ? 'This change needs attention before you can apply it. Ask AI Chat to fix the issues below.'
-              : (pendingFlowProposal?.findings.length ? 'Ready to apply. Please review the notes below.' : 'Ready to apply to your draft.')}
-          </Typography>
-          {pendingFlowProposal?.findings.map((finding, index) => (
+          {pendingFlowProposal?.findings.filter(finding => finding.severity !== 'info').map((finding, index) => (
             <Alert
               key={`${finding.code}-${finding.path}-${index}`}
               severity={finding.severity === 'warning' ? 'warning' : finding.severity === 'error' ? 'error' : 'info'}
@@ -1848,6 +1911,15 @@ function OpusChat({
               {finding.message}
             </Alert>
           ))}
+          {pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1'
+            && workshopProposalWarnings(pendingFlowProposal).map(warning => (
+              <Alert severity="warning" key={warning} sx={{ mb: 1 }}>{warning}</Alert>
+            ))}
+          {pendingFlowProposal?.contract_version === 'flow_authoring_proposal.v1' && (
+            <FlowProposalSummary proposal={pendingFlowProposal} />
+          )}
+          <Box component="details" key={pendingFlowProposal?.candidate_draft_fingerprint} sx={{ mt: 2 }}>
+            <Box component="summary" sx={{ cursor: 'pointer', py: 1, color: 'text.secondary', fontSize: '0.875rem' }}>Technical details</Box>
           {pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1' && (
             <>
               <Typography variant="body2" sx={{ mb: 1 }}>
@@ -1858,11 +1930,9 @@ function OpusChat({
               ))}
             </>
           )}
-          {pendingFlowProposal?.contract_version === 'flow_authoring_proposal.v1' && (
-            <FlowProposalSummary proposal={pendingFlowProposal} />
-          )}
-          <Box component="details" open={pendingFlowProposal?.contract_version === 'workshop_authoring_proposal.v1' || undefined} sx={{ mt: 2 }}>
-            <Box component="summary" sx={{ cursor: 'pointer', py: 1, color: 'text.secondary', fontSize: '0.875rem' }}>Technical details</Box>
+          {pendingFlowProposal?.findings.filter(finding => finding.severity === 'info').map((finding, index) => (
+            <Typography variant="body2" key={index} sx={{ mb: 1 }}>{finding.message}</Typography>
+          ))}
           <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
             Exact changes ({pendingFlowProposal?.diff.length ?? 0})
           </Typography>
@@ -1945,6 +2015,10 @@ function OpusChat({
           </Box>
         </DialogContent>
         <DialogActions>
+          {isStreaming && <Button startIcon={<StopIcon />} disabled={sharedSnapshot.isStopping}
+            onClick={() => sharedSnapshot.stop?.()} aria-label="Stop AI Chat">
+            {sharedSnapshot.isStopping ? 'Stopping…' : 'Stop'}
+          </Button>}
           <Button onClick={handleCancelFlowProposal} color="inherit" disabled={flowProposalApplying}>
             Cancel
           </Button>

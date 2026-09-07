@@ -20,13 +20,19 @@ It can also inspect available agent capabilities, selected validator prompts, an
 
 ### Review, Apply, and Save
 
-AI Chat prepares a proposal for your review. Read the summary and any notes about removals or validation changes. Expand **Technical details** if you need the full configuration.
+AI Chat prepares a proposal for your review. Read the highlighted **Changes to your draft** summary and any warnings about removals or validation changes. **Technical details** is collapsed by default; expand it for the full configuration. Clicking outside the dialog or pressing Escape does not dismiss the proposal. Choose Apply changes or Cancel.
 
 **Apply changes** updates the open draft. The button shows progress while the proposal is being validated. **Cancel** dismisses the proposal. After a successful Apply, AI Chat can continue the conversation using the updated draft. Saving a Workshop agent during the conversation can also trigger the next step once the saved settings have loaded.
 
 **Save** is separate: it saves the agent or flow to your account. An AI proposal, a green Apply confirmation, or a completed wizard does not mean you have saved it.
 
 Manual edits are included when you next send a message. If you change the draft while an older proposal is pending, it may need a fresh review. Ask AI Chat to refresh its proposal. You can undo the last applied AI change while the draft still matches that change.
+
+### Stop a response
+
+While AI Chat is preparing, using tools, or writing, choose **Stop** beside the message box. If a review dialog is open while the response is still running, it also has a Stop button. The button shows **Stopping…** until the run ends.
+
+The conversation keeps the partial answer, and you can send another message to narrow or redirect the request. Stop does not undo changes you already applied or saved. If stopping fails, the chat tells you and lets you retry.
 
 ### Start a fresh conversation
 
@@ -127,7 +133,7 @@ A flow combines initial task instructions, extraction, any additional validation
 
 If a suitable pre-made agent exists, inspect its fields first. If you need a custom one, AI Chat can help build it in Workshop while keeping the flow context.
 
-When you opened Workshop from a flow, save the agent and choose **Review in Flow** in the saved-agent notice. Studio returns to the preserved flow and asks AI Chat to propose how to use the saved agent. Review and Apply that proposal, then save the flow separately. Changed drafts or unavailable agents may require a fresh review.
+When working with AI Chat on an agent for a flow, save the agent and return to the **Flows** tab to continue the saved-agent handoff automatically. It runs once after any current reply finishes. You can also choose **Review in Flow** in the saved-agent notice. Studio returns to the preserved flow and asks AI Chat to propose how to use the saved agent. Review and Apply that proposal, then save the flow separately. Changed drafts or unavailable agents may require a fresh review.
 
 Use **Verify with AI Chat** to discuss structure, missing connections, or validation choices. This is assistance before running, not an extraction test or a guarantee of correct results. See [curation flows](CURATION_FLOWS.md) for connections, output instructions, and running a saved flow.
 

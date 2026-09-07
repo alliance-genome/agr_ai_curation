@@ -32,6 +32,7 @@ from .agent_studio_schemas import (
     AgentTestRequest,
     CatalogResponse,
     ChatRequest,
+    StopAgentStudioRequest,
     CloneAgentRequest,
     CombinedPromptRequest,
     CombinedPromptResponse,
@@ -4182,6 +4183,8 @@ async def chat_with_opus(
         clear_current_flow_context()
         raise HTTPException(status_code=503, detail="Agent Studio capability catalog is unavailable") from exc
 
+    cancel_event = asyncio.Event()
+
     async def generate_stream():
         source_trace_id = request.context.trace_id if request.context else None
         run_state = AgentStudioRunState(trace_id=str(uuid.uuid4()))
@@ -4364,6 +4367,7 @@ async def chat_with_opus(
                 user_id=user_id,
                 max_turns=get_agent_studio_openai_max_turns(),
                 model_settings=model_settings,
+                cancel_event=cancel_event,
             ):
                 event_type = str(runtime_event.pop("type"))
                 yield _opus_sse_event(
@@ -4404,19 +4408,23 @@ async def chat_with_opus(
                     "loaded_tool_count": run_state.tool_search_loaded_tools,
                 },
             }
+            if cancel_event.is_set():
+                assistant_payload["interrupted"] = True
+                assistant_payload["stop_reason"] = "curator_requested"
             assistant_turn = _persist_completed_agent_studio_turn(
                 session_id=prepared_turn.session_id,
                 user_id=user_id,
                 turn_id=prepared_turn.turn_id,
-                assistant_message=run_state.assistant_text,
+                assistant_message=run_state.assistant_text or ("Stopped at your request." if cancel_event.is_set() else ""),
                 trace_id=run_state.trace_id,
                 payload_json=assistant_payload,
             )
             yield _opus_sse_event(
                 session_id=prepared_turn.session_id,
                 turn_id=prepared_turn.turn_id,
-                event_type="DONE",
+                event_type="INCOMPLETE" if cancel_event.is_set() else "DONE",
                 trace_id=assistant_turn.trace_id,
+                **({"message": "Stopped at your request.", "error_source": "cancelled"} if cancel_event.is_set() else {}),
             )
         except ModelRefusalError:
             yield _opus_sse_event(
@@ -4581,7 +4589,8 @@ async def chat_with_opus(
             session_id=prepared_turn.session_id,
             turn_id=prepared_turn.turn_id,
             stream_factory=generate_stream,
-            can_cancel=False,
+            can_cancel=True,
+            cancel_event=cancel_event,
             terminal_error_event_factory=terminal_error_event,
         )
     except ExecutableRunAccessError as exc:
@@ -4598,6 +4607,26 @@ async def chat_with_opus(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/chat/stop")
+async def stop_agent_studio_chat(
+    request: StopAgentStudioRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Signal immediate SDK cancellation without treating navigation as Stop."""
+    owner = user.get("sub")
+    if not owner:
+        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    try:
+        run = await executable_run_manager.request_cancel_for_session(
+            session_id=request.session_id, owner_user_id=owner, turn_id=request.turn_id,
+        )
+    except ExecutableRunAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "stopping" if run else "finished"}
 
 
 def _send_error_notification_sns(user_email: str, error_message: str, context: Optional[ChatContext] = None) -> None:

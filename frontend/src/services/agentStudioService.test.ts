@@ -16,6 +16,7 @@ import {
   setCustomAgentVisibility,
   submitToolIdeaRequest,
   streamOpusChat,
+  stopAgentStudioChat,
   updateCustomAgent,
   listAgentExecutionRevisions,
   getAgentExecutionRevision,
@@ -31,6 +32,18 @@ global.fetch = mockFetch
 describe('agentStudioService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('stops only the specified Studio turn and reports cancellation failures', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true })
+    await stopAgentStudioChat('session-1', 'turn-2')
+    expect(mockFetch).toHaveBeenCalledWith('/api/agent-studio/chat/stop', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ session_id: 'session-1', turn_id: 'turn-2' }),
+    }))
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 409 })
+    await expect(stopAgentStudioChat('session-1', 'old-turn')).resolves.toBeUndefined()
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 503 })
+    await expect(stopAgentStudioChat('session-1', 'turn-2')).rejects.toThrow('Could not stop AI Chat')
   })
 
   it('returns canonical group options with available workshop templates', async () => {

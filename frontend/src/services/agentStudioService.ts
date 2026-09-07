@@ -887,6 +887,16 @@ export async function fetchAgentStudioSessionDetail(
  * @param context - Optional context (selected agent, group, trace, etc.)
  * @param sessionId - Durable Agent Studio session to attach to the streamed turn
  */
+export async function stopAgentStudioChat(sessionId: string, turnId: string): Promise<void> {
+  const response = await fetch(`${BASE_URL}/chat/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, turn_id: turnId }),
+  })
+  // A completed turn can race Stop; the requested turn must never cancel its successor.
+  if (!response.ok && response.status !== 409) throw new Error('Could not stop AI Chat. Please try again.')
+}
+
 export async function* streamOpusChat(
   messages: ChatMessage[],
   context?: ChatContext,
