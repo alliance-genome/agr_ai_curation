@@ -103,11 +103,6 @@ ALLOWED_VALIDATOR_DISPATCH_CLEANUP_CONTEXTS = (
         "export/submission readiness blockers are legitimate blocked states",
         re.compile(r"blockedCount|Blocked"),
     ),
-    (
-        "docs/curator/AGENT_STUDIO.md",
-        "lookup attempt statuses may be blocked without being validator buckets",
-        re.compile(r"ambiguous, not found, transient, blocked, or under development"),
-    ),
 )
 
 

@@ -25,7 +25,7 @@ def test_formatter_helpers_require_inheritance_and_live_permission(
         output_schema_keys=frozenset(), group_ids=frozenset(), builder_finalization_tool_ids=frozenset(),
     )
     filtered = service.authorized_agent_validation_sources(
-        object(), user_id=5, active_group_ids=['FB'], sources=sources,
+        object(), user_id=5, active_group_ids=[], sources=sources,
         inherited_tool_ids=[tool_id] if inherited else [],
     )
     assert (tool_id in filtered.tools) is accepted

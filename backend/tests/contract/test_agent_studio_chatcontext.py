@@ -197,5 +197,5 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     }
     assert assistant_payload["seed_session_id"] == "assistant-session-123"
     assert assistant_payload["provider_run"]["provider"] == "openai"
-    assert assistant_payload["provider_run"]["model"] == "gpt-5.6-sol"
+    assert assistant_payload["provider_run"]["model"] == "gpt-6-astra"
     assert assistant_payload["provider_run"]["response_id"] == "resp-context-1"

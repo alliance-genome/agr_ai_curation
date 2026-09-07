@@ -22,10 +22,10 @@
   {
     "phrase": "## `search_alleles` - Recommended for partial matches",
     "synonyms": [
-      "It offers many specific methods — search for a gene, fetch an allele by ID"
+      "It offers many specific methods \u2014 search for a gene, fetch an allele by ID"
     ],
     "category": "relocated",
-    "reason": "AV-20 de-dup (tool MECHANICS vs JUDGMENT). The pre-rewrite '# Available Allele Methods' block restated per-method tool mechanics (required/optional param lists, recommended-use one-liners) that the curator tool catalog already carries: agr_curation_query's bindings.yaml `methods.search_alleles.description` ('Find alleles whose symbol contains the text you give'), `methods.get_allele_by_exact_symbol.description` ('Find the allele whose official symbol exactly matches'), `methods.search_alleles_bulk.description`, and `methods.get_allele_by_id.description`, under a tool whose top-level summary states it 'offers many specific methods — search for a gene, fetch an allele by ID ... Different agents use the methods that fit their job'. The rewrite keeps the curation JUDGMENT (which method to choose when, in <lookup_workflow>) and drops the restated mechanics. The synonym matches the tool's bindings description/summary (the harness home text).",
+    "reason": "AV-20 de-dup (tool MECHANICS vs JUDGMENT). The pre-rewrite '# Available Allele Methods' block restated per-method tool mechanics (required/optional param lists, recommended-use one-liners) that the curator tool catalog already carries: agr_curation_query's bindings.yaml `methods.search_alleles.description` ('Find alleles whose symbol contains the text you give'), `methods.get_allele_by_exact_symbol.description` ('Find the allele whose official symbol exactly matches'), `methods.search_alleles_bulk.description`, and `methods.get_allele_by_id.description`, under a tool whose top-level summary states it 'offers many specific methods \u2014 search for a gene, fetch an allele by ID ... Different agents use the methods that fit their job'. The rewrite keeps the curation JUDGMENT (which method to choose when, in <lookup_workflow>) and drops the restated mechanics. The synonym matches the tool's bindings description/summary (the harness home text).",
     "old_source": "packages/alliance/agents/allele/prompt.yaml:# Available Allele Methods",
     "new_home": "bindings:agr_curation_query"
   },
@@ -71,6 +71,13 @@
     "category": "deleted",
     "reason": "AV-REPO. A developer-facing repository link is not a curation rule, not curator-voice content, and instructs the model on nothing. Dropped with no home (printed for review).",
     "old_source": "packages/alliance/agents/allele/prompt.yaml:Role/Repository line",
+    "new_home": ""
+  },
+  {
+    "phrase": "The extractor built this request from the paper.",
+    "category": "deleted",
+    "reason": "Custom-field identity validation is now supported. The request may originate from extraction or a custom field, and a paper quote is optional. The retention inventory asserts the replacement request scope; database evidence is still required for resolution.",
+    "old_source": "packages/alliance/agents/allele/prompt.yaml:Reading a validation request",
     "new_home": ""
   }
 ]

@@ -249,7 +249,7 @@ def test_env_example_documents_the_development_sentry_dsn_input():
     assert assignments["SENTRY_DSN"] == ""
 
 
-def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
+def test_compose_model_defaults_match_supported_runtime_roles():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]
     )
@@ -261,15 +261,15 @@ def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
     )
 
     expected_backend_defaults = {
-        "DEFAULT_AGENT_MODEL": "${DEFAULT_AGENT_MODEL:-gpt-5.6-terra}",
-        "DEFAULT_AGENT_REASONING": "${DEFAULT_AGENT_REASONING:-medium}",
+        "DEFAULT_AGENT_MODEL": "${DEFAULT_AGENT_MODEL:-gpt-6-astra}",
+        "DEFAULT_AGENT_REASONING": "${DEFAULT_AGENT_REASONING:-low}",
         "HIERARCHY_LLM_MODEL": "${HIERARCHY_LLM_MODEL:-gpt-5.6-terra}",
         "HIERARCHY_LLM_REASONING": "${HIERARCHY_LLM_REASONING:-low}",
         "FIGURE_LOCATOR_LLM_MODEL": "${FIGURE_LOCATOR_LLM_MODEL:-gpt-5.6-terra}",
         "FIGURE_LOCATOR_LLM_REASONING": "${FIGURE_LOCATOR_LLM_REASONING:-low}",
         "FIGURE_LOCATOR_RESOLUTION_MAX_TURNS": "${FIGURE_LOCATOR_RESOLUTION_MAX_TURNS:-10}",
         "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS": "${FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS:-60000}",
-        "ABSTRACT_EXTRACTION_MODEL": "${ABSTRACT_EXTRACTION_MODEL:-gpt-5.6-sol}",
+        "ABSTRACT_EXTRACTION_MODEL": "${ABSTRACT_EXTRACTION_MODEL:-gpt-6-astra}",
     }
     assert {key: dev_env[key] for key in expected_backend_defaults} == (
         expected_backend_defaults

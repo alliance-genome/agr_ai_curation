@@ -36,7 +36,7 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
 
     def get_agent(agent_id, **kwargs):
         assert agent_id == expected_agent_id
-        assert kwargs["authenticated_groups"] == ["WB"]
+        assert kwargs["authenticated_groups"] == ["TEAM"]
         assert kwargs["formatter_projection_plan"] == plan.model_dump(mode="json")
         return SimpleNamespace(tools=build_output_formatter_tools(
             bundle=bundle, output_format=format, formatter_agent_id=agent_id,
@@ -50,7 +50,7 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
     tool = executor._make_flow_runtime_formatter_tool(
         agent_id=expected_agent_id, agent_name="Export", output_format=format,
         tool_name="export", tool_description="Export saved fields", specialist_name="Export",
-        base_context={"authenticated_groups": ["WB"]}, step_instruction_prefix="",
+        base_context={"authenticated_groups": ["TEAM"]}, step_instruction_prefix="",
         completed_steps=[step], flow_name="Stock", flow_run_id="run-1", document_id="doc-1",
         node_data={"export_execution_mode": "direct", "projection_plan": plan.model_dump(mode="json")}, source_node_ids=["stocks"],
     )

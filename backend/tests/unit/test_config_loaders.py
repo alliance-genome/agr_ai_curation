@@ -254,7 +254,7 @@ class TestAgentLoader:
             assert formatter.tools == expected_tools
             assert not removed_tools & set(formatter.tools)
             assert formatter.model_config is not None
-            assert formatter.model_config.reasoning == "medium"
+            assert formatter.model_config.reasoning == "low"
             assert formatter.supervisor_routing.enabled is True
 
     def test_get_agent_by_folder(self):

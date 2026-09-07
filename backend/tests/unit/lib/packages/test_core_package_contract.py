@@ -150,7 +150,7 @@ def test_core_package_mirrors_shipped_runtime_config_files():
         )
 
 
-def test_shipped_catalog_keeps_gpt56_default_and_adds_openrouter_route():
+def test_shipped_catalog_defaults_to_astra_and_retains_alternative_routes():
     runtime_catalog = yaml.safe_load(
         (REPO_ROOT / "config" / "models.yaml").read_text(encoding="utf-8")
     )["models"]
@@ -160,12 +160,13 @@ def test_shipped_catalog_keeps_gpt56_default_and_adds_openrouter_route():
 
     assert runtime_catalog == package_catalog
     assert [model["model_id"] for model in runtime_catalog] == [
+        "gpt-6-astra",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "deepseek/deepseek-v4-pro-0813",
     ]
-    assert [model["default"] for model in runtime_catalog] == [True, False, False]
-    assert runtime_catalog[2]["provider"] == "openrouter"
-    for model in runtime_catalog[:2]:
+    assert [model["default"] for model in runtime_catalog] == [True, False, False, False]
+    assert runtime_catalog[3]["provider"] == "openrouter"
+    for model in runtime_catalog[:3]:
         assert model["reasoning_options"] == ["low", "medium", "high", "xhigh"]
-        assert model["default_reasoning"] == "medium"
+        assert model["default_reasoning"] == ("low" if model["model_id"] == "gpt-6-astra" else "medium")

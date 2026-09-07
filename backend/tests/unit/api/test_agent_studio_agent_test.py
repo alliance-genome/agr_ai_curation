@@ -833,7 +833,7 @@ class TestAgentWorkshopSystemPrompt:
         )
 
         assert "use `refresh_workshop_prompt` before judging" in system_prompt
-        assert "use `get_tool_inventory` and `get_tool_details`" in system_prompt
+        assert "inspect runtime tool schemas only when the requested change depends on their arguments" in system_prompt
         assert "`record_evidence(span_ids=[...])` creates backend-copied evidence" in system_prompt
         assert "Do not propose instructions that ask agents to generate quote strings" in system_prompt
 

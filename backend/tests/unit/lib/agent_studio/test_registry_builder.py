@@ -203,15 +203,15 @@ class TestAgentDocumentationCoverage:
             assert registry.get(canonical_id) is not None
             assert registry.get(alias) is None
 
-    def test_supervisor_declares_medium_reasoning_default(self, monkeypatch):
-        """Supervisor reasoning should not inherit the low global agent default."""
+    def test_supervisor_declares_low_reasoning_default(self, monkeypatch):
+        """The supervisor declaration overrides the global reasoning default."""
         monkeypatch.delenv("AGENT_SUPERVISOR_REASONING", raising=False)
-        monkeypatch.setenv("DEFAULT_AGENT_REASONING", "low")
+        monkeypatch.setenv("DEFAULT_AGENT_REASONING", "high")
         agent_loader.reset_cache()
 
         registry = build_agent_registry()
 
-        assert registry["supervisor"]["config_defaults"]["reasoning"] == "medium"
+        assert registry["supervisor"]["config_defaults"]["reasoning"] == "low"
 
         agent_loader.reset_cache()
 

@@ -83,6 +83,11 @@ def test_revision_list_uses_authorized_service_cursor(monkeypatch):
 
 @pytest.mark.parametrize("tab", ["agents", "flows", "agent_workshop"])
 async def test_dispatch_exposes_tool_and_enforces_readonly_transaction(monkeypatch, tab):
+    registry = MagicMock()
+    registry.get_tool.return_value = None
+    registry.get_all_tools.return_value = []
+    monkeypatch.setattr(api, "get_diagnostic_tools_registry", lambda: registry)
+    monkeypatch.setattr(api, "_ensure_flow_tools_registered", lambda _registry: None)
     context = ChatContext.model_validate({"active_tab": tab})
     tools = {item["name"]: item for item in api._get_all_opus_tools(context)}
     assert "inspect_saved_studio_resource" in tools

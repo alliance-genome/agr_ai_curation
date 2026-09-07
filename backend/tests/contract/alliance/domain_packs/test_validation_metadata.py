@@ -350,7 +350,14 @@ def test_source_mentions_prompt_and_tool_language_is_consistent():
         assert SOURCE_MENTIONS_EXTRACTOR_CONTRACT in path.read_text()
     for path in validator_prompt_paths:
         prompt_text = path.read_text()
-        assert SOURCE_MENTIONS_VALIDATOR_CONTEXT in prompt_text
+        expected_context = SOURCE_MENTIONS_VALIDATOR_CONTEXT
+        if path.parent.name == "allele":
+            expected_context = expected_context.replace(
+                "database lookup or `evidence_quote`; never resolve a target from `source_mentions` alone.",
+                "database lookup; never resolve a target from source phrases without database support.",
+            )
+            assert "do not require a paper quote to validate a database identity" in prompt_text
+        assert expected_context in prompt_text
         assert "had access to the paper; you do not" not in prompt_text
         assert "paper; you do not" not in prompt_text
 
