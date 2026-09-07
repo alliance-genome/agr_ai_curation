@@ -10,7 +10,7 @@ from typing import Any, Mapping
 import yaml
 from pydantic import ValidationError
 
-from .loader import BenchmarkCatalogError
+from .errors import BenchmarkCatalogError
 from .models import (
     BenchmarkConfiguration,
     BenchmarkRouteCatalog,

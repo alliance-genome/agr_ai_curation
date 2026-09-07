@@ -32,7 +32,7 @@ from src.lib.benchmarks.input_resolvers import (
     MaterializedBenchmarkInput,
 )
 from src.lib.benchmarks.document_inputs import decode_frozen_document
-from src.lib.benchmarks.loader import BenchmarkCatalogError
+from src.lib.benchmarks.errors import BenchmarkCatalogError
 from src.lib.benchmarks.models import BenchmarkInputReference
 from src.lib.benchmarks.observability import sanitized_benchmark_error
 from src.lib.benchmarks.suites import load_checked_in_suites

@@ -7,7 +7,7 @@ from src.lib.openai_agents.config import (
     get_benchmark_max_repetitions,
 )
 
-from .loader import BenchmarkCatalogError
+from .errors import BenchmarkCatalogError
 from .models import BenchmarkRouteCatalog, BenchmarkSuite, ResolvedBenchmarkPlan
 from .suites import resolve_suite
 

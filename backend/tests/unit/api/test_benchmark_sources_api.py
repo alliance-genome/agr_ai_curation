@@ -24,7 +24,7 @@ from src.lib.benchmarks.input_resolvers import (
     CheckedInFixtureResolver,
     DelegatedAuthorizationCapability,
 )
-from src.lib.benchmarks.loader import BenchmarkCatalogError
+from src.lib.benchmarks.errors import BenchmarkCatalogError
 from src.models.sql.database import get_db
 
 

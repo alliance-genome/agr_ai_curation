@@ -38,7 +38,7 @@ from .input_resolvers import (
     BenchmarkSourceRequestContext,
     materialize_plan_inputs,
 )
-from .loader import BenchmarkCatalogError
+from .errors import BenchmarkCatalogError
 from .models import BenchmarkRouteCatalog, BenchmarkSuite, ResolvedBenchmarkPlan
 from .observability import sanitized_benchmark_error
 from .planning import resolve_execution_plan
