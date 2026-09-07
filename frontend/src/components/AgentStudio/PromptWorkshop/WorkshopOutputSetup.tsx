@@ -86,10 +86,15 @@ export default function WorkshopOutputSetup({ value, onChange, agents, onEditStr
         {value.domainExtractionRef && <Typography color="text.secondary">This format uses backend builder finalization, not a model-response schema. Keep its matching tools and package access settings; start from the format’s agent template if those tools are not already attached.</Typography>}
       </>}
       {value.mode === 'profile_bound_generic' && <>
-        <Typography variant="h6">{value.profileContract?.name || 'New Output Structure'}</Typography>
+        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} gap={1}>
+          <Typography variant="h6">{value.profileContract?.name || 'Details to collect'}</Typography>
+          <Button disabled={disabled} variant="outlined" onClick={onEditStructure}>
+            {value.profileContract?.fields.length ? 'Edit details to collect' : 'Add details to collect'}
+          </Button>
+        </Stack>
+        <Typography color="text.secondary">Choose what the agent should collect about each item. You can add or change details, their parts, and validation.</Typography>
         {value.profileContract?.name && <ProfileValidatorCatalog value={value.profileContract}><OutputDetailsTable value={value.profileContract} /></ProfileValidatorCatalog>}
         <Typography color="text.secondary">{value.profilePin ? `Based on saved revision ${value.profilePin.revision}. Changes are not saved until you save the agent.` : 'Not saved yet. Define the details you want to collect; no JSON editing is required.'}</Typography>
-        <Button disabled={disabled} variant="outlined" onClick={onEditStructure}>Edit Output Structure</Button>
         {onChooseExisting && <details><summary>Advanced: reuse a saved structure</summary>
           <Button disabled={disabled} onClick={onChooseExisting}>Choose existing Output Structure</Button>
         </details>}

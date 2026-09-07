@@ -333,8 +333,7 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
             from src.lib.config.env import require_env
             model = require_env("ABSTRACT_EXTRACTION_MODEL")
 
-            # GPT-5 models use max_completion_tokens, others use max_tokens
-            is_gpt5 = model.startswith("gpt-5")
+            from src.lib.openai_agents.config import supports_temperature, supports_reasoning, require_model_reasoning_effort
             completion_kwargs = {
                 "model": model,
                 "messages": [
@@ -357,9 +356,14 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
                 ],
             }
 
-            # GPT-5 models don't support temperature; non-GPT5 models use it
-            if not is_gpt5:
+            # Use catalog capabilities for Astra and future registered models.
+            if supports_temperature(model):
                 completion_kwargs["temperature"] = 0
+
+            if supports_reasoning(model):
+                completion_kwargs["reasoning_effort"] = require_model_reasoning_effort(
+                    model, require_env("ABSTRACT_EXTRACTION_REASONING")
+                )
 
             response = await client.chat.completions.create(**completion_kwargs)
 

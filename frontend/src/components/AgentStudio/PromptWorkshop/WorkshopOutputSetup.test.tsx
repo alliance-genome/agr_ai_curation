@@ -40,7 +40,7 @@ describe('Workshop output choices', () => {
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
     expect(screen.getByLabelText('Selected output mode')).toHaveTextContent('profile_bound_generic')
-    expect(screen.getByRole('button', { name: 'Edit Output Structure' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^(Add|Edit) details to collect$/ })).toBeInTheDocument()
     expect(screen.getByText(/Not saved yet/)).toBeInTheDocument()
   })
 

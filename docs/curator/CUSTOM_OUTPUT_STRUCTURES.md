@@ -6,7 +6,7 @@ First decide what one record represents. For example, “one reagent per paper�
 
 ## Preview, edit, and return to your draft
 
-Start with **Agent Workshop → Custom data extraction**. Setup shows a read-only table of your details, their parts, inclusion rules, and attached validators. Choose **Edit Output Structure** to edit that same structure, then **Back to Setup** to return. Browser Back also follows the Workshop sections and detail pages while keeping your edits.
+Start with **Agent Workshop → Custom data extraction**. Setup shows a read-only table of your details, their parts, inclusion rules, and attached validators. Choose **Edit details to collect** to edit that same structure, then **Back to Setup** to return. Browser Back also follows the Workshop sections and detail pages while keeping your edits.
 
 Unsaved agent and flow drafts are kept on this browser for your signed-in account, including unfinished flow-step instructions. After returning or reloading, choose **Resume draft** or **Discard draft**. This recovery is local to your device; use **Save** to save the agent or flow to your account. If browser storage is unavailable, a warning tells you to keep the page open and Save.
 
@@ -24,7 +24,7 @@ The AI follows the same simple design: one item type, one answer per detail, and
 
 ## Choose an output mode
 
-New drafts from the General PDF Extraction template start with **Custom Output Structure**. Opening or cloning a saved agent keeps its saved output choice. Each format has an explanation directly below the selector.
+New drafts from the General PDF Extraction template start with **Custom Output Structure** and **GPT-6 Astra with low reasoning**. AI Chat uses Astra with medium reasoning; validation agents keep their Terra settings. Saved agents and flow revisions keep their existing model choices. Opening or cloning a saved agent keeps its saved output choice. Each format has an explanation directly below the selector.
 
 - **Custom Output Structure** defines consistent details, answer types, and inclusion rules across papers. Attach supported validators to details or parts when needed. It is not automatically ready for Alliance submission.
 - **Flexible extraction** lets the agent choose useful fields while reading. Fields may vary between runs, and custom-field validators are not applied. It suits exploratory chat or CSV, TSV, and JSON exports when fixed columns are unnecessary; general record and evidence rules still apply.

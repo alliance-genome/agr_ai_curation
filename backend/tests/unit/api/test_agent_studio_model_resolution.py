@@ -8,7 +8,9 @@ def test_chat_default_is_astra_medium_without_changing_extraction(monkeypatch):
     monkeypatch.delenv("AGENT_STUDIO_OPENAI_MODEL", raising=False)
     monkeypatch.delenv("AGENT_STUDIO_REASONING_EFFORT", raising=False)
     assert openai_runtime.resolve_agent_studio_model() == ("gpt-6-astra", "medium")
-    assert get_default_model().model_id == "gpt-5.6-sol"
+    assert get_default_model().model_id == "gpt-6-astra"
+    assert get_default_model().default_reasoning == "low"
+    assert get_default_model().curator_visible is True
 
 
 def test_chat_model_and_reasoning_can_be_configured(monkeypatch):

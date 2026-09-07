@@ -65,9 +65,9 @@ group_tool_policy:
 output_schema: null
 
 model_config:
-  model: "${AGENT_GO_ANNOTATIONS_MODEL:-gpt-5.6-sol}"
+  model: "${AGENT_RGD_GO_PAPER_CURATOR_MODEL:-gpt-6-astra}"
   temperature: 0.1
-  reasoning: "medium"
+  reasoning: "low"
 
 requires_document: true
 required_params:

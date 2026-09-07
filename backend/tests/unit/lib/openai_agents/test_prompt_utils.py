@@ -8,6 +8,7 @@ import sys
 
 import pytest
 
+from src.lib.openai_agents import config as model_config
 from src.lib.openai_agents.models import GeneExtractionResultEnvelope
 
 PROMPT_UTILS_PATH = Path(__file__).resolve().parents[4] / "src/lib/openai_agents/prompt_utils.py"
@@ -206,7 +207,8 @@ def test_format_abstract_for_prompt_trims_and_formats_text():
 
 
 @pytest.mark.asyncio
-async def test_extract_abstract_with_llm_omits_temperature_for_gpt5(monkeypatch):
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-5.6-sol"])
+async def test_extract_abstract_with_llm_uses_catalog_reasoning_without_temperature(monkeypatch, model):
     captured = {}
 
     class _FakeCompletions:
@@ -224,17 +226,19 @@ async def test_extract_abstract_with_llm_omits_temperature_for_gpt5(monkeypatch)
             pass
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", model)
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
 
     abstract = await prompt_utils._extract_abstract_with_llm("raw text for abstract extraction")
 
     assert abstract == "A" * 80
-    assert captured["model"] == "gpt-5.4-mini"
+    assert captured["model"] == model
+    assert captured["reasoning_effort"] == "low"
     assert "temperature" not in captured
 
 
 @pytest.mark.asyncio
-async def test_extract_abstract_with_llm_sets_temperature_for_non_gpt5(monkeypatch):
+async def test_extract_abstract_with_llm_uses_catalog_temperature_support(monkeypatch):
     captured = {}
 
     class _FakeCompletions:
@@ -252,12 +256,14 @@ async def test_extract_abstract_with_llm_sets_temperature_for_non_gpt5(monkeypat
             pass
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "custom-nonreasoning-model")
+    monkeypatch.setattr(model_config, "_get_model_definition", lambda _: SimpleNamespace(supports_reasoning=False, supports_temperature=True))
 
     abstract = await prompt_utils._extract_abstract_with_llm("raw text for abstract extraction")
 
     assert abstract == "B" * 90
-    assert captured["model"] == "gpt-4o-mini"
+    assert captured["model"] == "custom-nonreasoning-model"
+    assert "reasoning_effort" not in captured
     assert captured["temperature"] == 0
 
 
@@ -277,7 +283,8 @@ async def test_extract_abstract_with_llm_returns_none_for_short_or_missing_outpu
             pass
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
 
     assert await prompt_utils._extract_abstract_with_llm("raw text") is None
 
@@ -308,7 +315,8 @@ async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
             lifecycle["closed"] += 1
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
 
     if outcome == "cancelled":
         with pytest.raises(asyncio.CancelledError):
@@ -338,7 +346,8 @@ async def test_extract_abstract_with_llm_preserves_result_when_close_fails(
             raise RuntimeError("close failed")
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
 
     result = await prompt_utils._extract_abstract_with_llm("raw text")
 
