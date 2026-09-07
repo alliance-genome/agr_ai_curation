@@ -1,3 +1,5 @@
+import { sha256 } from '@noble/hashes/sha2.js'
+import { canonicalAuthoringJson } from '../../authoringContext'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { Alert, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, IconButton, Radio, RadioGroup, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material'
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
@@ -46,7 +48,9 @@ export default function OutputFieldEditor({ format, definition, binding, value, 
       source_node_id: typeof column?.source_node_id === 'string' ? column.source_node_id : '',
     })) : [])
     try {
-      const result = await validateFlowDraft(definition, 'pre_apply', '', '')
+      const digest = sha256(new TextEncoder().encode(canonicalAuthoringJson(definition)))
+      const fingerprint = `sha256:${Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')}`
+      const result = await validateFlowDraft(definition, 'pre_apply', fingerprint, fingerprint)
       if (generation === request.current) setCatalog(result.projection_fields_by_node || {})
     } catch {
       if (generation === request.current) setError('The source fields could not be loaded. Close this window and try again.')

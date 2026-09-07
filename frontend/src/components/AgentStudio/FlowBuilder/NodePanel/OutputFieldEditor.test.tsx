@@ -20,6 +20,10 @@ describe('Output field editor', () => {
     render(<OutputFieldEditor format="json" definition={definition} binding={binding} value={null} onChange={change} />)
     await user.click(screen.getByRole('button', { name: 'Choose output fields' }))
     expect(await screen.findByRole('table', { name: 'Available output fields' })).toBeInTheDocument()
+    const [, phase, expected, current] = mocks.validate.mock.calls[0]
+    expect(phase).toBe('pre_apply')
+    expect(expected).toMatch(/^sha256:[0-9a-f]{64}$/)
+    expect(current).toBe(expected)
     expect(within(screen.getByRole('table', { name: 'Selected output fields' })).getByText('Select fields above to build your output.')).toBeInTheDocument()
     await user.click(screen.getByRole('checkbox', { name: 'Include Stocks: Stock name' }))
     await user.click(screen.getByRole('checkbox', { name: 'Include Stocks: Supplier' }))
