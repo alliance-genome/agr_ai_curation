@@ -236,6 +236,27 @@ nothing unless both `BENCHMARK_WORKER_ENABLED` and
 `BENCHMARK_EXECUTION_ENABLED` are true. Both default to false, and the
 production Compose definition fixes both gates to false.
 
+The standalone entrypoint (`python -m src.lib.benchmarks.worker`) loads its own
+prompt cache from the deployment-local database and loads group configuration
+before constructing worker loops. Startup failures stop the process before any
+job is claimed. The worker reads existing prompt rows; it does not synchronize
+YAML prompts or agents, migrate the database, or run the API lifespan. Deployment
+setup must provide the migrated database, synchronized agent/prompt definitions,
+and installed runtime configuration/packages. Agent definitions, schemas and
+flow builders use their existing configuration loaders during construction.
+
+After required startup succeeds, the worker initializes optional Langfuse using
+the existing `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`
+settings. Missing configuration or tracing initialization failures do not prevent
+execution. On exit or cancellation, it stops worker loops before a best-effort
+Langfuse flush. Disabled entrypoints skip this prompt/group/tracing startup and
+the claim loops. Normal Python imports still require the backend's embedding
+configuration and tokenizer resources; the gates do not remove those import
+dependencies.
+This process initialization does not provision Weaviate or provider credentials;
+document preparation still needs the normal storage, embedding and provider
+dependencies described above.
+
 Worker concurrency defaults to one. `BENCHMARK_WORKER_CONCURRENCY`,
 `BENCHMARK_WORKER_LEASE_SECONDS`, `BENCHMARK_WORKER_HEARTBEAT_SECONDS`, and
 `BENCHMARK_CELL_TIMEOUT_SECONDS` tune the isolated worker lifecycle. A provider

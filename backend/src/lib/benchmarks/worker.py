@@ -483,9 +483,78 @@ class BenchmarkWorker:
                 await asyncio.sleep(1)
 
 
+def initialize_worker_runtime() -> None:
+    """Read deployment-local state before starting any worker claim loop.
+
+    Prompt/agent synchronization belongs to deployment setup, not this process.
+    The API's prompt cache cannot initialize the standalone worker's cache.
+    """
+    from src.lib.config.groups_loader import load_groups
+    from src.lib.prompts.cache import initialize as initialize_prompt_cache
+
+    failure_type = None
+    try:
+        with SessionLocal() as session:
+            initialize_prompt_cache(session)
+        load_groups()
+    except Exception as exc:
+        failure_type = type(exc).__name__
+    if failure_type is not None:
+        # Database exceptions may contain SQL parameters or connection details.
+        # Raise outside the handler so the raw exception is not retained.
+        raise _BenchmarkWorkerError(
+            f"Benchmark worker startup failed ({failure_type})"
+        )
+
+    try:
+        from src.lib.openai_agents.langfuse_client import (
+            initialize_langfuse,
+            is_langfuse_configured,
+        )
+
+        if is_langfuse_configured():
+            initialize_langfuse()
+        else:
+            logger.info("Langfuse not configured - benchmark worker tracing disabled")
+    except Exception as exc:
+        logger.warning(
+            "Benchmark worker tracing initialization failed (non-fatal): %s",
+            type(exc).__name__,
+            exc_info=False,
+        )
+
+
+def shutdown_worker_runtime() -> None:
+    """Best-effort export of pending tracing after worker tasks have stopped."""
+    try:
+        from src.lib.openai_agents.langfuse_client import flush_langfuse
+
+        flush_langfuse()
+    except Exception as exc:
+        logger.warning(
+            "Benchmark worker tracing flush failed (non-fatal): %s",
+            type(exc).__name__,
+            exc_info=False,
+        )
+
+
 async def _main() -> None:
-    workers = [BenchmarkWorker() for _ in range(get_benchmark_worker_concurrency())]
-    await asyncio.gather(*(worker.run_forever() for worker in workers))
+    if not (get_benchmark_worker_enabled() and get_benchmark_execution_enabled()):
+        logger.info("Benchmark worker is disabled by deployment gates")
+        return
+    initialize_worker_runtime()
+    tasks: list[asyncio.Task[None]] = []
+    try:
+        workers = [BenchmarkWorker() for _ in range(get_benchmark_worker_concurrency())]
+        tasks = [asyncio.create_task(worker.run_forever()) for worker in workers]
+        await asyncio.gather(*tasks)
+    finally:
+        # Stop sibling loops before flushing, including on cancellation/failure.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        shutdown_worker_runtime()
 
 
 def main() -> None:
