@@ -149,6 +149,7 @@ def _validated_flow_definition_payload(
             enforce_agent_step_policy=enforce_agent_step_policy,
             entries_by_node=resolved.entries_by_node,
             contract_findings=resolved.findings,
+            projection_catalogs=resolved.projection_catalogs,
         )
     except Exception:
         report_authoring_validation_engine_failure(
@@ -749,6 +750,7 @@ async def validate_flow_draft(
             enforce_agent_step_policy=True,
             entries_by_node=resolved.entries_by_node,
             contract_findings=resolved.findings,
+            projection_catalogs=resolved.projection_catalogs,
         )
     except Exception:
         report_authoring_validation_engine_failure(

@@ -62,13 +62,20 @@ When supported, a custom validator node can replace or supplement validation for
 
 Choose **Chat Output**, CSV, TSV, or JSON. A flow needs an output even if you do not want a downloadable file.
 
-Under **What should this output contain? → Output instructions**, describe what the reader needs:
+For CSV, TSV, and JSON, choose how to build the file:
 
-> One row per stock, with Stock name first and Source second. Leave unreported sources blank. Include supporting evidence.
+- **Use selected fields** fixes the columns across runs. Open **Choose output fields**, select details from the connected agents, rename or reorder the columns, then choose **Use these fields**. Apply the output-step changes and save the flow.
+- **Let AI arrange the output** uses your **Output instructions** to choose a layout from the available results. This is useful for exploratory work; columns can vary between runs.
 
-Specify columns, their order, row grouping, and missing-value display. For Chat Output, describe the summary or table. The step also offers evidence inclusion and, for file outputs, filename choices with a preview.
+The field picker works with saved custom structures and packaged field declarations. It shows each connected source separately. For a stock extractor, you might select **Stock name**, then the **Supplier name** and **Catalog number** parts of Source. Select the whole Source answer instead if you want to keep its parts together.
 
-**Need help with your output? Chat with AI** opens help for that exact step while keeping unapplied edits. If it already has a saved column layout, ask AI Chat to update that layout as well as the instructions when changing columns.
+JSON keeps selected groups as objects and lists as arrays. CSV and TSV put whole groups and lists in a cell as JSON; selecting individual parts gives them separate columns. Records from different source steps remain separate rows, with blanks in columns that belong to another source. They are not joined into a new biological record.
+
+Missing answers are blank in CSV/TSV and null in JSON. Selecting a column does **not** make the extractor require an answer. If a run finds no items, CSV/TSV still include the selected headers and JSON contains an empty list. If a source structure changes, review the field selection again before running.
+
+For Chat Output, use **Output instructions** to describe the summary or table. File output steps also offer filename choices and a filename preview.
+
+**Need help with your output? Chat with AI** opens help for that exact step while keeping unapplied edits. AI can help choose fields, rename or reorder columns, and propose the same settings for your review. Selected fields control the file layout; instructions cannot add columns or invent missing values.
 
 A formatter arranges collected information. If you need a new biological field, add it to a suitable custom extractor first; putting its name in the CSV instructions is not enough.
 
@@ -139,7 +146,7 @@ Task: “Extract expression patterns for C. elegans, including anatomical locati
 
 Create and save a custom stock extractor with a required **Stock name** and optional **Source**. Connect **Initial Instructions → your stock extractor**. Attach both **TSV File Formatter** and **Chat Output** directly to that extractor.
 
-Ask the TSV output for the two columns and supporting evidence. Ask Chat Output for a short summary of the stocks and any missing sources. If no compatible source validator is available, review source associations against the paper.
+Use **Choose output fields** in the TSV step to select the stock and source columns, plus supporting evidence IDs if needed. Ask Chat Output for a short summary of the stocks and any missing sources. If no compatible source validator is available, review source associations against the paper.
 
 ## Manage flows and unsaved drafts
 

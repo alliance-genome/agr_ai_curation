@@ -1203,10 +1203,12 @@ export async function updateFlow(
 
 export interface FlowDraftValidationResponse {
   projection_fields_by_node?: Record<string, {
-    execution_receipt: AgentExecutionReceipt
+    execution_receipt: AgentExecutionReceipt | null
+    schema_fingerprint?: string
     fields: Array<{
       ref: string
-      profile_path: string
+      profile_path?: string
+      group?: string
       label: string
       value_type: string
       schema_kind: string

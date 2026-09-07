@@ -670,3 +670,30 @@ def test_ai_retarget_reconciles_revision_attachments_without_changing_other_uses
     candidate.nodes[1].data.validation_attachments.append(
         FlowValidationAttachmentSelection(**previous.to_dict(), enabled=True))
     assert not flow_tools._validate_exact_flow_for_current_user(candidate, phase="pre_apply").valid
+
+
+def test_selected_export_authoring_binds_source_revision_and_field_identity(monkeypatch):
+    pin, db = profile_receipt_and_db()
+    install_resolver(monkeypatch, [pin])
+    definition = projection_flow(pin)
+    resolved = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[])
+    fingerprint = resolved.projection_catalogs["node_0"]["schema_fingerprint"]
+    definition.nodes[-1].data.projection_plan = {
+        "format": "tsv", "selection_mode": "selected_fields", "row_source": "object", "row_strategy": "wide_union",
+        "selected_sources": [{"node_id": "node_0", "schema_fingerprint": fingerprint}],
+        "columns": [{"key": "Count", "field_ref": "object.attribute.count", "source_node_id": "node_0"}],
+    }
+    assert not module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[]).findings
+    definition.nodes[-1].data.projection_plan["selected_sources"][0]["schema_fingerprint"] = "old"
+    assert any("changed" in f.message for f in module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[]).findings)
+    definition.nodes[-1].data.projection_plan["selected_sources"][0] = {"node_id": "disconnected", "schema_fingerprint": fingerprint}
+    assert any("no available saved structure" in f.message for f in module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[]).findings)
+
+
+def test_packaged_field_catalog_is_available_without_custom_agents_or_runtime_rows():
+    from src.lib.flows.export_fields import packaged_export_fields, packaged_field_value
+    fields = packaged_export_fields("gene_extractor")
+    symbol = next(field for field in fields if field["payload_path"] == "gene_symbol")
+    assert symbol["object_type"] == "gene_mention_evidence"
+    assert packaged_field_value({"object_type": "gene_mention_evidence", "payload": {"gene_symbol": "ccr2"}}, symbol) == "ccr2"
+    assert packaged_field_value({"object_type": "another_type", "payload": {"gene_symbol": "wrong"}}, symbol) is None

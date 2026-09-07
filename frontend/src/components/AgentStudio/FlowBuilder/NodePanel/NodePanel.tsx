@@ -44,6 +44,8 @@ import {
   isValidationAgentFromMetadata,
 } from '../agentMetadataUtils'
 import type { AgentBrowserRequest, AgentNode, AgentNodeData, OutputBindingView } from '../types'
+import OutputFieldEditor from './OutputFieldEditor'
+import type { FlowDefinition } from '../types'
 import AutomaticChecks from './AutomaticChecks'
 import ExecutionRevisionPicker from './ExecutionRevisionPicker'
 import NodePanelHeader from './NodePanelHeader'
@@ -87,6 +89,7 @@ export interface NodePanelProps {
   stepCount: number
   /** Step numbers by node id, for sentences that name other steps. */
   stepNumbersById: Record<string, number>
+  flowDefinition?: FlowDefinition
   outputBinding?: OutputBindingView
   validatorAttachment?: ValidatorAttachmentView | null
   mode: NodePanelMode
@@ -138,6 +141,7 @@ function NodePanel({
   stepCount,
   stepNumbersById,
   outputBinding,
+  flowDefinition,
   validatorAttachment,
   mode,
   onApply,
@@ -410,7 +414,7 @@ function NodePanel({
           )
         )}
 
-        {kind === 'output' && (
+        {kind === 'output' && draft.values.projectionPlan?.selection_mode !== 'selected_fields' && (
           <Section heading="Output">
             <FormControlLabel
               sx={{ m: 0, gap: 0.75, '& .MuiFormControlLabel-label': { fontSize: 12.5 } }}
@@ -427,6 +431,10 @@ function NodePanel({
           </Section>
         )}
 
+        {kind === 'output' && supportsFileOutputNaming && flowDefinition && <OutputFieldEditor
+          format={outputFileExtension(agentId)} definition={flowDefinition} binding={outputBinding}
+          value={draft.values.projectionPlan} onChange={(plan) => draft.set('projectionPlan', plan)} />}
+
         {kind === 'output' && (
           <Section heading="What should this output contain?" action={<OptionalMark />}
             help="Instructions for this output step only, in addition to your flow instructions. Use information collected by the earlier steps.">
@@ -436,7 +444,7 @@ function NodePanel({
               helperText="For a file, describe the columns and what makes one row. For chat, describe the summary or table you want."
               value={draft.values.customInstructions}
               onChange={(event) => draft.set('customInstructions', event.target.value)} sx={textFieldSx} />
-            {node.data.projection_plan && <Typography variant="body2" sx={{ mt: 1 }}>This output has a saved column layout. Use AI Chat to update that layout when changing columns.</Typography>}
+            {draft.values.projectionPlan?.selection_mode === 'selected_fields' && <Typography variant="body2">Your selected fields control the file layout. Instructions cannot add columns or fill missing answers.</Typography>}
             {onOutputHelp && <Button sx={{ mt: 1, textTransform: 'none' }} onClick={() => onOutputHelp(
               agentId, node.data.agent_display_name,
               `Help me design the output for the ${node.data.agent_display_name} step in this flow (internal step reference: ${node.id}; use its visible name in your reply). Ask what columns or summary I need and what should count as one row. Inspect the current flow and its source fields before suggesting changes. Keep my current draft instructions, and propose output-step instructions for my review. If there is a saved column layout, inspect it and update it to match the agreed columns. If a requested field is not collected, explain the extraction change needed first.`,

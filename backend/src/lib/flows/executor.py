@@ -836,7 +836,7 @@ def _build_flow_formatter_runtime_context(
         "Your runtime tools are bound to the completed saved flow artifacts summarized below. "
         "Use the formatter tools to inspect, validate, preview, and call finalize_and_save exactly once. "
         "Do not ask for previous-step prose as input and do not compose file rows yourself. "
-        "If configured_projection_plan is present, treat it as the flow owner's requested starting plan: "
+        "If configured_projection_plan has selection_mode=selected_fields, it is mandatory: call build_default_projection_plan to inspect it, then preview and finalize without changing it. Otherwise treat a configured plan as a starting plan: "
         "validate/preview it with the runtime tools, adjust only through saved field refs if needed, then finalize. "
         "Filename metadata is runtime-owned: filename_hint has already been resolved from the flow template, "
         "and saved files retain a trace identifier suffix. A timestamp is included only when the configured template "
@@ -908,6 +908,7 @@ def _make_flow_runtime_formatter_tool(
                 "formatter_bundle": bundle,
                 "formatter_output_format": output_format,
                 "formatter_agent_id": agent_id,
+                "formatter_projection_plan": node_data.get("projection_plan"),
                 "additional_runtime_context": runtime_contexts,
             }
         )

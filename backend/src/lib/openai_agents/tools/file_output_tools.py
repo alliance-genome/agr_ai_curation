@@ -12,7 +12,7 @@ import io
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from src.lib.flows.output_projection import FlowOutputProjectionResult
 from src.lib.file_outputs.storage import FileOutputStorageService, sanitize_output_descriptor
@@ -144,6 +144,14 @@ def _mime_type_for_file_type(file_type: str) -> str:
     raise ValueError(f"Unsupported file type: {file_type}")
 
 
+def _lossless_cell(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return value
+
+
 def _projection_content_for_file_type(
     *,
     output_format: str,
@@ -154,7 +162,7 @@ def _projection_content_for_file_type(
         column_keys = [column.key for column in projection.columns]
         writer = csv.DictWriter(output, fieldnames=column_keys, extrasaction="ignore")
         writer.writerow({column.key: column.header or column.key for column in projection.columns})
-        writer.writerows(projection.rows)
+        writer.writerows([{key: _lossless_cell(value) for key, value in row.items()} for row in projection.rows])
         return output.getvalue()
     if output_format == "tsv":
         output = io.StringIO()
@@ -169,7 +177,7 @@ def _projection_content_for_file_type(
         writer.writerows(
             [
                 {
-                    key: str(value or "").strip()
+                    key: _lossless_cell(value)
                     for key, value in row.items()
                 }
                 for row in projection.rows

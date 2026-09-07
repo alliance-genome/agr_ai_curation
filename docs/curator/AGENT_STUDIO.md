@@ -166,3 +166,7 @@ The agent's prompt, group instructions, flow instructions, and custom field guid
 ### What's the difference between AI Chat and the main chat?
 
 Studio AI Chat helps configure and explain agents and flows. The main chat is where you ask about papers, run flows, and receive extraction or lookup results.
+
+## Choose consistent file output
+
+In a CSV, TSV, or JSON flow step, **Use selected fields** lets you choose columns from connected agents without writing formatting instructions. AI Chat can inspect those fields and propose the same layout for you. Review and apply the proposal, then save the flow. See [output steps](CURATION_FLOWS.md#output-steps) for grouped answers, missing values, and multiple sources.

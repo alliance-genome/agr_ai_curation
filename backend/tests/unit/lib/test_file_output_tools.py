@@ -647,3 +647,17 @@ class TestSaveProjectedFileOutput:
         assert json.loads(Path(saved.file_path).read_text(encoding="utf-8")) == {
             "grouped": [{"rows": [{"symbol": "Notch"}]}]
         }
+
+
+@pytest.mark.parametrize("format,delimiter", [("csv", ","), ("tsv", "\t")])
+def test_cells_preserve_zero_false_whitespace_and_json_parts(format, delimiter):
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+    from src.lib.flows.output_projection import FlowOutputProjectionResult, FlowOutputColumnSpec
+    row = {"zero": 0, "no": False, "name": ' α,"x"\t\n ', "parts": {"supplier": "Ω", "number": "001"}}
+    projection = FlowOutputProjectionResult(format=format, row_source="object", columns=[FlowOutputColumnSpec(key=k, field_ref=k) for k in row], rows=[row], total_count=1)
+    content = _projection_content_for_file_type(output_format=format, projection=projection)
+    values = list(csv.DictReader(io.StringIO(content), delimiter=delimiter))[0]
+    assert values["zero"] == "0"
+    assert values["no"] == "False"
+    assert values["name"] == row["name"]
+    assert json.loads(values["parts"]) == row["parts"]

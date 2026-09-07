@@ -991,6 +991,7 @@ class ToolExecutionContext:
     formatter_bundle: Optional[Any] = None
     formatter_output_format: Optional[str] = None
     formatter_agent_id: Optional[str] = None
+    formatter_projection_plan: Optional[Any] = None
 
 
 def _resolve_runtime_formatter_tool(
@@ -1016,6 +1017,7 @@ def _resolve_runtime_formatter_tool(
         output_format=output_format,
         formatter_agent_id=formatter_agent_id,
         save_projected_output=save_projected_file_output,
+        configured_plan=execution_context.formatter_projection_plan,
     )
     for tool in tools:
         if getattr(tool, "name", None) == tool_id:
@@ -1566,6 +1568,7 @@ def _build_tool_execution_context(
         formatter_bundle=kwargs.get("formatter_bundle"),
         formatter_output_format=formatter_output_format,
         formatter_agent_id=formatter_agent_id,
+        formatter_projection_plan=kwargs.get("formatter_projection_plan"),
     )
 
 

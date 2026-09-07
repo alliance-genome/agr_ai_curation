@@ -13,10 +13,13 @@ from src.lib.flows.output_projection import (
 from src.lib.flows.profile_projection import profile_projection_fields
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.schemas.flows import FlowDefinition
+from src.lib.flows.export_fields import packaged_export_fields, profile_export_fields, source_catalog
+from src.lib.flows.selected_export import selection_errors
 
 
 def profile_projection_findings(
     db: Session | None, definition: FlowDefinition, entries: dict[str, dict[str, Any] | None],
+    catalogs: dict[str, dict] | None = None,
 ) -> list[AuthoringValidationFinding]:
     """Enrich transient resolved entries, never copy profile definitions to flow JSON."""
     graph = project_executable_flow_graph(definition, raise_on_invalid=False)
@@ -37,12 +40,16 @@ def profile_projection_findings(
         unprofiled = False
         packaged = False
         has_profile = False
+        source_catalogs = {}
         for source_id in attachment.source_node_ids:
             entry = entries.get(source_id)
             if not entry:
                 # System sources use their installed package, not a custom
                 # execution receipt. This profile catalog cannot declare them.
                 packaged = not nodes[source_id].data.agent_id.startswith("ca_") or packaged
+                if packaged:
+                    fields = packaged_export_fields(nodes[source_id].data.agent_id)
+                    source_catalogs[source_id] = source_catalog(fields)
                 continue
             receipt = AgentExecutionReceipt.model_validate(entry["execution_receipt"])
             if receipt.output_contract.output_mode == "unprofiled_generic":
@@ -50,6 +57,11 @@ def profile_projection_findings(
             if receipt.output_contract.output_mode == "domain":
                 packaged = True
             if receipt.output_contract.generic_profile_ref is None:
+                fields = packaged_export_fields(nodes[source_id].data.agent_id, entry) if packaged else []
+                source_catalogs[source_id] = source_catalog(fields, entry["execution_receipt"])
+                if fields:
+                    entry["projection_catalog"] = source_catalogs[source_id]
+                    entry["projection_fields"] = source_catalogs[source_id]["fields"]
                 continue
             has_profile = True
             try:
@@ -58,18 +70,17 @@ def profile_projection_findings(
                 profile = resolve_receipt_profile(db, receipt)
                 if profile is None:
                     raise ValueError("Saved profile is unavailable")
-                fields = [{
-                    "ref": field.row_ref, "profile_path": field.profile_path, "label": field.label,
-                    "value_type": field.value_type, "schema_kind": field.schema_kind,
-                    "array_depth": field.array_depth, "required": field.required,
-                    "nullable": field.nullable, "enum_values": list(field.enum_values),
-                } for field in profile_projection_fields(profile.contract)]
-                entry["projection_fields"] = fields
+                fields = profile_export_fields(profile_projection_fields(profile.contract))
+                source_catalogs[source_id] = source_catalog(fields, entry["execution_receipt"])
+                entry["projection_catalog"] = source_catalogs[source_id]
+                entry["projection_fields"] = source_catalogs[source_id]["fields"]
                 for field in fields:
                     declared.setdefault(field["ref"], []).append(field)
             except ValueError:
                 finding(output.id, "unavailable_projection_profile", f"Source '{source_id}' has an unavailable or mismatched saved output structure.")
-        if not (has_profile or unprofiled) or output.data.projection_plan is None:
+        if catalogs is not None:
+            catalogs.update(source_catalogs)
+        if output.data.projection_plan is None:
             continue
         try:
             plan = FlowOutputProjectionPlan.model_validate(output.data.projection_plan)
@@ -82,6 +93,12 @@ def profile_projection_findings(
                     message=error["msg"],
                     fix_hint="Inspect the formatter_projection_plan output contract schema and correct this field before saving.",
                 ))
+            continue
+        if plan.selection_mode == "selected_fields":
+            expected_format = output.data.agent_id.removesuffix("_formatter")
+            for message in selection_errors(plan, source_catalogs, expected_format):
+                finding(output.id, "invalid_selected_export", message)
+        if not (has_profile or unprofiled):
             continue
         for ref in projection_plan_field_refs(plan):
             if ref.startswith("attributes."):

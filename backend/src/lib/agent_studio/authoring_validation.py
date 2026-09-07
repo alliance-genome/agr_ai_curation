@@ -332,6 +332,7 @@ def validate_flow_authoring_draft(
     enforce_agent_step_policy: bool = True,
     entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
     contract_findings: Sequence[AuthoringValidationFinding] = (),
+    projection_catalogs: dict[str, dict] | None = None,
 ) -> AuthoringValidationResult:
     """Validate one exact full ``FlowDefinition`` without writing or applying it."""
 
@@ -509,11 +510,11 @@ def validate_flow_authoring_draft(
         phase=phase,
         findings=tuple(findings),
         candidate=flow_definition,
-        projection_fields_by_node={
-            node_id: {"execution_receipt": entry.get("execution_receipt"), "fields": entry["projection_fields"]}
-            for node_id, entry in entries.items()
+        projection_fields_by_node={**(projection_catalogs or {}), **{
+            node_id: entry.get("projection_catalog", {"execution_receipt": entry.get("execution_receipt"), "fields": entry["projection_fields"]})
+            for node_id, entry in {**entries, **(entries_by_node or {})}.items()
             if entry is not None and "projection_fields" in entry
-        },
+        }},
     )
 
 

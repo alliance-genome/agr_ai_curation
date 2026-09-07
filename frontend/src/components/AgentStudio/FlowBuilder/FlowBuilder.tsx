@@ -2738,6 +2738,7 @@ function FlowBuilderInner({
                   stepNumber={stepNumbersById[selectedEditorNode.id]}
                   stepCount={stepIds.length}
                   stepNumbersById={stepNumbersById}
+                  flowDefinition={currentFlowDefinition}
                   outputBinding={selectedOutputBinding}
                   validatorAttachment={selectedValidatorAttachment}
                   mode={panelMode}

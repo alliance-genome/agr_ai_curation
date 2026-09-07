@@ -4,7 +4,7 @@ The flow remains mutable. These are node references, not snapshots of the flow.
 The caller owns persistence and supplies the authenticated user/group context.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
@@ -28,6 +28,7 @@ class ResolvedFlowRevisions:
     definition: FlowDefinition
     entries_by_node: dict[str, dict[str, Any] | None]
     findings: tuple[AuthoringValidationFinding, ...]
+    projection_catalogs: dict[str, dict] = field(default_factory=dict)
 
 
 class FlowExecutionRevisionError(ValueError):
@@ -43,7 +44,7 @@ def flow_execution_revision_findings(
 ) -> list[dict[str, Any]]:
     """HTTP/pre-run adapter: report safe contract findings before starting work."""
     if not any(isinstance(node, dict) and isinstance(node.get("data"), dict)
-               and str(node["data"].get("agent_id", "")).startswith("ca_")
+               and (str(node["data"].get("agent_id", "")).startswith("ca_") or (node["data"].get("projection_plan") or {}).get("selection_mode") == "selected_fields")
                for node in definition.get("nodes", [])):
         return []
     try:
@@ -157,5 +158,6 @@ def resolve_flow_execution_revisions(
             fix_hint="Select an accessible exact agent revision and verify downstream field references.",
         ))
     from src.lib.flows.profile_authoring import profile_projection_findings
-    findings.extend(profile_projection_findings(db, candidate, entries))
-    return ResolvedFlowRevisions(candidate, entries, tuple(findings))
+    catalogs = {}
+    findings.extend(profile_projection_findings(db, candidate, entries, catalogs))
+    return ResolvedFlowRevisions(candidate, entries, tuple(findings), catalogs)

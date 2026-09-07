@@ -226,3 +226,90 @@ def test_saved_extraction_result_retains_profile_receipt_and_nested_values(profi
     assert bundle.artifacts[0].execution_receipt == receipt
     assert bundle.rows_for_source("object")[0]["object.attribute.sources[].identifier"] == ["A:1", None, "C:3"]
     assert record.model_dump(mode="json") == before
+
+
+def _selected_plan(bundle, format="json"):
+    return FlowOutputProjectionPlan.model_validate({
+        "format": format, "row_source": "object", "row_strategy": "wide_union",
+        "selection_mode": "selected_fields", "missing_value": None if format == "json" else "",
+        "selected_sources": [{"node_id": a.node_id, "schema_fingerprint": a.export_schema_fingerprint} for a in bundle.artifacts],
+        "columns": [{"key": f"{a.node_id} {key}", "field_ref": f"object.attribute.{key}", "source_node_id": a.node_id}
+                    for a in bundle.artifacts for key in ["count", "status", "sources"]],
+    })
+
+
+@pytest.mark.parametrize("format", ["csv", "tsv", "json"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_selected_export_preserves_schema_empty_results_and_nested_values(profile_step, format, empty):
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+    import csv
+    import io
+    import json
+    step, _, profile = profile_step
+    step["node_id"] = "stocks"
+    if empty:
+        step["candidate"]["payload_json"]["curatable_objects"] = []
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Stock", profile_resolver=lambda _: profile)
+    plan = _selected_plan(bundle, format)
+    result = apply_projection_plan(bundle, plan)
+    content = _projection_content_for_file_type(output_format=format, projection=result)
+    assert len(result.rows) == (0 if empty else 1)
+    if format == "json":
+        assert json.loads(content) == result.rows
+        if not empty:
+            assert result.rows[0]["stocks count"] == 0
+            assert result.rows[0]["stocks status"] is None
+            assert result.rows[0]["stocks sources"][1] == {"name": "B"}
+    else:
+        rows = list(csv.reader(io.StringIO(content), delimiter="," if format == "csv" else "\t"))
+        assert rows[0] == ["stocks count", "stocks status", "stocks sources"]
+        if not empty:
+            assert rows[1][:2] == ["0", ""]
+            assert json.loads(rows[1][2])[1] == {"name": "B"}
+
+
+def test_selected_export_keeps_sources_separate_and_rejects_stale_or_invented_fields(profile_step):
+    step, _, profile = profile_step
+    step["node_id"] = "first"
+    second = deepcopy(step)
+    second["node_id"] = "second"
+    second["candidate"]["payload_json"]["curatable_objects"][0]["payload"]["attributes"]["count"] = 7
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step, second], flow_name="Stock", profile_resolver=lambda _: profile)
+    plan = _selected_plan(bundle)
+    rows = apply_projection_plan(bundle, plan).rows
+    assert [(r["first count"], r["second count"]) for r in rows] == [(0, None), (None, 7)]
+    invalid = plan.model_copy(deep=True)
+    invalid.selected_sources[0].schema_fingerprint = "changed"
+    with pytest.raises(ValueError, match="changed"):
+        apply_projection_plan(bundle, invalid)
+    invalid = plan.model_copy(deep=True)
+    invalid.columns[0].field_ref = "object.attribute.invented"
+    with pytest.raises(ValueError, match="declared field"):
+        apply_projection_plan(bundle, invalid)
+
+
+@pytest.mark.asyncio
+async def test_formatter_tools_cannot_override_selected_fields(profile_step):
+    from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
+    from types import SimpleNamespace
+    import json
+    step, _, profile = profile_step
+    step["node_id"] = "stocks"
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Stock", profile_resolver=lambda _: profile)
+    plan = _selected_plan(bundle)
+    saved = []
+    async def saver(format, projection, descriptor, agent):
+        saved.append({"projection": projection})
+        return {"status": "saved", "file_id": "file1"}
+    tools = {tool.name: tool for tool in build_output_formatter_tools(bundle=bundle, output_format="json", formatter_agent_id="json_formatter", configured_plan=plan.model_dump(mode="json"), save_projected_output=saver)}
+    async def invoke(name, args):
+        return json.loads(await tools[name].on_invoke_tool(SimpleNamespace(tool_name=name), json.dumps(args)))
+    changed = plan.model_dump(mode="json")
+    changed["columns"] = changed["columns"][:1]
+    assert (await invoke("finalize_and_save", {"plan_json": json.dumps(changed)}))["status"] == "invalid"
+    assert not saved
+    preview = await invoke("preview_output_projection", {"plan_json": plan.model_dump_json(), "limit": 1})
+    assert preview["status"] == "ok", preview
+    await invoke("finalize_and_save", {})
+    assert len(saved) == 1
+    assert len(saved[0]["projection"].columns) == 3

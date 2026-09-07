@@ -46,6 +46,7 @@ export const outputFileExtension = (agentId: string): 'csv' | 'tsv' | 'json' => 
 export interface NodeDraftValues {
   executionSelection: Pick<AgentNodeData, 'agent_revision_id' | 'execution_receipt'>
   customInstructions: string
+  projectionPlan: Record<string, unknown> | null
   taskInstructions: string
   includeEvidence: boolean
   outputFilenameMode: OutputFilenameMode
@@ -84,6 +85,7 @@ function valuesFromNode(node: AgentNode, agentMetadata: Record<string, AgentMeta
       execution_receipt: node.data.execution_receipt,
     } : {},
     customInstructions: node.data.custom_instructions || '',
+    projectionPlan: node.data.projection_plan || null,
     taskInstructions: node.data.task_instructions || '',
     includeEvidence: resolveOutputFormatterIncludeEvidence(
       node.data.agent_id,
@@ -121,6 +123,7 @@ function summarizeChanges(initial: NodeDraftValues, current: NodeDraftValues, is
   const turnedOn = [...after].filter((id) => !before.has(id)).length
   if (turnedOff > 0) phrases.push(`turned off ${turnedOff === 1 ? 'one check' : `${turnedOff} checks`}`)
   if (turnedOn > 0) phrases.push(`turned on ${turnedOn === 1 ? 'one check' : `${turnedOn} checks`}`)
+  if (JSON.stringify(initial.projectionPlan) !== JSON.stringify(current.projectionPlan)) phrases.push('changed the output fields')
   if (initial.includeEvidence !== current.includeEvidence) phrases.push('changed the evidence option')
   if (
     initial.outputFilenameMode !== current.outputFilenameMode
@@ -218,6 +221,7 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
       : node.data.include_evidence
     return {
       ...values.executionSelection,
+      projection_plan: values.projectionPlan,
       custom_instructions: values.customInstructions,
       include_evidence: includeEvidence,
       output_filename_template: supportsFileOutputNaming
@@ -246,6 +250,7 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
       : node.data.include_evidence
     return {
       ...values.executionSelection,
+      projection_plan: values.projectionPlan,
       custom_instructions: values.customInstructions || undefined,
       include_evidence: includeEvidence,
       output_filename_template: supportsFileOutputNaming

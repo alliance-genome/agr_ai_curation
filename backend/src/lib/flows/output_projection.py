@@ -278,6 +278,7 @@ class FlowOutputColumnSpec(BaseModel):
     header: str | None = None
     field_ref: str | None = None
     transform: FlowOutputTransformSpec | None = None
+    source_node_id: str | None = None
 
 
 class FlowOutputFilterSpec(BaseModel):
@@ -292,6 +293,11 @@ class FlowOutputSortSpec(BaseModel):
     direction: FlowOutputSortDirection = "asc"
 
 
+class FlowOutputSelectedSource(BaseModel):
+    node_id: str
+    schema_fingerprint: str
+
+
 class FlowOutputProjectionPlan(BaseModel):
     format: FlowOutputFormat
     row_source: FlowOutputRowSource
@@ -304,8 +310,10 @@ class FlowOutputProjectionPlan(BaseModel):
     row_strategy: FlowOutputRowStrategy = "object"
     source_extraction_result_ids: list[str] = Field(default_factory=list)
     source_keys: list[str] = Field(default_factory=list)
-    missing_value: str = ""
+    missing_value: str | None = ""
     max_rows: int | None = None
+    selection_mode: Literal["guided", "selected_fields"] = "guided"
+    selected_sources: list[FlowOutputSelectedSource] = Field(default_factory=list)
 
 
 class FlowOutputProfileBinding(BaseModel):
@@ -330,6 +338,8 @@ class FlowOutputField(BaseModel):
 
 
 class FlowOutputArtifact(BaseModel):
+    node_id: str = ""
+    export_schema_fingerprint: str = ""
     execution_receipt: AgentExecutionReceipt | None = None
     declared_fields: list[FlowOutputField] = Field(default_factory=list)
     step: int | None = None
@@ -1532,7 +1542,23 @@ def _build_artifact_from_step(
     if shape == "non_structured":
         warnings.append("No canonical curation object rows are available for this artifact.")
 
+    from src.lib.flows.export_fields import packaged_export_fields, packaged_field_value, profile_export_fields, source_catalog
+    if profile_fields is not None:
+        export_fields = profile_export_fields(profile_fields)
+    else:
+        export_fields = packaged_export_fields(agent_id, {"curation": {"domain_pack_id": domain_pack_id}}) if receipt else packaged_export_fields(agent_id)
+        for row, item in zip(rows_by_source["object"], object_items):
+            for field in export_fields:
+                row[field["ref"]] = packaged_field_value(item, field)
+    catalog = source_catalog(export_fields, receipt.model_dump(mode="json") if receipt else None)
+    node_id = str(step.get("node_id") or "")
+    for rows in rows_by_source.values():
+        for row in rows:
+            row["artifact.node_id"] = node_id
+    extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object")
+                      for f in catalog["fields"] if not f["ref"].startswith("object.attribute.")]
     return FlowOutputArtifact(
+        node_id=node_id, export_schema_fingerprint=catalog["schema_fingerprint"],
         execution_receipt=receipt,
         declared_fields=[FlowOutputField(
             ref=field.row_ref, label=field.label, value_type=field.value_type, row_source="object",
@@ -1541,7 +1567,7 @@ def _build_artifact_from_step(
                 schema_kind=field.schema_kind, array_depth=field.array_depth,
                 required=field.required, nullable=field.nullable, enum_values=list(field.enum_values),
             )],
-        ) for field in profile_fields or [] if receipt is not None],
+        ) for field in profile_fields or [] if receipt is not None] + extra_declared,
         step=step_number,
         agent_id=agent_id,
         agent_name=agent_name,
@@ -2146,6 +2172,9 @@ def _rows_for_plan(
     plan: FlowOutputProjectionPlan,
 ) -> list[dict[str, Any]]:
     rows = bundle.rows_for_source(plan.row_source)
+    if plan.selection_mode == "selected_fields":
+        node_ids = {source.node_id for source in plan.selected_sources}
+        return [row for row in rows if row.get("artifact.node_id") in node_ids]
     selected_source_ids = {
         source_id.strip()
         for source_id in plan.source_extraction_result_ids
@@ -2176,6 +2205,9 @@ def validate_projection_plan(
 
     errors: list[str] = []
     warnings: list[str] = list(bundle.warnings)
+    if plan.selection_mode == "selected_fields":
+        from src.lib.flows.selected_export import selected_export_errors
+        errors.extend(selected_export_errors(bundle, plan))
     all_rows = bundle.rows_for_source(plan.row_source)
     rows = _rows_for_plan(bundle, plan)
     if plan.format == "tsv" and plan.row_source == "artifact":
@@ -2238,7 +2270,7 @@ def validate_projection_plan(
             "Curation TSV exports require canonical backend extraction object rows; "
             "literal-only TSV projections are not allowed."
         )
-    if not rows and not synthetic_literal_row:
+    if not rows and not synthetic_literal_row and plan.selection_mode != "selected_fields":
         errors.append(f"Row source '{plan.row_source}' is not available for this flow output.")
     if synthetic_literal_row:
         warnings.append(
@@ -2249,6 +2281,10 @@ def validate_projection_plan(
         errors.append(f"max_rows must be between 1 and {MAX_PROJECTION_ROWS}.")
 
     available_refs = _field_refs_for_rows(rows) if rows else bundle.field_refs_for_source(plan.row_source)
+    if plan.selection_mode == "selected_fields":
+        available_refs |= bundle.field_refs_for_source(plan.row_source)
+        if len(rows) > MAX_PROJECTION_ROWS:
+            errors.append("The selected export exceeds the configured row limit; increase FLOW_PROJECTION_MAX_ROWS before exporting all items.")
     if plan.row_source == "object":
         # Source selection is evaluated by the existing row resolver (keys and
         # result IDs have OR semantics). Only those artifacts own the declared
@@ -2511,15 +2547,18 @@ def _project_row(
     row: Mapping[str, Any],
     columns: Sequence[FlowOutputColumnSpec],
     *,
-    missing_value: str,
+    missing_value: str | None,
+    preserve_empty: bool = False,
 ) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for column in columns:
-        if column.transform is not None:
+        if column.source_node_id and row.get("artifact.node_id") != column.source_node_id:
+            value = None
+        elif column.transform is not None:
             value = _transform_value(row, column.transform, missing_value=missing_value)
         else:
             value = row.get(column.field_ref or "")
-        if _is_empty(value):
+        if value is None or (not preserve_empty and _is_empty(value)):
             value = missing_value
         output[column.key] = _jsonable(value)
     return output
@@ -2548,6 +2587,7 @@ def _group_projected_rows(
 def apply_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
+    *, preview_limit: int | None = None,
 ) -> FlowOutputProjectionResult:
     errors, warnings, columns = validate_projection_plan(bundle, plan)
     if errors:
@@ -2562,10 +2602,12 @@ def apply_projection_plan(
 
     total_count = len(rows)
     max_rows = plan.max_rows or MAX_PROJECTION_ROWS
+    if preview_limit is not None:
+        max_rows = min(max_rows, max(1, preview_limit))
     limited_rows = rows[:max_rows]
     truncated = len(rows) > len(limited_rows)
     projected_rows = [
-        _project_row(row, columns, missing_value=plan.missing_value)
+        _project_row(row, columns, missing_value=plan.missing_value, preserve_empty=plan.selection_mode == "selected_fields")
         for row in limited_rows
     ]
 
@@ -2676,8 +2718,7 @@ def preview_output_projection(
             errors=errors,
             warnings=warnings,
         )
-    preview_plan = plan.model_copy(update={"max_rows": min(limit, plan.max_rows or limit)})
-    result = apply_projection_plan(bundle, preview_plan)
+    result = apply_projection_plan(bundle, plan, preview_limit=limit)
     return FlowOutputProjectionPreview(
         status="ok",
         warnings=_bounded_projection_warnings(result.warnings),

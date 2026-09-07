@@ -775,7 +775,8 @@ def _validate_exact_flow_for_current_user(
         parsed = FlowDefinition.model_validate(flow_definition)
     except ValidationError:
         parsed = None  # The canonical validator below supplies schema findings.
-    if parsed is not None and any(node.data.agent_id.startswith("ca_") for node in parsed.nodes):
+    projection_catalogs = {}
+    if parsed is not None:
         with SessionLocal() as db:
             resolved = resolve_flow_execution_revisions(
                 db, parsed, user_id=context.db_user_id,
@@ -783,6 +784,7 @@ def _validate_exact_flow_for_current_user(
             )
         node_entries = resolved.entries_by_node
         contract_findings = resolved.findings
+        projection_catalogs = resolved.projection_catalogs
         flow_definition = resolved.definition
     resolved_entries: dict[str, Mapping[str, Any]] = {}
 
@@ -847,6 +849,7 @@ def _validate_exact_flow_for_current_user(
         phase=phase,
         entries_by_node=node_entries,
         contract_findings=contract_findings,
+        projection_catalogs=projection_catalogs,
     )
 
 
@@ -3259,7 +3262,9 @@ def _get_current_flow_projection_plan_handler():
                     "Use each field's ref verbatim in field_ref/field_refs; profile_path is "
                     "a structure path, not a formatter reference. Omit source_keys and "
                     "source_extraction_result_ids to use all attached sources. These selectors "
-                    "require runtime artifact identities, not a node output_key."
+                    "require runtime artifact identities, not a node output_key. For selected_fields mode, "
+                    "use selected_sources with each source node_id and schema_fingerprint; each column "
+                    "has source_node_id and the exact ref. Use wide_union rows, no filters/transforms."
                 ),
             }
             return _exact_chunk_response(
