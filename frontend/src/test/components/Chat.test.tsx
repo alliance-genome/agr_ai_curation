@@ -1697,6 +1697,36 @@ describe('Chat turn reconciliation', () => {
     mockChatFetch()
   })
 
+  it('shows the latest activity immediately without replaying a burst of old statuses', async () => {
+    renderChat({
+      isLoading: true,
+      events: [
+        { type: 'PROGRESS', message: 'Searching the paper…' },
+        { type: 'PROGRESS', message: 'Validating alleles…' },
+        { type: 'PROGRESS', message: 'Preparing your CSV…' },
+      ],
+    })
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Preparing your CSV…')
+    expect(screen.queryByText('Searching the paper…')).not.toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+  })
+
+  it('keeps warnings and requests for input visible after activity advances', async () => {
+    renderChat({
+      isLoading: true,
+      events: [
+        { type: 'DOMAIN_WARNING', details: { message: 'Some identifiers could not be validated.' } },
+        { type: 'PENDING_USER_INPUT', details: { message: 'Please choose an organism.' } },
+        { type: 'PROGRESS', message: 'Preparing your response…' },
+      ],
+    })
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Preparing your response…')
+    expect(screen.getByText('Some identifiers could not be validated.')).toBeInTheDocument()
+    expect(screen.getByText('Please choose an organism.')).toBeInTheDocument()
+  })
+
   it('shows terminal failure notices on the assistant turn matched by turn_id', async () => {
     renderChat({
       sessionId: 'session-1',

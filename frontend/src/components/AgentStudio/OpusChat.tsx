@@ -1745,7 +1745,6 @@ function OpusChat({
                 aria-live="polite"
                 sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary' }}
               >
-                <CircularProgress size={16} />
                 <Typography variant="body2">
                   {streamStatus || 'AI Chat is responding…'}
                 </Typography>
