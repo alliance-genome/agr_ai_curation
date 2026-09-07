@@ -3,8 +3,8 @@
 Run `python scripts/run_benchmarks.py --help` from a checkout. Python 3.11+ and
 httpx are required; backend development/test images include them. The CLI uses
 one deployment-local `/api/v1/benchmarks` origin. It never imports agents,
-provider credentials, scoring or the local execution engine. The old profile,
-provider/model override and dry-run flags have been removed, without aliases.
+provider credentials, scoring, or the worker runtime. The old profile,
+provider/model override, and dry-run flags have been removed without aliases.
 Use HTTPS; HTTP is allowed only on loopback. Redirects and environment proxies
 are not used.
 

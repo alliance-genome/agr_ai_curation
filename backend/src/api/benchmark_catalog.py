@@ -16,7 +16,7 @@ from src.api.benchmark_curator import require_benchmark_read_curator
 from src.api.benchmark_gate import require_benchmark_api
 from src.api.benchmark_sources import _catalog as input_resolver_catalog
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
-from src.lib.benchmarks.loader import BenchmarkCatalogError
+from src.lib.benchmarks.errors import BenchmarkCatalogError
 from src.lib.benchmarks.models import BenchmarkRouteCatalog, BenchmarkSuite
 from src.lib.benchmarks.observability import sanitized_benchmark_error
 from src.lib.benchmarks.planning import resolve_execution_plan

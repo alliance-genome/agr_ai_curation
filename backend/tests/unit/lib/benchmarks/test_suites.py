@@ -7,7 +7,7 @@ from pydantic import ValidationError
 import yaml
 
 from src.lib.benchmarks.catalog import build_route_catalog
-from src.lib.benchmarks.loader import BenchmarkCatalogError
+from src.lib.benchmarks.errors import BenchmarkCatalogError
 from src.lib.benchmarks.models import (
     BenchmarkModelCatalogEntry,
     BenchmarkSuite,

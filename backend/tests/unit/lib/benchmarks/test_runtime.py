@@ -1,5 +1,3 @@
-import shutil
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast
 
@@ -7,7 +5,6 @@ import pytest
 
 import src.lib.flows.executor as flow_executor
 import src.lib.benchmarks.runtime as benchmark_runtime
-from src.lib.benchmarks.loader import BenchmarkCatalogError
 from src.lib.benchmarks.models import (
     BenchmarkExecutionTarget,
     BenchmarkInputReference,
@@ -16,89 +13,6 @@ from src.lib.benchmarks.models import (
 )
 from src.lib.openai_agents.provider_usage import ProviderUsageRecord, emit_provider_usage
 from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
-ALLIANCE_BENCHMARK_ROOT = REPOSITORY_ROOT / "packages" / "alliance" / "benchmarks"
-APPROVED_RELEASE_ROUTES = [
-    ("openai", "gpt-5.6-sol"),
-    ("openai", "gpt-5.6-terra"),
-    ("openrouter", "deepseek/deepseek-v4-pro-0813"),
-    ("openrouter", "google/gemini-3.7-flash"),
-    ("openrouter", "qwen/qwen3.8-27b"),
-]
-
-
-@pytest.fixture
-def configured_benchmark_root(monkeypatch):
-    monkeypatch.setenv("BENCHMARK_ROOT", str(ALLIANCE_BENCHMARK_ROOT))
-    return ALLIANCE_BENCHMARK_ROOT
-
-
-def test_default_runtime_catalog_loads_without_constructing_targets(
-    configured_benchmark_root,
-):
-    catalog = benchmark_runtime.build_default_catalog()
-    assert {loaded.profile.profile_id for loaded in catalog.profiles} == {
-        "isolated-gene-agent-v1",
-        "isolated-ontology-agent-v1",
-        "flow-canary-gene-curation-v1",
-    }
-    for provider, model in APPROVED_RELEASE_ROUTES:
-        catalog.validate_route(model, provider)
-
-
-def test_default_runtime_catalog_rejects_unknown_and_mismatched_routes(
-    configured_benchmark_root,
-):
-    catalog = benchmark_runtime.build_default_catalog()
-
-    with pytest.raises(BenchmarkCatalogError, match="Unknown model_id"):
-        catalog.validate_route("made-up-model", "not-real")
-    with pytest.raises(BenchmarkCatalogError, match="belongs to provider 'openai'"):
-        catalog.validate_route("gpt-5.6-sol", "openrouter")
-
-
-def test_default_runtime_catalog_rejects_invalid_checked_in_route(
-    tmp_path, configured_benchmark_root
-):
-    benchmark_root = tmp_path / "benchmarks"
-    shutil.copytree(configured_benchmark_root, benchmark_root)
-    profile = benchmark_root / "profiles" / "isolated-gene-agent-v1.yaml"
-    profile.write_text(
-        profile.read_text(encoding="utf-8").replace(
-            "model: gpt-5.6-sol", "model: made-up-model", 1
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(BenchmarkCatalogError, match="Unknown model_id"):
-        benchmark_runtime.build_default_catalog(benchmark_root)
-
-
-def test_default_runtime_catalog_requires_configured_root(monkeypatch):
-    monkeypatch.delenv("BENCHMARK_ROOT", raising=False)
-
-    with pytest.raises(BenchmarkCatalogError, match="BENCHMARK_ROOT must be configured"):
-        benchmark_runtime.build_default_catalog()
-
-
-def test_default_service_wires_configured_adjudication_model(monkeypatch):
-    monkeypatch.setattr(
-        benchmark_runtime,
-        "build_default_catalog",
-        lambda _root=None: cast(Any, object()),
-    )
-    monkeypatch.setattr(
-        benchmark_runtime,
-        "get_benchmark_adjudication_model",
-        lambda: "deployment-adjudicator-v2",
-    )
-
-    service = benchmark_runtime.build_default_service()
-
-    assert service.adjudicator is not None
-    assert service.adjudicator.model == "deployment-adjudicator-v2"
-
 
 def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch):
     captured = {}

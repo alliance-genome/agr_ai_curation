@@ -1,4 +1,4 @@
-"""Developer-only, project-agnostic benchmark harness."""
+"""Project-agnostic execution-only benchmark API."""
 
 from .input_resolvers import (
     BenchmarkInputResolver,
@@ -11,21 +11,12 @@ from .input_resolvers import (
     MaterializedBenchmarkInput,
     materialize_plan_inputs,
 )
-from .loader import BenchmarkCatalog, BenchmarkCatalogError
+from .errors import BenchmarkCatalogError
 from .models import (
-    BenchmarkAdjudicationAttempt,
-    BenchmarkAggregateScore,
-    BenchmarkCaseRun,
-    BenchmarkDeterministicScore,
-    BenchmarkScoringRecord,
-    BenchmarkSelection,
     BenchmarkSuite,
-    DryRunPlan,
     ResolvedBenchmarkPlan,
 )
 from .suites import load_checked_in_suites, load_suite, resolve_suite, validate_suite
-from .scoring import aggregate_scores, score_case
-from .service import BenchmarkService
 from .snapshots import (
     BenchmarkSnapshotRepository,
     BenchmarkSnapshotStore,
@@ -34,31 +25,20 @@ from .snapshots import (
 )
 
 __all__ = [
-    "BenchmarkAdjudicationAttempt",
-    "BenchmarkAggregateScore",
-    "BenchmarkCaseRun",
-    "BenchmarkCatalog",
     "BenchmarkCatalogError",
-    "BenchmarkDeterministicScore",
     "BenchmarkInputResolver",
     "BenchmarkInputResolverCatalog",
     "BenchmarkResolverRegistrationError",
     "BenchmarkSnapshotRepository",
     "BenchmarkSnapshotStore",
     "BenchmarkSourceRequestContext",
-    "BenchmarkScoringRecord",
-    "BenchmarkSelection",
-    "BenchmarkService",
     "BenchmarkSuite",
-    "DryRunPlan",
     "DelegatedAuthorizationCapability",
     "DelegatedSourceAuthorization",
     "FrozenBenchmarkInputSnapshot",
     "MaterializedBenchmarkInput",
     "MaterializedBenchmarkPlanInputs",
     "ResolvedBenchmarkPlan",
-    "aggregate_scores",
-    "score_case",
     "load_checked_in_suites",
     "materialize_plan_inputs",
     "materialize_and_freeze_plan_inputs",

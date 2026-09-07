@@ -61,7 +61,7 @@ Start here for new developers:
 | [WEAVIATE_BACKUPS.md](guides/WEAVIATE_BACKUPS.md) | Native filesystem backup configuration, create/status workflow, isolated restore requirements, legacy non-multitenant collection migration, and disaster-recovery limitations |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
 | [BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md) | Durable batch worker leases, startup scan behavior, stale processing policy, and counter invariants |
-| [BENCHMARK_HARNESS.md](guides/BENCHMARK_HARNESS.md) | Developer-only checked-in benchmark profiles, dry-run validation, explicit routes, admin API, and CLI |
+| [BENCHMARK_HARNESS.md](guides/BENCHMARK_HARNESS.md) | Execution-only suite v2, frozen sources, asynchronous lifecycle API, worker telemetry, and CLI |
 | [BENCHMARK_SUITE_V2.md](guides/BENCHMARK_SUITE_V2.md) | Strict execution-only suite v2 schema, route slots, frozen plans, and stable digests |
 | [BENCHMARK_PERSISTENCE.md](guides/BENCHMARK_PERSISTENCE.md) | PostgreSQL benchmark job, cell, invocation, event, lineage, and immutable result contracts |
 | [BENCHMARK_SNAPSHOT_HANDOFF.md](guides/BENCHMARK_SNAPSHOT_HANDOFF.md) | Workspace snapshot export, configured destination discovery, handoff feedback and manual JSON recovery |
