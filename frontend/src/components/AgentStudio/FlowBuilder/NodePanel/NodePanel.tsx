@@ -1,5 +1,6 @@
 import { getAgentExecutionRevision } from '@/services/agentStudioService'
 import DirectExportSetting from '../../DirectExportSetting'
+import ExportOptionHelp from '../../ExportOptionHelp'
 /**
  * NodePanel
  *
@@ -434,11 +435,13 @@ function NodePanel({
 
         {kind === 'output' && draft.values.projectionPlan?.selection_mode !== 'selected_fields' && (
           <Section heading="Output">
+            <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <FormControlLabel
-              sx={{ m: 0, gap: 0.75, '& .MuiFormControlLabel-label': { fontSize: 12.5 } }}
+              sx={{ m: 0, gap: 0.75, '& .MuiFormControlLabel-label': { typography: 'body2' } }}
               control={(
                 <Switch
                   size="small"
+                  disabled={draft.values.exportExecutionMode === 'direct'}
                   checked={draft.values.includeEvidence}
                   onChange={(event) => draft.set('includeEvidence', event.target.checked)}
                   inputProps={{ role: 'switch' }}
@@ -446,6 +449,14 @@ function NodePanel({
               )}
               label="Include the supporting evidence in the output"
             />
+              <ExportOptionHelp title="Supporting evidence in the output">
+                <p>Ask this output step to include supporting quotes or locations in the paper when they are available.</p>
+                <p>Turning this off asks the output agent to leave evidence out of this output. It does not remove the evidence saved by the extractor agents.</p>
+                <p>If you choose specific output fields, those fields determine what appears in the file. Select evidence fields if you want them included.</p>
+                <p>In direct export mode, this toggle is not used. The file contains the fields you selected.</p>
+              </ExportOptionHelp>
+            </Box>
+            {draft.values.exportExecutionMode === 'direct' && <Typography variant="body2" color="text.secondary">To include evidence in direct export, select evidence fields below.</Typography>}
           </Section>
         )}
 
