@@ -131,11 +131,13 @@ def test_migration_baselines_actual_current_head_only(execution_db):
     assert current.execution_revision_id == original
 
 
-def test_template_baseline_captures_database_group_prompt(execution_db, monkeypatch):
+@pytest.mark.parametrize("blank_main_prompt", [False, True])
+def test_template_baseline_captures_database_group_prompt(execution_db, monkeypatch, blank_main_prompt):
     from src.lib.agent_studio.execution_revision_service import baseline_current_execution_heads, get_execution_revision
     from src.lib.agent_studio.execution_snapshot import saved_runtime_prompt_bundle
     from src.lib.config import agent_loader
     from src.lib.prompts import cache
+    from src.lib.prompts import assembly
     from src.models.sql.prompts import PromptTemplate
 
     db, agent_id, _, _ = execution_db
@@ -145,10 +147,18 @@ def test_template_baseline_captures_database_group_prompt(execution_db, monkeypa
     definition = agent_loader.AgentDefinition(folder_name="test_template", agent_id="test_template",
                                               name="Test template", tools=[])
     monkeypatch.setattr(agent_loader, "get_agent_definition", lambda _key: definition)
+    monkeypatch.setattr(assembly, "load_agent_definitions", lambda: {"test_template": definition})
     head = db.get(Agent, agent_id)
     head.template_source = "test_template"
     head.group_rules_component = "test_template"
     head.group_rules_enabled = True
+    if blank_main_prompt:
+        head.instructions = ""
+    original_instructions = head.instructions
+    base_prompt = PromptTemplate(agent_name="test_template", prompt_type="system",
+                                content="Stage the candidates and finalize through builder tools.",
+                                version=3, is_active=True)
+    db.add(base_prompt)
     prompt = PromptTemplate(agent_name="test_template", prompt_type="group_rules", group_id="FB",
                             content="Database group rules at migration", version=4, is_active=True)
     db.add(prompt)
@@ -158,10 +168,18 @@ def test_template_baseline_captures_database_group_prompt(execution_db, monkeypa
     assert saved.template_source == saved.group_rules_component == "test_template"
     assert saved.output_contract.output_state == "none"
     assert "Database group rules at migration" in saved_runtime_prompt_bundle(saved, active_groups=["FB"]).render()
+    assert head.instructions == original_instructions
+    assert saved.instructions == (base_prompt.content if blank_main_prompt else original_instructions)
+    original_fingerprint = saved.fingerprint()
     prompt.content = "Changed after migration"
+    base_prompt.content = "Changed base after migration"
     db.flush()
     cache.initialize(db)
     assert "Changed after migration" not in saved_runtime_prompt_bundle(saved, active_groups=["FB"]).render()
+    assert "Changed base after migration" not in saved_runtime_prompt_bundle(saved).render()
+    assert baseline_current_execution_heads(db) == 0
+    _, again = get_execution_revision(db, head.id, head.execution_revision_id, 1, active_group_ids=[])
+    assert again.fingerprint() == original_fingerprint
 
 
 @pytest.mark.parametrize("explicit_pin", [True, False])

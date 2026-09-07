@@ -29,6 +29,7 @@ def capture_execution_snapshot(
     from src.lib.agent_studio.custom_agent_service import (
         _system_managed_tool_ids,
         custom_main_prompt_for_parent,
+        inherit_empty_main_prompt,
     )
     from src.lib.config.agent_loader import (
         AgentDefinition,
@@ -45,7 +46,9 @@ def capture_execution_snapshot(
         definition = get_agent_definition(parent) or get_agent_by_folder(parent)
         if definition is None:
             raise ValueError("Cannot snapshot an unavailable template")
-    instructions = custom_main_prompt_for_parent(parent, agent.instructions)
+    instructions = inherit_empty_main_prompt(
+        parent, custom_main_prompt_for_parent(parent, agent.instructions)
+    )
     tools = list(agent.tool_ids or [])
     from src.lib.agent_studio.domain_output_contract import require_no_output_without_builder_tools
 

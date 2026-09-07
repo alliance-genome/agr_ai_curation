@@ -28,6 +28,11 @@ def isolate_execution_persistence(monkeypatch):
     """
     from src.lib.agent_studio import custom_agent_service as service
     from src.schemas.agent_execution_revision import initial_output_contract
+    # CRUD fakes have no application prompt-cache startup. Template creation
+    # now requires an available inherited base before saving its revision.
+    monkeypatch.setattr(service, "build_agent_prompt_layers", lambda *_args, **_kwargs: SimpleNamespace(
+        layers=[SimpleNamespace(kind="base_prompt", content="Template main instructions")],
+    ))
     monkeypatch.setattr(service, "_record_execution_save", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         service, "_prepare_execution_update",
@@ -263,7 +268,8 @@ def test_get_custom_agent_group_prompt_falls_back_to_cached_rules(monkeypatch):
     assert content == "cached wb rules"
 
 
-def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
+@pytest.mark.parametrize("system_clone", [False, True])
+def test_create_custom_agent_creates_unified_custom_agent(monkeypatch, system_clone):
     import src.lib.agent_studio.custom_agent_service as service
 
     class FakeQuery:
@@ -296,6 +302,9 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
             output_schema_key=None,
             category="Validation",
             allowed_group_ids=[],
+            visibility="system", template_source=None, name="Gene validator",
+            description="", icon="", group_rules_enabled=False,
+            group_prompt_overrides={},
         ),
     )
     monkeypatch.setattr(
@@ -304,20 +313,56 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
         lambda _model_id: SimpleNamespace(model_id=_model_id),
     )
 
-    custom = service.create_custom_agent(
-        db=FakeDB(),
-        user_id=7,
-        template_source="gene_validation",
-        name="My Agent",
-        output_schema_key="   ",
-        output_schema_key_provided=True,
+    base = "Stage the retained candidates, then call finalize_gene_extraction."
+    monkeypatch.setattr(service, "build_agent_prompt_layers", lambda *_args, **_kwargs: SimpleNamespace(
+        layers=[SimpleNamespace(kind="core_static", content="Locked runtime contract"),
+                SimpleNamespace(kind="base_prompt", content=base)],
+    ))
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot, saved_runtime_prompt_bundle
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    from src.lib.prompts import cache
+    monkeypatch.setattr(cache, "get_all_active_prompts", lambda: {})
+    monkeypatch.setattr(service, "get_tool_policy_cache", lambda: SimpleNamespace(
+        list_all=lambda _db: [SimpleNamespace(tool_key="agr_curation_query", allow_attach=True)],
+    ))
+    snapshots = []
+    monkeypatch.setattr(service, "_record_execution_save", lambda db, head, **_kwargs: snapshots.append(
+        capture_execution_snapshot(db, head, AgentOutputContract(output_state="none"))
+    ))
+    monkeypatch.setattr(service, "get_agent_by_key", lambda *_args, **_kwargs:
+                        service._resolve_system_template_agent(None, "gene_validation"))
+    custom = (
+        service.clone_visible_agent_for_user(FakeDB(), 7, "gene_validation", name="My Agent")
+        if system_clone else service.create_custom_agent(
+            db=FakeDB(), user_id=7, template_source="gene_validation", name="My Agent",
+            output_schema_key="   ", output_schema_key_provided=True,
+        )
     )
 
     assert custom.template_source == "gene_validation"
     assert custom.user_id == 7
     assert custom.agent_key.startswith("ca_")
-    assert custom.instructions == ""
+    assert custom.instructions == base
     assert custom.output_schema_key is None
+    base = "Changed template after save"
+    assert "Stage the retained candidates" in saved_runtime_prompt_bundle(snapshots[0]).render()
+    assert base not in saved_runtime_prompt_bundle(snapshots[0]).render()
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_inherit_empty_main_prompt_rejects_missing_template_guidance(monkeypatch, unavailable):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    def build(*_args, **_kwargs):
+        if unavailable:
+            raise RuntimeError("Prompt cache unavailable")
+        return SimpleNamespace(layers=[])
+
+    monkeypatch.setattr(service, "build_agent_prompt_layers", build)
+    with pytest.raises(ValueError, match="Cannot inherit"):
+        service.inherit_empty_main_prompt("gene_extractor", "")
+    assert service.inherit_empty_main_prompt(None, "") == ""
+    assert service.inherit_empty_main_prompt("gene_extractor", "Explicit replacement") == "Explicit replacement"
 
 
 @pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])

@@ -167,6 +167,28 @@ def custom_main_prompt_for_parent(
     return f"{base_prompt}\n\n## Custom instructions\n{overlay_content}".strip()
 
 
+def inherit_empty_main_prompt(parent_agent_key: Optional[str], instructions: str) -> str:
+    """Resolve an empty template prompt only when creating or capturing a save.
+
+    Persist the inherited text in the snapshot; pinned execution must never
+    consult the current template. Missing template guidance is a save error.
+    """
+    if instructions.strip() or not parent_agent_key:
+        return instructions
+    try:
+        bundle = build_agent_prompt_layers(parent_agent_key)
+    except Exception as exc:
+        raise ValueError("Cannot inherit the template main prompt") from exc
+    inherited = "\n\n".join(
+        str(layer.content or "").strip()
+        for layer in bundle.layers
+        if layer.kind == "base_prompt" and str(layer.content or "").strip()
+    )
+    if not inherited:
+        raise ValueError("Cannot inherit an empty template main prompt")
+    return inherited
+
+
 def _collapse_prompt_whitespace(prompt: str) -> str:
     lines = [line.rstrip() for line in str(prompt or "").splitlines()]
     collapsed: List[str] = []
@@ -949,6 +971,7 @@ def create_custom_agent(
         custom_prompt,
         target="Custom agent main prompt",
     )
+    agent_prompt = inherit_empty_main_prompt(parent_agent_key, agent_prompt)
     normalized_group_overrides = normalize_editable_group_prompt_overrides(group_prompt_overrides)
     normalized_allowed_group_ids = normalize_allowed_group_ids(
         allowed_group_ids
