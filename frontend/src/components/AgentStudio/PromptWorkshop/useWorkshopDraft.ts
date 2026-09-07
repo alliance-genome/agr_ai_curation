@@ -1,3 +1,5 @@
+import { isWorkshopRecovery } from '../draftRecoveryValidation'
+import { useDraftRecovery } from '../draftRecovery'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
@@ -15,6 +17,7 @@ import type {
 import {
   createCustomAgent,
   getWorkshopSavedReference,
+  getWorkshopCloneSource,
   getAgentExecutionRevision,
   deleteCustomAgent,
   fetchAgentTemplates,
@@ -189,6 +192,8 @@ export interface WorkshopDraft {
   dirty: DraftDirtyState
   canSave: boolean
   /** The selected draft and any saved output structure have finished loading. */
+  recovery: ReturnType<typeof useDraftRecovery>
+  recoveryRestored: boolean
   isHydrated: boolean
   /** Copy the complete current editable value synchronously for an AI Chat turn. */
   captureAuthoringContext: () => AgentWorkshopContext
@@ -238,6 +243,7 @@ export function useWorkshopDraft({
   const [gettingStartedMode, setGettingStartedMode] = useState<GettingStartedMode>(
     initialParentAgentId ? 'template' : 'scratch',
   )
+  const recoveryBlockedRef = useRef(false)
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
   const [draftResetGeneration, setDraftResetGeneration] = useState(0)
   const [customExtractionTemplateId, setCustomExtractionTemplateId] = useState<string>()
@@ -952,6 +958,7 @@ export function useWorkshopDraft({
   } | null>(null)
 
   const applyAuthoringProposal = useCallback(async (proposal: WorkshopAuthoringProposal): Promise<FlowProposalApplyResult> => {
+    if (recoveryBlockedRef.current) return { applied: false, message: 'Resume or discard your recovery draft first.' }
     if (applyingAuthoringRef.current || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading) {
       return { applied: false, message: 'Wait for the current Workshop operation to finish.' }
     }
@@ -1152,7 +1159,7 @@ export function useWorkshopDraft({
   }, [getTemplateAlignedAgentId, refreshAgentMetadata])
 
   const handleSave = useCallback(async (options?: SaveOptions, selfExclusionConfirmed = false) => {
-    if (applyingAuthoringRef.current) return
+    if (recoveryBlockedRef.current || applyingAuthoringRef.current) return
     const forceCreate = options?.forceCreate ?? false
     const nameToSave = (options?.nameOverride ?? name).trim()
     const notes = (options?.notes ?? '').trim()
@@ -1450,6 +1457,48 @@ export function useWorkshopDraft({
     setSelectedModelReasoning(resolveReasoningSelection(modelOptions, modelId))
   }, [modelOptions])
 
+  type RecoveryDraft = { fields: DraftFields; baseline: DraftFields | null; mode: GettingStartedMode;
+    parentId: string; customId: string; cloneId: string; sourceUpdatedAt?: string; cloneUpdatedAt?: string }
+  const [pendingRecovery, setPendingRecovery] = useState<RecoveryDraft | null>(null)
+  const [recoveryRestored, setRecoveryRestored] = useState(false)
+  const hydrated = hydratedKey === hydrationKey && !loading && !outputLoading && !outputLoadError
+  const recoveryValue = useMemo<RecoveryDraft>(() => ({ fields: currentFields, baseline: savedSnapshot,
+    mode: gettingStartedMode, parentId: parentAgentId, customId: selectedCustomAgentId,
+    cloneId: cloneSourceAgentId, sourceUpdatedAt: selectedCustomAgent?.updated_at, cloneUpdatedAt: selectedCloneSource?.updated_at }),
+    [currentFields, savedSnapshot, gettingStartedMode, parentAgentId, selectedCustomAgentId, cloneSourceAgentId, selectedCustomAgent?.updated_at, selectedCloneSource?.updated_at])
+  const recovery = useDraftRecovery({ ownerId: authUser?.uid, kind: 'agent', value: recoveryValue,
+    dirty: dirty.any, ready: Boolean(hydrated && !saving && !pendingRecovery), restore: async (stored, stillCurrent) => {
+      if (!isWorkshopRecovery(stored)) throw new Error('Invalid draft')
+      if (stored.mode === 'clone' && !stored.customId) {
+        const clone = await getWorkshopCloneSource(stored.cloneId)
+        if (!stillCurrent()) return
+        if (clone.id !== stored.cloneId || clone.updated_at !== stored.cloneUpdatedAt || !clone.is_active) throw new Error('Clone source changed or unavailable')
+        setChatCloneSource(clone)
+      }
+      const source = customAgents.find(agent => agent.id === stored.customId)
+      const changed = Boolean(stored.customId && (!source || !source.is_active || source.updated_at !== stored.sourceUpdatedAt))
+      const restored = structuredClone(stored)
+      if (changed) {
+        restored.customId = ''; restored.cloneId = ''; restored.mode = stored.parentId ? 'template' : 'scratch'
+        restored.fields.name += ' (Recovered draft)'
+        setStatus('The saved agent changed or is unavailable. Recovered your edits as a new agent so the saved version is preserved.')
+      }
+      setSelectedCustomAgentId(restored.customId)
+      setCloneSourceAgentId(restored.cloneId)
+      setParentAgentId(restored.parentId)
+      setGettingStartedMode(restored.mode)
+      setDraftResetGeneration(generation => generation + 1)
+      setPendingRecovery(restored)
+    } })
+  recoveryBlockedRef.current = recovery.pending
+  useEffect(() => {
+    if (!pendingRecovery || !hydrated) return
+    applyDraft(pendingRecovery.fields, true)
+    setSavedSnapshot(pendingRecovery.baseline)
+    setPendingRecovery(null)
+    setRecoveryRestored(true)
+  }, [pendingRecovery, hydrated, applyDraft])
+
   return {
     modelOptions,
     toolLibrary,
@@ -1562,7 +1611,9 @@ export function useWorkshopDraft({
     dirty,
     canSave,
     captureAuthoringContext,
-    isHydrated: hydratedKey === hydrationKey && !loading && !outputLoading && !outputLoadError,
+    isHydrated: hydrated,
+    recovery,
+    recoveryRestored,
     applyAuthoringProposal,
     undoAuthoringProposal,
     canUndoAuthoringProposal,

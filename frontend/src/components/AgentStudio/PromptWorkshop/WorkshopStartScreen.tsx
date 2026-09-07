@@ -78,7 +78,7 @@ export default function WorkshopStartScreen({ onChoose, onCustomExtraction, agen
           sx={{ flex: 1, p: 2, textAlign: 'left', display: 'block', borderRadius: 2, '&.Mui-focusVisible': { outline: '2px solid', outlineColor: 'primary.main' } }}>
           <Typography sx={{ fontWeight: 600, color: 'text.primary' }}>Custom data extraction</Typography>
           <Typography sx={{ fontSize: 13, color: 'text.secondary', mt: 0.5 }}>
-            {onCustomExtraction ? 'Choose what to find in a paper and design the details to collect—such as stocks, reagents, or other custom information.' : 'A general PDF extraction template must be available to start.'}
+            Choose what to find in a paper and design the details to collect—such as stocks, reagents, or other custom information.
           </Typography>
         </ButtonBase>
         <IconButton aria-label="About custom extraction" onClick={() => setHelp({ title: 'Custom data extraction', text: 'The wizard helps you name an item type and choose its details. It prepares a PDF extraction agent for you. These custom records are separate from Alliance data structures (sometimes called envelopes); they are not automatically ready for Alliance submission. For a supported Alliance structure, start from its specialized template.' })} sx={{ mr: 1 }}><HelpOutlineIcon fontSize="small" /></IconButton>

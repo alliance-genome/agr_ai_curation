@@ -1,3 +1,5 @@
+import { useAuth } from '@/contexts/AuthContext'
+import { StudioNavigationContext } from '@/components/AgentStudio/studioNavigation'
 import { Root, PanelCard, ClaudePanelSection, ResizeHandle, TabBar, StyledTabs, VisuallyHidden, StyledTab, TabContent } from '@/components/AgentStudio/studioShellStyles'
 /**
  * Agent Studio Page
@@ -128,6 +130,7 @@ function buildSeededOpusConversation(messages: Parameters<typeof buildRestorable
 
 function AgentStudioPage() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const { user: draftOwner } = useAuth()
 
   // Data state
   const [catalog, setCatalog] = useState<PromptCatalog | null>(null)
@@ -136,6 +139,8 @@ function AgentStudioPage() {
 
   // UI state (with persistence)
   const [activeTab, setActiveTab] = useState<TabValue>(() => {
+    const requestedTab = searchParams.get('tab')
+    if (requestedTab === 'agents' || requestedTab === 'flows' || requestedTab === 'agent_workshop') return requestedTab
     const storedResult = safeGetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, {
       owner: 'preferences',
       key: AGENT_STUDIO_TAB_KEY,
@@ -177,11 +182,18 @@ function AgentStudioPage() {
   // Persist tab changes
   const applyTab = useCallback((newValue: TabValue) => {
     setActiveTab(newValue)
+    setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', newValue); return next })
     safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, newValue, {
       owner: 'preferences',
       key: AGENT_STUDIO_TAB_KEY,
     })
-  }, [])
+  }, [setSearchParams])
+
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab === 'agents' || tab === 'flows' || tab === 'agent_workshop') setActiveTab(tab)
+    else setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', activeTab); return next }, { replace: true })
+  }, [searchParams, setSearchParams]) // Navigation restores the tab without discarding its draft.
 
   // Ask the Workshop before leaving it so unsaved edits are not dropped silently.
   // The Workshop only mounts once the catalog is loaded; without it there is nothing to guard.
@@ -192,14 +204,10 @@ function AgentStudioPage() {
   }, [])
 
   const handleTabChange = useCallback((_e: React.SyntheticEvent, newValue: TabValue) => {
-    if (activeTab === 'agent_workshop' && newValue !== 'agent_workshop') {
-      void confirmLeaveWorkshop().then((leave) => {
-        if (leave) applyTab(newValue)
-      })
-      return
-    }
     applyTab(newValue)
-  }, [activeTab, applyTab, confirmLeaveWorkshop])
+  }, [applyTab])
+  const [workshopVisited, setWorkshopVisited] = useState(activeTab === 'agent_workshop')
+  useEffect(() => { if (activeTab === 'agent_workshop') setWorkshopVisited(true) }, [activeTab])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   // The Flows tab mounts on first visit and then stays mounted (hidden) so an
@@ -729,7 +737,7 @@ function AgentStudioPage() {
           return
         }
       }
-      setActiveTab('flows')
+      applyTab('flows')
       safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'flows', {
         owner: 'preferences', key: AGENT_STUDIO_TAB_KEY,
       })
@@ -868,6 +876,7 @@ Agent ID: ${agentId}`
   }, [showClaude])
 
   const handleCloneToWorkshop = useCallback(async (agentId: string) => {
+    if (!await confirmLeaveWorkshop()) return
     try {
       if (agentId.startsWith('ca_')) {
         const cloned = await cloneAgentToWorkshop(agentId)
@@ -877,7 +886,7 @@ Agent ID: ${agentId}`
         setAgentWorkshopTemplateSource(agentId)
         setAgentWorkshopCustomAgentId(null)
       }
-      setActiveTab('agent_workshop')
+      applyTab('agent_workshop')
       safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agent_workshop', {
         owner: 'preferences',
         key: AGENT_STUDIO_TAB_KEY,
@@ -885,7 +894,7 @@ Agent ID: ${agentId}`
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to clone agent')
     }
-  }, [])
+  }, [applyTab, confirmLeaveWorkshop])
 
   const handleWorkshopVerifyRequest = useCallback((message: string) => {
     showClaude()
@@ -903,12 +912,8 @@ Agent ID: ${agentId}`
   }, [applyTab])
 
   const handleWorkshopViewEnvelope = useCallback((agentId: string) => {
-    void confirmLeaveWorkshop().then((leave) => {
-      if (!leave) return
-      openAgentBrowser({ agentId, tab: 'envelope' })
-    })
-  }, [confirmLeaveWorkshop, openAgentBrowser])
-
+    openAgentBrowser({ agentId, tab: 'envelope' })
+  }, [openAgentBrowser])
 
   const handleApplyWorkshopProposal = useCallback(async (proposal: WorkshopAuthoringProposal) => {
     const workshop = workshopAuthoringContextRef.current
@@ -929,14 +934,14 @@ Agent ID: ${agentId}`
     }
     const result = await builder.applyAuthoringProposal(proposal)
     if (result.applied) {
-      setActiveTab('flows')
+      applyTab('flows')
       safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'flows', {
         owner: 'preferences',
         key: AGENT_STUDIO_TAB_KEY,
       })
     }
     return result
-  }, [])
+  }, [applyTab])
 
   // Clear discuss message after it's been sent
   const handleDiscussMessageSent = useCallback(() => {
@@ -1089,7 +1094,11 @@ Agent ID: ${agentId}`
               )}
             </TabBar>
 
-            <TabContent>
+            <StudioNavigationContext.Provider value={{ params: searchParams, navigate: (changes) => {
+              setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', 'agent_workshop');
+                for (const [key, value] of Object.entries(changes)) { if (value === null) next.delete(key); else next.set(key, value) }
+                return next })
+            } }}><TabContent>
               {activeTab === 'agents' && catalog && (
                 <AgentBrowser
                   catalog={catalog}
@@ -1109,6 +1118,8 @@ Agent ID: ${agentId}`
                   sx={{ height: '100%', minHeight: 0, '&[hidden]': { display: 'none' } }}
                 >
                   <FlowBuilder
+                    key={draftOwner?.uid}
+                    recoveryOwnerId={draftOwner?.uid}
                     flowId={currentFlowId}
                     onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
                     onFlowChange={handleFlowChange}
@@ -1120,8 +1131,8 @@ Agent ID: ${agentId}`
                   />
                 </Box>
               )}
-              {activeTab === 'agent_workshop' && catalog && (
-                <>
+              {workshopVisited && catalog && (
+                <Box sx={{ display: activeTab === 'agent_workshop' ? 'contents' : 'none' }}>
                 {workshopSavedHandoff && (
                   <Alert severity={workshopSavedHandoff.status === 'ready' ? 'success' : 'warning'} role="status"
                     action={workshopSavedHandoff.status === 'ready' && workshopSavedHandoff.origin ? (
@@ -1136,6 +1147,7 @@ Agent ID: ${agentId}`
                   </Alert>
                 )}
                 <PromptWorkshop
+                  key={draftOwner?.uid}
                   catalog={catalog}
                   continuationOrigin={workshopContinuationOrigin}
                   onSavedHandoff={handleWorkshopSavedHandoff}
@@ -1157,9 +1169,9 @@ Agent ID: ${agentId}`
                   initialChatCloneSource={initialChatCloneSource}
                   onInitialChatActionComplete={() => setInitialWorkshopAction(undefined)}
                 />
-                </>
+                </Box>
               )}
-            </TabContent>
+            </TabContent></StudioNavigationContext.Provider>
           </PanelCard>
         </Panel>
 

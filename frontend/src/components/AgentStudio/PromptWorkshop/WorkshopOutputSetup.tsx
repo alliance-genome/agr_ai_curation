@@ -1,3 +1,5 @@
+import OutputDetailsTable from './OutputDetailsTable'
+import ProfileValidatorCatalog from './ProfileValidatorCatalog'
 import { useState } from 'react'
 import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Radio, RadioGroup, Stack, TextField, Typography } from '@mui/material'
 import type { AgentMetadata } from '@/services/agentStudioService'
@@ -84,7 +86,8 @@ export default function WorkshopOutputSetup({ value, onChange, agents, onEditStr
         {value.domainExtractionRef && <Typography color="text.secondary">This format uses backend builder finalization, not a model-response schema. Keep its matching tools and package access settings; start from the format’s agent template if those tools are not already attached.</Typography>}
       </>}
       {value.mode === 'profile_bound_generic' && <>
-        <Typography>{value.profileContract?.name || 'New Output Structure'} · {value.profileContract?.fields.length ?? 0} top-level fields</Typography>
+        <Typography variant="h6">{value.profileContract?.name || 'New Output Structure'}</Typography>
+        {value.profileContract?.name && <ProfileValidatorCatalog value={value.profileContract}><OutputDetailsTable value={value.profileContract} /></ProfileValidatorCatalog>}
         <Typography color="text.secondary">{value.profilePin ? `Based on saved revision ${value.profilePin.revision}. Changes are not saved until you save the agent.` : 'Not saved yet. Define the details you want to collect; no JSON editing is required.'}</Typography>
         <Button disabled={disabled} variant="outlined" onClick={onEditStructure}>Edit Output Structure</Button>
         {onChooseExisting && <details><summary>Advanced: reuse a saved structure</summary>

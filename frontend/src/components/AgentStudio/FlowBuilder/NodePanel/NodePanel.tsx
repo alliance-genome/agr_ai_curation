@@ -98,6 +98,7 @@ export interface NodePanelProps {
   onOutputHelp?: (agentId: string, agentName: string, prompt: string) => void
   leaveGuardRef?: Ref<NodePanelLeaveGuard>
   onDraftDirtyChange?: (dirty: boolean) => void
+  onDraftChange?: (draft: NodePanelAuthoringDraft | null) => void
 }
 
 type StepKind = 'input' | 'extraction' | 'validation' | 'output' | 'agent'
@@ -147,6 +148,7 @@ function NodePanel({
   onOutputHelp,
   leaveGuardRef,
   onDraftDirtyChange,
+  onDraftChange,
 }: NodePanelProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const icon = useAgentIcon(node.data.agent_id)
@@ -201,6 +203,10 @@ function NodePanel({
     data: draft.snapshotPayload(),
     dirty: draft.dirty,
   }), [draft, node.id])
+
+  const recoverySnapshot = JSON.stringify(captureAuthoringDraft())
+  useEffect(() => { onDraftChange?.(JSON.parse(recoverySnapshot)) }, [recoverySnapshot, onDraftChange])
+  useEffect(() => () => onDraftChange?.(null), [onDraftChange])
 
   const takeLastLeaveOutcome = useCallback((): NodePanelLeaveOutcome => {
     const outcome = lastLeaveOutcomeRef.current

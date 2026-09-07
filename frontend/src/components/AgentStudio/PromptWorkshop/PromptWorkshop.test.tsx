@@ -1,3 +1,5 @@
+import { MemoryRouter, useNavigate, useSearchParams } from 'react-router-dom'
+import { StudioNavigationContext } from '../studioNavigation'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, beforeEach, expect, it, vi } from 'vitest'
 import { createRef } from 'react'
@@ -23,6 +25,7 @@ const serviceMocks = vi.hoisted(() => ({
   validateWorkshopDraft: vi.fn(),
   createCustomAgent: vi.fn(),
   getWorkshopSavedReference: vi.fn(),
+  getWorkshopCloneSource: vi.fn(),
   getAgentExecutionRevision: vi.fn(),
   deleteCustomAgent: vi.fn(),
   fetchAgentTemplates: vi.fn(),
@@ -393,6 +396,7 @@ describe('PromptWorkshop', () => {
   ]
 
   beforeEach(() => {
+  localStorage.clear()
     authMocks.user = {
       uid: 'doug-test-user',
       email: 'doughowe@uoregon.edu',
@@ -474,6 +478,84 @@ describe('PromptWorkshop', () => {
     const saveAction = { ...action, request: { action: 'save' as const } }
     await act(async () => { expect(ref.current?.runChatAction(saveAction)).toBe(true) })
     expect(await screen.findByRole('dialog', { name: /Save/ })).toBeInTheDocument()
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it('reauthorizes a shared clone before restoring its draft and blocks Chat until the choice', async () => {
+    const agent = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [], total: 0 })
+    serviceMocks.getWorkshopCloneSource.mockResolvedValue(agent)
+    const action: import('@/types/promptExplorer').WorkshopAction = {
+      success: true, contract_version: 'workshop_action.v1', request: { action: 'new_agent', mode: 'clone', agent_id: agent.agent_id },
+      source: { agent_id: agent.agent_id, name: agent.name, updated_at: agent.updated_at, agent_revision_id: agent.execution_revision_id || null },
+      label: 'Open agent', origin: null, active_tab: 'agents', flow_draft_fingerprint: null, workshop_draft_fingerprint: null,
+      saved: false, message: 'Nothing saved.',
+    }
+    const first = render(<PromptWorkshop catalog={buildCatalog()} initialChatAction={action} initialChatCloneSource={agent} />)
+    fireEvent.change(await screen.findByLabelText('Agent name'), { target: { value: 'My shared clone edits' } })
+    await screen.findByText(/Draft kept on this device/)
+    first.unmount()
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} authoringContextRef={ref} />)
+    await screen.findByRole('button', { name: 'Resume draft' })
+    await act(async () => { expect(ref.current!.runChatAction(action, agent)).toBe(false) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume draft' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Resume draft' }))
+    await waitFor(() => expect(screen.getByLabelText('Agent name')).toHaveValue('My shared clone edits'))
+    expect(serviceMocks.getWorkshopCloneSource).toHaveBeenCalledWith(agent.id)
+    expect(ref.current!.captureAuthoringContext().clone_source_agent_id).toBe(agent.agent_id)
+  })
+
+  it('browser Back returns from a detail to its table and Setup without losing field edits', async () => {
+    const navigationCatalog = buildCatalog()
+    function NavigationHarness() {
+      const [params, setParams] = useSearchParams()
+      const navigate = useNavigate()
+      return <><button onClick={() => navigate(-1)}>Browser Back</button>
+        <StudioNavigationContext.Provider value={{ params, navigate: changes => setParams(current => {
+          const next = new URLSearchParams(current)
+          for (const [key, value] of Object.entries(changes)) { if (value === null) next.delete(key); else next.set(key, value) }
+          return next
+        }) }}><PromptWorkshop catalog={navigationCatalog} /></StudioNavigationContext.Provider></>
+    }
+    render(<MemoryRouter initialEntries={['/agent-studio?workshop=setup']}><NavigationHarness /></MemoryRouter>)
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Output Structure' }))
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Genetic regions' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose details to collect' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add a detail' }))
+    fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: 'Region name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
+    fireEvent.change(await screen.findByLabelText('Detail name'), { target: { value: 'Reported region' } })
+    fireEvent.click(screen.getByText('Browser Back'))
+    await screen.findByRole('heading', { name: 'What do you want to know about each item?' })
+    expect(screen.getByRole('table', { name: 'Details to collect' })).toHaveTextContent('Reported region')
+    fireEvent.click(screen.getByText('Browser Back'))
+    await screen.findByLabelText('Agent name')
+    expect(screen.getByRole('table', { name: 'Details to collect' })).toHaveTextContent('Reported region')
+    expect(screen.queryByRole('button', { name: 'Edit Reported region' })).not.toBeInTheDocument()
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it('recovers unsaved instructions and setup fields after leaving the page', async () => {
+    const first = render(<PromptWorkshop catalog={buildCatalog()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Recovered stock extractor' } })
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'My unsaved description' } })
+    gotoSection('Prompt')
+    fireEvent.change(screen.getByLabelText('Your prompt'), { target: { value: 'Preserve exact stock labels.' } })
+    await screen.findByText(/Draft kept on this device/)
+    first.unmount()
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+    const resume = await screen.findByRole('button', { name: 'Resume draft' })
+    await waitFor(() => expect(resume).toBeEnabled())
+    fireEvent.click(resume)
+    await waitFor(() => expect(screen.getByLabelText('Agent name')).toHaveValue('Recovered stock extractor'))
+    expect(screen.getByLabelText('Description')).toHaveValue('My unsaved description')
+    gotoSection('Prompt')
+    expect(screen.getByLabelText('Your prompt')).toHaveValue('Preserve exact stock labels.')
     expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
     expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
   })

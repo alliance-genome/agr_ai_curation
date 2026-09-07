@@ -268,6 +268,7 @@ export interface FlowState {
 }
 
 export interface FlowBuilderProps {
+  recoveryOwnerId?: string
   /** Currently editing flow ID (null for new flow) */
   flowId?: string | null
   /** Callback when flow is saved */

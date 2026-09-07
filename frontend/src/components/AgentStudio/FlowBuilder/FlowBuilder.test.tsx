@@ -5,6 +5,7 @@ import { webcrypto } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import FlowBuilder, { rebuildValidationGroupsFromEdges } from './FlowBuilder'
+import type { NodePanelAuthoringDraft } from './NodePanel'
 import type { AgentNodeData, FlowAuthoringContextHandle, FlowResponse } from './types'
 import type { ChatContext, FlowAuthoringProposal } from '@/types/promptExplorer'
 import { fingerprintFlowDraft } from '../authoringContext'
@@ -31,6 +32,7 @@ const nodePanelMocks = vi.hoisted(() => ({
   captureAuthoringDraft: vi.fn(),
   takeLastLeaveOutcome: vi.fn(),
   dirty: false,
+  reportDraft: null as null | ((draft: NodePanelAuthoringDraft | null) => void),
   reportDirty: null as null | ((dirty: boolean) => void),
   apply: null as null | ((id: string, data: Partial<AgentNodeData>) => void),
 }))
@@ -209,14 +211,17 @@ vi.mock('./NodePanel', async (importOriginal) => {
       leaveGuardRef,
       node,
       onDraftDirtyChange,
+      onDraftChange,
       onApply,
     }: {
       leaveGuardRef?: { current: unknown }
       node: { id: string; data: Record<string, unknown> }
       onDraftDirtyChange?: (dirty: boolean) => void
+      onDraftChange?: (draft: NodePanelAuthoringDraft | null) => void
       onApply: (id: string, data: Partial<AgentNodeData>) => void
     }) => {
       nodePanelMocks.apply = onApply
+      nodePanelMocks.reportDraft = onDraftChange ?? null
       react.useEffect(() => {
         if (!leaveGuardRef) return
         const guard = {
@@ -324,6 +329,7 @@ describe('FlowBuilder', () => {
   })
 
   beforeEach(() => {
+    localStorage.clear()
     Object.defineProperty(globalThis, 'crypto', {
       configurable: true,
       value: webcrypto,
@@ -361,6 +367,54 @@ describe('FlowBuilder', () => {
     nodePanelMocks.dirty = false
     nodePanelMocks.reportDirty = null
     agentMetadataMocks.agents = {}
+  })
+
+  it('blocks Chat and hides the canvas until recovery is chosen, then restores unfinished step instructions', async () => {
+    const key = 'agr-studio-draft:v1:curator:flow'
+    const saved = buildFlowResponse()
+    saved.flow_definition.nodes[0].data.task_instructions = 'My unfinished task instructions'
+    localStorage.setItem(key, JSON.stringify({ version: 1, updated: 'today', value: {
+      currentFlowId: saved.id, draft: { name: saved.name, description: '', definition: saved.flow_definition },
+    } }))
+    const ref = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder recoveryOwnerId="curator" authoringContextRef={ref} />)
+    expect(await screen.findByRole('button', { name: 'Resume draft' })).toBeEnabled()
+    expect(screen.queryByRole('region', { name: 'Flow canvas' })).not.toBeInTheDocument()
+    await act(async () => {
+      expect((await ref.current!.applyAuthoringProposal({} as FlowAuthoringProposal)).applied).toBe(false)
+    })
+    expect(serviceMocks.validateFlowDraft).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Resume draft' }))
+    await screen.findByRole('region', { name: 'Flow canvas' })
+    const context = ref.current!.captureAuthoringContext()
+    expect(context.nodes[0].task_instructions).toBe('My unfinished task instructions')
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+  })
+
+  it('round-trips saved CRUD nulls and the latest unapplied panel edit through recovery storage', async () => {
+    const saved = buildFlowResponse()
+    Object.assign(saved.flow_definition.nodes[0].data, { agent_description: null, custom_instructions: null,
+      prompt_version: null, include_evidence: null, projection_plan: null, output_filename_template: null })
+    saved.flow_definition.edges = [{ id: 'edge', source: saved.flow_definition.nodes[0].id, target: saved.flow_definition.nodes[0].id }]
+    Object.assign(saved.flow_definition.edges[0], { condition: null })
+    serviceMocks.getFlow.mockResolvedValue(saved)
+    const firstRef = React.createRef<FlowAuthoringContextHandle>()
+    const first = render(<FlowBuilder recoveryOwnerId="curator" flowId={saved.id} authoringContextRef={firstRef} />)
+    await waitFor(() => expect(firstRef.current!.captureAuthoringContext().flowName).toBe(saved.name))
+    act(() => { (reactFlowMocks.onNodeClick as unknown as (event: object, node: unknown) => void)({}, reactFlowMocks.nodes[0]) })
+    await screen.findByTestId('node-panel-dock')
+    act(() => {
+      nodePanelMocks.reportDraft?.({ nodeId: saved.flow_definition.nodes[0].id, data: { task_instructions: 'Latest unfinished text' }, dirty: true })
+      nodePanelMocks.reportDirty?.(true)
+    })
+    await screen.findByText(/Draft kept on this device/)
+    first.unmount()
+    const ref = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder recoveryOwnerId="curator" authoringContextRef={ref} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume draft' }))
+    await screen.findByRole('region', { name: 'Flow canvas' })
+    expect(ref.current!.captureAuthoringContext().nodes[0].task_instructions).toBe('Latest unfinished text')
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
   })
 
   it('offers provider-neutral AI Chat verification', async () => {

@@ -4,6 +4,14 @@ Use **Agent Workshop → Output Structure** to describe the records your agent s
 
 First decide what one record represents. For example, “one reagent per paper” differs from “one record for every mention.” Add a brief description under **Additional guidance for this item type**. The extraction AI receives this saved description in addition to the agent prompt and individual detail instructions. Use it to clarify what to include, exclude, and treat as a separate record; you do not need to repeat your full prompt. AI Chat can also help you draft it.
 
+## Preview, edit, and return to your draft
+
+Start with **Agent Workshop → Custom data extraction**. Setup shows a read-only table of your details, their parts, inclusion rules, and attached validators. Choose **Edit Output Structure** to edit that same structure, then **Back to Setup** to return. Browser Back also follows the Workshop sections and detail pages while keeping your edits.
+
+Unsaved agent and flow drafts are kept on this browser for your signed-in account, including unfinished flow-step instructions. After returning or reloading, choose **Resume draft** or **Discard draft**. This recovery is local to your device; use **Save** to save the agent or flow to your account. If browser storage is unavailable, a warning tells you to keep the page open and Save.
+
+Recovered flows open as unsaved copies. If a saved agent changed since your draft was kept, its recovery opens as a new agent too. Shared-agent clones require their source to remain available. These safeguards preserve saved work while you review recovered edits.
+
 ## Work with AI Chat
 
 AI Chat reads the current Workshop draft, including unsaved manual edits, detail names and parts. You can ask it to add a supplier name and stock number to the same answer, rename a detail, change its answer format or choices, edit extraction instructions, or change **Always include** and the empty-answer setting. It can also remove or reorder details and parts.

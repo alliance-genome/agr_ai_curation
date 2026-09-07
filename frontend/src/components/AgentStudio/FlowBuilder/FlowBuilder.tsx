@@ -1,3 +1,6 @@
+import { isFlowRecovery } from '../draftRecoveryValidation'
+import { DraftRecoveryNotice, useDraftRecovery } from '../draftRecovery'
+import type { NodePanelAuthoringDraft } from './NodePanel/NodePanel'
 /**
  * FlowBuilder Component
  *
@@ -761,6 +764,7 @@ const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
 }
 
 function FlowBuilderInner({
+  recoveryOwnerId,
   flowId,
   onFlowSaved,
   onFlowChange,
@@ -808,7 +812,7 @@ function FlowBuilderInner({
   const [selectedNode, setSelectedNode] = useState<AgentNode | null>(null)
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(Boolean(flowId))
   const [snackbar, setSnackbar] = useState<{
     message: string
     severity: 'success' | 'warning' | 'error'
@@ -820,6 +824,7 @@ function FlowBuilderInner({
   const [nodePanelCollapsed, setNodePanelCollapsed] = useState(false)
   const nodePanelGuardRef = useRef<NodePanelLeaveGuard | null>(null)
   const [nodePanelDraftDirty, setNodePanelDraftDirty] = useState(false)
+  const [nodePanelRecovery, setNodePanelRecovery] = useState<NodePanelAuthoringDraft | null>(null)
   const [canvasSplitRef, canvasAreaWidth] = useContainerWidth<HTMLDivElement>()
 
   // Menu bar state
@@ -958,12 +963,13 @@ function FlowBuilderInner({
   const [deletingFromManage, setDeletingFromManage] = useState(false)
 
   // Current flow ID (null for new flow)
-  const [currentFlowId, setCurrentFlowId] = useState<string | null>(flowId || null)
+  const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
   const [flowUpdatedAt, setFlowUpdatedAt] = useState<string | null>(null)
   const [savedBaseline, setSavedBaseline] = useState<FlowDraftBaseline>(initialFlowDraftBaseline)
   const [proposalUndo, setProposalUndo] = useState<FlowProposalUndo | null>(null)
   const [applyingProposal, setApplyingProposal] = useState(false)
   const applyingProposalRef = useRef(false)
+  const recoveryBlockedRef = useRef(false)
   const authoringMountedRef = useRef(true)
   useEffect(() => {
     authoringMountedRef.current = true
@@ -1426,7 +1432,7 @@ function FlowBuilderInner({
   }, [applyDefinitionToEditor])
 
   const applyAuthoringProposal = useCallback(async (proposal: FlowAuthoringProposal): Promise<FlowProposalApplyResult> => {
-    if (applyingProposalRef.current || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading) {
+    if (recoveryBlockedRef.current || applyingProposalRef.current || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading) {
       return { applied: false, reason: 'unavailable', message: 'Wait for the current flow operation to finish.' }
     }
     applyingProposalRef.current = true
@@ -1440,7 +1446,7 @@ function FlowBuilderInner({
   }, [applyAuthoringCandidate])
 
   const undoAuthoringProposal = useCallback(() => {
-    if (!proposalUndo) return
+    if (recoveryBlockedRef.current || !proposalUndo) return
     const pendingNodeDraft = nodePanelGuardRef.current?.captureAuthoringDraft?.()
     const currentCanonical = canonicalAuthoringJson(currentEditorDraftRef.current)
     if (pendingNodeDraft?.dirty || currentCanonical !== proposalUndo.appliedCanonical) {
@@ -1565,7 +1571,7 @@ function FlowBuilderInner({
     nameOverride?: string,
     options?: { forceCreate?: boolean }
   ) => {
-    if (applyingProposalRef.current) return
+    if (recoveryBlockedRef.current || applyingProposalRef.current) return
     const forceCreate = options?.forceCreate ?? false
     const nameToUse = nameOverride || flowName
 
@@ -1690,6 +1696,28 @@ function FlowBuilderInner({
       setSaving(false)
     }
   }
+
+  const recoveryDraft = useMemo(() => ({
+    currentFlowId,
+    draft: { name: flowName, description: flowDescription, definition: buildFlowDefinition(
+      nodes.map(node => nodePanelRecovery?.dirty && nodePanelRecovery.nodeId === node.id
+        ? { ...node, data: { ...node.data, ...nodePanelRecovery.data } } : node) as AgentNode[],
+      edges as FlowEdge[], taskInstructionsDefaultOnly,
+    ) },
+  }), [currentFlowId, flowName, flowDescription, nodes, edges, taskInstructionsDefaultOnly, nodePanelRecovery])
+  const recovery = useDraftRecovery({ ownerId: recoveryOwnerId, kind: 'flow', value: recoveryDraft,
+    dirty: flowIsDirty, ready: !loading && !saving && !applyingProposal,
+    restore: (stored) => {
+      if (!isFlowRecovery(stored)) throw new Error('Invalid flow draft')
+      const draft = structuredClone(stored.draft)
+      if (stored.currentFlowId) draft.name += ' (Recovered draft)'
+      applyDefinitionToEditor(draft)
+      setCurrentFlowId(null); setFlowUpdatedAt(null); setSavedBaseline(initialFlowDraftBaseline())
+      setSnackbar({ severity: 'success', message: 'Recovered your flow edits, including unfinished step edits. Save this draft when ready; existing saved flows are unchanged.' })
+    },
+  })
+
+  recoveryBlockedRef.current = recovery.pending
 
   // Handle new flow
   const handleNewFlow = useCallback(() => {
@@ -2403,7 +2431,7 @@ function FlowBuilderInner({
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!active) return
+      if (!active || recoveryBlockedRef.current) return
       if (isEditableShortcutTarget(event.target)) return
       if (!isBuilderShortcutContext(event)) return
 
@@ -2436,8 +2464,12 @@ function FlowBuilderInner({
 
   const saveActionsDisabled = saving || applyingProposal || nodes.length === 0
 
+  if (recovery.pending) return <BuilderContainer ref={builderRootRef}><DraftRecoveryNotice recovery={recovery} /></BuilderContainer>
+
   return (
     <BuilderContainer ref={builderRootRef}>
+      <DraftRecoveryNotice recovery={recovery} />
+      <Box component="fieldset" disabled={recovery.pending} sx={{ display: 'contents', border: 0, p: 0, m: 0 }}>
       {/* Unified Toolbar */}
       <Toolbar>
         {/* File Menu */}
@@ -2717,6 +2749,7 @@ function FlowBuilderInner({
                   onOutputHelp={onOutputHelp}
                   leaveGuardRef={nodePanelGuardRef}
                   onDraftDirtyChange={setNodePanelDraftDirty}
+                  onDraftChange={setNodePanelRecovery}
                 />
               </NodePanelDock>
             )}
@@ -3156,6 +3189,7 @@ function FlowBuilderInner({
           </Alert>
         </Snackbar>
       )}
+      </Box>
     </BuilderContainer>
   )
 }

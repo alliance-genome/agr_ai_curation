@@ -1,3 +1,5 @@
+import { DraftRecoveryNotice } from '../draftRecovery'
+import { useStudioLocation } from '../studioNavigation'
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
 import { Alert, Box, Button, Typography } from '@mui/material'
 import type { WorkshopAuthoringProposal } from '@/types/promptExplorer'
@@ -145,7 +147,8 @@ function PromptWorkshop({
     onContextChange,
   })
 
-  const [section, setSection] = useState<WorkshopSection>('setup')
+  const [section, navigateSection] = useStudioLocation('workshop', 'setup')
+  const setSection = (next: WorkshopSection) => { setStartScreenRequested(false); navigateSection(next) }
   const [profilePickerBase, setProfilePickerBase] = useState<string | null>(null)
   const visibleSection = section === 'output_structure' && draft.outputDraft.mode !== 'profile_bound_generic' ? 'setup' : section
   const [startScreenRequested, setStartScreenRequested] = useState(
@@ -179,7 +182,7 @@ function PromptWorkshop({
     versions,
   } = draft
 
-  const showStartScreen = startScreenRequested && !selectedCustomAgentId
+  const showStartScreen = (section === 'start' || (startScreenRequested && !draft.recoveryRestored && section === 'setup')) && !selectedCustomAgentId
 
   const guard = useCallback((action: () => void) => {
     if (dirty.any) {
@@ -273,8 +276,8 @@ function PromptWorkshop({
 
   const handleNew = () => guard(() => {
     draft.handleNew()
+    navigateSection('start')
     setStartScreenRequested(true)
-    setSection('setup')
   })
 
   const customExtractionTemplate = draft.templateOptions.find((template) =>
@@ -319,7 +322,7 @@ function PromptWorkshop({
   }
 
   const runChatAction = useCallback((action: WorkshopAction, cloneSource?: CustomAgent): boolean => {
-    if (draft.loading || draft.saving || draft.authoringBusy || draft.outputLoading) return false
+    if (draft.recovery.pending || draft.loading || draft.saving || draft.authoringBusy || draft.outputLoading) return false
     const request = action.request
     if (request.action === 'open_agent' || request.action === 'new_agent') {
       const source = action.source
@@ -447,6 +450,8 @@ function PromptWorkshop({
         containerName: 'workshop',
       }}
     >
+      <DraftRecoveryNotice recovery={draft.recovery} />
+      <Box component="fieldset" disabled={draft.recovery.pending} sx={{ display: 'contents', border: 0, p: 0, m: 0 }}>
       <WorkshopHeader
         icon={draft.icon}
         name={showStartScreen ? '' : draft.name}
@@ -477,7 +482,7 @@ function PromptWorkshop({
         }}
       >
         <WorkshopNav
-          section={visibleSection}
+          section={(visibleSection === 'start' ? 'setup' : visibleSection) as WorkshopSection}
           showOutputStructure={draft.outputDraft.mode === 'profile_bound_generic'}
           onSectionChange={setSection}
           dirty={dirty}
@@ -521,8 +526,8 @@ function PromptWorkshop({
           : draft.outputLoadError ? <Alert severity="error" action={<Button onClick={draft.retryOutputLoad}>Retry</Button>}>{draft.outputLoadError}</Alert>
           : showStartScreen ? (
             <WorkshopStartScreen
-              onChoose={handleChooseStart}
-              onCustomExtraction={customExtractionTemplate ? handleCustomExtraction : undefined}
+              onChoose={(mode) => guard(() => handleChooseStart(mode))}
+              onCustomExtraction={customExtractionTemplate ? () => guard(handleCustomExtraction) : undefined}
               agents={agentMetadata}
               hasTemplates={draft.templateOptions.length > 0}
               hasSavedAgents={draft.customAgents.length > 0}
@@ -585,6 +590,7 @@ function PromptWorkshop({
                 ? 'Your changes will be saved as a new version. Other agents and flows keep their current settings.'
                 : 'Saving creates your own copy of this structure.'}
             </Typography>}
+            <Button onClick={() => setSection('setup')} sx={{ alignSelf: 'flex-start' }}>Back to Setup</Button>
             <OutputStructureWorkflow value={draft.outputDraft.profileContract}
               onAskAI={onVerifyRequest ? () => onVerifyRequest(`Help me design the information collected by ${targetName} (${targetId}). Focus on the current output structure draft. Inspect my current draft, including its item guidance, detail names and parts. Help me add or edit details and parts using the current simple design. Ask a question only when my intent is unclear; otherwise propose concrete changes for review. Preserve unrelated settings and my earlier prompt.`) : undefined}
               disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
@@ -749,6 +755,7 @@ function PromptWorkshop({
           action?.cancel?.()
         }}
       />
+      </Box>
     </Box>
   )
 }

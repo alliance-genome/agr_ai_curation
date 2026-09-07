@@ -1,6 +1,6 @@
 import ProfileValidatorCatalog from './ProfileValidatorCatalog'
 import ValidatorAttachmentStatus, { ValidatorAttachmentHeading } from './ValidatorAttachmentStatus'
-import { useState } from 'react'
+import { useStudioLocation } from '../studioNavigation'
 import { Alert, Box, Button, Stack, Step, StepLabel, Stepper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material'
 import OutputStructureEditor, { type OutputStructureEditorProps } from './OutputStructureEditor'
 import { profileFieldRows } from './profileEditorModel'
@@ -8,7 +8,7 @@ import { profileFieldRows } from './profileEditorModel'
 /** One shared walkthrough for the real Workshop and the standalone design preview. */
 export default function OutputStructureWorkflow(props: OutputStructureEditorProps) {
   const { value, disabled, validating, issues, onValidate } = props
-  const [stage, setStage] = useState<'edit' | 'review' | 'done'>('edit')
+  const [stage, setStage] = useStudioLocation('stage', 'edit')
   const rows = profileFieldRows(value)
   return <ProfileValidatorCatalog value={value}><Stack spacing={3}>
     {stage !== 'done' && <Stepper activeStep={stage === 'review' ? 2 : value.name ? 1 : 0} alternativeLabel>

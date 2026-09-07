@@ -1,3 +1,6 @@
+import { useStudioLocation } from '../studioNavigation'
+import OutputDetailsTable from './OutputDetailsTable'
+import { answerSummary } from './outputAnswerLabels'
 import ValidatorAttachmentStatus, { ValidatorAttachmentHeading } from './ValidatorAttachmentStatus'
 import { profileFieldPath } from './profileMappingUi'
 import { useEffect, useState } from 'react'
@@ -6,7 +9,6 @@ import {
   FormControlLabel, RadioGroup, Radio, Table, TableHead, TableBody, TableRow, TableCell, TableContainer, Divider, Breadcrumbs, Stack, TextField, Typography, Tabs, Tab, Popover, IconButton,
 } from '@mui/material'
 import type { GenericProfileContract, GenericProfileValueSchema, ProfileMappingDiagnostic } from '@/services/genericProfileService'
-import InfoOutlined from '@mui/icons-material/InfoOutlined'
 import HelpOutline from '@mui/icons-material/HelpOutline'
 import Add from '@mui/icons-material/Add'
 import './outputStructureEditor.css'
@@ -84,7 +86,10 @@ function ValueSchemaEditor({ schema, onChange, onChangeKind, onBlur, path, issue
 export default function OutputStructureEditor({ value, onChange, onValidate, issues, validating = false, disabled = false, onAskAI }: OutputStructureEditorProps) {
   const [itemName, setItemName] = useState('')
   const [view, setView] = useState('fields')
-  const [selected, setSelected] = useState<ProfileFieldAddress | null>(null)
+  const rows = profileFieldRows(value)
+  const [selectedLocation, setSelectedLocation] = useStudioLocation('detail', '')
+  const selected = rows.find(entry => JSON.stringify(profileFieldPath(value, entry.address)) === selectedLocation)?.address || null
+  const setSelected = (address: ProfileFieldAddress | null) => setSelectedLocation(address ? JSON.stringify(profileFieldPath(value, address)) : '')
   const [basics, setBasics] = useState(false)
   const [checks, setChecks] = useState(false)
   const [instructions, setInstructions] = useState(false)
@@ -95,7 +100,6 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
   const [pendingRemoval, setPendingRemoval] = useState<ProfileFieldAddress | null>(null)
   const [pendingType, setPendingType] = useState<{ address: ProfileFieldAddress; schema: GenericProfileValueSchema } | null>(null)
   const [focusIssue, setFocusIssue] = useState<string | null>(null)
-  const rows = profileFieldRows(value)
   const row = rows.find((entry) => entry.address.join('.') === selected?.join('.'))
   const field = row?.field
   const parent = row && row.address.length > 1
@@ -149,7 +153,10 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
     onChange(next)
     setAdding(null)
     // Adding a part keeps the curator with the group; editing its settings is explicit.
-    if (adding.length === 0) edit(address)
+    if (adding.length === 0) {
+      setSelectedLocation(JSON.stringify(profileFieldPath(next, address)))
+      setInstructions(false); setMore(false)
+    }
   }
   const siblingCount = row && row.address.length > 1
     ? childSchema(rows.find((entry) => entry.address.join('.') === row.address.slice(0, -1).join('.'))!.field.value_schema)!.fields.length
@@ -204,26 +211,8 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
     <Box role="tabpanel" hidden={view !== 'fields'} id="collection-panel-fields" aria-labelledby="collection-tab-fields">
       <Typography component="h3" variant="h6" sx={{ mb: 1 }}>What do you want to know about each item?</Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>Add only the details you need. The paper and supporting evidence are kept automatically.</Typography>
-      <TableContainer sx={{ position: 'relative', border: 1, borderColor: 'divider', borderRadius: 1 }} tabIndex={0} role="region" aria-label="Details table; scroll horizontally on small screens">
-      <Table aria-label="Details to collect" sx={{ minWidth: 560 }}>
-        <TableHead sx={{ bgcolor: 'action.hover' }}><TableRow><TableCell sx={{ fontWeight: 700 }}>Detail</TableCell><TableCell sx={{ fontWeight: 700 }}>What to collect</TableCell><TableCell sx={{ fontWeight: 700 }}>Include</TableCell><TableCell><ValidatorAttachmentHeading /></TableCell><TableCell><span className="collection-sr-only">Actions</span></TableCell></TableRow></TableHead>
-        <TableBody>
-        {rows.map((entry) => {
-          const name = entry.field.display_name || entry.field.key
-          const parent = rows.find((candidate) => candidate.address.join('.') === entry.address.slice(0, -1).join('.'))
-          return <TableRow key={entry.schemaPath} sx={{ bgcolor: entry.depth ? 'action.hover' : undefined }}>
-            <TableCell component="th" scope="row" sx={{ pl: entry.depth ? 4 : 2 }}><Stack direction="row" alignItems="center" gap={0.5}>
-              <Typography fontWeight={600}>{name}</Typography>
-              <IconButton aria-label={`About ${name}`} onClick={(event) => setHelp({ anchor: event.currentTarget, title: name, text: entry.field.description || 'No extraction instructions have been added for this field.' })}><InfoOutlined fontSize="small" /></IconButton>
-            </Stack>{parent && <Typography variant="body2" color="text.secondary">Part of {parent.field.display_name || parent.field.key}</Typography>}</TableCell>
-            <TableCell><Typography>{answerSummary(entry.field.value_schema)}</Typography><Typography variant="body2" color="text.secondary">{answerExample(entry.field.value_schema)}</Typography></TableCell>
-            <TableCell><Typography color="text.secondary">{entry.field.required ? (entry.depth ? 'With its parent answer' : 'Every record') : 'When available'}</Typography></TableCell>
-            <TableCell><ValidatorAttachmentStatus value={value} address={entry.address} issues={issues} onEdit={() => edit(entry.address)} /></TableCell><TableCell><Button disabled={disabled} aria-label={`Edit ${name}`} onClick={() => edit(entry.address)}>Edit</Button></TableCell>
-          </TableRow>
-        })}
-        {rows.length === 0 && <TableRow><TableCell colSpan={5} sx={{ py: 5, textAlign: 'center' }}><Typography fontWeight={600}>No details yet</Typography><Typography color="text.secondary" sx={{ mt: 1 }}>Add your first detail, such as “Stock name”.</Typography></TableCell></TableRow>}
-        </TableBody>
-      </Table></TableContainer>
+      <OutputDetailsTable value={value} issues={issues} disabled={disabled} onEdit={edit}
+        onInfo={(anchor, title, text) => setHelp({ anchor, title, text })} />
       <Button startIcon={<Add />} disabled={disabled} onClick={() => beginAdd([])} sx={{ mt: 2 }}>Add a detail</Button>
       {!row && addDetailForm}
     </Box>
@@ -324,8 +313,8 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
           <FormControlLabel control={<Checkbox disabled={disabled} checked={field.nullable ?? false} onChange={(_, nullable) => patch({ nullable })} />} label="Allow an empty answer if the paper doesn’t say" />
           <Typography color="text.secondary">The detail stays in the record, but its answer can be empty when the paper does not provide the information.</Typography>
           <Stack direction="row" gap={1} flexWrap="wrap">
-            <Button disabled={disabled} onClick={() => { onChange(duplicateProfileField(value, row.address)); edit([...row.address.slice(0, -1), row.address.at(-1)! + 1]) }}>Duplicate</Button>
-            {([-1, 1] as const).map((direction) => <Button key={direction} disabled={disabled || row.address.at(-1)! + direction < 0 || row.address.at(-1)! + direction >= siblingCount} onClick={() => { onChange(moveProfileField(value, row.address, direction)); setSelected([...row.address.slice(0, -1), row.address.at(-1)! + direction]) }}>Move {direction === -1 ? 'up' : 'down'}</Button>)}
+            <Button disabled={disabled} onClick={() => { const next = duplicateProfileField(value, row.address); onChange(next); setSelectedLocation(JSON.stringify(profileFieldPath(next, [...row.address.slice(0, -1), row.address.at(-1)! + 1]))) }}>Duplicate</Button>
+            {([-1, 1] as const).map((direction) => <Button key={direction} disabled={disabled || row.address.at(-1)! + direction < 0 || row.address.at(-1)! + direction >= siblingCount} onClick={() => { onChange(moveProfileField(value, row.address, direction)) }}>Move {direction === -1 ? 'up' : 'down'}</Button>)}
             <Button color="error" disabled={disabled} onClick={() => setPendingRemoval(row.address)}>Remove field</Button>
           </Stack>
         </Stack>}
@@ -346,15 +335,4 @@ export default function OutputStructureEditor({ value, onChange, onValidate, iss
     <Dialog open={pendingRemoval !== null} onClose={() => setPendingRemoval(null)} aria-labelledby="remove-profile-field-title"><DialogTitle id="remove-profile-field-title">Remove this field from the draft?</DialogTitle><DialogContent>Its nested fields will also be removed. Saved revisions remain unchanged. Any validators referencing this field will need updating.</DialogContent><DialogActions><Button onClick={() => setPendingRemoval(null)}>Cancel</Button><Button color="error" disabled={disabled} onClick={() => { if (pendingRemoval) onChange(removeProfileField(value, pendingRemoval)); setPendingRemoval(null); setSelected(null) }}>Remove field</Button></DialogActions></Dialog>
     <Dialog open={pendingType !== null} onClose={() => setPendingType(null)} aria-labelledby="change-profile-kind-title"><DialogTitle id="change-profile-kind-title">Replace this answer format?</DialogTitle><DialogContent>Changing this format changes how the answer is stored and removes any parts or choices that the new format cannot represent. Its name and instructions stay. Cancel to keep the current format. Saved revisions are unchanged.</DialogContent><DialogActions><Button onClick={() => setPendingType(null)}>Cancel</Button><Button disabled={disabled} onClick={() => { if (pendingType) onChange(updateProfileField(value, pendingType.address, { value_schema: pendingType.schema })); setPendingType(null) }}>Change format</Button></DialogActions></Dialog>
   </Stack>
-}
-
-function answerSummary(schema: GenericProfileValueSchema): string {
-  if (schema.kind === 'array') return `Multiple ${schema.items.kind === 'object' ? 'sets of details' : answerSummary(schema.items).toLowerCase() + ' answers'}`
-  return ({ string: 'Text', integer: 'Whole number', number: 'Number', boolean: 'Yes or no', enum: 'One of your choices', object: 'Related details' })[schema.kind]
-}
-function answerExample(schema: GenericProfileValueSchema): string {
-  if (schema.kind === 'array') return answerExample(schema.items)
-  if (schema.kind === 'object') return schema.fields.map((field) => field.display_name || field.key).join(' + ')
-  if (schema.kind === 'enum') return schema.values.map((choice) => choice.replaceAll('_', ' ')).join(' / ')
-  return ({ string: 'Words or labels from the paper', integer: 'For example, 3', number: 'For example, 3.5', boolean: 'Yes / No' })[schema.kind]
 }
