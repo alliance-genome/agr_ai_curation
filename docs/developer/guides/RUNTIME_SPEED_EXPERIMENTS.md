@@ -22,6 +22,10 @@ or return malformed protocol data discard the worker without replaying the
 request. The timeout includes waiting for an available worker, after environment
 preparation. Shutdown releases retained workers.
 
+Async tool invocations still own separate event loops. A package that caches an
+async client tied to one loop must be reviewed before enabling worker reuse;
+retaining that client across calls would outlive its loop.
+
 Accepted-finalizer completion uses the Agents SDK terminal-result callback.
 Rejected finalizations still return feedback to the model for repair. The accepted
 typed result becomes the SDK output, retaining output guardrails, usage and provider

@@ -149,7 +149,7 @@ def _normalize_context_value(value: Any) -> str | None:
 def _apply_backend_request_context(context: dict[str, Any]) -> None:
     """Hydrate backend request context inside the package subprocess.
 
-    Static package tools execute in a fresh subprocess, so they cannot see the
+    Static package tools execute in an isolated subprocess, so they cannot see the
     host process contextvars directly. Re-apply the request metadata here so
     runtime helpers such as file output persistence behave the same way they do
     in host-process execution paths.
@@ -204,8 +204,8 @@ def _execute_tool_target(target: Any, request) -> Any:
     else:
         result = target(*request.args, **request.kwargs)
 
-    # This entrypoint always runs in a fresh subprocess, so asyncio.run() is the
-    # correct way to drive async tool objects without relying on a shared loop.
+    # Each invocation owns its event loop, including in a reused worker. Cached
+    # package clients must not depend on a previous invocation's event loop.
     if inspect.isawaitable(result):
         return asyncio.run(result)
     return result
