@@ -131,7 +131,6 @@ class CanaryIdentity:
             user = User(auth_sub=self.subject, is_active=True)
             db.add(user)
             db.commit()
-            self.user_id = user.id
         with connection.session() as client:
             for name in ("DocumentChunk", "PDFDocument"):
                 client.collections.get(name).tenants.create([Tenant(name=get_tenant_name(self.subject))])
