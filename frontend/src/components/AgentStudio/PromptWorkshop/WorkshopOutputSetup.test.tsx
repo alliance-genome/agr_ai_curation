@@ -57,7 +57,7 @@ describe('Workshop output choices', () => {
   it('distinguishes flexible generic extraction from no output', () => {
     render(<Harness initial={emptyOutputDraft('unprofiled_generic')} />)
     expect(screen.getByRole('radio', { name: 'Structured extraction' })).toBeChecked()
-    expect(screen.getByRole('alert')).toHaveTextContent('No custom field contract')
+    expect(screen.getByRole('alert')).toHaveTextContent('fields it considers useful')
     fireEvent.click(screen.getByRole('radio', { name: 'No structured output' }))
     expect(screen.getByLabelText('Selected output mode')).toHaveTextContent('none')
   })

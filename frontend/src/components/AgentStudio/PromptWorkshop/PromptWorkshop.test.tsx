@@ -494,6 +494,30 @@ describe('PromptWorkshop', () => {
     expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
   })
 
+  it('continues a chat template start only after the custom output draft is ready', async () => {
+    const catalog = buildCatalog()
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    const onChatContinuation = vi.fn(() => {
+      expect(ref.current?.captureAuthoringContext().draft_name).toBe('Gene Specialist (Custom)')
+      expect(ref.current?.captureAuthoringContext().draft_output?.mode).toBe('profile_bound_generic')
+      expect(ref.current?.captureAuthoringContext().draft_tool_ids).toContain('search_document')
+    })
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: [{ ...templates[0], output_contract: { output_state: 'structured_extraction', output_mode: 'unprofiled_generic' } }], group_options: [] })
+    render(<PromptWorkshop catalog={catalog} authoringContextRef={ref} onChatContinuation={onChatContinuation} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    await act(async () => {
+      expect(ref.current?.runChatAction({ success: true, contract_version: 'workshop_action.v1',
+        request: { action: 'new_agent', mode: 'template', agent_id: 'gene' },
+        source: { agent_id: 'gene', name: 'Gene Specialist', updated_at: '', agent_revision_id: null },
+        label: 'Start agent draft', origin: null, active_tab: 'agent_workshop',
+        flow_draft_fingerprint: null, workshop_draft_fingerprint: null, saved: false, message: '',
+      })).toBe(true)
+    })
+    await waitFor(() => expect(onChatContinuation).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+  })
+
   it.each(['reset', 'saving'])('protects scratch lifecycle during %s', async (mode) => {
     const ref = createRef<WorkshopAuthoringContextHandle>()
     render(<PromptWorkshop catalog={buildCatalog()} authoringContextRef={ref} />)
@@ -609,26 +633,33 @@ describe('PromptWorkshop', () => {
   // ── Saving ──
 
   it('does not publish a Flow handoff or persist when Save is canceled', async () => {
+    const onChatContinuation = vi.fn()
     const onSavedHandoff = vi.fn()
-    render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} />)
+    render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} onChatContinuation={onChatContinuation} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(onChatContinuation).not.toHaveBeenCalled()
     expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
     expect(onSavedHandoff).not.toHaveBeenCalled()
     await waitForHeaderName('Gene Specialist (Custom)')
   })
 
   it('saves new agents with template_source payload (no parent_agent_id)', async () => {
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    const onChatContinuation = vi.fn(() => {
+      expect(ref.current?.captureAuthoringContext().custom_agent_id).toBe(buildCustomAgent().agent_id)
+      expect(ref.current?.captureAuthoringContext().draft_name).toBe('My Agent')
+    })
     const onSavedHandoff = vi.fn()
     const origin = { flow_id: 'flow-1', flow_draft_fingerprint: 'sha256:original-flow' }
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [], total: 0 })
       .mockResolvedValue({ custom_agents: [buildCustomAgent()], total: 1 })
 
-    render(<PromptWorkshop catalog={buildCatalog()} continuationOrigin={origin} onSavedHandoff={onSavedHandoff} />)
+    render(<PromptWorkshop catalog={buildCatalog()} continuationOrigin={origin} onSavedHandoff={onSavedHandoff} authoringContextRef={ref} onChatContinuation={onChatContinuation} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
 
@@ -650,6 +681,7 @@ describe('PromptWorkshop', () => {
     await waitForHeaderName('My Agent')
     expect(screen.getByRole('status')).toHaveTextContent('Saved just now')
     expect(screen.getByText('Template: Gene Specialist')).toBeInTheDocument()
+    await waitFor(() => expect(onChatContinuation).toHaveBeenCalledTimes(1))
     expect(onSavedHandoff).toHaveBeenCalledWith({
       status: 'ready', saved_agent_id: buildCustomAgent().agent_id,
       saved_custom_agent_id: buildCustomAgent().id, origin,
@@ -658,10 +690,11 @@ describe('PromptWorkshop', () => {
   }, 15000)
 
   it.each(['failure', 'unavailable'])('retains a saved identity when catalog refresh reports %s without emitting an actionable handoff', async (outcome) => {
+    const onChatContinuation = vi.fn()
     const onSavedHandoff = vi.fn()
     serviceMocks.listCustomAgents
       .mockResolvedValue({ custom_agents: [], total: 0 })
-    render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} />)
+    render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} onChatContinuation={onChatContinuation} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
     if (outcome === 'failure') {
@@ -674,6 +707,7 @@ describe('PromptWorkshop', () => {
       status: 'catalog_unavailable', origin: undefined,
     }))
     await waitForHeaderName('My Agent')
+    expect(onChatContinuation).not.toHaveBeenCalled()
     expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Private server payload')).not.toBeInTheDocument()
   })
@@ -725,12 +759,13 @@ describe('PromptWorkshop', () => {
   }, 20000)
 
   it('shows the save-failed pill and keeps edits when the update rejects', async () => {
+    const onChatContinuation = vi.fn()
     const onSavedHandoff = vi.fn()
     const existing = buildCustomAgent()
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
     serviceMocks.updateCustomAgent.mockRejectedValue(new Error('409: another curator saved version 3'))
 
-    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} onSavedHandoff={onSavedHandoff} />)
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} onSavedHandoff={onSavedHandoff} onChatContinuation={onChatContinuation} />)
     await waitForHeaderName('My Agent')
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Changed description' } })
     await saveFromHeader()
@@ -739,6 +774,7 @@ describe('PromptWorkshop', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Could not save. 409: another curator saved version 3 Your edits are still here.')
     expect(screen.getByLabelText('Description')).toHaveValue('Changed description')
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+    expect(onChatContinuation).not.toHaveBeenCalled()
     expect(onSavedHandoff).not.toHaveBeenCalled()
   }, 15000)
 

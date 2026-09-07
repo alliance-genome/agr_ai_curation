@@ -77,6 +77,7 @@ interface PromptWorkshopProps {
   initialChatAction?: WorkshopAction
   initialChatCloneSource?: CustomAgent
   onInitialChatActionComplete?: () => void
+  onChatContinuation?: (message: string) => void
   continuationOrigin?: WorkshopContinuationOrigin
   onSavedHandoff?: (handoff: WorkshopSavedHandoff) => void
   initialParentAgentId?: string | null
@@ -117,6 +118,7 @@ function PromptWorkshop({
   onInitialChatActionComplete,
   continuationOrigin,
   onSavedHandoff,
+  onChatContinuation,
   initialParentAgentId,
   initialCustomAgentId,
   onContextChange,
@@ -126,11 +128,18 @@ function PromptWorkshop({
   leaveGuardRef,
   authoringContextRef,
 }: PromptWorkshopProps) {
+  const [pendingChatContinuation, setPendingChatContinuation] = useState<{ message: string; send: (message: string) => void } | null>(null)
+  const handleSavedHandoff = (handoff: WorkshopSavedHandoff) => {
+    onSavedHandoff?.(handoff)
+    if (handoff.status === 'ready' && onChatContinuation) {
+      setPendingChatContinuation({ send: onChatContinuation, message: 'I saved the agent. Review my current saved settings, including any changes I made in the editor, and continue with the next step we discussed. If we are finished, briefly confirm that. Do not make additional changes without a request.' })
+    }
+  }
   const { agents: agentMetadata } = useAgentMetadata()
   const draft = useWorkshopDraft({
     catalog,
     continuationOrigin,
-    onSavedHandoff,
+    onSavedHandoff: handleSavedHandoff,
     initialParentAgentId,
     initialCustomAgentId,
     onContextChange,
@@ -332,6 +341,8 @@ function PromptWorkshop({
           draft.setCloneSourceAgentId(custom.id)
         }
       }
+      if (onChatContinuation) setPendingChatContinuation({ send: onChatContinuation,
+        message: 'The Workshop action is complete and the agent draft is open. Use the current draft to continue where we left off. Do not ask me to click Start agent draft again. Nothing has been saved by opening this draft.' })
       setStartScreenRequested(false)
       setSection('setup')
       setFocusOriginToken((token) => token + 1)
@@ -353,7 +364,13 @@ function PromptWorkshop({
       }
     } else return false
     return true
-  }, [draft])
+  }, [draft, onChatContinuation])
+
+  useEffect(() => {
+    if (!pendingChatContinuation || !draft.isHydrated || draft.saving) return
+    setPendingChatContinuation(null)
+    pendingChatContinuation.send(pendingChatContinuation.message)
+  }, [pendingChatContinuation, draft.isHydrated, draft.saving])
 
   useImperativeHandle(
     authoringContextRef,

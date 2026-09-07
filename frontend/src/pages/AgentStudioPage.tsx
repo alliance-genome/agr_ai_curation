@@ -677,8 +677,8 @@ function AgentStudioPage() {
     }).catch(() => setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' }))
   }, [captureChatContext])
 
-  const continuationLiveRef = useRef({ activeTab, workshopSavedHandoff, isClaudeStreaming })
-  continuationLiveRef.current = { activeTab, workshopSavedHandoff, isClaudeStreaming }
+  const continuationLiveRef = useRef({ activeTab, workshopSavedHandoff, isClaudeStreaming, sessionId: effectiveDurableSessionId })
+  continuationLiveRef.current = { activeTab, workshopSavedHandoff, isClaudeStreaming, sessionId: effectiveDurableSessionId }
 
   const handleContinueInFlow = async () => {
     const handoff = workshopSavedHandoff
@@ -1131,7 +1131,7 @@ Agent ID: ${agentId}`
                       </Button>
                     ) : undefined}>
                     {workshopSavedHandoff.status === 'ready'
-                      ? `${workshopSavedHandoff.saved_agent_name || 'Your agent'} is saved. Review its use in your flow when ready.`
+                      ? `${workshopSavedHandoff.saved_agent_name || 'Your agent'} is saved.${workshopSavedHandoff.origin ? ' Review its use in your flow when ready.' : ''}`
                       : 'The agent handoff needs a fresh catalog or flow review before continuation.'}
                   </Alert>
                 )}
@@ -1139,6 +1139,12 @@ Agent ID: ${agentId}`
                   catalog={catalog}
                   continuationOrigin={workshopContinuationOrigin}
                   onSavedHandoff={handleWorkshopSavedHandoff}
+                  onChatContinuation={opusConversation.length > 0 ? (message) => {
+                    const live = continuationLiveRef.current
+                    if (!continuationMountedRef.current || live.activeTab !== 'agent_workshop'
+                      || live.sessionId !== effectiveDurableSessionId || live.isClaudeStreaming) return
+                    setDiscussMessage(message)
+                  } : undefined}
                   initialParentAgentId={agentWorkshopTemplateSource}
                   initialCustomAgentId={agentWorkshopCustomAgentId}
                   onContextChange={setAgentWorkshopContext}

@@ -188,8 +188,9 @@ If you clone a domain-pack extraction agent, the Workshop shows what the agent p
 
 **Starting a New Agent**
 
-Click **New** (or open the Workshop for the first time) to see the start screen with three choices:
+Click **New** (or open the Workshop for the first time) to see the start screen with these choices:
 
+- **Custom data extraction** - Go straight to defining the item type and details you want to extract
 - **From a template** - Start from a package agent and adjust its prompt
 - **From scratch** - Write the prompt yourself; built-in instructions still apply
 - **Clone one of yours** - Copy an agent you already saved

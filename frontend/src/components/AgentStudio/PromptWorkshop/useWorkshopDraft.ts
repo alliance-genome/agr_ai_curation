@@ -188,6 +188,8 @@ export interface WorkshopDraft {
   setStatus: (value: string | null) => void
   dirty: DraftDirtyState
   canSave: boolean
+  /** The selected draft and any saved output structure have finished loading. */
+  isHydrated: boolean
   /** Copy the complete current editable value synchronously for an AI Chat turn. */
   captureAuthoringContext: () => AgentWorkshopContext
   applyAuthoringProposal: (proposal: WorkshopAuthoringProposal) => Promise<FlowProposalApplyResult>
@@ -341,6 +343,11 @@ export function useWorkshopDraft({
     (chatCloneSource?.id === cloneSourceAgentId ? chatCloneSource : undefined)
       || customAgents.find((agent) => agent.id === cloneSourceAgentId)
   )
+  const hydrationKey = JSON.stringify([selectedCustomAgentId, selectedCustomAgent?.execution_revision_id,
+    gettingStartedMode, parentAgentId, cloneSourceAgentId, selectedCloneSource?.execution_revision_id,
+    draftResetGeneration, customExtractionTemplateId])
+  const [hydratedKey, setHydratedKey] = useState<string | null>(null)
+
   const templateMissing = useMemo(() => {
     const source = selectedCustomAgent?.template_source
     if (!source || !workshopOptionsLoaded) return false
@@ -697,6 +704,10 @@ export function useWorkshopDraft({
     // Hydrate only once model and template options are known, so the draft is
     // built once and a later options arrival cannot overwrite curator edits.
     if (!workshopOptionsLoaded) return
+    const hydrateDraft = (fields: DraftFields) => {
+      applyDraft(fields)
+      setHydratedKey(hydrationKey)
+    }
     const hydrateSaved = (fields: Omit<DraftFields, 'outputDraft'>, source: CustomAgent) => {
       let canceled = false
       setOutputLoading(true)
@@ -719,7 +730,7 @@ export function useWorkshopDraft({
           if (!canceled) {
             setProfileSource(sourceProfile)
             setSavedExecutionRevision(revision)
-            applyDraft({ ...fields, outputDraft: output })
+            hydrateDraft({ ...fields, outputDraft: output })
           }
         } catch (error) {
           if (!canceled) setOutputLoadError(error instanceof Error ? error.message : 'Could not load the saved Output Structure.')
@@ -751,7 +762,7 @@ export function useWorkshopDraft({
       if (gettingStartedMode === 'scratch') {
         setOutputLoading(false)
         setOutputLoadError(null)
-        applyDraft({
+        hydrateDraft({
           name: '',
           description: '',
           customPrompt: '',
@@ -771,7 +782,7 @@ export function useWorkshopDraft({
       const templateModelId = resolveModelSelection(modelOptions, defaultModelId, selectedTemplate?.model_id)
       setOutputLoading(false)
       setOutputLoadError(null)
-      applyDraft({
+      hydrateDraft({
         name: parentAgent ? `${parentAgent.agent_name} (Custom)` : '',
         description: '',
         customPrompt: '',
@@ -783,6 +794,7 @@ export function useWorkshopDraft({
         modelReasoning: resolveReasoningSelection(modelOptions, templateModelId),
         toolIds: selectedTemplate?.tool_ids || [],
         outputDraft: customExtractionTemplateId === parentAgentId
+          || selectedTemplate?.output_contract?.output_mode === 'unprofiled_generic'
           ? emptyOutputDraft('profile_bound_generic')
           : selectedTemplate?.output_contract
           ? outputDraftFromContract(selectedTemplate.output_contract)
@@ -820,6 +832,7 @@ export function useWorkshopDraft({
     selectedTemplate,
     outputLoadAttempt,
     draftResetGeneration,
+    hydrationKey,
     customExtractionTemplateId,
     parentAgentId,
   ])
@@ -1549,6 +1562,7 @@ export function useWorkshopDraft({
     dirty,
     canSave,
     captureAuthoringContext,
+    isHydrated: hydratedKey === hydrationKey && !loading && !outputLoading && !outputLoadError,
     applyAuthoringProposal,
     undoAuthoringProposal,
     canUndoAuthoringProposal,

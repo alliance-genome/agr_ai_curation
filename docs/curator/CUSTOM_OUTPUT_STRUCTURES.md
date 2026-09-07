@@ -10,14 +10,18 @@ AI Chat reads the current Workshop draft, including unsaved manual edits, detail
 
 For example: “Under Stock details, add Stock number as text and always include it. Keep Supplier name optional.” AI Chat proposes changes to that group while keeping unrelated settings and your earlier agent prompt. Review the changes and choose **Apply** to update the open editor. **Save** saves the agent separately. If you edit the draft while a proposal is pending, ask for a fresh proposal so your newer changes are preserved.
 
+AI Chat can also help with the agent name, description, icon, model and reasoning, sharing, tools, and main or group instructions. It guides you through the relevant sections and can offer to keep suitable defaults. Each message reads the current editor, including your manual edits. During an existing chat, opening a draft through the chat action or successfully saving it lets the conversation continue once its settings finish loading. Canceling Save or a failed save does not start a follow-up.
+
 The AI follows the same simple design: one item type, one answer per detail, and simple parts within a group. It preserves existing list or deeper-group definitions during unrelated edits and explains any proposed format conversion.
 
 ## Choose an output mode
 
+New drafts from the General PDF Extraction template start with **Custom Output Structure**. Opening or cloning a saved agent keeps its saved output choice. Each format has an explanation directly below the selector.
+
+- **Custom Output Structure** defines consistent details, answer types, and inclusion rules across papers. Attach supported validators to details or parts when needed. It is not automatically ready for Alliance submission.
+- **Flexible extraction** lets the agent choose useful fields while reading. Fields may vary between runs, and custom-field validators are not applied. It suits exploratory chat or CSV, TSV, and JSON exports when fixed columns are unnecessary; general record and evidence rules still apply.
+- **Packaged domain format** uses an existing biological structure, with automatic validation where supported and enabled. Inspect its supported fields and capabilities; choose custom output if you need additional fields.
 - **No structured output** suits conversational or tool-only agents.
-- **Typed domain output** uses a packaged record format. Check its stated fields, validators and export capabilities; an in-development format may still fit your task.
-- **Custom structured generic output** uses your saved, closed profile: only declared fields are allowed. It is not automatically LinkML-aligned or submission-ready.
-- **Flexible generic output** permits exploratory attributes without a custom closed profile. Choose this explicitly; clearing a packaged schema does not enable it.
 
 ## Build and review fields
 
