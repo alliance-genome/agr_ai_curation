@@ -110,7 +110,9 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
     from src.lib.config.agent_loader import get_agent_definition
     from src.lib.config import get_valid_group_ids
     from src.lib.openai_agents import langfuse_client
+    from src.lib.prompts import cache
     from src.models.sql import database
+    from src.models.sql.prompts import PromptTemplate
 
     db = policy_db
     definition = get_agent_definition(template_key)
@@ -124,7 +126,17 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
         group_rules_enabled=False,
     )
     db.add(template)
+    # Saving an inherited prompt uses the same active prompt cache as startup,
+    # not the template Agent row alone. Keep it local to this private schema.
+    PromptTemplate.__table__.create(db.connection())
+    db.add(PromptTemplate(
+        agent_name=template_key, prompt_type="system", content=template.instructions,
+        version=1, is_active=True,
+    ))
     db.flush()
+    for name in ("_active_cache", "_version_cache", "_initialized", "_loaded_at"):
+        monkeypatch.setattr(cache, name, getattr(cache, name))
+    cache.initialize(db)
     original_tools = list(template.tool_ids)
     head = service.create_custom_agent(
         db, 1, f"Inherited {template_key}", template_source=template_key,
@@ -132,6 +144,7 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
     )
     first_id = head.execution_revision_id
     _, first = get_execution_revision(db, head.id, first_id, 1, active_group_ids=groups)
+    assert head.instructions == first.instructions == template.instructions
     assert head.tool_ids == original_tools
     assert "agr_species_context_lookup" in first.system_managed_tool_ids
     assert set(first.tool_ids) <= {p.tool_key for p in db.query(ToolPolicy).filter(ToolPolicy.allow_execute.is_(True))}
@@ -144,7 +157,10 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
         custom_agent_id=head.agent_key, custom_agent_updated_at=head.updated_at.isoformat(),
         draft_name=head.name, draft_description=head.description or "", draft_icon=head.icon,
         draft_visibility="private", draft_model_id=head.model_id,
-        draft_model_reasoning=head.model_reasoning, prompt_draft=head.instructions,
+        draft_model_reasoning=head.model_reasoning,
+        # Workshop receives the serialized editable text, not frozen inherited
+        # instructions stored on the agent/revision.
+        prompt_draft=service.custom_agent_to_dict(head)["custom_prompt"],
         draft_allowed_group_ids=list(head.allowed_group_ids),
         inherited_allowed_group_ids=list(head.inherited_allowed_group_ids),
         include_group_rules=False, group_prompt_overrides={}, draft_tool_ids=list(head.tool_ids),
