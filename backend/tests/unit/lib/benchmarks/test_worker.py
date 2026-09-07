@@ -1,5 +1,6 @@
 """Unit coverage for durable benchmark worker dispatch controls."""
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from uuid import uuid4
@@ -10,6 +11,158 @@ from unittest.mock import AsyncMock, MagicMock
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.benchmarks.persistence import BenchmarkLeaseLostError
 from src.lib.benchmarks.worker import BenchmarkWorker, _report_failure
+
+
+@pytest.fixture
+def startup_runtime(monkeypatch):
+    """Replace only startup I/O; the process entrypoint remains real."""
+    from src.lib.benchmarks import worker
+    from src.lib.config import groups_loader
+    from src.lib.openai_agents import langfuse_client
+    from src.lib.prompts import cache
+
+    calls = []
+    session = MagicMock()
+    factory = MagicMock(return_value=session)
+    session.__enter__.side_effect = lambda: calls.append("open") or session
+    session.__exit__.side_effect = lambda *args: calls.append("close")
+    prompts = MagicMock(side_effect=lambda db: calls.append("prompts"))
+    groups = MagicMock(side_effect=lambda: calls.append("groups"))
+    tracing = MagicMock(side_effect=lambda: calls.append("tracing"))
+    flush = MagicMock(side_effect=lambda: calls.append("flush"))
+    monkeypatch.setattr(worker, "SessionLocal", factory)
+    monkeypatch.setattr(cache, "initialize", prompts)
+    monkeypatch.setattr(groups_loader, "load_groups", groups)
+    monkeypatch.setattr(langfuse_client, "is_langfuse_configured", lambda: True)
+    monkeypatch.setattr(langfuse_client, "initialize_langfuse", tracing)
+    monkeypatch.setattr(langfuse_client, "flush_langfuse", flush)
+    monkeypatch.setattr(worker, "get_benchmark_worker_enabled", lambda: True)
+    monkeypatch.setattr(worker, "get_benchmark_execution_enabled", lambda: True)
+    monkeypatch.setattr(worker, "get_benchmark_worker_concurrency", lambda: 2)
+    return SimpleNamespace(
+        worker=worker, calls=calls, factory=factory, session=session,
+        prompts=prompts, groups=groups, tracing=tracing, flush=flush,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled,execution", [(False, False), (False, True), (True, False)])
+async def test_main_disabled_gates_skip_all_startup_and_worker_construction(
+    monkeypatch, startup_runtime, enabled, execution,
+):
+    state = startup_runtime
+    monkeypatch.setattr(state.worker, "get_benchmark_worker_enabled", lambda: enabled)
+    monkeypatch.setattr(state.worker, "get_benchmark_execution_enabled", lambda: execution)
+    constructor = MagicMock(side_effect=AssertionError("must not construct worker"))
+    monkeypatch.setattr(state.worker, "BenchmarkWorker", constructor)
+    await state.worker._main()
+    assert state.calls == []
+    state.factory.assert_not_called()
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_main_initializes_once_before_all_claim_loops(monkeypatch, startup_runtime):
+    state = startup_runtime
+
+    async def run(_self):
+        assert state.calls[:5] == ["open", "prompts", "close", "groups", "tracing"]
+        state.calls.append("claim")
+
+    monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
+    await state.worker._main()
+    assert state.calls == ["open", "prompts", "close", "groups", "tracing", "claim", "claim", "flush"]
+    state.prompts.assert_called_once_with(state.session)
+    state.session.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["prompts", "groups"])
+async def test_required_startup_failure_closes_session_and_claims_nothing(
+    monkeypatch, startup_runtime, failure_stage,
+):
+    state = startup_runtime
+    getattr(state, failure_stage).side_effect = ValueError("private SQL or credential")
+    constructor = MagicMock()
+    monkeypatch.setattr(state.worker, "BenchmarkWorker", constructor)
+    with pytest.raises(RuntimeError, match="Benchmark worker startup failed") as caught:
+        await state.worker._main()
+    assert "private" not in str(caught.value)
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    state.session.__exit__.assert_called_once()
+    state.tracing.assert_not_called()
+    state.flush.assert_not_called()
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tracing_outcome", ["unconfigured", "unavailable", "failed", "none"])
+async def test_optional_tracing_never_blocks_claim_loops(
+    monkeypatch, startup_runtime, tracing_outcome, caplog,
+):
+    from src.lib.openai_agents import langfuse_client
+
+    state = startup_runtime
+    if tracing_outcome == "unconfigured":
+        monkeypatch.setattr(langfuse_client, "is_langfuse_configured", lambda: False)
+    elif tracing_outcome == "unavailable":
+        state.tracing.side_effect = ImportError("private connection")
+    elif tracing_outcome == "failed":
+        state.tracing.side_effect = RuntimeError("private connection")
+    else:
+        state.tracing.side_effect = None
+        state.tracing.return_value = None
+    run = AsyncMock()
+    monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
+    await state.worker._main()
+    assert run.await_count == 2
+    assert "private connection" not in caplog.text
+    state.flush.assert_called_once()
+    if tracing_outcome == "unconfigured":
+        state.tracing.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["failure", "cancel"])
+async def test_main_stops_siblings_before_best_effort_flush(
+    monkeypatch, startup_runtime, stop, caplog,
+):
+    state = startup_runtime
+    started = asyncio.Event()
+    waiting = asyncio.Event()
+    calls = 0
+
+    async def run(_self):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await started.wait()
+            if stop == "failure":
+                raise ValueError("loop failure")
+            await waiting.wait()
+        else:
+            started.set()
+            try:
+                await waiting.wait()
+            finally:
+                state.calls.append("stopped")
+
+    def failing_flush():
+        assert state.calls[-1] == "stopped"
+        state.calls.append("flush")
+        raise RuntimeError("private tracing connection")
+
+    state.flush.side_effect = failing_flush
+    monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
+    task = asyncio.create_task(state.worker._main())
+    if stop == "cancel":
+        await started.wait()
+        task.cancel()
+    with pytest.raises(ValueError if stop == "failure" else asyncio.CancelledError):
+        await task
+    assert state.calls[-2:] == ["stopped", "flush"]
+    assert "private tracing connection" not in caplog.text
 
 
 @pytest.mark.asyncio

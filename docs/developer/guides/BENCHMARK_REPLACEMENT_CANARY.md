@@ -55,6 +55,15 @@ supervisor/tool/validator scheduling branch; existing runtime unit tests cover
 those branches. Likewise, seeded review-session association is not a browser
 bootstrap or gold-review claim.
 
+The lifecycle canary substitutes agent construction at its synthetic boundary.
+The same wrapper also runs a second, cold-worker startup regression using a fresh
+Python process, migrated database prompt and agent rows, and the actual agent
+builder. It checks the missing-cache failure before startup and successful
+construction through the worker entrypoint after startup. Its finite loop does
+not claim a job or invoke a provider. This second test proves construction only,
+not live model or Langfuse connectivity. The existing
+`BENCHMARK_CANARY_SERVER_TIMEOUT_SECONDS` setting also bounds its child process.
+
 Prepared jobs cannot be SQL-deleted safely because their external preparation
 artifacts can outlive cancellation. The canary verifies that refusal and proves
 successful/idempotent deletion on a separate unprepared cancelled job. Expired

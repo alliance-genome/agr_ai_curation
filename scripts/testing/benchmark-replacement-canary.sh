@@ -16,4 +16,5 @@ trap cleanup EXIT
 "${compose[@]}" run --rm -e BENCHMARK_REPLACEMENT_CANARY=true \
   -e BENCHMARK_CANARY_SERVER_TIMEOUT_SECONDS="${BENCHMARK_CANARY_SERVER_TIMEOUT_SECONDS:-30}" backend-persistence-tests \
   python -m pytest tests/integration/persistence/test_benchmark_replacement_canary.py \
+  tests/integration/persistence/test_benchmark_worker_startup.py \
   --confcutdir=tests/integration/persistence -v --tb=short -s
