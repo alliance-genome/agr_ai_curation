@@ -1754,6 +1754,31 @@ def get_openai_responses_websocket_ping_timeout_seconds() -> Optional[float]:
     )
 
 
+def get_flow_selected_fields_direct_export() -> bool:
+    """Benchmark deterministic saved-field exports without formatter model turns."""
+    return _get_env_bool("FLOW_SELECTED_FIELDS_DIRECT_EXPORT", False)
+
+
+def get_validator_stop_after_accepted_finalization() -> bool:
+    """Benchmark accepted-finalizer completion without another model response."""
+    return _get_env_bool("VALIDATOR_STOP_AFTER_ACCEPTED_FINALIZATION", False)
+
+
+def get_package_runner_reuse_workers() -> bool:
+    """Opt into persistent isolated workers; disabled pending benchmark review."""
+    return _get_env_bool("PACKAGE_RUNNER_REUSE_WORKERS", False)
+
+
+def get_package_runner_worker_count() -> int:
+    """Maximum persistent processes per runner across all package environments."""
+    return max(1, _get_env_int_with_fallback("PACKAGE_RUNNER_WORKER_COUNT", 2))
+
+
+def get_package_runner_response_max_bytes() -> int:
+    """Bound stdout plus stderr retained for a persistent-worker response."""
+    return max(1, _get_env_int_with_fallback("PACKAGE_RUNNER_RESPONSE_MAX_BYTES", 8_388_608))
+
+
 def get_package_runner_timeout_seconds() -> float:
     """Subprocess timeout for an isolated package tool call (PACKAGE_RUNNER_TIMEOUT_SECONDS).
 

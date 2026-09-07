@@ -1452,6 +1452,7 @@ def run_package_scoped_validator_agent(
         )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
+    _configure_accepted_finalization_stop(agent, finalization_state, batch=False)
     output_type = getattr(agent, "output_type", None)
     if is_domain_validator_result_schema(output_type):
         agent.output_type = AgentOutputSchema(
@@ -1645,6 +1646,9 @@ def run_package_scoped_validator_agent_batch(
             batch_output_type,
             strict_json_schema=False,
         )
+    _configure_accepted_finalization_stop(
+        agent, finalization_state, batch=True, batch_output_type=batch_output_type,
+    )
     agent.tools = [
         *list(getattr(agent, "tools", []) or []),
         *_validator_document_tools(runtime_context),
@@ -2209,6 +2213,35 @@ def _effective_validator_max_tool_calls(binding: ValidatorBinding) -> int:
     if binding.max_tool_calls is not None:
         return binding.max_tool_calls
     return _DEFAULT_VALIDATOR_MAX_TOOL_CALLS
+
+
+def _configure_accepted_finalization_stop(
+    agent: Any,
+    state: _ValidatorFinalizationState,
+    *,
+    batch: bool,
+    batch_output_type: type[BaseModel] | None = None,
+) -> None:
+    """Let the SDK finish with the result accepted by our mandatory finalizer."""
+    from agents.agent import ToolsToFinalOutputResult
+    from src.lib.openai_agents.config import get_validator_stop_after_accepted_finalization
+
+    if not get_validator_stop_after_accepted_finalization():
+        return
+
+    def finish_when_accepted(_context, _tool_results):
+        if batch:
+            if not state.accepted_results:
+                return ToolsToFinalOutputResult(is_final_output=False)
+            payload = {"results": [result.model_dump(mode="json") for result in state.accepted_results]}
+            output = batch_output_type.model_validate(payload) if batch_output_type else payload
+        else:
+            if state.accepted_result is None:
+                return ToolsToFinalOutputResult(is_final_output=False)
+            output = state.accepted_result
+        return ToolsToFinalOutputResult(is_final_output=True, final_output=output)
+
+    agent.tool_use_behavior = finish_when_accepted
 
 
 def _build_finalize_validator_result_tool(

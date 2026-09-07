@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+from contextlib import redirect_stdout
 import importlib
 import inspect
 import json
@@ -22,14 +24,28 @@ def main() -> int:
     # Package tool calls already run in an isolated subprocess, so downstream
     # helpers can safely skip extra worker-thread offloading.
     os.environ["AGR_AI_CURATION_PACKAGE_TOOL_SUBPROCESS"] = "1"
+    if "--worker" in sys.argv[1:]:
+        for payload in sys.stdin:
+            # Each request gets an empty Context, including requests with no
+            # supplied metadata. Only imports and process-local clients survive.
+            contextvars.Context().run(_run_request, payload)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        return 0
+    return _run_request(sys.stdin.read())
+
+
+def _run_request(payload: str) -> int:
     protocol = _load_runner_protocol()
     try:
-        request = protocol["decode_request"](sys.stdin.read())
-        _extend_sys_path(request)
-        _apply_backend_request_context(request.context)
-        tool_target = _resolve_tool_target(request)
-        result = _normalize_result(_execute_tool_target(tool_target, request))
-        json.dumps(result)
+        request = protocol["decode_request"](payload)
+        # Tool/import diagnostics must never corrupt protocol framing.
+        with redirect_stdout(sys.stderr):
+            _extend_sys_path(request)
+            _apply_backend_request_context(request.context)
+            tool_target = _resolve_tool_target(request)
+            result = _normalize_result(_execute_tool_target(tool_target, request))
+            json.dumps(result)
         sys.stdout.write(protocol["encode_success_response"](result))
         return 0
     except protocol["RunnerProtocolError"] as exc:

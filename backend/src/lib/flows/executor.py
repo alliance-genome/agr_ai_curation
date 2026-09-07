@@ -913,18 +913,6 @@ def _make_flow_runtime_formatter_tool(
             }
         )
         agent = get_agent_by_id(agent_id, **agent_kwargs)
-        streaming_tool = cast(
-            Any,
-            _create_streaming_tool(
-                agent=agent,
-                tool_name=tool_name,
-                tool_description=tool_description,
-                specialist_name=specialist_name,
-                inline_chat_persistence=False,
-                isolate_run_config=True,
-                propagate_errors=True,
-            ),
-        )
         tool_ctx = SimpleNamespace(
             tool_name=tool_name,
             run_config=getattr(ctx, "run_config", None),
@@ -949,6 +937,44 @@ def _make_flow_runtime_formatter_tool(
             }
         )
         try:
+            from src.lib.openai_agents.config import get_flow_selected_fields_direct_export
+
+            raw_plan = node_data.get("projection_plan")
+            if (
+                get_flow_selected_fields_direct_export()
+                and isinstance(raw_plan, Mapping)
+                and raw_plan.get("selection_mode") == "selected_fields"
+            ):
+                # Agent construction above retains access/configuration checks.
+                # Its bound finalizer already enforces the saved plan, validates
+                # source fingerprints and persists the artifact with file events.
+                finalizer = next(
+                    (tool for tool in agent.tools if tool.name == "finalize_and_save"), None,
+                )
+                if finalizer is None:
+                    raise ValueError("Selected-fields export requires the configured file finalizer")
+                from agents.tool_context import ToolContext
+
+                arguments = json.dumps({"filename_hint": output_filename_descriptor})
+                finalizer_context = ToolContext(
+                    context=getattr(ctx, "context", None), tool_name="finalize_and_save",
+                    tool_call_id=f"selected-fields-{flow_run_id or 'flow'}",
+                    tool_arguments=arguments, run_config=getattr(ctx, "run_config", None),
+                )
+                output = await finalizer.on_invoke_tool(finalizer_context, arguments)
+                outcome = json.loads(output)
+                if outcome.get("status") != "ok":
+                    raise ValueError("Selected-fields export failed: " + "; ".join(outcome.get("errors") or ["File was not saved"]))
+                return output
+
+            streaming_tool = cast(
+                Any,
+                _create_streaming_tool(
+                    agent=agent, tool_name=tool_name, tool_description=tool_description,
+                    specialist_name=specialist_name, inline_chat_persistence=False,
+                    isolate_run_config=True, propagate_errors=True,
+                ),
+            )
             return await streaming_tool.on_invoke_tool(
                 tool_ctx,
                 json.dumps({"query": query}),
