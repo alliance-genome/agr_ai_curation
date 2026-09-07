@@ -45,6 +45,9 @@ def test_openapi_examples_match_canonical_request_and_response_models():
                 assert "content" not in response
             elif route.path.endswith("/events"):
                 assert "event: benchmark.event" in response["content"]["text/event-stream"]["example"]
+            elif route.path.endswith("/result"):
+                assert response["content"]["application/json"]["example"]["invocations"] == []
+                assert "X-Benchmark-Result-Digest" in response["headers"]
             else:
                 example = response["content"]["application/json"]["example"]
                 TypeAdapter(route.response_model).validate_json(json.dumps(example))

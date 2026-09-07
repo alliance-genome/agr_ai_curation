@@ -21,10 +21,13 @@ from src.api.benchmark_curator import require_benchmark_curator
 from src.api.benchmark_events import create_event_response
 from src.api.benchmark_sources import _catalog as input_resolver_catalog, delegated_source_request_context
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+from src.lib.benchmarks.observability import sanitized_benchmark_error
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.benchmarks.lifecycle import BenchmarkAdmissionResult, BenchmarkLifecycleFailure, rerun_job, submit_job
 from src.lib.benchmarks.input_resolvers import BenchmarkSourceError
 from src.lib.benchmarks.persistence import (
     BenchmarkIdempotencyConflictError,
+    BenchmarkResultArtifactError,
     BenchmarkCellCursor,
     BenchmarkCellDetail,
     BenchmarkCellSummary,
@@ -244,6 +247,61 @@ def get_cell(
         if result is None:
             raise _error(404, "not_found", "Benchmark resource not found")
         return result
+
+
+@router.get(
+    "/{job_id}/cells/{cell_id}/result", response_class=Response,
+    responses={200: {
+        "description": "Canonical UTF-8 JSON bytes; hash the response body directly.",
+        "content": {"application/json": {
+            "schema": {"type": "object"},
+            "example": {"output": {"records": []}, "invocations": []},
+        }},
+        "headers": {
+            "X-Benchmark-Result-Digest": {"schema": {"type": "string"}},
+            "X-Benchmark-Artifact-Version": {"schema": {"type": "string"}},
+            "X-Benchmark-Attempt-Count": {"schema": {"type": "integer"}},
+            "X-Benchmark-Job-ID": {"schema": {"type": "string", "format": "uuid"}},
+            "X-Benchmark-Cell-ID": {"schema": {"type": "string", "format": "uuid"}},
+        },
+    }},
+)
+def get_cell_result(
+    job_id: UUID, cell_id: UUID,
+    principal: dict[str, Any] = Depends(require_benchmark_read),
+):
+    with SessionLocal() as session:
+        try:
+            artifact = BenchmarkRepository(session).get_result_artifact(
+                job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
+            )
+        except BenchmarkResultArtifactError as exc:
+            status, message = {
+                "result_not_terminal": (409, "Benchmark cell is not terminal"),
+                "result_artifact_unavailable": (409, "Benchmark result artifact is unavailable"),
+                "result_artifact_oversize": (413, "Benchmark result artifact exceeds configured limit"),
+                "result_artifact_corrupt": (503, "Benchmark result artifact failed integrity verification"),
+            }[exc.code]
+            if status == 503:
+                report_runtime_exception(
+                    sanitized_benchmark_error("result_artifact_read", type(exc).__name__),
+                    component="benchmark_api", operation="result_artifact_read",
+                )
+            raise HTTPException(
+                status_code=status, detail={"code": exc.code, "message": message},
+                headers={"Cache-Control": "no-store"},
+            ) from None
+        return Response(
+            content=artifact.content, media_type="application/json",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Benchmark-Result-Digest": artifact.digest,
+                "X-Benchmark-Artifact-Version": "1",
+                "X-Benchmark-Attempt-Count": str(artifact.attempt_count),
+                "X-Benchmark-Job-ID": str(artifact.job_id),
+                "X-Benchmark-Cell-ID": str(artifact.cell_id),
+            },
+        )
 
 
 @router.post("/{job_id}/cancel", response_model=BenchmarkJobDetail, responses=examples.json_example(examples.CANCELLED))

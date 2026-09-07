@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     UniqueConstraint,
@@ -291,6 +292,7 @@ class BenchmarkCell(Base):
     envelope_size_bytes: Mapped[int | None] = mapped_column(Integer)
     envelope_digest: Mapped[str | None] = mapped_column(String(71))
     result_digest: Mapped[str | None] = mapped_column(String(71))
+    result_artifact: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     failure: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     job: Mapped[BenchmarkJob] = relationship(back_populates="cells")
@@ -300,6 +302,10 @@ class BenchmarkCell(Base):
 
     __table_args__ = (
         UniqueConstraint("id", "job_id", name="uq_benchmark_cells_id_job"),
+        CheckConstraint(
+            "result_artifact IS NULL OR (status = 'succeeded' AND result_digest IS NOT NULL)",
+            name="ck_benchmark_cells_result_artifact",
+        ),
         UniqueConstraint("job_id", "cell_key", name="uq_benchmark_cells_job_key"),
         UniqueConstraint("job_id", "position", name="uq_benchmark_cells_job_position"),
         ForeignKeyConstraint(

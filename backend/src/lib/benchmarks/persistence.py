@@ -15,12 +15,13 @@ from sqlalchemy import case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from src.lib.benchmarks.models import BenchmarkSuite, ResolvedBenchmarkPlan
+from src.lib.benchmarks.models import BenchmarkCellExecutionResult, BenchmarkSuite, ResolvedBenchmarkPlan
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
     get_benchmark_event_retention_count,
     get_benchmark_max_envelope_bytes,
+    get_benchmark_max_result_artifact_bytes,
     get_benchmark_max_page_size,
 )
 from src.models.sql.benchmark import (
@@ -124,6 +125,7 @@ class BenchmarkCellSummary:
 @dataclass(frozen=True)
 class BenchmarkCellDetail:
     summary: BenchmarkCellSummary
+    attempt_count: int
     target_kind: str
     target_id: str
     routes: dict[str, Any]
@@ -155,6 +157,23 @@ def canonical_digest(value: Any) -> str:
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+class BenchmarkResultArtifactError(ValueError):
+    """Content-free artifact retrieval failure with a stable public code."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True)
+class BenchmarkResultArtifact:
+    job_id: UUID
+    cell_id: UUID
+    attempt_count: int
+    digest: str
+    content: bytes
 
 
 class BenchmarkLeaseLostError(RuntimeError):
@@ -553,6 +572,7 @@ class BenchmarkRepository:
             return None
         return BenchmarkCellDetail(
             summary=_cell_summary(cell),
+            attempt_count=cell.attempt_count,
             target_kind=cell.target_kind,
             target_id=cell.target_id,
             routes=cell.routes,
@@ -564,6 +584,44 @@ class BenchmarkRepository:
             envelope_digest=cell.envelope_digest,
             result_digest=cell.result_digest,
             failure=cell.failure,
+        )
+
+    def get_result_artifact(
+        self, *, cell_id: UUID, job_id: UUID, owner_subject: str
+    ) -> BenchmarkResultArtifact:
+        self._owned_job(job_id, owner_subject)
+        limit = get_benchmark_max_result_artifact_bytes()
+        size = func.octet_length(BenchmarkCell.result_artifact)
+        # CASE bounds the returned content in the database, before the driver
+        # allocates it. The deferred column stays unloaded in ordinary ORM reads.
+        row = self.session.execute(
+            select(
+                BenchmarkCell.status,
+                BenchmarkCell.attempt_count,
+                BenchmarkCell.result_digest,
+                size.label("artifact_size"),
+                case(
+                    (size <= limit, BenchmarkCell.result_artifact), else_=None
+                ).label("content"),
+            ).where(BenchmarkCell.id == cell_id, BenchmarkCell.job_id == job_id)
+        ).one_or_none()
+        if row is None:
+            raise LookupError("benchmark cell not found")
+        if row.status not in _TERMINAL_CELL_STATUSES:
+            raise BenchmarkResultArtifactError("result_not_terminal")
+        if row.artifact_size is None:
+            raise BenchmarkResultArtifactError("result_artifact_unavailable")
+        if row.artifact_size > limit:
+            raise BenchmarkResultArtifactError("result_artifact_oversize")
+        content = bytes(row.content)
+        if (
+            row.status != BenchmarkCellStatus.SUCCEEDED
+            or row.result_digest != f"sha256:{hashlib.sha256(content).hexdigest()}"
+        ):
+            raise BenchmarkResultArtifactError("result_artifact_corrupt")
+        return BenchmarkResultArtifact(
+            job_id=job_id, cell_id=cell_id, attempt_count=row.attempt_count,
+            digest=row.result_digest, content=content,
         )
 
     def claim_next_job(
@@ -845,6 +903,21 @@ class BenchmarkRepository:
         if status != BenchmarkCellStatus.FAILED and failure is not None:
             raise ValueError("only failed benchmark cells may store failures")
 
+        artifact = None
+        if result is not None:
+            try:
+                outcome = BenchmarkCellExecutionResult.model_validate(result)
+                if canonical_digest(outcome.output) != canonical_digest(generated_envelope):
+                    raise ValueError("output mismatch")
+            except ValueError:
+                raise ValueError("benchmark result does not match its generated envelope") from None
+            artifact = json.dumps(
+                result, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(artifact) > get_benchmark_max_result_artifact_bytes():
+                raise ValueError("benchmark result artifact exceeds configured byte limit")
+
         cell.status = status
         cell.completed_at = completed_at
         cell.generated_envelope = generated_envelope
@@ -852,7 +925,10 @@ class BenchmarkRepository:
         cell.envelope_digest = (
             canonical_digest(generated_envelope) if generated_envelope is not None else None
         )
-        cell.result_digest = canonical_digest(result) if result is not None else None
+        cell.result_artifact = artifact
+        cell.result_digest = (
+            f"sha256:{hashlib.sha256(artifact).hexdigest()}" if artifact is not None else None
+        )
         cell.failure = failure
         cell.lease_owner = None
         cell.lease_expires_at = None
