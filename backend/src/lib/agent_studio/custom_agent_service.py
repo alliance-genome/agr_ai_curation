@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.agent_service import get_agent_by_key, get_project_ids_for_user
 from src.lib.agent_studio.agent_identity import require_canonical_agent_identity
-from src.lib.agent_studio.catalog_service import DOCUMENT_TOOL_IDS, has_tool_binding
+from src.lib.agent_studio.catalog_service import DOCUMENT_TOOL_IDS, has_tool_binding, is_runtime_formatter_tool
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.agent_studio.authoring_validation import (
     AgentModelValidationRecord,
@@ -406,6 +406,7 @@ def _system_managed_tool_ids(db: Session, tool_ids: List[str]) -> List[str]:
         if (
             tool_id not in _SYSTEM_MANAGED_INHERITED_TOOL_IDS
             and tool_id not in builder_finalization_tool_ids
+            and not is_runtime_formatter_tool(tool_id)
             and not designated
         ):
             continue

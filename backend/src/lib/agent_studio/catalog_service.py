@@ -973,6 +973,11 @@ def has_tool_binding(tool_id: str) -> bool:
     return _canonicalize_tool_id(str(tool_id).strip()) in TOOL_BINDINGS
 
 
+def is_runtime_formatter_tool(tool_id: str) -> bool:
+    """Identify helpers inherited from a formatter's bound runtime tool set."""
+    return tool_id in _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET
+
+
 # =============================================================================
 # Method-Level Tool Entries
 # =============================================================================
