@@ -31,7 +31,7 @@ Rejected finalizations still return feedback to the model for repair. The accept
 typed result becomes the SDK output, retaining output guardrails, usage and provider
 cleanup. Both individual and batch validator runs support this control.
 
-Direct exports apply only when a file node has an explicit `selected_fields`
+Direct exports apply only when a file node explicitly selects `export_execution_mode: direct` and has a `selected_fields`
 projection plan. Runtime agent construction still checks access and resolves
 configuration. The bound file finalizer validates the exact saved plan and source
 fingerprints, creates the projection and persists the file through the existing
@@ -58,3 +58,5 @@ Measure each change separately. A combined worker/concurrency result is a separa
 condition and must not be presented as the effect of concurrency alone. Background
 work on the same host can overwhelm small improvements; retain its load evidence
 and repeat controls before drawing conclusions.
+
+Direct mode is separate from column selection. Existing nodes without a mode retain AI execution. The server flag is an availability gate: an explicitly direct node fails clearly when disabled. Workshop defaults are saved in immutable snapshots and copied only into new flow steps. Custom file formatter clones resolve their format from the authorized pinned template and required tools. No agent, group, or step prompts execute in direct mode; their text is preserved.

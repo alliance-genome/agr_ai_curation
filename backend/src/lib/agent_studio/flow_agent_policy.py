@@ -53,7 +53,7 @@ def flow_palette_show_in_palette(
 
     category = str(entry.get("category") or "").casefold()
     runtime_compatible_output = (
-        category != "output" or agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+        category != "output" or agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS or entry.get("output_formatter_format") in {"csv", "tsv", "json"}
     )
     return bool(
         configured_visible

@@ -354,6 +354,8 @@ def test_catalog_reports_authorized_saved_revision_identity(sources, monkeypatch
         if not accessible:
             raise catalog.ExecutionRevisionNotFoundError("Unavailable")
         return SimpleNamespace(id=revision_id), SimpleNamespace(
+            template_source=None,
+            default_export_execution_mode=None,
             output_contract=SimpleNamespace(generic_profile_ref=SimpleNamespace(
                 profile_revision_id=profile_revision_id,
             )),
@@ -392,4 +394,3 @@ def test_flow_catalog_exposes_canonical_projection_schema_for_read_only_discover
     assert "object" in properties["row_source"]["enum"]
     assert "objects" not in properties["row_source"]["enum"]
     assert "key" in plan.detail["json_schema"]["$defs"]["FlowOutputColumnSpec"]["required"]
-

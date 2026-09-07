@@ -1,3 +1,5 @@
+import { getAgentExecutionRevision } from '@/services/agentStudioService'
+import DirectExportSetting from '../../DirectExportSetting'
 /**
  * NodePanel
  *
@@ -162,12 +164,12 @@ function NodePanel({
     ? 'input'
     : isValidationAgentFromMetadata(agentId, agentMetadata)
       ? 'validation'
-      : isOutputFormatterAgentFromMetadata(agentId, agentMetadata)
+      : node.type === 'output' || isOutputFormatterAgentFromMetadata(agentId, agentMetadata)
         ? 'output'
         : isExtractionAgentFromMetadata(agentId, agentMetadata)
           ? 'extraction'
           : 'agent'
-  const supportsFileOutputNaming = isFileOutputFormatterAgentFromMetadata(agentId, agentMetadata)
+  const supportsFileOutputNaming = (node.type === 'output' && agentId.startsWith('ca_')) || isFileOutputFormatterAgentFromMetadata(agentId, agentMetadata)
   const envelopeMetadata = agentMetadata[agentId]?.domain_envelope ?? null
 
   const draft = useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOutputNaming })
@@ -252,7 +254,23 @@ function NodePanel({
       ? `${agentId} · ${draft.values.executionSelection.execution_receipt ? `revision ${draft.values.executionSelection.execution_receipt.revision}` : draft.values.executionSelection.agent_revision_id ? 'saved revision selected' : 'revision selection required'}`
       : `${agentId}${node.data.prompt_version ? ` v${node.data.prompt_version}` : ''}`
 
-  const fileExtension = outputFileExtension(agentId)
+  const selectedRevisionId = draft.values.executionSelection.agent_revision_id
+  const [pinnedOutput, setPinnedOutput] = useState<{ revision: string; format: 'csv' | 'tsv' | 'json' | null; error?: string } | null>(null)
+  useEffect(() => {
+    if (!agentId.startsWith('ca_') || node.type !== 'output' || !selectedRevisionId) return
+    let current = true
+    void getAgentExecutionRevision(agentId.slice(3), selectedRevisionId).then((revision) => {
+      if (!current) return
+      if (revision.id !== selectedRevisionId || revision.agent_id !== agentId.slice(3)) throw new Error('Saved exporter identity changed.')
+      const formats: Record<string, 'csv' | 'tsv' | 'json'> = { csv_formatter: 'csv', tsv_formatter: 'tsv', json_formatter: 'json' }
+      const format = revision.snapshot.output_contract.output_state === 'none' && revision.snapshot.tool_ids.includes('finalize_and_save')
+        ? formats[revision.snapshot.template_source || ''] || null : null
+      setPinnedOutput({ revision: selectedRevisionId, format })
+    }).catch(() => { if (current) setPinnedOutput({ revision: selectedRevisionId, format: null, error: 'Could not load the selected exporter revision.' }) })
+    return () => { current = false }
+  }, [agentId, node.type, selectedRevisionId])
+  const outputReady = !agentId.startsWith('ca_') || (pinnedOutput?.revision === selectedRevisionId && Boolean(pinnedOutput?.format))
+  const fileExtension = outputFileExtension(agentId, pinnedOutput?.revision === selectedRevisionId ? pinnedOutput?.format : null)
   const filenamePreviewPrefix = draft.values.outputFilenameMode === 'source_pdf'
     ? '<PDF-name>'
     : draft.values.outputFilenameMode === 'custom'
@@ -431,17 +449,21 @@ function NodePanel({
           </Section>
         )}
 
-        {kind === 'output' && supportsFileOutputNaming && flowDefinition && <OutputFieldEditor
-          format={outputFileExtension(agentId)} definition={flowDefinition} binding={outputBinding}
+        {node.type === 'output' && agentId.startsWith('ca_') && !outputReady && <Alert severity={pinnedOutput?.error ? 'error' : 'info'}>{pinnedOutput?.error || 'Select a saved file exporter revision to configure its output.'}</Alert>}
+        {kind === 'output' && supportsFileOutputNaming && outputReady && <DirectExportSetting value={draft.values.exportExecutionMode} onChange={(mode) => draft.set('exportExecutionMode', mode)} />}
+
+        {kind === 'output' && supportsFileOutputNaming && outputReady && flowDefinition && <OutputFieldEditor
+          direct={draft.values.exportExecutionMode === 'direct'} format={fileExtension} definition={flowDefinition} binding={outputBinding}
           value={draft.values.projectionPlan} onChange={(plan) => draft.set('projectionPlan', plan)} />}
 
         {kind === 'output' && (
           <Section heading="What should this output contain?" action={<OptionalMark />}
             help="Instructions for this output step only, in addition to your flow instructions. Use information collected by the earlier steps.">
             <TextField fullWidth multiline minRows={4} size="small"
+              disabled={draft.values.exportExecutionMode === 'direct'}
               label="Output instructions"
               placeholder="For example: One row per allele. Include allele name, confirmed identifier and supporting quote, in that order. Leave missing identifiers blank."
-              helperText="For a file, describe the columns and what makes one row. For chat, describe the summary or table you want."
+              helperText={draft.values.exportExecutionMode === 'direct' ? 'Saved but inactive. Turn off direct export to use these instructions.' : 'For a file, describe the columns and what makes one row. For chat, describe the summary or table you want.'}
               value={draft.values.customInstructions}
               onChange={(event) => draft.set('customInstructions', event.target.value)} sx={textFieldSx} />
             {draft.values.projectionPlan?.selection_mode === 'selected_fields' && <Typography variant="body2">Your selected fields control the file layout. Instructions cannot add columns or fill missing answers.</Typography>}

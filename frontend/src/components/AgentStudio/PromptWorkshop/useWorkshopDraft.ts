@@ -122,6 +122,8 @@ export interface WorkshopDraft {
   setSelectedAllowedGroupIds: (value: string[]) => void
   selectedModelId: string
   handleModelChange: (modelId: string) => void
+  defaultExportExecutionMode: 'ai' | 'direct'
+  setDefaultExportExecutionMode: (value: 'ai' | 'direct') => void
   selectedModelReasoning: string
   setSelectedModelReasoning: (value: string) => void
   selectedToolIds: string[]
@@ -275,6 +277,7 @@ export function useWorkshopDraft({
   const [selectedVisibility, setSelectedVisibility] = useState<WorkshopVisibility>('private')
   const [selectedAllowedGroupIds, setSelectedAllowedGroupIds] = useState<string[]>([])
   const [selectedModelId, setSelectedModelId] = useState('')
+  const [defaultExportExecutionMode, setDefaultExportExecutionMode] = useState<'ai' | 'direct'>('ai')
   const [selectedModelReasoning, setSelectedModelReasoning] = useState('')
   const [selectedToolIds, setSelectedToolIds] = useState<string[]>([])
   const [outputDraft, setOutputDraft] = useState<WorkshopOutputDraft>(() => emptyOutputDraft())
@@ -490,6 +493,7 @@ export function useWorkshopDraft({
     visibility: selectedVisibility,
     allowedGroupIds: selectedAllowedGroupIds,
     modelId: selectedModelId,
+    defaultExportExecutionMode,
     modelReasoning: selectedModelReasoning,
     toolIds: selectedToolIds,
     outputDraft,
@@ -503,6 +507,7 @@ export function useWorkshopDraft({
     selectedVisibility,
     selectedAllowedGroupIds,
     selectedModelId,
+    defaultExportExecutionMode,
     selectedModelReasoning,
     selectedToolIds,
     outputDraft,
@@ -522,6 +527,7 @@ export function useWorkshopDraft({
     setSelectedAllowedGroupIds(fields.allowedGroupIds)
     setSelectedVisibility(fields.visibility)
     setSelectedModelId(fields.modelId)
+    setDefaultExportExecutionMode(fields.defaultExportExecutionMode || 'ai')
     setSelectedModelReasoning(fields.modelReasoning)
     setSelectedToolIds(fields.toolIds)
     setOutputDraft(fields.outputDraft)
@@ -736,7 +742,7 @@ export function useWorkshopDraft({
           if (!canceled) {
             setProfileSource(sourceProfile)
             setSavedExecutionRevision(revision)
-            hydrateDraft({ ...fields, outputDraft: output })
+            hydrateDraft({ ...fields, outputDraft: output, defaultExportExecutionMode: revision.snapshot.default_export_execution_mode || 'ai' })
           }
         } catch (error) {
           if (!canceled) setOutputLoadError(error instanceof Error ? error.message : 'Could not load the saved Output Structure.')
@@ -905,6 +911,7 @@ export function useWorkshopDraft({
       has_group_prompt_overrides: Object.keys(groupPromptOverrides).length > 0,
       draft_tool_ids: [...selectedToolIds],
       draft_model_id: selectedModelId || undefined,
+      draft_default_export_execution_mode: defaultExportExecutionMode,
       draft_model_reasoning: selectedModelReasoning || undefined,
       draft_output_schema_key: outputSchemaKey || undefined,
       draft_output: structuredClone(outputDraft),
@@ -931,6 +938,7 @@ export function useWorkshopDraft({
     selectedGroupId,
     selectedGroupPromptForContext,
     selectedModelId,
+    defaultExportExecutionMode,
     selectedModelReasoning,
     selectedTemplate?.name,
     selectedToolIds,
@@ -1011,6 +1019,7 @@ export function useWorkshopDraft({
         includeGroupRules: candidate.include_group_rules ?? false,
         visibility: candidate.draft_visibility ?? 'private',
         allowedGroupIds: candidate.draft_allowed_group_ids ?? [],
+        defaultExportExecutionMode: candidate.draft_default_export_execution_mode ?? 'ai',
         modelId: candidate.draft_model_id ?? '', modelReasoning: candidate.draft_model_reasoning ?? '',
         toolIds: candidate.draft_tool_ids ?? [],
         outputDraft: { ...structuredClone(candidate.draft_output),
@@ -1225,6 +1234,7 @@ export function useWorkshopDraft({
           group_prompt_overrides: groupPromptOverrides,
           include_group_rules: includeGroupRules,
           model_id: selectedModelId,
+          default_export_execution_mode: defaultExportExecutionMode,
           model_reasoning: selectedModelReasoning,
           tool_ids: selectedToolIds,
           ...outputPayload,
@@ -1255,6 +1265,7 @@ export function useWorkshopDraft({
           group_prompt_overrides: groupPromptOverrides,
           include_group_rules: includeGroupRules,
           model_id: selectedModelId,
+          default_export_execution_mode: defaultExportExecutionMode,
           model_reasoning: selectedModelReasoning,
           tool_ids: selectedToolIds,
           ...outputPayload,
@@ -1329,6 +1340,7 @@ export function useWorkshopDraft({
     selectedCustomAgent?.updated_at,
     selectedCustomAgentId,
     selectedModelId,
+    defaultExportExecutionMode,
     selectedModelReasoning,
     selectedToolIds,
     selectedVisibility,
@@ -1541,7 +1553,9 @@ export function useWorkshopDraft({
     setSelectedAllowedGroupIds,
     selectedModelId,
     handleModelChange,
+    defaultExportExecutionMode,
     selectedModelReasoning,
+    setDefaultExportExecutionMode,
     setSelectedModelReasoning,
     selectedToolIds,
     removeTool,

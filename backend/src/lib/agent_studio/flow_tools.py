@@ -414,9 +414,9 @@ def _seen_any_equivalent(
     return False
 
 
-def _is_output_agent_id(agent_id: str) -> bool:
+def _is_output_agent_id(agent_id: str, entry: Mapping[str, Any] | None = None) -> bool:
     """Whether an agent ID belongs to the output-agent family."""
-    return agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+    return agent_id in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS or bool(entry and entry.get("output_formatter_format") in {"csv", "tsv", "json"})
 
 
 def _validated_output_source_steps(
@@ -590,7 +590,7 @@ def _build_simplified_flow_definition(
             errors.append(f"Step {step_num}: unknown agent_id '{agent_id}'")
             continue
 
-        if _is_output_agent_id(agent_id):
+        if _is_output_agent_id(agent_id, agent_registry.get(agent_id)):
             source_steps, source_error = _validated_output_source_steps(
                 steps,
                 i,
@@ -629,7 +629,7 @@ def _build_simplified_flow_definition(
             "name",
             agent_id.replace("_", " ").title(),
         )
-        is_output = _is_output_agent_id(agent_id)
+        is_output = _is_output_agent_id(agent_id, agent_info)
         nodes.append(
             {
                 "id": node_id,
@@ -1466,7 +1466,7 @@ def _compile_flow_operations(
                         f"Proposal-local step reference '{step_ref}' is already in use."
                     )
                 semantic_refs[step_ref] = node_id
-            is_output = _is_output_agent_id(agent_id)
+            is_output = _is_output_agent_id(agent_id, agent)
             max_y = max(
                 (float(node.get("position", {}).get("y", 0)) for node in nodes),
                 default=0,
@@ -1487,6 +1487,7 @@ def _compile_flow_operations(
                     raise _FlowProposalCompileError("Custom agent has no selectable executable revision.")
                 data["agent_revision_id"] = str(revision_id)
             if is_output:
+                data["export_execution_mode"] = agent.get("default_export_execution_mode") or "ai"
                 data["include_evidence"] = bool(operation.get("include_evidence", True))
                 if operation.get("output_filename_template"):
                     data["output_filename_template"] = operation[
@@ -1642,6 +1643,7 @@ def _compile_flow_operations(
                 "prompt_version",
                 "include_evidence",
                 "output_filename_template",
+                "export_execution_mode",
                 "projection_plan",
             }
             for key in allowed.intersection(operation):
@@ -3561,6 +3563,7 @@ application-generated node IDs.""",
                             "prompt_version": {"type": ["integer", "null"]},
                             "include_evidence": {"type": "boolean"},
                             "output_filename_template": {"type": ["string", "null"]},
+                            "export_execution_mode": {"type": "string", "enum": ["ai", "direct"]},
                             "projection_plan": {"type": ["object", "null"]},
                             "enabled_attachment_ids": {
                                 "type": "array",

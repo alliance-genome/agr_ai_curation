@@ -170,3 +170,5 @@ Studio AI Chat helps configure and explain agents and flows. The main chat is wh
 ## Choose consistent file output
 
 In a CSV, TSV, or JSON flow step, **Use selected fields** lets you choose columns from connected agents without writing formatting instructions. AI Chat can inspect those fields and propose the same layout for you. Review and apply the proposal, then save the flow. See [output steps](CURATION_FLOWS.md#output-steps) for grouped answers, missing values, and multiple sources.
+
+For a custom CSV, TSV or JSON exporter, **Use direct export for new flow steps** saves a default with that agent revision. New steps start in direct mode; choose their source fields in the flow. Existing flow steps keep their settings. Direct export skips the exporter’s AI call and does not run its prompts. Turn direct mode off on a step when its output needs AI instructions.

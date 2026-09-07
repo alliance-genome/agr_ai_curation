@@ -1,3 +1,4 @@
+import DirectExportSetting from '../DirectExportSetting'
 import { DraftRecoveryNotice } from '../draftRecovery'
 import { useStudioLocation } from '../studioNavigation'
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
@@ -574,6 +575,7 @@ function PromptWorkshop({
               selectableGroupOptions={draft.selectableGroupOptions}
               inheritedAllowedGroupIds={draft.inheritedAllowedGroupIds}
             />
+            {((['csv_formatter', 'tsv_formatter', 'json_formatter'].includes(draft.domainEnvelopeAgentId) && draft.outputDraft.mode === 'none' && draft.selectedToolIds.includes('finalize_and_save')) || draft.defaultExportExecutionMode === 'direct') && <DirectExportSetting isDefault value={draft.defaultExportExecutionMode} onChange={draft.setDefaultExportExecutionMode} />}
             <WorkshopOutputSetup value={draft.outputDraft} onChange={draft.setOutputDraft}
               disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
               agents={agentMetadata} onEditStructure={() => setSection('output_structure')}
@@ -603,6 +605,8 @@ function PromptWorkshop({
               onMakeCopy={() => draft.setOutputDraft({ ...draft.outputDraft, profilePin: null })} /></Box>}
             </>
           ) : section === 'prompt' ? (
+            <>
+            {draft.defaultExportExecutionMode === 'direct' && <Alert severity="info">New flow steps use direct export and do not run these prompts. Your text is kept for steps using AI output. Change the export mode in a flow step to use its instructions.</Alert>}
             <PromptSection
               parentCorePrompt={draft.parentCorePrompt}
               parentGeneratedContract={draft.parentGeneratedContract}
@@ -628,6 +632,7 @@ function PromptWorkshop({
               loggedInGroupIds={draft.loggedInGroupIds}
               onDiscussPromptWithClaude={handleDiscussPrompt}
             />
+            </>
           ) : section === 'tools' ? (
             <ToolsSection
               selectedToolIds={draft.selectedToolIds}

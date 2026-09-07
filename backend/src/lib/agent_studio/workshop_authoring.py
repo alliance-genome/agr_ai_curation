@@ -34,7 +34,7 @@ class WorkshopOperation(BaseModel):
         "set_name", "set_description", "set_instructions", "set_group_instructions",
         "reset_group_instructions", "set_include_group_rules", "select_model",
         "add_tool", "remove_tool", "select_output", "clear_output", "set_icon",
-        "set_visibility", "set_allowed_groups", "edit_profile",
+        "set_visibility", "set_allowed_groups", "edit_profile", "set_export_execution_mode",
     ]
     text: str | None = None
     resource_id: str | None = None
@@ -58,6 +58,7 @@ def workshop_save_candidate(workshop: AgentWorkshopContext) -> dict[str, Any]:
         "inherited_allowed_group_ids": list(workshop.inherited_allowed_group_ids or []),
         "include_group_rules": bool(workshop.include_group_rules),
         "model_id": workshop.draft_model_id or "",
+        "default_export_execution_mode": workshop.draft_default_export_execution_mode,
         "model_reasoning": workshop.draft_model_reasoning or None,
         "tool_ids": list(workshop.draft_tool_ids or []),
         "output_schema_key": workshop.draft_output_schema_key or None,
@@ -174,6 +175,16 @@ def validate_workshop_context(db, *, workshop, user_id, active_group_ids, phase:
             code="prompt_size_limit", severity="error", path="custom_agent.custom_prompt",
             message="The editable instructions exceed the configured prompt size limit.",
         ))
+    if workshop.draft_default_export_execution_mode not in {"ai", "direct"}:
+        findings.append(AuthoringValidationFinding(code="invalid_export_execution_mode", severity="error",
+            path="custom_agent.default_export_execution_mode", message="Choose AI or direct export."))
+    if workshop.draft_default_export_execution_mode == "direct" and (
+        workshop.template_source not in {"csv_formatter", "tsv_formatter", "json_formatter"}
+        or (workshop.draft_output or {}).get("mode") != "none"
+        or "finalize_and_save" not in candidate["tool_ids"]
+    ):
+        findings.append(AuthoringValidationFinding(code="direct_export_requires_formatter", severity="error",
+            path="custom_agent.default_export_execution_mode", message="Direct export requires a file exporter agent."))
     source = None
     required_tools = []
     try:
@@ -360,6 +371,7 @@ def apply_workshop_operations(base, operations, *, output_contracts=None):
         "set_name": "draft_name", "set_description": "draft_description",
         "set_instructions": "prompt_draft", "set_icon": "draft_icon",
         "set_visibility": "draft_visibility",
+        "set_export_execution_mode": "draft_default_export_execution_mode",
     }
     for item in operations:
         op = WorkshopOperation.model_validate(item)

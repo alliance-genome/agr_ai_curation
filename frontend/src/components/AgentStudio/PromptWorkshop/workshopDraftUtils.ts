@@ -20,6 +20,7 @@ export interface DraftFields {
   visibility: WorkshopVisibility
   allowedGroupIds: string[]
   modelId: string
+  defaultExportExecutionMode?: 'ai' | 'direct'
   modelReasoning: string
   toolIds: string[]
   outputDraft: WorkshopOutputDraft
@@ -70,6 +71,7 @@ export function computeDirtyState(current: DraftFields, saved: DraftFields | nul
     || current.visibility !== saved.visibility
     || !areStringArraysEqual(current.allowedGroupIds, saved.allowedGroupIds)
     || current.modelId !== saved.modelId
+    || (current.defaultExportExecutionMode || 'ai') !== (saved.defaultExportExecutionMode || 'ai')
     || current.modelReasoning !== saved.modelReasoning
     || current.outputDraft.mode !== saved.outputDraft.mode
     || current.outputDraft.schemaKey !== saved.outputDraft.schemaKey

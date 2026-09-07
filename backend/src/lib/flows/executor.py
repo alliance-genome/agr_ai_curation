@@ -109,7 +109,6 @@ from src.lib.flows.output_projection import (
 )
 from src.lib.executable_flow_graph import project_executable_flow_graph
 from src.lib.flow_edge_roles import (
-    SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
     agent_can_source_output_attachment,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
@@ -676,7 +675,11 @@ def _build_flow_step_query(
     return "\n\n".join(sections)
 
 
-def _resolve_flow_terminal_output_format(agent_id: str) -> Optional[str]:
+def _resolve_flow_terminal_output_format(agent_id: str, entry: Mapping[str, Any] | None = None) -> Optional[str]:
+    from src.lib.flows.formatter_capability import resolved_formatter_format
+    saved_format = resolved_formatter_format(agent_id, entry)
+    if saved_format:
+        return saved_format
     normalized_agent_id = str(agent_id or "").strip()
     for output_format, agent_ids in _FLOW_OUTPUT_FORMATTER_AGENT_IDS_BY_FORMAT.items():
         if normalized_agent_id in agent_ids:
@@ -693,8 +696,8 @@ def _flow_terminal_projection_error(agent_id: str, reason: str) -> FlowTerminalO
     )
 
 
-def _flow_file_output_format(agent_id: str) -> str | None:
-    output_format = _resolve_flow_terminal_output_format(agent_id)
+def _flow_file_output_format(agent_id: str, entry: Mapping[str, Any] | None = None) -> str | None:
+    output_format = _resolve_flow_terminal_output_format(agent_id, entry)
     if output_format in {"csv", "tsv", "json"}:
         return output_format
     return None
@@ -940,11 +943,11 @@ def _make_flow_runtime_formatter_tool(
             from src.lib.openai_agents.config import get_flow_selected_fields_direct_export
 
             raw_plan = node_data.get("projection_plan")
-            if (
-                get_flow_selected_fields_direct_export()
-                and isinstance(raw_plan, Mapping)
-                and raw_plan.get("selection_mode") == "selected_fields"
-            ):
+            if node_data.get("export_execution_mode", "ai") == "direct":
+                if not get_flow_selected_fields_direct_export():
+                    raise ValueError("Direct export is unavailable. Choose AI output or ask an administrator to enable it.")
+                if output_format not in {"csv", "tsv", "json"} or not isinstance(raw_plan, Mapping) or raw_plan.get("selection_mode") != "selected_fields":
+                    raise ValueError("Direct export requires a saved selection of structured fields for CSV, TSV or JSON.")
                 # Agent construction above retains access/configuration checks.
                 # Its bound finalizer already enforces the saved plan, validates
                 # source fingerprints and persists the artifact with file events.
@@ -2539,13 +2542,11 @@ def _runtime_output_sources_by_node_id(
         output_agent_id = str(
             (output_data.get("agent_id") or "") if isinstance(output_data, Mapping) else ""
         )
-        output_entry = _resolve_flow_agent_entry(
-            output_agent_id,
-            db_user_id=db_user_id,
-        )
+        output_entry = (entries_by_node[output_node_id] if entries_by_node is not None and output_node_id in entries_by_node
+                        else _resolve_flow_agent_entry(output_agent_id, db_user_id=db_user_id))
         if (
             not _is_output_formatter_entry(output_entry)
-            or output_agent_id not in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+            or _resolve_flow_terminal_output_format(output_agent_id, output_entry) is None
         ):
             errors.append(
                 f"output node '{output_node_id}' agent '{output_agent_id}' is not an output formatter"
@@ -2778,6 +2779,7 @@ def get_all_agent_tools(
         agent_name: str,
         step_number: int,
         curation_adapter_key: str | None,
+        formatter_format: str | None,
         candidate_expected_from: list[str],
         execution_receipt: dict[str, Any] | None,
         node_data: dict[str, Any],
@@ -2869,7 +2871,7 @@ def get_all_agent_tools(
                         run_config=getattr(ctx, "run_config", None),
                     )
                     tool_input = {"query": resolved_query}
-                    if _flow_file_output_format(agent_id) is not None:
+                    if formatter_format is not None:
                         tool_input["output_filename_descriptor"] = (
                             output_filename_descriptor or ""
                         )
@@ -2908,7 +2910,7 @@ def get_all_agent_tools(
                     internal_event_cursor,
                     tool_name="formatter_cannot_complete",
                 )
-                if _flow_file_output_format(agent_id) is not None
+                if formatter_format is not None
                 else None
             )
             validation_schedule = validation_schedule_from_node_data(node_data)
@@ -3407,8 +3409,8 @@ def get_all_agent_tools(
                 agent_kwargs.pop("model_provider_override", None)
             if step_instruction_prefix:
                 agent_kwargs["additional_runtime_context"] = [step_instruction_prefix]
-            output_format = _resolve_flow_terminal_output_format(agent_id)
-            file_output_format = _flow_file_output_format(agent_id)
+            output_format = _resolve_flow_terminal_output_format(agent_id, entry)
+            file_output_format = _flow_file_output_format(agent_id, entry)
             if file_output_format is not None:
                 raw_streaming_tool = _make_flow_runtime_formatter_tool(
                     agent_id=agent_id,
@@ -3498,6 +3500,7 @@ def get_all_agent_tools(
             agent_name=entry.get("name", agent_id),
             step_number=step_num,
             node_data=data,
+            formatter_format=_flow_file_output_format(agent_id, entry),
             curation_adapter_key=curation_adapter_key,
             candidate_expected_from=candidate_expected_from,
             execution_receipt=entry.get("execution_receipt"),

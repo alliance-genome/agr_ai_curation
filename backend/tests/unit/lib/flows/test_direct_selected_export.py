@@ -16,7 +16,8 @@ from .test_profile_projection import profile_step, _selected_plan  # noqa: F401
 @pytest.mark.parametrize("format", ["csv", "tsv", "json"])
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize("save_failure", [False, True])
-async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_step, format, empty, save_failure):
+@pytest.mark.parametrize("custom", [False, True])
+async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_step, format, empty, save_failure, custom):
     monkeypatch.setenv("FLOW_SELECTED_FIELDS_DIRECT_EXPORT", "true")
     step, _, profile = profile_step
     step["node_id"] = "stocks"
@@ -25,6 +26,7 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
     bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Stock", profile_resolver=lambda _: profile)
     plan = _selected_plan(bundle, format)
     saved = []
+    expected_agent_id = "custom_exporter" if custom else f"{format}_formatter"
 
     async def save(output_format, projection, descriptor, agent_id):
         saved.append((output_format, projection, descriptor, agent_id, get_current_flow_output_attachment()))
@@ -33,6 +35,7 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
         return {"file_id": "saved", "download_url": "/api/files/saved/download"}
 
     def get_agent(agent_id, **kwargs):
+        assert agent_id == expected_agent_id
         assert kwargs["authenticated_groups"] == ["WB"]
         assert kwargs["formatter_projection_plan"] == plan.model_dump(mode="json")
         return SimpleNamespace(tools=build_output_formatter_tools(
@@ -45,11 +48,11 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
     monkeypatch.setattr(executor, "_create_streaming_tool", lambda **_: pytest.fail("Formatter model must not run"))
     before = get_current_flow_output_attachment()
     tool = executor._make_flow_runtime_formatter_tool(
-        agent_id=f"{format}_formatter", agent_name="Export", output_format=format,
+        agent_id=expected_agent_id, agent_name="Export", output_format=format,
         tool_name="export", tool_description="Export saved fields", specialist_name="Export",
         base_context={"authenticated_groups": ["WB"]}, step_instruction_prefix="",
         completed_steps=[step], flow_name="Stock", flow_run_id="run-1", document_id="doc-1",
-        node_data={"projection_plan": plan.model_dump(mode="json")}, source_node_ids=["stocks"],
+        node_data={"export_execution_mode": "direct", "projection_plan": plan.model_dump(mode="json")}, source_node_ids=["stocks"],
     )
     if save_failure:
         with pytest.raises(ValueError, match="Storage unavailable"):
@@ -60,8 +63,37 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
         assert result["download_url"] == "/api/files/saved/download"
     assert len(saved) == 1
     assert saved[0][0] == format
+    assert saved[0][3] == expected_agent_id
     assert saved[0][1].total_count == (0 if empty else 1)
     if not empty:
         assert saved[0][1].rows[0]["stocks sources"][1] == {"name": "B"}
     assert saved[0][4]["source_keys"] == [a.source_key for a in bundle.artifacts if a.source_key]
     assert get_current_flow_output_attachment() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,enabled,expected", [(None, True, "ai"), ("ai", True, "ai"), ("direct", False, "unavailable"), ("direct", True, "requires")])
+async def test_explicit_mode_controls_prompt_bypass(monkeypatch, profile_step, mode, enabled, expected):  # noqa: F811
+    monkeypatch.setenv("FLOW_SELECTED_FIELDS_DIRECT_EXPORT", str(enabled).lower())
+    step, _, profile = profile_step
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Stock", profile_resolver=lambda _: profile)
+    monkeypatch.setattr(executor, "_build_terminal_flow_artifact_bundle", lambda **_: bundle)
+    monkeypatch.setattr(executor, "get_agent_by_id", lambda *a, **kw: SimpleNamespace(tools=[]))
+    async def invoke(*args):
+        return "AI instructions executed"
+    monkeypatch.setattr(executor, "_create_streaming_tool", lambda **_: SimpleNamespace(on_invoke_tool=invoke))
+    data = {"custom_instructions": "Combine stocks by supplier"}
+    if mode is not None:
+        data["export_execution_mode"] = mode
+    tool = executor._make_flow_runtime_formatter_tool(
+        agent_id="csv_formatter", agent_name="Export", output_format="csv",
+        tool_name="export", tool_description="Export", specialist_name="Export",
+        base_context={}, step_instruction_prefix=data["custom_instructions"], completed_steps=[step],
+        flow_name="Stock", flow_run_id="run", document_id="doc", node_data=data,
+    )
+    if expected == "ai":
+        assert await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), '{"query":"Export"}') == "AI instructions executed"
+    else:
+        with pytest.raises(ValueError, match=expected):
+            await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), '{"query":"Export"}')
+    assert data["custom_instructions"] == "Combine stocks by supplier"

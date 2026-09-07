@@ -31,6 +31,7 @@ export type AgentOutputContract =
   | { output_state: 'structured_extraction'; output_mode: 'unprofiled_generic'; output_schema_key?: null; generic_profile_ref?: null; domain_extraction_ref?: null }
 
 export interface AgentExecutionSnapshot {
+  default_export_execution_mode?: 'ai' | 'direct'
   snapshot_version: 1
   model_id: string
   model_temperature: number

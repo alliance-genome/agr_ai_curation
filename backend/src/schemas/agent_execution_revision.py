@@ -133,6 +133,16 @@ class AgentExecutionSnapshot(RevisionContractModel):
     at execution, while tool source code remains deployment-owned.
     """
 
+    default_export_execution_mode: Literal["ai", "direct"] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_snapshot(self, handler):
+        result = handler(self)
+        # Keep historical revision fingerprints byte-for-byte stable.
+        if self.default_export_execution_mode is None:
+            result.pop("default_export_execution_mode", None)
+        return result
+
     snapshot_version: Literal[1] = 1
     model_id: str = Field(min_length=1)
     model_temperature: float

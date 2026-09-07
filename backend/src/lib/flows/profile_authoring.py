@@ -80,6 +80,12 @@ def profile_projection_findings(
                 finding(output.id, "unavailable_projection_profile", f"Source '{source_id}' has an unavailable or mismatched saved output structure.")
         if catalogs is not None:
             catalogs.update(source_catalogs)
+        if output.data.export_execution_mode == "direct":
+            from src.lib.openai_agents.config import get_flow_selected_fields_direct_export
+            if not get_flow_selected_fields_direct_export():
+                finding(output.id, "direct_export_unavailable", "Direct export is not enabled on this server.")
+            if not output.data.projection_plan or output.data.projection_plan.get("selection_mode") != "selected_fields":
+                finding(output.id, "direct_export_requires_fields", "Choose structured output fields before using direct export.")
         if output.data.projection_plan is None:
             continue
         try:
@@ -95,7 +101,8 @@ def profile_projection_findings(
                 ))
             continue
         if plan.selection_mode == "selected_fields":
-            expected_format = output.data.agent_id.removesuffix("_formatter")
+            from src.lib.flows.formatter_capability import resolved_formatter_format
+            expected_format = resolved_formatter_format(output.data.agent_id, entries.get(output.id))
             for message in selection_errors(plan, source_catalogs, expected_format):
                 finding(output.id, "invalid_selected_export", message)
         if not (has_profile or unprofiled):

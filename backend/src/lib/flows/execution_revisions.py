@@ -68,11 +68,15 @@ def _revision_entry(
 
     required_params = _required_context_for_tool_ids(saved.tool_ids)
     structured = saved.output_contract.output_state == "structured_extraction"
+    from src.lib.flows.formatter_capability import snapshot_formatter_format
+    formatter_format = snapshot_formatter_format(saved)
     return {
         "agent_id": node.data.agent_id,
         "name": node.data.agent_display_name,
         "display_name": node.data.agent_display_name,
-        "category": "Extraction" if structured else "Custom",
+        "category": "Output" if formatter_format else "Extraction" if structured else "Custom",
+        "output_formatter_format": formatter_format,
+        "default_export_execution_mode": saved.default_export_execution_mode or "ai",
         "subcategory": "",
         "is_active": True, "visible": True,
         "requires_document": "document_id" in required_params,

@@ -170,6 +170,7 @@ class CreateCustomAgentRequest(BaseModel):
     include_group_rules: bool = True
     model_id: Optional[str] = Field(None, min_length=1, max_length=100)
     model_temperature: Optional[float] = None
+    default_export_execution_mode: Literal["ai", "direct"] | None = None
     model_reasoning: Optional[str] = Field(None, max_length=20)
     tool_ids: Optional[List[str]] = None
     output_schema_key: Optional[str] = Field(None, max_length=100)
@@ -199,6 +200,7 @@ class UpdateCustomAgentRequest(BaseModel):
     include_group_rules: Optional[bool] = None
     model_id: Optional[str] = Field(None, min_length=1, max_length=100)
     model_temperature: Optional[float] = None
+    default_export_execution_mode: Literal["ai", "direct"] | None = None
     model_reasoning: Optional[str] = Field(None, max_length=20)
     tool_ids: Optional[List[str]] = None
     output_schema_key: Optional[str] = Field(None, max_length=100)
@@ -230,6 +232,7 @@ class CustomAgentResponse(BaseModel):
 
     id: str
     agent_id: str
+    output_formatter_format: Literal["csv", "tsv", "json"] | None = None
     execution_revision_id: UUID | None = None
     user_id: int
     template_source: Optional[str] = None
@@ -246,6 +249,7 @@ class CustomAgentResponse(BaseModel):
     include_group_rules: bool
     model_id: str
     model_temperature: float
+    default_export_execution_mode: Literal["ai", "direct"] | None = None
     model_reasoning: Optional[str] = None
     tool_ids: List[str] = Field(default_factory=list)
     output_schema_key: Optional[str] = None
@@ -541,6 +545,7 @@ async def create_custom_agent_endpoint(
                 model_id=request.model_id,
                 model_temperature=request.model_temperature,
                 model_reasoning=request.model_reasoning,
+                default_export_execution_mode=request.default_export_execution_mode,
                 model_reasoning_provided="model_reasoning" in request.model_fields_set,
                 tool_ids=request.tool_ids,
                 output_schema_key=request.output_schema_key,
@@ -712,6 +717,7 @@ async def update_custom_agent_endpoint(
             model_id=request.model_id,
             model_temperature=request.model_temperature,
             model_reasoning=request.model_reasoning,
+                default_export_execution_mode=request.default_export_execution_mode,
             model_reasoning_provided="model_reasoning" in request.model_fields_set,
             tool_ids=request.tool_ids,
             output_schema_key=request.output_schema_key,

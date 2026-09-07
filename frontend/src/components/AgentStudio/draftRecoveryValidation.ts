@@ -32,7 +32,7 @@ const output = shape({ mode: oneOf('none', 'domain', 'profile_bound_generic', 'u
   domainExtractionRef: optional(ref), profilePin: nullable(pin), profileContract: nullable(profile) })
 const fields = shape({ name: string, description: string, customPrompt: string, groupPromptOverrides: record(string),
   includeGroupRules: boolean, visibility: oneOf('private', 'project'), allowedGroupIds: strings, modelId: string,
-  modelReasoning: string, toolIds: strings, outputDraft: output, icon: string })
+  defaultExportExecutionMode: optional(oneOf('ai', 'direct')), modelReasoning: string, toolIds: strings, outputDraft: output, icon: string })
 export const isWorkshopRecovery = shape({ fields, baseline: nullable(fields), mode: oneOf('scratch', 'template', 'clone'),
   parentId: string, customId: string, cloneId: string, sourceUpdatedAt: optional(string), cloneUpdatedAt: optional(string) })
 const outputContract = shape({ output_state: oneOf('none', 'structured_extraction'),
@@ -47,7 +47,7 @@ const nodeData = shape({ agent_id: string, agent_display_name: string, output_ke
   agent_description: maybeString, agent_revision_id: maybeString, execution_receipt: optional(nullable(receipt)),
   task_instructions: maybeString, step_goal: maybeString, custom_instructions: maybeString,
   prompt_version: optional(nullable(number)), include_evidence: optional(nullable(boolean)), output_filename_template: maybeString,
-  projection_plan: optional(nullable(object)), validation_attachments: optional(array(attachment)) })
+  export_execution_mode: optional(oneOf('ai', 'direct')), projection_plan: optional(nullable(object)), validation_attachments: optional(array(attachment)) })
 const definition = shape({ version: oneOf('1.1'), entry_node_id: string, task_instructions_default_only: optional(nullable(boolean)),
   nodes: array(shape({ id: string, type: oneOf('agent', 'decision', 'output', 'task_input'), position: shape({ x: number, y: number }), data: nodeData })),
   edges: array(shape({ id: string, source: string, target: string, role: optional(oneOf('control_flow', 'output_attachment', 'validation_attachment')),

@@ -119,6 +119,7 @@ def workshop_draft_fingerprint(workshop: Any) -> str:
                 "group_prompt_overrides": workshop.group_prompt_overrides or {},
                 "include_group_rules": bool(workshop.include_group_rules),
                 "model_id": workshop.draft_model_id or "",
+                "default_export_execution_mode": workshop.draft_default_export_execution_mode,
                 "model_reasoning": workshop.draft_model_reasoning or "",
                 "tool_ids": sorted(
                     workshop.draft_tool_ids or [], key=lambda item: item.encode("utf-8")
@@ -158,6 +159,7 @@ def workshop_authoring_metadata(workshop: Any) -> dict[str, Any]:
         "draft_fingerprint": workshop.draft_fingerprint,
         "draft_tool_ids": workshop.draft_tool_ids or [],
         "draft_model_id": workshop.draft_model_id,
+        "draft_default_export_execution_mode": workshop.draft_default_export_execution_mode,
         "draft_model_reasoning": workshop.draft_model_reasoning,
         "draft_output_schema_key": workshop.draft_output_schema_key,
         "draft_output": workshop.draft_output,

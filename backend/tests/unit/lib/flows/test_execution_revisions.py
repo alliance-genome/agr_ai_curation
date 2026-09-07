@@ -62,6 +62,7 @@ def install_resolver(monkeypatch, receipts):
         return SimpleNamespace(id=revision_id, revision=item.revision,
                                fingerprint=item.fingerprint), SimpleNamespace(
             output_contract=item.output_contract, tool_ids=[], curation=None,
+            template_source=None, default_export_execution_mode=None,
             structured_finalization=None,
         )
     lookup = Mock(side_effect=read)

@@ -2074,12 +2074,16 @@ def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
 
     db = SessionLocal()
     try:
-        return get_agent_by_key(
+        row = get_agent_by_key(
             db,
             agent_id,
             user_id=db_user_id,
             active_group_ids=list(kwargs.get("authenticated_groups", []) or []),
         )
+        if row is not None and agent_id.startswith("ca_"):
+            from src.lib.agent_studio.custom_agent_service import saved_export_metadata
+            row._saved_export_metadata = saved_export_metadata(row)
+        return row
     except Exception:
         logger.exception("[CatalogService] Failed DB lookup for agent '%s'", agent_id)
         return None
@@ -2325,6 +2329,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
         return {
             "agent_id": agent_id,
             "display_name": db_agent.name,
+            **getattr(db_agent, "_saved_export_metadata", {}),
             "agent_revision_id": (
                 str(db_agent.execution_revision_id)
                 if agent_id.startswith("ca_") and getattr(db_agent, "execution_revision_id", None) else None

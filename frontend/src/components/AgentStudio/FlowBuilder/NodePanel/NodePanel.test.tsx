@@ -260,6 +260,18 @@ describe('NodePanel', () => {
     expect(onApply).toHaveBeenCalledWith('node_1', expect.objectContaining({ custom_instructions: 'Columns: allele name, identifier. Leave missing IDs blank.' }))
   })
 
+  it('keeps output instructions but disables them in explicit direct mode', async () => {
+    const user = userEvent.setup()
+    const node = buildNode({ agent_id: 'tsv_formatter', agent_display_name: 'TSV', custom_instructions: 'Combine suppliers.', validation_attachments: undefined }, 'output')
+    const { onApply } = renderPanel(node)
+    await user.click(screen.getByRole('switch', { name: 'Export structured data directly — faster' }))
+    const instructions = screen.getByRole('textbox', { name: 'Output instructions' })
+    expect(instructions).toBeDisabled()
+    expect(instructions).toHaveValue('Combine suppliers.')
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onApply).toHaveBeenCalledWith('node_1', expect.objectContaining({ export_execution_mode: 'direct', custom_instructions: 'Combine suppliers.' }))
+  })
+
   it('names the extraction step a custom validator attaches to', () => {
     const node = buildNode({ agent_id: 'custom_validator', agent_display_name: 'Custom validator', validation_attachments: undefined })
     renderPanel(node, { validatorAttachment: { sourceLabel: 'Gene Extractor', sourceStep: 2, replacesLabel: 'Gene lookup' } })

@@ -89,6 +89,7 @@ export interface FlowNodeData {
   /** For output/formatter steps only. Controls the human-readable output descriptor. */
   output_filename_template?: string
   /** For terminal formatter steps. Backend-validated projection plan for curation exports. */
+  export_execution_mode?: 'ai' | 'direct'
   projection_plan?: Record<string, unknown> | null
   output_key: string
   validation_attachments?: ValidationAttachmentSelection[]
@@ -251,7 +252,8 @@ export interface FlowState {
     prompt_version?: number
     include_evidence?: boolean
     output_filename_template?: string
-    projection_plan?: Record<string, unknown> | null
+    export_execution_mode?: 'ai' | 'direct'
+  projection_plan?: Record<string, unknown> | null
     output_key: string
     validation_attachments?: ValidationAttachmentSelection[]
     validation_groups?: ValidationAttachmentGroup[]

@@ -860,7 +860,9 @@ async def get_registry_metadata(
             except ValueError:
                 execution_metadata_error = "Saved executable revision metadata is unavailable."
 
+            from src.lib.agent_studio.custom_agent_service import saved_export_metadata
             agents[custom_id] = AgentMetadata(
+                **saved_export_metadata(custom),
                 name=custom.name,
                 icon=custom.icon or "❓",
                 category=category,

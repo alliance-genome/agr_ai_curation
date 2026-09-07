@@ -275,6 +275,7 @@ def _agent_records(
             "profile_revision_id": None,
         }
         selectable = True
+        exporter_metadata = {}
         revision_id = getattr(agent, "execution_revision_id", None)
         if agent_id.startswith("ca_") and revision_id is not None:
             try:
@@ -285,6 +286,11 @@ def _agent_records(
             except ExecutionRevisionNotFoundError:
                 selectable = False
             else:
+                from src.lib.flows.formatter_capability import snapshot_formatter_format
+                exporter_metadata = {"output_formatter_format": snapshot_formatter_format(saved),
+                                     "default_export_execution_mode": saved.default_export_execution_mode or "ai"}
+                policy_entry.update(exporter_metadata)
+                compatibility["flow_selectable"] = flow_palette_show_in_palette(agent_id, policy_entry)
                 profile_pin = saved.output_contract.generic_profile_ref
                 identity_contract = {
                     "phase": "saved_agent_revision",
@@ -306,6 +312,7 @@ def _agent_records(
                 detail={
                     "agent_id": agent_id,
                     "identity_contract": identity_contract,
+                    **exporter_metadata,
                     "visibility": str(agent.visibility),
                     "allowed_group_ids": list(agent.allowed_group_ids or []),
                     "model_id": str(agent.model_id),

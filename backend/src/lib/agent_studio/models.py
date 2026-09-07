@@ -226,6 +226,7 @@ class FlowNodeContext(BaseModel):
     prompt_version: Optional[int] = None
     include_evidence: Optional[bool] = None
     output_filename_template: Optional[str] = None
+    export_execution_mode: Literal["ai", "direct"] = "ai"
     projection_plan: Optional[Dict[str, object]] = None
     output_key: str
     validation_attachments: List[Dict[str, object]] = Field(default_factory=list)
@@ -284,6 +285,7 @@ class AgentWorkshopContext(BaseModel):
     has_group_prompt_overrides: Optional[bool] = None
     draft_tool_ids: Optional[List[str]] = None
     draft_model_id: Optional[str] = None
+    draft_default_export_execution_mode: Literal["ai", "direct"] = "ai"
     draft_model_reasoning: Optional[str] = None
     draft_output_schema_key: Optional[str] = None
     # Local draft data may intentionally be incomplete. Save/conformance APIs

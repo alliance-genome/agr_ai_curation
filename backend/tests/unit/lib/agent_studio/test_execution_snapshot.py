@@ -197,3 +197,20 @@ def test_item_guidance_supplements_saved_prompt_and_uses_pinned_description(monk
     else:
         assert "Additional curator guidance for this item type" not in rendered
     assert profile.attributes_schema()["properties"]["stock_name"]["description"] == "Keep the name as written."
+
+
+def test_export_default_preserves_historical_snapshot_fingerprint(monkeypatch):
+    import hashlib
+    from src.schemas.generic_extraction_profile import canonical_json
+    from src.schemas.agent_execution_revision import AgentExecutionSnapshot
+    from src.lib.agent_studio import custom_agent_service, catalog_service
+    monkeypatch.setattr(custom_agent_service, "_system_managed_tool_ids", lambda *_: [])
+    monkeypatch.setattr(catalog_service, "_inherited_curation_definition_for_db_agent", lambda _: None)
+    saved = capture_execution_snapshot(None, agent(), AgentOutputContract(output_state="none"))
+    historical = saved.model_dump(mode="json")
+    assert "default_export_execution_mode" not in historical
+    expected = "sha256:" + hashlib.sha256(canonical_json(historical).encode()).hexdigest()
+    assert AgentExecutionSnapshot.model_validate(historical).fingerprint() == expected
+    direct = saved.model_copy(update={"default_export_execution_mode": "direct"})
+    assert direct.fingerprint() != expected
+    assert AgentExecutionSnapshot.model_validate(direct.model_dump()).default_export_execution_mode == "direct"

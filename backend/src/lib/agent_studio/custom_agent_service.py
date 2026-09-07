@@ -797,6 +797,7 @@ def _record_execution_save(
     db, agent, *, expected_revision_id, output_contract=None, new_generic_profile=None,
     revise_generic_profile=None,
     previous_output=None, previous_snapshot=None, schema_provided=False, notes=None,
+    default_export_execution_mode=None,
     active_group_ids=(),
 ):
     from src.lib.agent_studio.execution_revision_service import append_execution_revision
@@ -839,6 +840,15 @@ def _record_execution_save(
     else:
         selected = previous_output
     saved = capture_execution_snapshot(db, agent, selected, active_group_ids=active_group_ids)
+    mode = default_export_execution_mode if default_export_execution_mode is not None else (
+        previous_snapshot.default_export_execution_mode if previous_snapshot is not None else None
+    )
+    if mode not in (None, "ai", "direct"):
+        raise ValueError("Choose AI or direct export.")
+    from src.lib.flows.formatter_capability import snapshot_formatter_format
+    if mode == "direct" and snapshot_formatter_format(saved) is None:
+        raise ValueError("Direct export defaults require a file exporter agent.")
+    saved = saved.model_copy(update={"default_export_execution_mode": mode})
     if selected.domain_extraction_ref is not None:
         # A newly selected package can narrow the access floor. Retain it on
         # the editable head too, so changing output later cannot erase it.
@@ -889,6 +899,7 @@ def create_custom_agent(
     visibility: str = "private",
     output_contract: AgentOutputContract | None = None,
     new_generic_profile: GenericProfileContract | None = None,
+    default_export_execution_mode: Optional[str] = None,
 ) -> CustomAgent:
     """Create a new custom agent and seed version snapshot."""
     selected_template_key = str(template_source or "").strip()
@@ -1078,6 +1089,7 @@ def create_custom_agent(
 
     _record_execution_save(
         db, custom_agent, expected_revision_id=None,
+        default_export_execution_mode=default_export_execution_mode,
         output_contract=output_contract, new_generic_profile=new_generic_profile,
         active_group_ids=active_group_ids,
     )
@@ -1297,6 +1309,9 @@ def clone_saved_custom_agent(
             if key == "output_contract" and AgentOutputContract.model_validate(value) == saved.output_contract:
                 continue
             changed[key] = value
+        elif key == "default_export_execution_mode":
+            if value != saved.default_export_execution_mode:
+                changed[key] = value
         elif value != getattr(clone, field_names.get(key, key)):
             changed[key] = value
     if changed:
@@ -1409,6 +1424,7 @@ def update_custom_agent(
     output_contract: AgentOutputContract | None = None,
     new_generic_profile: GenericProfileContract | None = None,
     revise_generic_profile: GenericProfileRevisionDraft | None = None,
+    default_export_execution_mode: Optional[str] = None,
 ) -> CustomAgent:
     """Save a complete new executable revision with inherited policy preserved."""
     previous_revision_id, previous_snapshot = _prepare_execution_update(
@@ -1587,6 +1603,7 @@ def update_custom_agent(
         custom_agent.version = int(custom_agent.version or 1) + 1
     _record_execution_save(
         db, custom_agent, expected_revision_id=previous_revision_id,
+        default_export_execution_mode=default_export_execution_mode,
         output_contract=output_contract, new_generic_profile=new_generic_profile,
         revise_generic_profile=revise_generic_profile,
         previous_output=previous_output, previous_snapshot=previous_snapshot, notes=notes,
@@ -1680,6 +1697,24 @@ def get_custom_agent_runtime_info(
             db.close()
 
 
+def saved_export_metadata(custom_agent: CustomAgent) -> Dict[str, Any]:
+    from sqlalchemy import inspect
+    from src.models.sql.agent_execution_revision import AgentExecutionRevision
+    from src.schemas.agent_execution_revision import AgentExecutionSnapshot
+    from src.lib.flows.formatter_capability import snapshot_formatter_format
+    state = inspect(custom_agent, raiseerr=False)
+    db = state.session if state is not None else None
+    revision_id = getattr(custom_agent, "execution_revision_id", None)
+    if db is None or revision_id is None:
+        return {"default_export_execution_mode": "ai", "output_formatter_format": None}
+    revision = db.get(AgentExecutionRevision, revision_id)
+    if revision is None or revision.agent_id != custom_agent.id:
+        raise ValueError("Saved exporter configuration is unavailable.")
+    saved = AgentExecutionSnapshot.model_validate(revision.snapshot)
+    return {"default_export_execution_mode": saved.default_export_execution_mode or "ai",
+            "output_formatter_format": snapshot_formatter_format(saved)}
+
+
 def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
     """Serialize SQL model to API-friendly dict."""
     group_prompt_overrides = _read_group_prompt_overrides(custom_agent)
@@ -1711,6 +1746,7 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
             custom_agent.model_temperature
             if custom_agent.model_temperature is not None else 0.1
         ),
+        **saved_export_metadata(custom_agent),
         "model_reasoning": custom_agent.model_reasoning,
         "tool_ids": list(custom_agent.tool_ids or []),
         "output_schema_key": custom_agent.output_schema_key,

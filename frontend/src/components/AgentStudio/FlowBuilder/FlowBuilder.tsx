@@ -171,6 +171,7 @@ const flowNodeDataForPersistence = (data: AgentNodeData): FlowNodeData => {
   if (data.output_filename_template !== undefined) {
     persisted.output_filename_template = data.output_filename_template
   }
+  if (data.export_execution_mode !== undefined) persisted.export_execution_mode = data.export_execution_mode
   if (data.projection_plan !== undefined) {
     persisted.projection_plan = data.projection_plan
   }
@@ -259,6 +260,7 @@ const flowStateDefinition = (state: FlowState): FlowDefinition => ({
       ...(node.output_filename_template !== undefined
         ? { output_filename_template: node.output_filename_template }
         : {}),
+      ...(node.export_execution_mode !== undefined ? { export_execution_mode: node.export_execution_mode } : {}),
       ...(node.projection_plan !== undefined ? { projection_plan: node.projection_plan } : {}),
       output_key: node.output_key,
       ...(node.validation_attachments !== undefined
@@ -1180,6 +1182,7 @@ function FlowBuilderInner({
         execution_receipt: n.data.execution_receipt,
         include_evidence: n.data.include_evidence,
         output_filename_template: n.data.output_filename_template,
+        export_execution_mode: n.data.export_execution_mode,
         projection_plan: n.data.projection_plan,
         output_key: n.data.output_key,
         validation_attachments: n.data.validation_attachments,
@@ -2014,6 +2017,7 @@ function FlowBuilderInner({
             agent_description: agentDescription,
             task_instructions: isTaskInput ? '' : undefined,
             custom_instructions: '',
+            export_execution_mode: isOutputFormatter ? agentMetadata[agentId]?.default_export_execution_mode || 'ai' : undefined,
             prompt_version: promptVersion,
             ...(agentId.startsWith('ca_') ? { agent_revision_id: agentRevisionId } : {}),
             include_evidence: isTaskInput

@@ -99,6 +99,14 @@ describe('Agent Studio authoring context fingerprints', () => {
     })
   })
 
+  it('includes explicit exporter mode in the flow fingerprint', async () => {
+    const context = flowContext()
+    context.flow_definition!.nodes[0].export_execution_mode = 'ai'
+    const ai = await fingerprintFlowDraft(context)
+    context.flow_definition!.nodes[0].export_execution_mode = 'direct'
+    expect(await fingerprintFlowDraft(context)).not.toBe(ai)
+  })
+
   it('matches the backend canonical hash fixture', async () => {
     await expect(fingerprintFlowDraft(flowContext())).resolves.toBe(
       'sha256:d78fb31bafaeef99c20bbebb07af22debf58dbe0315a1caa327a03e89f7586d7'
@@ -112,7 +120,7 @@ describe('Agent Studio authoring context fingerprints', () => {
       'sha256:f9f8664ca18901527a106d90c077ae0b52f2733a592531c7cd1110795a558b92'
     )
     await expect(fingerprintWorkshopDraft(adversarialWorkshopContext())).resolves.toBe(
-      'sha256:63fee43c366577e95a0eb9382622d0d345f4bd98b6d467f2ed5be2c155780443'
+      'sha256:73384471f082a5d75067c0f51f8cf345554eff60f4b85231baea2c75398bfc02'
     )
   })
 
@@ -128,7 +136,7 @@ describe('Agent Studio authoring context fingerprints', () => {
       'sha256:f9f8664ca18901527a106d90c077ae0b52f2733a592531c7cd1110795a558b92'
     )
     await expect(fingerprintWorkshopDraft(adversarialWorkshopContext())).resolves.toBe(
-      'sha256:63fee43c366577e95a0eb9382622d0d345f4bd98b6d467f2ed5be2c155780443'
+      'sha256:73384471f082a5d75067c0f51f8cf345554eff60f4b85231baea2c75398bfc02'
     )
   })
 

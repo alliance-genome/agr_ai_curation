@@ -12,6 +12,7 @@ import type { OutputBindingView } from '../types'
 type Catalog = NonNullable<FlowDraftValidationResponse['projection_fields_by_node']>
 interface Column { key: string; header: string; field_ref: string; source_node_id: string }
 interface Props {
+  direct?: boolean
   format: 'csv' | 'tsv' | 'json'
   definition: FlowDefinition
   binding?: OutputBindingView
@@ -19,7 +20,7 @@ interface Props {
   onChange: (value: Record<string, unknown> | null) => void
 }
 
-export default function OutputFieldEditor({ format, definition, binding, value, onChange }: Props) {
+export default function OutputFieldEditor({ format, definition, binding, value, onChange, direct = false }: Props) {
   const request = useRef(0)
   useEffect(() => () => { request.current += 1 }, [])
   const [open, setOpen] = useState(false)
@@ -75,14 +76,14 @@ export default function OutputFieldEditor({ format, definition, binding, value, 
   }
   return <Box component="section" sx={{ display: 'grid', gap: 1 }}>
     <Typography fontWeight={600}>Choose how to build the file</Typography>
-    <RadioGroup value={selected ? 'selected_fields' : 'guided'} aria-label="File content mode"
+    {!direct && <RadioGroup value={selected ? 'selected_fields' : 'guided'} aria-label="File content mode"
       onChange={(_, mode) => { if (mode === 'selected_fields') void edit(); else onChange(null) }}>
       <FormControlLabel value="selected_fields" control={<Radio />} label="Use selected fields" />
       <FormControlLabel value="guided" control={<Radio />} label="Let AI arrange the output" />
-    </RadioGroup>
+    </RadioGroup>}
     <Typography variant="body2">{selected
       ? `${Array.isArray(value.columns) ? value.columns.length : 0} fields selected. These columns are fixed and values are copied from your results.`
-      : 'Describe the layout in Output instructions. AI chooses columns from the available results; the layout may vary between runs.'}</Typography>
+      : direct ? 'Choose the structured fields to copy before applying this step.' : 'Describe the layout in Output instructions. AI chooses columns from the available results; the layout may vary between runs.'}</Typography>
     <Button variant={selected ? 'outlined' : 'text'} onClick={() => void edit()} disabled={sources.length === 0}>Choose output fields</Button>
     <Dialog open={open} maxWidth="lg" fullWidth aria-labelledby="output-fields-title" disableEscapeKeyDown>
       <DialogTitle id="output-fields-title">Choose output fields · {format.toUpperCase()}</DialogTitle>

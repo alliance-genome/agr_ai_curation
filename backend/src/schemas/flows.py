@@ -188,6 +188,9 @@ class FlowNodeData(BaseModel):
                 raise ValueError("Flow execution receipt revision does not match the node")
         return self
 
+    # Missing mode preserves existing model-driven execution.
+    export_execution_mode: Literal["ai", "direct"] = "ai"
+
     # Output configuration
     include_evidence: Optional[bool] = Field(
         None,
@@ -282,6 +285,8 @@ class FlowNode(BaseModel):
                 raise ValueError("task_input nodes must have non-empty task_instructions")
             if self.data.agent_id != "task_input":
                 raise ValueError("task_input nodes must have agent_id='task_input'")
+        if self.data.export_execution_mode == "direct" and self.type != "output":
+            raise ValueError("Direct export is only supported on file output steps.")
         return self
 
 

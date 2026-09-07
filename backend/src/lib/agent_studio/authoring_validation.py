@@ -422,7 +422,8 @@ def validate_flow_authoring_draft(
                         fix_hint="Connect an available extraction or typed validation node.",
                     )
                 )
-            if target is None or target.data.agent_id not in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS:
+            from src.lib.flows.formatter_capability import resolved_formatter_format
+            if target is None or (target.data.agent_id not in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS and not resolved_formatter_format(target.data.agent_id, entries.get(target.id))):
                 findings.append(
                     AuthoringValidationFinding(
                         code="incompatible_output_target",
@@ -533,6 +534,7 @@ class CustomAgentDraft(BaseModel):
     inherited_allowed_group_ids: list[str] = Field(default_factory=list)
     include_group_rules: bool = True
     model_id: str = Field(..., min_length=1, max_length=100)
+    default_export_execution_mode: Literal["ai", "direct"] = "ai"
     model_reasoning: str | None = Field(None, max_length=20)
     model_temperature: float | None = None
     tool_ids: list[str] = Field(default_factory=list)

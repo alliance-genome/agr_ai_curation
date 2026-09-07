@@ -238,6 +238,7 @@ export interface CustomAgent {
   include_group_rules: boolean
   model_id: string
   model_temperature: number
+  default_export_execution_mode?: 'ai' | 'direct'
   model_reasoning?: string
   tool_ids: string[]
   output_schema_key?: string
@@ -311,6 +312,7 @@ export interface FlowContextDefinition {
     prompt_version?: number
     include_evidence?: boolean
     output_filename_template?: string
+    export_execution_mode?: 'ai' | 'direct'
     projection_plan?: Record<string, unknown> | null
     output_key: string
     validation_attachments?: Array<Record<string, unknown>>
@@ -356,6 +358,7 @@ export interface AgentWorkshopContext {
   has_group_prompt_overrides?: boolean
   draft_tool_ids?: string[]
   draft_model_id?: string
+  draft_default_export_execution_mode?: 'ai' | 'direct'
   draft_model_reasoning?: string
   draft_output_schema_key?: string
   /** Complete local structure, including incomplete unsaved input; never an execution receipt. */

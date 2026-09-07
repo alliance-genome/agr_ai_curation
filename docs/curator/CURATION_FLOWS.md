@@ -67,6 +67,8 @@ For CSV, TSV, and JSON, choose how to build the file:
 - **Use selected fields** fixes the columns across runs. Open **Choose output fields**, select details from the connected agents, rename or reorder the columns, then choose **Use these fields**. Apply the output-step changes and save the flow.
 - **Let AI arrange the output** uses your **Output instructions** to choose a layout from the available results. This is useful for exploratory work; columns can vary between runs.
 
+**Export structured data directly — faster** skips the extra AI call and copies your selected fields into the file. Turn it on only when you want the values unchanged. Agent prompts, group prompts and output instructions do not run in this mode; your instruction text is kept and becomes available again when you turn direct export off. Renaming and reordering columns are supported; combining or rewriting values is not.
+
 The field picker works with saved custom structures and packaged field declarations. It shows each connected source separately. For a stock extractor, you might select **Stock name**, then the **Supplier name** and **Catalog number** parts of Source. Select the whole Source answer instead if you want to keep its parts together.
 
 JSON keeps selected groups as objects and lists as arrays. CSV and TSV put whole groups and lists in a cell as JSON; selecting individual parts gives them separate columns. Records from different source steps remain separate rows, with blanks in columns that belong to another source. They are not joined into a new biological record.

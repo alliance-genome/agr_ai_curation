@@ -37,7 +37,8 @@ export const resolveOutputFilenameMode = (template?: string): OutputFilenameMode
   return 'custom'
 }
 
-export const outputFileExtension = (agentId: string): 'csv' | 'tsv' | 'json' => {
+export const outputFileExtension = (agentId: string, savedFormat?: 'csv' | 'tsv' | 'json' | null): 'csv' | 'tsv' | 'json' => {
+  if (savedFormat) return savedFormat
   if (agentId === 'tsv_formatter') return 'tsv'
   if (agentId === 'json_formatter') return 'json'
   return 'csv'
@@ -46,6 +47,7 @@ export const outputFileExtension = (agentId: string): 'csv' | 'tsv' | 'json' => 
 export interface NodeDraftValues {
   executionSelection: Pick<AgentNodeData, 'agent_revision_id' | 'execution_receipt'>
   customInstructions: string
+  exportExecutionMode: 'ai' | 'direct'
   projectionPlan: Record<string, unknown> | null
   taskInstructions: string
   includeEvidence: boolean
@@ -85,6 +87,7 @@ function valuesFromNode(node: AgentNode, agentMetadata: Record<string, AgentMeta
       execution_receipt: node.data.execution_receipt,
     } : {},
     customInstructions: node.data.custom_instructions || '',
+    exportExecutionMode: node.data.export_execution_mode || 'ai',
     projectionPlan: node.data.projection_plan || null,
     taskInstructions: node.data.task_instructions || '',
     includeEvidence: resolveOutputFormatterIncludeEvidence(
@@ -123,6 +126,7 @@ function summarizeChanges(initial: NodeDraftValues, current: NodeDraftValues, is
   const turnedOn = [...after].filter((id) => !before.has(id)).length
   if (turnedOff > 0) phrases.push(`turned off ${turnedOff === 1 ? 'one check' : `${turnedOff} checks`}`)
   if (turnedOn > 0) phrases.push(`turned on ${turnedOn === 1 ? 'one check' : `${turnedOn} checks`}`)
+  if (initial.exportExecutionMode !== current.exportExecutionMode) phrases.push('changed how the file is created')
   if (JSON.stringify(initial.projectionPlan) !== JSON.stringify(current.projectionPlan)) phrases.push('changed the output fields')
   if (initial.includeEvidence !== current.includeEvidence) phrases.push('changed the evidence option')
   if (
@@ -221,6 +225,7 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
       : node.data.include_evidence
     return {
       ...values.executionSelection,
+      export_execution_mode: values.exportExecutionMode,
       projection_plan: values.projectionPlan,
       custom_instructions: values.customInstructions,
       include_evidence: includeEvidence,
@@ -250,6 +255,7 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
       : node.data.include_evidence
     return {
       ...values.executionSelection,
+      export_execution_mode: values.exportExecutionMode,
       projection_plan: values.projectionPlan,
       custom_instructions: values.customInstructions || undefined,
       include_evidence: includeEvidence,

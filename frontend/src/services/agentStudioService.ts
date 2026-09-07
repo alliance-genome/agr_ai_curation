@@ -304,6 +304,8 @@ export interface DomainEnvelopeMetadata {
 }
 
 export interface AgentMetadata {
+  default_export_execution_mode?: 'ai' | 'direct'
+  output_formatter_format?: 'csv' | 'tsv' | 'json' | null
   name: string
   icon: string
   category: string
@@ -426,6 +428,7 @@ export interface CreateCustomAgentRequest {
   include_group_rules?: boolean
   model_id?: string
   model_temperature?: number
+  default_export_execution_mode?: 'ai' | 'direct'
   model_reasoning?: string | null
   tool_ids?: string[]
   output_schema_key?: string | null
@@ -448,6 +451,7 @@ export interface UpdateCustomAgentRequest {
   include_group_rules?: boolean
   model_id?: string
   model_temperature?: number
+  default_export_execution_mode?: 'ai' | 'direct'
   model_reasoning?: string | null
   tool_ids?: string[]
   output_schema_key?: string | null

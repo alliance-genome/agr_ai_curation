@@ -71,6 +71,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     // Mirror the real component: the current transcript is published on mount
     // and whenever the seeded conversation changes.
     const [snapshot, setSnapshot] = React.useState<SnapshotMessage[]>(initialConversation ?? [])
+    const [captured, setCaptured] = React.useState('')
     // Key on content, not identity: some tests build fresh transcript objects per render.
     const seedKey = (initialConversation ?? []).map((message) => `${message.role}:${message.content}`).join('|')
     const appliedSeedKeyRef = React.useRef(seedKey)
@@ -101,6 +102,8 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
       </button>
       <button onClick={() => onStreamingChange?.(true)}>start-streaming</button>
       <button onClick={() => onStreamingChange?.(false)}>stop-streaming</button>
+      <button onClick={async () => setCaptured(JSON.stringify(await captureContext?.()))}>capture-export-context</button>
+      <div data-testid="captured-export-context">{captured}</div>
       <div data-testid="opus-chat-context">{JSON.stringify(context ?? {})}</div>
       <div data-testid="workshop-action-error">{actionError}</div>
       <button onClick={async () => {
@@ -173,7 +176,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
   return { default: OpusChatMock }
 })
 
-const flowBuilderInstances = vi.hoisted(() => ({ count: 0, draft: undefined as Record<string, any> | undefined }))
+const flowBuilderInstances = vi.hoisted(() => ({ direct: false, count: 0, draft: undefined as Record<string, any> | undefined }))
 
 vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
   const react = await import('react')
@@ -223,6 +226,7 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
           }],
           edges: [],
           }
+          if (flowBuilderInstances.direct) draft.nodes.push({ ...draft.nodes[0], id: 'export', type: 'output', agent_id: 'csv_formatter', agent_display_name: 'CSV', output_key: 'csv', export_execution_mode: 'direct' } as typeof draft.nodes[number])
           flowBuilderInstances.draft = draft
           onFlowChange?.(draft)
         }}
@@ -451,6 +455,24 @@ describe('AgentStudioPage', () => {
     })
     historyMocks.useChatHistoryDetailQuery.mockReturnValue(buildEmptyHistoryQueryResult())
     historyMocks.useChatHistoryTranscriptQuery.mockReturnValue(buildEmptyHistoryQueryResult())
+  })
+
+  it('preserves direct export in displayed and captured Chat context', async () => {
+    flowBuilderInstances.direct = true
+    try {
+      await renderStudio()
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      fireEvent.click(await screen.findByText('emit-flow-context'))
+      await waitFor(() => {
+        const context = JSON.parse(screen.getByTestId('opus-chat-context').textContent || '{}')
+        expect(context.flow_definition.nodes.find((node: { id: string }) => node.id === 'export').export_execution_mode).toBe('direct')
+      })
+      fireEvent.click(screen.getByText('capture-export-context'))
+      await waitFor(() => {
+        const context = JSON.parse(screen.getByTestId('captured-export-context').textContent || '{}')
+        expect(context.flow_definition.nodes.find((node: { id: string }) => node.id === 'export').export_execution_mode).toBe('direct')
+      })
+    } finally { flowBuilderInstances.direct = false }
   })
 
   it('preserves the selected tab when it changes during Chat action validation', async () => {

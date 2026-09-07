@@ -12,6 +12,7 @@ const settingNames: Record<string, string> = {
   validation_groups: 'Automatic validation',
   include_evidence: 'Supporting evidence',
   output_filename_template: 'Download filename',
+  export_execution_mode: 'How the file is created',
   projection_plan: 'Information in the download',
   output_key: 'Connection to other steps',
   agent_display_name: 'Step name',

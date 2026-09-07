@@ -110,6 +110,8 @@ class AgentMetadata(BaseModel):
     validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)
     domain_envelope: Optional[Dict[str, Any]] = None
     domain_extraction_ref: Optional[Dict[str, str]] = None
+    output_formatter_format: Optional[str] = None
+    default_export_execution_mode: str = "ai"
     execution_metadata_error: Optional[str] = None
 
 

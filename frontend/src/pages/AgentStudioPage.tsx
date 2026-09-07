@@ -535,6 +535,7 @@ function AgentStudioPage() {
             execution_receipt: node.execution_receipt,
             include_evidence: node.include_evidence,
             output_filename_template: node.output_filename_template,
+            export_execution_mode: node.export_execution_mode,
             projection_plan: node.projection_plan,
             output_key: node.output_key,
             validation_attachments: node.validation_attachments?.map((attachment) => ({
@@ -603,6 +604,7 @@ function AgentStudioPage() {
             execution_receipt: node.execution_receipt,
             include_evidence: node.include_evidence,
             output_filename_template: node.output_filename_template,
+            export_execution_mode: node.export_execution_mode,
             projection_plan: node.projection_plan,
             output_key: node.output_key,
             validation_attachments: node.validation_attachments?.map((attachment) => ({ ...attachment })),

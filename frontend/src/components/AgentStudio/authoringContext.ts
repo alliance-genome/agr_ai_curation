@@ -120,6 +120,7 @@ function workshopAuthorableDraft(workshop: AgentWorkshopContext) {
     group_prompt_overrides: workshop.group_prompt_overrides ?? {},
     include_group_rules: workshop.include_group_rules ?? false,
     model_id: workshop.draft_model_id ?? '',
+    default_export_execution_mode: workshop.draft_default_export_execution_mode ?? 'ai',
     model_reasoning: workshop.draft_model_reasoning ?? '',
     tool_ids: [...(workshop.draft_tool_ids ?? [])].sort(compareUtf8),
     output_schema_key: workshop.draft_output_schema_key ?? '',
