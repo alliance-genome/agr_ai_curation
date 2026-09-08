@@ -60,11 +60,12 @@ def validate_persisted_flow_definition(
         ):
             # Persisted repair belongs to e2f3a4b5c6d7 and i6j7k8l9m0n1.
             raise PersistedFlowMigrationError(
-                "Flow contains retired validation references. Re-select current "
+                f"Flow contains retired validation references from migration "
+                f"'{migration.migration_id}'. Re-select current "
                 "validation attachments before saving. For an existing saved flow, "
                 "ask an administrator to verify Alembic upgrade head completed "
-                "with the required package profile (repair revisions e2f3a4b5c6d7 "
-                "and i6j7k8l9m0n1) and investigate missed or corrupt persisted repairs."
+                "with the required package profile and investigate missed or "
+                "corrupt persisted repairs."
             )
 
 
@@ -74,7 +75,6 @@ class PersistedFlowMigrationResult:
 
     definition: dict[str, Any]
     applied_migrations: tuple[str, ...] = ()
-    removed_attachment_ids: tuple[str, ...] = ()
 
     @property
     def changed(self) -> bool:
@@ -186,7 +186,6 @@ def migrate_persisted_flow_definition(
         return PersistedFlowMigrationResult(definition=migrated)
 
     applied_migrations: list[str] = []
-    removed_attachment_ids: list[str] = []
     for migration in migrations:
         expected_bindings = {
             attachment.attachment_id: attachment.validator_binding_id
@@ -247,12 +246,10 @@ def migrate_persisted_flow_definition(
 
         if removed_for_migration:
             applied_migrations.append(migration.migration_id)
-            removed_attachment_ids.extend(removed_for_migration)
 
     return PersistedFlowMigrationResult(
         definition=migrated,
         applied_migrations=tuple(applied_migrations),
-        removed_attachment_ids=tuple(removed_attachment_ids),
     )
 
 

@@ -89,7 +89,6 @@ def test_removes_only_exact_retired_selections_without_mutating_input():
 
     assert original == before
     assert result.applied_migrations == (MIGRATION_ID,)
-    assert set(result.removed_attachment_ids) == (ATTACHMENT_IDS)
     assert result.definition["nodes"][0]["data"]["validation_attachments"] == [
         {
             "attachment_id": "org.example.records:binding:current",
@@ -203,8 +202,11 @@ def test_persisted_invariant_rejects_retired_references_without_repair(location)
         else:
             definition["edges"] = [{"replaces_attachment_id": next(iter(ATTACHMENT_IDS))}]
     original = deepcopy(definition)
-    with pytest.raises(PersistedFlowMigrationError, match="Alembic upgrade head"):
+    with pytest.raises(PersistedFlowMigrationError, match="Alembic upgrade head") as exc:
         validate_persisted_flow_definition(definition, migrations=(MIGRATION,))
+    assert f"migration '{MIGRATION_ID}'" in str(exc.value)
+    assert "e2f3a4b5c6d7" not in str(exc.value)
+    assert "i6j7k8l9m0n1" not in str(exc.value)
     assert definition == original
 
 

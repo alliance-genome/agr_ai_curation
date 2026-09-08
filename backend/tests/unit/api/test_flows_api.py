@@ -679,8 +679,8 @@ def test_flow_response_requires_persisted_retired_attachment_repair(monkeypatch,
         with pytest.raises(HTTPException) as exc:
             flows._flow_to_response(stored_flow)
         assert exc.value.status_code == 422
-        assert "e2f3a4b5c6d7" in exc.value.detail
-        assert "i6j7k8l9m0n1" in exc.value.detail
+        assert "2026-09-03.remove-allele-pending-envelope-validator" in exc.value.detail
+        assert "Alembic upgrade head" in exc.value.detail
         assert len(stored_flow.flow_definition["nodes"][1]["data"]["validation_attachments"]) == 7
         return
 
