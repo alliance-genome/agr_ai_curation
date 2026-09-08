@@ -21,6 +21,7 @@ def build_route_catalog(
     agent_defaults: Mapping[str, BenchmarkSuiteRoute],
     model_validator_defaults: Mapping[str, BenchmarkSuiteRoute],
     agent_targets: Iterable[str],
+    agent_model_validators: Mapping[str, Iterable[str]],
     flow_agents: Mapping[str, Iterable[str]],
     flow_model_validators: Mapping[str, Iterable[str]],
     agent_aliases: Mapping[str, str] | None = None,
@@ -57,13 +58,16 @@ def build_route_catalog(
         for validator_id, route in sorted(model_validator_defaults.items())
     )
 
-    targets = [
-        BenchmarkTargetCatalogEntry(
+    targets = []
+    for agent_id in sorted(set(agent_targets)):
+        validator_ids = tuple(sorted(set(agent_model_validators.get(agent_id, ()))))
+        missing = set(validator_ids) - set(model_validator_defaults)
+        if agent_id not in agent_defaults or missing:
+            raise ValueError(f"agent '{agent_id}' references catalog entries without defaults")
+        targets.append(BenchmarkTargetCatalogEntry(
             target=BenchmarkExecutionTarget(kind="agent", id=agent_id),
-            route_slots=(f"agent:{agent_id}",),
-        )
-        for agent_id in sorted(set(agent_targets))
-    ]
+            route_slots=(f"agent:{agent_id}", *(f"validator:{key}" for key in validator_ids)),
+        ))
     for flow_id in sorted(flow_agents):
         agent_ids = tuple(
             sorted(

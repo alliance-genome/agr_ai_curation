@@ -376,6 +376,19 @@ Resolved agent cells consume the validated structured object in
 not an extraction result. Document-aware agents receive the same normal
 `DocumentContext` for construction and streaming/tool execution.
 
+Direct builder agents also use the normal per-run evidence, extraction workspace,
+and resolver state for their package-declared tools. Their backend finalizer owns
+the extraction payload; ordinary model completion text cannot replace it.
+The finalized payload passes through the same domain-validator dispatch as a
+curator's specialist run, using the actual agent and authenticated curator context.
+Validator findings remain in the result; missing finalization or a validator
+execution failure fails the run. This does not create a
+supervisor handoff or write chat extraction records, and it does not change builder
+agents to schema-based model output. Each run has its own tool-state bindings.
+The catalog includes the active model-backed validator slots for each direct
+extractor and excludes targets whose validator agents are not visible to the
+curator. Deterministic validators do not need model routes.
+
 Resolved flow cells require a successful `FLOW_FINISHED.data` receipt, then
 resolve its extraction references through persisted records scoped to the
 execution owner, document, flow run, origin session, and FLOW source kind.

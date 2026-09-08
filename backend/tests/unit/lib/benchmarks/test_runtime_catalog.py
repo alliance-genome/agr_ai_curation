@@ -14,6 +14,7 @@ def configured(monkeypatch):
             NS(agent_key="validator", model_id="model-a", model_reasoning="high", visibility="system")]
     listing = Mock(return_value=rows)
     monkeypatch.setattr(runtime, "list_agents_visible_to_user", listing)
+    monkeypatch.setattr(runtime, "get_agent_metadata", lambda key, **kwargs: {})
     monkeypatch.setattr(runtime, "list_models", lambda: [NS(
         model_id=model, provider="provider-a", reasoning_options=["high"], supports_reasoning=True,
     ) for model in ("model-a", "model-b")])
@@ -83,6 +84,33 @@ def test_invalid_db_model_fails_without_substitution(configured):
         runtime.build_curator_route_catalog(object(), configured.curator)
 
 
+@pytest.mark.parametrize("validator_visible", [True, False])
+def test_direct_target_requires_visible_model_validator(configured, monkeypatch, validator_visible):
+    configured.rows.append(NS(agent_key="plain", model_id="model-a", model_reasoning="high", visibility="system"))
+    def option(state, binding, model=None):
+        return NS(state=NS(value=state), to_dict=lambda: {
+            "validator_binding_id": binding, "validator_agent_id": model,
+            "validator_package_id": "package" if model else None,
+        })
+
+    monkeypatch.setattr(runtime, "load_benchmark_flow_templates", lambda groups: [])
+    monkeypatch.setattr(runtime, "validation_attachment_options_for_agent", lambda key, **kwargs: (
+        option("active", "semantic-binding", "semantic"),
+        option("active", "tool-only"),
+        option("under_development", "future-binding", "future"),
+    ) if key == "extractor" else ())
+    if not validator_visible:
+        configured.rows[:] = [row for row in configured.rows if row.agent_key != "validator"]
+    catalog = runtime.build_curator_route_catalog(object(), configured.curator)
+    direct = {target.target.id: target.route_slots for target in catalog.targets}
+    if validator_visible:
+        assert direct["extractor"] == ("agent:extractor", "validator:semantic-binding")
+    else:
+        assert "extractor" not in direct
+    assert all(slot.slot not in {"validator:tool-only", "validator:future-binding"}
+               for slot in catalog.route_slots)
+
+
 @pytest.mark.parametrize("reasoning,expected", [("disabled", None), ("none", None), ("off", None), (" HIGH ", "high")])
 def test_persisted_reasoning_uses_normal_runtime_normalization(configured, reasoning, expected):
     configured.rows[0].model_reasoning = reasoning
@@ -107,10 +135,17 @@ def test_real_package_catalog_and_hydrated_recipes(monkeypatch):
 
     rows = [NS(
         agent_key=canonical_system_agent_key(definition),
+        name=definition.name, description=definition.description,
         model_id=definition.model_config.model,
         model_reasoning=definition.model_config.reasoning,
         visibility="system",
     ) for definition in load_agent_definitions().values() if definition.model_config is not None]
+    rows.append(NS(
+        agent_key="custom_gene", name="Custom gene", description="Custom builder",
+        model_id="gpt-5.6-sol", model_reasoning="medium", visibility="private",
+        tool_ids=["read_section", "stage_gene_mention_evidence", "finalize_gene_extraction"],
+        template_source="gene_extractor",
+    ))
     monkeypatch.setattr(runtime, "list_agents_visible_to_user", lambda *args, **kwargs: rows)
     recipes = load_flow_recipe_catalog().recipes
     groups = tuple(sorted({group for recipe in recipes for group in recipe.access.allowed_group_ids}))
@@ -120,6 +155,17 @@ def test_real_package_catalog_and_hydrated_recipes(monkeypatch):
     advertised_flows = {target.target.id for target in catalog.targets if target.target.kind == "flow"}
     assert advertised_flows == {recipe["name"] for recipe in runtime.load_benchmark_flow_templates(groups)}
     assert {"Gene Extraction", "Allele/Variant Extraction"} <= advertised_flows
+    direct = {target.target.id: target.route_slots for target in catalog.targets
+              if target.target.kind == "agent"}
+    assert direct["gene_extractor"] == (
+        "agent:gene_extractor", "validator:alliance_gene_reference_lookup",
+    )
+    assert direct["allele_extractor"] == (
+        "agent:allele_extractor", "validator:allele_mention_reference_validation",
+    )
+    assert direct["custom_gene"] == (
+        "agent:custom_gene", "validator:alliance_gene_reference_lookup",
+    )
     for name in ("Gene Extraction", "Allele/Variant Extraction"):
         flow = _flow_from_recipe(name, list(groups))
         model_agents = {

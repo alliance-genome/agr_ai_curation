@@ -24,6 +24,7 @@ def test_catalog_exposes_stable_model_backed_slots_only():
         agent_defaults={"extractor": _route()},
         model_validator_defaults={"semantic-check": _route()},
         agent_targets={"extractor"},
+        agent_model_validators={"extractor": ["semantic-check"]},
         flow_agents={"Extraction Flow": ["extractor"]},
         flow_model_validators={"Extraction Flow": ["semantic-check"]},
     )
@@ -34,6 +35,8 @@ def test_catalog_exposes_stable_model_backed_slots_only():
         "validator:semantic-check",
     ]
     flow = next(item for item in catalog.targets if item.target.kind == "flow")
+    direct = next(item for item in catalog.targets if item.target.kind == "agent")
+    assert direct.route_slots == ("agent:extractor", "validator:semantic-check")
     assert flow.route_slots == (
         "supervisor",
         "agent:extractor",
@@ -59,6 +62,7 @@ def test_catalog_resolves_flow_agent_aliases_to_canonical_slots():
         agent_defaults={"chat_output": _route()},
         model_validator_defaults={},
         agent_targets=(),
+        agent_model_validators={},
         flow_agents={"Formatting Flow": ["chat_output_formatter"]},
         flow_model_validators={},
         agent_aliases={"chat_output_formatter": "chat_output"},
@@ -82,6 +86,18 @@ def test_catalog_rejects_flow_slot_without_checked_in_default():
             agent_defaults={},
             model_validator_defaults={},
             agent_targets=(),
+            agent_model_validators={},
             flow_agents={"Extraction Flow": ["missing"]},
             flow_model_validators={},
+        )
+
+
+def test_catalog_rejects_direct_validator_without_default():
+    with pytest.raises(ValueError, match="without defaults"):
+        build_route_catalog(
+            models=[BenchmarkModelCatalogEntry(provider="provider-a", model="model-a", reasoning_efforts=("high",))],
+            supervisor_default=_route(), agent_defaults={"extractor": _route()},
+            model_validator_defaults={}, agent_targets={"extractor"},
+            agent_model_validators={"extractor": ["missing"]},
+            flow_agents={}, flow_model_validators={},
         )

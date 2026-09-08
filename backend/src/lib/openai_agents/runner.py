@@ -18,7 +18,7 @@ import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager, nullcontext
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, AsyncIterator, Dict, Any, Literal, Optional, List
@@ -85,6 +85,7 @@ from .extraction_builder_workspace import (
     set_active_extraction_builder_workspace,
     stage_extraction_payload,
 )
+from .resolver_call_ledger import ResolverCallLedger
 from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer, file_ready_event_details
 from .evidence_summary import (
@@ -107,6 +108,10 @@ from .streaming_tools import (
     SpecialistToolCall,
     _StructuredSpecialistFinalizationState,
     _agent_structured_finalization_config,
+    _agent_runtime_canonical_agent_key,
+    _agent_runtime_curation_adapter_key,
+    _bind_run_state_into_tools,
+    _dispatch_domain_envelope_validators_for_chat,
     _configure_structured_specialist_finalization,
     _extract_stream_tool_call_tracking_id,
     _max_turns_with_structured_specialist_finalization,
@@ -117,6 +122,8 @@ from .streaming_tools import (
     _structured_specialist_finalization_tool_name,
     _tool_output_payload_for_finalization,
     _output_type_name,
+    is_builder_materializer_agent,
+    _validator_runtime_context_for_chat,
 )
 from .curation_context_registry import clear_current_turn_curation_context
 
@@ -1134,6 +1141,9 @@ async def _run_agent_with_owned_resources(
     pending_tool_calls: deque[Dict[str, Any]] = deque()
     tool_calls_count = 0
     current_agent = agent.name
+    builder_materializer_agent = is_builder_materializer_agent(agent)
+    if builder_materializer_agent and getattr(agent, "output_type", None) is not None:
+        raise ValueError("Builder agents must use backend finalization, not an output schema")
     agents_used = [agent.name]
     custom_tool_display_names = _build_custom_tool_display_names(agent)
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
@@ -1188,7 +1198,7 @@ async def _run_agent_with_owned_resources(
         required=_structured_specialist_finalization_required(
             agent,
             expected_output_type=expected_output_type,
-            builder_materializer_agent=False,
+            builder_materializer_agent=builder_materializer_agent,
             finalization_config=finalization_config,
         ),
         tool_name=finalization_tool_name or "finalize_structured_result",
@@ -1317,6 +1327,15 @@ async def _run_agent_with_owned_resources(
 
     benchmark_route_token = set_benchmark_invocation_route(agent)
     try:
+        # Catalog package tools otherwise execute outside this process. Reuse
+        # the specialist's package-derived binding without mutating the caller.
+        if getattr(agent, "tools", None):
+            agent = _bind_run_state_into_tools(
+                copy(agent),
+                evidence_records=evidence_records,
+                builder_workspace=builder_workspace,
+                resolver_ledger=ResolverCallLedger(trace_id=trace_id),
+            )
         result = Runner.run_streamed(
             agent,
             input=input_items,
@@ -1326,6 +1345,9 @@ async def _run_agent_with_owned_resources(
         )
     except BaseException as exc:
         reset_benchmark_invocation_route(benchmark_route_token)
+        reset_active_evidence_records(evidence_workspace_token)
+        reset_active_extraction_builder_workspace(builder_workspace_token)
+        reset_current_run_config(run_config_token)
         sentry_stream_finalization_status = (
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
         )
@@ -1931,7 +1953,42 @@ async def _run_agent_with_owned_resources(
         reset_benchmark_invocation_route(benchmark_route_token)
 
     # Get final output if not captured from streaming
-    if hasattr(result, "final_output"):
+    if builder_materializer_agent:
+        finalization = builder_workspace.finalization
+        if finalization is None:
+            run_error_event = {
+                "type": "RUN_ERROR",
+                "data": {
+                    "message": "Extraction ended without a finalized backend builder payload.",
+                    "error_type": "BuilderFinalizationMissing",
+                    "trace_id": trace_id,
+                },
+            }
+            _record_sentry_post_stream_outcome(status="rejected", error_detail=run_error_event["data"])
+            write_stream_event(run_error_event, trace_id=trace_id)
+            yield run_error_event
+            return
+        # The package finalizer owns canonical extraction, not SDK completion
+        # text. Do not stage this payload again or finalize different membership.
+        validated_output = await _dispatch_domain_envelope_validators_for_chat(
+            json.dumps(finalization.payload),
+            expected_output_type=expected_output_type,
+            specialist_name=current_agent,
+            tool_name=None,
+            adapter_key=_agent_runtime_curation_adapter_key(agent),
+            source_agent_key=_agent_runtime_canonical_agent_key(agent),
+            is_builder_envelope=True,
+            runtime_context=_validator_runtime_context_for_chat(
+                document_id=document_id,
+                user_id=user_id,
+                authenticated_groups=getattr(agent, "authenticated_groups", None),
+            ),
+        )
+        structured_result = json.loads(validated_output)
+        if not isinstance(structured_result, dict):
+            raise ValueError("Builder validator dispatch must return a JSON object")
+        builder_workspace.finalization = replace(finalization, payload=structured_result)
+    elif hasattr(result, "final_output"):
         final_output = result.final_output
         if final_output:
             if hasattr(final_output, "model_dump"):
@@ -2119,10 +2176,11 @@ async def _run_agent_with_owned_resources(
                 structured_evidence_records,
             )
 
-        finalization = builder_workspace.finalize(
-            candidate_ids=["runner_structured_result"],
-        )
-        structured_result = finalization.payload
+        if not builder_materializer_agent:
+            finalization = builder_workspace.finalize(
+                candidate_ids=["runner_structured_result"],
+            )
+            structured_result = finalization.payload
 
         try:
             parsed_answer = Answer.model_validate(structured_result)
