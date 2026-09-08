@@ -128,8 +128,6 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
                 if binding in validators and validators[binding] != default:
                     raise ValueError("Model validator binding has conflicting defaults")
                 validators[binding] = default
-            if not accessible:
-                break
         if not accessible:
             continue
         register_validators(validators)
