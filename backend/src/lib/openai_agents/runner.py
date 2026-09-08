@@ -85,7 +85,11 @@ from .extraction_builder_workspace import (
     set_active_extraction_builder_workspace,
     stage_extraction_payload,
 )
-from .resolver_call_ledger import ResolverCallLedger
+from .resolver_call_ledger import (
+    ResolverCallLedger,
+    reset_active_resolver_call_ledger,
+    set_active_resolver_call_ledger,
+)
 from .guardrails import enforce_uncited_negative_guardrail
 from .models import Answer, file_ready_event_details
 from .evidence_summary import (
@@ -1181,6 +1185,8 @@ async def _run_agent_with_owned_resources(
         agent_id=current_agent,
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
+    resolver_call_ledger = ResolverCallLedger(trace_id=trace_id)
+    resolver_ledger_token = set_active_resolver_call_ledger(resolver_call_ledger)
     evidence_summary_tool_names: List[str] = []
     structured_tool_calls: List[SpecialistToolCall] = []
 
@@ -1334,7 +1340,7 @@ async def _run_agent_with_owned_resources(
                 copy(agent),
                 evidence_records=evidence_records,
                 builder_workspace=builder_workspace,
-                resolver_ledger=ResolverCallLedger(trace_id=trace_id),
+                resolver_ledger=resolver_call_ledger,
             )
         result = Runner.run_streamed(
             agent,
@@ -1347,6 +1353,7 @@ async def _run_agent_with_owned_resources(
         reset_benchmark_invocation_route(benchmark_route_token)
         reset_active_evidence_records(evidence_workspace_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
+        reset_active_resolver_call_ledger(resolver_ledger_token)
         reset_current_run_config(run_config_token)
         sentry_stream_finalization_status = (
             "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
@@ -1691,6 +1698,11 @@ async def _run_agent_with_owned_resources(
                                 evidence_records,
                                 [evidence_record],
                             )
+                        resolver_call_ledger.record_tool_output(
+                            tool_call_id=str(completed_tool.get("tool_id") or "") or None,
+                            tool_name=last_tool,
+                            output=output,
+                        )
                         structured_tool_calls.append(
                             SpecialistToolCall(
                                 tool_name=last_tool,
@@ -1940,6 +1952,13 @@ async def _run_agent_with_owned_resources(
             user_id=user_id,
         )
         _safe_reset_run_context_token(
+            label="resolver_call_ledger",
+            reset_fn=reset_active_resolver_call_ledger,
+            token=resolver_ledger_token,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
+        _safe_reset_run_context_token(
             label="run_config",
             reset_fn=reset_current_run_config,
             token=run_config_token,
@@ -2086,7 +2105,7 @@ async def _run_agent_with_owned_resources(
     # Run robust uncited-negative guardrail using actual tool calls (if structured Answer)
     if structured_result is not None:
         expected_output_type = getattr(agent, "output_type", None)
-        if _looks_like_curation_shaped_payload(structured_result):
+        if not builder_materializer_agent and _looks_like_curation_shaped_payload(structured_result):
             output_type_name = _output_type_name(expected_output_type)
             logger.warning(
                 "Top-level agent produced curation-shaped structured output; "
