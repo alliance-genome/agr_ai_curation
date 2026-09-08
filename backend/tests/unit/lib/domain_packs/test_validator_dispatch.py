@@ -823,7 +823,7 @@ def test_apply_validator_evidence_updates_replaces_matching_envelope_records():
 
     updated = _apply_validator_evidence_updates_to_envelope(
         envelope,
-        cast(Any, [SimpleNamespace(request=request)]),
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
     )
 
     evidence_record = updated.extracted_objects[0].payload["evidence_records"][0]
@@ -2623,8 +2623,9 @@ def test_validator_finalization_feedback_rejects_resolved_without_success_lookup
     )
 
 
+@pytest.mark.parametrize("profile_mapped", [False, True])
 def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_result(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, profile_mapped: bool,
 ):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
     from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
@@ -2656,14 +2657,27 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_result"
         )
-        _unwrap_function_tool(tool)(result=_result_payload(request))
+        result = _result_payload(request)
+        feedback = _unwrap_function_tool(tool)(result=result)
+        if profile_mapped:
+            assert "Custom-profile output contract" in agent.instructions
+            assert feedback["status"] == "rejected"
+            result["resolved_objects"] = []
+            result["resolved_values"] = {"identifier": "AGR:0001"}
+            assert _unwrap_function_tool(tool)(result=result)["status"] == "accepted"
+        else:
+            assert "Custom-profile output contract" not in agent.instructions
+            assert feedback["status"] == "accepted"
         return {"status": "resolved"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     raw_output = run_package_scoped_validator_agent(
         request,
-        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+        binding=cast(Any, SimpleNamespace(
+            raw={"profile_validation": {"mapping": {}}} if profile_mapped else {},
+            max_tool_calls=4,
+        )),
     )
     result = validator_result_from_agent_output(raw_output, request=request)
 
@@ -2991,7 +3005,7 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
 
     binding = cast(Any, SimpleNamespace(raw={}, max_tool_calls=4))
     run_package_scoped_validator_agent_batch(
-        cast(Any, [SimpleNamespace(request=request)]),
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
         binding=binding,
         runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
     )
@@ -3058,7 +3072,7 @@ def test_package_scoped_validator_lookup_rejects_nonmatching_runtime_groups(
     with pytest.raises(ValueError, match="restricted validator agent is unavailable"):
         if batch:
             run_package_scoped_validator_agent_batch(
-                cast(Any, [SimpleNamespace(request=request)]),
+                cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
                 binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
                 runtime_context=ValidatorRuntimeContext(
                     authenticated_groups=("MGI",),
@@ -3264,7 +3278,7 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     run_package_scoped_validator_agent_batch(
-        cast(Any, [SimpleNamespace(request=request)]),
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
         binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=None)),
     )
 
@@ -3299,7 +3313,7 @@ def test_package_scoped_validator_batch_agent_max_turns_scales_with_job_count(
         request = base_request.model_copy(
             update={"request_id": f"domain-validation:verbose-{index}"}
         )
-        return SimpleNamespace(request=request)
+        return SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))
 
     jobs = [_job(index) for index in range(3)]
 
@@ -3360,7 +3374,7 @@ def test_package_scoped_validator_batch_agent_prefers_accepted_finalization_resu
     )
 
     request = _validation_request()
-    job = cast(Any, SimpleNamespace(request=request))
+    job = cast(Any, SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={}))))
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
         tools=[],
@@ -3446,7 +3460,7 @@ def test_package_scoped_validator_batch_agent_requires_accepted_finalization_too
         match="mandatory finalize_validator_batch_results",
     ):
         run_package_scoped_validator_agent_batch(
-            cast(Any, [SimpleNamespace(request=request)]),
+            cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
             binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
         )
 
@@ -3567,3 +3581,71 @@ def test_dispatch_validates_and_materializes_every_multivalued_element(tmp_path:
         if finding.field_ref is not None
     )
     assert indexed_paths == ["evidence_code_curies[0]", "evidence_code_curies[1]"]
+
+
+@pytest.mark.parametrize("channel", ["resolved_objects", "extra_slot"])
+def test_profile_finalization_rejects_unmapped_output_and_accepts_repair(channel):
+    from src.lib.domain_packs.validator_dispatch import (
+        _ValidatorFinalizationState, _build_finalize_validator_result_tool,
+    )
+    request = _verbose_validation_request().model_copy(update={
+        "expected_result_fields": {
+            "identifier": "attributes.allele_checks[0].confirmed_curie",
+            "symbol": "attributes.allele_checks[0].confirmed_symbol",
+        },
+    })
+    original = _result_payload(request)
+    original["resolved_objects"] = []
+    if channel == "resolved_objects":
+        original["resolved_objects"] = [{"symbol": "ABC-1"}]
+    else:
+        original["resolved_values"]["unmapped"] = "not an approved destination"
+    state = _ValidatorFinalizationState()
+    tool = _build_finalize_validator_result_tool(
+        request, finalization_state=state, profile_mapped=True,
+        function_tool_factory=lambda **kwargs: lambda function: function,
+    )
+    rejected = tool(original)
+    assert rejected["status"] == "rejected"
+    assert state.accepted_result is None
+    assert "expected_result_fields" in rejected["message"]
+    repaired = _result_payload(request)
+    repaired["resolved_objects"] = []
+    accepted = tool(repaired)
+    assert accepted["status"] == "accepted"
+    assert state.accepted_result.resolved_values == repaired["resolved_values"]
+    assert state.accepted_result.lookup_attempts
+    # Packaged targets retain their existing database-object output contract.
+    assert _validator_result_finalization_feedback(
+        _result_payload(request), request=request,
+    ).accepted_result is not None
+
+
+def test_profile_batch_finalization_enforces_each_trusted_binding():
+    from src.lib.domain_packs.validator_dispatch import _validator_batch_results_finalization_feedback
+    request = _verbose_validation_request().model_copy(update={
+        "expected_result_fields": {
+            "identifier": "attributes.allele_checks[0].confirmed_curie",
+            "symbol": "attributes.allele_checks[0].confirmed_symbol",
+        },
+    })
+    job = SimpleNamespace(request=request, match=SimpleNamespace(
+        binding=SimpleNamespace(raw={"profile_validation": {"mapping": {"mapping_id": "alleles"}}}),
+    ))
+    raw = _result_payload(request)
+    feedback = _validator_batch_results_finalization_feedback([raw], jobs=[job])
+    assert not feedback.accepted_results
+    raw["resolved_objects"] = []
+    feedback = _validator_batch_results_finalization_feedback([raw], jobs=[job])
+    assert len(feedback.accepted_results) == 1
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_profile_finalization_instructions_scope_package_override_to_requests(batch):
+    from src.lib.domain_packs.validator_dispatch import _append_validator_finalization_instructions
+    agent = SimpleNamespace(instructions="Package requests database facts in resolved_objects.")
+    _append_validator_finalization_instructions(agent, batch=batch, profile_request_ids=("profile-request",))
+    assert '"profile-request"' in agent.instructions
+    assert "takes precedence over package instructions" in agent.instructions
+    assert "resolved_objects as an empty list" in agent.instructions
+    assert "must remain unresolved" in agent.instructions

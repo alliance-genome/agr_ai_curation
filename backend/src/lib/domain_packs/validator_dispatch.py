@@ -1466,6 +1466,7 @@ def run_package_scoped_validator_agent(
             request,
             finalization_state=finalization_state,
             function_tool_factory=function_tool,
+            profile_mapped=bool(binding.raw.get("profile_validation")),
             result_schema=(
                 output_type
                 if is_domain_validator_result_schema(output_type)
@@ -1478,7 +1479,10 @@ def run_package_scoped_validator_agent(
         batch=False,
         runtime_context=runtime_context,
     )
-    _append_validator_finalization_instructions(agent, batch=False)
+    _append_validator_finalization_instructions(
+        agent, batch=False,
+        profile_request_ids=(request.request_id,) if binding.raw.get("profile_validation") else (),
+    )
 
     provider_payload = validator_request_payload_for_agent(
         request,
@@ -1663,7 +1667,13 @@ def run_package_scoped_validator_agent_batch(
         batch=True,
         runtime_context=runtime_context,
     )
-    _append_validator_finalization_instructions(agent, batch=True)
+    _append_validator_finalization_instructions(
+        agent, batch=True,
+        profile_request_ids=tuple(
+            job.request.request_id for job in jobs
+            if job.match.binding.raw.get("profile_validation")
+        ),
+    )
 
     provider_payload = {
         "mode": "domain_validator_batch",
@@ -2113,7 +2123,9 @@ def validator_request_payload_for_agent(
     return payload
 
 
-def _append_validator_finalization_instructions(agent: Any, *, batch: bool) -> None:
+def _append_validator_finalization_instructions(
+    agent: Any, *, batch: bool, profile_request_ids: tuple[str, ...] = (),
+) -> None:
     tool_name = (
         "finalize_validator_batch_results" if batch else "finalize_validator_result"
     )
@@ -2130,6 +2142,17 @@ def _append_validator_finalization_instructions(agent: Any, *, batch: bool) -> N
         "rejects validator runs that do not complete this tool with "
         "`status: accepted`."
     )
+    if profile_request_ids:
+        instruction_block += (
+            "\nCustom-profile output contract for request_ids "
+            + json.dumps(profile_request_ids)
+            + ": this contract takes precedence over package instructions to populate "
+            "resolved_objects. Return resolved_objects as an empty list. Put only "
+            "tool-grounded values in resolved_values, using only the keys in that "
+            "request's expected_result_fields. Preserve lookup_attempts and candidate "
+            "evidence; do not invent values to fill mapped slots. Unresolved or "
+            "ambiguous identities must remain unresolved."
+        )
     instructions = getattr(agent, "instructions", None)
     if instructions is None:
         agent.instructions = instruction_block
@@ -2250,6 +2273,7 @@ def _build_finalize_validator_result_tool(
     finalization_state: _ValidatorFinalizationState,
     function_tool_factory: Any,
     result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
+    profile_mapped: bool = False,
 ) -> Any:
     @function_tool_factory(name_override="finalize_validator_result", strict_mode=False)
     def finalize_validator_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -2259,6 +2283,7 @@ def _build_finalize_validator_result_tool(
             result,
             request=request,
             result_schema=result_schema,
+            profile_mapped=profile_mapped,
         )
         if feedback.accepted_result is not None:
             finalization_state.accepted_result = feedback.accepted_result
@@ -2302,6 +2327,7 @@ def _validator_result_finalization_feedback(
     *,
     request: DomainValidationRequest,
     result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
+    profile_mapped: bool = False,
 ) -> _ValidatorFinalizationFeedback:
     try:
         payload = _extract_structured_output(raw_result)
@@ -2334,6 +2360,22 @@ def _validator_result_finalization_feedback(
             "Validator result rejected: request_id, validator_binding_id, "
             "validator_agent, and target must exactly match this "
             "DomainValidationRequest."
+        )
+        return _ValidatorFinalizationFeedback(
+            accepted_result=None,
+            message=message,
+            repair_instructions=_validator_repair_instructions(message),
+        )
+
+    if profile_mapped and (
+        result.resolved_objects
+        or set(result.resolved_values) - request.expected_result_fields.keys()
+    ):
+        message = (
+            "Validator result rejected: custom-profile results require resolved_objects "
+            "to be an empty list and resolved_values to contain only approved "
+            "expected_result_fields keys. Keep grounded mapped values and lookup "
+            "evidence; remove the unmapped output channels."
         )
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
@@ -2447,6 +2489,7 @@ def _validator_batch_results_finalization_feedback(
         feedback = _validator_result_finalization_feedback(
             raw_result,
             request=request,
+            profile_mapped=bool(job.match.binding.raw.get("profile_validation")),
         )
         if feedback.accepted_result is None:
             result_errors.append(
