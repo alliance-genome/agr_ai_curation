@@ -475,6 +475,17 @@ async def _store_hierarchy_metadata(
     owner_user_id: int,
     hierarchy_metadata: Any,
 ) -> None:
+    await asyncio.to_thread(
+        _store_hierarchy_metadata_sync, document_id, user_id, owner_user_id, hierarchy_metadata,
+    )
+
+
+def _store_hierarchy_metadata_sync(
+    document_id: str,
+    user_id: str,
+    owner_user_id: int,
+    hierarchy_metadata: Any,
+) -> None:
     from src.models.sql.database import SessionLocal
     from src.models.sql.pdf_document import PDFDocument
     from src.models.sql.user import User
@@ -500,6 +511,20 @@ async def _store_hierarchy_metadata(
 
 
 async def _sync_sql_document_status(
+    document_id: str,
+    *,
+    user_id: str,
+    owner_user_id: int,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    await asyncio.to_thread(
+        _update_sql_document_status, document_id, user_id=user_id,
+        owner_user_id=owner_user_id, status=status, error_message=error_message,
+    )
+
+
+def _update_sql_document_status(
     document_id: str,
     *,
     user_id: str,
@@ -553,6 +578,16 @@ async def _sync_sql_document_status(
 
 
 async def _require_owned_document(
+    document_id: str,
+    user_id: str,
+    owner_user_id: int,
+) -> None:
+    await asyncio.to_thread(
+        _require_owned_document_sync, document_id, user_id, owner_user_id,
+    )
+
+
+def _require_owned_document_sync(
     document_id: str,
     user_id: str,
     owner_user_id: int,

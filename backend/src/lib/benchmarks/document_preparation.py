@@ -120,19 +120,9 @@ async def prepare_frozen_document(
     preparation pipeline. This function must run under the caller's durable
     preparation accounting, not a comparison-arm routing override.
     """
-    checksum = hashlib.sha256(content).hexdigest()
-    if snapshot_digest != f"sha256:{checksum}":
-        raise ValueError("Frozen document digest does not match preparation input")
-    elements = decode_frozen_document(content, content_type=content_type)
-    pages = [element.get("metadata", {}).get("page_number") for element in elements]
-    page_count = max((page for page in pages if type(page) is int and page > 0), default=1)
-    with SessionLocal() as session:
-        user = session.get(User, curator.db_user_id)
-        if user is None or user.is_active is not True or user.auth_sub != curator.subject:
-            raise PermissionError("Frozen document requires its active curator owner")
-        if session.get(PDFDocument, document_id) is not None:
-            raise ValueError("Prepared document identity already exists; do not replay preparation")
-
+    checksum, elements, page_count = await asyncio.to_thread(
+        _validate_frozen_input, document_id, content, content_type, snapshot_digest, curator,
+    )
     root = Path(get_pdf_storage_path())
     await stage_checkpoint("artifacts")
     source_path, processed_path, processed_digest = await asyncio.to_thread(
@@ -144,14 +134,10 @@ async def prepare_frozen_document(
     scoped_file_hash = hashlib.sha256(
         f"benchmark:{curator.db_user_id}:{document_id}:{checksum}".encode()
     ).hexdigest()
-    with SessionLocal() as session:
-        session.add(PDFDocument(
-            id=document_id, user_id=curator.db_user_id, filename=filename,
-            file_path=source_path, file_hash=scoped_file_hash, file_size=len(content),
-            page_count=page_count, processed_json_path=processed_path, source_payload_path=source_path,
-            viewer_mode="benchmark_frozen", status="pending",
-        ))
-        session.commit()
+    await asyncio.to_thread(
+        _insert_document, document_id, curator, filename, source_path,
+        scoped_file_hash, len(content), page_count, processed_path,
+    )
 
     now = datetime.now(timezone.utc)
     try:
@@ -194,3 +180,38 @@ async def prepare_frozen_document(
             status="failed", error_message="Frozen benchmark preparation failed",
         )
         raise
+
+
+def _validate_frozen_input(
+    document_id: UUID, content: bytes, content_type: str, snapshot_digest: str,
+    curator: BenchmarkCuratorContext,
+) -> tuple[str, list[dict[str, Any]], int]:
+    checksum = hashlib.sha256(content).hexdigest()
+    if snapshot_digest != f"sha256:{checksum}":
+        raise ValueError("Frozen document digest does not match preparation input")
+    elements = decode_frozen_document(content, content_type=content_type)
+    pages = [element.get("metadata", {}).get("page_number") for element in elements]
+    page_count = max((page for page in pages if type(page) is int and page > 0), default=1)
+    with SessionLocal() as session:
+        user = session.get(User, curator.db_user_id)
+        if user is None or user.is_active is not True or user.auth_sub != curator.subject:
+            raise PermissionError("Frozen document requires its active curator owner")
+        if session.get(PDFDocument, document_id) is not None:
+            raise ValueError("Prepared document identity already exists; do not replay preparation")
+
+    return checksum, elements, page_count
+
+
+def _insert_document(
+    document_id: UUID, curator: BenchmarkCuratorContext, filename: str,
+    source_path: str, scoped_file_hash: str, content_size: int, page_count: int,
+    processed_path: str,
+) -> None:
+    with SessionLocal() as session:
+        session.add(PDFDocument(
+            id=document_id, user_id=curator.db_user_id, filename=filename,
+            file_path=source_path, file_hash=scoped_file_hash, file_size=content_size,
+            page_count=page_count, processed_json_path=processed_path, source_payload_path=source_path,
+            viewer_mode="benchmark_frozen", status="pending",
+        ))
+        session.commit()

@@ -201,12 +201,22 @@ milliseconds with `measurement="elapsed_time_only"`; they do not claim
 per-provider invocation, token, embedding, or cost measurements.
 
 `preparation_service.prepare_job_document` now coordinates current curator
-authorization, the journal claim, verified snapshot bytes, committed start,
+authorization, the committed journal start, verified snapshot bytes,
 normal ingestion with committed stage checkpoints, and committed completion.
 It obtains identity from the immutable job context, not caller-supplied paper
 data. Reuse rechecks authorization and returns the completed receipt without
 repeating indexing. Real PostgreSQL tests verify a separate connection sees
 the start before vector creation, and that revoked authorization blocks reuse.
+
+Preparation SQL transactions, snapshot reads, artifact work, and shared ingestion
+SQL run in worker threads. Each session is created, used, and closed in the same
+thread. The coordinator commits the start and releases the job lock before
+reading storage, allowing lease renewal during a slow snapshot read. A failed or
+interrupted read therefore retains a started-only journal, which cannot authorize
+replay. Cancelling an await cannot stop an already-running thread; its transaction
+may finish, but the cancelled coordinator cannot advance to paid preparation.
+Worker lease renewal and cell terminalization also run off the event loop so a
+blocked database operation does not prevent other tasks or timeouts from running.
 
 The worker keeps its heartbeat and cell timeout around preparation and target
 execution, then rechecks authorization after preparation. The target invocation
