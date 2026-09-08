@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from decimal import Decimal, InvalidOperation
 import logging
 from typing import Any, Iterator, Mapping, Optional, Protocol
@@ -259,10 +259,10 @@ def complete_generic_provider_invocation(
     payload = _as_mapping(response)
     usage = _as_mapping(payload.get("usage") or getattr(response, "usage", None))
     input_tokens = _optional_int(
-        usage.get("input_tokens") or usage.get("prompt_tokens")
+        usage.get("input_tokens", usage.get("prompt_tokens"))
     )
     output_tokens = _optional_int(
-        usage.get("output_tokens") or usage.get("completion_tokens")
+        usage.get("output_tokens", usage.get("completion_tokens"))
     )
     total_tokens = _optional_int(usage.get("total_tokens"))
     if total_tokens is None and input_tokens is not None and output_tokens is not None:
@@ -367,6 +367,10 @@ def _emit_provider_usage_trace_event(record: ProviderUsageRecord) -> None:
 def _as_mapping(value: Any) -> Mapping[str, Any]:
     if isinstance(value, Mapping):
         return value
+    if is_dataclass(value) and not isinstance(value, type):
+        # Agents SDK ModelResponse and Usage are dataclasses. Keep this shallow:
+        # response content is not telemetry and must not be recursively copied.
+        return {field.name: getattr(value, field.name) for field in fields(value)}
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
         dumped = model_dump()
