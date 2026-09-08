@@ -159,6 +159,8 @@ async def test_shared_indexing_checks_owner_before_any_model_or_storage_work(mon
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stop_stage", ["hierarchy", "chunking", "figure_locators", "vector_storage"])
 async def test_shared_indexing_checkpoint_failure_stops_next_stage(monkeypatch, stop_stage):
+    reporter = Mock()
+    monkeypatch.setattr(ingestion, "report_runtime_exception", reporter, raising=False)
     monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
     monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
     elements = [{"text": "Synthetic evidence", "metadata": {}}]
@@ -185,10 +187,75 @@ async def test_shared_indexing_checkpoint_failure_stops_next_stage(monkeypatch, 
         )
     operations[stop_stage].assert_not_awaited()
     operations["vector_storage"].assert_not_awaited()
+    reporter.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["resolution", "metadata"])
+@pytest.mark.parametrize("reporter_fails", [False, True])
+async def test_shared_indexing_reports_hierarchy_failure_and_continues(
+    monkeypatch, caplog, failure_stage, reporter_fails,
+):
+    sensitive = "private document text and provider payload"
+    elements = [{"text": sensitive, "metadata": {}}]
+    resolved = [{"text": sensitive, "metadata": {"section": "Results"}}]
+    chunks = [{"content": sensitive}, {"content": sensitive}]
+    error = RuntimeError(sensitive)
+    hierarchy = AsyncMock(return_value=(resolved, {"sections": [sensitive]}))
+    metadata = AsyncMock()
+    if failure_stage == "resolution":
+        hierarchy.side_effect = error
+    else:
+        metadata.side_effect = error
+    reporter = Mock(side_effect=RuntimeError(sensitive) if reporter_fails else None)
+    monkeypatch.setattr(ingestion, "report_runtime_exception", reporter, raising=False)
+    monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+    monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
+    monkeypatch.setattr(ingestion, "_store_hierarchy_metadata", metadata)
+    monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", hierarchy)
+    chunk = AsyncMock(return_value=chunks)
+    figures = AsyncMock(return_value=chunks)
+    store = AsyncMock()
+    monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", chunk)
+    monkeypatch.setattr("src.lib.pipeline.figure_locator_resolution.resolve_figure_locators", figures)
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", store)
+    client = object()
+    strategy = ChunkingStrategy.get_research_strategy()
+
+    result = await ingestion.index_owned_document_elements(
+        elements, document_id="doc-1", user_id="owner-1", owner_user_id=42,
+        weaviate_client=client, strategy=strategy,
+    )
+
+    assert result == 2
+    chunk.assert_awaited_once_with(
+        elements if failure_stage == "resolution" else resolved, strategy, "doc-1",
+    )
+    figures.assert_awaited_once_with(chunks, provider_figure_metadata=())
+    store.assert_awaited_once_with(chunks, "doc-1", client, "owner-1")
+    reporter.assert_called_once()
+    reported = reporter.call_args.args[0]
+    assert reported is not error
+    assert reported.__traceback__ is not None
+    assert reported.__context__ is None
+    assert reported.__cause__ is None
+    assert reporter.call_args.kwargs == {
+        "component": "document_ingestion",
+        "operation": "hierarchy_resolution_failed",
+        "context": {"document_id": "doc-1"},
+    }
+    assert sensitive not in str(reported)
+    assert sensitive not in caplog.text
+    records = [record for record in caplog.records if record.name == ingestion.__name__]
+    assert len(records) == (2 if reporter_fails else 1)
+    assert all("doc-1" in record.getMessage() for record in records)
+    assert all(record.sentry_skip_event for record in records)
 
 
 @pytest.mark.asyncio
 async def test_ingest_provider_markdown_document_runs_pipeline(monkeypatch):
+    reporter = Mock()
+    monkeypatch.setattr(ingestion, "report_runtime_exception", reporter, raising=False)
     monkeypatch.setattr(
         ingestion,
         "_save_source_markdown",
@@ -242,6 +309,7 @@ async def test_ingest_provider_markdown_document_runs_pipeline(monkeypatch):
     )
 
     assert result.processing_result.success is True
+    reporter.assert_not_called()
     assert result.processing_result.stages_completed == [
         ProcessingStage.PARSING,
         ProcessingStage.CHUNKING,
