@@ -2760,6 +2760,55 @@ def test_builder_preserves_unresolved_selectors_as_pending_blocked_observation(
         assert "expression_pattern.where_expressed" in export_blocked_fields
 
 
+@pytest.mark.parametrize("stage_state", ["missing", "null"])
+def test_builder_preserves_missing_stage_selector_with_submission_blocker(stage_state):
+    staged = _gene_expression_builder_staged_fields()
+    staged["data_provider"] = {"abbreviation": "WB"}
+    staged["expression_annotation_subject"]["primary_external_id"] = None
+    staged["expression_pattern"].pop("where_expressed")
+    staged["where_expressed_statement"] += " Stage hint: long-pec; anatomy hint: posterior tectum."
+    if stage_state == "missing":
+        staged.pop("when_expressed_stage_name")
+    else:
+        staged["when_expressed_stage_name"] = None
+    staged["metadata"]["provenance"]["helper_selections"] = [
+        selection for selection in staged["metadata"]["provenance"]["helper_selections"]
+        if selection["field_path"] not in {
+            "when_expressed_stage_name", "expression_pattern.where_expressed.anatomical_structure",
+        }
+    ]
+    result = _materialize_gene_expression_candidate(staged)
+    assert result.ok, result.issues
+    envelope = gene_expression_extraction_output_to_pending_envelope(
+        result.payload, envelope_id="missing-stage-expression",
+    )
+    annotation = envelope.extracted_objects[0]
+    assert annotation.status is CuratableObjectStatus.PENDING
+    assert not annotation.payload.get("when_expressed_stage_name")
+    assert annotation.payload["where_expressed_statement"] == staged["where_expressed_statement"]
+    assert annotation.evidence_record_ids == ["evidence-67598e5688f123c8"]
+    finding = next(
+        finding for finding in validate_pending_gene_expression_envelope(envelope)
+        if finding.field_ref and finding.field_ref.field_path == "when_expressed_stage_name"
+    )
+    assert finding.code == "alliance.gene_expression.expression_context_missing"
+    assert finding.severity is ValidationFindingSeverity.BLOCKER
+    assert finding.details["blocking"] is True
+    assert "when_expressed_stage_name" in {
+        blocker.field_path
+        for blocker in gene_expression_export_blockers(annotation.model_dump(mode="json"))
+    }
+
+
+@pytest.mark.parametrize("stage_value", [123, [], {"name": "long-pec"}, "unselected stage"])
+def test_builder_rejects_malformed_or_unprovenanced_provided_stage(stage_value):
+    staged = _gene_expression_builder_staged_fields()
+    staged["when_expressed_stage_name"] = stage_value
+    result = _materialize_gene_expression_candidate(staged)
+    assert not result.ok
+    assert "when_expressed_stage_name" in str(result.issues)
+
+
 def test_gene_expression_builder_rejects_object_level_only_evidence():
     staged_fields = _gene_expression_builder_staged_fields()
     workspace = ExtractionBuilderWorkspace(

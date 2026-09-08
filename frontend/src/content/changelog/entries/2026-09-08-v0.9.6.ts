@@ -13,6 +13,7 @@ const entry: ChangelogEntry = {
         'Fixed a problem that could leave validated allele fields blank in custom extraction results.',
         'Validators now return values through the selected custom fields, while ambiguous identities remain unresolved for review.',
         'Chat output now follows its formatting instructions when presenting structured extraction results.',
+        'Gene-expression observations with a missing stage can be saved for review. Validation still flags the missing information.',
         'Saved agents and flows using GPT-5.6 Sol with medium reasoning now use Astra with low reasoning. Their prompts, tools, and output structures are preserved.',
       ],
     },

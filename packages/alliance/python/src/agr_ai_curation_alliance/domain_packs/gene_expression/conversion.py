@@ -91,6 +91,7 @@ MATERIALIZER_RESOLVABLE_EXTRACTION_FIELDS = frozenset(
         "expression_annotation_subject.primary_external_id",
         "expression_experiment.entity_assayed.primary_external_id",
         "expression_pattern.where_expressed",
+        "when_expressed_stage_name",
     }
 )
 FIELD_SPECIFIC_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
@@ -429,6 +430,10 @@ def validate_gene_expression_extraction_objects(
                     )
                 )
         stage_name = _payload_value(obj.payload, "when_expressed_stage_name")
+        if stage_name is not None and not isinstance(stage_name, str):
+            errors.append(
+                f"{location}.payload when_expressed_stage_name must be a string when provided"
+            )
         if isinstance(stage_name, str) and stage_name.strip():
             if not _has_helper_selection(
                 output,
