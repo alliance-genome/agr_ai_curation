@@ -25,7 +25,7 @@ def _request(*, authorization: str = "", api_key: str = ""):
 @pytest.fixture(autouse=True)
 def _reset_provider(monkeypatch):
     monkeypatch.delenv("BENCHMARK_OIDC_COGNITO_M2M_ENABLED", raising=False)
-    monkeypatch.delenv("BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID", raising=False)
+    monkeypatch.delenv("BENCHMARK_OIDC_COGNITO_M2M_CLIENT_IDS", raising=False)
     benchmark_auth.reset_benchmark_auth_cache()
     yield
     benchmark_auth.reset_benchmark_auth_cache()
@@ -295,8 +295,8 @@ def _configure_cognito_m2m(monkeypatch, claims):
     )
     monkeypatch.setattr(
         benchmark_auth,
-        "get_benchmark_oidc_cognito_m2m_client_id",
-        lambda: "machine-client",
+        "get_benchmark_oidc_cognito_m2m_client_ids",
+        lambda: ("machine-client",),
     )
     monkeypatch.setattr(
         benchmark_auth, "get_benchmark_oidc_audience", lambda: "benchmark-resource"
@@ -446,14 +446,42 @@ async def test_cognito_m2m_signature_issuer_and_time_fail_sanitized(
     assert "private" not in caplog.text
 
 
+@pytest.mark.parametrize("client_id", ["machine-client", "second-client", "unapproved"])
+@pytest.mark.asyncio
+async def test_cognito_m2m_explicit_clients_keep_distinct_principals(monkeypatch, client_id):
+    _configure_cognito_m2m(monkeypatch, {
+        "client_id": client_id, "token_use": "access", "scope": "benchmark-resource/read",
+    })
+    monkeypatch.setattr(benchmark_auth, "get_benchmark_oidc_cognito_m2m_client_ids",
+                        lambda: ("machine-client", "second-client"))
+    if client_id == "unapproved":
+        with pytest.raises(HTTPException) as exc:
+            await benchmark_auth.require_benchmark_read(_request(authorization="Bearer signed-cognito-token"))
+        assert exc.value.status_code == 401
+    else:
+        principal = await benchmark_auth.require_benchmark_read(_request(authorization="Bearer signed-cognito-token"))
+        assert principal["sub"] == f"service:{client_id}"
+        assert principal["client_id"] == client_id
+
+
+def test_cognito_m2m_empty_allowlist_fails_closed(monkeypatch):
+    monkeypatch.setattr(benchmark_auth, "get_benchmark_oidc_issuer_url",
+                        lambda: "https://cognito-idp.us-east-1.amazonaws.com/example-pool")
+    monkeypatch.setattr(benchmark_auth, "get_benchmark_oidc_audience", lambda: "benchmark-resource")
+    monkeypatch.setattr(benchmark_auth, "get_benchmark_oidc_cognito_m2m_client_ids", tuple)
+    with pytest.raises(HTTPException) as exc:
+        benchmark_auth._get_cognito_m2m_provider()
+    assert exc.value.status_code == 503
+
+
 def test_cognito_m2m_provider_requires_explicit_cognito_configuration(monkeypatch):
     monkeypatch.setattr(
         benchmark_auth, "get_benchmark_oidc_issuer_url", lambda: "https://issuer.example.org"
     )
     monkeypatch.setattr(
         benchmark_auth,
-        "get_benchmark_oidc_cognito_m2m_client_id",
-        lambda: "machine-client",
+        "get_benchmark_oidc_cognito_m2m_client_ids",
+        lambda: ("machine-client",),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -470,8 +498,8 @@ def test_cognito_m2m_provider_uses_exact_issuer_and_time_contract(monkeypatch):
     )
     monkeypatch.setattr(
         benchmark_auth,
-        "get_benchmark_oidc_cognito_m2m_client_id",
-        lambda: "machine-client",
+        "get_benchmark_oidc_cognito_m2m_client_ids",
+        lambda: ("machine-client",),
     )
     monkeypatch.setattr(
         benchmark_auth, "get_benchmark_oidc_jwks_timeout_seconds", lambda: 4

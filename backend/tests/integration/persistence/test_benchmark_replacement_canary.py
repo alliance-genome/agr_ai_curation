@@ -117,6 +117,17 @@ def test_replacement_journey(isolated_database, monkeypatch, tmp_path, weaviate_
         job_id = admission["job_id"]
         assert cli(client, *args) == {"job_id": job_id, "replayed": True}
         assert not provider.calls
+        # Another approved machine can authenticate but cannot inherit this owner's data.
+        other_headers = {"Authorization": "Bearer " + identity.token(client="canary-other")}
+        assert client.http.get(origin + "/api/v1/benchmarks/jobs", headers=other_headers).status_code == 200
+        for path in (
+            f"/api/v1/benchmarks/jobs/{job_id}",
+            f"/api/v1/benchmarks/sources/snapshots/{receipt['snapshot_id']}/content",
+        ):
+            assert client.http.get(origin + path, headers=other_headers).status_code == 404
+        assert client.http.post(origin + f"/api/v1/benchmarks/jobs/{job_id}/cancel",
+                                headers=other_headers).status_code == 404
+        assert cli(client, "get", job_id)["summary"]["status"] == "queued"
         # Revoked initiating-human authority must fail even on accepted replay.
         identity.current = False
         with pytest.raises(ClientError):

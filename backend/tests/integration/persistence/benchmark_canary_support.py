@@ -105,7 +105,7 @@ class CanaryIdentity:
             "BENCHMARK_OIDC_ISSUER_URL": ISSUER, "BENCHMARK_OIDC_AUDIENCE": "canary-api",
             "BENCHMARK_OIDC_ALLOWED_CLIENT_IDS": CLIENT + ",canary-other",
             "BENCHMARK_OIDC_COGNITO_M2M_ENABLED": "true",
-            "BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID": CLIENT,
+            "BENCHMARK_OIDC_COGNITO_M2M_CLIENT_IDS": CLIENT + ",canary-other",
             "BENCHMARK_SNAPSHOT_STORE_BACKEND": "filesystem",
             "BENCHMARK_SNAPSHOT_STORE_PATH": str(tmp_path / "snapshots"),
             "PDF_STORAGE_PATH": str(tmp_path / "documents"),

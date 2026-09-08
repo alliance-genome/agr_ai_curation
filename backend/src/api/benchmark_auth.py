@@ -24,7 +24,7 @@ from src.lib.openai_agents.config import (
     get_benchmark_oidc_audience,
     get_benchmark_oidc_capability_scopes,
     get_benchmark_oidc_clock_skew_seconds,
-    get_benchmark_oidc_cognito_m2m_client_id,
+    get_benchmark_oidc_cognito_m2m_client_ids,
     get_benchmark_oidc_cognito_m2m_enabled,
     get_benchmark_oidc_issuer_url,
     get_benchmark_oidc_jwks_cache_ttl_seconds,
@@ -122,9 +122,9 @@ def _get_cognito_m2m_provider() -> OIDCAuthProvider:
             return _cognito_m2m_provider
 
         issuer = get_benchmark_oidc_issuer_url()
-        client_id = get_benchmark_oidc_cognito_m2m_client_id()
+        client_ids = get_benchmark_oidc_cognito_m2m_client_ids()
         audience = get_benchmark_oidc_audience()
-        if not _is_cognito_issuer(issuer) or not audience or not client_id:
+        if not _is_cognito_issuer(issuer) or not audience or not client_ids:
             raise HTTPException(
                 status_code=503,
                 detail="Benchmark Cognito M2M authentication is not configured",
@@ -135,7 +135,9 @@ def _get_cognito_m2m_provider() -> OIDCAuthProvider:
             {
                 "issuer_url": issuer,
                 "validation_issuer": issuer,
-                "client_id": client_id,
+                # Validation uses the issuer's keys, not an OAuth exchange.
+                # Each signed client_id is checked against the explicit list below.
+                "client_id": "",
                 "audience": audience,
                 "timeout_seconds": timeout,
                 "jwks_timeout_seconds": timeout,
@@ -183,7 +185,7 @@ def _authorized_cognito_m2m_client_id(claims: dict[str, Any]) -> str:
         ):
             raise _InvalidBenchmarkTokenError("Ambiguous Cognito M2M client identity")
 
-    if client_id != get_benchmark_oidc_cognito_m2m_client_id():
+    if client_id not in get_benchmark_oidc_cognito_m2m_client_ids():
         raise _InvalidBenchmarkTokenError("Unapproved Cognito M2M client")
     return client_id
 
