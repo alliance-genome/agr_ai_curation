@@ -1,4 +1,4 @@
-"""Unit tests for tool failure SNS notifier."""
+"""Unit tests for tool failure Sentry and SNS notifications."""
 
 import asyncio
 from types import SimpleNamespace
@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.lib.alerts import tool_failure_notifier as notifier
+from src.lib.observability.sentry import _redact_event, hash_sentry_identifier
 
 
 @pytest.fixture
@@ -181,8 +182,63 @@ def test_notify_tool_failure_captures_sentry_when_sns_disabled(
     assert "raw curator detail" not in sentry_text
     assert "prompt text" not in sentry_text
     assert ("alert_type", "tool_failure") in fake_sentry["tags"]
-    assert ("trace_id", "trace-1") in fake_sentry["tags"]
-    assert ("session_id", "session-1") in fake_sentry["tags"]
+    assert ("ai_curation.trace.id_hash", hash_sentry_identifier("trace-1")) in fake_sentry["tags"]
+    assert ("ai_curation.chat.session_id_hash", hash_sentry_identifier("session-1")) in fake_sentry["tags"]
+    for raw_id in ("trace-1", "session-1", "curator@example.com"):
+        assert raw_id not in sentry_text
+
+
+@pytest.mark.parametrize(
+    "trace_id,session_id",
+    [("application-trace-123", "application-session-456"), (None, None), ("", "")],
+)
+def test_tool_failure_correlation_survives_final_redactor(
+    monkeypatch, direct_to_thread, fake_sentry, trace_id, session_id,
+):
+    """Validate the emitted custom payload with the production final redactor."""
+    monkeypatch.setenv("TOOL_FAILURE_ALERTS_ENABLED", "false")
+    asyncio.run(
+        notifier.notify_tool_failure(
+            error_type="TimeoutError",
+            error_message="private failure detail",
+            source="infrastructure",
+            specialist_name="gene_expression",
+            trace_id=trace_id,
+            session_id=session_id,
+            curator_id="private-curator@example.com",
+            context="private prompt detail",
+        )
+    )
+    sdk_trace_id = "0123456789abcdef0123456789abcdef"
+    event = _redact_event({
+        "tags": dict(fake_sentry["tags"]),
+        "contexts": {
+            **dict(fake_sentry["contexts"]),
+            "trace": {"trace_id": sdk_trace_id, "span_id": "0123456789abcdef"},
+        },
+        "message": fake_sentry["messages"][0]["message"],
+    })
+    for raw_value in (
+        trace_id, session_id, "private-curator@example.com",
+        "private failure detail", "private prompt detail",
+    ):
+        if raw_value:
+            assert raw_value not in repr(event)
+    for key, identifier in (
+        ("ai_curation.trace.id_hash", trace_id),
+        ("ai_curation.chat.session_id_hash", session_id),
+    ):
+        if identifier:
+            assert event["tags"][key] == hash_sentry_identifier(identifier)
+        else:
+            assert key not in event["tags"]
+    assert "trace_id" not in event["tags"]
+    assert "session_id" not in event["tags"]
+    assert event["tags"]["alert_type"] == "tool_failure"
+    assert event["tags"]["source"] == "infrastructure"
+    assert event["tags"]["tool_name"] == "gene_expression"
+    assert event["tags"]["error_type"] == "TimeoutError"
+    assert event["contexts"]["trace"]["trace_id"] == sdk_trace_id
 
 
 def test_notify_tool_failure_can_preserve_sns_without_duplicate_sentry(

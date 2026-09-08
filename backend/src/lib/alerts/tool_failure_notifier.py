@@ -5,15 +5,14 @@ import importlib
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 import boto3
 
+from src.lib.observability.sentry import hash_sentry_identifier
 from src.lib.openai_agents.config import get_tool_failure_alert_summary_max_chars
 
 logger = logging.getLogger(__name__)
-
-_REDACTED = "[Filtered]"
 
 
 def _alert_summary(value: Optional[str]) -> str:
@@ -29,27 +28,6 @@ def _alert_summary(value: Optional[str]) -> str:
     return text
 
 
-def _sentry_extra(
-    *,
-    error_type: str,
-    source: str,
-    specialist_name: Optional[str],
-    trace_id: Optional[str],
-    session_id: Optional[str],
-    curator_id: Optional[str],
-) -> dict[str, Any]:
-    """Build Sentry-safe structured context for a runtime alert."""
-
-    return {
-        "error_type": error_type or "UnknownError",
-        "source": source or "unknown",
-        "tool_name": specialist_name or "N/A",
-        "trace_id": trace_id or None,
-        "session_id": session_id or None,
-        "curator_id": curator_id or None,
-    }
-
-
 def _capture_tool_failure_to_sentry(
     *,
     error_type: str,
@@ -57,7 +35,6 @@ def _capture_tool_failure_to_sentry(
     specialist_name: Optional[str],
     trace_id: Optional[str],
     session_id: Optional[str],
-    curator_id: Optional[str],
 ) -> bool:
     """Best-effort Sentry capture for caught runtime failures."""
 
@@ -68,26 +45,20 @@ def _capture_tool_failure_to_sentry(
         return False
 
     tool_name = specialist_name or "N/A"
-    extra = _sentry_extra(
-        error_type=error_type,
-        source=source,
-        specialist_name=specialist_name,
-        trace_id=trace_id,
-        session_id=session_id,
-        curator_id=curator_id,
-    )
-
     try:
         with sentry_sdk.new_scope() as scope:
             scope.set_level("error")
             scope.set_tag("alert_type", "tool_failure")
             scope.set_tag("source", source or "unknown")
             scope.set_tag("tool_name", tool_name)
-            if trace_id:
-                scope.set_tag("trace_id", trace_id)
-            if session_id:
-                scope.set_tag("session_id", session_id)
-            scope.set_context("runtime_alert", extra)
+            scope.set_tag("error_type", error_type or "UnknownError")
+            for key, identifier in (
+                ("ai_curation.trace.id_hash", trace_id),
+                ("ai_curation.chat.session_id_hash", session_id),
+            ):
+                hashed = hash_sentry_identifier(identifier)
+                if hashed is not None:
+                    scope.set_tag(key, hashed)
             sentry_sdk.capture_message(
                 f"Tool failure: {error_type or 'UnknownError'} ({tool_name})",
                 level="error",
@@ -124,7 +95,6 @@ async def notify_tool_failure(
             specialist_name=specialist_name,
             trace_id=trace_id,
             session_id=session_id,
-            curator_id=curator_id,
         )
 
     alerts_enabled = os.getenv("TOOL_FAILURE_ALERTS_ENABLED", "false").lower() == "true"
