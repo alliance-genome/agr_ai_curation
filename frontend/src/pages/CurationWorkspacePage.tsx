@@ -286,6 +286,15 @@ function CurationWorkspacePageContent({
     () => countValidatedPending(candidates),
     [candidates],
   )
+  const openFindingCount = useMemo(() => {
+    const summaries = [
+      ...envelopeObjectRows.flatMap((row) => row.validationSummaries),
+      ...candidates
+        .filter((candidate) => !candidate.projection_ref)
+        .flatMap((candidate) => candidate.validation_summary_projections ?? []),
+    ]
+    return summaries.reduce((count, summary) => count + summary.open_finding_count, 0)
+  }, [candidates, envelopeObjectRows])
   const validationCounts = useMemo(() => candidates.reduce(
     (summary, candidate) => {
       const validation = candidate.validation
@@ -301,14 +310,11 @@ function CurationWorkspacePageContent({
     },
     {
       blocking: 0,
-      openFindings: horizontalGridModel?.rows.reduce(
-        (count, row) => count + row.validation.openFindingCount,
-        0,
-      ) ?? 0,
+      openFindings: openFindingCount,
       stale: 0,
       validated: 0,
     },
-  ), [candidates, horizontalGridModel])
+  ), [candidates, openFindingCount])
   const selectedCandidate = useMemo(
     () => findCandidate(candidates, activeCandidateId),
     [activeCandidateId, candidates],
