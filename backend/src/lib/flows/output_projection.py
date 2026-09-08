@@ -921,18 +921,39 @@ def _validation_rows_from_records(
         }
     )
     for index, record in enumerate(records, start=1):
+        details = record.get("details")
+        details = details if isinstance(details, Mapping) else {}
+        result = details.get("validation_result")
+        result = result if isinstance(result, Mapping) else {}
+        field_ref = record.get("field_ref")
+        field_ref = field_ref if isinstance(field_ref, Mapping) else {}
+        target = result.get("target")
+        target = target if isinstance(target, Mapping) else {}
+        object_ref = field_ref.get("object_ref") or record.get("object_ref")
+        object_ref = object_ref if isinstance(object_ref, Mapping) else {}
         row: dict[str, Any] = dict(artifact_context)
         row.update(object_context)
+        if object_row is None:
+            for key in ("object_type", "object_id", "pending_ref_id"):
+                row[f"object.{key}"] = object_ref.get(key) or ""
         row.update(
             {
                 "validation.finding_id": record.get("finding_id") or record.get("id") or index,
                 "validation.status": record.get("status") or record.get("state") or "",
                 "validation.severity": record.get("severity") or "",
                 "validation.message": record.get("message") or record.get("detail") or record.get("reason") or "",
-                "validation.field_path": record.get("field_path") or record.get("field_key") or "",
-                "validation.validator": record.get("validator") or record.get("binding_id") or "",
+                "validation.field_path": record.get("field_path") or record.get("field_key") or field_ref.get("field_path") or target.get("field_path") or "",
+                "validation.validator": record.get("validator") or record.get("binding_id") or result.get("validator_binding_id") or "",
             }
         )
+        # Canonical findings keep review evidence beside their compact result.
+        # Do not copy receipts or unrelated runtime context into formatter input.
+        for key in ("candidate_matches", "lookup_attempts"):
+            if key in details:
+                row[f"validation.{key}"] = details[key]
+        for key in ("request_id", "target", "candidate_count", "resolved_values", "missing_expected_fields"):
+            if key in result:
+                row[f"validation.{key}"] = result[key]
         for key, value in _scalar_payload_fields(record).items():
             row.setdefault(f"validation.{key}", value)
         rows.append(row)
