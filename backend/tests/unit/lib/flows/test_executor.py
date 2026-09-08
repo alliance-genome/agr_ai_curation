@@ -8032,6 +8032,8 @@ class TestExecuteFlowTermination:
             "extraction_output_required": True,
         }
 
+
+
     @pytest.mark.asyncio
     async def test_execute_flow_emits_validator_lookup_audit_events(self, monkeypatch):
         flow = _make_flow([
@@ -8585,3 +8587,75 @@ class TestExecuteFlowTermination:
             "candidate_count": 1,
             "extraction_output_required": True,
         }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("benchmark", [False, True])
+async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypatch, benchmark):
+    """A long custom extraction must not become a default fifty-row metadata preview."""
+    from agents.tool_context import ToolContext
+    from contextlib import nullcontext
+    from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
+    from src.lib.flows.output_projection import FlowOutputArtifact, FlowOutputArtifactBundle, FlowOutputField
+    executor = _executor_module()
+    rows = [
+        {"object.object_id": f"observation-{i}", "object.attribute.phenotype": f"Phenotype {i}",
+         "object.attribute.genotype": f"genotype-{i}", "object.evidence_record_ids": [f"evidence-{i}"]}
+        for i in range(82)
+    ]
+    bundle = FlowOutputArtifactBundle(
+        flow_name="Phenotype flow", artifacts=[FlowOutputArtifact(
+            source_key="phenotypes", envelope_id="saved-envelope", object_count=82,
+            rows_by_source={"object": rows, "evidence": [{"evidence.evidence_record_id": "evidence-81", "evidence.verified_quote": "Exact source quote"}],
+                            "validation_finding": [{"validation.message": "Requires review"}]},
+        )], field_catalog=[FlowOutputField(ref="object.attribute.phenotype", label="Phenotype", row_source="object", value_type="string")],
+    )
+    monkeypatch.setattr(executor, "_build_terminal_flow_artifact_bundle", lambda **kwargs: bundle)
+    captured = {}
+    agent = SimpleNamespace()
+    def get_agent(agent_id, **kwargs):
+        captured.update(agent_id=agent_id, kwargs=kwargs)
+        return agent
+    monkeypatch.setattr(executor, "get_agent_by_id", get_agent)
+    async def invoke(ctx, arguments):
+        captured["query"] = json.loads(arguments)["query"]
+        captured["run_config"] = ctx.run_config
+        return "Authored six-column table with all 82 records"
+    def streaming(**kwargs):
+        assert kwargs["agent"] is agent and kwargs["propagate_errors"]
+        assert kwargs["inline_chat_persistence"] is False
+        return SimpleNamespace(on_invoke_tool=invoke)
+    monkeypatch.setattr(executor, "_create_streaming_tool", streaming)
+    instructions = "Show all records in six columns: Figure, Genotype, Stage, Conditions, Phenotype, Qualifier."
+    tool = executor._make_flow_chat_output_tool(
+        agent_id="chat_output_formatter", output_format="chat", tool_name="ask_chat_output_formatter_specialist",
+        tool_description="Display results", specialist_name="Chat Output", base_context={"db_user_id": 22, "authenticated_groups": []},
+        step_instruction_prefix=instructions, completed_steps=[], flow_name="Phenotype flow", flow_run_id="run", document_id="paper",
+        node_data={"custom_instructions": instructions, "step_goal": "Display every phenotype"}, source_node_ids=["extractor"],
+    )
+    arguments = json.dumps({"query": "Use the requested six columns"})
+    ctx = ToolContext(context=None, tool_name=tool.name, tool_call_id="chat-call", tool_arguments=arguments)
+    routing = benchmark_route_plan({"agent:chat_output_formatter": {
+        "provider": "test-provider", "model": "test-model", "reasoning_effort": "low",
+    }}) if benchmark else nullcontext()
+    with routing:
+        output = await tool.on_invoke_tool(ctx, arguments)
+    assert output == "Authored six-column table with all 82 records"
+    assert captured["agent_id"] == "chat_output_formatter"
+    assert captured["kwargs"]["db_user_id"] == 22
+    assert captured["kwargs"]["authenticated_groups"] == []
+    if benchmark:
+        assert captured["kwargs"]["benchmark_route_slot"] == "agent:chat_output_formatter"
+        assert captured["kwargs"]["model_id_override"] == "test-model"
+        assert captured["kwargs"]["model_provider_override"] == "test-provider"
+        assert captured["kwargs"]["model_reasoning_override"] == "low"
+    else:
+        assert "benchmark_route_slot" not in captured["kwargs"]
+    contexts = captured["kwargs"]["additional_runtime_context"]
+    assert contexts[0] == instructions
+    payload = json.loads(contexts[1].split("\n", 2)[2])
+    assert payload["rows"]["object"] == rows
+    assert payload["rows"]["evidence"][0]["evidence.verified_quote"] == "Exact source quote"
+    assert payload["rows"]["validation_finding"][0]["validation.message"] == "Requires review"
+    assert payload["curator_output_request"]["custom_instructions"] == instructions
+    assert captured["query"] == "Use the requested six columns"

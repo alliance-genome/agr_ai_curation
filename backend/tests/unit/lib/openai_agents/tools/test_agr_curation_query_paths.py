@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from agr_ai_curation_alliance.tools import agr_curation
 
 
@@ -857,6 +859,108 @@ def test_search_alleles_uses_generic_db_fuzzy_fallback_when_api_search_misses(mo
     assert fallback_calls == [("crb 11A22", "NCBITaxon:7227", True, 5)]
     assert result.data[0]["curie"] == "FB:FBal0001817"
     assert result.data[0]["match_type"] == "fuzzy_symbol"
+
+
+@pytest.mark.parametrize("method", ["search_alleles", "search_alleles_bulk"])
+@pytest.mark.parametrize(
+    "mention,matched,symbol,curie,match_type",
+    [
+        ("Nfa-g", "NFAT-GFP", "P{PTT-GA}NFAT<sup>CA07788</sup>", "FB:FBti0099824", "fuzzy_synonym"),
+        ("upd3∆", "upd3Δ", "upd3<sup>Δ</sup>", "FB:FBal0283677", "fuzzy_synonym"),
+        ("N fa-g", "N fa-g", "N<sup>fa-g</sup>", "FB:FBal0012868", "exact"),
+    ],
+)
+def test_allele_search_distinguishes_fuzzy_candidates_from_confirmed_identity(
+    monkeypatch, method, mention, matched, symbol, curie, match_type,
+):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        def search_entities(self, **kwargs):
+            assert kwargs["search_pattern"] == mention
+            return [{"entity_curie": curie, "entity": matched, "match_type": match_type}]
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: SimpleNamespace(get_db_client=lambda: FakeDb()))
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:7227": "FB"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_allele_details_bulk", lambda _db, _curies: ({curie: {"curie": curie, "symbol": symbol, "taxon": "NCBITaxon:7227"}}, {}))
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+    args = {"allele_symbol": mention} if method == "search_alleles" else {"allele_symbols": [mention]}
+    result = query_fn(method=method, data_provider="FB", limit=5, **args)
+    item = result.model_dump() if method == "search_alleles" else result.data["items"][0]
+    rows = item["data"] if method == "search_alleles" else item["results"]
+    assert result.status == "ok"
+    assert len(rows) == 1
+    assert rows[0]["curie"] == curie
+    assert rows[0]["symbol"] == symbol
+    assert rows[0]["curie_validated"] is True
+    if match_type.startswith("fuzzy_"):
+        assert rows[0]["matched_on"] == matched
+        assert rows[0]["identity_status"] == "unconfirmed"
+        assert item["lookup_status"] == "ambiguous"
+        assert item["result_projections"][0]["projection_status"] == "candidate"
+        assert "not identity with the request" in item["explanation"]
+        assert "Fetching the same candidate by ID" in item["explanation"]
+        if method == "search_alleles_bulk":
+            assert item["status"] == "ambiguous"
+            assert result.data["resolved_count"] == 0
+            assert result.lookup_status == "ambiguous"
+            assert "unconfirmed candidates" in result.explanation
+    else:
+        assert "identity_status" not in rows[0]
+        assert item["lookup_status"] == "success"
+        assert item["result_projections"][0]["projection_status"] == "resolved"
+
+
+def test_bulk_fuzzy_candidates_preserve_other_input_operational_failure(monkeypatch):
+    class FakeDb:
+        def search_entities(self, **kwargs):
+            if kwargs["search_pattern"] == "failed-input":
+                raise TimeoutError("database query timed out")
+            return [{"entity_curie": "FB:FBti0099824", "entity": "NFAT-GFP", "match_type": "fuzzy_synonym"}]
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: SimpleNamespace(get_db_client=lambda: FakeDb()))
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:7227": "FB"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_allele_details_bulk", lambda _db, _curies: ({"FB:FBti0099824": {"curie": "FB:FBti0099824", "symbol": "NFAT insertion", "taxon": "NCBITaxon:7227"}}, {}))
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+    result = _unwrap_query_function(agr_curation.agr_curation_query)(
+        method="search_alleles_bulk", allele_symbols=["Nfa-g", "failed-input"], data_provider="FB", limit=5,
+    )
+    assert [item["status"] for item in result.data["items"]] == ["ambiguous", "transient_failure"]
+    assert result.data["resolution_status"] == "transient_failure"
+    assert result.data["resolved_count"] == 0
+    assert result.data["total_matches"] == 1
+    assert result.data["items"][1]["lookup_attempts"][0]["lookup_status"] == "transient"
+
+
+def test_fuzzy_allele_synthetic_attempt_does_not_claim_identity_resolution():
+    row = {"curie": "FB:FBti0099824", "symbol": "NFAT insertion", "matched_on": "NFAT-GFP", "match_type": "fuzzy_synonym"}
+    result = agr_curation._lookup_response(
+        method="search_alleles", data=[row], count=1,
+        attempted_query={"method": "search_alleles", "allele_symbol": "Nfa-g"},
+    )
+    attempt = result.lookup_attempts[0]
+    assert attempt["lookup_status"] == "ambiguous"
+    assert attempt["target_projection"]["projection_status"] == "candidate"
+    assert "resolved_id" not in attempt and "resolved_label" not in attempt
+    assert "unconfirmed candidates" in attempt["explanation"]
+    assert "resolved 'Nfa-g'" not in attempt["explanation"]
+    failed = {"lookup_status": "transient", "explanation": "First search timed out."}
+    result = agr_curation._lookup_response(
+        method="search_alleles", data=[row], count=1, attempts=[failed],
+    )
+    assert result.lookup_attempts == [failed]
+    bulk = agr_curation._lookup_response(
+        method="search_alleles_bulk", count=1,
+        data={"status_counts": {"ambiguous": 1}, "resolved_input_count": 0, "resolution_status": "ambiguous"},
+    )
+    assert bulk.lookup_status == "ambiguous"
+    assert "unconfirmed candidates" in bulk.explanation
+    assert bulk.lookup_attempts[0]["lookup_status"] == "ambiguous"
+    assert "unconfirmed candidates" in bulk.lookup_attempts[0]["explanation"]
 
 
 def test_search_alleles_uses_single_all_taxa_fuzzy_fallback_without_provider(monkeypatch):

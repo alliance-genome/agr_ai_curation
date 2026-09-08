@@ -1930,7 +1930,7 @@ def test_group_by_is_rejected_for_flat_file_formats():
         flow_name="Projection Flow",
     )
 
-    with pytest.raises(ValueError, match="group_by is not supported for CSV"):
+    with pytest.raises(ValueError, match="group_by is not supported for CSV.*choose JSON output"):
         apply_projection_plan(
             bundle,
             FlowOutputProjectionPlan(
@@ -1939,34 +1939,6 @@ def test_group_by_is_rejected_for_flat_file_formats():
                 group_by=["artifact.adapter_key"],
             ),
         )
-
-
-def test_chat_grouped_projection_renders_visible_sections():
-    bundle = build_flow_output_artifact_bundle(
-        completed_steps=[_completed_domain_step()],
-        flow_name="Projection Flow",
-    )
-
-    result = apply_projection_plan(
-        bundle,
-        FlowOutputProjectionPlan(
-            format="chat",
-            row_source="object",
-            group_by=["artifact.adapter_key"],
-            columns=[
-                FlowOutputColumnSpec(
-                    key="symbol",
-                    header="Symbol",
-                    field_ref="object.payload.symbol",
-                )
-            ],
-        ),
-    )
-
-    assert result.chat_output is not None
-    assert "## Adapter: gene" in result.chat_output
-    assert "| Symbol |" in result.chat_output
-    assert "BRCA1" in result.chat_output
 
 
 def test_step_level_evidence_and_validation_metadata_are_projectable_without_payload_records():
@@ -2425,7 +2397,7 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
                 "query_summary": "Resolved one GO term.",
                 "not_found": [],
             },
-            "chat",
+            "json",
             "GO:0003677",
         ),
         (
@@ -2491,7 +2463,7 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
                     }
                 ]
             },
-            "chat",
+            "json",
             "TERM:0001",
         ),
         (
@@ -2510,7 +2482,7 @@ def test_legacy_items_payload_is_not_mapped_into_object_or_evidence_rows():
         ),
     ],
 )
-def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
+def test_real_typed_validator_results_build_nonempty_file_bundles(
     schema_name,
     validator_agent_id,
     schema_fields,
@@ -2547,8 +2519,6 @@ def test_real_typed_validator_results_build_nonempty_file_and_chat_bundles(
     result = apply_projection_plan(bundle, plan)
 
     assert result.rows
-    if output_format == "chat":
-        assert result.chat_output
 
 
 def test_typed_go_annotations_inherit_gene_identity_into_each_object_row():

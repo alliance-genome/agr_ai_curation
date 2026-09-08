@@ -238,13 +238,36 @@ async def test_runtime_file_formatter_rejects_empty_bundle_before_agent(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_chat_output_formatter_flow_output_renders_runtime_chat_table():
+async def test_chat_output_formatter_flow_output_uses_authored_chat(monkeypatch):
     executor = _executor_module()
+    captured = {}
+    authored_response = "| Gene |\n| --- |\n| TP53 |\n| BRCA1 |"
+
+    def _fake_get_agent_by_id(agent_id, **kwargs):
+        captured["agent_id"] = agent_id
+        captured["context"] = kwargs["additional_runtime_context"]
+        return SimpleNamespace(name="Chat Output Formatter")
+
+    def _fake_create_streaming_tool(**kwargs):
+        assert kwargs["inline_chat_persistence"] is False
+        assert kwargs["propagate_errors"] is True
+
+        async def _invoke(_ctx, arguments):
+            captured["query"] = json.loads(arguments)["query"]
+            return authored_response
+
+        return SimpleNamespace(on_invoke_tool=_invoke)
+
+    monkeypatch.setattr(executor, "get_agent_by_id", _fake_get_agent_by_id)
+    monkeypatch.setattr(executor, "_create_streaming_tool", _fake_create_streaming_tool)
     tool = executor._make_flow_chat_output_tool(
         agent_id="chat_output_formatter",
         output_format="chat",
         tool_name="ask_chat_output_formatter_specialist",
         tool_description="Ask chat output formatter",
+        specialist_name="Chat Output Formatter",
+        base_context={},
+        step_instruction_prefix="",
         completed_steps=[_completed_artifact_step()],
         flow_name="Chat Flow",
         flow_run_id="flow-run-123",
@@ -254,9 +277,13 @@ async def test_chat_output_formatter_flow_output_renders_runtime_chat_table():
 
     result_text = await _invoke_tool(tool, {"query": "Summarize results."})
 
-    assert "| Adapter | Object Type | Status | Symbol |" in result_text
-    assert "TP53" in result_text
-    assert "BRCA1" in result_text
+    assert result_text == authored_response
+    assert captured["agent_id"] == "chat_output_formatter"
+    assert captured["query"] == "Summarize results."
+    payload = json.loads(captured["context"][0].split("\n", 2)[2])
+    assert [row["object.payload.symbol"] for row in payload["rows"]["object"]] == [
+        "TP53", "BRCA1",
+    ]
 
 
 def test_hidden_projection_planner_helpers_are_removed():

@@ -2941,9 +2941,9 @@ def get_flow_projection_max_rows() -> int:
 
 
 def get_flow_chat_max_rows() -> int:
-    """Max rows rendered in a chat-format flow output (FLOW_CHAT_MAX_ROWS).
+    """Default file-formatter row inspection page size (FLOW_CHAT_MAX_ROWS).
 
-    Bounds chat table/section length. Default 50.
+    Bounds inspection tool responses, not authored chat output. Default 50.
     """
     return max(1, _get_env_int_with_fallback("FLOW_CHAT_MAX_ROWS", 50))
 

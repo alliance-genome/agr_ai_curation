@@ -29,7 +29,11 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
     The caller owns the session. Admission constructs this only after determining
     that the idempotency key does not already have a durable outcome.
     """
-    runtime_only = SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS | {
+    # Authored chat now invokes a model and must have a frozen route like any
+    # other specialist. Keep the existing non-chat terminal classification.
+    runtime_only = (SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS - {
+        "chat_output", "chat_output_formatter",
+    }) | {
         CURATION_PREP_AGENT_ID, CURATION_HANDOFF_AGENT_ID, "task_input",
     }
     visible = {
@@ -86,6 +90,9 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
 
     direct_validators: dict[str, tuple[str, ...]] = {}
     for key in visible:
+        if key in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS:
+            # Formatters consume saved flow artifacts, not a standalone paper.
+            continue
         # Direct curator runs dispatch active package bindings, without flow opt-outs.
         # Resolve the same inherited curation ownership as custom runtime agents.
         metadata = get_agent_metadata(key, _resolved_db_agent=visible[key])
@@ -111,7 +118,7 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
         validators: dict[str, BenchmarkSuiteRoute] = {}
         accessible = True
         for node in definition.nodes:
-            if node.type != "agent":
+            if node.type not in ("agent", "output"):
                 continue
             agent_id = node.data.agent_id
             if agent_id not in runtime_only:
