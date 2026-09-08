@@ -3655,6 +3655,8 @@ async def _handle_tool_call(
         )
         return {
             "status": "success" if delivered else "not_sent",
+            "success": delivered,
+            "error": None if delivered else "Developer notification was not sent; delivery is disabled or unavailable.",
             "notification_submitted": delivered,
             "message": (
                 "Failure report submitted to the developer notification service."

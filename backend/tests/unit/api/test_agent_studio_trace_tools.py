@@ -598,9 +598,12 @@ async def test_failure_report_waits_for_delivery_and_keeps_session(monkeypatch, 
     notify.assert_awaited_once()
     assert notify.call_args.kwargs["session_id"] == "session-owned"
     assert result["notification_submitted"] is delivered
+    assert result["success"] is delivered
+    assert api_module._tool_result_status(result) == ("success" if delivered else "error")
     assert result["status"] == ("success" if delivered else "not_sent")
     if not delivered:
         assert "not sent" in result["message"]
+        assert "not sent" in api_module._tool_result_error(result)
         assert "sent to dev team" not in result["message"]
 
 
