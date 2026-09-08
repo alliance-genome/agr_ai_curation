@@ -67,6 +67,7 @@ def _catalog():
         agent_targets={"extractor"},
         flow_agents={"Extraction Flow": ["extractor"]},
         flow_model_validators={"Extraction Flow": ["semantic-check"]},
+        agent_model_validators={},
     )
 
 
@@ -122,6 +123,7 @@ def _checked_in_catalog():
         agent_targets={"gene_validation", "ontology_term_validation"},
         flow_agents={"Gene Curation": flow_agents},
         flow_model_validators={},
+        agent_model_validators={},
         agent_aliases={chat_output_alias: "chat_output"},
     )
 

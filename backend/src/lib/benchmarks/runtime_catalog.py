@@ -4,13 +4,17 @@ from sqlalchemy.orm import Session
 
 from src.lib.agent_access import is_resource_access_allowed
 from src.lib.agent_studio.agent_service import list_agents_visible_to_user
+from src.lib.agent_studio.catalog_service import get_agent_metadata
 from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
 from src.lib.config.agent_loader import canonical_system_agent_key, get_agent_definition_for_package
 from src.lib.config.models_loader import list_models
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 from src.lib.flows.executor import CURATION_HANDOFF_AGENT_ID
-from src.lib.flows.validation_attachments import validation_schedule_from_node_data
+from src.lib.flows.validation_attachments import (
+    validation_attachment_options_for_agent,
+    validation_schedule_from_node_data,
+)
 from src.lib.openai_agents.config import get_agent_config, normalize_reasoning_effort, resolve_model_provider
 
 from .catalog import build_route_catalog
@@ -49,6 +53,51 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
     flow_agents: dict[str, tuple[str, ...]] = {}
     flow_validators: dict[str, tuple[str, ...]] = {}
     validator_defaults: dict[str, BenchmarkSuiteRoute] = {}
+
+    def model_validators(schedule: list[dict]) -> dict[str, BenchmarkSuiteRoute] | None:
+        validators: dict[str, BenchmarkSuiteRoute] = {}
+        for validator in schedule:
+            validator_agent = validator.get("validator_agent_id")
+            if not validator_agent:
+                # Tool-backed validation is deterministic, not a model slot.
+                continue
+            package = validator.get("validator_package_id")
+            binding = validator.get("validator_binding_id")
+            if not package or not binding:
+                raise ValueError("Model validator lacks its package/binding identity")
+            definition = get_agent_definition_for_package(package, validator_agent)
+            if definition is None:
+                raise ValueError("Model validator agent is not configured")
+            key = canonical_system_agent_key(definition)
+            agent = visible.get(key)
+            if agent is None or agent.visibility != "system":
+                return None
+            default = agent_defaults[key]
+            if binding in validators and validators[binding] != default:
+                raise ValueError("Model validator binding has conflicting defaults")
+            validators[binding] = default
+        return validators
+
+    def register_validators(validators: dict[str, BenchmarkSuiteRoute]) -> None:
+        for binding, default in validators.items():
+            if binding in validator_defaults and validator_defaults[binding] != default:
+                raise ValueError("Model validator binding has conflicting defaults")
+            validator_defaults[binding] = default
+
+    direct_validators: dict[str, tuple[str, ...]] = {}
+    for key in visible:
+        # Direct curator runs dispatch active package bindings, without flow opt-outs.
+        # Resolve the same inherited curation ownership as custom runtime agents.
+        metadata = get_agent_metadata(key, _resolved_db_agent=visible[key])
+        direct_bindings = model_validators([
+            option.to_dict() for option in validation_attachment_options_for_agent(
+                key, agent_registry={key: metadata},
+            )
+            if option.state.value == "active"
+        ])
+        if direct_bindings is not None:
+            register_validators(direct_bindings)
+            direct_validators[key] = tuple(sorted(direct_bindings))
     for recipe in load_benchmark_flow_templates(curator.active_groups):
         if not is_resource_access_allowed(
             visibility_allowed=True, allowed_group_ids=recipe["allowed_group_ids"],
@@ -71,35 +120,17 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
                     break
                 agents.add(agent_id)
             schedule = validation_schedule_from_node_data(node.data.model_dump())
-            for validator in schedule["scheduled_validators"]:
-                validator_agent = validator.get("validator_agent_id")
-                if not validator_agent:
-                    # Tool-backed validation is deterministic, not a model slot.
-                    continue
-                package = validator.get("validator_package_id")
-                binding = validator.get("validator_binding_id")
-                if not package or not binding:
-                    raise ValueError("Model validator lacks its package/binding identity")
-                agent_definition = get_agent_definition_for_package(package, validator_agent)
-                if agent_definition is None:
-                    raise ValueError("Model validator agent is not configured")
-                key = canonical_system_agent_key(agent_definition)
-                agent = visible.get(key)
-                if agent is None or agent.visibility != "system":
-                    accessible = False
-                    break
-                default = agent_defaults[key]
+            node_validators = model_validators(schedule["scheduled_validators"])
+            if node_validators is None:
+                accessible = False
+                break
+            for binding, default in node_validators.items():
                 if binding in validators and validators[binding] != default:
                     raise ValueError("Model validator binding has conflicting defaults")
                 validators[binding] = default
-            if not accessible:
-                break
         if not accessible:
             continue
-        for binding, default in validators.items():
-            if binding in validator_defaults and validator_defaults[binding] != default:
-                raise ValueError("Model validator binding has conflicting defaults")
-            validator_defaults[binding] = default
+        register_validators(validators)
         flow_agents[recipe["name"]] = tuple(sorted(agents))
         flow_validators[recipe["name"]] = tuple(sorted(validators))
     return build_route_catalog(
@@ -109,5 +140,6 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
         }) for model in models),
         supervisor_default=route(supervisor.model, supervisor.reasoning),
         agent_defaults=agent_defaults, model_validator_defaults=validator_defaults,
-        agent_targets=visible, flow_agents=flow_agents, flow_model_validators=flow_validators,
+        agent_targets=direct_validators, agent_model_validators=direct_validators,
+        flow_agents=flow_agents, flow_model_validators=flow_validators,
     )
