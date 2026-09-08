@@ -699,21 +699,10 @@ class TraceExtractorTests(unittest.TestCase):
                 self.assertEqual(result["meta"]["observations_inspected"], 2)
                 self.assertEqual(result["meta"]["complete"], complete)
                 self.assertEqual(result["meta"]["truncated"], not complete)
-
-    def test_session_result_bound_is_independent_of_page_size(self):
-        for ids, complete in [(["a", "a"], True), (["a", "b"], False)]:
-            with self.subTest(ids=ids):
-                extractor = self._make_extractor()
-                extractor.client.api.observations.get_many.return_value = SimpleNamespace(
-                    data=[{"id": str(i), "trace_id": tid, "session_id": "session-1"} for i, tid in enumerate(ids)],
-                    meta=SimpleNamespace(cursor=None),
-                )
-                result = extractor.list_session_traces("session-1", limit=10, max_results=1)
-                self.assertEqual(extractor.client.api.observations.get_many.call_args.kwargs["limit"], 10)
-                self.assertEqual([t["id"] for t in result["traces"]], ["a"])
-                self.assertEqual(result["meta"]["result_limit"], 1)
-                self.assertEqual(result["meta"]["complete"], complete)
-                self.assertEqual(result["meta"]["stop_reason"], None if complete else "result_limit")
+                self.assertEqual(result["meta"]["returned_trace_count"], 2)
+                self.assertEqual(result["meta"]["stop_reason"], None if complete else "observation_limit")
+                self.assertEqual(result["meta"]["totalItems"], 2 if complete else None)
+                self.assertEqual(result["meta"]["totalPages"], 1 if complete else None)
 
     def test_list_session_traces_preserves_empty_result(self):
         extractor = self._make_extractor()

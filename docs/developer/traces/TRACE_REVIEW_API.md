@@ -322,18 +322,16 @@ the row budget; returned trace IDs remain deduplicated. These bounds apply to
 discovery, not the subsequent exact analysis of each discovered trace.
 `list_session_traces(limit=...)` still controls page size, capped by
 `TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT` and the remaining row budget.
-Its optional `max_results` separately caps unique traces and cannot exceed the
-configured observation budget; without it, that budget also bounds results.
 
 Inspect `session.langfuse_meta.complete`, `truncated`, and `stop_reason` before
 using an export as session-history evidence. A budget stop returns HTTP 200
 with `status: "partial"`, `session.complete: false`, and the discovered traces.
-`stop_reason` is `request_limit`, `observation_limit`, or `result_limit`.
+`stop_reason` is `request_limit` or `observation_limit`.
 `totalItems` and `totalPages` are null on partial scans; `returned_trace_count`,
 `requests_made`, and `observations_inspected` describe only the work performed.
-The metadata also reports the effective `request_limit`, `observation_limit`,
-and `result_limit`. A terminal page at the budget boundary is complete if all
-its rows were inspected. An empty complete session has zero traces and
+The metadata also reports the effective `request_limit` and `observation_limit`.
+A terminal page at the budget boundary is complete if all its rows were inspected.
+An empty complete session has zero traces and
 `complete: true`; an empty stopped scan is partial. Repeated cursors and
 provider filter violations remain explicit errors.
 
@@ -376,7 +374,7 @@ curl "http://localhost:8001/api/traces/sessions/ef55be6a-a67a-4258-9430-bf31f42b
     "first_timestamp": "2025-12-10T15:01:42.956Z",
     "last_timestamp": "2025-12-10T16:39:04.804Z",
     "complete": false,
-    "langfuse_meta": { "page": 1, "limit": 100, "totalItems": 14, "totalPages": 1, "complete": true, "truncated": false, "stop_reason": null, "requests_made": 1, "observations_inspected": 80, "returned_trace_count": 14, "request_limit": 200, "observation_limit": 10000, "result_limit": 10000 },
+    "langfuse_meta": { "page": 1, "limit": 100, "totalItems": 14, "totalPages": 1, "complete": true, "truncated": false, "stop_reason": null, "requests_made": 1, "observations_inspected": 80, "returned_trace_count": 14, "request_limit": 200, "observation_limit": 10000 },
     "exported_at": "2026-04-25T18:50:00Z"
   },
   "traces": [
