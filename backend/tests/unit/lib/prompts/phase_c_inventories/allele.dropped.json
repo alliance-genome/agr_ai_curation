@@ -79,5 +79,19 @@
     "reason": "Custom-field identity validation is now supported. The request may originate from extraction or a custom field, and a paper quote is optional. The retention inventory asserts the replacement request scope; database evidence is still required for resolution.",
     "old_source": "packages/alliance/agents/allele/prompt.yaml:Reading a validation request",
     "new_home": ""
+  },
+  {
+    "phrase": "you are the resolver that settles it",
+    "category": "deleted",
+    "reason": "v0.9.6 identity-safety correction: unconditional resolution pressure is replaced by explicit source/database agreement and a successful unresolved outcome when identity cannot be established. The replacement is asserted in allele.txt.",
+    "old_source": "packages/alliance/agents/allele/prompt.yaml:<role>",
+    "new_home": ""
+  },
+  {
+    "phrase": "ONLY IF that fails with zero results, consider alternative interpretations.",
+    "category": "deleted",
+    "reason": "v0.9.6 identity-safety correction: unrelated fuzzy candidates must not prevent further source-supported searches. Literal-first and no-invented-name rules remain; allele.txt asserts the replacement source-compatible-candidate condition.",
+    "old_source": "packages/alliance/agents/allele/prompt.yaml:Never assume one symbol means another gene",
+    "new_home": ""
   }
 ]
