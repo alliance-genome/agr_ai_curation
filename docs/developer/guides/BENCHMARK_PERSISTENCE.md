@@ -111,8 +111,9 @@ missing or malformed context before reading input bytes. These historical
 jobs remain inspectable; they cannot be upgraded into executable jobs by
 editing their identity.
 
-Before invoking a target, the worker now rechecks the current Cognito account
-and all group pages, then the local active user row. The captured issuer must
+Before invoking a target, the worker rechecks the current account and complete
+membership through the configured auth provider's token-free resolver, then
+the local active user row. For Cognito, the captured issuer must
 match the configured user pool, and the returned username and stable subject
 must match the receipt. Missing provider locators, disabled accounts, removed
 mapped execution groups, unavailable lookups, and unsupported provider types fail closed.
@@ -126,9 +127,41 @@ not a saved human bearer. Deployment needs those two actions scoped to the
 configured user pool; this source change does not grant them. AdminGetUser
 contributes to Cognito MAU billing. SDK connect/read timeouts and total attempts
 are configured by `BENCHMARK_CURATOR_AUTH_TIMEOUT_SECONDS` and
-`BENCHMARK_CURATOR_AUTH_MAX_ATTEMPTS`. Generic OIDC and dev bypass have no
-token-free current-membership adapter implemented and cannot execute these
-jobs. The auth adapter is tested with synthetic responses, not live Cognito.
+`BENCHMARK_CURATOR_AUTH_MAX_ATTEMPTS`. The auth adapter is tested with synthetic
+responses, not live Cognito.
+
+`src.auth.base.CurrentPrincipalResolver` is the provider-neutral extension
+contract. The callable accepts only `PrincipalLookupIdentity` (subject,
+normalized provider, issuer, optional provider username), with no historical
+groups or human credentials, and returns exactly `AuthPrincipal`. It must use
+authoritative administrative reads to verify an enabled account, stable
+identity and configured issuer, and obtain every current membership page.
+For generic OIDC, the issuer and subject identify the account; no Cognito
+username is required. Return the normalized provider `oidc` and verified `iss`
+in `raw_claims`, matching the authenticated receipt. Cognito additionally
+returns its verified `cognito:username` locator.
+
+An installed deployment package can register its resolver in `pyproject.toml`:
+
+```toml
+[project.entry-points."agr_ai_curation.current_principal_resolvers"]
+oidc = "institution_auth.directory:resolve_current_principal"
+```
+
+The entry-point name matches `AUTH_PROVIDER`, and its value is the callable
+itself, not a factory. Install the package in both backend and worker images.
+The built-in Cognito adapter and package adapters share the same selection
+boundary in `src.auth.current_principal`; duplicate registrations (including
+attempts to override Cognito) fail closed. Generic OIDC has no standardized
+administrative membership API, so an unregistered resolver remains unavailable.
+Development bypass cannot authorize durable jobs even with a registration.
+
+Resolvers must raise `CurrentPrincipalDenied` only for authoritative account
+absence, disablement or identity mismatch. Infrastructure failures, denied
+administrative access and malformed/incomplete responses raise other
+exceptions and retain the sanitized operational-failure path. Bound all I/O
+with documented environment settings and close resources. Never reuse frozen
+claims, accept alternate principal shapes, or return partial memberships.
 
 Each suite case can now carry an explicit `user_query`, copied into the resolved
 case and cell and included in their digests. New standalone-agent jobs require

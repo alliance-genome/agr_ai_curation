@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
 
 
 @dataclass
@@ -17,6 +17,38 @@ class AuthPrincipal:
     groups: List[str] = field(default_factory=list)
     raw_claims: Dict[str, Any] = field(default_factory=dict)
     provider: str = "unknown"
+
+
+@dataclass(frozen=True)
+class PrincipalLookupIdentity:
+    """Verified identity locator; contains no tokens or historical memberships."""
+
+    subject: str
+    auth_provider: str
+    auth_issuer: str | None
+    provider_username: str | None
+
+
+class CurrentPrincipalDenied(PermissionError):
+    """Authoritative account absence, disablement, or identity mismatch.
+
+    Infrastructure, permission-to-read, and malformed-response failures must
+    raise other exceptions, not this explicit authorization-denial signal.
+    """
+
+
+class CurrentPrincipalResolver(Protocol):
+    """Synchronous, token-free administrative lookup run in a worker thread.
+
+    Verify the configured issuer and stable identity, require an enabled
+    account, and return AuthPrincipal with complete current memberships.
+    Never reconstruct authorization from historical claims. Use bounded I/O
+    and close resources; unavailable or incomplete reads must raise.
+    """
+
+    def __call__(self, identity: PrincipalLookupIdentity, /) -> AuthPrincipal:
+        """Resolve one authoritative current principal or raise."""
+        ...
 
 
 @dataclass
