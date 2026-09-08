@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, List
 
@@ -59,6 +61,44 @@ class FeedbackDebugDetailForbidden(Exception):
 
 class _FeedbackProcessingError(RuntimeError):
     """Content-free diagnostic for a handled feedback processing failure."""
+
+
+class _FeedbackDependencyLogFilter(logging.Filter):
+    """Leave event ownership with feedback only in the calling execution context."""
+
+    def __init__(self):
+        super().__init__()
+        self.active = ContextVar("feedback_dependency_logs", default=False)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self.active.get() and record.levelno >= logging.WARNING:
+            record.sentry_skip_event = True
+            record.msg = "Feedback dependency failed; feedback service owns failure reporting."
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+        return True
+
+
+_feedback_log_filter = _FeedbackDependencyLogFilter()
+for _dependency_logger_name in (
+    "src.lib.feedback.email_notifier",
+    "src.lib.feedback.sns_notifier",
+    "src.lib.agent_studio.trace_context_service",
+):
+    # Register once: mutating logger filter lists during concurrent emissions
+    # can skip filters. Outside the feedback scope this filter is inert.
+    logging.getLogger(_dependency_logger_name).addFilter(_feedback_log_filter)
+
+
+@contextmanager
+def _feedback_dependency_logs():
+    token = _feedback_log_filter.active.set(True)
+    try:
+        yield
+    finally:
+        _feedback_log_filter.active.reset(token)
 
 
 def _report_feedback_failure(stage: str, *, error_count: int = 1) -> None:
@@ -254,7 +294,8 @@ class FeedbackService:
 
             # Send notification (SNS or email)
             try:
-                self.notifier.send_feedback_notification(report)
+                with _feedback_dependency_logs():
+                    self.notifier.send_feedback_notification(report)
                 report.email_sent_at = datetime.now(timezone.utc)
                 logger.info('Sent notification for feedback %s', feedback_id)
             except Exception:
@@ -431,7 +472,8 @@ class FeedbackService:
 
         for trace_id in trace_ids[:MAX_TRACE_SNAPSHOT_TRACES]:
             try:
-                trace_context = asyncio.run(get_trace_context_for_explorer(trace_id))
+                with _feedback_dependency_logs():
+                    trace_context = asyncio.run(get_trace_context_for_explorer(trace_id))
                 traces.append(
                     self._trace_context_snapshot(
                         trace_context=trace_context,

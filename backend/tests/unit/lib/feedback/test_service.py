@@ -1056,3 +1056,106 @@ def test_routine_absence_does_not_report(monkeypatch, missing_session):
     assert _status_value(report.processing_status) == "completed"
     assert report.trace_data["capture_status"] == "degraded"
     reporter.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["email", "sns_client", "sns_unexpected", "trace_init", "trace_fetch"])
+def test_real_dependency_failures_have_one_event_owner(monkeypatch, caplog, failure):
+    import logging
+    import smtplib
+
+    from botocore.exceptions import ClientError
+    from src.lib.observability.sentry import before_send
+
+    module = _feedback_service_module()
+    secret = "private feedback transcript password=fixture-secret"
+    reporter = MagicMock()
+    sleep = MagicMock()
+    monkeypatch.setattr(module, "report_runtime_exception", reporter)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    monkeypatch.setenv("SENTRY_LOG_EVENT_LEVEL", "ERROR")
+    caplog.set_level(logging.WARNING)
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    service = module.FeedbackService(db=db)
+    notifier = service.notifier
+    if failure.startswith("trace"):
+        monkeypatch.setenv("TRACE_CONTEXT_SOURCE", "langfuse_sdk")
+        langfuse = importlib.import_module("langfuse")
+        client = MagicMock()
+        constructor = MagicMock(return_value=client)
+        if failure == "trace_init":
+            constructor.side_effect = RuntimeError(secret)
+        else:
+            client.api.trace.get.side_effect = RuntimeError(secret)
+        monkeypatch.setattr(langfuse, "Langfuse", constructor)
+        report.trace_ids = ["trace-1", "trace-2", "trace-3"]
+        service.notifier = MagicMock()
+        expected_stage = "trace_capture"
+    else:
+        service._capture_feedback_trace_snapshot = MagicMock(
+            return_value={"capture_status": "success"}
+        )
+        expected_stage = "notifier_delivery"
+        if failure == "email":
+            monkeypatch.setattr(notifier, "_send_email", MagicMock(side_effect=smtplib.SMTPException(secret)))
+            email_module = importlib.import_module("src.lib.feedback.email_notifier")
+            monkeypatch.setattr(email_module.time, "sleep", sleep)
+        else:
+            notifier = module.SNSNotifier(topic_arn="arn:aws:sns:us-east-1:123456789012:fixture")
+            notifier._sns_client = MagicMock()
+            notifier._sns_client.publish.side_effect = (
+                ClientError({"Error": {"Code": "InternalError", "Message": secret}}, "Publish")
+                if failure == "sns_client" else RuntimeError(secret)
+            )
+            service.notifier = notifier
+
+    service.process_feedback_report(report.id)
+
+    reporter.assert_called_once()
+    assert reporter.call_args.kwargs["operation"] == expected_stage
+    assert reporter.call_args.kwargs["context"] == {
+        "error_count": 3 if failure.startswith("trace") else 1
+    }
+    assert _status_value(report.processing_status) == "completed"
+    if failure == "email":
+        assert notifier._send_email.call_count == notifier.MAX_RETRIES
+        assert sleep.call_count == notifier.MAX_RETRIES - 1
+    if failure.startswith("trace"):
+        assert report.trace_data["capture_status"] == "error"
+    else:
+        assert report.email_sent_at is None
+    dependency_errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(dependency_errors) == (3 if failure.startswith("trace") else 1)
+    # Exercise the actual promotion hook: these records would otherwise become
+    # separate Sentry events when ERROR log promotion is enabled.
+    assert all(before_send({"level": "error"}, {"log_record": r}) is None for r in dependency_errors)
+    assert secret not in caplog.text
+    assert "fixture-secret" not in str(report.trace_data)
+    assert "fixture-secret" not in str(report.error_details)
+
+    # The scope must release ownership even when the dependency raised.
+    caplog.clear()
+    logging.getLogger(dependency_errors[0].name).error("Unrelated caller failure")
+    assert before_send({"level": "error"}, {"log_record": caplog.records[-1]}) is not None
+
+
+def test_feedback_log_ownership_isolates_concurrent_callers(caplog):
+    import logging
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.lib.observability.sentry import before_send
+
+    module = _feedback_service_module()
+    dependency_logger = logging.getLogger("src.lib.feedback.email_notifier")
+    original_filters = list(dependency_logger.filters)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with module._feedback_dependency_logs():
+            executor.submit(dependency_logger.error, "Other caller failure").result()
+            with module._feedback_dependency_logs():
+                dependency_logger.error("Nested feedback failure")
+            dependency_logger.error("Outer feedback failure")
+    records = caplog.records
+    assert before_send({"level": "error"}, {"log_record": records[0]}) is not None
+    assert all(before_send({"level": "error"}, {"log_record": r}) is None for r in records[1:])
+    assert dependency_logger.filters == original_filters
