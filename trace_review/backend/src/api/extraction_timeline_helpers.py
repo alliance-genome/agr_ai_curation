@@ -14,7 +14,7 @@ from ..services.feedback_artifacts import fetch_feedback_trace_artifacts
 
 
 TraceCacheLoader = Callable[[], Awaitable[Dict[str, Any]]]
-SiblingTraceLoader = Callable[[], List[str]]
+SiblingTraceLoader = Callable[[], tuple[List[str], Optional[Dict[str, Any]]]]
 SiblingTraceCacheLoader = Callable[[str], Awaitable[Dict[str, Any]]]
 ExceptionFactory = Callable[[BaseException], BaseException]
 
@@ -27,6 +27,7 @@ class ExtractionTimelineContext:
     sibling_trace_ids: List[str]
     sibling_cached_data_by_trace_id: Dict[str, Dict[str, Any]]
     feedback_artifacts: Optional[Dict[str, Any]]
+    session_discovery: Optional[Dict[str, Any]]
 
 
 def _feedback_trace_data(
@@ -88,11 +89,13 @@ async def load_extraction_timeline_context(
         )
     feedback_trace_data = _feedback_trace_data(feedback_artifacts)
 
+    session_discovery = None
     try:
         cached_data = await load_cached_data()
+        discovered_ids, session_discovery = load_sibling_trace_ids()
         sibling_trace_ids = _merge_feedback_sibling_trace_ids(
             trace_id=trace_id,
-            sibling_trace_ids=load_sibling_trace_ids(),
+            sibling_trace_ids=discovered_ids,
             feedback_trace_data=feedback_trace_data,
             include_sibling_traces=include_sibling_traces,
         )
@@ -129,6 +132,7 @@ async def load_extraction_timeline_context(
         sibling_trace_ids=sibling_trace_ids,
         sibling_cached_data_by_trace_id=sibling_cached_data_by_trace_id,
         feedback_artifacts=feedback_artifacts,
+        session_discovery=session_discovery,
     )
 
 
@@ -164,6 +168,7 @@ def build_extraction_timeline(
         feedback_trace_data=feedback_trace_data,
     )
     timeline["query"] = {
+        "session_discovery": context.session_discovery,
         "session_id": session_id,
         "feedback_id": feedback_id,
         "feedback_artifact_status": (

@@ -14,6 +14,35 @@ from src.services.cache_manager import CacheManager
 
 
 class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
+    @patch("src.api.claude._ensure_trace_analyzed", new_callable=AsyncMock)
+    @patch("src.api.claude.TraceExtractor")
+    @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events", return_value=[])
+    async def test_claude_sibling_views_propagate_partial_discovery(self, _events, extractor_cls, analyze):
+        analyze.return_value = self._make_trace_data()
+        meta = {"complete": False, "truncated": True, "stop_reason": "observation_limit"}
+        extractor_cls.return_value.list_session_traces.return_value = {
+            "meta": meta,
+            "traces": [
+                {"id": "trace-extraction-123", "userId": "user-1"},
+                {"id": "allowed-sibling", "userId": "user-1"},
+                {"id": "other-user-sibling", "userId": "user-2"},
+            ],
+        }
+        for endpoint in (claude.get_extraction_timeline, claude.get_extraction_diagnostic_report, claude.get_evidence_revisions):
+            with self.subTest(endpoint=endpoint.__name__):
+                analyze.reset_mock()
+                kwargs: dict[str, Any] = dict(
+                    source="remote", session_id="session-1", feedback_id=None,
+                    include_sibling_traces=True, refresh=False, tool_name=None,
+                    event_type=None, candidate_id=None,
+                    user={"sub": "user-1", "email": "curator@example.org"},
+                )
+                if endpoint is not claude.get_evidence_revisions:
+                    kwargs.update(include_raw_args=False, include_raw_outputs=False)
+                response = await endpoint("trace-extraction-123", self._make_request(), **kwargs)
+                self.assertEqual(response.data["filters"]["session_discovery"], meta)
+                self.assertEqual([call.args[0] for call in analyze.call_args_list], ["trace-extraction-123", "allowed-sibling"])
+
     def _make_request(self) -> Any:
         cache_manager = CacheManager(ttl_hours=1)
         return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cache_manager=cache_manager)))
@@ -135,7 +164,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
                 feedback_id=None,
                 include_sibling_traces=True,
                 load_cached_data=load_cached_data,
-                load_sibling_trace_ids=lambda: ["trace-sibling-456"],
+                load_sibling_trace_ids=lambda: (["trace-sibling-456"], {"complete": True}),
                 load_sibling_cached_data=load_sibling_cached_data,
                 fallback_exceptions=(RuntimeError,),
             )
@@ -320,6 +349,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["view"], "extraction_timeline")
         self.assertEqual(response["data"]["feedback_artifact_event_count"], 2)
+        self.assertIsNone(response["data"]["query"]["session_discovery"])
         self.assertEqual(response["data"]["sibling_trace_ids"], ["trace-sibling-456"])
         self.assertEqual(
             [item["event_trace_id"] for item in response["data"]["timeline"]],
@@ -365,6 +395,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         extractor = extractor_cls.return_value
         extractor.extract_complete_trace.side_effect = trace_data_for
         extractor.list_session_traces.return_value = {
+            "meta": {"complete": False, "truncated": True, "stop_reason": "request_limit"},
             "traces": [
                 {"id": "trace-extraction-123"},
                 {"id": "trace-sibling-456"},
@@ -391,6 +422,8 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(response["view"], "extraction_timeline")
+        self.assertFalse(response["data"]["query"]["session_discovery"]["complete"])
+        self.assertEqual(response["data"]["query"]["session_discovery"]["stop_reason"], "request_limit")
         self.assertEqual(response["data"]["sibling_trace_ids"], ["trace-sibling-456"])
         self.assertEqual(response["data"]["observation_event_count"], 1)
         self.assertEqual(response["data"]["timeline"][0]["event_trace_id"], "trace-sibling-456")

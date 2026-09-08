@@ -177,7 +177,7 @@ class SessionTraceBundleItem(BaseModel):
 
 
 class SessionTraceExportResponse(BaseModel):
-    """Compact JSON export for every trace in a Langfuse session."""
+    """Compact session export with discovery completeness in session metadata."""
     status: str = Field(default="success")
     session: Dict[str, Any]
     traces: List[SessionTraceBundleItem]

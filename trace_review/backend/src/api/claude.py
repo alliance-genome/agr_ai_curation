@@ -1376,9 +1376,9 @@ def _sibling_trace_ids(
     session_id: Optional[str],
     include_sibling_traces: bool,
     caller_sub: str,
-) -> List[str]:
+) -> tuple[List[str], Optional[Dict[str, Any]]]:
     if not include_sibling_traces or not session_id:
-        return []
+        return [], None
     extractor = TraceExtractor(source=_effective_source(source))
     session_listing = extractor.list_session_traces(session_id)
     return [
@@ -1387,7 +1387,7 @@ def _sibling_trace_ids(
         if listed_trace.get("id")
         and listed_trace.get("id") != trace_id
         and str(listed_trace.get("userId") or "").strip() == caller_sub
-    ]
+    ], session_listing["meta"]
 
 
 def _extract_langfuse_trace(
@@ -2904,7 +2904,7 @@ async def get_trace_view(
             feedback_id=None,
             include_sibling_traces=False,
             load_cached_data=lambda: _ensure_trace_analyzed(trace_id, request, source),
-            load_sibling_trace_ids=lambda: [],
+            load_sibling_trace_ids=lambda: ([], None),
             load_sibling_cached_data=lambda sibling_trace_id: _ensure_trace_analyzed(
                 sibling_trace_id,
                 request,

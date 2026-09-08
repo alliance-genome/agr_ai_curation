@@ -689,12 +689,23 @@ class TraceExtractor:
             "checks": checks,
         }
 
-    def list_session_traces(self, session_id: str, limit: int = SESSION_TRACE_LIST_LIMIT) -> Dict[str, Any]:
-        """List a session's traces from cursor-paginated v2 observations."""
+    def list_session_traces(
+        self,
+        session_id: str,
+        limit: int = SESSION_TRACE_LIST_LIMIT,
+    ) -> Dict[str, Any]:
+        """Discover session traces within search budgets; ``limit`` is page size.
+
+        Partial discovery never establishes session totals or stable roots.
+        """
         observations_by_trace: Dict[str, List[Dict[str, Any]]] = {}
         cursor: Optional[str] = None
         seen_cursors = set()
         page_count = 0
+        observation_count = 0
+        observation_limit = get_langfuse_search_observation_limit()
+        request_limit = get_langfuse_search_request_limit()
+        stop_reason = None
         page_limit = min(get_langfuse_observation_page_limit(), max(1, limit))
         filter_json = json.dumps([{
             "type": "string",
@@ -707,11 +718,17 @@ class TraceExtractor:
         }
 
         while True:
+            if page_count >= request_limit:
+                stop_reason = "request_limit"
+                break
+            if observation_count >= observation_limit:
+                stop_reason = "observation_limit"
+                break
             try:
                 response = self.client.api.observations.get_many(
                     fields=SESSION_OBSERVATION_FIELDS,
                     filter=filter_json,
-                    limit=page_limit,
+                    limit=min(page_limit, observation_limit - observation_count),
                     cursor=cursor,
                     request_options=request_options,
                 )
@@ -723,6 +740,10 @@ class TraceExtractor:
 
             page_count += 1
             for item in getattr(response, "data", None) or []:
+                if observation_count >= observation_limit:
+                    stop_reason = "observation_limit"
+                    break
+                observation_count += 1
                 observation = self._normalize_v2_observation(item)
                 observation_session_id = self._first_present(
                     observation,
@@ -736,6 +757,9 @@ class TraceExtractor:
                 trace_id = observation.get("traceId") or observation.get("trace_id")
                 if trace_id:
                     observations_by_trace.setdefault(str(trace_id), []).append(observation)
+
+            if stop_reason:
+                break
 
             response_meta = getattr(response, "meta", None)
             cursor = getattr(response_meta, "cursor", None) if response_meta is not None else None
@@ -756,8 +780,16 @@ class TraceExtractor:
         meta = {
             "page": page_count,
             "limit": page_limit,
-            "totalItems": len(traces),
-            "totalPages": page_count,
+            "totalItems": len(traces) if stop_reason is None else None,
+            "totalPages": page_count if stop_reason is None else None,
+            "complete": stop_reason is None,
+            "truncated": stop_reason is not None,
+            "stop_reason": stop_reason,
+            "requests_made": page_count,
+            "observations_inspected": observation_count,
+            "returned_trace_count": len(traces),
+            "request_limit": request_limit,
+            "observation_limit": observation_limit,
         }
 
         return {

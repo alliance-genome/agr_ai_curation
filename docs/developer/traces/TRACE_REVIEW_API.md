@@ -312,7 +312,38 @@ curl "http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/export?s
 
 **GET** `/api/traces/sessions/{session_id}/export?source=remote`
 
-Export a compact JSON bundle for every trace Langfuse associates with a session. The endpoint lists and deduplicates trace IDs through cursor-paginated v2 observations filtered by `sessionId`, analyzes each trace with the same analyzer stack used by single-trace export, and keeps per-trace failures in the response instead of failing the whole session.
+Export a compact JSON bundle for the traces discovered in a Langfuse session. The endpoint lists and deduplicates trace IDs through cursor-paginated v2 observations filtered by `sessionId`, analyzes each trace with the same analyzer stack used by single-trace export, and keeps per-trace failures in the response instead of failing the whole session.
+
+
+Session discovery shares `TRACE_REVIEW_LANGFUSE_SEARCH_REQUEST_LIMIT` (default
+200 API calls) and `TRACE_REVIEW_LANGFUSE_SEARCH_OBSERVATION_LIMIT` (default
+10000 inspected rows) with trace search. Duplicate observations count toward
+the row budget; returned trace IDs remain deduplicated. These bounds apply to
+discovery, not the subsequent exact analysis of each discovered trace.
+`list_session_traces(limit=...)` still controls page size, capped by
+`TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT` and the remaining row budget.
+
+Inspect `session.langfuse_meta.complete`, `truncated`, and `stop_reason` before
+using an export as session-history evidence. A budget stop returns HTTP 200
+with `status: "partial"`, `session.complete: false`, and the discovered traces.
+`stop_reason` is `request_limit` or `observation_limit`.
+`totalItems` and `totalPages` are null on partial scans; `returned_trace_count`,
+`requests_made`, and `observations_inspected` describe only the work performed.
+The metadata also reports the effective `request_limit` and `observation_limit`.
+A terminal page at the budget boundary is complete if all its rows were inspected.
+An empty complete session has zero traces and
+`complete: true`; an empty stopped scan is partial. Repeated cursors and
+provider filter violations remain explicit errors.
+
+`session.complete` additionally requires every discovered trace to export
+successfully. Per-trace errors remain in `errors` and the trace bundle as before.
+Partial listing timestamps and trace roots reflect only inspected observations.
+Sibling expansion preserves the same discovery metadata in
+`data.query.session_discovery` for timeline/evidence views and
+`data.filters.session_discovery` for Claude timeline, diagnostic report, and
+evidence revision responses. Null (or omitted in Claude filters) means discovery
+was not performed; it is not evidence of a complete session. Discovery
+completeness does not assert successful loading of every sibling's detail.
 
 #### Request
 
@@ -342,7 +373,8 @@ curl "http://localhost:8001/api/traces/sessions/ef55be6a-a67a-4258-9430-bf31f42b
     ],
     "first_timestamp": "2025-12-10T15:01:42.956Z",
     "last_timestamp": "2025-12-10T16:39:04.804Z",
-    "langfuse_meta": { "page": 1, "limit": 100, "totalItems": 14, "totalPages": 1 },
+    "complete": false,
+    "langfuse_meta": { "page": 1, "limit": 100, "totalItems": 14, "totalPages": 1, "complete": true, "truncated": false, "stop_reason": null, "requests_made": 1, "observations_inspected": 80, "returned_trace_count": 14, "request_limit": 200, "observation_limit": 10000 },
     "exported_at": "2026-04-25T18:50:00Z"
   },
   "traces": [

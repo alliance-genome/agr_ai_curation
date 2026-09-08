@@ -169,7 +169,7 @@ def get_langfuse_observation_page_limit() -> int:
 
 
 def get_langfuse_search_observation_limit() -> int:
-    """Return the maximum v2 observations inspected by one trace search."""
+    """Return the maximum v2 observations inspected by one trace search or session discovery."""
     return max(
         1,
         int(os.getenv("TRACE_REVIEW_LANGFUSE_SEARCH_OBSERVATION_LIMIT", "10000")),
@@ -177,7 +177,7 @@ def get_langfuse_search_observation_limit() -> int:
 
 
 def get_langfuse_search_request_limit() -> int:
-    """Return the maximum Langfuse API requests made by one trace search."""
+    """Return the maximum Langfuse API requests made by one trace search or session discovery."""
     return max(
         1,
         int(os.getenv("TRACE_REVIEW_LANGFUSE_SEARCH_REQUEST_LIMIT", "200")),
