@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+from alembic import command
+from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 import pytest
@@ -49,7 +51,7 @@ def sharing_db():
             INSERT INTO curation_flows (id, user_id, name, flow_definition)
             VALUES (:id, 7, 'Existing', '{}')
         """), {"id": uuid4()})
-        sharing_migration = migration(connection, "o1p2q3r4s5t6_add_flow_project_sharing.py")
+        sharing_migration = migration(connection, "7c9e2a4b6d80_add_flow_project_sharing.py")
         sharing_migration.upgrade()
         connection.commit()
         try:
@@ -61,6 +63,33 @@ def sharing_db():
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
             connection.commit()
     engine.dispose()
+
+
+def test_alembic_upgrade_head_preserves_existing_private_flow():
+    config = Config(str(Path(__file__).resolve().parents[3] / "alembic.ini"))
+    engine = create_engine(os.environ["DATABASE_URL"])
+    flow_id = uuid4()
+    command.upgrade(config, "head")
+    command.downgrade(config, "n0o1p2q3r4s5")
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO curation_flows (id, user_id, name, flow_definition)
+                VALUES (:id, 7, :name, '{}')
+            """), {"id": flow_id, "name": f"Migration {flow_id}"})
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            assert connection.execute(text(
+                "SELECT version_num FROM alembic_version"
+            )).scalar_one() == "7c9e2a4b6d80"
+            assert connection.execute(text(
+                "SELECT visibility, project_id, shared_at FROM curation_flows WHERE id = :id"
+            ), {"id": flow_id}).one() == ("private", None, None)
+    finally:
+        command.upgrade(config, "head")
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM curation_flows WHERE id = :id"), {"id": flow_id})
+        engine.dispose()
 
 
 def test_existing_private_defaults_constraints_and_index(sharing_db):
