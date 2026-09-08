@@ -1,9 +1,9 @@
 import type { ChangelogEntry } from '../types';
 
 const entry: ChangelogEntry = {
-  id: '2026-09-07-v0.9.5',
+  id: '2026-09-08-v0.9.5',
   version: '0.9.5',
-  date: 'September 7, 2026',
+  date: 'September 8, 2026',
   title: 'Custom data extraction, a rebuilt AI Chat, and faster flows',
   releaseUrl: 'https://github.com/alliance-genome/agr_ai_curation/releases/tag/v0.9.5',
   sections: [
