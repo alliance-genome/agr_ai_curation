@@ -224,7 +224,9 @@ function BlockerList({
             })}
           >
             <Stack spacing={0.75}>
-              <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={0.75} useFlexGap sx={{
+                flexWrap: "wrap"
+              }}>
                 <Chip
                   label={blocker.object_id ? `Object ${blocker.object_id}` : 'Envelope-level'}
                   size="small"
@@ -253,13 +255,17 @@ function BlockerList({
               </Typography>
 
               {blocker.code ? (
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" sx={{
+                  color: "text.secondary"
+                }}>
                   {blocker.code}
                 </Typography>
               ) : null}
 
               {overrideAllowed ? (
-                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={0.75} useFlexGap sx={{
+                  flexWrap: "wrap"
+                }}>
                   <Chip
                     color="info"
                     label="Waiver allowed"
@@ -270,10 +276,10 @@ function BlockerList({
               ) : null}
             </Stack>
           </Box>
-        )
+        );
       })}
     </Stack>
-  )
+  );
 }
 
 export default function SubmissionPreviewDialog({
@@ -424,21 +430,29 @@ export default function SubmissionPreviewDialog({
           <Stack
             direction={{ xs: 'column', md: 'row' }}
             spacing={1.5}
-            justifyContent="space-between"
+            sx={{
+              justifyContent: "space-between"
+            }}
           >
             <Box>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 {session.document.title}
               </Typography>
               <Typography variant="h6">
                 {MODE_COPY[mode].title}
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 {MODE_COPY[mode].description}
               </Typography>
             </Box>
 
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} useFlexGap sx={{
+              flexWrap: "wrap"
+            }}>
               <Button
                 onClick={() => setMode('preview')}
                 startIcon={<PreviewRoundedIcon />}
@@ -505,7 +519,9 @@ export default function SubmissionPreviewDialog({
             </Alert>
           ) : null}
 
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} useFlexGap sx={{
+            flexWrap: "wrap"
+          }}>
             <Chip
               color="success"
               label={`${readyCount} ready`}
@@ -531,14 +547,20 @@ export default function SubmissionPreviewDialog({
             <Stack spacing={1.5}>
               <Typography variant="subtitle1">Object readiness</Typography>
               {loading && !response ? (
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} sx={{
+                  alignItems: "center"
+                }}>
                   <CircularProgress size={18} />
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" sx={{
+                    color: "text.secondary"
+                  }}>
                     Building submission preview...
                   </Typography>
                 </Stack>
               ) : readiness.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" sx={{
+                  color: "text.secondary"
+                }}>
                   No object readiness data is available yet.
                 </Typography>
               ) : (
@@ -547,9 +569,13 @@ export default function SubmissionPreviewDialog({
                     <Stack
                       direction={{ xs: 'column', sm: 'row' }}
                       spacing={1}
-                      justifyContent="space-between"
+                      sx={{
+                        justifyContent: "space-between"
+                      }}
                     >
-                      <Stack direction="row" spacing={1} alignItems="center">
+                      <Stack direction="row" spacing={1} sx={{
+                        alignItems: "center"
+                      }}>
                         {item.ready ? (
                           <CheckCircleOutlineRoundedIcon color="success" fontSize="small" />
                         ) : (
@@ -568,13 +594,23 @@ export default function SubmissionPreviewDialog({
                     </Stack>
 
                     {item.blocking_reasons.length > 0 ? (
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: "text.secondary",
+                          mt: 0.75
+                        }}>
                         {item.blocking_reasons.join(' ')}
                       </Typography>
                     ) : null}
                     <BlockerList blockers={item.blockers} />
                     {item.warnings.length > 0 ? (
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: "text.secondary",
+                          mt: 0.75
+                        }}>
                         {item.warnings.join(' ')}
                       </Typography>
                     ) : null}
@@ -625,5 +661,5 @@ export default function SubmissionPreviewDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }

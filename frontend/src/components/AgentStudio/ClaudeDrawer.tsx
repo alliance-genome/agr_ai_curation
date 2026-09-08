@@ -29,22 +29,24 @@ function ClaudeDrawer({ id, open, fullWidth, onClose, children }: ClaudeDrawerPr
       onClose={onClose}
       disableRestoreFocus
       ModalProps={{ keepMounted: true }}
-      PaperProps={{
-        role: 'dialog',
-        'aria-modal': true,
-        'aria-label': 'Claude',
-        sx: {
-          width: fullWidth ? '100%' : CLAUDE_DRAWER_WIDTH,
-          maxWidth: '100%',
-          borderRight: 'none',
-          borderLeft: 1,
-          borderColor: 'divider',
-        },
+      slotProps={{
+        paper: {
+          role: 'dialog',
+          'aria-modal': true,
+          'aria-label': 'Claude',
+          sx: {
+            width: fullWidth ? '100%' : CLAUDE_DRAWER_WIDTH,
+            maxWidth: '100%',
+            borderRight: 'none',
+            borderLeft: 1,
+            borderColor: 'divider',
+          },
+        }
       }}
     >
       {children}
     </Drawer>
-  )
+  );
 }
 
 export default ClaudeDrawer

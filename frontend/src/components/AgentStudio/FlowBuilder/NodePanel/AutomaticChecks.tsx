@@ -83,7 +83,9 @@ function AutomaticChecks({ view, envelopeAgentId, agentMetadata, onToggle, onOpe
                           size="small"
                           checked={check.enabled}
                           onChange={(event) => onToggle(check.attachmentIds, event.target.checked)}
-                          inputProps={{ role: 'switch' }}
+                          slotProps={{
+                            input: { role: 'switch' }
+                          }}
                         />
                       )}
                       label={(
@@ -99,7 +101,7 @@ function AutomaticChecks({ view, envelopeAgentId, agentMetadata, onToggle, onOpe
                       onOpenAgent={onOpenAgent}
                     />
                   </Box>
-                )
+                );
               })}
             </Box>
           )}
@@ -115,7 +117,7 @@ function AutomaticChecks({ view, envelopeAgentId, agentMetadata, onToggle, onOpe
         </>
       )}
     </Box>
-  )
+  );
 }
 
 export default AutomaticChecks

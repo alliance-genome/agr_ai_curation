@@ -1,5 +1,5 @@
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import { Box, Tooltip } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'

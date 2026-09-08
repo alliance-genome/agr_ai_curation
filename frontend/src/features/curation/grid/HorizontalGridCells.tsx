@@ -65,12 +65,21 @@ export function HorizontalGridContextCellContent({
           width: '100%',
         }}
       >
-        <Stack spacing={0.25} minWidth={0} width="100%">
-          <Typography fontWeight={750} noWrap variant="body2">
+        <Stack
+          spacing={0.25}
+          sx={{
+            minWidth: 0,
+            width: "100%"
+          }}>
+          <Typography noWrap variant="body2" sx={{
+            fontWeight: 750
+          }}>
             {cell.value.identityLabel}
           </Typography>
           {cell.value.secondaryLabel ? (
-            <Typography color="text.secondary" noWrap variant="caption">
+            <Typography noWrap variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               {cell.value.secondaryLabel}
             </Typography>
           ) : null}
@@ -139,7 +148,7 @@ export function HorizontalGridContextCellContent({
         </Stack>
       ) : null}
     </Stack>
-  )
+  );
 }
 
 export function HorizontalGridFieldCellContent({
@@ -157,10 +166,14 @@ export function HorizontalGridFieldCellContent({
 }) {
   if (!field || !cell.hasField) {
     return (
-      <Typography color="text.disabled" fontStyle="italic" variant="body2">
-        Not available
-      </Typography>
-    )
+      <Typography
+        variant="body2"
+        sx={{
+          color: "text.disabled",
+          fontStyle: "italic"
+        }}>Not available
+              </Typography>
+    );
   }
 
   const value = formatHorizontalGridValue(cell.value)
@@ -179,10 +192,11 @@ export function HorizontalGridFieldCellContent({
 
   return (
     <Stack
-      minWidth={0}
       spacing={0.35}
-      width="100%"
-    >
+      sx={{
+        minWidth: 0,
+        width: "100%"
+      }}>
       <ButtonBase
         aria-label={`Select ${field.label} for ${cell.fieldPath}. ${stateLabel}.`}
         aria-pressed={active}
@@ -199,7 +213,12 @@ export function HorizontalGridFieldCellContent({
           width: '100%',
         }}
       >
-        <Stack direction="row" minWidth={0} width="100%">
+        <Stack
+          direction="row"
+          sx={{
+            minWidth: 0,
+            width: "100%"
+          }}>
           <Typography
             aria-label={value === null ? 'Empty value' : undefined}
             data-slot="field-value"
@@ -253,5 +272,5 @@ export function HorizontalGridFieldCellContent({
         </Tooltip>
       ) : null}
     </Stack>
-  )
+  );
 }

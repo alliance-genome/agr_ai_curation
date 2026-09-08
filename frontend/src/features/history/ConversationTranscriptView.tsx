@@ -100,7 +100,15 @@ export default function ConversationTranscriptView({
     >
       <Box sx={{ maxHeight: HISTORY_TRANSCRIPT_MAX_HEIGHT, overflowY: 'auto', pr: '6px' }}>
         <Stack spacing={1.25}>
-          <Stack direction="row" flexWrap="wrap" useFlexGap sx={{ columnGap: 2, rowGap: 0.75, alignItems: 'center' }}>
+          <Stack
+            direction="row"
+            useFlexGap
+            sx={{
+              flexWrap: "wrap",
+              columnGap: 2,
+              rowGap: 0.75,
+              alignItems: 'center'
+            }}>
             <MetaItem label="Created" value={formatExactTime(session.created_at)} />
             <MetaItem label="Last message" value={formatExactTime(session.last_message_at)} />
             <Typography component="span" sx={{ fontSize: '12px', color: 'text.secondary', display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
@@ -143,9 +151,15 @@ export default function ConversationTranscriptView({
           ) : null}
 
           {detailQuery.isLoading ? (
-            <Stack direction="row" spacing={1.5} alignItems="center">
+            <Stack direction="row" spacing={1.5} sx={{
+              alignItems: "center"
+            }}>
               <CircularProgress size={16} />
-              <Typography color="text.secondary" sx={{ fontSize: '12.5px' }}>
+              <Typography
+                sx={{
+                  color: "text.secondary",
+                  fontSize: '12.5px'
+                }}>
                 Loading transcript…
               </Typography>
             </Stack>
@@ -172,11 +186,21 @@ export default function ConversationTranscriptView({
 
       <Stack
         direction="row"
-        alignItems="center"
         spacing={1.25}
-        sx={{ mt: 1.25, pt: 1.25, borderTop: '1px solid', borderColor: 'divider' }}
-      >
-        <Typography color="text.secondary" sx={{ fontSize: '12.5px', flex: 1, minWidth: 0 }}>
+        sx={{
+          alignItems: "center",
+          mt: 1.25,
+          pt: 1.25,
+          borderTop: '1px solid',
+          borderColor: 'divider'
+        }}>
+        <Typography
+          sx={{
+            color: "text.secondary",
+            fontSize: '12.5px',
+            flex: 1,
+            minWidth: 0
+          }}>
           {detail?.next_message_cursor
             ? `Showing the newest ${transcriptMessages.length} ${pluralize(transcriptMessages.length, 'message')}. Resume the chat to read the full conversation.`
             : ''}
@@ -192,5 +216,5 @@ export default function ConversationTranscriptView({
         </Button>
       </Stack>
     </Box>
-  )
+  );
 }

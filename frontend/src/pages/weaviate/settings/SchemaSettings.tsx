@@ -74,7 +74,9 @@ const SchemaSettings: React.FC = () => {
         </TableContainer>
 
         <Box sx={{ mt: 3 }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             The schema defines the structure of documents stored in Weaviate.
             Modifying the schema requires reindexing all documents.
           </Typography>

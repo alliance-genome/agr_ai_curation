@@ -134,19 +134,21 @@ const InlineFilterBar: React.FC<InlineFilterBarProps> = ({
           value={filters.searchTerm || ''}
           onChange={handleSearchChange}
           sx={{ minWidth: 200, maxWidth: 280 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search fontSize="small" color="action" />
-              </InputAdornment>
-            ),
-            endAdornment: filters.searchTerm && (
-              <InputAdornment position="end">
-                <IconButton size="small" onClick={clearSearch} edge="end">
-                  <Clear fontSize="small" />
-                </IconButton>
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search fontSize="small" color="action" />
+                </InputAdornment>
+              ),
+              endAdornment: filters.searchTerm && (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={clearSearch} edge="end">
+                    <Clear fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }
           }}
         />
 
@@ -168,9 +170,9 @@ const InlineFilterBar: React.FC<InlineFilterBarProps> = ({
               return `${selected.length} selected`;
             }}
             MenuProps={{
-              PaperProps: {
+              slotProps: { paper: {
                 style: { maxHeight: 280 },
-              },
+              } },
             }}
           >
             {EMBEDDING_STATUSES.map((status) => (
@@ -284,7 +286,9 @@ const InlineFilterBar: React.FC<InlineFilterBarProps> = ({
                 fullWidth
                 value={filters.minVectorCount ?? ''}
                 onChange={(e) => handleVectorChange('minVectorCount', e.target.value)}
-                InputProps={{ inputProps: { min: 0 } }}
+                slotProps={{
+                  input: { inputProps: { min: 0 } }
+                }}
               />
               <TextField
                 label="Maximum"
@@ -293,7 +297,9 @@ const InlineFilterBar: React.FC<InlineFilterBarProps> = ({
                 fullWidth
                 value={filters.maxVectorCount ?? ''}
                 onChange={(e) => handleVectorChange('maxVectorCount', e.target.value)}
-                InputProps={{ inputProps: { min: 0 } }}
+                slotProps={{
+                  input: { inputProps: { min: 0 } }
+                }}
               />
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
                 <Button size="small" onClick={clearVectors}>
@@ -316,7 +322,9 @@ const InlineFilterBar: React.FC<InlineFilterBarProps> = ({
 
         {/* Active Filters Summary & Clear All */}
         {activeFilterCount > 0 && (
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{
+            alignItems: "center"
+          }}>
             <Chip
               label={`${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''} active`}
               size="small"

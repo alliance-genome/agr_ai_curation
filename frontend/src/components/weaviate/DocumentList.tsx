@@ -623,7 +623,9 @@ const DocumentList: React.FC<DocumentListProps> = ({
           checked={table.getIsAllPageRowsSelected()}
           indeterminate={table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected()}
           onChange={table.getToggleAllPageRowsSelectedHandler()}
-          inputProps={{ 'aria-label': 'Select all documents on this page' }}
+          slotProps={{
+            input: { 'aria-label': 'Select all documents on this page' }
+          }}
         />
       ),
       cell: ({ row }) => (
@@ -633,7 +635,9 @@ const DocumentList: React.FC<DocumentListProps> = ({
           disabled={!row.getCanSelect()}
           onClick={row.getToggleSelectedHandler()}
           onChange={() => undefined}
-          inputProps={{ 'aria-label': `Select ${row.original.filename}` }}
+          slotProps={{
+            input: { 'aria-label': `Select ${row.original.filename}` }
+          }}
         />
       ),
       size: 52,
@@ -676,7 +680,13 @@ const DocumentList: React.FC<DocumentListProps> = ({
 
         return (
           <Stack spacing={0.25} sx={{ minWidth: 0, py: 0.5 }}>
-            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+            <Stack
+              direction="row"
+              spacing={0.5}
+              sx={{
+                alignItems: "center",
+                minWidth: 0
+              }}>
               <Chip
                 label={providerLabel}
                 size="small"
@@ -691,10 +701,12 @@ const DocumentList: React.FC<DocumentListProps> = ({
             <Tooltip title={referenceLabel}>
               <Typography
                 variant="caption"
-                color="text.secondary"
                 noWrap
-                sx={{ display: 'block', maxWidth: '100%' }}
-              >
+                sx={{
+                  color: "text.secondary",
+                  display: 'block',
+                  maxWidth: '100%'
+                }}>
                 {referenceLabel}
               </Typography>
             </Tooltip>
@@ -952,10 +964,11 @@ const DocumentList: React.FC<DocumentListProps> = ({
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
             spacing={1}
-            alignItems={{ xs: 'stretch', sm: 'center' }}
-            justifyContent="space-between"
-            sx={{ mb: 2 }}
-          >
+            sx={{
+              alignItems: { xs: 'stretch', sm: 'center' },
+              justifyContent: "space-between",
+              mb: 2
+            }}>
             {extractionHealthQuery.isLoading ? (
               <Alert severity="info" sx={{ flex: 1 }}>
                 Checking PDF extraction service health…
@@ -1060,10 +1073,18 @@ const DocumentList: React.FC<DocumentListProps> = ({
           open={Boolean(layoutMenuAnchor)}
           onClose={() => setLayoutMenuAnchor(null)}
           anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-          PaperProps={{ role: 'dialog', 'aria-label': 'Documents table layout' }}
+          slotProps={{
+            paper: { role: 'dialog', 'aria-label': 'Documents table layout' }
+          }}
         >
           <Box sx={{ px: 2, pt: 1.5 }}>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.75 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                display: "block",
+                mb: 0.75
+              }}>
               Row density
             </Typography>
             <ToggleButtonGroup
@@ -1092,51 +1113,57 @@ const DocumentList: React.FC<DocumentListProps> = ({
               const visible = tablePreferences.columnVisibilityModel[field] !== false;
               return (
                 <ListItem key={field}>
-                <Checkbox
-                  checked={visible}
-                  size="small"
-                  autoFocus={index === 0}
-                  onChange={() => handleToggleColumnVisibility(field)}
-                  inputProps={{ 'aria-label': `Show ${label} column` }}
-                />
-                <ListItemText primary={label} />
-                <Tooltip title="Move earlier">
-                  <span>
-                    <IconButton
-                      size="small"
-                      aria-label={`Move ${label} column earlier`}
-                      disabled={index === 0}
-                      onClick={() => {
-                        handleMoveColumn(field, -1);
-                      }}
-                    >
-                      <ArrowUpward fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Tooltip title="Move later">
-                  <span>
-                    <IconButton
-                      size="small"
-                      aria-label={`Move ${label} column later`}
-                      disabled={index === tablePreferences.columnOrder.length - 1}
-                      onClick={() => {
-                        handleMoveColumn(field, 1);
-                      }}
-                    >
-                      <ArrowDownward fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                  <Checkbox
+                    checked={visible}
+                    size="small"
+                    autoFocus={index === 0}
+                    onChange={() => handleToggleColumnVisibility(field)}
+                    slotProps={{
+                      input: { 'aria-label': `Show ${label} column` }
+                    }}
+                  />
+                  <ListItemText primary={label} />
+                  <Tooltip title="Move earlier">
+                    <span>
+                      <IconButton
+                        size="small"
+                        aria-label={`Move ${label} column earlier`}
+                        disabled={index === 0}
+                        onClick={() => {
+                          handleMoveColumn(field, -1);
+                        }}
+                      >
+                        <ArrowUpward fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title="Move later">
+                    <span>
+                      <IconButton
+                        size="small"
+                        aria-label={`Move ${label} column later`}
+                        disabled={index === tablePreferences.columnOrder.length - 1}
+                        onClick={() => {
+                          handleMoveColumn(field, 1);
+                        }}
+                      >
+                        <ArrowDownward fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                 </ListItem>
               );
             })}
           </List>
         </Popover>
         {pipelineBusy && (
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{
+            alignItems: "center"
+          }}>
             <CircularProgress size={16} thickness={5} />
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               {pipelineMessage ||
                 'Processing in progress.'}
             </Typography>
@@ -1193,9 +1220,17 @@ const DocumentList: React.FC<DocumentListProps> = ({
               <TableBody>
                 <TableRow>
                   <TableCell colSpan={4} align="center" sx={{ py: 3 }}>
-                    <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      sx={{
+                        alignItems: "center",
+                        justifyContent: "center"
+                      }}>
                       {loading && <CircularProgress size={16} />}
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" sx={{
+                        color: "text.secondary"
+                      }}>
                         {loading ? 'Loading documents…' : showUploadControls ? 'No documents yet. Upload a PDF to get started.' : 'No library documents yet.'}
                       </Typography>
                     </Stack>

@@ -11,7 +11,7 @@ import {
   ListItem,
   Typography,
 } from '@mui/material'
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 
 import type { CustomAgent } from '@/types/promptExplorer'
 
@@ -43,7 +43,9 @@ export default function ManageAgentsDialog({
       maxWidth="sm"
       fullWidth
       aria-labelledby="manage-agents-title"
-      PaperProps={{ sx: { maxHeight: '70vh' } }}
+      slotProps={{
+        paper: { sx: { maxHeight: '70vh' } }
+      }}
     >
       <DialogTitle id="manage-agents-title" sx={{ pb: 0.5 }}>
         Manage agents
@@ -112,5 +114,5 @@ export default function ManageAgentsDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }

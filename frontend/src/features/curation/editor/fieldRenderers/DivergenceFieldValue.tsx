@@ -26,8 +26,12 @@ export default function DivergenceFieldValue({
   }
 
   return (
-    <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="caption">
-      AI proposed: {formatValue(proposedValue)}
+    <Typography
+      variant="caption"
+      sx={{
+        color: "text.secondary",
+        mt: 0.5
+      }}>AI proposed: {formatValue(proposedValue)}
     </Typography>
-  )
+  );
 }

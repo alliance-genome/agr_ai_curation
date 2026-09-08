@@ -62,11 +62,18 @@ frontend/
 - **Vite** - Build tool and dev server
 
 ### UI Components
-- **Material-UI (MUI)** - Component library
-- **MUI X Data Grid Pro** - Advanced data tables
+- **Material UI 9** - Component library and icons
+- **MUI X Date Pickers 9** - Community date inputs
+- **TanStack Table** - Documents table (no MUI X DataGrid or paid MUI X features)
 - **@emotion** - CSS-in-JS styling
 - **react-resizable-panels** - Resizable split panes (Agent Studio layout)
 - **React Flow** - Node-based flow editor (Flow Builder)
+
+MUI 9 uses `slotProps` for component slots and `sx` for system styling.
+Use `Grid size` instead of the removed `item` and breakpoint props. Keep the
+`react-is` dependency and override aligned with React 18 for element detection.
+See the [official MUI migration guide](https://mui.com/material-ui/migration/upgrade-to-v9/)
+for removed APIs and the supported browser baseline (including Safari 17+).
 
 ### State & Data
 - **React Query (TanStack Query)** - Server state management

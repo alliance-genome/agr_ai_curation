@@ -90,7 +90,9 @@ export default function ToolLibraryDialog({ open, tools, attachedToolIds, onConf
       maxWidth="sm"
       fullWidth
       aria-labelledby="tool-library-title"
-      PaperProps={{ sx: { maxHeight: '75vh' } }}
+      slotProps={{
+        paper: { sx: { maxHeight: '75vh' } }
+      }}
     >
       <DialogTitle id="tool-library-title" sx={{ pb: 0.5 }}>
         Add tools
@@ -104,18 +106,20 @@ export default function ToolLibraryDialog({ open, tools, attachedToolIds, onConf
             autoFocus
             size="small"
             placeholder="Search tools"
-            inputProps={{ 'aria-label': 'Search tools' }}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-                </InputAdornment>
-              ),
-            }}
             sx={{ flex: 1, minWidth: 200 }}
-          />
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                  </InputAdornment>
+                ),
+              },
+
+              htmlInput: { 'aria-label': 'Search tools' }
+            }} />
           <FormControl size="small" sx={{ width: 180 }}>
             <InputLabel id="tool-library-category-label">Category</InputLabel>
             <Select
@@ -165,8 +169,10 @@ export default function ToolLibraryDialog({ open, tools, attachedToolIds, onConf
                         tabIndex={-1}
                         disableRipple
                         disabled={!attachable}
-                        inputProps={{ 'aria-hidden': true }}
                         sx={{ p: 0.5 }}
+                        slotProps={{
+                          input: { 'aria-hidden': true }
+                        }}
                       />
                       <ListItemText
                         id={labelId}
@@ -180,7 +186,9 @@ export default function ToolLibraryDialog({ open, tools, attachedToolIds, onConf
                             ? `${tool.display_name} · ${tool.description}`
                             : `Disabled by policy for custom agents: ${tool.description}`
                         }
-                        secondaryTypographyProps={{ fontSize: 12, color: attachable ? 'text.secondary' : 'text.disabled' }}
+                        slotProps={{
+                          secondary: { sx: { fontSize: 12, color: attachable ? 'text.secondary' : 'text.disabled' } }
+                        }}
                       />
                       {!attachable && (
                         <Typography component="span" sx={{ fontSize: 11, px: 0.75, border: (theme) => `1px solid ${theme.palette.divider}`, borderRadius: 999, alignSelf: 'center', color: 'text.disabled' }}>
@@ -189,7 +197,7 @@ export default function ToolLibraryDialog({ open, tools, attachedToolIds, onConf
                       )}
                     </ListItemButton>
                   </ListItem>
-                )
+                );
               })}
             </List>
           )}
@@ -204,5 +212,5 @@ export default function ToolLibraryDialog({ open, tools, attachedToolIds, onConf
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }

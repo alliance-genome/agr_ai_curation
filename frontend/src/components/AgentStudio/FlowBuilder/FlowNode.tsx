@@ -10,7 +10,7 @@ import { memo } from 'react'
 import { Handle, Position } from 'reactflow'
 import { Box, Typography, Paper, Tooltip } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined'
 
 import type { AgentNodeData } from './types'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'

@@ -129,10 +129,17 @@ export default function BatchGroupRow({
           <Stack
             direction={{ xs: 'column', md: 'row' }}
             spacing={1.5}
-            alignItems={{ xs: 'flex-start', md: 'center' }}
-            justifyContent="space-between"
-          >
-            <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap">
+            sx={{
+              alignItems: { xs: 'flex-start', md: 'center' },
+              justifyContent: "space-between"
+            }}>
+            <Stack
+              direction="row"
+              spacing={1.5}
+              sx={{
+                alignItems: "center",
+                flexWrap: "wrap"
+              }}>
               {expanded ? (
                 <KeyboardArrowDownIcon color="action" />
               ) : (
@@ -146,7 +153,9 @@ export default function BatchGroupRow({
               <Chip label={`${flowRun.pending_count} pending`} size="small" variant="outlined" />
               <Chip label={`${flowRun.submitted_count} submitted`} size="small" variant="outlined" />
             </Stack>
-            <Typography color="text.secondary" variant="caption">
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               {flowRun.last_activity_at
                 ? `Last activity ${formatSessionDate(flowRun.last_activity_at)}`
                 : 'No activity yet'}
@@ -175,9 +184,17 @@ export default function BatchGroupRow({
       {expanded && !errorMessage && sessionsQuery.isLoading && (
         <TableRow>
           <TableCell colSpan={colSpan} sx={{ py: 3 }}>
-            <Stack direction="row" spacing={1.5} alignItems="center" justifyContent="center">
+            <Stack
+              direction="row"
+              spacing={1.5}
+              sx={{
+                alignItems: "center",
+                justifyContent: "center"
+              }}>
               <CircularProgress size={18} />
-              <Typography color="text.secondary" variant="body2">
+              <Typography variant="body2" sx={{
+                color: "text.secondary"
+              }}>
                 Loading flow-run sessions...
               </Typography>
             </Stack>
@@ -193,7 +210,9 @@ export default function BatchGroupRow({
       {expanded && !errorMessage && !sessionsQuery.isLoading && sessions.length === 0 && (
         <TableRow>
           <TableCell colSpan={colSpan} sx={{ py: 3 }}>
-            <Typography color="text.secondary" variant="body2">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               No sessions matched this flow run.
             </Typography>
           </TableCell>
@@ -206,10 +225,13 @@ export default function BatchGroupRow({
             <Stack
               direction={{ xs: 'column', md: 'row' }}
               spacing={1.5}
-              alignItems={{ xs: 'stretch', md: 'center' }}
-              justifyContent="space-between"
-            >
-              <Typography color="text.secondary" variant="caption">
+              sx={{
+                alignItems: { xs: 'stretch', md: 'center' },
+                justifyContent: "space-between"
+              }}>
+              <Typography variant="caption" sx={{
+                color: "text.secondary"
+              }}>
                 {renderRangeLabel(pageInfo)}
               </Typography>
               <Pagination
@@ -224,5 +246,5 @@ export default function BatchGroupRow({
         </TableRow>
       )}
     </Fragment>
-  )
+  );
 }

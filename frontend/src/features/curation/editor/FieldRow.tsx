@@ -121,31 +121,32 @@ function renderNotesValue(value: unknown): ReactNode {
         {notes.map((note, index) => (
           <Typography
             component="li"
-            color="text.secondary"
             key={`${index}-${note}`}
+            variant="body2"
             sx={{
+              color: "text.secondary",
               mb: index === notes.length - 1 ? 0 : 0.45,
               whiteSpace: 'normal',
-              wordBreak: 'break-word',
-            }}
-            variant="body2"
-          >
+              wordBreak: 'break-word'
+            }}>
             {note}
           </Typography>
         ))}
       </Box>
-    )
+    );
   }
 
   return (
     <Typography
-      color="text.secondary"
-      sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
       variant="body2"
-    >
+      sx={{
+        color: "text.secondary",
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word'
+      }}>
       {normalizeFieldTextValue(value)}
     </Typography>
-  )
+  );
 }
 
 function resolvePlaceholder(field: CurationDraftField): string | undefined {
@@ -261,7 +262,6 @@ function renderDefaultInput({
         disabled={disabled}
         fullWidth
         id={inputId}
-        inputProps={{ 'aria-label': ariaLabel }}
         onChange={(event) => {
           const nextOption = options.find((option) => option.key === event.target.value)
           onChange(nextOption?.value ?? null)
@@ -270,6 +270,9 @@ function renderDefaultInput({
         size="small"
         sx={fieldInputSx}
         value={selectedKey}
+        slotProps={{
+          htmlInput: { 'aria-label': ariaLabel }
+        }}
       >
         {options.map((option) => (
           <MenuItem key={option.key} value={option.key}>
@@ -277,7 +280,7 @@ function renderDefaultInput({
           </MenuItem>
         ))}
       </TextField>
-    )
+    );
   }
 
   if (field.field_type === 'json' || field.field_type === 'object' || field.field_type === 'array') {
@@ -287,7 +290,6 @@ function renderDefaultInput({
         disabled={disabled}
         fullWidth
         id={inputId}
-        inputProps={{ 'aria-label': ariaLabel }}
         minRows={3}
         multiline
         onChange={(event) => {
@@ -308,8 +310,11 @@ function renderDefaultInput({
         size="small"
         sx={fieldInputSx}
         value={normalizeFieldTextValue(value)}
+        slotProps={{
+          htmlInput: { 'aria-label': ariaLabel }
+        }}
       />
-    )
+    );
   }
 
   if (field.field_type === 'number' || field.field_type === 'integer') {
@@ -321,11 +326,6 @@ function renderDefaultInput({
         disabled={disabled}
         fullWidth
         id={inputId}
-        inputProps={{
-          'aria-label': ariaLabel,
-          inputMode: integerField ? 'numeric' : 'decimal',
-          step: integerField ? 1 : 'any',
-        }}
         onChange={(event) => {
           const nextValue = event.target.value
 
@@ -352,8 +352,15 @@ function renderDefaultInput({
         sx={fieldInputSx}
         type="number"
         value={normalizeFieldTextValue(value)}
+        slotProps={{
+          htmlInput: {
+            'aria-label': ariaLabel,
+            inputMode: integerField ? 'numeric' : 'decimal',
+            step: integerField ? 1 : 'any',
+          }
+        }}
       />
-    )
+    );
   }
 
   const defaultInput = (
@@ -362,15 +369,17 @@ function renderDefaultInput({
       disabled={disabled}
       fullWidth
       id={inputId}
-      inputProps={{
-        'aria-label': ariaLabel,
-        readOnly: field.read_only,
-      }}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
       size="small"
       sx={fieldInputSx}
       value={normalizeFieldTextValue(value)}
+      slotProps={{
+        htmlInput: {
+          'aria-label': ariaLabel,
+          readOnly: field.read_only,
+        }
+      }}
     />
   )
 
@@ -439,17 +448,16 @@ export default function FieldRow({
         }}
       >
         <Typography
-          color="text.secondary"
           component="label"
           htmlFor={inputId}
+          variant="body2"
           sx={{
+            color: "text.secondary",
             display: 'block',
             fontWeight: 600,
             lineHeight: 1.25,
-            textAlign: 'left',
-          }}
-          variant="body2"
-        >
+            textAlign: 'left'
+          }}>
           {field.label}
         </Typography>
         {labelSubtitleSlot}
@@ -514,5 +522,5 @@ export default function FieldRow({
         {revertSlot}
       </Box>
     </Box>
-  )
+  );
 }

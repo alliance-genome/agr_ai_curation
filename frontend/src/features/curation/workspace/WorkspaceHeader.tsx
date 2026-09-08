@@ -81,12 +81,14 @@ export default function WorkspaceHeader({
     >
       <Stack
         direction="row"
-        alignItems="center"
-        flexWrap="wrap"
         spacing={1.25}
         useFlexGap
-        sx={{ flex: '1 1 auto', minWidth: 0 }}
-      >
+        sx={{
+          alignItems: "center",
+          flexWrap: "wrap",
+          flex: '1 1 auto',
+          minWidth: 0
+        }}>
         <Button
           aria-label="Back to inventory"
           component={RouterLink}
@@ -116,14 +118,25 @@ export default function WorkspaceHeader({
           sx={{ color: 'text.secondary', display: { xs: 'none', sm: 'block' }, fontSize: 24 }}
         />
 
-        <Stack minWidth={0} spacing={0.25} sx={{ flex: '1 1 18rem' }}>
+        <Stack
+          spacing={0.25}
+          sx={{
+            minWidth: 0,
+            flex: '1 1 18rem'
+          }}>
           <Typography
-            color="text.secondary"
-            sx={{ fontSize: '0.66rem', fontWeight: 750, letterSpacing: '0.09em', textTransform: 'uppercase' }}
-          >
+            sx={{
+              color: "text.secondary",
+              fontSize: '0.66rem',
+              fontWeight: 750,
+              letterSpacing: '0.09em',
+              textTransform: 'uppercase'
+            }}>
             Curation workspace / {getAdapterLabel(session.adapter)}
           </Typography>
-          <Stack alignItems="center" direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{
+            alignItems: "center"
+          }}>
             <Typography
               component="h1"
               sx={{ fontSize: { xs: '1rem', md: '1.25rem' }, fontWeight: 700, letterSpacing: '-0.02em' }}
@@ -137,7 +150,9 @@ export default function WorkspaceHeader({
               sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { px: 0.8, fontSize: '0.66rem', fontWeight: 700 } }}
             />
           </Stack>
-          <Typography color="text.secondary" noWrap title={session.document.title} variant="caption">
+          <Typography noWrap title={session.document.title} variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             {session.document.title} · {getDocumentMetaLabel(session)}
           </Typography>
         </Stack>
@@ -146,17 +161,17 @@ export default function WorkspaceHeader({
 
         <Stack
           direction="row"
-          flexShrink={0}
-          flexWrap="wrap"
           spacing={0.75}
           useFlexGap
           sx={{
+            flexShrink: 0,
+            flexWrap: "wrap",
+
             '@container (max-width: 700px)': {
               flexBasis: '100%',
               pl: '44px',
-            },
-          }}
-        >
+            }
+          }}>
           <Chip
             color={adapterChipColor}
             label={getAdapterLabel(session.adapter)}
@@ -180,15 +195,14 @@ export default function WorkspaceHeader({
           />
         </Stack>
         <Typography
-          color="text.secondary"
-          sx={{
-            display: 'block',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-            '@container (max-width: 900px)': { display: 'none' },
-          }}
           title={session.session_id}
           variant="caption"
-        >
+          sx={{
+            color: "text.secondary",
+            display: 'block',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            '@container (max-width: 900px)': { display: 'none' }
+          }}>
           {compactSessionId(session.session_id)}
         </Typography>
       </Stack>
@@ -196,13 +210,14 @@ export default function WorkspaceHeader({
       {navigationSlot ? (
         <Stack
           direction="row"
-          justifyContent="flex-end"
           data-testid="workspace-header-navigation-slot"
-          sx={{ flex: '0 0 auto' }}
-        >
+          sx={{
+            justifyContent: "flex-end",
+            flex: '0 0 auto'
+          }}>
           {navigationSlot}
         </Stack>
       ) : null}
     </Box>
-  )
+  );
 }

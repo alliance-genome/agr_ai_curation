@@ -182,7 +182,9 @@ function SessionTableRow({ nested = false, onRowClick, session }: SessionTableRo
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
             {session.document.title}
           </Typography>
-          <Typography color="text.secondary" variant="caption">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             {nested && session.flow_run_id ? `Flow run ${session.flow_run_id} • ` : ''}
             {session.document.pmid
               ? `PMID ${session.document.pmid}`
@@ -208,7 +210,9 @@ function SessionTableRow({ nested = false, onRowClick, session }: SessionTableRo
       <TableCell>
         <Stack spacing={0.35}>
           <Typography variant="body2">{session.progress.total_candidates} total</Typography>
-          <Typography color="text.secondary" variant="caption">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             {renderObjectReviewSummary(session)}
           </Typography>
         </Stack>
@@ -228,7 +232,9 @@ function SessionTableRow({ nested = false, onRowClick, session }: SessionTableRo
               />
             ))}
           </Box>
-          <Typography color="text.secondary" variant="caption">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             {getValidationLabel(session.validation)}
           </Typography>
         </Stack>
@@ -251,7 +257,9 @@ function SessionTableRow({ nested = false, onRowClick, session }: SessionTableRo
         <Stack spacing={0.35}>
           <Typography variant="body2">{formatLastWorkedAt(session.last_worked_at)}</Typography>
           {session.last_worked_at && (
-            <Typography color="text.secondary" variant="caption">
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               {formatSessionDate(session.last_worked_at)}
             </Typography>
           )}
@@ -261,7 +269,7 @@ function SessionTableRow({ nested = false, onRowClick, session }: SessionTableRo
         <Typography variant="body2">{renderCuratorName(session)}</Typography>
       </TableCell>
     </TableRow>
-  )
+  );
 }
 
 export default function CurationInventoryTable({
@@ -316,20 +324,21 @@ export default function CurationInventoryTable({
       <Stack
         direction={{ xs: 'column', md: 'row' }}
         spacing={1.5}
-        alignItems={{ xs: 'stretch', md: 'center' }}
-        justifyContent="space-between"
         sx={{
+          alignItems: { xs: 'stretch', md: 'center' },
+          justifyContent: "space-between",
           borderBottom: '1px solid',
           borderBottomColor: 'divider',
           px: 2,
-          py: 1.5,
-        }}
-      >
+          py: 1.5
+        }}>
         <Stack spacing={0.25}>
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
             Inventory view
           </Typography>
-          <Typography color="text.secondary" variant="caption">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             Keep the flat list as the default, or browse sessions by shared flow run.
           </Typography>
         </Stack>
@@ -398,13 +407,17 @@ export default function CurationInventoryTable({
               flowRuns.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={COLUMN_COUNT} sx={{ py: 6 }}>
-                    <Stack spacing={1.5} alignItems="center">
+                    <Stack spacing={1.5} sx={{
+                      alignItems: "center"
+                    }}>
                       <Typography variant="h6">
                         {tableIsLoading
                           ? 'Loading flow runs...'
                           : 'No batch flow runs match these filters.'}
                       </Typography>
-                      <Typography color="text.secondary" variant="body2">
+                      <Typography variant="body2" sx={{
+                        color: "text.secondary"
+                      }}>
                         {hasActiveFilters
                           ? 'Try clearing one or more filters to broaden the queue.'
                           : 'Grouped flow runs will appear here when multiple sessions share a batch identifier.'}
@@ -432,11 +445,15 @@ export default function CurationInventoryTable({
             ) : sessions.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={COLUMN_COUNT} sx={{ py: 6 }}>
-                  <Stack spacing={1.5} alignItems="center">
+                  <Stack spacing={1.5} sx={{
+                    alignItems: "center"
+                  }}>
                     <Typography variant="h6">
                       {tableIsLoading ? 'Loading inventory...' : 'No curation sessions match these filters.'}
                     </Typography>
-                    <Typography color="text.secondary" variant="body2">
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
                       {hasActiveFilters
                         ? 'Try clearing one or more filters to broaden the queue.'
                         : 'Prepared object review sessions will appear here once they are ready for review.'}
@@ -459,23 +476,32 @@ export default function CurationInventoryTable({
       <Stack
         direction={{ xs: 'column', md: 'row' }}
         spacing={2}
-        alignItems={{ xs: 'stretch', md: 'center' }}
-        justifyContent="space-between"
         sx={{
+          alignItems: { xs: 'stretch', md: 'center' },
+          justifyContent: "space-between",
           borderTop: '1px solid',
           borderTopColor: 'divider',
           px: 2,
-          py: 1.5,
-        }}
-      >
-        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap">
-          <Typography color="text.secondary" variant="body2">
+          py: 1.5
+        }}>
+        <Stack
+          direction="row"
+          spacing={1.5}
+          sx={{
+            alignItems: "center",
+            flexWrap: "wrap"
+          }}>
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             {viewMode === 'flow_runs'
               ? renderFlowRunRangeLabel(flowRuns.length)
               : renderRangeLabel(pageInfo)}
           </Typography>
           {tableIsRefreshing && !tableIsLoading && (
-            <Typography color="text.secondary" variant="caption">
+            <Typography variant="caption" sx={{
+              color: "text.secondary"
+            }}>
               Updating...
             </Typography>
           )}
@@ -485,10 +511,16 @@ export default function CurationInventoryTable({
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
             spacing={1.5}
-            alignItems={{ xs: 'stretch', sm: 'center' }}
+            sx={{
+              alignItems: { xs: 'stretch', sm: 'center' }
+            }}
           >
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography color="text.secondary" variant="caption">
+            <Stack direction="row" spacing={1} sx={{
+              alignItems: "center"
+            }}>
+              <Typography variant="caption" sx={{
+                color: "text.secondary"
+              }}>
                 Rows
               </Typography>
               <FormControl size="small">
@@ -514,11 +546,13 @@ export default function CurationInventoryTable({
             />
           </Stack>
         ) : (
-          <Typography color="text.secondary" variant="caption">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             Flow runs are ordered by latest activity. Expand a flow run to load its sessions.
           </Typography>
         )}
       </Stack>
     </Paper>
-  )
+  );
 }

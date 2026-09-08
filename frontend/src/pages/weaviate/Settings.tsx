@@ -169,7 +169,11 @@ const Settings: React.FC<SettingsProps> = ({
         <Box sx={{ p: 3 }}>
           <TabPanel value={tabValue} index={0}>
             <Grid container spacing={3}>
-              <Grid item xs={12} md={6}>
+              <Grid
+                size={{
+                  xs: 12,
+                  md: 6
+                }}>
                 <Card>
                   <CardContent>
                     <Typography variant="h6" gutterBottom>
@@ -271,7 +275,11 @@ const Settings: React.FC<SettingsProps> = ({
                 </Card>
               </Grid>
 
-              <Grid item xs={12} md={6}>
+              <Grid
+                size={{
+                  xs: 12,
+                  md: 6
+                }}>
                 <Card>
                   <CardContent>
                     <Typography variant="h6" gutterBottom>
@@ -294,7 +302,11 @@ const Settings: React.FC<SettingsProps> = ({
                 <Divider sx={{ mb: 3 }} />
 
                 <Grid container spacing={3}>
-                  <Grid item xs={12} md={6}>
+                  <Grid
+                    size={{
+                      xs: 12,
+                      md: 6
+                    }}>
                     <TextField
                       fullWidth
                       label="Collection Name"
@@ -329,12 +341,18 @@ const Settings: React.FC<SettingsProps> = ({
                         })
                       }
                       sx={{ mb: 3 }}
-                      inputProps={{ min: 1, max: 10 }}
                       helperText="Number of data replicas"
+                      slotProps={{
+                        htmlInput: { min: 1, max: 10 }
+                      }}
                     />
                   </Grid>
 
-                  <Grid item xs={12} md={6}>
+                  <Grid
+                    size={{
+                      xs: 12,
+                      md: 6
+                    }}>
                     <FormControl fullWidth sx={{ mb: 3 }}>
                       <InputLabel>Consistency Level</InputLabel>
                       <Select
@@ -412,32 +430,56 @@ const Settings: React.FC<SettingsProps> = ({
                 <Divider sx={{ mb: 3 }} />
 
                 <Grid container spacing={2}>
-                  <Grid item xs={12} md={6}>
-                    <Typography variant="body2" color="text.secondary">
+                  <Grid
+                    size={{
+                      xs: 12,
+                      md: 6
+                    }}>
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
                       Collection Name
                     </Typography>
                     <Typography variant="body1" sx={{ mb: 2 }}>
                       {weaviate.collectionName}
                     </Typography>
                   </Grid>
-                  <Grid item xs={12} md={6}>
-                    <Typography variant="body2" color="text.secondary">
+                  <Grid
+                    size={{
+                      xs: 12,
+                      md: 6
+                    }}>
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
                       Schema Version
                     </Typography>
                     <Typography variant="body1" sx={{ mb: 2 }}>
                       {weaviate.schemaVersion}
                     </Typography>
                   </Grid>
-                  <Grid item xs={12} md={6}>
-                    <Typography variant="body2" color="text.secondary">
+                  <Grid
+                    size={{
+                      xs: 12,
+                      md: 6
+                    }}>
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
                       Vector Index Type
                     </Typography>
                     <Typography variant="body1" sx={{ mb: 2 }}>
                       {weaviate.vectorIndexType.toUpperCase()}
                     </Typography>
                   </Grid>
-                  <Grid item xs={12} md={6}>
-                    <Typography variant="body2" color="text.secondary">
+                  <Grid
+                    size={{
+                      xs: 12,
+                      md: 6
+                    }}>
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
                       Vector Dimensions
                     </Typography>
                     <Typography variant="body1" sx={{ mb: 2 }}>

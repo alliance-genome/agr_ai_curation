@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, IconButton, Stack, Typography } from '@mui/material';
 import {
   Close as CloseIcon,
-  ErrorOutline as ErrorIcon,
+  ErrorOutlined as ErrorIcon,
   WarningAmber as WarningIcon,
 } from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
@@ -118,7 +118,13 @@ const ConnectionsHealthBanner: React.FC = () => {
         <CloseIcon fontSize="small" />
       </IconButton>
 
-      <Stack direction="row" alignItems="flex-start" spacing={1.5} sx={{ pr: 3 }}>
+      <Stack
+        direction="row"
+        spacing={1.5}
+        sx={{
+          alignItems: "flex-start",
+          pr: 3
+        }}>
         {isError ? (
           <ErrorIcon sx={{ flexShrink: 0, mt: 0.25 }} />
         ) : (

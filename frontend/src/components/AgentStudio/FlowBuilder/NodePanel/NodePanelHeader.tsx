@@ -12,8 +12,8 @@ import { alpha } from '@mui/material/styles'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import CloseIcon from '@mui/icons-material/Close'
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined'
 
 export type NodePanelStatus = 'clean' | 'dirty' | 'error'
 

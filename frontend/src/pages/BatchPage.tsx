@@ -1125,7 +1125,9 @@ const BatchPage: React.FC = () => {
       {/* Documents Section */}
       <Box sx={{ mb: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="subtitle2" color="text.secondary">
+          <Typography variant="subtitle2" sx={{
+            color: "text.secondary"
+          }}>
             Documents ({batchState.documents.length} selected)
           </Typography>
           <Button size="small" onClick={handleChangeDocuments}>
@@ -1167,8 +1169,10 @@ const BatchPage: React.FC = () => {
                   </ListItemIcon>
                   <ListItemText
                     primary={doc.title}
-                    primaryTypographyProps={{ noWrap: true }}
                     sx={{ pr: 2 }}
+                    slotProps={{
+                      primary: { noWrap: true }
+                    }}
                   />
                 </ListItem>
               ))}
@@ -1181,7 +1185,9 @@ const BatchPage: React.FC = () => {
 
       {/* Flow Selection */}
       <Box sx={{ mb: 3 }}>
-        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+        <Typography variant="subtitle2" gutterBottom sx={{
+          color: "text.secondary"
+        }}>
           Flow
         </Typography>
         <FormControl fullWidth size="small">
@@ -1229,7 +1235,9 @@ const BatchPage: React.FC = () => {
         <>
           <Divider sx={{ my: 2 }} />
           <Box sx={{ mb: 2 }}>
-            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+            <Typography variant="subtitle2" gutterBottom sx={{
+              color: "text.secondary"
+            }}>
               Recent Batches
             </Typography>
             <Paper variant="outlined" sx={{ maxHeight: 180, overflow: 'auto' }}>
@@ -1258,7 +1266,9 @@ const BatchPage: React.FC = () => {
                         </Box>
                       }
                       secondary={
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography variant="caption" sx={{
+                          color: "text.secondary"
+                        }}>
                           {batch.completed_documents}/{batch.total_documents} docs •{' '}
                           {new Date(batch.created_at).toLocaleDateString()}
                         </Typography>
@@ -1352,8 +1362,10 @@ const BatchPage: React.FC = () => {
                   doc.status === 'failed' ? doc.error_message :
                   'Pending'
                 }
-                primaryTypographyProps={{ noWrap: true }}
                 sx={{ pr: 2 }}
+                slotProps={{
+                  primary: { noWrap: true }
+                }}
               />
             </ListItem>
           ))}
@@ -1382,7 +1394,9 @@ const BatchPage: React.FC = () => {
 
       {/* Summary */}
       <Box sx={{ mb: 2 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           Flow: {flows.find(f => f.id === batchState.selectedFlowId)?.name || 'Unknown'}
         </Typography>
         <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
@@ -1404,7 +1418,9 @@ const BatchPage: React.FC = () => {
       </Box>
 
       {/* Results List */}
-      <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+      <Typography variant="subtitle2" gutterBottom sx={{
+        color: "text.secondary"
+      }}>
         Results
       </Typography>
       <Paper variant="outlined" sx={{ flexGrow: 1, overflow: 'auto', mb: 2 }}>
@@ -1465,8 +1481,10 @@ const BatchPage: React.FC = () => {
                         .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}`
                       : undefined
                 }
-                primaryTypographyProps={{ noWrap: true }}
                 sx={{ pr: 2 }}
+                slotProps={{
+                  primary: { noWrap: true }
+                }}
               />
             </ListItem>
           ))}

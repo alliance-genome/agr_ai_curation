@@ -7,7 +7,7 @@ import {
   AutoAwesome as AgentStudioIcon,
   FactCheck as CurationIcon,
   Home as HomeIcon,
-  HelpOutline as HelpIcon,
+  HelpOutlined as HelpIcon,
   History as HistoryIcon,
   Update as ChangelogIcon,
 } from '@mui/icons-material'
@@ -873,7 +873,9 @@ export function AppContent() {
               bgcolor: 'background.default',
               color: 'text.primary',
             }}>
-              <Typography variant="h2" color="inherit">
+              <Typography variant="h2" sx={{
+                color: "inherit"
+              }}>
                 PDF Viewer - Coming Soon
               </Typography>
             </Box>

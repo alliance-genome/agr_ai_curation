@@ -184,7 +184,9 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
 
   const renderInfoItem = (label: string, value: React.ReactNode) => (
     <Box key={label} sx={{ mb: 1.5 }}>
-      <Typography variant="caption" color="text.secondary">
+      <Typography variant="caption" sx={{
+        color: "text.secondary"
+      }}>
         {label}
       </Typography>
       <Typography variant="body1">{value ?? '—'}</Typography>
@@ -211,11 +213,18 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
       <DialogTitle sx={{ pb: 1 }}>
-        <Box display="flex" alignItems="center" justifyContent="space-between">
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between"
+          }}>
           <Typography variant="h6" component="span">
             {documentTitle}
           </Typography>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{
+            alignItems: "center"
+          }}>
             <Tooltip title="Refresh details">
               <span>
                 <IconButton
@@ -249,7 +258,9 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
 
         {details && (
           <Stack spacing={3} sx={{ pt: 1 }}>
-            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={2} useFlexGap sx={{
+              flexWrap: "wrap"
+            }}>
               <Chip
                 label={`Processing: ${details.document.processingStatus}`}
                 color={getStatusColor(details.document.processingStatus)}
@@ -263,7 +274,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
             </Stack>
 
             <Grid container spacing={2}>
-              <Grid item xs={12}>
+              <Grid size={12}>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="subtitle2" gutterBottom>
                     Document Info
@@ -274,14 +285,18 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                   {renderInfoItem('Created', formatDateTime(details.document.creationDate))}
                 </Paper>
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={12}>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="subtitle2" gutterBottom>
                     Source
                   </Typography>
                   <Divider sx={{ mb: 2 }} />
                   <Grid container spacing={2}>
-                    <Grid item xs={12} md={6}>
+                    <Grid
+                      size={{
+                        xs: 12,
+                        md: 6
+                      }}>
                       {renderInfoItem('Provider', documentSourceProviderLabel(sourceProvenance))}
                       {renderInfoItem(
                         'Reference',
@@ -290,7 +305,11 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                       {renderInfoItem('External IDs', externalIdsText)}
                       {renderInfoItem('Source MD5', sourceProvenance?.sourceMd5)}
                     </Grid>
-                    <Grid item xs={12} md={6}>
+                    <Grid
+                      size={{
+                        xs: 12,
+                        md: 6
+                      }}>
                       {renderInfoItem('Source File', sourceProvenance?.sourceFileId)}
                       {renderInfoItem('PDF Artifact', sourceProvenance?.pdfArtifactId)}
                       {renderInfoItem('Converted Artifact', sourceProvenance?.convertedArtifactId)}
@@ -318,7 +337,12 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
         )}
 
         {!isInitialLoading && !details && !fetchErrorMessage && (
-          <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: "text.secondary",
+              py: 2
+            }}>
             No details available for this document.
           </Typography>
         )}

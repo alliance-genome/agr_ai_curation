@@ -337,21 +337,6 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
               placeholder="Search agents..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ fontSize: '1rem' }} color="action" />
-                  </InputAdornment>
-                ),
-                endAdornment: searchQuery && (
-                  <InputAdornment position="end">
-                    <IconButton size="small" onClick={handleClearSearch} edge="end">
-                      <ClearIcon sx={{ fontSize: '0.9rem' }} />
-                    </IconButton>
-                  </InputAdornment>
-                ),
-                sx: { fontSize: '0.75rem' },
-              }}
               sx={{
                 '& .MuiInputBase-root': {
                   height: 28,
@@ -360,6 +345,23 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
                   fontSize: '0.75rem',
                   py: 0.5,
                 },
+              }}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon sx={{ fontSize: '1rem' }} color="action" />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchQuery && (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={handleClearSearch} edge="end">
+                        <ClearIcon sx={{ fontSize: '0.9rem' }} />
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                  sx: { fontSize: '0.75rem' },
+                }
               }}
             />
           </SearchBox>
@@ -448,7 +450,9 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
 
           {!loading && !error && searchQuery && filteredAgents.length === 0 && (
             <Box sx={{ p: 1.5, textAlign: 'center' }}>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" sx={{
+                color: "text.secondary"
+              }}>
                 No agents match: {searchQuery}
               </Typography>
             </Box>
@@ -457,9 +461,11 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
           {!loading && !error && agents.length === 0 && (
             <Typography
               variant="body2"
-              color="text.secondary"
-              sx={{ textAlign: 'center', p: 2 }}
-            >
+              sx={{
+                color: "text.secondary",
+                textAlign: 'center',
+                p: 2
+              }}>
               No agents available
             </Typography>
           )}
@@ -467,7 +473,7 @@ function AgentPalette({ isCollapsed = false, onToggleCollapse }: AgentPalettePro
         </>
       )}
     </PaletteContainer>
-  )
+  );
 }
 
 export default AgentPalette

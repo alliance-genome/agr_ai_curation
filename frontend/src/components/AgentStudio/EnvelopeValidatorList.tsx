@@ -27,10 +27,11 @@ function coverageLabel(validator: EnvelopeValidatorView): string {
 function EnvelopeValidatorList({ validators, ariaLabelledBy }: EnvelopeValidatorListProps) {
   if (validators.length === 0) {
     return (
-      <Typography variant="body2" color="text.secondary">
-        No automatic checks run on this object.
-      </Typography>
-    )
+      <Typography variant="body2" sx={{
+        color: "text.secondary"
+      }}>No automatic checks run on this object.
+              </Typography>
+    );
   }
 
   return (

@@ -120,11 +120,11 @@ export default function BenchmarkSnapshotDialog({
     setSending(true)
     setError(null)
     try {
-      const createdSnapshot = snapshot ?? await createCurationBenchmarkSnapshot(
+      const createdSnapshot = snapshot ?? (await createCurationBenchmarkSnapshot(
         sessionId,
         selectedEnvelope.envelopeId,
         { expected_revision: selectedEnvelope.revision },
-      )
+      ))
       if (!snapshot) setSnapshots((current) => ({ ...current, [snapshotKey]: createdSnapshot }))
       if (send) {
         const handoffResult = await handoffCurationBenchmarkSnapshot(
@@ -155,7 +155,9 @@ export default function BenchmarkSnapshotDialog({
       <DialogTitle>Send snapshot to Benchmark</DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2}>
-          <Typography color="text.secondary" variant="body2">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Create an immutable JSON snapshot of the displayed persisted envelope revision and send it to a configured comparison destination. Validation and approval status do not affect eligibility.
           </Typography>
 
@@ -187,7 +189,9 @@ export default function BenchmarkSnapshotDialog({
           )}
 
           {destinationsLoading ? (
-            <Stack direction="row" spacing={1} alignItems="center" role="status">
+            <Stack direction="row" spacing={1} role="status" sx={{
+              alignItems: "center"
+            }}>
               <CircularProgress size={18} />
               <Typography variant="body2">Loading benchmark destinations…</Typography>
             </Stack>
@@ -217,7 +221,9 @@ export default function BenchmarkSnapshotDialog({
 
           {error ? <Alert severity="error">{error}</Alert> : null}
           {sending ? (
-            <Stack direction="row" spacing={1} alignItems="center" role="status">
+            <Stack direction="row" spacing={1} role="status" sx={{
+              alignItems: "center"
+            }}>
               <CircularProgress size={18} aria-hidden="true" />
               <Typography variant="body2">Preparing snapshot or delivering it to Benchmark…</Typography>
             </Stack>
@@ -271,5 +277,5 @@ export default function BenchmarkSnapshotDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }

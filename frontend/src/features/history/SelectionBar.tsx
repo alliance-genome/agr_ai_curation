@@ -1,4 +1,4 @@
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Box, Button, Checkbox, Typography } from '@mui/material'
 
 interface SelectionBarProps {
@@ -42,13 +42,15 @@ export default function SelectionBar({
       <Checkbox
         checked={allSelected}
         indeterminate={!allSelected}
-        inputProps={{
-          'aria-label': 'Select all shown conversations',
-          'aria-checked': allSelected ? 'true' : 'mixed',
-        }}
         onChange={(event) => (event.target.checked ? onSelectAll() : onClear())}
         size="small"
         sx={{ p: 0 }}
+        slotProps={{
+          input: {
+            'aria-label': 'Select all shown conversations',
+            'aria-checked': allSelected ? 'true' : 'mixed',
+          }
+        }}
       />
       <Typography component="span" sx={{ fontSize: '13px' }}>
         <Box component="b" sx={{ fontWeight: 500 }}>{selectedCount} selected</Box>
@@ -75,5 +77,5 @@ export default function SelectionBar({
         Delete {selectedCount}
       </Button>
     </Box>
-  )
+  );
 }

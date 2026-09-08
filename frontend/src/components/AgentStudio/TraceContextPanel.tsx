@@ -112,10 +112,14 @@ function TraceContextPanel({
       <PanelHeader onClick={() => setExpanded(!expanded)}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <TimelineIcon color="info" fontSize="small" />
-          <Typography variant="subtitle2" fontWeight={600}>
+          <Typography variant="subtitle2" sx={{
+            fontWeight: 600
+          }}>
             Trace Context
           </Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             {context.trace_id.slice(0, 8)}...
           </Typography>
         </Box>
@@ -147,7 +151,12 @@ function TraceContextPanel({
         <PanelContent>
           {/* User Query */}
           <Box sx={{ mb: 2 }}>
-            <Typography variant="caption" color="text.secondary" fontWeight={600}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                fontWeight: 600
+              }}>
               Query
             </Typography>
             <Typography variant="body2" sx={{ mt: 0.5 }}>
@@ -157,7 +166,12 @@ function TraceContextPanel({
 
           {/* Agents Executed */}
           <Box sx={{ mb: 2 }}>
-            <Typography variant="caption" color="text.secondary" fontWeight={600}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: "text.secondary",
+                fontWeight: 600
+              }}>
               Agents Executed ({context.prompts_executed.length})
             </Typography>
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
@@ -166,16 +180,22 @@ function TraceContextPanel({
                   key={`${exec.agent_id}-${idx}`}
                   title={
                     <Box>
-                      <Typography variant="caption" display="block">
+                      <Typography variant="caption" sx={{
+                        display: "block"
+                      }}>
                         {exec.agent_name}
                       </Typography>
                       {exec.group_applied && (
-                        <Typography variant="caption" display="block">
+                        <Typography variant="caption" sx={{
+                          display: "block"
+                        }}>
                           Group: {exec.group_applied}
                         </Typography>
                       )}
                       {exec.tokens_used && (
-                        <Typography variant="caption" display="block">
+                        <Typography variant="caption" sx={{
+                          display: "block"
+                        }}>
                           Tokens: {exec.tokens_used}
                         </Typography>
                       )}
@@ -196,7 +216,12 @@ function TraceContextPanel({
           {/* Routing Decisions */}
           {context.routing_decisions.length > 0 && (
             <Box sx={{ mb: 2 }}>
-              <Typography variant="caption" color="text.secondary" fontWeight={600}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "text.secondary",
+                  fontWeight: 600
+                }}>
                 Routing Path
               </Typography>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
@@ -206,7 +231,11 @@ function TraceContextPanel({
                     <AccountTreeIcon fontSize="small" color="action" />
                     <Chip label={decision.to_agent} size="small" variant="outlined" />
                     {idx < context.routing_decisions.length - 1 && (
-                      <Typography color="text.secondary" sx={{ mx: 0.5 }}>
+                      <Typography
+                        sx={{
+                          color: "text.secondary",
+                          mx: 0.5
+                        }}>
                         →
                       </Typography>
                     )}
@@ -219,7 +248,12 @@ function TraceContextPanel({
           {/* Tool Calls Summary */}
           {context.tool_calls.length > 0 && (
             <Box>
-              <Typography variant="caption" color="text.secondary" fontWeight={600}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "text.secondary",
+                  fontWeight: 600
+                }}>
                 Tool Calls ({context.tool_calls.length})
               </Typography>
               <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
@@ -244,7 +278,7 @@ function TraceContextPanel({
         </PanelContent>
       </Collapse>
     </PanelContainer>
-  )
+  );
 }
 
 export default TraceContextPanel

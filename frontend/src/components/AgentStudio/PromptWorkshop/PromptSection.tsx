@@ -268,8 +268,10 @@ export default function PromptSection(props: PromptSectionProps) {
               value={customPrompt}
               onChange={(event) => onCustomPromptChange(event.target.value)}
               placeholder="Edit the main prompt for this custom agent."
-              inputProps={{ 'aria-label': 'Your prompt' }}
               sx={editorInputSx}
+              slotProps={{
+                htmlInput: { 'aria-label': 'Your prompt' }
+              }}
             />
           )}
         </EditorFrame>
@@ -351,8 +353,10 @@ export default function PromptSection(props: PromptSectionProps) {
                   minRows={6}
                   value={selectedGroupPrompt}
                   onChange={(event) => onGroupPromptChange(event.target.value)}
-                  inputProps={{ 'aria-label': `${selectedGroupId} instructions` }}
                   sx={editorInputSx}
+                  slotProps={{
+                    htmlInput: { 'aria-label': `${selectedGroupId} instructions` }
+                  }}
                 />
               </EditorFrame>
             ) : (
@@ -371,5 +375,5 @@ export default function PromptSection(props: PromptSectionProps) {
         )}
       </Section>
     </Stack>
-  )
+  );
 }

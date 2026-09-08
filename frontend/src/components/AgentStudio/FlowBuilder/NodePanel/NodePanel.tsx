@@ -252,8 +252,10 @@ function NodePanel({
               onChange={(event) => draft.set('taskInstructions', event.target.value)}
               error={!draft.values.taskInstructions.trim()}
               helperText={!draft.values.taskInstructions.trim() ? 'Task instructions are required.' : undefined}
-              inputProps={{ 'aria-label': 'Task instructions' }}
               sx={textFieldSx}
+              slotProps={{
+                htmlInput: { 'aria-label': 'Task instructions' }
+              }}
             />
           </Section>
         )}
@@ -261,7 +263,9 @@ function NodePanel({
         {kind === 'validation' && (
           <Alert
             severity="info"
-            icon={<LinkIcon fontSize="inherit" />}
+            icon={<LinkIcon sx={{
+              fontSize: "inherit"
+            }} />}
             sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: 12.5 } }}
           >
             {validatorAttachment
@@ -286,8 +290,10 @@ function NodePanel({
               placeholder="e.g., Accept a term only when its primary label appears verbatim in the evidence quote."
               value={draft.values.customInstructions}
               onChange={(event) => draft.set('customInstructions', event.target.value)}
-              inputProps={{ 'aria-label': 'Steering prompt' }}
               sx={textFieldSx}
+              slotProps={{
+                htmlInput: { 'aria-label': 'Steering prompt' }
+              }}
             />
           </Section>
         )}
@@ -306,8 +312,10 @@ function NodePanel({
               placeholder="e.g., Only extract records named in the results section."
               value={draft.values.customInstructions}
               onChange={(event) => draft.set('customInstructions', event.target.value)}
-              inputProps={{ 'aria-label': 'Instructions for this step' }}
               sx={textFieldSx}
+              slotProps={{
+                htmlInput: { 'aria-label': 'Instructions for this step' }
+              }}
             />
           </Section>
         )}
@@ -361,7 +369,9 @@ function NodePanel({
                   size="small"
                   checked={draft.values.includeEvidence}
                   onChange={(event) => draft.set('includeEvidence', event.target.checked)}
-                  inputProps={{ role: 'switch' }}
+                  slotProps={{
+                    input: { role: 'switch' }
+                  }}
                 />
               )}
               label="Include the supporting evidence in the output"
@@ -439,7 +449,9 @@ function NodePanel({
                 value={draft.values.outputKey}
                 onChange={(event) => draft.set('outputKey', event.target.value.replace(/[^a-zA-Z0-9_]/g, '_'))}
                 helperText="Names this step's saved result for later steps and exports."
-                inputProps={{ style: { fontFamily: MONO_FONT_FAMILY, fontSize: 13 } }}
+                slotProps={{
+                  htmlInput: { style: { fontFamily: MONO_FONT_FAMILY, fontSize: 13 } }
+                }}
               />
             </Box>
           </Collapse>
@@ -521,7 +533,7 @@ function NodePanel({
         }}
       />
     </Box>
-  )
+  );
 }
 
 export default NodePanel

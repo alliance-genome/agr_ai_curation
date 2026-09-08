@@ -113,13 +113,15 @@ export default function ConversationList({
           checked={allSelected}
           disabled={isLoading || sessions.length === 0}
           indeterminate={someSelected}
-          inputProps={{
-            'aria-label': 'Select all conversations',
-            'aria-checked': someSelected ? 'mixed' : allSelected,
-          }}
           onChange={(event) => onToggleSelectAll(event.target.checked)}
           size="small"
           sx={{ p: 0.5, justifySelf: 'start' }}
+          slotProps={{
+            input: {
+              'aria-label': 'Select all conversations',
+              'aria-checked': someSelected ? 'mixed' : allSelected,
+            }
+          }}
         />
         <span>Conversation</span>
         <Box component="span" sx={{ textAlign: 'right', pr: '10px' }}>Activity</Box>
@@ -158,5 +160,5 @@ export default function ConversationList({
         </Box>
       )}
     </Box>
-  )
+  );
 }

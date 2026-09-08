@@ -31,7 +31,7 @@ const RailRoot = styled(Box)(({ theme }) => ({
   paddingBottom: theme.spacing(0.75),
   backgroundColor: theme.palette.background.paper,
   border: `1px solid ${theme.palette.divider}`,
-  borderRadius: theme.shape.borderRadius * 2,
+  ...theme.unstable_sx({ borderRadius: 2 }),
 }))
 
 const ShowButton = styled(IconButton)(({ theme }) => ({

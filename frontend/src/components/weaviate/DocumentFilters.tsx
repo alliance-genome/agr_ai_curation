@@ -114,13 +114,17 @@ const DocumentFilters: React.FC<DocumentFiltersProps> = ({
     <LocalizationProvider dateAdapter={AdapterDateFns}>
       <Paper elevation={0} sx={{ p: 2, border: 1, borderColor: 'divider' }}>
         <Box sx={{ mb: 2 }}>
-          <Stack direction="row" spacing={2} alignItems="center">
+          <Stack direction="row" spacing={2} sx={{
+            alignItems: "center"
+          }}>
             <FilterList />
             <Typography variant="h6" sx={{ flex: 1 }}>
               Filters
             </Typography>
             {activeFilterCount() > 0 && (
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack direction="row" spacing={1} sx={{
+                alignItems: "center"
+              }}>
                 <Chip
                   label={`${activeFilterCount()} active`}
                   size="small"
@@ -145,24 +149,26 @@ const DocumentFilters: React.FC<DocumentFiltersProps> = ({
           value={localFilters.searchTerm || ''}
           onChange={handleSearchChange}
           sx={{ mb: 2 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search />
-              </InputAdornment>
-            ),
-            endAdornment: localFilters.searchTerm && (
-              <InputAdornment position="end">
-                <IconButton
-                  size="small"
-                  onClick={() =>
-                    handleSearchChange({ target: { value: '' } } as any)
-                  }
-                >
-                  <Clear />
-                </IconButton>
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search />
+                </InputAdornment>
+              ),
+              endAdornment: localFilters.searchTerm && (
+                <InputAdornment position="end">
+                  <IconButton
+                    size="small"
+                    onClick={() =>
+                      handleSearchChange({ target: { value: '' } } as any)
+                    }
+                  >
+                    <Clear />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }
           }}
         />
 
@@ -199,7 +205,9 @@ const DocumentFilters: React.FC<DocumentFiltersProps> = ({
                     />
                   }
                   label={
-                    <Stack direction="row" spacing={1} alignItems="center">
+                    <Stack direction="row" spacing={1} sx={{
+                      alignItems: "center"
+                    }}>
                       <Typography variant="body2">{status.label}</Typography>
                       <Chip
                         size="small"
@@ -222,7 +230,9 @@ const DocumentFilters: React.FC<DocumentFiltersProps> = ({
           sx={{ '&:before': { display: 'none' } }}
         >
           <AccordionSummary expandIcon={<ExpandMore />}>
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} sx={{
+              alignItems: "center"
+            }}>
               <DateRange />
               <Typography>Date Range</Typography>
             </Stack>
@@ -265,7 +275,9 @@ const DocumentFilters: React.FC<DocumentFiltersProps> = ({
           sx={{ '&:before': { display: 'none' } }}
         >
           <AccordionSummary expandIcon={<ExpandMore />}>
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} sx={{
+              alignItems: "center"
+            }}>
               <Numbers />
               <Typography>Chunk Count</Typography>
             </Stack>
@@ -284,8 +296,10 @@ const DocumentFilters: React.FC<DocumentFiltersProps> = ({
                 onChange={(e) =>
                   handleVectorCountChange('minVectorCount', e.target.value)
                 }
-                InputProps={{
-                  inputProps: { min: 0 },
+                slotProps={{
+                  input: {
+                    inputProps: { min: 0 },
+                  }
                 }}
               />
               <TextField
@@ -297,8 +311,10 @@ const DocumentFilters: React.FC<DocumentFiltersProps> = ({
                 onChange={(e) =>
                   handleVectorCountChange('maxVectorCount', e.target.value)
                 }
-                InputProps={{
-                  inputProps: { min: 0 },
+                slotProps={{
+                  input: {
+                    inputProps: { min: 0 },
+                  }
                 }}
               />
             </Stack>
@@ -307,10 +323,14 @@ const DocumentFilters: React.FC<DocumentFiltersProps> = ({
 
         {activeFilterCount() > 0 && (
           <Box sx={{ mt: 2, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
+            <Typography variant="body2" gutterBottom sx={{
+              color: "text.secondary"
+            }}>
               Active Filters:
             </Typography>
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} useFlexGap sx={{
+              flexWrap: "wrap"
+            }}>
               {localFilters.searchTerm && (
                 <Chip
                   label={`Search: ${localFilters.searchTerm}`}

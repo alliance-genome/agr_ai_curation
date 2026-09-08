@@ -29,7 +29,9 @@ function ResetConfirmationDialog({
     >
       <DialogTitle>Reset candidate?</DialogTitle>
       <DialogContent>
-        <Typography color="text.secondary" variant="body2">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           This will restore seeded field values, clear curator notes, remove manual evidence,
           and return the candidate to pending.
         </Typography>
@@ -48,7 +50,7 @@ function ResetConfirmationDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }
 
 export default ResetConfirmationDialog

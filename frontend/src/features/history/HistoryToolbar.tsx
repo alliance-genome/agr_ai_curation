@@ -75,40 +75,45 @@ export default function HistoryToolbar({
       </ToggleButtonGroup>
 
       <TextField
-        inputProps={{ 'aria-label': 'Search titles' }}
         onChange={(event) => onSearchChange(event.target.value)}
         placeholder="Search titles"
         size="small"
         value={searchValue}
-        InputProps={{
-          startAdornment: (
-            <InputAdornment position="start">
-              <SearchIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-            </InputAdornment>
-          ),
-          endAdornment: searchValue ? (
-            <InputAdornment position="end">
-              <IconButton aria-label="Clear search text" edge="end" onClick={() => onSearchChange('')} size="small">
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            </InputAdornment>
-          ) : undefined,
-        }}
         sx={{
           flex: 1,
           minWidth: 180,
           maxWidth: 360,
           '& .MuiInputBase-root': { height: 32, fontSize: '13px', bgcolor: 'background.paper' },
         }}
-      />
+        slotProps={{
+          input: {
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+              </InputAdornment>
+            ),
+            endAdornment: searchValue ? (
+              <InputAdornment position="end">
+                <IconButton aria-label="Clear search text" edge="end" onClick={() => onSearchChange('')} size="small">
+                  <ClearIcon fontSize="small" />
+                </IconButton>
+              </InputAdornment>
+            ) : undefined,
+          },
+
+          htmlInput: { 'aria-label': 'Search titles' }
+        }} />
 
       <Typography
         aria-live="polite"
-        color="text.secondary"
-        sx={{ ml: 'auto', fontSize: '13px', whiteSpace: 'nowrap' }}
-      >
+        sx={{
+          color: "text.secondary",
+          ml: 'auto',
+          fontSize: '13px',
+          whiteSpace: 'nowrap'
+        }}>
         {isLoading ? 'Loading…' : `Showing ${visibleCount} of ${totalSessions}`}
       </Typography>
     </Box>
-  )
+  );
 }

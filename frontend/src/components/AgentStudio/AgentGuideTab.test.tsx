@@ -110,7 +110,7 @@ describe('AgentGuideTab', () => {
 
     const alert = screen.getByTestId('guide-note')
     expect(alert).toHaveAttribute('role', 'alert')
-    expect(alert).toHaveClass('MuiAlert-standardWarning')
+    expect(alert).toHaveClass('MuiAlert-standard', 'MuiAlert-colorWarning')
     expect(alert.textContent).toBe(note)
 
     const useStripe = screen.getByRole('region', { name: 'When to use it' })

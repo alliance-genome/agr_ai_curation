@@ -160,7 +160,9 @@ Component Stack: ${errorInfo.componentStack}
                   <Typography variant="h4" gutterBottom>
                     Oops! Something went wrong
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" sx={{
+                    color: "text.secondary"
+                  }}>
                     We apologize for the inconvenience. The application encountered an unexpected error.
                   </Typography>
                 </Box>
@@ -183,7 +185,9 @@ Component Stack: ${errorInfo.componentStack}
                 </Alert>
               )}
 
-              <Stack direction="row" spacing={2} justifyContent="center">
+              <Stack direction="row" spacing={2} sx={{
+                justifyContent: "center"
+              }}>
                 <Button
                   variant="contained"
                   startIcon={<Refresh />}
@@ -285,7 +289,9 @@ Component Stack: ${errorInfo.componentStack}
                 </Collapse>
               </Box>
 
-              <Typography variant="caption" color="text.secondary" align="center">
+              <Typography variant="caption" align="center" sx={{
+                color: "text.secondary"
+              }}>
                 Error ID: {Date.now().toString(36).toUpperCase()}
               </Typography>
             </Stack>

@@ -50,7 +50,9 @@ export default function OpenAgentDialog({ open, agents, loading, selectedAgentId
       maxWidth="sm"
       fullWidth
       aria-labelledby="open-agent-title"
-      PaperProps={{ sx: { maxHeight: '70vh' } }}
+      slotProps={{
+        paper: { sx: { maxHeight: '70vh' } }
+      }}
     >
       <DialogTitle id="open-agent-title">Open agent</DialogTitle>
       <DialogContent sx={{ pt: 0.5 }}>
@@ -59,18 +61,20 @@ export default function OpenAgentDialog({ open, agents, loading, selectedAgentId
           autoFocus
           size="small"
           placeholder="Search agents"
-          inputProps={{ 'aria-label': 'Search agents' }}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-              </InputAdornment>
-            ),
-          }}
           sx={{ mb: 1.5, mt: 0.5 }}
-        />
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                </InputAdornment>
+              ),
+            },
+
+            htmlInput: { 'aria-label': 'Search agents' }
+          }} />
         <Box sx={{ minHeight: 200, maxHeight: 320, overflow: 'auto' }}>
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
@@ -92,9 +96,10 @@ export default function OpenAgentDialog({ open, agents, loading, selectedAgentId
                     <ListItemText
                       primary={agent.name}
                       secondary={agent.description || 'Custom agent'}
-                      primaryTypographyProps={{ fontSize: 13.5 }}
-                      secondaryTypographyProps={{ fontSize: 12 }}
-                    />
+                      slotProps={{
+                        primary: { sx: { fontSize: 13.5 } },
+                        secondary: { sx: { fontSize: 12 } }
+                      }} />
                   </ListItemButton>
                 </ListItem>
               ))}
@@ -108,5 +113,5 @@ export default function OpenAgentDialog({ open, agents, loading, selectedAgentId
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }

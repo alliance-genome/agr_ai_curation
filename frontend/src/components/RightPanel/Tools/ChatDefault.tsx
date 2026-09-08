@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import {
   Alert,
   Autocomplete,
@@ -192,10 +192,14 @@ const ChatDefault: React.FC = () => {
       <Stack spacing={1.5}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography id="chat-default-title" variant="subtitle1" fontWeight={600}>
+            <Typography id="chat-default-title" variant="subtitle1" sx={{
+              fontWeight: 600
+            }}>
               Chat default
             </Typography>
-            <Typography variant="body2" color="text.secondary" noWrap title={preferenceSummary(confirmed)}>
+            <Typography variant="body2" noWrap title={preferenceSummary(confirmed)} sx={{
+              color: "text.secondary"
+            }}>
               Current: {preferenceSummary(confirmed)}
             </Typography>
           </Box>
@@ -275,7 +279,12 @@ const ChatDefault: React.FC = () => {
                   <Box sx={{ minWidth: 0 }}>
                     <Typography variant="body2">{option.display_name}</Typography>
                     {(option.category || option.description) && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: "text.secondary",
+                          display: 'block'
+                        }}>
                         {[modeLabel[option.kind], option.category, option.description].filter(Boolean).join(' · ')}
                       </Typography>
                     )}
@@ -286,17 +295,21 @@ const ChatDefault: React.FC = () => {
                 <TextField
                   {...params}
                   placeholder={`Search ${draftMode}s`}
-                  inputProps={{ ...params.inputProps, 'aria-label': `Choose ${draftMode}` }}
-                  InputProps={{
-                    ...params.InputProps,
-                    endAdornment: (
-                      <>
-                        {isPickerLoading ? <CircularProgress color="inherit" size={18} /> : null}
-                        {params.InputProps.endAdornment}
-                      </>
-                    ),
-                  }}
-                />
+                  slotProps={{
+                    ...params.slotProps,
+
+                    input: {
+                      ...params.slotProps.input,
+                      endAdornment: (
+                        <>
+                          {isPickerLoading ? <CircularProgress color="inherit" size={18} /> : null}
+                          {params.slotProps.input.endAdornment}
+                        </>
+                      ),
+                    },
+
+                    htmlInput: { ...params.slotProps.htmlInput, 'aria-label': `Choose ${draftMode}` }
+                  }} />
               )}
             />
           </Box>
@@ -320,7 +333,13 @@ const ChatDefault: React.FC = () => {
             {saveError}
           </Alert>
         )}
-        <Typography aria-live="polite" variant="caption" color="text.secondary" sx={{ minHeight: '1.25em' }}>
+        <Typography
+          aria-live="polite"
+          variant="caption"
+          sx={{
+            color: "text.secondary",
+            minHeight: '1.25em'
+          }}>
           {isSaving ? 'Saving chat default…' : savedMessage}
         </Typography>
       </Stack>
@@ -338,7 +357,7 @@ const ChatDefault: React.FC = () => {
         </DialogActions>
       </Dialog>
     </Box>
-  )
+  );
 }
 
 export default ChatDefault

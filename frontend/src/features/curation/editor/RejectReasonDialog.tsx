@@ -34,7 +34,12 @@ function RejectReasonDialog({
     >
       <DialogTitle>Reject candidate?</DialogTitle>
       <DialogContent>
-        <Typography color="text.secondary" sx={{ mb: 2 }} variant="body2">
+        <Typography
+          variant="body2"
+          sx={{
+            color: "text.secondary",
+            mb: 2
+          }}>
           Add an optional reason for the audit log before moving to the next candidate.
         </Typography>
         <TextField
@@ -62,7 +67,7 @@ function RejectReasonDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }
 
 export default RejectReasonDialog

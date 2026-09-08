@@ -75,17 +75,25 @@ const UploadProgressDialog: React.FC<UploadProgressDialogProps> = ({
   return (
     <Dialog
       open={open}
-      onClose={allowBackgroundClose || isComplete || isError ? onClose : undefined}
+      onClose={(_event, reason) => {
+        if (!allowBackgroundClose && !isComplete && !isError && reason === 'escapeKeyDown') {
+          return;
+        }
+        if (allowBackgroundClose || isComplete || isError) {
+          onClose();
+        }
+      }}
       maxWidth="sm"
       fullWidth
-      disableEscapeKeyDown={!allowBackgroundClose && !isComplete && !isError}
     >
       <DialogTitle>
         {isCancelled ? 'Upload Cancelled' : isError ? 'Upload Failed' : isComplete ? 'Upload Complete' : 'Processing Document'}
       </DialogTitle>
       <DialogContent>
         <Box sx={{ mb: 2 }}>
-          <Typography variant="body2" color="text.secondary" gutterBottom>
+          <Typography variant="body2" gutterBottom sx={{
+            color: "text.secondary"
+          }}>
             {fileName}
           </Typography>
           <Typography variant="body1" sx={{ mt: 1 }}>
@@ -106,7 +114,13 @@ const UploadProgressDialog: React.FC<UploadProgressDialogProps> = ({
               },
             }}
           />
-          <Typography variant="body2" color="text.secondary" align="center" sx={{ mt: 1 }}>
+          <Typography
+            variant="body2"
+            align="center"
+            sx={{
+              color: "text.secondary",
+              mt: 1
+            }}>
             {progress}%
           </Typography>
         </Box>
@@ -145,7 +159,9 @@ const UploadProgressDialog: React.FC<UploadProgressDialogProps> = ({
                   </StepLabel>
                   {stepActive && !isComplete && (
                     <StepContent>
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography variant="caption" sx={{
+                        color: "text.secondary"
+                      }}>
                         Processing...
                       </Typography>
                     </StepContent>

@@ -274,26 +274,28 @@ function AgentBrowser({
               placeholder="Search agents..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              inputProps={{ 'aria-label': 'Search agents' }}
               sx={{
                 '& .MuiInputBase-root': { height: 30, fontSize: 12.5, backgroundColor: 'background.default' },
                 '& .MuiInputBase-input': { py: 0 },
               }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ fontSize: 16 }} color="action" />
-                  </InputAdornment>
-                ),
-                endAdornment: searchQuery && (
-                  <InputAdornment position="end">
-                    <IconButton size="small" onClick={handleClearSearch} edge="end" aria-label="Clear search">
-                      <ClearIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-            />
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon sx={{ fontSize: 16 }} color="action" />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchQuery && (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={handleClearSearch} edge="end" aria-label="Clear search">
+                        <ClearIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                },
+
+                htmlInput: { 'aria-label': 'Search agents' }
+              }} />
           </ListTop>
           <AgentList>
             {agentsBySubcategory.map(([subcategory, subcategoryAgents]) => (
@@ -370,7 +372,13 @@ function AgentBrowser({
                           <ListItemText
                             disableTypography
                             primary={(
-                              <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+                              <Stack
+                                direction="row"
+                                spacing={0.75}
+                                sx={{
+                                  alignItems: "center",
+                                  minWidth: 0
+                                }}>
                                 <Box
                                   component="span"
                                   title={agent.agent_name}
@@ -405,7 +413,7 @@ function AgentBrowser({
                             sx={{ m: 0, minWidth: 0 }}
                           />
                         </ListItemButton>
-                      )
+                      );
                     })}
                   </List>
                 </AccordionDetails>
@@ -413,7 +421,9 @@ function AgentBrowser({
             ))}
             {searchQuery && filteredAgents.length === 0 && (
               <Box sx={{ p: 2, textAlign: 'center' }}>
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" sx={{
+                  color: "text.secondary"
+                }}>
                   No agents match: {searchQuery}
                 </Typography>
               </Box>
@@ -437,7 +447,7 @@ function AgentBrowser({
         </DetailsContainer>
       )}
     </BrowserContainer>
-  )
+  );
 }
 
 export default AgentBrowser

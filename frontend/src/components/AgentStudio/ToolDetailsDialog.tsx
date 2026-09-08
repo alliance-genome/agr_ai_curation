@@ -101,12 +101,14 @@ function ToolDetailsDialog({
       anchor="right"
       open={open}
       onClose={handleClose}
-      PaperProps={{
-        sx: {
-          width: { xs: '100%', sm: 520 },
-          display: 'flex',
-          flexDirection: 'column',
-        },
+      slotProps={{
+        paper: {
+          sx: {
+            width: { xs: '100%', sm: 520 },
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        }
       }}
     >
       {/* Header */}
@@ -154,9 +156,11 @@ function ToolDetailsDialog({
                 </Typography>
                 <Typography
                   variant="body2"
-                  color="text.secondary"
-                  sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}
-                >
+                  sx={{
+                    color: "text.secondary",
+                    fontFamily: 'monospace',
+                    fontSize: '0.8rem'
+                  }}>
                   {toolId}
                 </Typography>
               </Box>
@@ -200,7 +204,9 @@ function ToolDetailsDialog({
 
             {/* Description */}
             <Box>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              <Typography variant="subtitle2" gutterBottom sx={{
+                color: "text.secondary"
+              }}>
                 Description
               </Typography>
               <Typography variant="body2">
@@ -211,7 +217,9 @@ function ToolDetailsDialog({
             {/* Documentation summary */}
             {tool.documentation?.summary && (
               <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                <Typography variant="subtitle2" gutterBottom sx={{
+                  color: "text.secondary"
+                }}>
                   How It Works
                 </Typography>
                 <Typography variant="body2">
@@ -225,7 +233,9 @@ function ToolDetailsDialog({
             {/* Parameters (for simple tools and method-level tools) */}
             {tool.documentation?.parameters && tool.documentation.parameters.length > 0 && !methodsToShow && (
               <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                <Typography variant="subtitle2" gutterBottom sx={{
+                  color: "text.secondary"
+                }}>
                   Parameters
                 </Typography>
                 <ParameterTable parameters={tool.documentation.parameters} />
@@ -235,7 +245,9 @@ function ToolDetailsDialog({
             {/* Example (for method-level tools) */}
             {tool.example && Object.keys(tool.example).length > 0 && (
               <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                <Typography variant="subtitle2" gutterBottom sx={{
+                  color: "text.secondary"
+                }}>
                   Example Usage
                 </Typography>
                 <Box
@@ -258,7 +270,9 @@ function ToolDetailsDialog({
             {/* Methods (for multi-method tools) */}
             {methodsToShow && Object.keys(methodsToShow).length > 0 && (
               <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                <Typography variant="subtitle2" gutterBottom sx={{
+                  color: "text.secondary"
+                }}>
                   {tool.agent_context ? 'Methods Used by This Agent' : 'Available Methods'}
                 </Typography>
                 <Box sx={{ mt: 1 }}>
@@ -275,7 +289,14 @@ function ToolDetailsDialog({
 
             {/* Source file */}
             <Box sx={{ mt: 1 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "text.secondary",
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.5
+                }}>
                 <CodeIcon sx={{ fontSize: 14 }} />
                 Source: {tool.source_file}
               </Typography>
@@ -300,7 +321,7 @@ function ToolDetailsDialog({
         </Button>
       </Box>
     </Drawer>
-  )
+  );
 }
 
 // Parameter table component
@@ -335,7 +356,9 @@ function ParameterTable({ parameters }: { parameters: ToolParameter[] }) {
                 )}
               </TableCell>
               <TableCell>
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" sx={{
+                  color: "text.secondary"
+                }}>
                   {param.description}
                 </Typography>
               </TableCell>
@@ -344,7 +367,7 @@ function ParameterTable({ parameters }: { parameters: ToolParameter[] }) {
         </TableBody>
       </Table>
     </TableContainer>
-  )
+  );
 }
 
 // Method accordion component
@@ -383,14 +406,21 @@ function MethodAccordion({ methodName, method }: { methodName: string; method: T
       </AccordionSummary>
       <AccordionDetails>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             {method.description}
           </Typography>
 
           {/* Required params */}
           {method.required_params.length > 0 && (
             <Box>
-              <Typography variant="caption" color="error.main" fontWeight={500}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "error.main",
+                  fontWeight: 500
+                }}>
                 Required:
               </Typography>
               <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
@@ -411,7 +441,12 @@ function MethodAccordion({ methodName, method }: { methodName: string; method: T
           {/* Optional params */}
           {method.optional_params.length > 0 && (
             <Box>
-              <Typography variant="caption" color="text.secondary" fontWeight={500}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "text.secondary",
+                  fontWeight: 500
+                }}>
                 Optional:
               </Typography>
               <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
@@ -431,7 +466,12 @@ function MethodAccordion({ methodName, method }: { methodName: string; method: T
           {/* Example */}
           {method.example && Object.keys(method.example).length > 0 && (
             <Box>
-              <Typography variant="caption" color="text.secondary" fontWeight={500}>
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "text.secondary",
+                  fontWeight: 500
+                }}>
                 Example:
               </Typography>
               <Box
@@ -454,7 +494,7 @@ function MethodAccordion({ methodName, method }: { methodName: string; method: T
         </Box>
       </AccordionDetails>
     </Accordion>
-  )
+  );
 }
 
 export default ToolDetailsDialog

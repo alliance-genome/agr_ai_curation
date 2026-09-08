@@ -1,4 +1,4 @@
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import HistoryIcon from '@mui/icons-material/History'
 import {
   Alert,
@@ -331,13 +331,19 @@ export default function HistoryPage() {
         gap: 1.25,
       }}
     >
-      <Stack direction="row" spacing={1.5} alignItems="center">
+      <Stack direction="row" spacing={1.5} sx={{
+        alignItems: "center"
+      }}>
         <HistoryIcon color="primary" sx={{ fontSize: 20 }} />
         <Typography component="h1" sx={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.3 }}>
           Chat History
         </Typography>
         {isInitialLoading || listErrorMessage ? null : (
-          <Typography color="text.secondary" sx={{ fontSize: '13px' }}>
+          <Typography
+            sx={{
+              color: "text.secondary",
+              fontSize: '13px'
+            }}>
             {totalSessions} {pluralize(totalSessions, 'conversation')}
           </Typography>
         )}
@@ -381,10 +387,10 @@ export default function HistoryPage() {
 
       {showEmptyState ? (
         <Stack
-          alignItems="center"
-          justifyContent="center"
           spacing={0.5}
           sx={{
+            alignItems: "center",
+            justifyContent: "center",
             flex: 1,
             minHeight: 160,
             border: '1px dashed',
@@ -392,13 +398,16 @@ export default function HistoryPage() {
             borderRadius: 2,
             px: 3,
             py: 4,
-            textAlign: 'center',
-          }}
-        >
+            textAlign: 'center'
+          }}>
           <Typography sx={{ fontWeight: 500 }}>
             {hasSearch ? `No conversations match "${normalizedSearchQuery}"` : 'No stored conversations yet'}
           </Typography>
-          <Typography color="text.secondary" sx={{ fontSize: '13px' }}>
+          <Typography
+            sx={{
+              color: "text.secondary",
+              fontSize: '13px'
+            }}>
             {hasSearch
               ? 'Try a shorter title search, or switch the kind filter to All.'
               : 'Completed conversations appear here once they are stored in history.'}
@@ -455,11 +464,13 @@ export default function HistoryPage() {
           <TextField
             autoFocus
             fullWidth
-            inputProps={{ maxLength: 255 }}
             label="Conversation title"
             margin="dense"
             onChange={(event) => setRenameTitle(event.target.value)}
             value={renameTitle}
+            slotProps={{
+              htmlInput: { maxLength: 255 }
+            }}
           />
         </DialogContent>
         <DialogActions>
@@ -544,5 +555,5 @@ export default function HistoryPage() {
         </DialogActions>
       </Dialog>
     </Box>
-  )
+  );
 }

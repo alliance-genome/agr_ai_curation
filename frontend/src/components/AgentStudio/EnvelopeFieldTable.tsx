@@ -160,10 +160,14 @@ function EnvelopeFieldTable({ groups, ariaLabel, providerWord, narrow = false, m
 
   if (!hasFields) {
     return (
-      <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
-        This object declares no fields.
-      </Typography>
-    )
+      <Typography
+        variant="body2"
+        sx={{
+          color: "text.secondary",
+          py: 1
+        }}>This object declares no fields.
+              </Typography>
+    );
   }
 
   return (

@@ -215,12 +215,14 @@ function AgentDetailsPanel({
           <Typography variant="h6" sx={{ mb: 1 }}>
             Browse your agents
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: "text.secondary"
+          }}>
             Pick an agent on the left to see what it does, the tools it uses, and the validation that applies.
           </Typography>
         </Box>
       </EmptyState>
-    )
+    );
   }
 
   const { documentation } = agent

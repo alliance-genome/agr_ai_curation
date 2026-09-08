@@ -68,11 +68,13 @@ function AgentToolsTable({ tools, descriptions, inventoryError, onRetryInventory
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
         <SectionHeading>Tools</SectionHeading>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: "text.secondary"
+        }}>
           This agent has no tools. It works from the paper text and its prompt alone.
         </Typography>
       </Box>
-    )
+    );
   }
 
   const toggle = (

@@ -91,7 +91,13 @@ const MaintenanceBanner: React.FC = () => {
         <CloseIcon fontSize="small" />
       </IconButton>
 
-      <Stack direction="row" alignItems="flex-start" spacing={1.5} sx={{ pr: 3 }}>
+      <Stack
+        direction="row"
+        spacing={1.5}
+        sx={{
+          alignItems: "flex-start",
+          pr: 3
+        }}>
         <WarningIcon sx={{ flexShrink: 0, mt: 0.25 }} />
         <Box>
           <Typography component="div" sx={{ fontWeight: 600, mb: 0.25, fontSize: '0.95rem' }}>
@@ -103,7 +109,7 @@ const MaintenanceBanner: React.FC = () => {
         </Box>
       </Stack>
     </Box>
-  )
+  );
 }
 
 export default MaintenanceBanner

@@ -93,10 +93,11 @@ function EnvelopeTab({ metadata, narrow = false, focus = null }: EnvelopeTabProp
 
   if (!selectedChoice || !primaryObject) {
     return (
-      <Typography variant="body2" color="text.secondary">
-        This domain pack declares no envelope objects.
-      </Typography>
-    )
+      <Typography variant="body2" sx={{
+        color: "text.secondary"
+      }}>This domain pack declares no envelope objects.
+              </Typography>
+    );
   }
 
   return (

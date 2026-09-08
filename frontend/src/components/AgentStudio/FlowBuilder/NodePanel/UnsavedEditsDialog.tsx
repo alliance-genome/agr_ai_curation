@@ -30,7 +30,9 @@ function UnsavedEditsDialog({
       open={open}
       onClose={onKeepEditing}
       aria-labelledby="node-panel-unsaved-title"
-      PaperProps={{ sx: { minWidth: 360, maxWidth: 440, borderRadius: 2 } }}
+      slotProps={{
+        paper: { sx: { minWidth: 360, maxWidth: 440, borderRadius: 2 } }
+      }}
     >
       <DialogTitle id="node-panel-unsaved-title" sx={{ fontSize: '1rem', pb: 0.5 }}>
         Apply changes to step {stepNumber}?
@@ -60,7 +62,7 @@ function UnsavedEditsDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }
 
 export default UnsavedEditsDialog

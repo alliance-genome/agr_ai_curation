@@ -55,7 +55,9 @@ export default function QueueNavigationButton({
   const isLoading = nextSessionMutation.isPending
 
   return (
-    <Stack spacing={1} alignItems={{ xs: 'stretch', sm: 'flex-end' }}>
+    <Stack spacing={1} sx={{
+      alignItems: { xs: 'stretch', sm: 'flex-end' }
+    }}>
       <Button
         disabled={isLoading || isQueueExhausted}
         onClick={() => {
@@ -72,5 +74,5 @@ export default function QueueNavigationButton({
         </Alert>
       ) : null}
     </Stack>
-  )
+  );
 }

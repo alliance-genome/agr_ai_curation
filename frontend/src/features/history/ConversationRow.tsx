@@ -1,5 +1,5 @@
 import ContentCopyOutlinedIcon from '@mui/icons-material/ContentCopyOutlined'
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import LinkIcon from '@mui/icons-material/Link'
@@ -136,10 +136,12 @@ export default function ConversationRow({
       >
         <Checkbox
           checked={isSelected}
-          inputProps={{ 'aria-label': `Select ${title}` }}
           onChange={(event) => onSelectChange(event.target.checked)}
           size="small"
           sx={{ p: 0.5, justifySelf: 'start' }}
+          slotProps={{
+            input: { 'aria-label': `Select ${title}` }
+          }}
         />
 
         <Box
@@ -295,10 +297,12 @@ export default function ConversationRow({
         anchorEl={menuAnchor}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         id={menuId}
-        MenuListProps={{ 'aria-label': `Actions for ${title}`, dense: true }}
         onClose={closeMenu}
         open={menuOpen}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        slotProps={{
+          list: { 'aria-label': `Actions for ${title}`, dense: true }
+        }}
       >
         <MenuItem onClick={runMenuAction(onRename)}>
           <ListItemIcon><EditOutlinedIcon fontSize="small" /></ListItemIcon>
@@ -317,5 +321,5 @@ export default function ConversationRow({
 
       {isExpanded ? children : null}
     </Box>
-  )
+  );
 }

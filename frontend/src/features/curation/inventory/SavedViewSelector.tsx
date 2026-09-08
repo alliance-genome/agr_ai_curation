@@ -1,5 +1,5 @@
 import AddIcon from '@mui/icons-material/Add'
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import {
   Alert,
   Box,
@@ -151,15 +151,13 @@ export default function SavedViewSelector({
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={1}
-        alignItems={{ xs: 'stretch', sm: 'center' }}
-        justifyContent="flex-end"
-      >
+        sx={{
+          alignItems: { xs: 'stretch', sm: 'center' },
+          justifyContent: "flex-end"
+        }}>
         <TextField
           select
-          InputLabelProps={{ shrink: true }}
-          SelectProps={{ native: true }}
           disabled={viewsQuery.isLoading}
-          inputProps={{ 'data-testid': 'saved-view-selector' }}
           label="Saved view"
           onChange={(event) => {
             const nextValue = event.target.value
@@ -176,7 +174,11 @@ export default function SavedViewSelector({
           size="small"
           sx={{ minWidth: { sm: 260 } }}
           value={selectedViewId ?? ''}
-        >
+          slotProps={{
+            htmlInput: { 'data-testid': 'saved-view-selector' },
+            select: { native: true },
+            inputLabel: { shrink: true }
+          }}>
           <option value="">Live filters</option>
           {views.map((view) => (
             <option key={view.view_id} value={view.view_id}>
@@ -216,7 +218,9 @@ export default function SavedViewSelector({
 
       {selectedView && (
         <Box sx={{ alignSelf: { xs: 'stretch', sm: 'flex-end' } }}>
-          <Typography color="text.secondary" variant="caption">
+          <Typography variant="caption" sx={{
+            color: "text.secondary"
+          }}>
             {selectedView.description || 'Applies this saved filter and sort preset to the inventory.'}
           </Typography>
         </Box>
@@ -228,7 +232,9 @@ export default function SavedViewSelector({
         <DialogTitle>Save current filters</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
-            <Typography color="text.secondary" variant="body2">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               Save the current filter and sort state so you can recall it later from the inventory page.
             </Typography>
             <TextField
@@ -282,12 +288,16 @@ export default function SavedViewSelector({
         <DialogTitle>Delete saved view?</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5} sx={{ pt: 1 }}>
-            <Typography color="text.secondary" variant="body2">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               {selectedView
                 ? `Delete "${selectedView.name}" permanently?`
                 : 'Delete this saved view permanently?'}
             </Typography>
-            <Typography color="text.secondary" variant="body2">
+            <Typography variant="body2" sx={{
+              color: "text.secondary"
+            }}>
               This action cannot be undone.
             </Typography>
           </Stack>
@@ -307,5 +317,5 @@ export default function SavedViewSelector({
         </DialogActions>
       </Dialog>
     </Stack>
-  )
+  );
 }

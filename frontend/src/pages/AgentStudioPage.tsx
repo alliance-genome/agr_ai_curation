@@ -85,7 +85,7 @@ const PanelCard = styled(Box)(({ theme }) => ({
   height: '100%',
   backgroundColor: theme.palette.background.paper,
   border: `1px solid ${theme.palette.divider}`,
-  borderRadius: theme.shape.borderRadius * 2,
+  ...theme.unstable_sx({ borderRadius: 2 }),
   overflow: 'hidden',
 }))
 
@@ -610,12 +610,12 @@ function AgentStudioPage() {
             output_filename_template: node.output_filename_template,
             projection_plan: node.projection_plan,
             output_key: node.output_key,
-            validation_attachments: node.validation_attachments?.map((attachment) => ({
-              ...attachment,
-            }) as Record<string, unknown>),
-            validation_groups: node.validation_groups?.map((group) => ({
-              ...group,
-            }) as Record<string, unknown>),
+            validation_attachments: node.validation_attachments?.map((attachment) => (({
+              ...attachment
+            }) as Record<string, unknown>)),
+            validation_groups: node.validation_groups?.map((group) => (({
+              ...group
+            }) as Record<string, unknown>)),
           })),
           edges: flowState.edges.map((edge) => ({
             id: edge.id,
@@ -817,9 +817,13 @@ Agent ID: ${agentId}`
         }}
         open={loading || durableTranscriptLoading}
       >
-        <Stack spacing={2} alignItems="center">
+        <Stack spacing={2} sx={{
+          alignItems: "center"
+        }}>
           <CircularProgress color="inherit" size={60} />
-          <Typography variant="h6" color="inherit">
+          <Typography variant="h6" sx={{
+            color: "inherit"
+          }}>
             {durableTranscriptLoading ? 'Hydrating durable chat...' : 'Initializing...'}
           </Typography>
         </Stack>
@@ -1002,7 +1006,7 @@ Agent ID: ${agentId}`
         </ClaudeDrawer>
       )}
     </Root>
-  )
+  );
 }
 
 export default AgentStudioPage
