@@ -48,7 +48,11 @@ packages with no declaration show every projected field, including new fields.
 
 The materializer carries the declaration in review-row `workspace_display`,
 which the grid reads from the live materialized review row, so package policy
-changes apply to existing sessions as well as new ones. The policy only selects
+changes apply to existing sessions as well as new ones. The workspace waits for
+all projected objects' live review rows before building the grid, showing loading
+or error feedback when rows are unresolved (including revision refreshes).
+Non-envelope candidates do not require review rows and show all fields.
+The policy only selects
 peer decision columns and preview-validation controls in the horizontal grid; it does not
 remove supporting fields from the envelope or metadata projections. Invalid
 explicit review declarations are errors, not an implicit show-all policy.

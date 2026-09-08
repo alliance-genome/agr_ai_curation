@@ -349,7 +349,15 @@ describe('buildHorizontalGridModel', () => {
       custom.metadata.review_row_metadata = {
         workspace_display: { review_policy: { mode: 'fields', decision_fields: ['label'] } },
       }
-      const model = modelForRows([workspaceRow({ candidate: custom, row: liveRow })])
+      if (liveRow === null) {
+        expect(() => modelForRows([workspaceRow({ candidate: custom, row: null })]))
+          .toThrow('unresolved envelope review row')
+        custom.projection_ref = null
+      }
+      const model = buildHorizontalGridModel({
+        candidates: [custom],
+        envelopeReviewRows: liveRow ? [workspaceRow({ candidate: custom, row: liveRow })] : [],
+      })
       expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'label', 'notes'])
       expect(model.rows[0]!.cells.map((cell) => cell.value)).toEqual(['Record', 'Context'])
     },

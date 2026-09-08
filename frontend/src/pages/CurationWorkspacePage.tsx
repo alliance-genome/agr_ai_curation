@@ -265,9 +265,12 @@ function CurationWorkspacePageContent({
   const hasUnsavedEnvelopeChanges = autosave.isDirty || candidates.some(
     (candidate) => candidate.draft.fields.some((field) => field.dirty),
   )
+  const hasUnresolvedReviewRows = envelopeObjectRows.some((row) => row.reviewRow === null)
   const horizontalGridModel = useMemo(
-    () => buildHorizontalGridModel({ candidates, envelopeReviewRows: envelopeObjectRows }),
-    [candidates, envelopeObjectRows],
+    () => hasUnresolvedReviewRows
+      ? null
+      : buildHorizontalGridModel({ candidates, envelopeReviewRows: envelopeObjectRows }),
+    [candidates, envelopeObjectRows, hasUnresolvedReviewRows],
   )
   const pendingCandidateCount = useMemo(
     () => candidates.filter((candidate) => candidate.status === 'pending').length,
@@ -298,14 +301,14 @@ function CurationWorkspacePageContent({
     },
     {
       blocking: 0,
-      openFindings: horizontalGridModel.rows.reduce(
+      openFindings: horizontalGridModel?.rows.reduce(
         (count, row) => count + row.validation.openFindingCount,
         0,
-      ),
+      ) ?? 0,
       stale: 0,
       validated: 0,
     },
-  ), [candidates, horizontalGridModel.rows])
+  ), [candidates, horizontalGridModel])
   const selectedCandidate = useMemo(
     () => findCandidate(candidates, activeCandidateId),
     [activeCandidateId, candidates],
@@ -695,7 +698,15 @@ function CurationWorkspacePageContent({
                   </Typography>
                 </Alert>
               ))}
-            <InteractiveHorizontalCurationGrid model={horizontalGridModel} />
+            {horizontalGridModel ? (
+              <InteractiveHorizontalCurationGrid model={horizontalGridModel} />
+            ) : envelopeRowsQuery.isPending ? (
+              <Typography role="status">Loading review fields…</Typography>
+            ) : !envelopeReviewRowsError ? (
+              <Alert severity="error">
+                Review fields are unavailable for one or more objects.
+              </Alert>
+            ) : null}
           </Box>
         )}
       />

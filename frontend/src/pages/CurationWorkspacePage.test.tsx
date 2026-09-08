@@ -903,6 +903,28 @@ describe('CurationWorkspacePage', () => {
     )
   })
 
+  it('waits for live review rows before rendering decision fields', async () => {
+    const rows = createDeferredPromise<DomainEnvelopeReviewRowsResponse[]>()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildEnvelopeWorkspace())
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReturnValue(rows.promise)
+    renderPage('/curation/session-1')
+
+    expect(await screen.findByText('Loading review fields…')).toBeInTheDocument()
+    expect(screen.queryByTestId('horizontal-grid-context-candidate-tmem67')).not.toBeInTheDocument()
+    await act(async () => rows.resolve([buildEnvelopeReviewRows()]))
+    expect(await screen.findByTestId('horizontal-grid-context-candidate-tmem67')).toBeInTheDocument()
+    expect(screen.queryByText('Loading review fields…')).not.toBeInTheDocument()
+  })
+
+  it('reports missing live rows in a successful response without rendering decision fields', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildEnvelopeWorkspace())
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([])
+    renderPage('/curation/session-1')
+
+    expect(await screen.findByText('Review fields are unavailable for one or more objects.')).toBeInTheDocument()
+    expect(screen.queryByTestId('horizontal-grid-context-candidate-tmem67')).not.toBeInTheDocument()
+  })
+
   it('surfaces non-Error domain-envelope review row query failures', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildEnvelopeWorkspace())
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockRejectedValue(
@@ -912,10 +934,12 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1')
 
     expect(await screen.findByText('review rows unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('horizontal-grid-context-candidate-tmem67')).not.toBeInTheDocument()
   })
 
   it('keeps a successful decision when the following review-row refresh fails', async () => {
     const workspace = buildEnvelopeWorkspace()
+    const refreshedRows = createDeferredPromise<DomainEnvelopeReviewRowsResponse[]>()
     const refreshedWorkspace: CurationWorkspace = {
       ...workspace,
       candidates: workspace.candidates.map((candidate) => ({
@@ -931,7 +955,7 @@ describe('CurationWorkspacePage', () => {
       .mockResolvedValueOnce(refreshedWorkspace)
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows
       .mockResolvedValueOnce([buildEnvelopeReviewRows()])
-      .mockRejectedValue(new Error('review row refresh failed'))
+      .mockReturnValue(refreshedRows.promise)
     serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
       candidate: refreshedWorkspace.candidates[0],
       session: refreshedWorkspace.session,
@@ -945,11 +969,12 @@ describe('CurationWorkspacePage', () => {
       name: 'Reject Legacy candidate label',
     }))
 
+    expect(await screen.findByText('Loading review fields…')).toBeInTheDocument()
+    expect(screen.queryByTestId('horizontal-grid-context-candidate-tmem67')).not.toBeInTheDocument()
+    await act(async () => refreshedRows.reject(new Error('review row refresh failed')))
     expect(await screen.findByText('review row refresh failed')).toBeInTheDocument()
     await waitFor(() => {
-      const contextCell = screen.getByTestId('horizontal-grid-context-candidate-tmem67')
-      expect(contextCell).toHaveTextContent('Legacy candidate label')
-      expect(contextCell).not.toHaveTextContent('Gene assertion')
+      expect(screen.queryByTestId('horizontal-grid-context-candidate-tmem67')).not.toBeInTheDocument()
       expect(screen.getByText('rejected')).toBeInTheDocument()
       expect(screen.queryByRole('button', {
         name: 'Reject Legacy candidate label',
@@ -1229,6 +1254,19 @@ describe('CurationWorkspacePage', () => {
       candidates: [envelopeCandidate, workspace.candidates[1]],
       active_candidate_id: 'candidate-accepted',
     })
+    const reviewRows = buildEnvelopeReviewRows()
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([{
+      ...reviewRows,
+      envelope_id: 'envelope-1',
+      envelope_revision: 5,
+      rows: [{
+        ...reviewRows.rows[0],
+        envelope_id: 'envelope-1',
+        envelope_revision: 5,
+        object_id: 'object-1',
+        display_label: 'Accepted candidate',
+      }],
+    }])
     serviceMocks.patchCurationEnvelopeField.mockResolvedValue({
       accepted: true,
       envelope_id: 'envelope-1',

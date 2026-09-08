@@ -563,6 +563,11 @@ function sourceRows({
           `Envelope review row projection does not match candidate '${candidate.candidate_id}'`,
         )
       }
+      if (!envelopeReviewRow.reviewRow) {
+        throw new Error(
+          `Candidate '${candidate.candidate_id}' has an unresolved envelope review row`,
+        )
+      }
 
       return {
         candidate,
