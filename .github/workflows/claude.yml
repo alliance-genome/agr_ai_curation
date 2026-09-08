@@ -38,7 +38,9 @@ jobs:
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', github.event.issue.number) || '' }}
 
       - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@v1
+        # Temporary pin: v1.0.218 fails to install the Claude executable.
+        # https://github.com/anthropics/claude-code-action/issues/1817
+        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           trigger_phrase: "@claude"
