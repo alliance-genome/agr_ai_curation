@@ -13,6 +13,7 @@ from typing import Annotated, Any, Protocol
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from pydantic import Field, RootModel
 
@@ -79,7 +80,7 @@ class BenchmarkSnapshotStore(Protocol):
 
     def put(self, *, digest: str, content: bytes) -> str: ...
 
-    def read(self, *, blob_reference: str) -> bytes: ...
+    def read(self, *, blob_reference: str, max_bytes: int) -> bytes: ...
 
 
 def _digest(content: bytes) -> str:
@@ -107,7 +108,7 @@ class FileSystemBenchmarkSnapshotStore:
         destination = self.root / reference
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if destination.exists():
-            self._verify(destination, digest)
+            self._verify(destination, digest, len(content))
             return reference
         file_descriptor, temporary_name = tempfile.mkstemp(
             dir=destination.parent, prefix=".snapshot-"
@@ -122,25 +123,32 @@ class FileSystemBenchmarkSnapshotStore:
         finally:
             if os.path.exists(temporary_name):
                 os.unlink(temporary_name)
-        self._verify(destination, digest)
+        self._verify(destination, digest, len(content))
         return reference
 
-    def read(self, *, blob_reference: str) -> bytes:
+    def read(self, *, blob_reference: str, max_bytes: int) -> bytes:
+        if max_bytes < 1:
+            raise BenchmarkSnapshotError("Snapshot read limit is invalid")
         path = (self.root / blob_reference).resolve(strict=False)
         if not path.is_relative_to(self.root):
             raise BenchmarkSnapshotError("Snapshot blob reference is invalid")
         try:
-            return path.read_bytes()
+            with path.open("rb") as stream:
+                content = stream.read(max_bytes + 1)
         except OSError as exc:
             raise BenchmarkSnapshotError("Snapshot content is unavailable") from exc
+        if len(content) > max_bytes:
+            raise BenchmarkSnapshotError("Snapshot content exceeds read limit")
+        return content
 
     @staticmethod
-    def _verify(path: Path, digest: str) -> None:
+    def _verify(path: Path, digest: str, content_bytes: int) -> None:
         try:
-            content = path.read_bytes()
+            with path.open("rb") as stream:
+                content = stream.read(content_bytes + 1)
         except OSError as exc:
             raise BenchmarkSnapshotError("Snapshot content is unavailable") from exc
-        if _digest(content) != digest:
+        if len(content) != content_bytes or _digest(content) != digest:
             raise BenchmarkSnapshotError("Stored snapshot failed digest verification")
 
 
@@ -235,7 +243,7 @@ class S3BenchmarkSnapshotStore:
                 "Stored snapshot failed metadata verification"
             )
         reference = self._reference(key, version_id)
-        if _digest(self.read(blob_reference=reference)) != digest:
+        if _digest(self.read(blob_reference=reference, max_bytes=content_bytes)) != digest:
             raise BenchmarkSnapshotError("Stored snapshot failed digest verification")
         return reference
 
@@ -264,17 +272,29 @@ class S3BenchmarkSnapshotStore:
     def _reference(self, key: str, version_id: str) -> str:
         return f"s3://{self.bucket}/{key}?versionId={version_id}"
 
-    def read(self, *, blob_reference: str) -> bytes:
+    def read(self, *, blob_reference: str, max_bytes: int) -> bytes:
+        if max_bytes < 1:
+            raise BenchmarkSnapshotError("Snapshot read limit is invalid")
         prefix = f"s3://{self.bucket}/"
         if not blob_reference.startswith(prefix) or "?versionId=" not in blob_reference:
             raise BenchmarkSnapshotError("Snapshot blob reference is invalid")
         key_and_version = blob_reference[len(prefix) :]
         key, version_id = key_and_version.rsplit("?versionId=", 1)
         version_id = self._version_id({"VersionId": version_id})
-        response = self.client.get_object(
-            Bucket=self.bucket, Key=key, VersionId=version_id
-        )
-        return response["Body"].read()
+        try:
+            response = self.client.get_object(
+                Bucket=self.bucket, Key=key, VersionId=version_id
+            )
+            body = response["Body"]
+            try:
+                content = body.read(max_bytes + 1)
+            finally:
+                body.close()
+        except Exception:
+            raise BenchmarkSnapshotError("Snapshot content is unavailable") from None
+        if len(content) > max_bytes:
+            raise BenchmarkSnapshotError("Snapshot content exceeds read limit")
+        return content
 
 
 def configured_benchmark_snapshot_store() -> BenchmarkSnapshotStore:
@@ -315,20 +335,19 @@ class BenchmarkSnapshotRepository:
         content = source.content.encode("utf-8")
         if len(content) != source.metadata.content_bytes or _digest(content) != source.digest:
             raise BenchmarkSnapshotError("Materialized input failed snapshot verification")
-        existing = self.session.scalar(
-            select(BenchmarkInputSnapshot).where(
-                BenchmarkInputSnapshot.owner_subject == owner_subject,
-                BenchmarkInputSnapshot.resolver_id == source.resolver,
-                BenchmarkInputSnapshot.source_reference == source.reference,
-                BenchmarkInputSnapshot.source_version == source.version,
-                BenchmarkInputSnapshot.digest == source.digest,
-            )
+        identity = select(BenchmarkInputSnapshot).where(
+            BenchmarkInputSnapshot.owner_subject == owner_subject,
+            BenchmarkInputSnapshot.resolver_id == source.resolver,
+            BenchmarkInputSnapshot.source_reference == source.reference,
+            BenchmarkInputSnapshot.source_version == source.version,
+            BenchmarkInputSnapshot.digest == source.digest,
         )
+        existing = self.session.scalar(identity)
         if existing is not None:
             self.read_verified(existing.id, owner_subject=owner_subject)
             return existing
         blob_reference = self.store.put(digest=source.digest, content=content)
-        snapshot = BenchmarkInputSnapshot(
+        values = dict(
             id=uuid4(),
             digest=source.digest,
             source_version=source.version,
@@ -341,8 +360,18 @@ class BenchmarkSnapshotRepository:
             service_principal=service_principal,
             blob_reference=blob_reference,
         )
-        self.session.add(snapshot)
-        self.session.flush()
+        snapshot = self.session.scalar(
+            insert(BenchmarkInputSnapshot).values(**values).on_conflict_do_nothing(
+                constraint="uq_benchmark_snapshot_owner_source_version_digest",
+            ).returning(BenchmarkInputSnapshot)
+        )
+        if snapshot is None:
+            # Different experiments may freeze the same paper concurrently.
+            # Keep the winning immutable receipt/provenance, never overwrite it.
+            snapshot = self.session.scalar(identity)
+            if snapshot is None:
+                raise BenchmarkSnapshotError("Concurrent snapshot receipt is unavailable")
+            self.read_verified(snapshot.id, owner_subject=owner_subject)
         return snapshot
 
     def freeze_plan(
@@ -364,7 +393,9 @@ class BenchmarkSnapshotRepository:
             snapshots[case.case_id] = snapshot.id
         return snapshots
 
-    def read_verified(self, snapshot_id: UUID, *, owner_subject: str) -> bytes:
+    def read_verified(
+        self, snapshot_id: UUID, *, owner_subject: str, max_bytes: int | None = None,
+    ) -> bytes:
         snapshot = self.session.scalar(
             select(BenchmarkInputSnapshot).where(
                 BenchmarkInputSnapshot.id == snapshot_id,
@@ -373,7 +404,13 @@ class BenchmarkSnapshotRepository:
         )
         if snapshot is None:
             raise BenchmarkSnapshotError("Snapshot is unavailable")
-        content = self.store.read(blob_reference=snapshot.blob_reference)
+        if max_bytes is not None and snapshot.content_bytes > max_bytes:
+            raise BenchmarkSnapshotError("Snapshot content exceeds read limit")
+        # Bound allocation even for corrupt storage objects. Existing callers
+        # use the immutable recorded byte length; transfers may set a lower cap.
+        content = self.store.read(
+            blob_reference=snapshot.blob_reference, max_bytes=snapshot.content_bytes,
+        )
         if len(content) != snapshot.content_bytes or _digest(content) != snapshot.digest:
             raise BenchmarkSnapshotError("Stored snapshot failed integrity verification")
         return content
@@ -438,9 +475,13 @@ class FrozenBenchmarkSnapshotResolver:
                 raise BenchmarkSourceError(
                     "missing_source", "Frozen benchmark input was not found"
                 )
+            if snapshot.content_bytes > max_bytes:
+                raise BenchmarkSourceError(
+                    "oversize_payload", "Benchmark input exceeds the materialization limit"
+                )
             content_bytes = BenchmarkSnapshotRepository(
                 session, configured_benchmark_snapshot_store()
-            ).read_verified(snapshot.id, owner_subject=owner_subject)
+            ).read_verified(snapshot.id, owner_subject=owner_subject, max_bytes=max_bytes)
             if len(content_bytes) > max_bytes:
                 raise BenchmarkSourceError(
                     "oversize_payload", "Benchmark input exceeds the materialization limit"

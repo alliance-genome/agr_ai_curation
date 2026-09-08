@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -702,6 +703,7 @@ class UploadExecutionService:
                 raise _ProviderMainMarkdownAccessDenied(str(exc)) from exc
             if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                 raise PDFCancellationError("Processing cancelled by user request")
+            converted_artifact_sha256 = hashlib.sha256(markdown_bytes).hexdigest()
             markdown = markdown_bytes.decode("utf-8")
             figure_metadata_artifact_ids = await _figure_metadata_artifact_ids_for_markdown_request(
                 provider=provider,
@@ -730,7 +732,11 @@ class UploadExecutionService:
                     user_id=request.user_id,
                     document_owner_user_id=request.owner_user_id,
                     markdown=markdown,
-                    source_provenance=request.source_provenance,
+                    source_provenance={
+                        **request.source_provenance,
+                        "converted_artifact_id": request.converted_artifact_id,
+                        "converted_artifact_sha256": converted_artifact_sha256,
+                    },
                     filename=request.filename,
                     provider_figure_metadata=figure_metadata_entries,
                 ),
@@ -929,6 +935,7 @@ class UploadExecutionService:
                     "Cannot persist provider source-import failure for missing document"
                 )
             document.source_import_status = "failed"
+            document.source_converted_artifact_sha256 = None
             session.commit()
         except Exception:
             session.rollback()
@@ -1153,6 +1160,8 @@ class UploadExecutionService:
                 document.source_provider_converted_artifact_id = source_provenance.get(
                     "converted_artifact_id"
                 )
+                # A selected replacement has no captured byte identity until ingested.
+                document.source_converted_artifact_sha256 = None
                 document.source_file_class = source_provenance.get("file_class")
                 document.source_file_extension = source_provenance.get("file_extension")
                 document.source_artifact_status = source_provenance.get("artifact_status")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,6 +17,8 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
+    Numeric,
     String,
     UniqueConstraint,
     func,
@@ -130,6 +133,9 @@ class BenchmarkJob(Base):
     suite_id: Mapped[str] = mapped_column(String(128), nullable=False)
     suite_specification: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     resolved_plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # NULL identifies historical jobs whose human execution identity is unknown.
+    # New jobs must supply this at insertion; the migration enforces immutability.
+    curator_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     suite_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     catalog_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     plan_digest: Mapped[str] = mapped_column(String(71), nullable=False)
@@ -178,6 +184,10 @@ class BenchmarkJob(Base):
         CheckConstraint(
             "jsonb_typeof(resolved_plan) = 'object'",
             name="ck_benchmark_jobs_plan_object",
+        ),
+        CheckConstraint(
+            "curator_context IS NULL OR jsonb_typeof(curator_context) = 'object'",
+            name="ck_benchmark_jobs_curator_context_object",
         ),
         CheckConstraint(
             "total_cells > 0 AND queued_cells >= 0 AND running_cells >= 0 "
@@ -280,6 +290,9 @@ class BenchmarkCell(Base):
     lease_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     generated_envelope: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     envelope_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    envelope_digest: Mapped[str | None] = mapped_column(String(71))
+    result_digest: Mapped[str | None] = mapped_column(String(71))
+    result_artifact: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     failure: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     job: Mapped[BenchmarkJob] = relationship(back_populates="cells")
@@ -289,6 +302,10 @@ class BenchmarkCell(Base):
 
     __table_args__ = (
         UniqueConstraint("id", "job_id", name="uq_benchmark_cells_id_job"),
+        CheckConstraint(
+            "result_artifact IS NULL OR (status = 'succeeded' AND result_digest IS NOT NULL)",
+            name="ck_benchmark_cells_result_artifact",
+        ),
         UniqueConstraint("job_id", "cell_key", name="uq_benchmark_cells_job_key"),
         UniqueConstraint("job_id", "position", name="uq_benchmark_cells_job_position"),
         ForeignKeyConstraint(
@@ -314,6 +331,11 @@ class BenchmarkCell(Base):
         CheckConstraint(
             "failure IS NULL OR jsonb_typeof(failure) = 'object'",
             name="ck_benchmark_cells_failure_object",
+        ),
+        CheckConstraint(
+            "(envelope_digest IS NULL OR envelope_digest ~ '^sha256:[0-9a-f]{64}$') "
+            "AND (result_digest IS NULL OR result_digest ~ '^sha256:[0-9a-f]{64}$')",
+            name="ck_benchmark_cells_result_digests",
         ),
         Index("ix_benchmark_cells_job_page", "job_id", "position", "id"),
         Index(
@@ -351,6 +373,20 @@ class BenchmarkInvocation(Base):
     route_slot: Mapped[str] = mapped_column(String(255), nullable=False)
     request_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     response_digest: Mapped[str | None] = mapped_column(String(71))
+    requested_provider: Mapped[str | None] = mapped_column(String(64))
+    requested_model: Mapped[str | None] = mapped_column(String(255))
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16))
+    actual_provider: Mapped[str | None] = mapped_column(String(64))
+    actual_model: Mapped[str | None] = mapped_column(String(255))
+    routing_attempt: Mapped[int | None] = mapped_column(Integer)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    billed_amount: Mapped[Decimal | None] = mapped_column(Numeric(), nullable=True)
+    billed_unit: Mapped[str | None] = mapped_column(String(32))
+    billed_source: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[BenchmarkInvocationStatus] = mapped_column(
         _status_enum(
             BenchmarkInvocationStatus, "ck_benchmark_invocations_status_values"
@@ -366,6 +402,21 @@ class BenchmarkInvocation(Base):
     __table_args__ = (
         UniqueConstraint("cell_id", "ordinal", name="uq_benchmark_invocations_cell_ordinal"),
         CheckConstraint("ordinal >= 0 AND attempt >= 1", name="ck_benchmark_invocations_order"),
+        CheckConstraint(
+            "sequence >= 1 AND (routing_attempt IS NULL OR routing_attempt >= 0) "
+            "AND (latency_ms IS NULL OR latency_ms >= 0) "
+            "AND (input_tokens IS NULL OR input_tokens >= 0) "
+            "AND (output_tokens IS NULL OR output_tokens >= 0) "
+            "AND (total_tokens IS NULL OR total_tokens >= 0) "
+            "AND (billed_amount IS NULL OR billed_amount >= 0)",
+            name="ck_benchmark_invocations_telemetry_values",
+        ),
+        CheckConstraint(
+            "(billed_amount IS NULL AND billed_unit IS NULL AND billed_source IS NULL) OR "
+            "(billed_amount IS NOT NULL AND billed_unit IS NOT NULL "
+            "AND billed_source IS NOT NULL)",
+            name="ck_benchmark_invocations_billed_cost",
+        ),
         CheckConstraint(
             "failure IS NULL OR jsonb_typeof(failure) = 'object'",
             name="ck_benchmark_invocations_failure_object",
@@ -400,4 +451,62 @@ class BenchmarkEvent(Base):
         CheckConstraint("char_length(event_type) > 0", name="ck_benchmark_events_type"),
         CheckConstraint("jsonb_typeof(payload) = 'object'", name="ck_benchmark_events_payload_object"),
         Index("ix_benchmark_events_replay", "job_id", "sequence", "id"),
+    )
+
+
+class BenchmarkJobIdempotency(Base):
+    """Immutable caller key reservation for one job-creation operation."""
+
+    __tablename__ = "benchmark_job_idempotency"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    owner_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    curator_context_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    job_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("benchmark_jobs.id", ondelete="SET NULL"),
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(512))
+    error_status: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_subject",
+            "operation",
+            "idempotency_key",
+            name="uq_benchmark_job_idempotency_owner_operation_key",
+        ),
+        CheckConstraint(
+            "operation IN ('submit', 'rerun')",
+            name="ck_benchmark_job_idempotency_operation",
+        ),
+        CheckConstraint(
+            "outcome IN ('pending', 'accepted', 'failed')",
+            name="ck_benchmark_job_idempotency_outcome",
+        ),
+        CheckConstraint(
+            "request_digest ~ '^sha256:[0-9a-f]{64}$' AND "
+            "curator_context_digest ~ '^sha256:[0-9a-f]{64}$'",
+            name="ck_benchmark_job_idempotency_digests",
+        ),
+        CheckConstraint(
+            "(outcome = 'pending' AND job_id IS NULL AND error_code IS NULL "
+            "AND error_message IS NULL AND error_status IS NULL) OR "
+            "(outcome = 'accepted' AND error_code IS NULL "
+            "AND error_message IS NULL AND error_status IS NULL) OR "
+            "(outcome = 'failed' AND job_id IS NULL AND error_code IS NOT NULL "
+            "AND error_message IS NOT NULL AND error_status BETWEEN 400 AND 599)",
+            name="ck_benchmark_job_idempotency_result",
+        ),
+        Index("ix_benchmark_job_idempotency_job", "job_id"),
     )

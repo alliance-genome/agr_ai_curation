@@ -388,6 +388,9 @@ async def cleanup_phantom_documents(user: dict[str, Any]) -> int:
                 return 0  # No documents to check
 
             pg_doc_ids = {str(doc.id) for doc in pg_docs}
+            benchmark_doc_ids = {
+                str(doc.id) for doc in pg_docs if doc.viewer_mode == "benchmark_frozen"
+            }
             logger.info('[Phantom Check] Found %s documents in PostgreSQL', len(pg_doc_ids))
 
             # Step 3: Get all document IDs from Weaviate for this user's tenant
@@ -417,7 +420,9 @@ async def cleanup_phantom_documents(user: dict[str, Any]) -> int:
             # Step 4: Find inconsistencies in both directions
             # Phantom = in PostgreSQL but NOT in Weaviate (user can't see their doc)
             # Orphan = in Weaviate but NOT in PostgreSQL (leftover data)
-            phantom_ids = pg_doc_ids - weaviate_doc_ids
+            # Preparation deliberately creates SQL before vectors. Its journal
+            # owns partial-state cleanup, not the curator library's repair pass.
+            phantom_ids = pg_doc_ids - weaviate_doc_ids - benchmark_doc_ids
             orphan_ids = weaviate_doc_ids - pg_doc_ids
 
             if not phantom_ids and not orphan_ids:

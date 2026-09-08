@@ -294,17 +294,17 @@ export function PdfViewerChrome({
                 </Tooltip>
                 <Typography
                   variant="body2"
-                  color="text.secondary"
                   sx={{
+                    color: "text.secondary",
                     minWidth: 72,
                     textAlign: 'center',
+
                     ...(isCurationVariant && {
                       color: alpha(theme.palette.common.white, 0.82),
                       fontVariantNumeric: 'tabular-nums',
                       fontWeight: 700,
-                    }),
-                  }}
-                >
+                    })
+                  }}>
                   {currentPage} / {activeDocument.pageCount}
                 </Typography>
                 <Tooltip title="Next page">
@@ -336,17 +336,17 @@ export function PdfViewerChrome({
                 </Tooltip>
                 <Typography
                   variant="body2"
-                  color="text.secondary"
                   sx={{
+                    color: "text.secondary",
                     minWidth: 48,
                     textAlign: 'center',
+
                     ...(isCurationVariant && {
                       color: alpha(theme.palette.common.white, 0.82),
                       fontVariantNumeric: 'tabular-nums',
                       fontWeight: 700,
-                    }),
-                  }}
-                >
+                    })
+                  }}>
                   {zoomLevel}%
                 </Typography>
                 <Tooltip title="Zoom in">
@@ -521,7 +521,9 @@ export function PdfViewerChrome({
             {uploadInFlight && (
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 2 }}>
                 <CircularProgress size={16} />
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" sx={{
+                  color: "text.secondary"
+                }}>
                   Upload in progress...
                 </Typography>
               </Stack>
@@ -565,7 +567,9 @@ export function PdfViewerChrome({
           >
             <Stack spacing={2} sx={{ alignItems: 'center' }}>
               <CircularProgress color="inherit" size={48} />
-              <Typography variant="body2" color="inherit">
+              <Typography variant="body2" sx={{
+                color: "inherit"
+              }}>
                 Loading PDF...
               </Typography>
             </Stack>

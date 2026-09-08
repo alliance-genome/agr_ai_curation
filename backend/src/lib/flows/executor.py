@@ -32,6 +32,8 @@ from uuid import uuid4
 
 from agents import Agent, RunContextWrapper, function_tool
 from sqlalchemy.orm import Session
+from src.lib.curation_workspace.execution_provenance import capture_source_document
+from src.schemas.execution_provenance import ExtractionExecutionContext
 from src.lib.context import (
     get_current_flow_output_attachment,
     get_current_run_config,
@@ -80,6 +82,7 @@ from src.lib.domain_packs.validation_registry import (
     ValidationBindingState,
     ValidatorBindingMatch,
 )
+from src.lib.flows.persisted_flow_migrations import migrate_persisted_flow_definition
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorDispatchJob,
@@ -2692,6 +2695,17 @@ def get_all_agent_tools(
                 document_id=document_id,
                 document_name=document_name,
             )
+            execution_context = ExtractionExecutionContext(
+                captured_at=datetime.now(timezone.utc),
+                source_kind="flow",
+                flow_id=str(flow.id),
+                step_id=node_id,
+                agent_key=agent_id,
+                executed_query=resolved_query,
+                document=await asyncio.to_thread(
+                    capture_source_document, document_id, user_id
+                ),
+            )
             output_filename_descriptor = _resolve_output_filename_descriptor(
                 output_filename_template=node_data.get("output_filename_template"),
                 template_variables=template_variables,
@@ -2812,6 +2826,7 @@ def get_all_agent_tools(
                         "flow_name": flow.name,
                         "step": step_number,
                         "agent_name": agent_name,
+                        "execution_context": execution_context.model_dump(mode="json"),
                         **({"document_name": document_name} if document_name else {}),
                         **validation_schedule_metadata,
                     },
@@ -4289,6 +4304,24 @@ async def execute_flow(
         dict: Streaming events - FLOW_STARTED, then all regular chat events
               (RUN_STARTED, SUPERVISOR_START, TOOL_START, etc.), then FLOW_FINISHED
     """
+    persisted_migration = migrate_persisted_flow_definition(
+        flow.flow_definition or {}
+    )
+    if persisted_migration.changed:
+        logger.info(
+            "Applying persisted flow migration in memory for execution: flow_id=%s, "
+            "removed_attachment_count=%s",
+            flow.id,
+            len(persisted_migration.removed_attachment_ids),
+        )
+        flow = cast(
+            CurationFlow,
+            SimpleNamespace(
+                id=flow.id,
+                name=flow.name,
+                flow_definition=persisted_migration.definition,
+            ),
+        )
     logger.info(
         f"[Flow Executor] Starting flow: '{flow.name}', "
         f"user_id={user_id}, session_id={session_id}"

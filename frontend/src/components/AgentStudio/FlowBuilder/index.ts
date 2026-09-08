@@ -7,9 +7,7 @@
 export { default as FlowBuilder } from './FlowBuilder'
 export { default as FlowNode } from './FlowNode'
 export { default as AgentPalette } from './AgentPalette'
-export { default as NodeEditor } from './NodeEditor'
-export { default as PromptViewer } from './PromptViewer'
-export { default as DomainEnvelopeViewer } from './DomainEnvelopeViewer'
+export { NodePanel, NodePanelDock } from './NodePanel'
 
 // Re-export types
 export type {
@@ -39,7 +37,7 @@ export type {
   FlowState,
   AgentPaletteProps,
   FlowNodeProps,
-  NodeEditorProps,
+  AgentBrowserRequest,
   // Validation types
   ValidationError,
   ValidationResult,

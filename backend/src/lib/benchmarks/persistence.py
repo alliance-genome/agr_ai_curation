@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any, Generic, TypeVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, delete, func, or_, select, text
+from sqlalchemy import case, delete, func, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from src.lib.benchmarks.models import BenchmarkSuite, ResolvedBenchmarkPlan
+from src.lib.benchmarks.models import BenchmarkCellExecutionResult, BenchmarkSuite, ResolvedBenchmarkPlan
+from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
+    get_benchmark_event_retention_count,
     get_benchmark_max_envelope_bytes,
+    get_benchmark_max_result_artifact_bytes,
     get_benchmark_max_page_size,
 )
 from src.models.sql.benchmark import (
@@ -26,6 +32,7 @@ from src.models.sql.benchmark import (
     BenchmarkInvocation,
     BenchmarkInvocationStatus,
     BenchmarkJob,
+    BenchmarkJobIdempotency,
     BenchmarkJobInputSnapshot,
     BenchmarkJobStatus,
 )
@@ -64,7 +71,12 @@ class BenchmarkJobSummary:
     owner_subject: str
     status: BenchmarkJobStatus
     suite_id: str
+    suite_digest: str
+    catalog_digest: str
     plan_digest: str
+    config_digest: str
+    code_digest: str
+    inputs_digest: str
     total_cells: int
     queued_cells: int
     running_cells: int
@@ -113,6 +125,7 @@ class BenchmarkCellSummary:
 @dataclass(frozen=True)
 class BenchmarkCellDetail:
     summary: BenchmarkCellSummary
+    attempt_count: int
     target_kind: str
     target_id: str
     routes: dict[str, Any]
@@ -121,6 +134,8 @@ class BenchmarkCellDetail:
     input_version: str
     generated_envelope: dict[str, Any] | None
     envelope_size_bytes: int | None
+    envelope_digest: str | None
+    result_digest: str | None
     failure: dict[str, Any] | None
 
 
@@ -137,13 +152,54 @@ def _page_size(limit: int | None) -> int:
     return min(requested, get_benchmark_max_page_size())
 
 
+def canonical_digest(value: Any) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+class BenchmarkResultArtifactError(ValueError):
+    """Content-free artifact retrieval failure with a stable public code."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True)
+class BenchmarkResultArtifact:
+    job_id: UUID
+    cell_id: UUID
+    attempt_count: int
+    digest: str
+    content: bytes
+
+
+class BenchmarkLeaseLostError(RuntimeError):
+    """A stale worker attempted to publish after losing its durable lease."""
+
+
+class BenchmarkCancellationRequestedError(RuntimeError):
+    """A worker reached provider dispatch after its job was cancelled."""
+
+
+class BenchmarkIdempotencyConflictError(ValueError):
+    """A caller reused one operation key for different immutable work."""
+
+
 def _job_summary(job: BenchmarkJob) -> BenchmarkJobSummary:
     return BenchmarkJobSummary(
         id=job.id,
         owner_subject=job.owner_subject,
         status=job.status,
         suite_id=job.suite_id,
+        suite_digest=job.suite_digest,
+        catalog_digest=job.catalog_digest,
         plan_digest=job.plan_digest,
+        config_digest=job.config_digest,
+        code_digest=job.code_digest,
+        inputs_digest=job.inputs_digest,
         total_cells=job.total_cells,
         queued_cells=job.queued_cells,
         running_cells=job.running_cells,
@@ -186,6 +242,7 @@ class BenchmarkRepository:
         *,
         owner_subject: str,
         suite: BenchmarkSuite,
+        curator_context: BenchmarkCuratorContext,
         plan: ResolvedBenchmarkPlan,
         config_digest: str,
         code_digest: str,
@@ -193,7 +250,14 @@ class BenchmarkRepository:
         snapshot_ids_by_case: Mapping[str, UUID],
         rerun_of_job_id: UUID | None = None,
     ) -> BenchmarkJob:
-        """Persist a frozen plan and all cells in one caller-owned transaction."""
+        """Persist a frozen plan and trusted context in one transaction.
+
+        The admission layer must authenticate the curator and authorize the
+        operation before calling this internal repository, including reruns.
+        A typed context alone is not proof of authentication.
+        """
+        if not isinstance(curator_context, BenchmarkCuratorContext):
+            raise ValueError("verified curator context is required for new jobs")
         if not owner_subject:
             raise ValueError("benchmark owner subject is required")
         if not plan.cells:
@@ -201,6 +265,15 @@ class BenchmarkRepository:
         if suite.suite_id != plan.suite_id:
             raise ValueError("suite and resolved plan IDs differ")
         case_ids = {case.case_id for case in plan.cases}
+        suite_queries = {case.case_id: case.user_query for case in suite.cases}
+        for planned_case in plan.cases:
+            if planned_case.user_query != suite_queries.get(planned_case.case_id):
+                raise ValueError("resolved case query differs from suite")
+            if planned_case.target.kind == "agent" and not (planned_case.user_query or "").strip():
+                raise ValueError("agent benchmark cases require an explicit curator query")
+        for cell in plan.cells:
+            if cell.user_query != suite_queries.get(cell.case_id):
+                raise ValueError("resolved cell query differs from suite")
         if set(snapshot_ids_by_case) != case_ids:
             raise ValueError("every plan case must reference exactly one frozen snapshot")
         snapshots = {
@@ -255,6 +328,7 @@ class BenchmarkRepository:
             suite_id=suite.suite_id,
             suite_specification=suite.model_dump(mode="json"),
             resolved_plan=plan.model_dump(mode="json"),
+            curator_context=curator_context.model_dump(mode="json"),
             suite_digest=plan.suite_digest,
             catalog_digest=plan.catalog_digest,
             plan_digest=plan.plan_digest,
@@ -307,6 +381,88 @@ class BenchmarkRepository:
             )
         self.session.flush()
         return job
+
+    def reserve_idempotency(
+        self,
+        *,
+        owner_subject: str,
+        operation: str,
+        idempotency_key: str,
+        request_digest: str,
+        curator_context_digest: str,
+    ) -> tuple[BenchmarkJobIdempotency, bool]:
+        """Atomically reserve a key or lock and return its completed outcome."""
+
+        if operation not in {"submit", "rerun"}:
+            raise ValueError("unsupported benchmark idempotency operation")
+        inserted_id = self.session.scalar(
+            insert(BenchmarkJobIdempotency)
+            .values(
+                id=uuid4(),
+                owner_subject=owner_subject,
+                operation=operation,
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+                curator_context_digest=curator_context_digest,
+                outcome="pending",
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_benchmark_job_idempotency_owner_operation_key"
+            )
+            .returning(BenchmarkJobIdempotency.id)
+        )
+        if inserted_id is not None:
+            record = self.session.get(BenchmarkJobIdempotency, inserted_id)
+            if record is None:
+                raise RuntimeError("benchmark idempotency reservation disappeared")
+            return record, True
+
+        record = self.session.scalar(
+            select(BenchmarkJobIdempotency)
+            .where(
+                BenchmarkJobIdempotency.owner_subject == owner_subject,
+                BenchmarkJobIdempotency.operation == operation,
+                BenchmarkJobIdempotency.idempotency_key == idempotency_key,
+            )
+            .with_for_update()
+        )
+        if record is None:
+            raise RuntimeError("benchmark idempotency reservation is unavailable")
+        if (
+            record.request_digest != request_digest
+            or record.curator_context_digest != curator_context_digest
+        ):
+            raise BenchmarkIdempotencyConflictError(
+                "Idempotency key is already bound to a different request or curator context"
+            )
+        if record.outcome == "pending":
+            raise RuntimeError("benchmark idempotency reservation has no durable outcome")
+        return record, False
+
+    def accept_idempotency(
+        self, *, reservation: BenchmarkJobIdempotency, job_id: UUID
+    ) -> None:
+        if reservation.outcome != "pending":
+            raise ValueError("benchmark idempotency reservation is already complete")
+        reservation.outcome = "accepted"
+        reservation.job_id = job_id
+        self.session.flush()
+
+    def fail_idempotency(
+        self,
+        *,
+        reservation: BenchmarkJobIdempotency,
+        error_code: str,
+        error_message: str,
+        error_status: int,
+    ) -> None:
+        if reservation.outcome != "pending":
+            raise ValueError("benchmark idempotency reservation is already complete")
+        reservation.outcome = "failed"
+        reservation.error_code = error_code
+        reservation.error_message = error_message
+        reservation.error_status = error_status
+        self.session.flush()
 
     def list_jobs(
         self,
@@ -416,6 +572,7 @@ class BenchmarkRepository:
             return None
         return BenchmarkCellDetail(
             summary=_cell_summary(cell),
+            attempt_count=cell.attempt_count,
             target_kind=cell.target_kind,
             target_id=cell.target_id,
             routes=cell.routes,
@@ -424,7 +581,47 @@ class BenchmarkRepository:
             input_version=cell.input_version,
             generated_envelope=cell.generated_envelope,
             envelope_size_bytes=cell.envelope_size_bytes,
+            envelope_digest=cell.envelope_digest,
+            result_digest=cell.result_digest,
             failure=cell.failure,
+        )
+
+    def get_result_artifact(
+        self, *, cell_id: UUID, job_id: UUID, owner_subject: str
+    ) -> BenchmarkResultArtifact:
+        self._owned_job(job_id, owner_subject)
+        limit = get_benchmark_max_result_artifact_bytes()
+        size = func.octet_length(BenchmarkCell.result_artifact)
+        # CASE bounds the returned content in the database, before the driver
+        # allocates it. The deferred column stays unloaded in ordinary ORM reads.
+        row = self.session.execute(
+            select(
+                BenchmarkCell.status,
+                BenchmarkCell.attempt_count,
+                BenchmarkCell.result_digest,
+                size.label("artifact_size"),
+                case(
+                    (size <= limit, BenchmarkCell.result_artifact), else_=None
+                ).label("content"),
+            ).where(BenchmarkCell.id == cell_id, BenchmarkCell.job_id == job_id)
+        ).one_or_none()
+        if row is None:
+            raise LookupError("benchmark cell not found")
+        if row.status not in _TERMINAL_CELL_STATUSES:
+            raise BenchmarkResultArtifactError("result_not_terminal")
+        if row.artifact_size is None:
+            raise BenchmarkResultArtifactError("result_artifact_unavailable")
+        if row.artifact_size > limit:
+            raise BenchmarkResultArtifactError("result_artifact_oversize")
+        content = bytes(row.content)
+        if (
+            row.status != BenchmarkCellStatus.SUCCEEDED
+            or row.result_digest != f"sha256:{hashlib.sha256(content).hexdigest()}"
+        ):
+            raise BenchmarkResultArtifactError("result_artifact_corrupt")
+        return BenchmarkResultArtifact(
+            job_id=job_id, cell_id=cell_id, attempt_count=row.attempt_count,
+            digest=row.result_digest, content=content,
         )
 
     def claim_next_job(
@@ -474,20 +671,25 @@ class BenchmarkRepository:
         now: datetime | None = None,
     ) -> BenchmarkCell | None:
         current = now or datetime.now(timezone.utc)
+        job = self.session.scalar(
+            select(BenchmarkJob)
+            .where(
+                BenchmarkJob.id == job_id,
+                BenchmarkJob.status == BenchmarkJobStatus.RUNNING,
+                BenchmarkJob.lease_owner == lease_owner,
+                BenchmarkJob.lease_expires_at > current,
+            )
+            .with_for_update()
+        )
+        if job is None:
+            raise BenchmarkLeaseLostError("benchmark job lease is no longer owned")
         cell = self.session.scalar(
             select(BenchmarkCell)
             .where(
                 BenchmarkCell.job_id == job_id,
-                or_(
-                    BenchmarkCell.status == BenchmarkCellStatus.QUEUED,
-                    (
-                        BenchmarkCell.status == BenchmarkCellStatus.RUNNING
-                    )
-                    & (BenchmarkCell.lease_expires_at < current),
-                ),
+                BenchmarkCell.status == BenchmarkCellStatus.QUEUED,
             )
             .order_by(
-                case((BenchmarkCell.status == BenchmarkCellStatus.QUEUED, 0), else_=1),
                 BenchmarkCell.position,
                 BenchmarkCell.id,
             )
@@ -506,24 +708,165 @@ class BenchmarkRepository:
         self._refresh_job_counters(job_id)
         return cell
 
+    def recover_expired_cells(self, *, now: datetime | None = None) -> tuple[UUID, ...]:
+        """Atomically fail expired paid work without making it claimable again."""
+
+        current = now or datetime.now(timezone.utc)
+        candidate_job_ids = tuple(
+            self.session.scalars(
+                select(BenchmarkCell.job_id)
+                .where(
+                    BenchmarkCell.status == BenchmarkCellStatus.RUNNING,
+                    or_(
+                        BenchmarkCell.lease_expires_at.is_(None),
+                        BenchmarkCell.lease_expires_at <= current,
+                    ),
+                )
+                .distinct()
+                .order_by(BenchmarkCell.job_id)
+            )
+        )
+        if not candidate_job_ids:
+            return ()
+        tuple(
+            self.session.scalars(
+                select(BenchmarkJob)
+                .where(BenchmarkJob.id.in_(candidate_job_ids))
+                .order_by(BenchmarkJob.id)
+                .with_for_update()
+            )
+        )
+        cells = tuple(
+            self.session.scalars(
+                select(BenchmarkCell)
+                .where(
+                    BenchmarkCell.job_id.in_(candidate_job_ids),
+                    BenchmarkCell.status == BenchmarkCellStatus.RUNNING,
+                    or_(
+                        BenchmarkCell.lease_expires_at.is_(None),
+                        BenchmarkCell.lease_expires_at <= current,
+                    ),
+                )
+                .order_by(BenchmarkCell.job_id, BenchmarkCell.position)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        affected_jobs: set[UUID] = set()
+        failure = {"category": "interrupted_uncertain", "retryable": False}
+        for cell in cells:
+            self.session.execute(
+                update(BenchmarkInvocation)
+                .where(
+                    BenchmarkInvocation.cell_id == cell.id,
+                    BenchmarkInvocation.status == BenchmarkInvocationStatus.RUNNING,
+                )
+                .values(
+                    status=BenchmarkInvocationStatus.FAILED,
+                    completed_at=current,
+                    failure=failure,
+                )
+            )
+            cell.status = BenchmarkCellStatus.FAILED
+            cell.completed_at = current
+            cell.generated_envelope = None
+            cell.envelope_size_bytes = None
+            cell.envelope_digest = None
+            cell.result_digest = None
+            cell.failure = failure
+            cell.lease_owner = None
+            cell.lease_expires_at = None
+            cell.lease_heartbeat_at = None
+            affected_jobs.add(cell.job_id)
+        self.session.flush()
+        for job_id in affected_jobs:
+            self._refresh_job_counters(job_id)
+        return tuple(cell.id for cell in cells)
+
+    def heartbeat_leases(
+        self,
+        *,
+        job_id: UUID,
+        cell_id: UUID,
+        lease_owner: UUID,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> bool:
+        current = now or datetime.now(timezone.utc)
+        expires = current + timedelta(seconds=lease_seconds)
+        job = self.session.scalar(
+            select(BenchmarkJob)
+            .where(
+                BenchmarkJob.id == job_id,
+                BenchmarkJob.status.in_(
+                    (BenchmarkJobStatus.RUNNING, BenchmarkJobStatus.CANCEL_REQUESTED)
+                ),
+                BenchmarkJob.lease_owner == lease_owner,
+                BenchmarkJob.lease_expires_at > current,
+            )
+            .with_for_update()
+        )
+        cell = self.session.scalar(
+            select(BenchmarkCell)
+            .where(
+                BenchmarkCell.id == cell_id,
+                BenchmarkCell.job_id == job_id,
+                BenchmarkCell.status == BenchmarkCellStatus.RUNNING,
+                BenchmarkCell.lease_owner == lease_owner,
+                BenchmarkCell.lease_expires_at > current,
+            )
+            .with_for_update()
+        )
+        if job is None or cell is None:
+            return False
+        job.lease_expires_at = expires
+        job.lease_heartbeat_at = current
+        cell.lease_expires_at = expires
+        cell.lease_heartbeat_at = current
+        self.session.flush()
+        return True
+
     def finish_cell(
         self,
         *,
         cell_id: UUID,
+        lease_owner: UUID,
         status: BenchmarkCellStatus,
         completed_at: datetime,
         generated_envelope: dict[str, Any] | None = None,
+        result: Any | None = None,
         failure: dict[str, Any] | None = None,
+        now: datetime | None = None,
     ) -> BenchmarkCell:
         if status not in _TERMINAL_CELL_STATUSES:
             raise ValueError("finish_cell requires a terminal cell status")
+        current = now or datetime.now(timezone.utc)
+        job = self.session.scalar(
+            select(BenchmarkJob)
+            .join(BenchmarkCell, BenchmarkCell.job_id == BenchmarkJob.id)
+            .where(
+                BenchmarkCell.id == cell_id,
+                BenchmarkJob.status.in_(
+                    (BenchmarkJobStatus.RUNNING, BenchmarkJobStatus.CANCEL_REQUESTED)
+                ),
+                BenchmarkJob.lease_owner == lease_owner,
+                BenchmarkJob.lease_expires_at > current,
+            )
+            .with_for_update(of=BenchmarkJob)
+        )
+        if job is None:
+            raise BenchmarkLeaseLostError("benchmark job lease is no longer owned")
         cell = self.session.scalar(
-            select(BenchmarkCell).where(BenchmarkCell.id == cell_id).with_for_update()
+            select(BenchmarkCell)
+            .where(
+                BenchmarkCell.id == cell_id,
+                BenchmarkCell.status == BenchmarkCellStatus.RUNNING,
+                BenchmarkCell.lease_owner == lease_owner,
+                BenchmarkCell.lease_expires_at > current,
+            )
+            .with_for_update()
         )
         if cell is None:
-            raise LookupError("benchmark cell not found")
-        if cell.status != BenchmarkCellStatus.RUNNING:
-            raise ValueError("only a running benchmark cell may finish")
+            raise BenchmarkLeaseLostError("benchmark cell lease is no longer owned")
         running_invocation = self.session.scalar(
             select(BenchmarkInvocation.id)
             .where(
@@ -539,6 +882,8 @@ class BenchmarkRepository:
         if status == BenchmarkCellStatus.SUCCEEDED:
             if generated_envelope is None:
                 raise ValueError("successful benchmark cell requires an envelope")
+            if result is None:
+                raise ValueError("successful benchmark cell requires a result")
             envelope_size = self.session.scalar(
                 text(
                     "SELECT octet_length("
@@ -551,15 +896,39 @@ class BenchmarkRepository:
                 raise ValueError("generated benchmark envelope exceeds configured byte limit")
         elif generated_envelope is not None:
             raise ValueError("only successful benchmark cells may store envelopes")
+        elif result is not None:
+            raise ValueError("only successful benchmark cells may store result digests")
         if status == BenchmarkCellStatus.FAILED and failure is None:
             raise ValueError("failed benchmark cell requires a failure object")
         if status != BenchmarkCellStatus.FAILED and failure is not None:
             raise ValueError("only failed benchmark cells may store failures")
 
+        artifact = None
+        if result is not None:
+            try:
+                outcome = BenchmarkCellExecutionResult.model_validate(result)
+                if canonical_digest(outcome.output) != canonical_digest(generated_envelope):
+                    raise ValueError("output mismatch")
+            except ValueError:
+                raise ValueError("benchmark result does not match its generated envelope") from None
+            artifact = json.dumps(
+                result, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(artifact) > get_benchmark_max_result_artifact_bytes():
+                raise ValueError("benchmark result artifact exceeds configured byte limit")
+
         cell.status = status
         cell.completed_at = completed_at
         cell.generated_envelope = generated_envelope
         cell.envelope_size_bytes = envelope_size
+        cell.envelope_digest = (
+            canonical_digest(generated_envelope) if generated_envelope is not None else None
+        )
+        cell.result_artifact = artifact
+        cell.result_digest = (
+            f"sha256:{hashlib.sha256(artifact).hexdigest()}" if artifact is not None else None
+        )
         cell.failure = failure
         cell.lease_owner = None
         cell.lease_expires_at = None
@@ -580,21 +949,49 @@ class BenchmarkRepository:
         self,
         *,
         cell_id: UUID,
+        lease_owner: UUID,
         ordinal: int,
         attempt: int,
         route_slot: str,
         request_digest: str,
+        requested_provider: str,
+        requested_model: str,
+        reasoning_effort: str | None,
+        sequence: int,
         started_at: datetime,
+        now: datetime | None = None,
     ) -> BenchmarkInvocation:
+        current = now or datetime.now(timezone.utc)
+        job = self.session.scalar(
+            select(BenchmarkJob)
+            .join(BenchmarkCell, BenchmarkCell.job_id == BenchmarkJob.id)
+            .where(
+                BenchmarkCell.id == cell_id,
+                BenchmarkJob.lease_owner == lease_owner,
+                BenchmarkJob.lease_expires_at > current,
+            )
+            .with_for_update(of=BenchmarkJob)
+        )
+        if job is None:
+            raise BenchmarkLeaseLostError("benchmark job lease is no longer owned")
+        if job.status == BenchmarkJobStatus.CANCEL_REQUESTED:
+            raise BenchmarkCancellationRequestedError(
+                "benchmark cancellation was requested before provider dispatch"
+            )
+        if job.status != BenchmarkJobStatus.RUNNING:
+            raise BenchmarkLeaseLostError("benchmark job is no longer active")
         cell = self.session.scalar(
             select(BenchmarkCell)
-            .where(BenchmarkCell.id == cell_id)
+            .where(
+                BenchmarkCell.id == cell_id,
+                BenchmarkCell.status == BenchmarkCellStatus.RUNNING,
+                BenchmarkCell.lease_owner == lease_owner,
+                BenchmarkCell.lease_expires_at > current,
+            )
             .with_for_update()
         )
         if cell is None:
-            raise LookupError("benchmark cell not found")
-        if cell.status != BenchmarkCellStatus.RUNNING:
-            raise ValueError("benchmark invocations require a running cell")
+            raise BenchmarkLeaseLostError("benchmark cell lease is no longer owned")
         invocation = BenchmarkInvocation(
             id=uuid4(),
             cell_id=cell_id,
@@ -602,6 +999,10 @@ class BenchmarkRepository:
             attempt=attempt,
             route_slot=route_slot,
             request_digest=request_digest,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            reasoning_effort=reasoning_effort,
+            sequence=sequence,
             status=BenchmarkInvocationStatus.RUNNING,
             started_at=started_at,
         )
@@ -613,13 +1014,26 @@ class BenchmarkRepository:
         self,
         *,
         invocation_id: UUID,
+        lease_owner: UUID,
         status: BenchmarkInvocationStatus,
         completed_at: datetime,
         response_digest: str | None = None,
+        actual_provider: str | None = None,
+        actual_model: str | None = None,
+        routing_attempt: int | None = None,
+        latency_ms: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+        billed_amount: Decimal | None = None,
+        billed_unit: str | None = None,
+        billed_source: str | None = None,
         failure: dict[str, Any] | None = None,
+        now: datetime | None = None,
     ) -> BenchmarkInvocation:
         if status == BenchmarkInvocationStatus.RUNNING:
             raise ValueError("finish_invocation requires a terminal status")
+        current = now or datetime.now(timezone.utc)
         cell_id = self.session.scalar(
             select(BenchmarkInvocation.cell_id).where(
                 BenchmarkInvocation.id == invocation_id
@@ -627,15 +1041,33 @@ class BenchmarkRepository:
         )
         if cell_id is None:
             raise LookupError("benchmark invocation not found")
+        job = self.session.scalar(
+            select(BenchmarkJob)
+            .join(BenchmarkCell, BenchmarkCell.job_id == BenchmarkJob.id)
+            .where(
+                BenchmarkCell.id == cell_id,
+                BenchmarkJob.status.in_(
+                    (BenchmarkJobStatus.RUNNING, BenchmarkJobStatus.CANCEL_REQUESTED)
+                ),
+                BenchmarkJob.lease_owner == lease_owner,
+                BenchmarkJob.lease_expires_at > current,
+            )
+            .with_for_update(of=BenchmarkJob)
+        )
+        if job is None:
+            raise BenchmarkLeaseLostError("benchmark job lease is no longer owned")
         cell = self.session.scalar(
             select(BenchmarkCell)
-            .where(BenchmarkCell.id == cell_id)
+            .where(
+                BenchmarkCell.id == cell_id,
+                BenchmarkCell.status == BenchmarkCellStatus.RUNNING,
+                BenchmarkCell.lease_owner == lease_owner,
+                BenchmarkCell.lease_expires_at > current,
+            )
             .with_for_update()
         )
         if cell is None:
-            raise LookupError("benchmark cell not found")
-        if cell.status != BenchmarkCellStatus.RUNNING:
-            raise ValueError("benchmark invocations require a running cell")
+            raise BenchmarkLeaseLostError("benchmark cell lease is no longer owned")
         invocation = self.session.scalar(
             select(BenchmarkInvocation)
             .where(BenchmarkInvocation.id == invocation_id)
@@ -657,6 +1089,16 @@ class BenchmarkRepository:
         invocation.completed_at = completed_at
         invocation.response_digest = response_digest
         invocation.failure = failure
+        invocation.actual_provider = actual_provider
+        invocation.actual_model = actual_model
+        invocation.routing_attempt = routing_attempt
+        invocation.latency_ms = latency_ms
+        invocation.input_tokens = input_tokens
+        invocation.output_tokens = output_tokens
+        invocation.total_tokens = total_tokens
+        invocation.billed_amount = billed_amount
+        invocation.billed_unit = billed_unit
+        invocation.billed_source = billed_source
         self.session.flush()
         return invocation
 
@@ -715,7 +1157,32 @@ class BenchmarkRepository:
         )
         self.session.add(event)
         self.session.flush()
+        self._prune_ordinary_events(job_id)
         return event
+
+    def _prune_ordinary_events(self, job_id: UUID) -> None:
+        """Bound ordinary replay history without removing preparation receipts."""
+
+        protected = (
+            "document_preparation.started",
+            "document_preparation.completed",
+        )
+        retained_ids = (
+            select(BenchmarkEvent.id)
+            .where(
+                BenchmarkEvent.job_id == job_id,
+                BenchmarkEvent.event_type.not_in(protected),
+            )
+            .order_by(BenchmarkEvent.sequence.desc(), BenchmarkEvent.id.desc())
+            .limit(get_benchmark_event_retention_count())
+        )
+        self.session.execute(
+            delete(BenchmarkEvent).where(
+                BenchmarkEvent.job_id == job_id,
+                BenchmarkEvent.event_type.not_in(protected),
+                BenchmarkEvent.id.not_in(retained_ids),
+            )
+        )
 
     def request_cancellation(
         self, *, job_id: UUID, owner_subject: str, requested_at: datetime
@@ -730,20 +1197,99 @@ class BenchmarkRepository:
         )
         if job is None:
             raise LookupError("benchmark job not found for owner")
-        if job.status != BenchmarkJobStatus.RUNNING:
-            raise ValueError("only a running benchmark job may request cancellation")
-        job.status = BenchmarkJobStatus.CANCEL_REQUESTED
-        job.cancel_requested_at = requested_at
+        if job.status in _TERMINAL_JOB_STATUSES or job.status == BenchmarkJobStatus.CANCEL_REQUESTED:
+            return job
+        if job.status == BenchmarkJobStatus.QUEUED:
+            self.session.execute(
+                update(BenchmarkCell)
+                .where(
+                    BenchmarkCell.job_id == job_id,
+                    BenchmarkCell.status == BenchmarkCellStatus.QUEUED,
+                )
+                .values(
+                    status=BenchmarkCellStatus.CANCELLED,
+                    completed_at=requested_at,
+                )
+            )
+            job.status = BenchmarkJobStatus.CANCELLED
+            job.cancel_requested_at = requested_at
+            job.completed_at = requested_at
+            self._refresh_job_counters(job_id)
+        elif job.status == BenchmarkJobStatus.RUNNING:
+            job.status = BenchmarkJobStatus.CANCEL_REQUESTED
+            job.cancel_requested_at = requested_at
         self.session.flush()
         return job
 
-    def complete_job(self, *, job_id: UUID, completed_at: datetime) -> BenchmarkJob:
-        """Seal a fully processed job with its counter-derived terminal outcome."""
+    def cancellation_requested(
+        self, *, job_id: UUID, lease_owner: UUID, now: datetime | None = None
+    ) -> bool:
+        current = now or datetime.now(timezone.utc)
+        status = self.session.scalar(
+            select(BenchmarkJob.status).where(
+                BenchmarkJob.id == job_id,
+                BenchmarkJob.lease_owner == lease_owner,
+                BenchmarkJob.lease_expires_at > current,
+            )
+        )
+        if status is None:
+            raise BenchmarkLeaseLostError("benchmark job lease is no longer owned")
+        return status == BenchmarkJobStatus.CANCEL_REQUESTED
+
+    def cancel_queued_cells(
+        self,
+        *,
+        job_id: UUID,
+        lease_owner: UUID,
+        cancelled_at: datetime,
+        now: datetime | None = None,
+    ) -> int:
+        current = now or datetime.now(timezone.utc)
         job = self.session.scalar(
-            select(BenchmarkJob).where(BenchmarkJob.id == job_id).with_for_update()
+            select(BenchmarkJob)
+            .where(
+                BenchmarkJob.id == job_id,
+                BenchmarkJob.status == BenchmarkJobStatus.CANCEL_REQUESTED,
+                BenchmarkJob.lease_owner == lease_owner,
+                BenchmarkJob.lease_expires_at > current,
+            )
+            .with_for_update()
         )
         if job is None:
-            raise LookupError("benchmark job not found")
+            raise BenchmarkLeaseLostError("benchmark job lease is no longer owned")
+        count = self.session.execute(
+            update(BenchmarkCell)
+            .where(
+                BenchmarkCell.job_id == job_id,
+                BenchmarkCell.status == BenchmarkCellStatus.QUEUED,
+            )
+            .values(status=BenchmarkCellStatus.CANCELLED, completed_at=cancelled_at)
+        ).rowcount
+        self.session.flush()
+        self._refresh_job_counters(job_id)
+        return count
+
+    def complete_job(
+        self,
+        *,
+        job_id: UUID,
+        lease_owner: UUID,
+        completed_at: datetime,
+        now: datetime | None = None,
+    ) -> BenchmarkJob:
+        """Seal a fully processed job with its counter-derived terminal outcome."""
+        current = now or datetime.now(timezone.utc)
+        job = self.session.scalar(
+            select(BenchmarkJob)
+            .where(
+                BenchmarkJob.id == job_id,
+                BenchmarkJob.lease_owner == lease_owner,
+                BenchmarkJob.lease_expires_at > current,
+            )
+            .with_for_update()
+        )
+        if job is None:
+            raise BenchmarkLeaseLostError("benchmark job lease is no longer owned")
         self._refresh_job_counters(job_id)
         if job.queued_cells or job.running_cells:
             raise ValueError("benchmark job still has unfinished cells")
@@ -789,6 +1335,12 @@ class BenchmarkRepository:
         )
 
     def delete_terminal_job(self, *, job_id: UUID, owner_subject: str) -> bool:
+        """Delete a terminal SQL-only job, retaining prepared-copy recovery IDs.
+
+        Terminal state does not prove external preparation writes are quiescent.
+        Prepared jobs need coordinated vector/file/SQL cleanup before journal
+        deletion, which this synchronous repository method cannot provide.
+        """
         job = self.session.scalar(
             select(BenchmarkJob)
             .where(
@@ -801,6 +1353,23 @@ class BenchmarkRepository:
             return False
         if job.status not in _TERMINAL_JOB_STATUSES:
             raise ValueError("only terminal benchmark jobs may be deleted")
+        has_reruns = self.session.scalar(
+            select(
+                select(BenchmarkJob.id)
+                .where(BenchmarkJob.rerun_of_job_id == job.id)
+                .exists()
+            )
+        )
+        if has_reruns:
+            raise ValueError("benchmark jobs with rerun lineage may not be deleted")
+        has_preparation = self.session.scalar(
+            select(select(BenchmarkEvent.id).where(
+                BenchmarkEvent.job_id == job.id,
+                BenchmarkEvent.event_type == "document_preparation.started",
+            ).exists())
+        )
+        if has_preparation:
+            raise ValueError("prepared benchmark jobs require coordinated document cleanup before deletion")
         self.session.execute(delete(BenchmarkJob).where(BenchmarkJob.id == job.id))
         self.session.flush()
         return True

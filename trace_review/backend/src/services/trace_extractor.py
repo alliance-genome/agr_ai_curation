@@ -4,21 +4,27 @@ Fetches and processes trace data from Langfuse API
 """
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, cast
 from langfuse import Langfuse
 from ..analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from ..config import (
-    get_agent_studio_trace_search_max_limit,
     get_langfuse_observation_page_limit,
     get_langfuse_request_timeout_seconds,
+    get_langfuse_search_observation_limit,
+    get_langfuse_search_request_limit,
     get_trace_source_runtime_config,
 )
 from .langfuse_run_reconstruction import usage_cost_summary
 
 logger = logging.getLogger(__name__)
-OBSERVATION_FIELDS = "core,basic,time,io,metadata,model,usage,trace_context"
+OBSERVATION_FIELDS = (
+    "core,basic,time,io,metadata,model,usage,metrics,trace_context"
+)
 SESSION_OBSERVATION_FIELDS = "core,basic,time,trace_context"
+TRACE_LIST_OBSERVATION_FIELDS = (
+    "core,basic,time,metadata,usage,metrics,trace_context"
+)
 SESSION_TRACE_LIST_LIMIT = 100
 
 
@@ -75,6 +81,63 @@ class TraceExtractor:
             if mapping.get(key) is not None:
                 return mapping[key]
         return None
+
+    @staticmethod
+    def _normalized_datetime(value: Any) -> Optional[datetime]:
+        """Normalize SDK/string timestamps for exact, timezone-safe comparisons."""
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @classmethod
+    def _is_root_observation(cls, observation: Mapping[str, Any]) -> bool:
+        return bool(
+            observation.get("isRootObservation") is True
+            or observation.get("is_root_observation") is True
+            or not cls._first_present(
+                observation,
+                "parentObservationId",
+                "parent_observation_id",
+            )
+        )
+
+    @classmethod
+    def _trace_latency(cls, observations: List[Dict[str, Any]]) -> float:
+        starts: List[datetime] = []
+        ends: List[datetime] = []
+        for observation in observations:
+            start = cls._normalized_datetime(
+                cls._first_present(observation, "startTime", "start_time")
+            )
+            if start is None:
+                continue
+            starts.append(start)
+            end = cls._normalized_datetime(
+                cls._first_present(observation, "endTime", "end_time")
+            )
+            if end is None:
+                latency = observation.get("latency")
+                if isinstance(latency, (int, float)) and not isinstance(latency, bool):
+                    end = start + timedelta(seconds=max(0.0, float(latency)))
+            if end is not None:
+                ends.append(end)
+        if not starts:
+            return 0.0
+        if ends:
+            return max(0.0, (max(ends) - min(starts)).total_seconds())
+        if len(starts) > 1:
+            return max(0.0, (max(starts) - min(starts)).total_seconds())
+        return 0.0
 
     @classmethod
     def _normalize_v2_observation(cls, item: Any) -> Dict[str, Any]:
@@ -191,12 +254,7 @@ class TraceExtractor:
                 str(item.get("id") or ""),
             ),
         )
-        roots = [
-            item for item in ordered
-            if item.get("isRootObservation") is True
-            or item.get("is_root_observation") is True
-            or not (item.get("parentObservationId") or item.get("parent_observation_id"))
-        ]
+        roots = [item for item in ordered if cls._is_root_observation(item)]
         root = roots[0] if roots else ordered[0]
         context = next(
             (
@@ -206,6 +264,12 @@ class TraceExtractor:
                 or item.get("user_id")
             ),
             root,
+        )
+
+        project_id = cls._first_present(root, "projectId", "project_id")
+        total_cost = sum(
+            usage_cost_summary(observation)["total_cost"]
+            for observation in observations
         )
 
         return {
@@ -220,7 +284,19 @@ class TraceExtractor:
             "environment": context.get("environment") or root.get("environment"),
             "input": root.get("input"),
             "output": root.get("output"),
-            "latency": root.get("latency") or 0,
+            "latency": cls._trace_latency(observations),
+            "totalCost": total_cost,
+            "calculatedTotalCost": total_cost,
+            "htmlPath": (
+                f"/project/{project_id}/traces/{trace_id}"
+                if project_id
+                else None
+            ),
+            "observations": [
+                observation_id
+                for observation in observations
+                if (observation_id := observation.get("id"))
+            ],
         }
 
     def list_traces(
@@ -237,8 +313,49 @@ class TraceExtractor:
         from_timestamp: Optional[datetime] = None,
         to_timestamp: Optional[datetime] = None,
     ) -> Dict[str, Any]:
-        """List Langfuse traces using indexed fields and metadata filters."""
+        """List traces through the Langfuse v4 observations API.
+
+        Langfuse v4 has no trace-list endpoint. The supported replacement is a
+        cursor-paginated observation query grouped by trace ID on the client.
+        """
         filters: List[Dict[str, Any]] = []
+        if session_id:
+            filters.append({
+                "type": "string",
+                "column": "sessionId",
+                "operator": "=",
+                "value": session_id,
+            })
+        if name:
+            filters.append({
+                "type": "string",
+                "column": "traceName",
+                "operator": "=",
+                "value": name,
+            })
+        if user_id:
+            filters.append({
+                "type": "string",
+                "column": "userId",
+                "operator": "=",
+                "value": user_id,
+            })
+        normalized_from = self._normalized_datetime(from_timestamp)
+        normalized_to = self._normalized_datetime(to_timestamp)
+        if normalized_from:
+            filters.append({
+                "type": "datetime",
+                "column": "startTime",
+                "operator": ">=",
+                "value": normalized_from.isoformat(),
+            })
+        if normalized_to:
+            filters.append({
+                "type": "datetime",
+                "column": "startTime",
+                "operator": "<",
+                "value": normalized_to.isoformat(),
+            })
         metadata_filters = {
             "document_id": document_id,
             "run_id": run_id,
@@ -254,47 +371,161 @@ class TraceExtractor:
                     "value": value,
                 })
 
-        page = 1
-        traces: List[Dict[str, Any]] = []
-        meta: Dict[str, Any] = {}
+        observations_by_trace: Dict[str, List[Dict[str, Any]]] = {}
+        trace_order: List[str] = []
+        cursor: Optional[str] = None
+        seen_cursors = set()
+        seen_observation_ids = set()
+        page_count = 0
+        scanned_observation_count = 0
+        rejected_observation_count = 0
+        request_count = 0
         filter_json = json.dumps(filters) if filters else None
 
         safe_offset = max(0, offset)
         requested_end = safe_offset + max(1, limit)
-        source_page_limit = min(
-            get_agent_studio_trace_search_max_limit(),
-            requested_end,
-        )
+        search_observation_limit = get_langfuse_search_observation_limit()
+        search_request_limit = get_langfuse_search_request_limit()
+        source_page_limit = min(get_langfuse_observation_page_limit(), search_observation_limit)
+        request_options = {
+            "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
+        }
         source_exhausted = False
-        while len(traces) < requested_end:
-            response = self.client.api.trace.list(
-                page=page,
-                limit=source_page_limit,
+        scan_truncated = False
+        while True:
+            if request_count >= search_request_limit:
+                scan_truncated = True
+                break
+            remaining_scan = search_observation_limit - scanned_observation_count
+            if remaining_scan <= 0:
+                scan_truncated = True
+                break
+
+            response = self.client.api.observations.get_many(
+                fields=TRACE_LIST_OBSERVATION_FIELDS,
+                limit=min(source_page_limit, remaining_scan),
+                cursor=cursor,
+                filter=filter_json,
+                request_options=request_options,
+            )
+            request_count += 1
+            response_data = getattr(response, "data", None) or []
+            scanned_observation_count += len(response_data)
+            page_count += 1
+            for item in response_data:
+                observation = self._normalize_v2_observation(item)
+                if not self._observation_matches_trace_search(
+                    observation,
+                    session_id=session_id,
+                    user_id=user_id,
+                    name=name,
+                    metadata_filters=metadata_filters,
+                    from_timestamp=from_timestamp,
+                    to_timestamp=to_timestamp,
+                ):
+                    rejected_observation_count += 1
+                    continue
+                observation_id = observation.get("id")
+                if observation_id and observation_id in seen_observation_ids:
+                    continue
+                if observation_id:
+                    seen_observation_ids.add(observation_id)
+                trace_id = observation.get("traceId") or observation.get("trace_id")
+                if not trace_id:
+                    continue
+                normalized_trace_id = str(trace_id)
+                if normalized_trace_id not in observations_by_trace:
+                    observations_by_trace[normalized_trace_id] = []
+                    trace_order.append(normalized_trace_id)
+                observations_by_trace[normalized_trace_id].append(observation)
+
+            response_meta = getattr(response, "meta", None)
+            next_cursor = (
+                getattr(response_meta, "cursor", None)
+                if response_meta is not None
+                else None
+            )
+            if not next_cursor:
+                source_exhausted = True
+                break
+            if not response_data:
+                raise RuntimeError(
+                    "Langfuse returned an empty trace-search page with a continuation cursor"
+                )
+            if next_cursor in seen_cursors:
+                raise RuntimeError("Langfuse repeated trace-search observation cursor")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+        if (
+            scanned_observation_count >= search_observation_limit
+            and len(trace_order) < requested_end
+            and not source_exhausted
+        ):
+            scan_truncated = True
+
+        traces: List[Dict[str, Any]] = []
+        rejected_trace_count = 0
+        hydration_truncated = False
+        must_hydrate_all = bool(
+            from_timestamp
+            or to_timestamp
+            or scan_truncated
+            or any(metadata_filters.values())
+        )
+        for trace_id in trace_order:
+            observations = observations_by_trace[trace_id]
+            if must_hydrate_all or not any(
+                self._is_root_observation(observation)
+                for observation in observations
+            ):
+                observations, requests_made, hydration_complete = (
+                    self._get_observations_bounded(
+                        trace_id,
+                        fields=TRACE_LIST_OBSERVATION_FIELDS,
+                        max_requests=search_request_limit - request_count,
+                    )
+                )
+                request_count += requests_made
+                if not hydration_complete:
+                    hydration_truncated = True
+                    break
+            trace = self.get_trace_details(trace_id, observations)
+            if not self._trace_matches_search(
+                trace,
                 session_id=session_id,
                 user_id=user_id,
                 name=name,
+                metadata_filters=metadata_filters,
                 from_timestamp=from_timestamp,
                 to_timestamp=to_timestamp,
-                order_by="timestamp.asc",
-                filter=filter_json,
+            ):
+                rejected_trace_count += 1
+                continue
+            traces.append(trace)
+
+        scan_truncated = scan_truncated or hydration_truncated
+
+        traces.sort(
+            key=lambda trace: (
+                self._normalized_datetime(trace.get("timestamp"))
+                or datetime.min.replace(tzinfo=timezone.utc),
+                str(trace.get("id") or ""),
             )
-            response_data = getattr(response, "data", None) or []
-            traces.extend(self._normalize_item(trace) for trace in response_data)
-
-            response_meta = getattr(response, "meta", None)
-            meta = self._normalize_item(response_meta) if response_meta is not None else {}
-            total_pages = meta.get("totalPages") or meta.get("total_pages")
-            if total_pages is None:
-                source_exhausted = len(response_data) < source_page_limit
-                break
-            if page >= total_pages:
-                source_exhausted = True
-                break
-            page += 1
-
-        total_items = meta.get("totalItems") or meta.get("total_items")
-        if total_items is None and source_exhausted:
-            total_items = len(traces)
+        )
+        meta = {
+            "cursor": cursor,
+            "pagesScanned": page_count,
+            "observationsScanned": scanned_observation_count,
+            "observationsRejected": rejected_observation_count,
+            "tracesRejected": rejected_trace_count,
+            "scanLimit": search_observation_limit,
+            "requestLimit": search_request_limit,
+            "requestsMade": request_count,
+            "scanTruncated": scan_truncated,
+            "hydrationTruncated": hydration_truncated,
+        }
+        total_items = len(traces) if source_exhausted and not scan_truncated else None
 
         return {
             "source": self.source,
@@ -302,6 +533,8 @@ class TraceExtractor:
             "meta": meta,
             "total_items": total_items,
             "source_exhausted": source_exhausted,
+            "scan_truncated": scan_truncated,
+            "local_result_count": len(traces),
             "query": {
                 "session_id": session_id,
                 "user_id": user_id,
@@ -314,6 +547,146 @@ class TraceExtractor:
                 "from_timestamp": from_timestamp.isoformat() if from_timestamp else None,
                 "to_timestamp": to_timestamp.isoformat() if to_timestamp else None,
             },
+        }
+
+    @staticmethod
+    def _observation_matches_trace_search(
+        observation: Mapping[str, Any],
+        *,
+        session_id: Optional[str],
+        user_id: Optional[str],
+        name: Optional[str],
+        metadata_filters: Mapping[str, Optional[str]],
+        from_timestamp: Optional[datetime],
+        to_timestamp: Optional[datetime],
+    ) -> bool:
+        """Fail closed if a provider-side exact filter is ignored."""
+        if session_id and str(observation.get("session_id") or "") != session_id:
+            return False
+        if user_id and str(observation.get("user_id") or "") != user_id:
+            return False
+        if name and str(observation.get("trace_name") or "") != name:
+            return False
+        timestamp = TraceExtractor._normalized_datetime(
+            TraceExtractor._first_present(
+                observation,
+                "startTime",
+                "start_time",
+            )
+        )
+        normalized_from = TraceExtractor._normalized_datetime(from_timestamp)
+        normalized_to = TraceExtractor._normalized_datetime(to_timestamp)
+        if normalized_from and (timestamp is None or timestamp < normalized_from):
+            return False
+        if normalized_to and (timestamp is None or timestamp >= normalized_to):
+            return False
+
+        metadata = observation.get("metadata")
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+        for key, value in metadata_filters.items():
+            if value and str(metadata.get(key) or "") != value:
+                return False
+        return True
+
+    @classmethod
+    def _trace_matches_search(
+        cls,
+        trace: Mapping[str, Any],
+        *,
+        session_id: Optional[str],
+        user_id: Optional[str],
+        name: Optional[str],
+        metadata_filters: Mapping[str, Optional[str]],
+        from_timestamp: Optional[datetime],
+        to_timestamp: Optional[datetime],
+    ) -> bool:
+        """Verify the reconstructed trace, not a possibly matching child row."""
+        if session_id and str(trace.get("sessionId") or "") != session_id:
+            return False
+        if user_id and str(trace.get("userId") or "") != user_id:
+            return False
+        if name and str(trace.get("name") or "") != name:
+            return False
+
+        timestamp = cls._normalized_datetime(trace.get("timestamp"))
+        normalized_from = cls._normalized_datetime(from_timestamp)
+        normalized_to = cls._normalized_datetime(to_timestamp)
+        if normalized_from and (timestamp is None or timestamp < normalized_from):
+            return False
+        if normalized_to and (timestamp is None or timestamp >= normalized_to):
+            return False
+
+        metadata = trace.get("metadata")
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+        return all(
+            not value or str(metadata.get(key) or "") == value
+            for key, value in metadata_filters.items()
+        )
+
+    def probe_v4_capabilities(self) -> Dict[str, Any]:
+        """Exercise exact-trace and session discovery without exposing trace data."""
+        request_options = {
+            "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
+        }
+        checks: Dict[str, Dict[str, Any]] = {}
+        probes = (
+            (
+                "explicit_trace",
+                {"trace_id": "__trace_review_health_missing_trace__"},
+                "traceId",
+                "__trace_review_health_missing_trace__",
+            ),
+            (
+                "session_discovery",
+                {
+                    "filter": json.dumps([{
+                        "type": "string",
+                        "column": "sessionId",
+                        "operator": "=",
+                        "value": "__trace_review_health_missing_session__",
+                    }]),
+                },
+                "sessionId",
+                "__trace_review_health_missing_session__",
+            ),
+        )
+        for check_name, query, field_name, expected in probes:
+            try:
+                response = self.client.api.observations.get_many(
+                    fields="core,basic",
+                    limit=1,
+                    request_options=request_options,
+                    **query,
+                )
+                rows = [
+                    self._normalize_v2_observation(item)
+                    for item in (getattr(response, "data", None) or [])
+                ]
+                widened = any(
+                    str(self._first_present(row, field_name, "session_id") or "")
+                    != expected
+                    for row in rows
+                )
+                checks[check_name] = {
+                    "status": "error" if widened else "ok",
+                    "filter_widened": widened,
+                }
+            except Exception as exc:
+                checks[check_name] = {
+                    "status": "error",
+                    "error_type": exc.__class__.__name__,
+                }
+
+        return {
+            "status": (
+                "ok"
+                if all(check["status"] == "ok" for check in checks.values())
+                else "degraded"
+            ),
+            "query_surface": "observations_v2",
+            "checks": checks,
         }
 
     def list_session_traces(self, session_id: str, limit: int = SESSION_TRACE_LIST_LIMIT) -> Dict[str, Any]:
@@ -351,6 +724,15 @@ class TraceExtractor:
             page_count += 1
             for item in getattr(response, "data", None) or []:
                 observation = self._normalize_v2_observation(item)
+                observation_session_id = self._first_present(
+                    observation,
+                    "session_id",
+                    "sessionId",
+                )
+                if str(observation_session_id or "") != session_id:
+                    raise RuntimeError(
+                        "Langfuse session filter returned an observation from another session"
+                    )
                 trace_id = observation.get("traceId") or observation.get("trace_id")
                 if trace_id:
                     observations_by_trace.setdefault(str(trace_id), []).append(observation)
@@ -385,8 +767,14 @@ class TraceExtractor:
             "meta": meta,
         }
 
-    def get_observations(self, trace_id: str) -> List[Dict]:
-        """Get every observation through the cursor-paginated v2 API."""
+    def _get_observations_bounded(
+        self,
+        trace_id: str,
+        *,
+        fields: str,
+        max_requests: Optional[int],
+    ) -> tuple[List[Dict], int, bool]:
+        """Get an exact trace, optionally stopping at a provider-request budget."""
         observations: List[Dict] = []
         cursor: Optional[str] = None
         seen_cursors = set()
@@ -396,18 +784,26 @@ class TraceExtractor:
             "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
         }
 
-        while True:
+        request_count = 0
+        while max_requests is None or request_count < max_requests:
             response = self.client.api.observations.get_many(
                 trace_id=trace_id,
-                fields=OBSERVATION_FIELDS,
+                fields=fields,
                 limit=page_limit,
                 cursor=cursor,
                 request_options=request_options,
             )
+            request_count += 1
             response_data = getattr(response, "data", None)
             if response_data:
                 for item in response_data:
                     observation = self._normalize_v2_observation(item)
+                    returned_trace_id = observation.get("traceId") or observation.get("trace_id")
+                    if str(returned_trace_id or "") != trace_id:
+                        raise RuntimeError(
+                            "Langfuse returned an observation outside requested trace "
+                            f"{trace_id}"
+                        )
                     observation_id = observation.get("id")
                     if observation_id and observation_id in seen_observation_ids:
                         continue
@@ -418,13 +814,24 @@ class TraceExtractor:
             meta = getattr(response, "meta", None)
             cursor = getattr(meta, "cursor", None) if meta is not None else None
             if not cursor:
-                break
+                return observations, request_count, True
             if cursor in seen_cursors:
                 raise RuntimeError(
                     f"Langfuse repeated observation cursor for trace {trace_id}"
                 )
             seen_cursors.add(cursor)
 
+        return observations, request_count, False
+
+    def get_observations(self, trace_id: str) -> List[Dict]:
+        """Get every observation through the cursor-paginated v2 API."""
+        observations, _request_count, complete = self._get_observations_bounded(
+            trace_id,
+            fields=OBSERVATION_FIELDS,
+            max_requests=None,
+        )
+        if not complete:  # pragma: no cover - an unlimited read completes or raises
+            raise RuntimeError(f"Langfuse observation read stopped early for trace {trace_id}")
         return observations
 
     def get_scores(self, trace_id: str) -> List[Dict]:

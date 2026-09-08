@@ -29,6 +29,25 @@ class _DocumentsModuleProxy:
 documents = _DocumentsModuleProxy()
 
 
+@pytest.mark.asyncio
+async def test_detailed_library_read_rejects_benchmark_before_vector_access(monkeypatch):
+    session = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = SimpleNamespace(id=42)
+    session.scalar.return_value = "benchmark_frozen"
+
+    def database():
+        yield session
+
+    connection = MagicMock()
+    monkeypatch.setattr(documents._module(), "get_db", database)
+    monkeypatch.setattr(documents._module(), "get_connection", connection)
+    with pytest.raises(ValueError, match="curator library"):
+        await documents.get_document("synthetic-curator", "00000000-0000-0000-0000-000000000123")
+    connection.assert_not_called()
+    params = session.scalar.call_args.args[0].compile().params.values()
+    assert 42 in params
+
+
 @pytest.mark.parametrize(
     ("sql_status", "weaviate_status", "expected"),
     [

@@ -1,11 +1,12 @@
 import os
+import asyncio
 import unittest
 from types import SimpleNamespace
 from typing import get_args, get_type_hints
 from unittest.mock import patch
 
 from src import config
-from src.main import _preflight_payload, preflight_health
+from src.main import _health_payload, _preflight_payload, langfuse_health, preflight_health
 from src.services.cache_manager import CacheManager
 from src.services.trace_extractor import TraceExtractor
 
@@ -69,6 +70,72 @@ class TraceReviewPreflightTests(unittest.TestCase):
         self.assertEqual(payload["diagnostics"]["source_selection"]["selected"], "local")
         self.assertFalse(payload["diagnostics"]["source_selection"]["selected_ready"])
         self.assertIn("LANGFUSE_LOCAL_PUBLIC_KEY", payload["next_actions"][0])
+
+    @patch("src.main.TraceExtractor")
+    def test_preflight_payload_degrades_when_v4_capability_probe_fails(
+        self,
+        extractor_cls,
+    ):
+        env = {
+            "LANGFUSE_HOST": "http://remote.example:3000",
+            "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
+            "LANGFUSE_SECRET_KEY": "sk-lf-test",
+        }
+        extractor_cls.return_value.probe_v4_capabilities.return_value = {
+            "status": "degraded",
+            "query_surface": "observations_v2",
+            "checks": {"session_discovery": {"status": "error"}},
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            payload, status_code = _preflight_payload(self._make_app(), "remote")
+
+        self.assertEqual(status_code, 503)
+        self.assertEqual(payload["status"], "degraded")
+        self.assertEqual(payload["langfuse_capabilities"]["status"], "degraded")
+
+    def test_health_payload_exposes_build_identity(self):
+        env = {
+            "TRACE_REVIEW_RUNTIME_VERSION": "v0.9.4",
+            "TRACE_REVIEW_SOURCE_REVISION": "abc123",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            payload, status_code = _health_payload(self._make_app())
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(
+            payload["runtime"],
+            {"image_version": "v0.9.4", "source_revision": "abc123"},
+        )
+
+    @patch("requests.get")
+    @patch("src.main.TraceExtractor")
+    def test_langfuse_health_degrades_when_capability_probe_fails(
+        self,
+        extractor_cls,
+        requests_get,
+    ):
+        requests_get.return_value.status_code = 200
+        extractor_cls.return_value.probe_v4_capabilities.return_value = {
+            "status": "degraded",
+            "query_surface": "observations_v2",
+            "checks": {"explicit_trace": {"status": "error"}},
+        }
+        env = {
+            "LANGFUSE_HOST": "http://remote.example:3000",
+            "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
+            "LANGFUSE_SECRET_KEY": "sk-lf-test",
+            "TRACE_REVIEW_RUNTIME_VERSION": "v0.9.4",
+            "TRACE_REVIEW_SOURCE_REVISION": "abc123",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            payload = asyncio.run(langfuse_health("remote"))
+
+        self.assertEqual(payload["status"], "degraded")
+        self.assertEqual(payload["langfuse"]["remote"]["capabilities"]["status"], "degraded")
+        self.assertEqual(payload["runtime"]["image_version"], "v0.9.4")
 
     def test_trace_extractor_rejects_unknown_source(self):
         with self.assertRaisesRegex(ValueError, "Unsupported trace source 'stale'"):

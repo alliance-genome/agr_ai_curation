@@ -13,6 +13,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.schemas.execution_provenance import ExtractionExecutionContext
+
 from src.lib.domain_envelope_payload_hash import canonical_domain_envelope_payload_hash
 from src.lib.curation_workspace.models import (
     DomainEnvelopeHistory,
@@ -103,6 +105,7 @@ class DomainEnvelopeCheckpointRequest:
     source_extraction_result_id: str | UUID | None = None
     source_payload_hash: str | None = None
     authenticated_groups: Sequence[str] | None = None
+    execution_context: ExtractionExecutionContext | None = None
     object_model_ref_json: Mapping[str, Any] = field(default_factory=dict)
     model_field_ref_json: Mapping[str, Any] = field(default_factory=dict)
 
@@ -219,8 +222,21 @@ def write_domain_envelope_checkpoint(
         envelope_row=envelope_row,
         authenticated_groups=request.authenticated_groups,
     )
+    execution_context = _checkpoint_execution_context(
+        envelope_row=envelope_row,
+        supplied=request.execution_context,
+        initial=request.expected_revision == 0,
+    )
+    if execution_context is not None and execution_context.document is not None:
+        if execution_context.document.document_id != _optional_uuid(
+            request.document_id, field_name="document_id"
+        ):
+            raise DomainEnvelopePersistenceError("Execution context document differs from checkpoint")
     envelope_json = envelope.model_copy(
-        update={"authenticated_context": authenticated_context}
+        update={
+            "authenticated_context": authenticated_context,
+            "execution_context": execution_context,
+        }
     ).model_dump(mode="json")
 
     envelope_row.project_key = project_key
@@ -263,7 +279,28 @@ def domain_envelope_payload_hash(envelope: DomainEnvelope) -> str:
 
     payload = envelope.model_dump(mode="json")
     payload.pop("authenticated_context", None)
+    payload.pop("execution_context", None)
     return canonical_domain_envelope_payload_hash(payload)
+
+
+def _checkpoint_execution_context(
+    *,
+    envelope_row: DomainEnvelopeModel,
+    supplied: ExtractionExecutionContext | None,
+    initial: bool,
+) -> ExtractionExecutionContext | None:
+    """Ignore model payload; only an initial server capture can establish context."""
+    if initial:
+        return (
+            ExtractionExecutionContext.model_validate(supplied.model_dump())
+            if supplied is not None else None
+        )
+    payload = getattr(envelope_row, "envelope_json", None) or {}
+    stored = payload.get("execution_context")
+    context = ExtractionExecutionContext.model_validate(stored) if stored is not None else None
+    if supplied is not None and supplied != context:
+        raise DomainEnvelopePersistenceError("Original execution context cannot be replaced")
+    return context
 
 
 def _checkpoint_authenticated_context(

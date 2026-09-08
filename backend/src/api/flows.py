@@ -32,6 +32,10 @@ from ..lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
     apply_flow_validation_attachment_defaults,
 )
+from ..lib.flows.persisted_flow_migrations import (
+    PersistedFlowMigrationError,
+    migrate_persisted_flow_definition,
+)
 from ..lib.agent_studio.catalog_service import (
     AGENT_REGISTRY,
     get_active_visible_agent_metadata,
@@ -493,8 +497,14 @@ def _flow_to_response(
 ) -> FlowResponse:
     """Convert a stored flow to an API response with validation defaults hydrated."""
 
+    try:
+        persisted_migration = migrate_persisted_flow_definition(
+            flow.flow_definition
+        )
+    except PersistedFlowMigrationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     flow_definition = _validated_flow_definition(
-        FlowDefinition.model_validate(flow.flow_definition),
+        FlowDefinition.model_validate(persisted_migration.definition),
         db_user_id=flow.user_id,
         active_group_ids=active_group_ids,
         tolerate_unresolvable_custom_agent_attachments=True,
@@ -504,16 +514,25 @@ def _flow_to_response(
         db_user_id=flow.user_id,
         active_group_ids=active_group_ids,
     )
-    validation_warnings = (
-        [
+    validation_warnings = []
+    if persisted_migration.changed:
+        validation_warnings.append(
+            FlowValidationWarning(
+                type="WARNING",
+                message=(
+                    "This saved flow contained retired validation selections. "
+                    "They were removed from the loaded definition; save the flow "
+                    "to persist the repaired configuration."
+                ),
+            )
+        )
+    if missing_references:
+        validation_warnings.append(
             FlowValidationWarning(
                 type="CRITICAL",
                 message=_missing_flow_agent_references_detail(missing_references),
             )
-        ]
-        if missing_references
-        else []
-    )
+        )
     return FlowResponse(
         id=flow.id,
         user_id=flow.user_id,

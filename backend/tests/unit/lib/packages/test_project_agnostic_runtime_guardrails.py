@@ -77,6 +77,9 @@ GENERIC_RUNTIME_SOURCE_GUARD_PATHS = {
     Path("backend/src/lib/openai_agents/runner.py"),
     Path("backend/src/lib/openai_agents/streaming_tools.py"),
     Path("backend/src/lib/packages/flow_recipes.py"),
+    Path("backend/src/lib/packages/persisted_flow_migration_loader.py"),
+    Path("backend/src/lib/flows/persisted_flow_database_migrations.py"),
+    Path("backend/src/lib/flows/persisted_flow_migrations.py"),
     Path("backend/src/lib/packages/document_source_provider_loader.py"),
     Path("backend/src/lib/packages/identifier_prefix_provider_loader.py"),
     Path("backend/src/lib/pdf_jobs/upload_intake_service.py"),
@@ -124,6 +127,9 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Benchmark identity integration verifies the shipped provider-group mapping.
+    Path("backend/tests/unit/lib/benchmarks/test_execution_context.py"),
+    Path("backend/tests/unit/lib/benchmarks/test_curator_authorization.py"),
     # Group-tool policy contract covers Alliance package/provider examples.
     Path("backend/tests/contract/alliance/agents/test_group_tool_policy_contract.py"),
     Path("backend/tests/unit/lib/agent_studio/test_group_tool_policy.py"),
@@ -318,9 +324,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/live_integration/test_backend_pdfx_live_pipeline.py"),
     # Frontend tests that assert current shipped Alliance defaults or auth fixtures.
     Path("frontend/src/components/AgentStudio/OpusChat.test.tsx"),
-    Path("frontend/src/components/AgentStudio/DomainEnvelopeMetadataPanel.test.tsx"),
     Path("frontend/src/components/AgentStudio/FlowBuilder/FlowBuilder.test.tsx"),
-    Path("frontend/src/components/AgentStudio/FlowBuilder/NodeEditor.test.tsx"),
     Path("frontend/src/components/AgentStudio/PromptWorkshop/PromptWorkshop.test.tsx"),
     Path("frontend/src/features/curation/entityTable/workspaceEntityTags.test.ts"),
     Path("frontend/src/features/curation/entityTags/workspaceEntityTags.test.ts"),

@@ -31,6 +31,12 @@ def test_approved_benchmark_models_load_from_canonical_registry(tmp_path):
 def test_benchmark_operational_defaults(monkeypatch):
     for key in (
         "BENCHMARK_ENABLED",
+        "BENCHMARK_WORKER_ENABLED",
+        "BENCHMARK_EXECUTION_ENABLED",
+        "BENCHMARK_WORKER_CONCURRENCY",
+        "BENCHMARK_WORKER_LEASE_SECONDS",
+        "BENCHMARK_WORKER_HEARTBEAT_SECONDS",
+        "BENCHMARK_CELL_TIMEOUT_SECONDS",
         "BENCHMARK_ROOT",
         "BENCHMARK_SOURCE_TIMEOUT_SECONDS",
         "BENCHMARK_MAX_INPUT_BYTES",
@@ -47,34 +53,24 @@ def test_benchmark_operational_defaults(monkeypatch):
         "BENCHMARK_MAX_ENVELOPE_BYTES",
         "BENCHMARK_DEFAULT_PAGE_SIZE",
         "BENCHMARK_MAX_PAGE_SIZE",
-        "BENCHMARK_MAX_CONCURRENCY",
-        "BENCHMARK_MATRIX_LIMIT",
-        "BENCHMARK_CASE_LIMIT",
-        "BENCHMARK_RESULT_LIMIT",
-        "BENCHMARK_TIMEOUT_SECONDS",
-        "BENCHMARK_RETRIES",
-        "BENCHMARK_PREVIEW_MAX_CHARS",
-        "BENCHMARK_INLINE_MAX_BYTES",
-        "BENCHMARK_ADJUDICATION_ENABLED",
-        "BENCHMARK_ADJUDICATION_MODEL",
-        "BENCHMARK_ADJUDICATION_CASE_LIMIT",
-        "BENCHMARK_ADJUDICATION_TURN_LIMIT",
-        "BENCHMARK_ADJUDICATION_TOOL_CALL_LIMIT",
-        "BENCHMARK_ADJUDICATION_TIMEOUT_SECONDS",
-        "BENCHMARK_ADJUDICATION_RETRIES",
-        "BENCHMARK_ADJUDICATION_RESULT_MAX_BYTES",
-        "BENCHMARK_ARTIFACT_UPLOAD_ENABLED",
-        "BENCHMARK_ARTIFACT_MAX_BYTES",
-        "BENCHMARK_ARTIFACT_PART_SIZE_BYTES",
-        "BENCHMARK_ARTIFACT_UPLOAD_RETRIES",
-        "BENCHMARK_ARTIFACT_RETRY_BACKOFF_SECONDS",
-        "BENCHMARK_ARTIFACT_UPLOAD_TIMEOUT_SECONDS",
-        "BENCHMARK_ARTIFACT_UPLOAD_CONCURRENCY",
-        "BENCHMARK_ARTIFACT_SECRET_PATTERNS",
+        "BENCHMARK_SNAPSHOT_HANDOFF_ENABLED",
+        "BENCHMARK_SNAPSHOT_HANDOFF_DESTINATIONS_JSON",
+        "BENCHMARK_HANDOFF_TIMEOUT_SECONDS",
+        "BENCHMARK_MAX_SNAPSHOT_BYTES",
     ):
         monkeypatch.delenv(key, raising=False)
 
     assert config.get_benchmark_enabled() is False
+    assert config.get_benchmark_snapshot_handoff_enabled() is False
+    assert config.get_benchmark_snapshot_handoff_destinations_json() == "{}"
+    assert config.get_benchmark_handoff_timeout_seconds() == 30
+    assert config.get_benchmark_max_snapshot_bytes() == 10_485_760
+    assert config.get_benchmark_worker_enabled() is False
+    assert config.get_benchmark_execution_enabled() is False
+    assert config.get_benchmark_worker_concurrency() == 1
+    assert config.get_benchmark_worker_lease_seconds() == 300
+    assert config.get_benchmark_worker_heartbeat_seconds() == 30
+    assert config.get_benchmark_cell_timeout_seconds() == 3600
     assert config.get_benchmark_root() == ""
     assert config.get_benchmark_source_timeout_seconds() == 30
     assert config.get_benchmark_max_input_bytes() == 52_428_800
@@ -91,34 +87,22 @@ def test_benchmark_operational_defaults(monkeypatch):
     assert config.get_benchmark_max_envelope_bytes() == 10_485_760
     assert config.get_benchmark_default_page_size() == 50
     assert config.get_benchmark_max_page_size() == 200
-    assert config.get_benchmark_max_concurrency() == 2
-    assert config.get_benchmark_matrix_limit() == 20
-    assert config.get_benchmark_case_limit() == 20
-    assert config.get_benchmark_result_limit() == 20
-    assert config.get_benchmark_timeout_seconds() == 300
-    assert config.get_benchmark_retries() == 0
-    assert config.get_benchmark_preview_max_chars() == 1000
-    assert config.get_benchmark_inline_max_bytes() == 20000
-    assert config.get_benchmark_adjudication_enabled() is False
-    assert config.get_benchmark_adjudication_model() == "gpt-5.6-sol"
-    assert config.get_benchmark_adjudication_case_limit() == 2
-    assert config.get_benchmark_adjudication_turn_limit() == 1
-    assert config.get_benchmark_adjudication_tool_call_limit() == 0
-    assert config.get_benchmark_adjudication_timeout_seconds() == 60
-    assert config.get_benchmark_adjudication_retries() == 1
-    assert config.get_benchmark_adjudication_result_max_bytes() == 10000
-    assert config.get_benchmark_artifact_upload_enabled() is False
-    assert config.get_benchmark_artifact_max_bytes() == 10_485_760
-    assert config.get_benchmark_artifact_part_size_bytes() == 8_388_608
-    assert config.get_benchmark_artifact_upload_retries() == 3
-    assert config.get_benchmark_artifact_retry_backoff_seconds() == 0.5
-    assert config.get_benchmark_artifact_upload_timeout_seconds() == 30
-    assert config.get_benchmark_artifact_upload_concurrency() == 2
-    assert config.get_benchmark_artifact_secret_patterns() == ()
 
 
 def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_SNAPSHOT_HANDOFF_ENABLED", "true")
+    monkeypatch.setenv(
+        "BENCHMARK_SNAPSHOT_HANDOFF_DESTINATIONS_JSON", ' {"portal": {}} '
+    )
+    monkeypatch.setenv("BENCHMARK_HANDOFF_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_MAX_SNAPSHOT_BYTES", "0")
+    monkeypatch.setenv("BENCHMARK_WORKER_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_EXECUTION_ENABLED", "true")
+    monkeypatch.setenv("BENCHMARK_WORKER_CONCURRENCY", "0")
+    monkeypatch.setenv("BENCHMARK_WORKER_LEASE_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_WORKER_HEARTBEAT_SECONDS", "0")
+    monkeypatch.setenv("BENCHMARK_CELL_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_ROOT", "  /tmp/custom-benchmarks  ")
     monkeypatch.setenv("BENCHMARK_SOURCE_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("BENCHMARK_MAX_INPUT_BYTES", "0")
@@ -135,23 +119,18 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     monkeypatch.setenv("BENCHMARK_MAX_ENVELOPE_BYTES", "0")
     monkeypatch.setenv("BENCHMARK_DEFAULT_PAGE_SIZE", "500")
     monkeypatch.setenv("BENCHMARK_MAX_PAGE_SIZE", "75")
-    monkeypatch.setenv("BENCHMARK_MAX_CONCURRENCY", "0")
-    monkeypatch.setenv("BENCHMARK_TIMEOUT_SECONDS", "0")
-    monkeypatch.setenv("BENCHMARK_RETRIES", "-2")
-    monkeypatch.setenv("BENCHMARK_ADJUDICATION_ENABLED", "true")
-    monkeypatch.setenv("BENCHMARK_ADJUDICATION_MODEL", "  deployment-judge  ")
-    monkeypatch.setenv("BENCHMARK_ADJUDICATION_CASE_LIMIT", "0")
-    monkeypatch.setenv("BENCHMARK_ADJUDICATION_TOOL_CALL_LIMIT", "-1")
-    monkeypatch.setenv("BENCHMARK_ARTIFACT_UPLOAD_ENABLED", "true")
-    monkeypatch.setenv("BENCHMARK_ARTIFACT_MAX_BYTES", "0")
-    monkeypatch.setenv("BENCHMARK_ARTIFACT_PART_SIZE_BYTES", "1")
-    monkeypatch.setenv("BENCHMARK_ARTIFACT_UPLOAD_RETRIES", "-1")
-    monkeypatch.setenv("BENCHMARK_ARTIFACT_RETRY_BACKOFF_SECONDS", "-1")
-    monkeypatch.setenv("BENCHMARK_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", "0")
-    monkeypatch.setenv("BENCHMARK_ARTIFACT_UPLOAD_CONCURRENCY", "0")
-    monkeypatch.setenv("BENCHMARK_ARTIFACT_SECRET_PATTERNS", " secret-a\nsecret-b ")
 
     assert config.get_benchmark_enabled() is True
+    assert config.get_benchmark_snapshot_handoff_enabled() is True
+    assert config.get_benchmark_snapshot_handoff_destinations_json() == '{"portal": {}}'
+    assert config.get_benchmark_handoff_timeout_seconds() == 0.1
+    assert config.get_benchmark_max_snapshot_bytes() == 1
+    assert config.get_benchmark_worker_enabled() is True
+    assert config.get_benchmark_execution_enabled() is True
+    assert config.get_benchmark_worker_concurrency() == 1
+    assert config.get_benchmark_worker_lease_seconds() == 1
+    assert config.get_benchmark_worker_heartbeat_seconds() == 1
+    assert config.get_benchmark_cell_timeout_seconds() == 0.1
     assert config.get_benchmark_root() == "/tmp/custom-benchmarks"
     assert config.get_benchmark_source_timeout_seconds() == 0.1
     assert config.get_benchmark_max_input_bytes() == 1
@@ -168,21 +147,35 @@ def test_benchmark_operational_overrides_are_bounded(monkeypatch):
     assert config.get_benchmark_max_envelope_bytes() == 1
     assert config.get_benchmark_default_page_size() == 75
     assert config.get_benchmark_max_page_size() == 75
-    assert config.get_benchmark_max_concurrency() == 1
-    assert config.get_benchmark_timeout_seconds() == 0.1
-    assert config.get_benchmark_retries() == 0
-    assert config.get_benchmark_adjudication_enabled() is True
-    assert config.get_benchmark_adjudication_model() == "deployment-judge"
-    assert config.get_benchmark_adjudication_case_limit() == 1
-    assert config.get_benchmark_adjudication_tool_call_limit() == 0
-    assert config.get_benchmark_artifact_upload_enabled() is True
-    assert config.get_benchmark_artifact_max_bytes() == 1
-    assert config.get_benchmark_artifact_part_size_bytes() == 5_242_880
-    assert config.get_benchmark_artifact_upload_retries() == 0
-    assert config.get_benchmark_artifact_retry_backoff_seconds() == 0
-    assert config.get_benchmark_artifact_upload_timeout_seconds() == 0.1
-    assert config.get_benchmark_artifact_upload_concurrency() == 1
-    assert config.get_benchmark_artifact_secret_patterns() == ("secret-a", "secret-b")
+
+
+def test_lifecycle_api_and_event_limits(monkeypatch):
+    monkeypatch.delenv("BENCHMARK_API_ENABLED", raising=False)
+    assert config.get_benchmark_api_enabled() is False
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
+    assert config.get_benchmark_api_enabled() is True
+    limits = (
+        ("BENCHMARK_ADMISSION_MAX_BYTES", config.get_benchmark_admission_max_bytes, 1048576, 1),
+        ("BENCHMARK_CURATOR_AUTH_MAX_BYTES", config.get_benchmark_curator_auth_max_bytes, 8192, 1),
+        ("BENCHMARK_EVENT_RETENTION_COUNT", config.get_benchmark_event_retention_count, 10000, 1),
+        ("BENCHMARK_EVENT_HEARTBEAT_SECONDS", config.get_benchmark_event_heartbeat_seconds, 15, 0.1),
+        ("BENCHMARK_EVENT_REPLAY_BATCH_SIZE", config.get_benchmark_event_replay_batch_size, 250, 1),
+        (
+            "BENCHMARK_MAX_EVENT_CONNECTIONS_PER_PRINCIPAL",
+            config.get_benchmark_max_event_connections_per_principal,
+            5,
+            1,
+        ),
+    )
+    for variable, getter, default, minimum in limits:
+        monkeypatch.delenv(variable, raising=False)
+        assert getter() == default
+        monkeypatch.setenv(variable, "0")
+        assert getter() == minimum
+        monkeypatch.setenv(variable, "invalid")
+        assert getter() == default
+        monkeypatch.setenv(variable, "22")
+        assert getter() == 22
 
 
 def test_benchmark_oidc_defaults_and_overrides(monkeypatch):

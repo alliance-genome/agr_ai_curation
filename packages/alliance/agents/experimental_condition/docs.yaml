@@ -47,9 +47,17 @@ data_sources:
       - "taxon identifiers"
       - "ontology-backed condition terms"
       - "ChEBI chemical ontology terms (CHEBITerm)"
+note: "Validation runs automatically. This check runs on every experimental condition in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
+use_when:
+  - "When you want a custom condition check: a changed prompt, extra tools, or a stricter or looser check on ontology terms, chemicals, or units."
+  - "When you have a condition (a treatment, temperature, chemical exposure, or diet) and want its parts checked together."
+  - "When you want to review how conditions on disease, phenotype, and expression annotations are confirmed."
+avoid_when:
+  - "To get conditions validated; the domain pack already runs this check automatically on every condition an extractor captures."
+  - "To pull conditions out of a paper; that is the domain extractor's job."
+  - "For a single chemical or ontology term on its own; use the Chemical Ontology Agent or the Ontology Term Resolver Agent."
+  - "To judge whether the experiment itself was well designed; that judgment stays with you."
 limitations:
-  - "Validates submitted condition payloads; it does not extract experimental conditions from PDFs."
   - "Component-level ambiguity can make the overall condition require curator review."
-  - "Does not decide whether an experiment is biologically well designed or statistically sufficient."
   - "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records."
   - "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."

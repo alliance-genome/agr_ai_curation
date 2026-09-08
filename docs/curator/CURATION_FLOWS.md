@@ -56,8 +56,8 @@ A searchable, collapsible list of available agents organized by category. Click 
 **Canvas (Center/Right)**
 The main workspace where you build your flow by adding agents and connecting them.
 
-**Properties Panel (Right)**
-When you select a node, this panel shows its configuration options where you can add custom instructions.
+**Step Panel (Right)**
+When you select a node, a panel opens beside the canvas with the settings that step owns: instructions, the optional automatic checks, and output options. Drag its left edge to resize it, or hide it to a narrow strip. On a narrow window it opens as a drawer over the canvas.
 
 ## Available Agents
 
@@ -114,60 +114,45 @@ If you've created custom agents in **Agent Workshop**, they appear here under "M
 
 ### Step 3: Configure Each Step
 
-Click on any agent node to open the **Properties Panel** on the right. This panel lets you fine-tune how each step in your flow behaves.
+Click any node to open the **step panel** beside the canvas. The header shows the agent, its step number, and whether the step has unsaved changes or a configuration error. **Apply** saves your edits to the step, **Cancel** puts them back, and the menu in the header holds **Delete step**. If you click another node while edits are unsaved, the panel asks whether to apply them, discard them, or keep editing.
 
-**Custom Instructions**
+**Instructions for this step**
 
-Add specific instructions for this step. These are prepended to the agent's system prompt with highest priority — they override the agent's default behavior for this flow step. Example: "Focus only on gene expression data from the methods section."
+Add instructions for this step only. They are added to the agent's prompt with highest priority, so they override the agent's default behavior for this flow step. Example: "Focus only on gene expression data from the methods section."
 
-**Domain Envelope Metadata**
+**Automatic checks**
 
-For domain-pack extraction agents, the Properties Panel shows the domain
-envelope object types, field paths, required fields, schema/provider references,
-source-of-truth notes, and validation policy. This tells you what the extractor
-is expected to save for review and export. It also helps distinguish extractor
-proposal fields from validator-materialized fields.
+Extraction steps show what runs automatically on what the step extracts: a one-line summary such as "9 checks run on what this step extracts, 1 turned off for this flow", and how many of those checks always run. Checks that are blocking, or that the domain pack locks on, are counted but not listed, because you cannot turn them off.
 
-**Validation Attachments**
+Click **Adjust optional checks** to see one switch per check you may turn off for this flow. Each switch is one sentence in plain words, such as "Confirm the annotation type against the Annotation Type vocabulary". The info circle beside a switch opens a short explanation: what the check does, which fields it checks, what happens to those fields if you turn it off, and links to the validator's guide and the field in the Agents tab. All of that wording comes from the domain pack, so it matches what the Agents tab says.
 
-Automatic validators are listed on the extraction node. Active default
-validators run after extraction when enabled. They can be unchecked only when
-the flow replaces or supplements that automatic check with explicit validation
-for the same object, field, or curation question. Validators that the domain
-pack marks as not allowing flow replacement stay locked on.
+If a custom validator step replaces one of the automatic checks, the summary says so, and that check no longer appears as a switch.
 
-Under-development validators can appear as roadmap or context metadata. They do
-not run and do not create validation findings. Current findings, lookup audit
-notes, and export/submission readiness blockers are shown from the saved domain
-envelope after a run.
+Under-development checks do not run and are not shown here. Current findings, lookup notes, and export or submission readiness are shown from the saved domain envelope after a run.
 
-First-pass extractors should use document/evidence tools and the narrow
-species/provider/taxon context helper when needed. They should not be configured
-to do broad entity, ontology, reference, relation, or data-provider lookup when
-an active validator binding owns that resolution. Check the node's tool list and
-validation attachments together: the extractor's unavailable lookup tools are
-intentional when the matching validator is responsible for those fields.
+**Custom validator steps**
 
-To add a custom validation step, add a validation agent after the extraction
-node. Use its steering prompt to point at the envelope object, field path, or
-question you want it to check.
+A custom validation agent placed after an extraction step shows which step it attaches to and which automatic check it replaces or adds to. Its **steering prompt** is added to the validator's prompt for this step only. Use it to name the envelope object, field, or question you want checked.
+
+**Output steps**
+
+A formatter step shows which step's results it formats, a switch to include the supporting evidence in the output, and, for file formatters, the file name choice: the paper's file name, a custom prefix, or the formatter's own name. An example file name is shown beneath the choice.
+
+**Output variable**
+
+Every step names its saved result for later steps and exports. The default name is fine for most flows. To rename it, open **Output variable** at the bottom of the panel. Names can contain letters, numbers, and underscores. Example: `validated_genes`
+
+**About this agent**
+
+The row at the bottom of the panel links to the agent in the Agents tab: its **Guide**, what it produces and checks in **Envelope**, and its **Prompts**. The panel itself holds only what the step owns.
 
 **Step Context**
 
 Each step receives the flow's Initial Instructions, the loaded document context,
-the selected agent, and that node's custom instructions. The runtime preserves
+the selected agent, and that node's instructions for the step. The runtime preserves
 structured artifacts from earlier steps separately for review, export, and
 follow-up lookup. Later step prompts do not use hidden previous-output text or
 custom variable templates.
-
-**Output Key**
-
-Set a stable key for this step's saved artifact. Names can contain letters,
-numbers, and underscores. Example: `validated_genes`
-
-**View Base Prompt & Group Rules**
-
-Click the **"View base prompt & group rules"** link to see the full prompt and any group-specific overrides for this agent.
 
 ### Step 4: Verify with Claude
 
@@ -211,7 +196,7 @@ The Flow Builder validates your flow and shows error indicators when there are i
 - **Parallel connections** - A node has more than one outgoing connection. Each node can connect to only one downstream step.
 - **Duplicate Initial Instructions** - Only one Initial Instructions node is allowed per flow
 
-Validation errors appear as a red banner in the Properties Panel when you select the affected node.
+Validation errors appear as a red banner under the step panel header when you select the affected node.
 
 ## How Prompts Layer Together
 
@@ -227,9 +212,9 @@ Output Schema              ← Auto-injected when structured output is configure
 
 **Layer 1 — Base Prompt:** The core instructions that define the agent's role, mission, and workflow. You can view these in the Agent Browser on the Agents tab.
 
-**Layer 2 — Group-Specific Rules:** Customizations for each curator group (WormBase, FlyBase, MGI, etc.). These are appended to the base prompt when your groups are active. You can view these via the "Combined View" in the Agent Browser or via "View base prompt & group rules" in the node Properties Panel.
+**Layer 2 — Group-Specific Rules:** Customizations for each curator group (WormBase, FlyBase, MGI, etc.). These are appended to the base prompt when your groups are active. You can view these on the Prompts tab in the Agent Browser; the step panel's **About this agent** row takes you there.
 
-**Layer 3 — Flow Custom Instructions (highest priority):** Instructions you add to a node in the flow Properties Panel. These are prepended to the agent's prompt and explicitly marked as highest priority — they override both the base prompt and group rules for that flow step.
+**Layer 3 — Flow Custom Instructions (highest priority):** Instructions you add to a step in the flow step panel. These are prepended to the agent's prompt and explicitly marked as highest priority — they override both the base prompt and group rules for that flow step.
 
 **What this means in practice:**
 - If the base prompt says "extract all genes" but your flow custom instructions say "only extract C. elegans genes," the flow instructions win.

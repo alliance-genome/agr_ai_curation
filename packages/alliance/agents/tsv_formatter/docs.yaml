@@ -5,5 +5,12 @@ capabilities:
     description: "Generates tab-delimited output for pipelines that expect TSV input"
     example_query: "Export curated rows as TSV"
     example_result: "Returns a downloadable TSV with stable tab-delimited columns"
+use_when:
+  - "At the end of a flow when a downstream tool or loader expects tab-separated columns."
+  - "When you want a spreadsheet-style file and the values themselves contain commas."
+avoid_when:
+  - "When you want a standard comma-separated spreadsheet file; use the CSV File Formatter."
+  - "When the results have nested detail you want to keep intact; use the JSON File Formatter."
+  - "When you only want to read the results in chat; use the Chat Output Agent."
 limitations:
   - "Like CSV, complex nested fields may be flattened"

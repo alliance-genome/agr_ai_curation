@@ -483,12 +483,28 @@ async def search_traces(
             detail=f"Unable to search Langfuse traces ({source}): {str(exc)}",
         ) from exc
 
+    warnings = []
+    if listing.get("scan_truncated"):
+        warnings.append(
+            "Trace search reached its configured observation scan limit; results are partial."
+        )
+    rejected_count = (
+        int(listing["meta"].get("observationsRejected") or 0)
+        + int(listing["meta"].get("tracesRejected") or 0)
+    )
+    if rejected_count:
+        warnings.append(
+            "Langfuse returned data outside the exact search filters; "
+            "mismatched observations or reconstructed traces were discarded."
+        )
+
     return {
-        "status": "success",
+        "status": "partial" if warnings else "success",
         "source": source,
         "trace_count": len(listing["traces"]),
         "query": listing["query"],
         "langfuse_meta": listing["meta"],
+        "warnings": warnings,
         "traces": [_listed_trace_reference(trace) for trace in listing["traces"]],
     }
 

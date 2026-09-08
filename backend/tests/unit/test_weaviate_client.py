@@ -28,6 +28,48 @@ class DummyCollection:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("search", [None, "paper"])
+async def test_library_excludes_benchmark_ids_in_both_page_and_count_queries(search):
+    from src.models.api_schemas import DocumentFilter
+    from weaviate.classes.query import Filter
+
+    benchmark_id = UUID("00000000-0000-0000-0000-000000000123")
+    collection = DummyCollection(SimpleNamespace(objects=[]), SimpleNamespace(total_count=5))
+    connection = MagicMock()
+    db = MagicMock()
+    db.execute.return_value.scalar_one_or_none.return_value = SimpleNamespace(id=42)
+    db.execute.return_value.scalars.return_value.all.return_value = []
+    db.scalars.return_value = [benchmark_id]
+
+    def database():
+        yield db
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_client.documents.get_db", database), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(MagicMock(), collection)), \
+         patch("src.lib.weaviate_helpers.get_tenant_name", return_value="synthetic-tenant"):
+        result = await _documents_module().async_list_documents(
+            "synthetic-curator", DocumentFilter(search_term=search),
+            {"page": 2, "page_size": 3, "sort_by": "creationDate", "sort_order": "desc"},
+        )
+    exclusion = Filter.by_id().contains_none([str(benchmark_id)])
+    expected = Filter.all_of([Filter.by_property("filename").like("*paper*"), exclusion]) if search else exclusion
+    page = collection.query.fetch_objects.call_args.kwargs
+    count = collection.aggregate.over_all.call_args.kwargs
+    assert page["filters"] is count["filters"]
+    if search:
+        assert type(page["filters"]) is type(expected)
+        assert page["filters"].filters == expected.filters
+    else:
+        assert page["filters"] == expected
+    assert page["offset"] == 3 and page["limit"] == 3
+    assert count["total_count"] is True
+    assert result["total"] == 5
+    query_parameters = db.scalars.call_args.args[0].compile().params.values()
+    assert 42 in query_parameters and "benchmark_frozen" in query_parameters
+
+
+@pytest.mark.asyncio
 async def test_update_document_filename_updates_tenant_index():
     collection = MagicMock()
     mock_client = MagicMock()

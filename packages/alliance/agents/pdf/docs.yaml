@@ -18,6 +18,14 @@ data_sources:
     description: "Scientific papers indexed in Weaviate"
     species_supported: null
     data_types: ["text", "tables", "figures", "references"]
+use_when:
+  - "When you want to search an uploaded paper for a phrase, gene, method, or figure caption."
+  - "When you need a table or a specific section (methods, results) pulled out of the paper as text."
+  - "As a general reading tool when no specialized extractor fits the question."
+avoid_when:
+  - "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent."
+  - "To confirm any identifier against a database; use a validation agent."
+  - "For content inside figures beyond their captions."
 limitations:
   - "Document must be loaded in Weaviate before use"
   - "Very large tables may be truncated"

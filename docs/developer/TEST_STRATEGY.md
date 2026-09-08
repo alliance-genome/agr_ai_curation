@@ -29,6 +29,14 @@ environment intentionally uses the system daemon. Run only one command against
 the same Compose project at a time, and inspect active containers before any
 manual cleanup.
 
+## Synthetic Benchmark Replacement Canary
+
+For the opt-in, no-provider v2 benchmark composition proof, run
+`bash scripts/testing/benchmark-replacement-canary.sh`. It owns a disposable,
+externally isolated Compose project and cleans only that project. See
+[the canary boundary and evidence guide](guides/BENCHMARK_REPLACEMENT_CANARY.md).
+This does not change the live release validation sequence.
+
 ## TraceReview Backend Tests
 
 TraceReview has an isolated, offline backend suite with its own test-only image

@@ -26,8 +26,14 @@ data_sources:
     description: "EMBL-EBI's QuickGO service providing programmatic access to the Gene Ontology database with term information, hierarchy, and relationships."
     species_supported: ["All species (GO is species-independent ontology)"]
     data_types: ["GO term definitions and metadata", "GO hierarchy relationships (is_a, part_of, regulates)", "GO term synonyms and secondary IDs", "Obsolete term status"]
+note: "This lookup does not run automatically; add it to a flow or ask for it in chat when you need it."
+use_when:
+  - "When you have a GO term name, keyword, or ID and want its definition and category."
+  - "When you need the broader or narrower terms around a GO term to pick the right level of detail."
+  - "When several GO terms need looking up at once."
+avoid_when:
+  - "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent."
+  - "To find which genes carry a given GO term; use the Gene GO Annotations Agent."
+  - "For GO enrichment analysis, which no agent performs."
 limitations:
-  - "Cannot retrieve gene-to-GO annotations (use GO Annotations Agent instead)"
-  - "Cannot determine which genes have a specific GO term (use GO Annotations Agent instead)"
-  - "Does not perform GO enrichment analysis"
   - "Every answer comes from a fresh, live lookup against the Gene Ontology — it never answers from memory."

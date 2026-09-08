@@ -254,7 +254,17 @@ describe('HorizontalCurationGrid', () => {
     expect(
       screen.getByRole('region', { name: 'Horizontally scrollable curation grid' }),
     ).toHaveAttribute('tabindex', '0')
-    expect(screen.getByTestId('horizontal-grid-scroll-region')).toHaveStyle({ overflow: 'auto' })
+    expect(screen.getByTestId('horizontal-curation-grid')).toHaveStyle({
+      flex: '1 1 0%',
+      minHeight: '0',
+      minWidth: '0',
+      overflow: 'hidden',
+    })
+    expect(screen.getByTestId('horizontal-grid-scroll-region')).toHaveStyle({
+      flex: '1 1 0%',
+      minHeight: '0',
+      overflow: 'auto',
+    })
     expect(screen.getByTestId('horizontal-grid-table')).toHaveStyle({
       width: '876px',
       minWidth: '876px',

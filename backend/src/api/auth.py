@@ -274,6 +274,9 @@ async def _get_user_from_cookie_impl(
         payload = {
             "sub": principal.subject,
             "uid": principal.subject,
+            # Only validated provider claims establish an issuer. Development
+            # and API-key identities deliberately have no remote handoff issuer.
+            "iss": claims.get("iss"),
             "email": principal.email,
             "name": principal.display_name or principal.email,
             "provider": principal.provider,

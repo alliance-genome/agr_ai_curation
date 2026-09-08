@@ -15,7 +15,10 @@ def owned_documents_select(owner_user_id: int) -> Select[tuple[PDFDocument]]:
     Documents without an owner and documents owned by another user are deliberately
     excluded. ``source_access_scope`` is provenance metadata, not an access grant.
     """
-    return select(PDFDocument).where(PDFDocument.user_id == owner_user_id)
+    return select(PDFDocument).where(
+        PDFDocument.user_id == owner_user_id,
+        PDFDocument.viewer_mode.is_distinct_from("benchmark_frozen"),
+    )
 
 
 def require_owned_document(
@@ -34,7 +37,10 @@ def require_owned_document(
     if for_update:
         statement = statement.with_for_update()
     document = db.execute(statement).scalar_one_or_none()
-    if document is None:
+    # Benchmark runtime copies belong to a curator for normal internal tool
+    # scoping, but are not editable/reprocessable curator-library documents.
+    # Internal ingestion and document tools have separate owned read paths.
+    if document is None or document.viewer_mode == "benchmark_frozen":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document with ID {document_id} not found",
@@ -45,6 +51,24 @@ def require_owned_document(
             detail="You do not have permission to access this document",
         )
     return document
+
+
+def exclude_benchmark_document(db: Session, document_id: str | UUID | None) -> None:
+    """Exclude frozen copies at curator execution boundaries, not internal tools.
+
+    This is not a replacement for document ownership or request validation.
+    Non-UUID inputs cannot identify a persisted frozen copy and retain their
+    existing downstream validation behavior.
+    """
+    if not document_id:
+        return
+    try:
+        parsed_id = document_id if isinstance(document_id, UUID) else UUID(document_id)
+    except ValueError:
+        return
+    mode = db.scalar(select(PDFDocument.viewer_mode).where(PDFDocument.id == parsed_id))
+    if mode == "benchmark_frozen":
+        raise HTTPException(status_code=404, detail="Document not found")
 
 
 def protected_pdf_url(document_id: UUID) -> str:

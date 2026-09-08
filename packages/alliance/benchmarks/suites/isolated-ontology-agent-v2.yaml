@@ -2,12 +2,13 @@ schema_version: 2
 suite_id: isolated-ontology-agent-v2
 cases:
   - case_id: synthetic-ontology-lookup-1
+    user_query: "Resolve the deliberately synthetic ontology identifier SYNTH:0000001. Return an empty result when it is not present."
     target: {kind: agent, id: ontology_term_validation}
     input:
       resolver: checked_in_fixture
-      reference: cases/synthetic-ontology-lookup-1/input.json
+      reference: cases/synthetic-ontology-lookup-1/document.json
       version: "1"
-      digest: sha256:e9a3290d5b877b22b4a590b040ad54acbeedadbc8297099e7c69fcbacbb83dcd
+      digest: sha256:e16bba1f73f87623c3c3b7d350e786b4d324f34a0c906eed337ade2d69b42617
 configurations:
   - configuration_id: sol
     routes:

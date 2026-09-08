@@ -143,6 +143,15 @@ trace_review/
 
 **Available Views**: `summary`, `conversation`, `tool_calls`, `pdf_citations`, `token_analysis`, `agent_context`, `trace_summary`, `document_hierarchy`, `agent_configs`, `group_context`, `domain_envelope`, `extraction_timeline`, `evidence_revisions`
 
+Trace search preserves the legacy oldest-first trace ordering. Under Langfuse
+v4 it reconstructs each reference from v2 observations: the earliest root
+timestamp identifies the trace, latency spans the complete observation group,
+cost is the sum of observation costs, and `html_path` is derived from the
+observation project ID. Searches that reach either the configured observation
+scan limit or the shared discovery-and-hydration request limit are explicitly
+returned as partial rather than claiming a complete page. Pagination stops at
+the end of that local partial result window instead of repeating a cursor.
+
 ## Development
 
 ### Backend Tests

@@ -3,7 +3,7 @@
  *
  * Custom React Flow node for agents in the flow canvas.
  * Displays agent icon, name, and step preview.
- * Click to expand and edit in NodeEditor.
+ * Click to select it; the step panel beside the canvas holds its settings.
  */
 
 import { memo } from 'react'

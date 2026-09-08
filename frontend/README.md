@@ -28,8 +28,7 @@ frontend/
 │   │   │   │   ├── FlowBuilder.tsx      # Main flow canvas
 │   │   │   │   ├── FlowNode.tsx         # Draggable agent nodes
 │   │   │   │   ├── AgentPalette.tsx     # Agent palette for drag-and-drop
-│   │   │   │   ├── NodeEditor.tsx       # Per-node configuration panel
-│   │   │   │   └── TaskInputEditor.tsx  # Task instruction editor for input nodes
+│   │   │   │   └── NodePanel/           # Docked step panel (draft/apply, automatic checks)
 │   │   │   └── PromptWorkshop/         # Agent Workshop (custom agent creation)
 │   │   │       └── PromptWorkshop.tsx   # Full-featured prompt editor with model/tool selection
 │   │   ├── Chat/              # Chat interface components
@@ -215,9 +214,11 @@ The Agent Studio page (`AgentStudioPage.tsx`) uses a two-panel layout with resiz
    - View version history and revert to previous versions
    - Submit tool idea requests when a needed tool does not exist
 
-Domain-envelope metadata is rendered through
-`AgentStudio/DomainEnvelopeMetadataPanel.tsx` in Agent Details, Flow Builder
-nodes, Node Editor, and Prompt Workshop. It is a read-only projection of backend
+Domain-envelope metadata is rendered through `AgentStudio/EnvelopeTab.tsx` and
+`AgentStudio/EnvelopeFieldTable.tsx` in the Agent Browser. The Flow Builder step
+panel (`FlowBuilder/NodePanel/`) and the Prompt Workshop link into that tab
+through the Agent Browser deep link (`AgentStudio/agentBrowserRequest.ts`)
+instead of rendering their own copy. It is a read-only projection of backend
 domain-pack metadata; editing prompts or custom agents does not edit schema
 refs, field paths, validators, or export/submission policy.
 

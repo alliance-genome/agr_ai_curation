@@ -986,6 +986,119 @@ def get_benchmark_enabled() -> bool:
     return _get_env_bool("BENCHMARK_ENABLED", False)
 
 
+def get_benchmark_snapshot_handoff_enabled() -> bool:
+    """Whether curator-owned snapshots may be sent to configured destinations."""
+    return _get_env_bool("BENCHMARK_SNAPSHOT_HANDOFF_ENABLED", False)
+
+
+def get_benchmark_snapshot_handoff_destinations_json() -> str:
+    """Server-only JSON registry of exact benchmark snapshot destinations."""
+    return os.getenv("BENCHMARK_SNAPSHOT_HANDOFF_DESTINATIONS_JSON", "{}").strip()
+
+
+def get_benchmark_handoff_timeout_seconds() -> float:
+    """Total timeout for each outbound token or snapshot handoff request."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("BENCHMARK_HANDOFF_TIMEOUT_SECONDS", 30.0),
+    )
+
+
+def get_benchmark_handoff_max_identity_bytes() -> int:
+    """Maximum combined bytes of verified issuer and subject transport metadata."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_HANDOFF_MAX_IDENTITY_BYTES", 4096))
+
+
+def get_benchmark_max_snapshot_bytes() -> int:
+    """Maximum canonical bytes stored and delivered for one curation snapshot."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_MAX_SNAPSHOT_BYTES", 10_485_760),
+    )
+
+
+def get_benchmark_worker_enabled() -> bool:
+    """Whether the durable benchmark worker may poll its local database."""
+    return _get_env_bool("BENCHMARK_WORKER_ENABLED", False)
+
+
+def get_benchmark_api_enabled() -> bool:
+    """Whether the stable deployment-local benchmark HTTP API is available."""
+    return _get_env_bool("BENCHMARK_API_ENABLED", False)
+
+
+def get_benchmark_environment_id() -> str:
+    """Non-secret operator-assigned execution target label, never a hostname."""
+    return os.getenv("BENCHMARK_ENVIRONMENT_ID", "").strip() or "unconfigured"
+
+
+def get_benchmark_catalog_max_response_bytes() -> int:
+    """Maximum encoded catalog, suite or normalized preview response size."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CATALOG_MAX_RESPONSE_BYTES", 1_048_576))
+
+
+def get_benchmark_execution_enabled() -> bool:
+    """Whether this deployment may dispatch benchmark provider calls."""
+    return _get_env_bool("BENCHMARK_EXECUTION_ENABLED", False)
+
+
+def get_benchmark_event_retention_count() -> int:
+    """Maximum ordinary replay events retained per job."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_EVENT_RETENTION_COUNT", 10_000))
+
+
+def get_benchmark_event_heartbeat_seconds() -> float:
+    """Seconds between server-sent-event heartbeat comments."""
+    return max(
+        0.1,
+        _get_env_float_with_fallback("BENCHMARK_EVENT_HEARTBEAT_SECONDS", 15.0),
+    )
+
+
+def get_benchmark_event_replay_batch_size() -> int:
+    """Maximum durable events loaded in one stream replay query."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_EVENT_REPLAY_BATCH_SIZE", 250),
+    )
+
+
+def get_benchmark_max_event_connections_per_principal() -> int:
+    """Maximum simultaneous lifecycle event streams for one API principal."""
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "BENCHMARK_MAX_EVENT_CONNECTIONS_PER_PRINCIPAL", 5
+        ),
+    )
+
+
+def get_benchmark_worker_concurrency() -> int:
+    return max(1, _get_env_int_with_fallback("BENCHMARK_WORKER_CONCURRENCY", 1))
+
+
+def get_benchmark_worker_lease_seconds() -> int:
+    return max(1, _get_env_int_with_fallback("BENCHMARK_WORKER_LEASE_SECONDS", 300))
+
+
+def get_benchmark_worker_heartbeat_seconds() -> int:
+    return max(1, _get_env_int_with_fallback("BENCHMARK_WORKER_HEARTBEAT_SECONDS", 30))
+
+
+def get_benchmark_cell_timeout_seconds() -> float:
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_CELL_TIMEOUT_SECONDS", 3600.0))
+
+
+def get_benchmark_curator_auth_timeout_seconds() -> float:
+    """Connect/read timeout for current curator authorization lookups."""
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_CURATOR_AUTH_TIMEOUT_SECONDS", 10.0))
+
+
+def get_benchmark_curator_auth_max_attempts() -> int:
+    """Total SDK attempts per read-only authorization request, including the first."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CURATOR_AUTH_MAX_ATTEMPTS", 1))
+
+
 def get_benchmark_oidc_issuer_url() -> str:
     """Trusted issuer for benchmark bearer access tokens."""
     return os.getenv("BENCHMARK_OIDC_ISSUER_URL", "").strip()
@@ -1058,24 +1171,69 @@ def get_benchmark_oidc_clock_skew_seconds() -> float:
 
 
 def get_benchmark_root() -> str:
-    """Filesystem root holding this deployment's benchmark profiles and cases."""
+    """Filesystem root holding this deployment's benchmark suites and cases."""
     return os.getenv("BENCHMARK_ROOT", "").strip()
 
 
+def get_benchmark_cli_request_timeout_seconds() -> float:
+    """Socket timeout for the API-only developer CLI."""
+    return _get_env_float_with_fallback("BENCHMARK_CLI_REQUEST_TIMEOUT_SECONDS", 30.0)
+
+
+def get_benchmark_cli_max_response_bytes() -> int:
+    """Bound each decoded JSON response and SSE frame in the developer CLI."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CLI_MAX_RESPONSE_BYTES", 10_485_760))
+
+
+def get_benchmark_cli_event_reconnect_attempts() -> int:
+    """Additional observation connections after the first stream; never POST retries."""
+    return max(0, _get_env_int_with_fallback("BENCHMARK_CLI_EVENT_RECONNECT_ATTEMPTS", 3))
+
+
+def get_benchmark_cli_poll_interval_seconds() -> float:
+    """Delay between observation reconnects or explicitly enabled status polls."""
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_CLI_POLL_INTERVAL_SECONDS", 5.0))
+
+
+def get_benchmark_cli_poll_timeout_seconds() -> float:
+    """Maximum duration of explicitly enabled polling fallback."""
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_CLI_POLL_TIMEOUT_SECONDS", 3600.0))
+
+
 def get_benchmark_source_timeout_seconds() -> float:
-    """Maximum time allowed for one registered source materialization."""
+    """Maximum time for source materialization or receiving a raw snapshot upload."""
     return max(
         0.1,
         _get_env_float_with_fallback("BENCHMARK_SOURCE_TIMEOUT_SECONDS", 30.0),
     )
 
 
+def get_benchmark_source_discovery_max_choices() -> int:
+    """Maximum paper or artifact choices returned by one discovery request."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_SOURCE_DISCOVERY_MAX_CHOICES", 50))
+
+
+def get_benchmark_source_selection_max_bytes() -> int:
+    """Maximum UTF-8 bytes per source query, locator, cursor, reference or label."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_SOURCE_SELECTION_MAX_BYTES", 4096))
+
+
 def get_benchmark_max_input_bytes() -> int:
-    """Maximum UTF-8 bytes accepted from one registered input resolver."""
+    """Maximum canonical UTF-8 bytes per resolver input or snapshot transfer."""
     return max(
         1,
         _get_env_int_with_fallback("BENCHMARK_MAX_INPUT_BYTES", 52_428_800),
     )
+
+
+def get_benchmark_admission_max_bytes() -> int:
+    """Maximum JSON request bytes for benchmark admission and plan preview."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_ADMISSION_MAX_BYTES", 1_048_576))
+
+
+def get_benchmark_curator_auth_max_bytes() -> int:
+    """Maximum UTF-8 bytes in the benchmark's ephemeral human credential."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_CURATOR_AUTH_MAX_BYTES", 8_192))
 
 
 def get_benchmark_delegated_source_auth_max_bytes() -> int:
@@ -1166,6 +1324,14 @@ def get_benchmark_max_envelope_bytes() -> int:
     )
 
 
+def get_benchmark_max_result_artifact_bytes() -> int:
+    """Maximum canonical result bytes stored and returned for one cell."""
+    return max(
+        1,
+        _get_env_int_with_fallback("BENCHMARK_MAX_RESULT_ARTIFACT_BYTES", 16_777_216),
+    )
+
+
 def get_benchmark_default_page_size() -> int:
     """Default number of benchmark persistence records returned per page."""
     return max(
@@ -1180,156 +1346,6 @@ def get_benchmark_default_page_size() -> int:
 def get_benchmark_max_page_size() -> int:
     """Maximum number of benchmark persistence records returned per page."""
     return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_PAGE_SIZE", 200))
-
-
-def get_benchmark_max_concurrency() -> int:
-    """Maximum benchmark case runs executing concurrently."""
-    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_CONCURRENCY", 2))
-
-
-def get_benchmark_matrix_limit() -> int:
-    """Maximum profile/case/route combinations in one request."""
-    return max(1, _get_env_int_with_fallback("BENCHMARK_MATRIX_LIMIT", 20))
-
-
-def get_benchmark_case_limit() -> int:
-    """Maximum selected profile-case pairs before route expansion."""
-    return max(1, _get_env_int_with_fallback("BENCHMARK_CASE_LIMIT", 20))
-
-
-def get_benchmark_result_limit() -> int:
-    """Maximum canonical case-run records returned by one request."""
-    return max(1, _get_env_int_with_fallback("BENCHMARK_RESULT_LIMIT", 20))
-
-
-def get_benchmark_timeout_seconds() -> float:
-    """Per-attempt benchmark target execution timeout."""
-    return max(0.1, _get_env_float_with_fallback("BENCHMARK_TIMEOUT_SECONDS", 300.0))
-
-
-def get_benchmark_retries() -> int:
-    """Retry count for timeout and normalized runtime failures."""
-    return max(0, _get_env_int_with_fallback("BENCHMARK_RETRIES", 0))
-
-
-def get_benchmark_preview_max_chars() -> int:
-    """Maximum preview characters for outputs too large to inline."""
-    return max(1, _get_env_int_with_fallback("BENCHMARK_PREVIEW_MAX_CHARS", 1000))
-
-
-def get_benchmark_inline_max_bytes() -> int:
-    """Maximum serialized output bytes retained inline in a case-run record."""
-    return max(1, _get_env_int_with_fallback("BENCHMARK_INLINE_MAX_BYTES", 20000))
-
-
-def get_benchmark_adjudication_enabled() -> bool:
-    """Whether explicitly ambiguous benchmark mismatches may be adjudicated."""
-    return _get_env_bool("BENCHMARK_ADJUDICATION_ENABLED", False)
-
-
-def get_benchmark_adjudication_model() -> str:
-    """Model used for direct supplemental benchmark adjudication."""
-    return (
-        os.getenv("BENCHMARK_ADJUDICATION_MODEL", "gpt-5.6-sol").strip()
-        or "gpt-5.6-sol"
-    )
-
-
-def get_benchmark_adjudication_case_limit() -> int:
-    """Maximum ambiguous cases sent to the direct adjudicator per execution."""
-    return max(1, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_CASE_LIMIT", 2))
-
-
-def get_benchmark_adjudication_turn_limit() -> int:
-    """Maximum independent structured decisions requested for one mismatch."""
-    return max(1, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_TURN_LIMIT", 1))
-
-
-def get_benchmark_adjudication_tool_call_limit() -> int:
-    """Tool calls allowed during direct adjudication; the canonical value is zero."""
-    return max(
-        0, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_TOOL_CALL_LIMIT", 0)
-    )
-
-
-def get_benchmark_adjudication_timeout_seconds() -> float:
-    """Per-attempt timeout for direct supplemental adjudication."""
-    return max(
-        0.1,
-        _get_env_float_with_fallback("BENCHMARK_ADJUDICATION_TIMEOUT_SECONDS", 60.0),
-    )
-
-
-def get_benchmark_adjudication_retries() -> int:
-    """Retries after a failed direct adjudication attempt."""
-    return max(0, _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_RETRIES", 1))
-
-
-def get_benchmark_adjudication_result_max_bytes() -> int:
-    """Maximum accepted structured adjudication result size."""
-    return max(
-        1,
-        _get_env_int_with_fallback("BENCHMARK_ADJUDICATION_RESULT_MAX_BYTES", 10000),
-    )
-
-
-def get_benchmark_artifact_upload_enabled() -> bool:
-    """Whether explicit developer benchmark artifact uploads are permitted."""
-    return _get_env_bool("BENCHMARK_ARTIFACT_UPLOAD_ENABLED", False)
-
-
-def get_benchmark_artifact_max_bytes() -> int:
-    """Maximum bytes accepted for one serialized benchmark artifact."""
-    return max(
-        1, _get_env_int_with_fallback("BENCHMARK_ARTIFACT_MAX_BYTES", 10_485_760)
-    )
-
-
-def get_benchmark_artifact_part_size_bytes() -> int:
-    """Bytes per resumable S3 multipart upload part."""
-    return max(
-        5_242_880,
-        _get_env_int_with_fallback("BENCHMARK_ARTIFACT_PART_SIZE_BYTES", 8_388_608),
-    )
-
-
-def get_benchmark_artifact_upload_retries() -> int:
-    """Retries for an individual benchmark artifact S3 operation."""
-    return max(0, _get_env_int_with_fallback("BENCHMARK_ARTIFACT_UPLOAD_RETRIES", 3))
-
-
-def get_benchmark_artifact_retry_backoff_seconds() -> float:
-    """Initial exponential backoff between benchmark artifact upload retries."""
-    return max(
-        0.0,
-        _get_env_float_with_fallback(
-            "BENCHMARK_ARTIFACT_RETRY_BACKOFF_SECONDS", 0.5
-        ),
-    )
-
-
-def get_benchmark_artifact_upload_timeout_seconds() -> float:
-    """Connection and read timeout for benchmark artifact S3 operations."""
-    return max(
-        0.1,
-        _get_env_float_with_fallback(
-            "BENCHMARK_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", 30.0
-        ),
-    )
-
-
-def get_benchmark_artifact_upload_concurrency() -> int:
-    """Maximum pooled S3 connections available to artifact uploads."""
-    return max(
-        1,
-        _get_env_int_with_fallback("BENCHMARK_ARTIFACT_UPLOAD_CONCURRENCY", 2),
-    )
-
-
-def get_benchmark_artifact_secret_patterns() -> tuple[str, ...]:
-    """Additional newline-separated regexes rejected from serialized artifacts."""
-    raw = os.getenv("BENCHMARK_ARTIFACT_SECRET_PATTERNS", "")
-    return tuple(pattern.strip() for pattern in raw.splitlines() if pattern.strip())
 
 
 def get_go_annotations_request_timeout_seconds() -> float:

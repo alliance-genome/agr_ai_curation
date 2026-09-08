@@ -98,6 +98,46 @@ def test_get_tool_library_endpoint_returns_curator_visible_policy_rows(monkeypat
         "search_document",
         "stale_seeded_tool",
     ]
+    assert [tool.config.requires_document for tool in response.tools] == [True, False]
+
+
+def test_get_tool_library_endpoint_marks_document_tools_from_one_definition(monkeypatch):
+    import src.api.agent_studio as api_module
+    from src.lib.agent_studio.catalog_service import DOCUMENT_TOOL_IDS
+
+    def _entry(tool_key, config):
+        return SimpleNamespace(
+            tool_key=tool_key,
+            display_name=tool_key,
+            description="",
+            category="Document",
+            curator_visible=True,
+            allow_attach=True,
+            allow_execute=True,
+            config=config,
+        )
+
+    fake_service = SimpleNamespace(
+        list_curator_visible=lambda _db: [
+            *[_entry(tool_id, {"mode": "auto"}) for tool_id in sorted(DOCUMENT_TOOL_IDS)],
+            _entry("chebi_lookup", {"requires_document": True}),
+        ],
+    )
+    monkeypatch.setattr(api_module, "get_tool_policy_cache", lambda: fake_service)
+
+    response = asyncio.run(
+        api_module.get_tool_library_endpoint(user={"sub": "test"}, db=SimpleNamespace())
+    )
+
+    by_key = {tool.tool_key: tool for tool in response.tools}
+    for tool_id in DOCUMENT_TOOL_IDS:
+        assert by_key[tool_id].config.requires_document is True
+        # Policy config keys other than the derived flag pass through untouched.
+        assert by_key[tool_id].config.model_dump()["mode"] == "auto"
+    # A stored policy value never overrides the tool registry definition.
+    assert by_key["chebi_lookup"].config.requires_document is False
+    payload = response.model_dump()["tools"]
+    assert all("requires_document" in tool["config"] for tool in payload)
 
 
 def test_get_agent_templates_endpoint_returns_system_templates_and_canonical_groups(monkeypatch):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -62,13 +63,14 @@ def test_provider_markdown_unknown_validation_error_remains_blocking(monkeypatch
         ingestion._validate_provider_markdown("# Title\n")
 
 
-def _source_provenance(**overrides):
+def _source_provenance(*, markdown="# Results\n\nText.\n", **overrides):
     payload = {
         "provider": "abc_literature",
         "reference_id": "101",
         "reference_curie": "AGRKB:101",
         "source_file_id": "source-file-1",
         "converted_artifact_id": "converted-file-1",
+        "converted_artifact_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
         "source_md5": "abc123",
         "file_class": "converted_merged_main",
         "file_extension": "md",
@@ -78,6 +80,111 @@ def _source_provenance(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overrides", [
+    {"converted_artifact_sha256": None},
+    {"converted_artifact_sha256": "A" * 64},
+    {"converted_artifact_sha256": "a" * 63},
+    {"converted_artifact_sha256": "0" * 64},
+    {"converted_artifact_id": None},
+])
+async def test_ingestion_rejects_missing_or_inconsistent_artifact_identity(monkeypatch, overrides):
+    owned = AsyncMock()
+    monkeypatch.setattr(ingestion, "_require_owned_document", owned)
+    with pytest.raises(DocumentSourceIngestionError, match="Converted artifact identity"):
+        await ingest_provider_markdown_document(
+            ProviderMarkdownIngestionRequest(
+                document_id="doc-1", user_id="user-1", document_owner_user_id=42,
+                markdown="# Results\n\nText.\n", source_provenance=_source_provenance(**overrides),
+            ),
+            weaviate_client=object(),
+        )
+    owned.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_persist_ingestion_metadata_stores_digest_with_downloaded_artifact(monkeypatch):
+    document = SimpleNamespace()
+    session = Mock()
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
+    monkeypatch.setattr(ingestion, "_query_owned_document", lambda *args, **kwargs: document)
+    provenance = _source_provenance()
+    await ingestion._persist_ingestion_metadata(
+        document_id="doc-1", user_id="user-1", owner_user_id=42,
+        source_provenance=provenance,
+        source_markdown_path="user-1/source_markdown/doc-1.md",
+        processed_json_path="user-1/processed_json/doc-1.json",
+        viewer_mode="local_pdf", filename=None,
+    )
+    assert document.source_provider_converted_artifact_id == provenance["converted_artifact_id"]
+    assert document.source_converted_artifact_sha256 == provenance["converted_artifact_sha256"]
+    session.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_original_source_file_preserves_utf8_and_crlf_bytes(monkeypatch, tmp_path):
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    original = "\ufeff # Résults\r\n\r\nβ cells.  \r\n".encode("utf-8")
+    relative = await ingestion._save_source_markdown(
+        markdown=original.decode("utf-8"), document_id="doc-1", user_id="user-1",
+    )
+    assert (tmp_path / relative).read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_shared_indexing_checks_owner_before_any_model_or_storage_work(monkeypatch):
+    monkeypatch.setattr(
+        ingestion, "_require_owned_document",
+        AsyncMock(side_effect=DocumentSourceIngestionError("Document owner mismatch")),
+    )
+    hierarchy = AsyncMock()
+    store = AsyncMock()
+    monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", hierarchy)
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", store)
+    with pytest.raises(DocumentSourceIngestionError, match="owner mismatch"):
+        await ingestion.index_owned_document_elements(
+            [{"text": "Synthetic paper", "metadata": {}}],
+            document_id="isolated-document",
+            user_id="owner-1",
+            owner_user_id=42,
+            weaviate_client=object(),
+            strategy=ChunkingStrategy.get_research_strategy(),
+        )
+    hierarchy.assert_not_awaited()
+    store.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_stage", ["hierarchy", "chunking", "figure_locators", "vector_storage"])
+async def test_shared_indexing_checkpoint_failure_stops_next_stage(monkeypatch, stop_stage):
+    monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+    monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
+    elements = [{"text": "Synthetic evidence", "metadata": {}}]
+    operations = {
+        "hierarchy": AsyncMock(return_value=(elements, {})),
+        "chunking": AsyncMock(return_value=[]),
+        "figure_locators": AsyncMock(return_value=[]),
+        "vector_storage": AsyncMock(),
+    }
+    monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", operations["hierarchy"])
+    monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", operations["chunking"])
+    monkeypatch.setattr("src.lib.pipeline.figure_locator_resolution.resolve_figure_locators", operations["figure_locators"])
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", operations["vector_storage"])
+
+    async def checkpoint(stage):
+        if stage == stop_stage:
+            raise RuntimeError("synthetic lease lost")
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        await ingestion.index_owned_document_elements(
+            elements, document_id="isolated-document", user_id="owner-1", owner_user_id=42,
+            weaviate_client=object(), strategy=ChunkingStrategy.get_research_strategy(),
+            stage_checkpoint=checkpoint,
+        )
+    operations[stop_stage].assert_not_awaited()
+    operations["vector_storage"].assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -126,7 +233,10 @@ async def test_ingest_provider_markdown_document_runs_pipeline(monkeypatch):
             user_id="user-1",
             document_owner_user_id=42,
             markdown="# Results\n\n<!-- page: 2 -->\nSignal from **B cells**.\n",
-            source_provenance=_source_provenance(access_scope="Restricted"),
+            source_provenance=_source_provenance(
+                markdown="# Results\n\n<!-- page: 2 -->\nSignal from **B cells**.\n",
+                access_scope="Restricted",
+            ),
         ),
         weaviate_client=object(),
     )
@@ -442,7 +552,9 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
             user_id="user-1",
             document_owner_user_id=42,
             markdown="# Results\n\nNative result text.\n",
-            source_provenance=_source_provenance(access_scope="Restricted"),
+            source_provenance=_source_provenance(
+                markdown="# Results\n\nNative result text.\n", access_scope="Restricted",
+            ),
             provider_figure_metadata=(provider_metadata,),
         ),
         weaviate_client=object(),
@@ -450,6 +562,10 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
 
     assert result.processing_result.success is True
     assert saved_markdown["markdown"] == "# Results\n\nNative result text.\n"
+    persisted = ingestion._persist_ingestion_metadata.await_args.kwargs
+    assert persisted["source_provenance"]["converted_artifact_sha256"] == hashlib.sha256(
+        saved_markdown["markdown"].encode("utf-8")
+    ).hexdigest()
     indexed_text = "\n".join(
         element["text"] for element in captured_elements["before_hierarchy"]
     )

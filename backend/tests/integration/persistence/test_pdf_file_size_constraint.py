@@ -9,7 +9,7 @@ from uuid import uuid4
 from alembic import command
 from alembic.config import Config
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.exc import IntegrityError
 
 from src.models.sql.database import SessionLocal
@@ -70,9 +70,27 @@ def test_upgrade_from_prior_head_relaxes_former_ceiling():
     try:
         legacy_session = SessionLocal()
         try:
-            legacy_session.add(document)
-            with pytest.raises(IntegrityError):
-                legacy_session.commit()
+            # Use the historical schema rather than today's ORM columns while
+            # proving that the former file-size constraint rejects this row.
+            with pytest.raises(IntegrityError) as rejected:
+                legacy_session.execute(
+                    text("""
+                        INSERT INTO pdf_documents
+                          (id, user_id, filename, file_path, file_hash, file_size,
+                           page_count, upload_timestamp)
+                        VALUES
+                          (:id, :user_id, :filename, :file_path, :file_hash,
+                           :file_size, :page_count, :upload_timestamp)
+                    """),
+                    {
+                        "id": document.id, "user_id": owner_id,
+                        "filename": document.filename, "file_path": document.file_path,
+                        "file_hash": document.file_hash, "file_size": document.file_size,
+                        "page_count": document.page_count,
+                        "upload_timestamp": document.upload_timestamp,
+                    },
+                )
+            assert rejected.value.orig.diag.constraint_name == "ck_pdf_documents_file_size"
             legacy_session.rollback()
         finally:
             legacy_session.close()

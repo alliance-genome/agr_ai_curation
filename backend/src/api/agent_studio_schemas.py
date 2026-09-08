@@ -135,6 +135,16 @@ class ModelsResponse(BaseModel):
     models: List[ModelOption]
 
 
+class ToolLibraryConfig(BaseModel):
+    """Per-tool policy config plus the flags the platform derives for the Workshop."""
+
+    model_config = ConfigDict(extra="allow")
+
+    requires_document: bool = Field(
+        description="True when the tool only works against an uploaded document.",
+    )
+
+
 class ToolLibraryItem(BaseModel):
     """Single tool entry from tool library policy table."""
 
@@ -145,7 +155,7 @@ class ToolLibraryItem(BaseModel):
     curator_visible: bool
     allow_attach: bool
     allow_execute: bool
-    config: Dict[str, Any] = Field(default_factory=dict)
+    config: ToolLibraryConfig
 
 
 class ToolLibraryResponse(BaseModel):

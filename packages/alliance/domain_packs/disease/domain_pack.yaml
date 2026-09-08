@@ -2389,49 +2389,97 @@ metadata:
     active:
       - validator_id: disease.domain_envelope_shape
         display_name: Disease data structure
-        description: Load the envelope through the provider-agnostic DomainEnvelope contract.
+        curator_label: Confirm the extracted data has the expected structure
+        description: Checks that the extracted disease data is in the structure the review screens and export expect.
+        definition_notes:
+          - Loads the envelope through the provider-agnostic DomainEnvelope contract.
       - validator_id: disease.required_payload_fields
         display_name: Required disease fields
-        description: Required pending disease assertion field paths declared in this pack must be present.
+        curator_label: Confirm every required disease field is filled in
+        description: Checks that each pending disease annotation has a value in every required field.
+        definition_notes:
+          - Required field paths are the ones this pack declares as required; each pending object payload must carry them.
       - validator_id: disease.tool_verified_evidence_links
         display_name: Evidence link preservation
-        description: Disease assertions must retain non-empty verified evidence_record_ids and evidence_records.
+        curator_label: Confirm each disease annotation keeps its evidence links
+        description: Checks that each disease annotation still points at the verified quotes from the paper that support it.
+        definition_notes:
+          - Disease assertions must retain non-empty verified evidence_record_ids and evidence_records.
       - validator_id: disease.no_legacy_semantic_lists
         display_name: Current extraction format
-        description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
+        curator_label: Confirm the extraction uses the current record format
+        description: Checks that the extraction uses the current record format and not an older list-based layout.
+        definition_notes:
+          - Rejects legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
       - validator_id: disease_ontology_term_lookup
         display_name: Disease ontology lookup
-        description: Validate Disease Ontology curies and labels through the active ontology-term package validator binding.
+        curator_label: Confirm each disease term against the Disease Ontology
+        description: Checks that the disease named on each annotation is a real Disease Ontology term. It matches the DOID identifier or the disease name and fills in the confirmed identifier and name.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family disease, DOTerm, accepted prefix DOID).
       - validator_id: disease_relation_cv_lookup
         display_name: Disease relation vocabulary lookup
-        description: Validate disease_relation_name against the Disease Relation vocabulary through the active controlled-vocabulary package validator binding.
+        curator_label: Confirm the disease relation against the Disease Relation vocabulary
+        description: Checks that the relation between the subject and the disease, such as is_model_of or is_implicated_in, is a term in the Disease Relation vocabulary.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Relation) on disease_relation_name.
       - validator_id: disease_condition_relation_lookup
         display_name: Condition relation lookup
-        description: Validate condition relation names through the active controlled-vocabulary package validator binding.
+        curator_label: Confirm each condition relation type against the Condition Relation Type vocabulary
+        description: Checks that the relation type on each experimental condition, such as has_condition or induced_by, is a term in the Condition Relation Type vocabulary.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Condition Relation Type, subset Expression Condition Relation).
+          - Fans out one check per condition_relations entry.
       - validator_id: disease_data_provider_lookup
         display_name: Data provider lookup
-        description: Validate disease data-provider abbreviations through the active data-provider package validator binding.
+        curator_label: Confirm the data provider against the Alliance member list
+        description: Checks that the data provider abbreviation on each annotation, such as ZFIN or MGI, names an Alliance member database.
+        definition_notes:
+          - Runs through the data-provider package validator binding.
       - validator_id: disease_subject_materialization
         display_name: Disease subject lookup
-        description: Resolve the staged disease_annotation_subject to concrete Gene, Allele, or AGM identity through the active subject-entity package validator binding (D2 full LinkML alignment).
+        curator_label: Confirm the subject gene, allele, or model in the Alliance records
+        description: Checks that the gene, allele, or genetic model the annotation is about matches an Alliance record and fills in its identifier and type. An annotation cannot be submitted until the subject is confirmed or a curator waives the check.
+        definition_notes:
+          - Runs through the subject-entity package validator binding, resolving the staged disease_annotation_subject to concrete Gene, Allele, or AGM identity (D2 full LinkML alignment).
+          - Blocking and required; curators may waive it through curator_override.
       - validator_id: disease_evidence_code_lookup
         display_name: Evidence code lookup
-        description: Validate ECO evidence-code curies through the active ontology-term package validator binding (D3 full LinkML alignment).
+        curator_label: Confirm each evidence code against the Evidence and Conclusion Ontology
+        description: Checks that each evidence code on the annotation is a real ECO term, such as ECO:0000033 for an author statement.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family evidence, ECOTerm, accepted prefix ECO) (D3 full LinkML alignment).
       - validator_id: disease_annotation_type_cv_lookup
         display_name: Annotation type lookup
-        description: Validate the curation-method constant (manually_curated) against the Annotation Type vocabulary through the active controlled-vocabulary package validator binding (R4).
+        curator_label: Confirm the annotation type against the Annotation Type vocabulary
+        description: Checks that the annotation type on each disease record is a term in the Annotation Type vocabulary. Records from this pipeline carry manually_curated.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Annotation Type, curation-method constant manually_curated) (R4).
       - validator_id: disease_genetic_sex_cv_lookup
         display_name: Genetic sex lookup
-        description: Validate the optional genetic_sex_name against the Genetic Sex vocabulary through the active controlled-vocabulary package validator binding (R4).
+        curator_label: Confirm the genetic sex against the Genetic Sex vocabulary
+        description: Checks that the genetic sex on the annotation, when the paper states one, is a term in the Genetic Sex vocabulary.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Genetic Sex) on the optional genetic_sex_name (R4).
       - validator_id: disease_qualifier_cv_lookup
         display_name: Disease qualifier lookup
-        description: Validate the disease_qualifier_names terms against the Disease Qualifier vocabulary through the active controlled-vocabulary package validator binding (R4).
+        curator_label: Confirm each disease qualifier against the Disease Qualifier vocabulary
+        description: Checks that each qualifier on the annotation, such as susceptibility or severity, is a term in the Disease Qualifier vocabulary.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Qualifier) on disease_qualifier_names (R4).
       - validator_id: disease_with_gene_validation
         display_name: With/from gene lookup
-        description: Validate the with_gene_identifiers genes through the active gene_validation package validator binding (R4).
+        curator_label: Confirm each with/from gene in the Alliance records
+        description: Checks that each gene listed as supporting evidence in the with/from column matches an Alliance gene record.
+        definition_notes:
+          - Runs through the gene_validation package validator binding on with_gene_identifiers (R4).
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
-        description: Compose disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision. Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
+        curator_label: Confirm each experimental condition against the condition ontologies and vocabularies
+        description: Checks each experimental condition on the annotation as one unit. It confirms the condition class and ontology terms, any chemical, the taxon, and the data provider together, so one decision covers the whole condition.
+        definition_notes:
+          - Runs through the experimental-condition package validator binding, which composes the disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision.
+          - Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
     under_development:
       - validator_id: disease_reference_materialization
         display_name: Reference lookup
@@ -2440,6 +2488,11 @@ metadata:
     active:
       - binding_id: disease_ontology_term_lookup
         display_name: Disease ontology lookup
+        curator_label: Confirm each disease term against the Disease Ontology
+        description: Checks that the disease named on each annotation is a real Disease Ontology term. It matches the DOID identifier or the disease name and fills in the confirmed identifier and name.
+        when_off: The disease term stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family disease, DOTerm, accepted prefix DOID).
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2488,6 +2541,11 @@ metadata:
           allowed: false
       - binding_id: disease_relation_cv_lookup
         display_name: Disease relation vocabulary lookup
+        curator_label: Confirm the disease relation against the Disease Relation vocabulary
+        description: Checks that the relation between the subject and the disease, such as is_model_of or is_implicated_in, is a term in the Disease Relation vocabulary.
+        when_off: The disease relation stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Relation) on disease_relation_name.
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -2544,6 +2602,12 @@ metadata:
           allowed: false
       - binding_id: disease_condition_relation_lookup
         display_name: Condition relation type lookup
+        curator_label: Confirm each condition relation type against the Condition Relation Type vocabulary
+        description: Checks that the relation type on each experimental condition, such as has_condition or induced_by, is a term in the Condition Relation Type vocabulary.
+        when_off: Condition relation types stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Condition Relation Type, subset Expression Condition Relation).
+          - Fans out one check per condition_relations entry.
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -2594,6 +2658,11 @@ metadata:
           allowed: false
       - binding_id: disease_data_provider_lookup
         display_name: Data provider lookup
+        curator_label: Confirm the data provider against the Alliance member list
+        description: Checks that the data provider abbreviation on each annotation, such as ZFIN or MGI, names an Alliance member database.
+        when_off: The data provider stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the data-provider package validator binding.
         validator_agent:
           package_id: agr.alliance
           agent_id: data_provider_validation
@@ -2628,6 +2697,12 @@ metadata:
       # selects the concrete DiseaseAnnotation subtype materialized by the builder.
       - binding_id: disease_subject_materialization
         display_name: Disease subject lookup
+        curator_label: Confirm the subject gene, allele, or model in the Alliance records
+        description: Checks that the gene, allele, or genetic model the annotation is about matches an Alliance record and fills in its identifier and type. An annotation cannot be submitted until the subject is confirmed or a curator waives the check.
+        when_off: The subject stays as the extractor wrote it, review rows show it unconfirmed, and the annotation cannot be submitted until a curator confirms or waives it.
+        definition_notes:
+          - Runs through the subject-entity package validator binding, resolving the staged disease_annotation_subject to concrete Gene, Allele, or AGM identity (D2 full LinkML alignment).
+          - Blocking and required; curators may waive it through curator_override.
         validator_agent:
           package_id: agr.alliance
           agent_id: subject_entity_validation
@@ -2676,6 +2751,11 @@ metadata:
       # LinkML-required + multivalued; ECO CURIEs are validated through the ontology-term validator.
       - binding_id: disease_evidence_code_lookup
         display_name: Evidence code lookup
+        curator_label: Confirm each evidence code against the Evidence and Conclusion Ontology
+        description: Checks that each evidence code on the annotation is a real ECO term, such as ECO:0000033 for an author statement.
+        when_off: Evidence codes stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family evidence, ECOTerm, accepted prefix ECO) (D3 full LinkML alignment).
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2725,6 +2805,11 @@ metadata:
       # the Annotation Type vocabulary; the result snapshots back to the sibling vocabulary/id fields.
       - binding_id: disease_annotation_type_cv_lookup
         display_name: Annotation type lookup
+        curator_label: Confirm the annotation type against the Annotation Type vocabulary
+        description: Checks that the annotation type on each disease record is a term in the Annotation Type vocabulary. Records from this pipeline carry manually_curated.
+        when_off: The annotation type stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Annotation Type, curation-method constant manually_curated) (R4).
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -2758,6 +2843,11 @@ metadata:
       # validates and snapshots vocabulary/id back to the sibling fields.
       - binding_id: disease_genetic_sex_cv_lookup
         display_name: Genetic sex lookup
+        curator_label: Confirm the genetic sex against the Genetic Sex vocabulary
+        description: Checks that the genetic sex on the annotation, when the paper states one, is a term in the Genetic Sex vocabulary.
+        when_off: The genetic sex stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Genetic Sex) on the optional genetic_sex_name (R4).
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -2798,6 +2888,11 @@ metadata:
       # validation against the Disease Qualifier vocabulary.
       - binding_id: disease_qualifier_cv_lookup
         display_name: Disease qualifier lookup
+        curator_label: Confirm each disease qualifier against the Disease Qualifier vocabulary
+        description: Checks that each qualifier on the annotation, such as susceptibility or severity, is a term in the Disease Qualifier vocabulary.
+        when_off: Disease qualifiers stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Disease Qualifier) on disease_qualifier_names (R4).
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -2840,6 +2935,11 @@ metadata:
       # validation through gene_validation, mirroring the subject_gene_validation binding.
       - binding_id: disease_with_gene_validation
         display_name: With/from gene lookup
+        curator_label: Confirm each with/from gene in the Alliance records
+        description: Checks that each gene listed as supporting evidence in the with/from column matches an Alliance gene record.
+        when_off: With/from genes stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the gene_validation package validator binding on with_gene_identifiers (R4).
         validator_agent:
           package_id: agr.alliance
           agent_id: gene_validation
@@ -2890,6 +2990,12 @@ metadata:
       # composite request carries that condition's own components plus its relation context.
       - binding_id: experimental_condition_validation
         display_name: Experimental condition validation
+        curator_label: Confirm each experimental condition against the condition ontologies and vocabularies
+        description: Checks each experimental condition on the annotation as one unit. It confirms the condition class and ontology terms, any chemical, the taxon, and the data provider together, so one decision covers the whole condition.
+        when_off: Experimental conditions stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the experimental-condition package validator binding, which composes the disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision.
+          - Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
         validator_agent:
           package_id: agr.alliance
           agent_id: experimental_condition_validation

@@ -1,4 +1,9 @@
 import type {
+  CurationBenchmarkDestinationListResponse,
+  CurationBenchmarkHandoffRequest,
+  CurationBenchmarkHandoffResponse,
+  CurationBenchmarkSnapshotCreateRequest,
+  CurationBenchmarkSnapshotCreateResponse,
   CurationCandidateDecisionRequest,
   CurationCandidateDecisionResponse,
   CurationCandidateValidationRequest,
@@ -129,6 +134,33 @@ export async function fetchCurationWorkspace(sessionId: string): Promise<Curatio
   )
 
   return payload.workspace
+}
+
+export async function fetchBenchmarkDestinations(): Promise<CurationBenchmarkDestinationListResponse> {
+  return fetchCurationWorkspaceJson<CurationBenchmarkDestinationListResponse>(
+    '/api/curation-workspace/benchmark-destinations',
+  )
+}
+
+export async function createCurationBenchmarkSnapshot(
+  sessionId: string,
+  envelopeId: string,
+  request: CurationBenchmarkSnapshotCreateRequest,
+): Promise<CurationBenchmarkSnapshotCreateResponse> {
+  return fetchCurationWorkspaceJson<CurationBenchmarkSnapshotCreateResponse>(
+    `/api/curation-workspace/sessions/${encodeURIComponent(sessionId)}/envelopes/${encodeURIComponent(envelopeId)}/benchmark-snapshots`,
+    { method: 'POST', body: JSON.stringify(request) },
+  )
+}
+
+export async function handoffCurationBenchmarkSnapshot(
+  snapshotId: string,
+  request: CurationBenchmarkHandoffRequest,
+): Promise<CurationBenchmarkHandoffResponse> {
+  return fetchCurationWorkspaceJson<CurationBenchmarkHandoffResponse>(
+    `/api/curation-workspace/benchmark-snapshots/${encodeURIComponent(snapshotId)}/handoffs`,
+    { method: 'POST', body: JSON.stringify(request) },
+  )
 }
 
 export async function updateCurationSession(

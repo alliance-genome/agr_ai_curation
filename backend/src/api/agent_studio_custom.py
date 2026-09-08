@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .auth import get_auth_dependency
 from src.models.sql import get_db
 from src.services.user_service import set_global_user_from_cognito
+from src.services.document_access import exclude_benchmark_document
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.openai_agents import run_agent_streamed
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
@@ -591,6 +592,7 @@ async def test_custom_agent_endpoint(
             detail="This custom agent requires a document_id for testing",
         )
 
+    exclude_benchmark_document(db, request.document_id)
     user_sub = user.get("sub") or db_user.auth_sub
     if not user_sub:
         raise HTTPException(status_code=401, detail="User identifier not found in token")

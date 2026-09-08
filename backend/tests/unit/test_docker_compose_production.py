@@ -60,8 +60,59 @@ def _load_dev_compose() -> dict:
     return yaml.safe_load(DEV_COMPOSE_PATH.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("compose_path,backend_name,worker_name", [
+    (DEV_COMPOSE_PATH, "backend", "benchmark_worker"),
+    (COMPOSE_PATH, "backend", "benchmark_worker"),
+    (TEST_COMPOSE_PATH, "backend-integration-tests", "benchmark-worker-test"),
+])
+def test_benchmark_api_settings_reach_api_process(compose_path, backend_name, worker_name):
+    services = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"]
+    environment = services[backend_name]["environment"]
+    if isinstance(environment, list):
+        environment = dict(item.split("=", 1) for item in environment)
+    assert environment["BENCHMARK_API_ENABLED"] == (
+        "false" if compose_path == COMPOSE_PATH else "${BENCHMARK_API_ENABLED:-false}"
+    )
+    assert environment["BENCHMARK_EXECUTION_ENABLED"] == (
+        "false" if compose_path == COMPOSE_PATH else "${BENCHMARK_EXECUTION_ENABLED:-false}"
+    )
+    for name, default in (
+        ("BENCHMARK_CATALOG_MAX_RESPONSE_BYTES", 1048576),
+        ("BENCHMARK_EVENT_HEARTBEAT_SECONDS", 15),
+        ("BENCHMARK_EVENT_REPLAY_BATCH_SIZE", 250),
+        ("BENCHMARK_MAX_EVENT_CONNECTIONS_PER_PRINCIPAL", 5),
+    ):
+        assert environment[name] == "${" + name + ":-" + str(default) + "}"
+    assert environment["BENCHMARK_ENVIRONMENT_ID"] == "${BENCHMARK_ENVIRONMENT_ID:-unconfigured}"
+    assert "BENCHMARK_API_ENABLED" not in services[worker_name]["environment"]
+
+
 def _load_test_compose() -> dict:
     return yaml.safe_load(TEST_COMPOSE_PATH.read_text(encoding="utf-8"))
+
+
+def test_benchmark_worker_is_isolated_and_production_dispatch_is_disabled():
+    production = _load_compose()["services"]["benchmark_worker"]
+    development = _load_dev_compose()["services"]["benchmark_worker"]
+    test_service = _load_test_compose()["services"]["benchmark-worker-test"]
+
+    assert production["command"] == "python -m src.lib.benchmarks.worker"
+    assert production["environment"]["BENCHMARK_WORKER_ENABLED"] == "false"
+    assert production["environment"]["BENCHMARK_EXECUTION_ENABLED"] == "false"
+    assert production["restart"] == "on-failure"
+    assert development["environment"]["BENCHMARK_WORKER_ENABLED"].endswith(
+        ":-false}"
+    )
+    assert development["environment"]["BENCHMARK_EXECUTION_ENABLED"].endswith(
+        ":-false}"
+    )
+    assert "DATABASE_URL" not in development["environment"]
+    assert development["restart"] == "on-failure"
+    assert test_service["command"] == "python -m src.lib.benchmarks.worker"
+    assert test_service["environment"]["POSTGRES_HOST"] == "postgres-test"
+    assert test_service["environment"]["POSTGRES_PASSWORD"].endswith(
+        ":-CHANGE_ME_TEST_DB_PASSWORD}"
+    )
 
 
 def _list_environment(entries: list[str]) -> dict[str, str]:

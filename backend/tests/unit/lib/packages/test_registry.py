@@ -381,6 +381,7 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
         ExportKind.TOOL_BINDING,
         ExportKind.TOOL_POLICY_DEFAULTS,
         ExportKind.FLOW_RECIPES,
+        ExportKind.PERSISTED_FLOW_MIGRATIONS,
         ExportKind.IDENTIFIER_PREFIXES,
     }
 

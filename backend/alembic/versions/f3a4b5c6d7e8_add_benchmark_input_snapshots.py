@@ -1,7 +1,7 @@
 """Add immutable benchmark input snapshots.
 
 Revision ID: f3a4b5c6d7e8
-Revises: e2f3a4b5c6d7
+Revises: e2f3a4b5c6e8
 """
 
 from collections.abc import Sequence
@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 
 revision: str = "f3a4b5c6d7e8"
-down_revision: str | Sequence[str] | None = "e2f3a4b5c6d7"
+down_revision: str | Sequence[str] | None = "e2f3a4b5c6e8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

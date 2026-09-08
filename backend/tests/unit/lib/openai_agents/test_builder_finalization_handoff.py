@@ -16,6 +16,7 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 @pytest.fixture(autouse=True)
 def _stub_inline_builder_persistence(monkeypatch):
     counter = {"value": 0}
+    monkeypatch.setattr(streaming_tools, "capture_source_document", lambda *_: None)
 
     def _fake_persist_builder_finalization_for_supervisor(**_kwargs):
         counter["value"] += 1
@@ -1590,6 +1591,17 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
     )
     _disable_package_tool_rebinding(monkeypatch)
     persist_calls = _spy_inline_persistence(monkeypatch)
+    capture_order = []
+
+    def capture_document(*_args):
+        capture_order.append("capture")
+        return None
+
+    def run_streamed(*_args, **_kwargs):
+        capture_order.append("run")
+        return _BuilderFinalizingRunResult()
+
+    monkeypatch.setattr(streaming_tools, "capture_source_document", capture_document)
 
     async def _materialize_domain_envelope(serialized_payload, *_args, **_kwargs):
         return json.dumps(
@@ -1609,7 +1621,7 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
     monkeypatch.setattr(
         streaming_tools.Runner,
         "run_streamed",
-        lambda *args, **kwargs: _BuilderFinalizingRunResult(),
+        run_streamed,
     )
     monkeypatch.setattr(
         streaming_tools,
@@ -1624,6 +1636,7 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
 
     agent = SimpleNamespace(
         name="Gene Expression Extractor",
+        agent_key="gene_expression_extraction",
         tools=[_builder_finalizer_tool()],
         output_type=None,
         instructions="",
@@ -1642,6 +1655,12 @@ async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
 
     # The CHAT-source inline persist helper fired exactly once.
     assert len(persist_calls) == 1
+    context = persist_calls[0]["execution_context"]
+    assert context.source_kind == "chat"
+    assert context.flow_id is None
+    assert context.executed_query == "extract gene expression evidence"
+    assert context.agent_key == "gene_expression_extraction"
+    assert capture_order == ["capture", "run"]
     assert len(validated_handoffs) == 1
     assert validated_handoffs[0] == expected_handoff
     assert validated_handoffs[0].object_count == 1

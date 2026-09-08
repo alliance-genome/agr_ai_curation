@@ -51,6 +51,7 @@ def test_create_app_registers_benchmark_sources_without_loading_catalog(monkeypa
 
     assert application.state.benchmark_input_resolver_extensions == ()
     assert not hasattr(application.state, "benchmark_input_resolvers")
+    assert any(route.path == "/api/v1/benchmarks/jobs" for route in application.routes)
     assert any(
         route.path == "/api/v1/benchmarks/sources/materialize"
         for route in application.routes

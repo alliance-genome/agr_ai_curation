@@ -22,13 +22,14 @@ data_sources:
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents. Supports searching by query terms, filtering by section, and reading full sections or subsections."
     species_supported: null
     data_types: ["PDF text chunks", "Section content", "Subsection content"]
-  - name: "Expression validators"
-    description: "Specialist validators confirm the expression-relation vocabulary and the data provider after extraction. Confirming the gene, anatomy term, developmental stage, and reference against the database is still in development."
-    species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "M. musculus (MGI)", "D. rerio (ZFIN)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)", "H. sapiens (HGNC)"]
-    data_types: ["Proposed expression relations", "Proposed data providers", "Evidence-backed expression observations"]
+use_when:
+  - "When you upload a paper that reports where and when genes are expressed and want each pattern captured with its quote."
+  - "At the start of a gene expression curation flow; the domain pack's validators then confirm genes, anatomy, and stage terms automatically."
+  - "When a paper uses reporters, in situ hybridization, or antibody staining to show baseline expression."
+avoid_when:
+  - "For expression changes caused by mutations, RNAi, heat shock, or drug treatment; only wild-type patterns are captured."
+  - "To turn tissue or stage wording into official ontology IDs; the domain pack's validators do that automatically on everything this agent extracts."
+  - "To produce a downloadable file; add a File Formatter after this agent."
 limitations:
-  - "Returns plain text output only - JSON conversion is handled by a separate Formatter Agent"
-  - "Does NOT extract expression data from mutant phenotypes or experimental perturbations (heat shock, RNAi knockdown, drug treatment) - only baseline/wild-type expression"
   - "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)"
-  - "The extractor records the term wording it finds; turning that into an official ontology ID is the validators' or the Ontology Term Resolver's job."
   - "Requires at least one document search or read tool call before returning results"

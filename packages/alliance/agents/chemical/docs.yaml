@@ -22,9 +22,15 @@ data_sources:
     description: "EBI-hosted curated ontology of molecular entities focused on small chemical compounds involved in biological processes, including drugs, metabolites, cofactors, and toxins."
     species_supported: null
     data_types: ["Chemical identifiers (ChEBI IDs)", "Molecular formulas", "InChI/SMILES structures", "Chemical definitions", "Ontology classifications", "Synonyms"]
+note: "This check does not run automatically yet. No domain pack includes chemical validation, so add this agent to your flow when you need ChEBI terms and IDs confirmed. Other checks declared by the domain packs run automatically."
+use_when:
+  - "After an extractor names a chemical, drug, or treatment compound that needs an official ChEBI term and ID."
+  - "When you have a compound name or synonym and want its ChEBI record, formula, and parent classes."
+  - "Before curation handoff, so chemical annotations and experimental conditions carry confirmed ChEBI IDs."
+avoid_when:
+  - "For chemical to gene interactions, drug targets, or mechanisms of action, which ChEBI does not record."
+  - "For pathway information, which ChEBI does not cover."
+  - "For anatomy, life stage, or other non-chemical ontology terms; use the Ontology Term Resolver Agent."
 limitations:
-  - "Cannot provide chemical-gene interactions (requires gene specialist agent)"
-  - "Cannot provide drug targets or mechanisms of action"
-  - "Cannot provide pathway information (pathways not in ChEBI)"
   - "Multiple results for common names (e.g., 'glucose' matches many stereoisomers) - selects most biologically relevant form"
   - "Every answer comes from a fresh, live lookup against ChEBI — it never answers from memory."

@@ -107,6 +107,11 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
             "config/flow_recipes.yaml",
         ),
         (
+            ExportKind.PERSISTED_FLOW_MIGRATIONS,
+            "saved_flow_repairs",
+            "config/persisted_flow_migrations.yaml",
+        ),
+        (
             ExportKind.AGENT_STUDIO_PROMPT,
             "system",
             "config/agent_studio_system_prompt.md",

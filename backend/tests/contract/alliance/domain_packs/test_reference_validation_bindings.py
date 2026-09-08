@@ -93,9 +93,16 @@ def test_reference_validation_bindings_have_expected_lifecycle_state():
         assert binding.object_types == expected["object_types"]
         assert binding.field_paths == expected["field_paths"]
         assert binding.expected_result_fields == expected["expected_result_fields"]
-        assert bool(binding.reason) is (
-            expected_state is ValidationBindingState.UNDER_DEVELOPMENT
-        )
+        # Active bindings carry their curator-voice description as the reason and
+        # expose the curator switch text; under-development bindings carry their
+        # state_explanation and no curator switch text.
+        assert binding.reason
+        if expected_state is ValidationBindingState.ACTIVE:
+            assert binding.curator_label
+            assert binding.when_off
+        else:
+            assert binding.curator_label is None
+            assert binding.when_off is None
 
         active_reference_bindings = [
             item

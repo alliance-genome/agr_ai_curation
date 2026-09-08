@@ -22,8 +22,17 @@ data_sources:
     description: "Comprehensive allele/variant data from all Model Organism Databases, including symbols, names, synonyms, obsolete status, and extinction status"
     species_supported: ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"]
     data_types: ["allele symbols", "allele IDs (CURIEs)", "full names", "synonyms", "gene associations", "obsolete/extinct status"]
+note: "Validation runs automatically. This check runs on every allele an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
+use_when:
+  - "When you want a custom allele check: a changed prompt, different tools, or a stricter or looser match than the automatic check."
+  - "When you have an allele symbol or ID and want to confirm it exists and see the gene it belongs to."
+  - "When you want to review how alleles in extracted records are confirmed against Alliance records."
+avoid_when:
+  - "To get alleles validated in a flow; the domain pack already runs this check automatically on every allele an extractor produces."
+  - "For genes; use the Gene Validation Agent."
+  - "For diseases or phenotypes; use the Disease Ontology Agent or the phenotype validators."
+  - "To find the alleles a paper studies; that is the Allele/Variant Extraction Agent's job."
 limitations:
   - "Only validates against Alliance group data - newly published alleles may not be in the database yet"
-  - "Searches alleles only - genes, diseases, and phenotypes are handled by separate agents"
   - "Allele symbols written with angle brackets are matched to their superscript form automatically — you don't need to reformat them."
   - "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."

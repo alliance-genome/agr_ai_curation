@@ -183,6 +183,39 @@ installs. Repo-local agent templates remain under `config/agents/_examples/`.
 | `model_config.reasoning` | No | Thinking effort: `disabled` / `low` / `medium` / `high` / `xhigh` |
 | `group_rules_enabled` | No | Load `group_rules/*.yaml` (default: `false`) |
 
+### docs.yaml fields (curator guide)
+
+An optional sibling `docs.yaml` holds the curator-facing guide shown on the
+Agent Studio Guide tab. Write it in plain language for biologists. The
+frontend renders every field verbatim and adds no text of its own.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `summary` | Yes | One sentence saying what the agent does |
+| `capabilities` | No | List of `{name, description, example_query, example_result}` |
+| `data_sources` | No | List of `{name, description, species_supported}` the agent reads. Do not list validator agents here; a validator is not a source an extractor reads |
+| `limitations` | Yes | Plain sentences, one true limitation each |
+| `use_when` | Yes | Situations where a curator would pick this agent |
+| `avoid_when` | Yes | Situations where another agent is the right choice |
+| `note` | Validation agents only | One short paragraph shown in a highlighted box above the guidance |
+
+Rules for `note`:
+
+- Notes appear on validation agents only. Extractors carry no `note`.
+- Every note states whether the check runs automatically. That is decided by
+  the domain packs, not by the UI: a check runs automatically only when a
+  binding for the agent is in the `active` bucket of a pack's
+  `validator_bindings` in `packages/alliance/domain_packs/*/domain_pack.yaml`.
+  Bindings under `under_development` do not run and must not be claimed.
+- A note (and any `avoid_when` sentence about automatic checks) may name
+  only the record types and packs where the binding is active.
+- Unbound validators and lookup agents say so, and tell the curator to add
+  the agent to a flow or ask for it in chat.
+- After a content pass, regenerate the parity baseline: delete
+  `backend/tests/unit/api/fixtures/agent_documentation_baseline.json`, run
+  `tests/unit/api/test_agent_documentation_parity.py` once to rewrite it, and
+  run it again to assert.
+
 ### prompt.yaml fields
 
 | Field | Required | Description |

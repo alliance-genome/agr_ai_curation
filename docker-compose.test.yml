@@ -10,6 +10,38 @@
 #   or `backend-tests` when the change needs heavier integration or end-to-end coverage.
 
 services:
+  benchmark-worker-test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.test
+    command: python -m src.lib.benchmarks.worker
+    volumes:
+      - ./backend:/app/backend
+      - ./config:/runtime/config:ro
+      - ./packages:/runtime/packages:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      POSTGRES_HOST: postgres-test
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${TEST_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}
+      POSTGRES_DB: ${TEST_DB_NAME:-ai_curation}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-test-key}
+      BENCHMARK_WORKER_ENABLED: ${BENCHMARK_WORKER_ENABLED:-false}
+      BENCHMARK_EXECUTION_ENABLED: ${BENCHMARK_EXECUTION_ENABLED:-false}
+      BENCHMARK_EVENT_RETENTION_COUNT: ${BENCHMARK_EVENT_RETENTION_COUNT:-10000}
+      BENCHMARK_WORKER_CONCURRENCY: ${BENCHMARK_WORKER_CONCURRENCY:-1}
+      BENCHMARK_WORKER_LEASE_SECONDS: ${BENCHMARK_WORKER_LEASE_SECONDS:-300}
+      BENCHMARK_WORKER_HEARTBEAT_SECONDS: ${BENCHMARK_WORKER_HEARTBEAT_SECONDS:-30}
+      BENCHMARK_CELL_TIMEOUT_SECONDS: ${BENCHMARK_CELL_TIMEOUT_SECONDS:-3600}
+      BENCHMARK_SNAPSHOT_STORE_BACKEND: filesystem
+      BENCHMARK_SNAPSHOT_STORE_PATH: /tmp/benchmark-snapshots
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    networks:
+      - test-network
+
   reranker-transformers-test:
     profiles: ["local-reranker"]
     image: cr.weaviate.io/semitechnologies/reranker-transformers:cross-encoder-ms-marco-MiniLM-L-6-v2
@@ -41,7 +73,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${TEST_DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}
       POSTGRES_DB: ${TEST_DB_NAME:-ai_curation}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${TEST_DB_USER:-postgres} -d ${TEST_DB_NAME:-ai_curation}"]
@@ -123,7 +155,7 @@ services:
       - EVIDENCE_CONFIRMATION_ENABLED=true
       - EVIDENCE_CONFIRMATION_MODEL=gpt-5-nano
       - EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS=8
-      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
@@ -181,7 +213,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
-      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - OPENAI_API_KEY=test-key-for-unit-tests
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - EVIDENCE_CONFIRMATION_ENABLED=true
@@ -232,7 +264,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
-      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
@@ -251,6 +283,10 @@ services:
       - TESTING_API_KEY_USER=${TESTING_API_KEY_USER:-}
       - TESTING_API_KEY_EMAIL=${TESTING_API_KEY_EMAIL:-}
       - TESTING_API_KEY_GROUPS=${TESTING_API_KEY_GROUPS:-}
+      - BENCHMARK_SNAPSHOT_HANDOFF_ENABLED=${BENCHMARK_SNAPSHOT_HANDOFF_ENABLED:-false}
+      - BENCHMARK_SNAPSHOT_HANDOFF_DESTINATIONS_JSON=${BENCHMARK_SNAPSHOT_HANDOFF_DESTINATIONS_JSON:-{}}
+      - BENCHMARK_HANDOFF_TIMEOUT_SECONDS=${BENCHMARK_HANDOFF_TIMEOUT_SECONDS:-30}
+      - BENCHMARK_MAX_SNAPSHOT_BYTES=${BENCHMARK_MAX_SNAPSHOT_BYTES:-10485760}
       - BENCHMARK_OIDC_ISSUER_URL=${BENCHMARK_OIDC_ISSUER_URL:-}
       - BENCHMARK_OIDC_AUDIENCE=${BENCHMARK_OIDC_AUDIENCE:-}
       - BENCHMARK_OIDC_ALLOWED_CLIENT_IDS=${BENCHMARK_OIDC_ALLOWED_CLIENT_IDS:-}
@@ -270,6 +306,15 @@ services:
       - BENCHMARK_OIDC_JWKS_CACHE_TTL_SECONDS=${BENCHMARK_OIDC_JWKS_CACHE_TTL_SECONDS:-300}
       - BENCHMARK_OIDC_CLOCK_SKEW_SECONDS=${BENCHMARK_OIDC_CLOCK_SKEW_SECONDS:-60}
       - BENCHMARK_DELEGATED_SOURCE_AUTH_MAX_BYTES=${BENCHMARK_DELEGATED_SOURCE_AUTH_MAX_BYTES:-8192}
+      - BENCHMARK_CURATOR_AUTH_MAX_BYTES=${BENCHMARK_CURATOR_AUTH_MAX_BYTES:-8192}
+      - BENCHMARK_ADMISSION_MAX_BYTES=${BENCHMARK_ADMISSION_MAX_BYTES:-1048576}
+      - BENCHMARK_API_ENABLED=${BENCHMARK_API_ENABLED:-false}
+      - BENCHMARK_ENVIRONMENT_ID=${BENCHMARK_ENVIRONMENT_ID:-unconfigured}
+      - BENCHMARK_CATALOG_MAX_RESPONSE_BYTES=${BENCHMARK_CATALOG_MAX_RESPONSE_BYTES:-1048576}
+      - BENCHMARK_EXECUTION_ENABLED=${BENCHMARK_EXECUTION_ENABLED:-false}
+      - BENCHMARK_EVENT_HEARTBEAT_SECONDS=${BENCHMARK_EVENT_HEARTBEAT_SECONDS:-15}
+      - BENCHMARK_EVENT_REPLAY_BATCH_SIZE=${BENCHMARK_EVENT_REPLAY_BATCH_SIZE:-250}
+      - BENCHMARK_MAX_EVENT_CONNECTIONS_PER_PRINCIPAL=${BENCHMARK_MAX_EVENT_CONNECTIONS_PER_PRINCIPAL:-5}
       - BENCHMARK_MAX_MATERIALIZED_SUBMISSION_BYTES=${BENCHMARK_MAX_MATERIALIZED_SUBMISSION_BYTES:-262144000}
       - BENCHMARK_SNAPSHOT_STORE_BACKEND=filesystem
       - BENCHMARK_SNAPSHOT_STORE_PATH=/tmp/benchmark-snapshots
@@ -341,7 +386,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
-      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
@@ -384,7 +429,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
-      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
+      - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http

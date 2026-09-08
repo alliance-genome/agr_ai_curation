@@ -317,13 +317,52 @@ raise SystemExit(1)
 PY
 }
 
+langfuse_capability_status() {
+  local payload_file="$1"
+
+  "$python_cmd" - "$payload_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+print(str(payload.get("status", "invalid")))
+PY
+}
+
+trace_review_runtime_identity() {
+  local payload_file="$1"
+
+  "$python_cmd" - "$payload_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+print(f"{runtime.get('image_version', 'unknown')} {runtime.get('source_revision', 'unknown')}")
+PY
+}
+
 check_trace_review_backend() {
   local payload_file
   local preflight_payload_file
+  local langfuse_payload_file
   local backend_port
   local owner
+  local capability_status
+  local runtime_identity
   payload_file="$(mktemp)"
   preflight_payload_file="$(mktemp)"
+  langfuse_payload_file="$(mktemp)"
 
   backend_port="$(url_port "$backend_url")"
   if [[ -n "$backend_port" ]]; then
@@ -340,7 +379,7 @@ check_trace_review_backend() {
     if [[ "$backend_port" == "8001" ]]; then
       record_warning "Port 8001 is the default TraceReview backend port and may be occupied by another local service; verify the listener or pass --backend-url."
     fi
-    rm -f "$payload_file" "${payload_file}.err" "$preflight_payload_file" "${preflight_payload_file}.err"
+    rm -f "$payload_file" "${payload_file}.err" "$preflight_payload_file" "${preflight_payload_file}.err" "$langfuse_payload_file" "${langfuse_payload_file}.err"
     return 0
   fi
 
@@ -356,7 +395,20 @@ check_trace_review_backend() {
     record_warning "TraceReview /health/preflight endpoint was not reachable. Rebuild/redeploy TraceReview if this backend predates the diagnostic endpoint."
   fi
 
-  rm -f "$payload_file" "${payload_file}.err" "$preflight_payload_file" "${preflight_payload_file}.err"
+  if http_get "${backend_url%/}/health/langfuse?source=${selected_source}" "$langfuse_payload_file"; then
+    capability_status="$(langfuse_capability_status "$langfuse_payload_file" || printf invalid)"
+    runtime_identity="$(trace_review_runtime_identity "$langfuse_payload_file" || printf 'unknown unknown')"
+    log_info "TraceReview runtime identity: image_version=${runtime_identity%% *} source_revision=${runtime_identity#* }"
+    if [[ "$capability_status" == "ok" ]]; then
+      log_success "TraceReview exact-trace and session-discovery capability probes passed for source '${selected_source}'."
+    else
+      record_health_failure "TraceReview Langfuse v4 capability probes are '${capability_status}' for source '${selected_source}'."
+    fi
+  else
+    record_health_failure "TraceReview /health/langfuse capability endpoint was not reachable for source '${selected_source}'."
+  fi
+
+  rm -f "$payload_file" "${payload_file}.err" "$preflight_payload_file" "${preflight_payload_file}.err" "$langfuse_payload_file" "${langfuse_payload_file}.err"
 }
 
 check_source_selection() {

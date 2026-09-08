@@ -76,6 +76,14 @@ from .models import (
     ToolBindingKind,
     ToolBindingsManifest,
 )
+from .persisted_flow_migration_loader import (
+    PersistedFlowMigration,
+    PersistedFlowMigrationCatalog,
+    PersistedFlowMigrationLoadError,
+    RetiredFlowAttachment,
+    build_persisted_flow_migration_catalog,
+    load_persisted_flow_migration_catalog,
+)
 from .package_runner import (
     PackageRunnerError,
     PackageToolExecutionResult,
@@ -178,6 +186,9 @@ __all__ = [
     "PackageRegistryValidationError",
     "PackageToolExecutionResult",
     "PackageToolRunner",
+    "PersistedFlowMigration",
+    "PersistedFlowMigrationCatalog",
+    "PersistedFlowMigrationLoadError",
     "RegisteredToolBinding",
     "RunnerError",
     "RunnerErrorResponse",
@@ -187,6 +198,7 @@ __all__ = [
     "RuntimeOverrideSelection",
     "RuntimeOverrides",
     "RuntimeOverridesError",
+    "RetiredFlowAttachment",
     "ToolBinding",
     "ToolBindingCollision",
     "ToolBindingKind",
@@ -200,6 +212,7 @@ __all__ = [
     "build_document_source_provider_catalog",
     "build_flow_recipe_catalog",
     "build_identifier_prefix_provider_catalog",
+    "build_persisted_flow_migration_catalog",
     "build_tool_registry",
     "decode_request",
     "decode_response",
@@ -236,6 +249,7 @@ __all__ = [
     "load_package_manifest",
     "load_installed_agent_studio_prompt",
     "load_package_registry",
+    "load_persisted_flow_migration_catalog",
     "load_flow_recipe_catalog",
     "load_runtime_overrides",
     "load_tool_bindings",

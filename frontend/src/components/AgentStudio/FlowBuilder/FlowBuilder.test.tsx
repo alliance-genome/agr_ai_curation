@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -22,10 +22,16 @@ const agentMetadataMocks = vi.hoisted(() => ({
   agents: {} as Record<string, unknown>,
 }))
 
+const nodePanelMocks = vi.hoisted(() => ({
+  requestLeave: vi.fn(),
+}))
+
 const reactFlowMocks = vi.hoisted(() => ({
   fitView: vi.fn(),
   screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
   onConnect: undefined as undefined | ((connection: { source: string; target: string }) => void),
+  onNodeClick: undefined as undefined | ((...args: never[]) => void),
+  onPaneClick: undefined as undefined | (() => void),
   nodes: [] as Array<{ id?: string; type?: string }>,
   edges: [] as Array<{ source?: string; target?: string; animated?: boolean; data?: { role?: string } }>,
 }))
@@ -91,6 +97,8 @@ vi.mock('reactflow', async () => {
       onDrop,
       onDragOver,
       onConnect,
+      onNodeClick,
+      onPaneClick,
       nodes = [],
       edges = [],
     }: {
@@ -102,6 +110,8 @@ vi.mock('reactflow', async () => {
       onDrop?: (event: React.DragEvent<HTMLDivElement>) => void
       onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void
       onConnect?: (connection: { source: string; target: string }) => void
+      onNodeClick?: (...args: never[]) => void
+      onPaneClick?: () => void
       nodes?: Array<{ id?: string; type?: string }>
       edges?: Array<{ source?: string; target?: string; animated?: boolean; data?: { role?: string } }>
     }) => {
@@ -119,6 +129,14 @@ vi.mock('reactflow', async () => {
           reactFlowMocks.onConnect = undefined
         }
       }, [onConnect])
+      react.useEffect(() => {
+        reactFlowMocks.onNodeClick = onNodeClick
+        reactFlowMocks.onPaneClick = onPaneClick
+        return () => {
+          reactFlowMocks.onNodeClick = undefined
+          reactFlowMocks.onPaneClick = undefined
+        }
+      }, [onNodeClick, onPaneClick])
 
       return (
         <div data-testid="react-flow" onDrop={onDrop} onDragOver={onDragOver}>
@@ -173,17 +191,23 @@ vi.mock('./AgentPalette', () => ({
   default: () => <div data-testid="agent-palette" />,
 }))
 
-vi.mock('./NodeEditor', () => ({
-  default: () => null,
-}))
-
-vi.mock('./TaskInputEditor', () => ({
-  default: () => null,
-}))
-
-vi.mock('./PromptViewer', () => ({
-  default: () => null,
-}))
+vi.mock('./NodePanel', async (importOriginal) => {
+  const react = await vi.importActual<typeof import('react')>('react')
+  return {
+    ...(await importOriginal<typeof import('./NodePanel')>()),
+    NodePanel: ({ leaveGuardRef }: { leaveGuardRef?: { current: unknown } }) => {
+      react.useEffect(() => {
+        if (!leaveGuardRef) return
+        const guard = { requestLeave: nodePanelMocks.requestLeave }
+        leaveGuardRef.current = guard
+        return () => {
+          if (leaveGuardRef.current === guard) leaveGuardRef.current = null
+        }
+      }, [leaveGuardRef])
+      return null
+    },
+  }
+})
 
 function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse {
   return {
@@ -258,6 +282,14 @@ function expectedPrimaryShortcutLabel() {
 }
 
 describe('FlowBuilder', () => {
+  it('gives the canvas row an explicit flex basis so React Flow gets a width inside the Panel', async () => {
+    render(<FlowBuilder />)
+    const split = await screen.findByTestId('flow-canvas-split')
+    expect(split).toHaveStyle({ display: 'flex', flex: '1 1 0%', width: '100%', height: '100%', minWidth: '0', minHeight: '0' })
+    const canvas = screen.getByRole('region', { name: 'Flow canvas' })
+    expect(canvas).toHaveStyle({ flex: '1 1 0%', minWidth: '0' })
+  })
+
   beforeEach(() => {
     serviceMocks.createFlow.mockReset()
     serviceMocks.updateFlow.mockReset()
@@ -268,9 +300,58 @@ describe('FlowBuilder', () => {
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
     reactFlowMocks.onConnect = undefined
+    reactFlowMocks.onNodeClick = undefined
+    reactFlowMocks.onPaneClick = undefined
     reactFlowMocks.nodes = []
     reactFlowMocks.edges = []
+    nodePanelMocks.requestLeave.mockReset()
+    nodePanelMocks.requestLeave.mockResolvedValue(true)
     agentMetadataMocks.agents = {}
+  })
+
+  it('asks the dirty node guard once before selecting another node in Strict Mode', async () => {
+    render(
+      <React.StrictMode>
+        <FlowBuilder />
+      </React.StrictMode>,
+    )
+
+    await screen.findByText('1 step')
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320,
+      clientY: 220,
+      dataTransfer: {
+        getData: vi.fn((format: string) => (
+          format === 'application/reactflow'
+            ? JSON.stringify({
+              type: 'agent',
+              agentId: 'gene_extractor',
+              agentName: 'Gene Extractor',
+              agentDescription: 'Extracts genes',
+            })
+            : ''
+        )),
+      },
+    })
+
+    await waitFor(() => {
+      expect(reactFlowMocks.nodes).toHaveLength(2)
+      expect(reactFlowMocks.onNodeClick).toBeTypeOf('function')
+    })
+
+    type NodeClick = (event: React.MouseEvent, node: typeof reactFlowMocks.nodes[number]) => void
+    const selectFirst = reactFlowMocks.onNodeClick as unknown as NodeClick
+    act(() => selectFirst({} as React.MouseEvent, reactFlowMocks.nodes[0]))
+    await screen.findByTestId('node-panel-dock')
+
+    nodePanelMocks.requestLeave.mockClear()
+    const selectSecond = reactFlowMocks.onNodeClick as unknown as NodeClick
+    await act(async () => {
+      selectSecond({} as React.MouseEvent, reactFlowMocks.nodes[1])
+      await Promise.resolve()
+    })
+
+    expect(nodePanelMocks.requestLeave).toHaveBeenCalledTimes(1)
   })
 
   it('reports step_goal prompt_version and validation_groups in FlowState', async () => {
@@ -308,6 +389,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'identity',
                 label: 'Gene identity validation',
                 state: 'active',
+                curator_label: 'Confirm gene identity validation',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 required: true,
                 blocking: false,
@@ -832,6 +915,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'symbol',
                 label: 'Allele symbol lookup',
                 state: 'active',
+                curator_label: 'Confirm allele symbol lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'symbol',
                 required: true,
@@ -847,6 +932,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'identifier',
                 label: 'Allele identifier lookup',
                 state: 'active',
+                curator_label: 'Confirm allele identifier lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'identifier',
                 required: true,
@@ -935,6 +1022,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'symbol',
                 label: 'Allele symbol lookup',
                 state: 'active',
+                curator_label: 'Confirm allele symbol lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'symbol',
                 required: true,
@@ -990,6 +1079,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'identifier',
                 label: 'Allele identifier lookup',
                 state: 'active',
+                curator_label: 'Confirm allele identifier lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'identifier',
                 required: true,
@@ -1005,6 +1096,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'future-reference',
                 label: 'Future reference lookup',
                 state: 'under_development',
+                curator_label: null,
+                when_off: null,
                 scope: 'field',
                 field_path: 'reference.curie',
                 required: false,
@@ -1071,6 +1164,8 @@ describe('FlowBuilder', () => {
                 validator_binding_id: 'symbol',
                 label: 'Allele symbol lookup',
                 state: 'active',
+                curator_label: 'Confirm allele symbol lookup',
+                when_off: 'Stays as the extractor wrote it.',
                 scope: 'field',
                 field_path: 'symbol',
                 required: true,
@@ -1227,6 +1322,8 @@ describe('FlowBuilder', () => {
             validator_binding_id: 'identifier',
             label: 'Allele identifier lookup',
             state: 'active',
+            curator_label: 'Confirm allele identifier lookup',
+            when_off: 'Stays as the extractor wrote it.',
             scope: 'field',
             object_type: 'Allele',
             field_path: 'allele_identifier',
@@ -1241,6 +1338,8 @@ describe('FlowBuilder', () => {
             validator_id: 'future_validator',
             label: 'Future validator',
             state: 'under_development',
+            curator_label: null,
+            when_off: null,
             scope: 'pack',
             state_explanation: 'Future validation is visible but not runnable yet.',
             required: false,

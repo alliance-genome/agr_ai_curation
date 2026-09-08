@@ -4,6 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from src.schemas.curation_workspace import (
+    CurationBenchmarkHandoffRequest,
+    CurationBenchmarkSnapshotBundleV1,
     CurationCandidateStatus,
     CurationEntityTagDbValidationStatus,
     CurationEntityTagSource,
@@ -24,6 +26,31 @@ from src.schemas.curation_workspace import (
     SubmissionMode,
     SubmissionPayloadContract,
 )
+
+
+def test_benchmark_handoff_contract_rejects_caller_destination_url():
+    with pytest.raises(ValidationError):
+        CurationBenchmarkHandoffRequest.model_validate(
+            {"destination_id": "portal", "destination_url": "https://attacker.example"}
+        )
+
+
+def test_benchmark_bundle_requires_every_v1_top_level_key():
+    required = set(CurationBenchmarkSnapshotBundleV1.model_json_schema()["required"])
+    assert required == {
+        "schema_version",
+        "snapshot_id",
+        "session_id",
+        "envelope_id",
+        "envelope_revision",
+        "envelope_status",
+        "curation_state",
+        "schema_references",
+        "provenance",
+        "exported_at",
+        "envelope_digest",
+        "envelope",
+    }
 
 
 def make_anchor_payload() -> dict:

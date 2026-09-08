@@ -221,6 +221,28 @@ domain agent IDs, aliases, recipe wording, and domain composition suggestions
 in the owning package contract. A core-only installation therefore exposes no
 domain recipes.
 
+### Persisted Flow Migrations
+
+When a package retires catalog references that may already be stored in saved
+flows, it can declare an exact forward repair with a
+`persisted_flow_migrations` export. Core owns only the generic copy, safety
+checks, and removal mechanism; the package owns its agent, binding, and
+attachment IDs. New and edited flows still use strict current-catalog
+validation.
+
+```yaml
+exports:
+  - kind: persisted_flow_migrations
+    name: saved_flow_repairs
+    path: config/persisted_flow_migrations.yaml
+```
+
+The exported YAML uses `persisted_flow_migrations_api_version: 1.0.0`. Each
+migration supplies a unique `migration_id`, one `retired_binding_id`, and exact
+`retired_attachments` with their expected
+`validator_binding_id` (or `null` for metadata-only selections). References
+from validation groups or edges fail closed instead of being silently removed.
+
 ### Loading Order
 
 At system startup:

@@ -42,6 +42,10 @@ exports:
     name: alliance_flow_recipes
     path: config/flow_recipes.yaml
     description: Alliance Agent Studio recipes, aliases, and composition guidance
+  - kind: persisted_flow_migrations
+    name: saved_flow_repairs
+    path: config/persisted_flow_migrations.yaml
+    description: Forward-only repairs for retired Alliance saved-flow references
   - kind: agent_studio_prompt
     name: system
     path: config/agent_studio_system_prompt.md

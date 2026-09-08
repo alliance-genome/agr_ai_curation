@@ -85,6 +85,7 @@ async def test_download_document_file_returns_403_for_cross_user_access(monkeypa
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -109,6 +110,7 @@ async def test_download_document_file_returns_404_when_file_missing(monkeypatch,
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -138,6 +140,7 @@ async def test_download_document_file_returns_pdf_response(monkeypatch, tmp_path
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -168,6 +171,7 @@ async def test_download_document_file_returns_pdfx_json_response(monkeypatch, tm
         pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -197,6 +201,7 @@ async def test_download_document_file_returns_processed_json_response(monkeypatc
         pdfx_json_path=None,
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -279,6 +284,7 @@ async def test_download_document_file_blocks_path_traversal(monkeypatch, tmp_pat
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -380,6 +386,7 @@ async def test_get_download_info_returns_403_for_cross_user_access(monkeypatch):
         pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -410,6 +417,7 @@ async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch
         pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -557,6 +565,7 @@ async def test_get_download_info_handles_missing_optional_paths(monkeypatch, tmp
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -584,6 +593,7 @@ async def test_get_download_info_blocks_path_traversal(monkeypatch, tmp_path):
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -607,6 +617,7 @@ async def test_download_document_file_blocks_pdfx_json_path_traversal(monkeypatc
         pdfx_json_path="../outside.json",
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -631,6 +642,7 @@ async def test_download_document_file_blocks_processed_json_path_traversal(monke
         pdfx_json_path=None,
         processed_json_path="../outside.json",
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -655,6 +667,7 @@ async def test_get_download_info_blocks_pdfx_json_path_traversal(monkeypatch, tm
         pdfx_json_path="../outside.json",
         processed_json_path=None,
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -678,6 +691,7 @@ async def test_get_download_info_blocks_processed_json_path_traversal(monkeypatc
         pdfx_json_path=None,
         processed_json_path="../outside.json",
         filename="paper.pdf",
+        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 

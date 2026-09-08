@@ -1,70 +1,26 @@
-from types import SimpleNamespace
+"""Entrypoint regression: CLI import must never initialize execution."""
 
-from src.lib.benchmarks.models import DryRunPlan
-import src.lib.benchmarks.cli as run_benchmarks
-
-
-def test_cli_validation_targets_profile_case_and_route_without_execution(
-    monkeypatch, capsys
-):
-    captured = {}
-
-    class Service:
-        def plan(self, selection):
-            captured["selection"] = selection
-            return DryRunPlan(runs=[])
-
-    monkeypatch.setattr(run_benchmarks, "build_default_service", Service)
-    result = run_benchmarks.main(
-        [
-            "--validate",
-            "--profile",
-            "profile-1",
-            "--case",
-            "case-1",
-            "--provider",
-            "openrouter",
-            "--model",
-            "deepseek/deepseek-v4-pro-0813",
-        ]
-    )
-
-    assert result == 0
-    assert captured["selection"].profile_ids == ["profile-1"]
-    assert captured["selection"].case_ids == ["case-1"]
-    assert captured["selection"].route.provider == "openrouter"
-    assert '"runs": []' in capsys.readouterr().out
+from pathlib import Path
+import subprocess
+import sys
 
 
-def test_cli_execution_requires_feature_gate(monkeypatch, capsys):
-    monkeypatch.setattr(
-        run_benchmarks, "build_default_service", lambda: SimpleNamespace()
-    )
-    monkeypatch.setattr(run_benchmarks, "get_benchmark_enabled", lambda: False)
-
-    assert run_benchmarks.main([]) == 2
-    assert "disabled" in capsys.readouterr().err
-
-
-def test_cli_returns_failure_when_any_case_fails(monkeypatch):
-    failed_run = SimpleNamespace(status="failed")
-
-    class Response:
-        runs = [failed_run]
-
-        def model_dump_json(self, **_kwargs):
-            return "{}"
-
-    class Service:
-        async def execute(self, _selection):
-            return Response()
-
-    monkeypatch.setattr(run_benchmarks, "build_default_service", Service)
-    monkeypatch.setattr(run_benchmarks, "get_benchmark_enabled", lambda: True)
-
-    assert run_benchmarks.main([]) == 1
+def test_entrypoint_help_is_api_only():
+    root = Path(__file__).resolve().parents[4]
+    result = subprocess.run([sys.executable, str(root / "scripts/run_benchmarks.py"), "--help"], capture_output=True, text=True, check=False)
+    assert result.returncode == 0
+    assert "watch" in result.stdout
+    assert "submit" in result.stdout
+    assert "--profile" not in result.stdout
 
 
-def test_cli_rejects_partial_route_override(capsys):
-    assert run_benchmarks.main(["--provider", "openai", "--validate"]) == 2
-    assert "supplied together" in capsys.readouterr().err
+def test_entrypoint_import_does_not_load_execution_packages():
+    root = Path(__file__).resolve().parents[4]
+    result = subprocess.run([
+        sys.executable, "-c",
+        "import runpy,sys; runpy.run_path('scripts/run_benchmarks.py'); "
+        "assert not any(n == 'src.lib.benchmarks' or n.startswith('src.lib.benchmarks.') for n in sys.modules); "
+        "assert 'agents' not in sys.modules; print('API_ONLY_IMPORT_OK')",
+    ], cwd=root, capture_output=True, text=True, check=False)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "API_ONLY_IMPORT_OK"

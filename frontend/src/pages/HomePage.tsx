@@ -971,7 +971,9 @@ function HomePage() {
           ) : (
             <>
               <CircularProgress color="inherit" size={60} />
-              <Typography variant="h6" color="inherit">
+              <Typography variant="h6" sx={{
+                color: "inherit"
+              }}>
                 Loading document...
               </Typography>
             </>

@@ -10,7 +10,7 @@ from typing import Any, Mapping
 import yaml
 from pydantic import ValidationError
 
-from .loader import BenchmarkCatalogError
+from .errors import BenchmarkCatalogError
 from .models import (
     BenchmarkConfiguration,
     BenchmarkRouteCatalog,
@@ -188,7 +188,7 @@ def resolve_suite(
 
     resolved_cases = tuple(
         ResolvedBenchmarkCase(
-            case_id=case.case_id, target=case.target, input=case.input
+            case_id=case.case_id, target=case.target, input=case.input, user_query=case.user_query
         )
         for case in suite.cases
     )
@@ -206,6 +206,7 @@ def resolve_suite(
                     "repetition": repetition,
                     "target": case.target.model_dump(mode="json"),
                     "input": case.input.model_dump(mode="json"),
+                    "user_query": case.user_query,
                     "routes": {
                         slot: route.model_dump(mode="json")
                         for slot, route in cell_routes.items()
@@ -219,6 +220,7 @@ def resolve_suite(
                         repetition=repetition,
                         target=case.target,
                         input=case.input,
+                        user_query=case.user_query,
                         routes=cell_routes,
                     )
                 )

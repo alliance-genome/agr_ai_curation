@@ -1903,61 +1903,120 @@ metadata:
     active:
       - validator_id: gene_expression.domain_envelope_shape
         display_name: Gene expression data structure
-        description: Load the envelope through the provider-agnostic DomainEnvelope contract.
+        curator_label: Confirm the extracted data has the expected structure
+        description: Checks that the extracted gene expression data is in the structure the review screens and export expect.
+        definition_notes:
+          - Loads the envelope through the provider-agnostic DomainEnvelope contract.
       - validator_id: gene_expression.required_payload_fields
         display_name: Required gene expression fields
-        description: Required GeneExpressionAnnotation field paths declared in this pack must be present in each pending object payload.
+        curator_label: Confirm every required gene expression field is filled in
+        description: Checks that each pending gene expression annotation has a value in every required field.
+        definition_notes:
+          - Required field paths are the ones this pack declares as required; each pending object payload must carry them.
       - validator_id: gene_expression.no_legacy_semantic_lists
         display_name: Current extraction format
-        description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
+        curator_label: Confirm the extraction uses the current record format
+        description: Checks that the extraction uses the current record format and not an older list-based layout.
+        definition_notes:
+          - Rejects legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
       - validator_id: gene_expression.extractor_output_migration
         display_name: Gene expression extractor format
-        description: Validate runtime extractor output through the GeneExpressionAnnotation domain-envelope schema and pending-envelope conversion.
+        curator_label: Confirm the extractor output loads as gene expression records
+        description: Checks that what the extractor produced loads as gene expression annotation records ready for review.
+        definition_notes:
+          - Validates runtime extractor output through the GeneExpressionAnnotation domain-envelope schema and pending-envelope conversion.
       - validator_id: gene_expression.linkml_extraction_contract
         display_name: Gene expression LinkML extraction contract
-        description: Package-owned deterministic validator emits field-addressed extraction diagnostics for LinkML-required selectors, evidence integrity, relation vocabulary, assay/method selectors, and expression context postconditions.
+        curator_label: Confirm each gene expression record meets the Alliance data model
+        description: Checks each gene expression record against the Alliance data model, covering required fields, evidence links, the relation term, the assay, and the expression context. Problems are reported on the field they belong to.
+        definition_notes:
+          - Package-owned deterministic validator; emits field-addressed extraction diagnostics for LinkML-required selectors, evidence integrity, relation vocabulary, assay/method selectors, and expression context postconditions.
       - validator_id: gene_expression.export_submission_projection
         display_name: Gene expression ready for export
-        description: Validate GeneExpressionAnnotation export/submission target projection payloads.
+        curator_label: Confirm each gene expression record is ready for export
+        description: Checks that each gene expression record can be written out in the format the Alliance submission expects.
+        definition_notes:
+          - Validates GeneExpressionAnnotation export/submission target projection payloads.
       - validator_id: relation_vocabulary_validation
         display_name: Relation vocabulary lookup
-        description: Active package binding validates the LinkML-required GeneExpressionAnnotation relation against controlled vocabulary rows.
+        curator_label: Confirm the expression relation against the Expression Relation vocabulary
+        description: Checks that the relation between the gene and the expression pattern, such as expressed_in, is a term in the Expression Relation vocabulary.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Expression Relation) on the LinkML-required relation.
       - validator_id: data_provider_validation
         display_name: Data provider validation
-        description: Active package binding validates the LinkML-required data provider abbreviation through the shared Alliance data-provider validator.
+        curator_label: Confirm the data provider against the Alliance member list
+        description: Checks that the data provider abbreviation on each annotation, such as ZFIN or MGI, names an Alliance member database.
+        definition_notes:
+          - Runs through the shared Alliance data-provider package validator binding on the LinkML-required data provider abbreviation.
       - validator_id: subject_gene_validation
         display_name: Subject gene validation
-        description: Active package binding resolves embedded expression annotation subject gene identifiers and symbols through the shared Alliance gene validator.
+        curator_label: Confirm the subject gene in the Alliance records
+        description: Checks that the gene the annotation is about matches an Alliance gene record, by identifier or symbol, and fills in the confirmed identifier and symbol.
+        definition_notes:
+          - Runs through the shared Alliance gene package validator binding on the embedded expression annotation subject gene identifier and symbol.
       - validator_id: source_reference_validation
         display_name: Source reference validation
-        description: Active package binding resolves embedded literature/reference identifiers through the API-backed reference validator.
+        curator_label: Confirm the source paper in the Alliance literature records
+        description: Checks that the paper the annotation comes from matches an Alliance reference record, by identifier, CURIE, or title.
+        definition_notes:
+          - Runs through the API-backed reference package validator binding on the embedded literature/reference identifiers.
       - validator_id: expression_stage_ontology_validation
         display_name: Expression stage ontology lookup
-        description: Active package binding resolves paper-facing GeneExpressionAnnotation stage labels to authoritative stage ontology terms while preserving original labels in materialization metadata.
+        curator_label: Confirm the developmental stage against the stage ontology for the species
+        description: Checks that the stage when expression was seen matches a term in the species stage ontology. The original wording from the paper is kept beside the confirmed term.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family life_stage, lookup method search_life_stage_terms); original labels are preserved in materialization metadata.
       - validator_id: expression_assay_ontology_validation
         display_name: Expression assay ontology lookup
-        description: Active package binding resolves paper-facing GeneExpressionAnnotation assay/method labels to authoritative MMO terms while preserving original labels in materialization metadata.
+        curator_label: Confirm the assay against the Measurement Method Ontology
+        description: Checks that the assay used to detect expression, such as in situ hybridization, matches a Measurement Method Ontology term. The original wording from the paper is kept beside the confirmed term.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family assay, MMOTerm, lookup method search_ontology_terms); original labels are preserved in materialization metadata.
       - validator_id: expression_stage_uberon_slim_validation
         display_name: Stage UBERON slim lookup
-        description: Active package binding validates and materializes stage UBERON slim term arrays through ontology lookup evidence.
+        curator_label: Confirm each stage slim term against the allowed UBERON life-stage terms
+        description: Checks that each broad life-stage term on the annotation is one of the allowed UBERON slim terms, such as embryo stage or post-embryonic stage.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family uberon, UBERONTerm) with allowed_term_curies UBERON:0000068 and UBERON:0000113; the label 'post embryonic, pre-adult' is accepted unresolved. Materializes the stage UBERON slim term array through ontology lookup evidence.
       - validator_id: expression_anatomical_structure_validation
         display_name: Anatomical structure ontology lookup
-        description: Active package binding resolves anatomical expression-site labels and CURIEs to authoritative anatomy ontology terms.
+        curator_label: Confirm the anatomical structure against the anatomy ontology for the species
+        description: Checks that the tissue or structure where expression was seen matches a term in the species anatomy ontology, by identifier or name.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family anatomy, lookup method search_anatomy_terms) on anatomical expression-site labels and CURIEs.
       - validator_id: expression_anatomical_uberon_slim_validation
         display_name: Anatomical UBERON slim lookup
-        description: Active package binding validates and materializes anatomical UBERON slim term arrays through ontology lookup evidence.
+        curator_label: Confirm each anatomy slim term against the allowed UBERON anatomy terms
+        description: Checks that each broad anatomy term on the annotation is one of the allowed UBERON slim terms, such as nervous system or musculature.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family uberon, UBERONTerm) with the allowed_term_curies list declared on the binding. Materializes the anatomical UBERON slim term array through ontology lookup evidence.
       - validator_id: expression_cellular_component_validation
         display_name: GO cellular component lookup
-        description: Active package binding resolves GO cellular-component expression-site labels and CURIEs while allowing cellular-component-only sites.
+        curator_label: Confirm the cellular component against the Gene Ontology
+        description: Checks that the part of the cell where expression was seen, such as nucleus or plasma membrane, matches a Gene Ontology cellular component term. An annotation may name a cellular component with no anatomical structure.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family go, go_aspect cellular_component, lookup method search_go_terms); cellular-component-only expression sites are allowed.
       - validator_id: expression_cellular_component_qualifier_validation
         display_name: GO cellular component qualifier lookup
-        description: Active package binding validates and materializes cellular-component qualifier term arrays through GO cellular-component lookup evidence.
+        curator_label: Confirm each cellular component qualifier against the Gene Ontology
+        description: Checks that each qualifier attached to the cellular component matches a Gene Ontology cellular component term.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family go, go_aspect cellular_component, lookup method search_go_terms). Materializes the cellular-component qualifier term array through GO lookup evidence.
       - validator_id: gene_expression_condition_relation_lookup
         display_name: Condition relation type lookup
-        description: Active package binding validates each gene-expression condition relation type against the 'Condition Relation Type' controlled vocabulary (Expression Condition Relation subset); fans out per condition_relations entry.
+        curator_label: Confirm each condition relation type against the Condition Relation Type vocabulary
+        description: Checks that the relation type on each experimental condition, such as has_condition or induced_by, is a term in the Condition Relation Type vocabulary.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Condition Relation Type, subset Expression Condition Relation).
+          - Fans out one check per condition_relations entry.
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
-        description: Compose gene-expression condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision. Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
+        curator_label: Confirm each experimental condition against the condition ontologies and vocabularies
+        description: Checks each experimental condition on the annotation as one unit. It confirms the condition class and ontology terms, any chemical, the taxon, and the data provider together, so one decision covers the whole condition.
+        definition_notes:
+          - Runs through the experimental-condition package validator binding, which composes the gene-expression condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision.
+          - Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
     under_development:
       - validator_id: gene_expression.reagent_context_materialization
         display_name: Reagent context materialization
@@ -1970,6 +2029,11 @@ metadata:
     active:
       - binding_id: relation_vocabulary_validation
         display_name: Relation vocabulary lookup
+        curator_label: Confirm the expression relation against the Expression Relation vocabulary
+        description: Checks that the relation between the gene and the expression pattern, such as expressed_in, is a term in the Expression Relation vocabulary.
+        when_off: The relation stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Expression Relation) on the LinkML-required relation.
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -1997,6 +2061,11 @@ metadata:
           allowed: false
       - binding_id: data_provider_validation
         display_name: Data provider validation
+        curator_label: Confirm the data provider against the Alliance member list
+        description: Checks that the data provider abbreviation on each annotation, such as ZFIN or MGI, names an Alliance member database.
+        when_off: The data provider stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the shared Alliance data-provider package validator binding on the LinkML-required data provider abbreviation.
         validator_agent:
           package_id: agr.alliance
           agent_id: data_provider_validation
@@ -2019,6 +2088,11 @@ metadata:
           allowed: false
       - binding_id: subject_gene_validation
         display_name: Subject gene validation
+        curator_label: Confirm the subject gene in the Alliance records
+        description: Checks that the gene the annotation is about matches an Alliance gene record, by identifier or symbol, and fills in the confirmed identifier and symbol.
+        when_off: The subject gene stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the shared Alliance gene package validator binding on the embedded expression annotation subject gene identifier and symbol.
         validator_agent:
           package_id: agr.alliance
           agent_id: gene_validation
@@ -2056,6 +2130,11 @@ metadata:
           family: gene_expression_subject_gene_validation
       - binding_id: source_reference_validation
         display_name: Source reference validation
+        curator_label: Confirm the source paper in the Alliance literature records
+        description: Checks that the paper the annotation comes from matches an Alliance reference record, by identifier, CURIE, or title.
+        when_off: The source reference stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the API-backed reference package validator binding on the embedded literature/reference identifiers.
         validator_agent:
           package_id: agr.alliance
           agent_id: reference_validation
@@ -2104,6 +2183,11 @@ metadata:
           allowed: false
       - binding_id: expression_stage_ontology_validation
         display_name: Expression stage ontology lookup
+        curator_label: Confirm the developmental stage against the stage ontology for the species
+        description: Checks that the stage when expression was seen matches a term in the species stage ontology. The original wording from the paper is kept beside the confirmed term.
+        when_off: The stage stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family life_stage, lookup method search_life_stage_terms); original labels are preserved in materialization metadata.
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2146,6 +2230,11 @@ metadata:
           allowed: false
       - binding_id: expression_assay_ontology_validation
         display_name: Expression assay ontology lookup
+        curator_label: Confirm the assay against the Measurement Method Ontology
+        description: Checks that the assay used to detect expression, such as in situ hybridization, matches a Measurement Method Ontology term. The original wording from the paper is kept beside the confirmed term.
+        when_off: The assay stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family assay, MMOTerm, lookup method search_ontology_terms); original labels are preserved in materialization metadata.
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2190,6 +2279,11 @@ metadata:
           allowed: false
       - binding_id: expression_stage_uberon_slim_validation
         display_name: Stage UBERON slim lookup
+        curator_label: Confirm each stage slim term against the allowed UBERON life-stage terms
+        description: Checks that each broad life-stage term on the annotation is one of the allowed UBERON slim terms, such as embryo stage or post-embryonic stage.
+        when_off: Stage slim terms stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family uberon, UBERONTerm) with allowed_term_curies UBERON:0000068 and UBERON:0000113; the label 'post embryonic, pre-adult' is accepted unresolved. Materializes the stage UBERON slim term array through ontology lookup evidence.
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2239,6 +2333,11 @@ metadata:
           allowed: false
       - binding_id: expression_anatomical_structure_validation
         display_name: Anatomical structure ontology lookup
+        curator_label: Confirm the anatomical structure against the anatomy ontology for the species
+        description: Checks that the tissue or structure where expression was seen matches a term in the species anatomy ontology, by identifier or name.
+        when_off: The anatomical structure stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family anatomy, lookup method search_anatomy_terms) on anatomical expression-site labels and CURIEs.
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2285,6 +2384,11 @@ metadata:
           allowed: false
       - binding_id: expression_anatomical_uberon_slim_validation
         display_name: Anatomical UBERON slim lookup
+        curator_label: Confirm each anatomy slim term against the allowed UBERON anatomy terms
+        description: Checks that each broad anatomy term on the annotation is one of the allowed UBERON slim terms, such as nervous system or musculature.
+        when_off: Anatomy slim terms stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family uberon, UBERONTerm) with the allowed_term_curies list declared on the binding. Materializes the anatomical UBERON slim term array through ontology lookup evidence.
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2354,6 +2458,11 @@ metadata:
           allowed: false
       - binding_id: expression_cellular_component_validation
         display_name: GO cellular component lookup
+        curator_label: Confirm the cellular component against the Gene Ontology
+        description: Checks that the part of the cell where expression was seen, such as nucleus or plasma membrane, matches a Gene Ontology cellular component term. An annotation may name a cellular component with no anatomical structure.
+        when_off: The cellular component stays as the extractor wrote it, and review rows show it unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family go, go_aspect cellular_component, lookup method search_go_terms); cellular-component-only expression sites are allowed.
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2398,6 +2507,11 @@ metadata:
           allowed: false
       - binding_id: expression_cellular_component_qualifier_validation
         display_name: GO cellular component qualifier lookup
+        curator_label: Confirm each cellular component qualifier against the Gene Ontology
+        description: Checks that each qualifier attached to the cellular component matches a Gene Ontology cellular component term.
+        when_off: Cellular component qualifiers stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the ontology-term package validator binding (ontology family go, go_aspect cellular_component, lookup method search_go_terms). Materializes the cellular-component qualifier term array through GO lookup evidence.
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
@@ -2438,6 +2552,12 @@ metadata:
           allowed: false
       - binding_id: gene_expression_condition_relation_lookup
         display_name: Condition relation type lookup
+        curator_label: Confirm each condition relation type against the Condition Relation Type vocabulary
+        description: Checks that the relation type on each experimental condition, such as has_condition or induced_by, is a term in the Condition Relation Type vocabulary.
+        when_off: Condition relation types stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the controlled-vocabulary package validator binding (vocabulary Condition Relation Type, subset Expression Condition Relation).
+          - Fans out one check per condition_relations entry.
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
@@ -2484,6 +2604,12 @@ metadata:
       # indexes so each composite request carries that condition's own components plus its relation context.
       - binding_id: experimental_condition_validation
         display_name: Experimental condition validation
+        curator_label: Confirm each experimental condition against the condition ontologies and vocabularies
+        description: Checks each experimental condition on the annotation as one unit. It confirms the condition class and ontology terms, any chemical, the taxon, and the data provider together, so one decision covers the whole condition.
+        when_off: Experimental conditions stay as the extractor wrote them, and review rows show them unconfirmed.
+        definition_notes:
+          - Runs through the experimental-condition package validator binding, which composes the gene-expression condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable per-condition decision.
+          - Fans out one composite validation per ExperimentalCondition via the nested multivalued engine.
         validator_agent:
           package_id: agr.alliance
           agent_id: experimental_condition_validation

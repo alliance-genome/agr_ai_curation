@@ -129,13 +129,35 @@ class FeedbackService:
             user_auth_sub=user_auth_sub,
             authenticated_curator_email=authenticated_curator_email,
         )
+        submitted_trace_ids = self._normalize_trace_ids(trace_ids)
+        transcript_trace_ids = self._trace_ids_from_transcript(conversation_transcript)
+        canonical_trace_ids = self._merge_trace_ids(
+            submitted_trace_ids,
+            transcript_trace_ids,
+        )
+        curator_matches = self._curator_matches_authenticated_user(
+            curator_id=curator_id,
+            user_auth_sub=user_auth_sub,
+            authenticated_curator_email=authenticated_curator_email,
+        )
+        association_status = self._trace_association_status(
+            submitted_trace_ids=submitted_trace_ids,
+            transcript_trace_ids=transcript_trace_ids,
+            transcript=conversation_transcript,
+            curator_matches=curator_matches,
+        )
 
         report = FeedbackReport(
             id=feedback_id,
             session_id=session_id,
             curator_id=curator_id,
             feedback_text=feedback_text,
-            trace_ids=trace_ids,
+            trace_ids=canonical_trace_ids,
+            trace_data=self._pending_trace_capture_snapshot(
+                session_id=session_id,
+                trace_ids=canonical_trace_ids,
+                association_status=association_status,
+            ),
             conversation_transcript=conversation_transcript,
             processing_status=ProcessingStatus.PENDING,
             created_at=datetime.now(timezone.utc),
@@ -179,14 +201,19 @@ class FeedbackService:
 
             try:
                 trace_snapshot = self._capture_feedback_trace_snapshot(report)
-                if trace_snapshot is not None:
-                    report.trace_data = trace_snapshot
-                    if trace_snapshot.get("capture_status") != "success":
+                report.trace_data = trace_snapshot
+                if trace_snapshot.get("capture_status") != "success":
+                    if trace_snapshot.get("capture_status") == "degraded":
+                        report.error_details = (
+                            "Trace capture degraded. "
+                            "See trace_data.error_summary for details."
+                        )
+                    else:
                         report.error_details = (
                             "Trace capture completed with errors. "
                             "See trace_data.error_summary for details."
                         )
-                    logger.info('Captured trace snapshot for feedback %s', feedback_id)
+                logger.info('Captured trace snapshot for feedback %s', feedback_id)
             except Exception as e:
                 logger.warning(
                     'Trace snapshot capture failed for feedback %s: %s',
@@ -369,12 +396,32 @@ class FeedbackService:
 
         return transcript
 
-    def _capture_feedback_trace_snapshot(self, report: FeedbackReport) -> dict | None:
+    def _capture_feedback_trace_snapshot(self, report: FeedbackReport) -> dict:
         """Capture a compact, redacted trace snapshot for later feedback review."""
 
         trace_ids = self._normalize_trace_ids(report.trace_ids)
+        association = self._trace_association_from_snapshot(report.trace_data)
         if not trace_ids:
-            return None
+            return {
+                "schema_version": 1,
+                "capture_status": "degraded",
+                "captured_at": self._utc_timestamp(),
+                "source": self._trace_snapshot_source(),
+                "feedback": {
+                    "session_id": report.session_id,
+                    "trace_ids": [],
+                },
+                "association": association,
+                "traces": [],
+                "error_summary": {
+                    "trace_error_count": 0,
+                    "reason": association.get("status", "no_structured_trace_ids"),
+                    "message": (
+                        "No canonical trace IDs were available from the submitted "
+                        "feedback or durable structured transcript metadata."
+                    ),
+                },
+            }
 
         captured_at = self._utc_timestamp()
         traces = []
@@ -410,20 +457,12 @@ class FeedbackService:
             "schema_version": 1,
             "capture_status": capture_status,
             "captured_at": captured_at,
-            "source": {
-                "kind": os.getenv(
-                    TRACE_CONTEXT_SOURCE_ENV,
-                    TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
-                ),
-                "extractor": (
-                    "src.lib.agent_studio.trace_context_service."
-                    "get_trace_context_for_explorer"
-                ),
-            },
+            "source": self._trace_snapshot_source(),
             "feedback": {
                 "session_id": report.session_id,
                 "trace_ids": trace_ids,
             },
+            "association": association,
             "traces": traces,
         }
 
@@ -438,6 +477,99 @@ class FeedbackService:
             }
 
         return snapshot
+
+    @staticmethod
+    def _trace_snapshot_source() -> dict[str, str]:
+        return {
+            "kind": os.getenv(
+                TRACE_CONTEXT_SOURCE_ENV,
+                TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
+            ),
+            "extractor": (
+                "src.lib.agent_studio.trace_context_service."
+                "get_trace_context_for_explorer"
+            ),
+        }
+
+    @classmethod
+    def _pending_trace_capture_snapshot(
+        cls,
+        *,
+        session_id: str,
+        trace_ids: list[str],
+        association_status: str,
+    ) -> dict:
+        return {
+            "schema_version": 1,
+            "capture_status": "pending",
+            "captured_at": None,
+            "source": cls._trace_snapshot_source(),
+            "feedback": {
+                "session_id": session_id,
+                "trace_ids": trace_ids,
+            },
+            "association": {"status": association_status},
+            "traces": [],
+        }
+
+    @classmethod
+    def _trace_ids_from_transcript(cls, transcript: Any) -> list[str]:
+        """Read canonical IDs only from structured durable message metadata."""
+        if not isinstance(transcript, dict):
+            return []
+        messages = transcript.get("messages")
+        if not isinstance(messages, list):
+            return []
+
+        candidates: list[Any] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            candidates.append(message.get("trace_id"))
+            payload = message.get("payload_json")
+            if isinstance(payload, dict):
+                candidates.append(payload.get("trace_id"))
+        return cls._normalize_trace_ids(candidates)
+
+    @staticmethod
+    def _merge_trace_ids(*trace_id_groups: list[str]) -> list[str]:
+        merged: list[str] = []
+        seen = set()
+        for trace_ids in trace_id_groups:
+            for trace_id in trace_ids:
+                if trace_id in seen:
+                    continue
+                merged.append(trace_id)
+                seen.add(trace_id)
+        return merged
+
+    @staticmethod
+    def _trace_association_status(
+        *,
+        submitted_trace_ids: list[str],
+        transcript_trace_ids: list[str],
+        transcript: Any,
+        curator_matches: bool,
+    ) -> str:
+        if submitted_trace_ids:
+            return "submitted"
+        if transcript_trace_ids:
+            return "recovered_from_transcript"
+        if not curator_matches:
+            return "authorization_mismatch"
+        if transcript is None:
+            return "transcript_unavailable"
+        return "no_structured_trace_ids"
+
+    @staticmethod
+    def _trace_association_from_snapshot(trace_data: Any) -> dict[str, str]:
+        if isinstance(trace_data, dict):
+            association = trace_data.get("association")
+            if isinstance(association, dict):
+                status = str(association.get("status") or "").strip()
+                if status:
+                    return {"status": status}
+        return {"status": "legacy_report"}
 
     def _trace_context_snapshot(
         self,
@@ -525,20 +657,12 @@ class FeedbackService:
             "schema_version": 1,
             "capture_status": "error",
             "captured_at": self._utc_timestamp(),
-            "source": {
-                "kind": os.getenv(
-                    TRACE_CONTEXT_SOURCE_ENV,
-                    TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
-                ),
-                "extractor": (
-                    "src.lib.agent_studio.trace_context_service."
-                    "get_trace_context_for_explorer"
-                ),
-            },
+            "source": self._trace_snapshot_source(),
             "feedback": {
                 "session_id": report.session_id,
                 "trace_ids": trace_ids,
             },
+            "association": self._trace_association_from_snapshot(report.trace_data),
             "traces": [
                 {
                     "trace_id": trace_id,
@@ -637,6 +761,7 @@ class FeedbackService:
 
         feedback_payload = cls._optional_mapping(trace_data, "feedback")
         source_payload = cls._optional_mapping(trace_data, "source")
+        association_payload = cls._optional_mapping(trace_data, "association")
         trace_payloads = cls._optional_list(trace_data, "traces")
 
         stored_session_id = cls._string_or_none(feedback_payload.get("session_id"))
@@ -654,6 +779,7 @@ class FeedbackService:
             "schema_version": cls._int_or_none(trace_data.get("schema_version")),
             "source_kind": cls._string_or_none(source_payload.get("kind")),
             "source_extractor": cls._string_or_none(source_payload.get("extractor")),
+            "association_status": cls._string_or_none(association_payload.get("status")),
             "expected_trace_ids": trace_ids,
             "stored_trace_ids": stored_trace_ids,
             "trace_count": len(trace_payloads),
@@ -678,6 +804,8 @@ class FeedbackService:
             )
         if "message" in error_summary:
             summary["message"] = cls._redacted_optional_text(error_summary.get("message"))
+        if "reason" in error_summary:
+            summary["reason"] = cls._redacted_optional_text(error_summary.get("reason"))
 
         return {key: value for key, value in summary.items() if value is not None} or None
 

@@ -49,6 +49,7 @@ from .agent_studio_schemas import (
     ToolIdeaCreateRequest,
     ToolIdeaListResponse,
     ToolIdeaResponseItem,
+    ToolLibraryConfig,
     ToolLibraryItem,
     ToolLibraryResponse,
 )
@@ -106,7 +107,11 @@ from src.lib.agent_studio.custom_agent_service import (
     reject_locked_prompt_markers,
     set_custom_agent_visibility,
 )
-from src.lib.agent_studio.catalog_service import get_agent_by_id, get_agent_metadata
+from src.lib.agent_studio.catalog_service import (
+    get_agent_by_id,
+    get_agent_metadata,
+    tool_requires_document,
+)
 from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.agent_studio.tool_idea_service import (
@@ -519,7 +524,12 @@ async def get_tool_library_endpoint(
                     curator_visible=entry.curator_visible,
                     allow_attach=entry.allow_attach,
                     allow_execute=entry.allow_execute,
-                    config=entry.config,
+                    config=ToolLibraryConfig.model_validate(
+                        {
+                            **entry.config,
+                            "requires_document": tool_requires_document(entry.tool_key),
+                        }
+                    ),
                 )
                 for entry in entries
             ]

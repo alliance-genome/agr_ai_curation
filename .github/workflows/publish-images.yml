@@ -117,7 +117,9 @@ jobs:
             manifest_key: frontend
             repository: public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend
           - artifact_id: trace-review-backend
-            build_args: ""
+            build_args: |
+              TRACE_REVIEW_RUNTIME_VERSION=${{ needs.prepare.outputs.artifact_label }}
+              TRACE_REVIEW_SOURCE_REVISION=${{ github.sha }}
             context: trace_review/backend
             display_name: trace-review-backend
             dockerfile: trace_review/backend/Dockerfile.prod
@@ -244,6 +246,22 @@ jobs:
           index_html="$(docker run --rm --network=none --entrypoint cat "${image_ref}" \
             /usr/share/nginx/html/index.html)"
           grep -Fq '<script src="/runtime-config.js"></script>' <<<"${index_html}"
+
+      - name: Verify TraceReview image identity
+        if: matrix.artifact_id == 'trace-review-backend'
+        shell: bash
+        env:
+          ARTIFACT_LABEL: ${{ needs.prepare.outputs.artifact_label }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GIT_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ matrix.repository }}
+        run: |
+          image_ref="${REPOSITORY}@${DIGEST}"
+          docker pull "${image_ref}"
+          actual_version="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${image_ref}")"
+          actual_revision="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${image_ref}")"
+          [[ "${actual_version}" == "${ARTIFACT_LABEL}" ]]
+          [[ "${actual_revision}" == "${GIT_SHA}" ]]
 
       - name: Write image metadata
         shell: bash
