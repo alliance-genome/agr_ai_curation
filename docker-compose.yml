@@ -422,6 +422,9 @@ services:
         condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
+      # Match backend routing: generic production DSNs cannot select the dev project.
+      SENTRY_DSN: ${SENTRY_DEV_DSN:-}
+      SENTRY_DEV_DSN: ""
       BENCHMARK_WORKER_ENABLED: ${BENCHMARK_WORKER_ENABLED:-false}
       BENCHMARK_EXECUTION_ENABLED: ${BENCHMARK_EXECUTION_ENABLED:-false}
       BENCHMARK_EVENT_RETENTION_COUNT: ${BENCHMARK_EVENT_RETENTION_COUNT:-10000}

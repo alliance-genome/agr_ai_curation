@@ -922,3 +922,24 @@ def test_generated_production_launches_cannot_bypass_preflight():
     assert "docker compose --env-file ${env_output_path} -f ${main_compose_file} restart" not in (
         start_verify_script
     )
+
+
+def test_worker_sentry_configuration_matches_backend_in_each_environment():
+    prod = _load_compose()["services"]
+    prod_sentry = {
+        key: value for key, value in prod["backend"]["environment"].items()
+        if key.startswith("SENTRY_")
+    }
+    assert prod_sentry
+    assert {
+        key: value for key, value in prod["benchmark_worker"]["environment"].items()
+        if key.startswith("SENTRY_")
+    } == prod_sentry
+
+    dev = _load_dev_compose()["services"]
+    backend_env = dict(item.split("=", 1) for item in dev["backend"]["environment"])
+    worker_env = dev["benchmark_worker"]["environment"]
+    assert worker_env["SENTRY_DSN"] == backend_env["SENTRY_DSN"] == "${SENTRY_DEV_DSN:-}"
+    assert worker_env["SENTRY_DEV_DSN"] == backend_env["SENTRY_DEV_DSN"] == ""
+    # Release, environment and the remaining Sentry settings come from this shared env file.
+    assert dev["benchmark_worker"]["env_file"] == dev["backend"]["env_file"]
