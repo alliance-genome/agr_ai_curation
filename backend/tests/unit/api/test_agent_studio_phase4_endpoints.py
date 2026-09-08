@@ -142,11 +142,11 @@ def test_list_tool_ideas_endpoint_returns_current_user_requests(monkeypatch):
         lambda _db, _user: SimpleNamespace(id=7, auth_sub="auth-sub"),
     )
 
-    def _fake_list_tool_idea_requests_for_user(_db, user_id):
+    def _fake_list_tool_idea_requests_visible_to_user(_db, user_id):
         observed["user_id"] = user_id
         return [_tool_idea_record()]
 
-    monkeypatch.setattr(api_module, "list_tool_idea_requests_for_user", _fake_list_tool_idea_requests_for_user)
+    monkeypatch.setattr(api_module, "list_tool_idea_requests_visible_to_user", _fake_list_tool_idea_requests_visible_to_user)
 
     response = asyncio.run(
         api_module.list_tool_ideas_endpoint(
@@ -158,3 +158,24 @@ def test_list_tool_ideas_endpoint_returns_current_user_requests(monkeypatch):
     assert observed["user_id"] == 7
     assert response.total == 1
     assert response.tool_ideas[0].title == "Need a new GO cross-reference tool"
+
+
+def test_list_tool_ideas_omits_teammate_conversations_in_serialized_response(monkeypatch):
+    import src.api.agent_studio as api_module
+
+    monkeypatch.setattr(api_module, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=7))
+    own = _tool_idea_record()
+    teammate = _tool_idea_record(user_id=8, developer_notes="Private triage")
+    monkeypatch.setattr(api_module, "list_tool_idea_requests_visible_to_user", lambda *_: [own, teammate])
+    response = asyncio.run(api_module.list_tool_ideas_endpoint(user={}, db=SimpleNamespace()))
+    payload = response.model_dump(mode="json")
+    assert payload["total"] == 2
+    assert payload["tool_ideas"][0]["opus_conversation"] == own.opus_conversation
+    summary = payload["tool_ideas"][1]
+    assert summary["user_id"] == 8
+    assert summary["project_id"] == str(teammate.project_id)
+    assert summary["title"] == teammate.title
+    assert summary["status"] == teammate.status
+    assert "opus_conversation" not in summary
+    assert "developer_notes" not in summary
+    assert "resulting_tool_key" not in summary

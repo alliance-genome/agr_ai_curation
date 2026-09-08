@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from src.lib.agent_studio.agent_service import get_project_ids_for_user
 from src.models.sql.agent import ProjectMember
 from src.models.sql.tool_idea_request import ToolIdeaRequest
 
@@ -94,21 +96,25 @@ def create_tool_idea_request(
     return record
 
 
-def list_tool_idea_requests_for_user(
+def list_tool_idea_requests_visible_to_user(
     db: Session,
     user_id: int,
 ) -> List[ToolIdeaRequest]:
-    """List tool idea requests submitted by a user (most recent first)."""
+    """List owned requests and requests in any current project membership."""
+    project_ids = get_project_ids_for_user(db, user_id)
     return (
         db.query(ToolIdeaRequest)
-        .filter(ToolIdeaRequest.user_id == user_id)
+        .filter(or_(
+            ToolIdeaRequest.user_id == user_id,
+            ToolIdeaRequest.project_id.in_(project_ids),
+        ))
         .order_by(ToolIdeaRequest.created_at.desc(), ToolIdeaRequest.updated_at.desc())
         .all()
     )
 
 
-def tool_idea_request_to_dict(record: ToolIdeaRequest) -> Dict[str, Any]:
-    """Serialize a tool idea request for API responses."""
+def tool_idea_request_to_dict(record: ToolIdeaRequest, *, viewer_user_id: int) -> Dict[str, Any]:
+    """Serialize visible requests, exposing conversation and triage details only to owners."""
     created_at = record.created_at
     updated_at = record.updated_at
     if isinstance(created_at, datetime) and created_at.tzinfo is None:
@@ -116,16 +122,20 @@ def tool_idea_request_to_dict(record: ToolIdeaRequest) -> Dict[str, Any]:
     if isinstance(updated_at, datetime) and updated_at.tzinfo is None:
         updated_at = updated_at.replace(tzinfo=timezone.utc)
 
-    return {
+    payload = {
         "id": str(record.id),
         "user_id": record.user_id,
         "project_id": str(record.project_id) if record.project_id else None,
         "title": record.title,
         "description": record.description,
-        "opus_conversation": list(record.opus_conversation or []),
         "status": record.status,
-        "developer_notes": record.developer_notes,
-        "resulting_tool_key": record.resulting_tool_key,
         "created_at": created_at,
         "updated_at": updated_at,
     }
+    if record.user_id == viewer_user_id:
+        payload.update(
+            opus_conversation=list(record.opus_conversation or []),
+            developer_notes=record.developer_notes,
+            resulting_tool_key=record.resulting_tool_key,
+        )
+    return payload

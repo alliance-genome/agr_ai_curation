@@ -1334,3 +1334,77 @@ def test_revert_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
     assert updated.version == 5
     assert len(db.added) == 1
     assert db.added[0].allowed_group_ids == ["WB", "RGD"]
+
+
+@pytest.mark.parametrize("visibility,owner,member,allowed", [
+    ("private", 1, False, True),
+    ("private", 2, True, False),
+    ("project", 1, True, True),
+    ("project", 2, True, True),
+    ("project", 2, False, False),
+])
+def test_custom_agent_visible_read_membership(monkeypatch, visibility, owner, member, allowed):
+    from unittest.mock import MagicMock
+    from src.lib.agent_studio import custom_agent_service as service
+
+    project = uuid.uuid4()
+    record = SimpleNamespace(user_id=owner, visibility=visibility, project_id=project)
+    db = MagicMock()
+    db.query.return_value.filter.return_value = db.query.return_value
+    db.query.return_value.first.return_value = record
+    monkeypatch.setattr(service, "get_project_ids_for_user", lambda *_: {project} if member else set())
+    if allowed:
+        assert service.get_custom_agent_visible_to_user(db, uuid.uuid4(), 1) is record
+    else:
+        with pytest.raises(service.CustomAgentAccessError):
+            service.get_custom_agent_visible_to_user(db, uuid.uuid4(), 1)
+
+
+def test_nonowner_cannot_change_custom_agent_visibility():
+    from unittest.mock import MagicMock
+    from src.lib.agent_studio import custom_agent_service as service
+
+    db = MagicMock()
+    with pytest.raises(service.CustomAgentAccessError):
+        service.set_custom_agent_visibility(db, Agent(user_id=2), 1, "private")
+    db.flush.assert_not_called()
+
+
+@pytest.mark.parametrize("member", [True, False])
+def test_visible_agent_list_filters_private_nonmember_and_inactive(monkeypatch, member):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from src.lib.agent_studio import custom_agent_service as service
+
+    project, other = uuid.uuid4(), uuid.uuid4()
+    engine = create_engine("sqlite://")
+    expected = set()
+    with engine.begin() as connection:
+        connection.exec_driver_sql("""CREATE TABLE agents (
+            id UUID, user_id INTEGER, project_id UUID, visibility TEXT,
+            agent_key TEXT, is_active BOOLEAN, template_source TEXT,
+            updated_at DATETIME, created_at DATETIME
+        )""")
+        for owner, visibility, project_id, active, template, key in (
+            (1, "private", None, True, "gene", "ca_own"),
+            (1, "project", project, True, "gene", "ca_own_shared"),
+            (2, "private", project, True, "gene", "ca_private"),
+            (2, "project", project, True, "gene", "ca_shared"),
+            (2, "project", other, True, "gene", "ca_outside"),
+            (2, "project", project, False, "gene", "ca_inactive"),
+            (2, "project", project, True, "other", "ca_other_template"),
+            (None, "system", None, True, "gene", "system_gene"),
+        ):
+            agent_id = uuid.uuid4()
+            connection.exec_driver_sql("INSERT INTO agents VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+                                      (agent_id.hex, owner, project_id.hex if project_id else None,
+                                       visibility, key, active, template))
+            if key == "ca_own" or (member and key in {"ca_own_shared", "ca_shared"}):
+                expected.add(agent_id)
+    monkeypatch.setattr(service, "get_project_ids_for_user", lambda *_: {project} if member else set())
+    with Session(engine) as session:
+        # Project IDs only; the production service supplies every filter/order clause.
+        db = SimpleNamespace(query=lambda _: session.query(Agent.id))
+        rows = service.list_custom_agents_visible_to_user(db, 1, template_source="gene")
+        assert {row.id for row in rows} == expected
+    engine.dispose()

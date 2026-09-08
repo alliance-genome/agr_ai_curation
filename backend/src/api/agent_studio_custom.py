@@ -30,8 +30,10 @@ from src.lib.agent_studio.custom_agent_service import (
     create_custom_agent,
     custom_agent_to_dict,
     get_custom_agent_for_user,
+    get_custom_agent_visible_to_user,
     get_custom_agent_runtime_info,
     list_custom_agents_for_user,
+    list_custom_agents_visible_to_user,
     list_custom_agent_versions,
     make_custom_agent_id,
     revert_custom_agent_to_version,
@@ -345,15 +347,21 @@ async def create_custom_agent_endpoint(
 @router.get("", response_model=ListCustomAgentsResponse)
 async def list_custom_agents_endpoint(
     template_source: Optional[str] = Query(None, description="Optional template source filter"),
+    scope: Literal["owned", "visible"] = "owned",
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> ListCustomAgentsResponse:
-    """List active custom agents for current user."""
+    """List owned agents for management, or visible agents for discovery."""
     db_user = set_global_user_from_cognito(db, user)
     try:
+        list_agents = (
+            list_custom_agents_visible_to_user
+            if scope == "visible"
+            else list_custom_agents_for_user
+        )
         agents = [
             agent
-            for agent in list_custom_agents_for_user(
+            for agent in list_agents(
                 db,
                 db_user.id,
                 template_source=template_source,
@@ -384,10 +392,10 @@ async def get_custom_agent_endpoint(
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CustomAgentResponse:
-    """Get custom agent details with staleness metadata."""
+    """Read a visible custom agent; mutation routes still require ownership."""
     db_user = set_global_user_from_cognito(db, user)
     try:
-        custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
+        custom_agent = get_custom_agent_visible_to_user(db, custom_agent_id, db_user.id)
         _require_custom_agent_group_access(custom_agent, user)
         return _as_response_payload(custom_agent)
     except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
