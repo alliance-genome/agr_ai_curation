@@ -65,6 +65,30 @@ def _extract_execute_flow_runtime_identifiers(
     return flow_run_id, trace_id
 
 
+def _flow_execution_error_message(exc: Exception) -> tuple[str, str | None]:
+    """Describe typed provider failures without exposing provider payloads."""
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ResponsesWebSocketError):
+            if current.error_type in {"server_error", "service_unavailable_error"}:
+                return (
+                    "The AI service interrupted this run before it finished. "
+                    "Please try running the flow again. If this keeps happening, "
+                    "report the problem using the feedback button.",
+                    "openai",
+                )
+            return "The AI service could not complete this run.", "openai"
+        current = current.__cause__ or current.__context__
+    return (
+        str(exc) if isinstance(exc, ValueError) else "Flow execution failed unexpectedly.",
+        None,
+    )
+
+
 def _flow_failure_tags(
     *,
     flow_id: Any,
@@ -1273,11 +1297,7 @@ async def execute_flow_endpoint(
                 )
             )
         except Exception as exc:
-            run_error_message = (
-                str(exc)
-                if isinstance(exc, ValueError)
-                else "Flow execution failed unexpectedly."
-            )
+            run_error_message, failure_provider = _flow_execution_error_message(exc)
             report_runtime_exception(
                 exc,
                 component="execute_flow_stream",
@@ -1286,6 +1306,7 @@ async def execute_flow_endpoint(
                     flow_id=flow.id,
                     failure_type=type(exc).__name__,
                     phase="event_generator",
+                    provider=failure_provider,
                 ),
                 context={
                     "session_id": current_session_id,
@@ -1314,7 +1335,7 @@ async def execute_flow_endpoint(
                 trace_id=trace_id,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 details=_stream_error_details(
-                    error="Flow execution failed unexpectedly.",
+                    error=run_error_message,
                     exc=exc,
                 ),
             )
@@ -1326,8 +1347,11 @@ async def execute_flow_endpoint(
                 message=run_error_message,
                 error_type=type(exc).__name__,
             )
-            outcome.replace_with_persistence_failure(
-                "Flow execution failed before its terminal outcome was durable.",
+            outcome.replace_with_failure(
+                run_error_message,
+                failure_type=type(exc).__name__,
+                phase="event_generator",
+                provider=failure_provider,
                 terminal_events=[supervisor_error_event, run_error_event],
             )
             await executable_run_manager.set_outcome_status(run_id, "failed")

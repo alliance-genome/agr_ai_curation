@@ -214,21 +214,26 @@ class FlowRunOutcome:
         self.persistence_status = "succeeded"
         self.persistence_result = dict(result)
 
-    def replace_with_persistence_failure(
+    def replace_with_failure(
         self,
         reason: str,
         *,
         terminal_events: list[dict[str, Any]],
+        failure_type: str,
+        phase: str,
+        provider: str | None = None,
     ) -> None:
-        """Replace a non-durable candidate with its recoverable failed truth."""
+        """Replace candidate outputs with a failure awaiting transcript persistence."""
 
-        self.persistence_status = "failed"
-        self.persistence_result = {"reason": reason}
+        self.persistence_status = "pending"
+        self.persistence_result = {}
         self.status = "failed"
         self.failure_reason = reason
-        self.failure_type = "FlowOutcomePersistenceFailure"
-        self.failure_phase = "outcome_persistence"
-        self.failure_already_reported = False
+        self.failure_type = failure_type
+        self.failure_phase = phase
+        self.failure_provider = provider
+        self.failure_tool = None
+        self.failure_already_reported = True
         self.final_user_visible_text = None
         self._success_output_events = []
         self._run_finished_event = None

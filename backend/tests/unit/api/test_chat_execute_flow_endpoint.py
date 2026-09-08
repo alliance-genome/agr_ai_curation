@@ -2558,7 +2558,8 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
     assert keepalive_calls == [True]
 
 
-def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog):
+@pytest.mark.parametrize("websocket_failure", [False, True])
+def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog, websocket_failure):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-error")
     flow = SimpleNamespace(
@@ -2581,6 +2582,17 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     async def _fake_execute_flow(**_kwargs):
         if False:
             yield {"type": "RUN_STARTED"}
+        if websocket_failure:
+            from agents import UserError
+            from agents.models.openai_responses import ResponsesWebSocketError
+            try:
+                raise ResponsesWebSocketError({
+                    "type": "error", "sequence_number": 23,
+                    "error": {"type": "server_error", "code": None,
+                              "message": "private provider payload"},
+                })
+            except ResponsesWebSocketError as cause:
+                raise UserError("executor boom") from cause
         raise RuntimeError("executor boom")
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
@@ -2596,26 +2608,43 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
 
     events = asyncio.run(_consume_stream(response))
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
-    assert events[0]["details"]["error"] == "Flow execution failed unexpectedly."
-    assert events[1]["message"] == "Flow execution failed unexpectedly."
+    expected_message = (
+        "The AI service interrupted this run before it finished. "
+        "Please try running the flow again. If this keeps happening, "
+        "report the problem using the feedback button."
+        if websocket_failure else "Flow execution failed unexpectedly."
+    )
+    assert events[0]["details"]["error"] == expected_message
+    assert events[1]["message"] == expected_message
+    assert "private provider payload" not in json.dumps(events)
     assert "executor boom" not in json.dumps(events)
     assert "executor boom" in caplog.text
-    assert events[1]["error_type"] == "RuntimeError"
+    summaries = [
+        message
+        for messages in calls["repository"].messages.values()
+        for message in messages
+        if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    ]
+    assert len(summaries) == 1
+    assert summaries[0].payload_json["failure_reason"] == expected_message
+    assert "terminal outcome was durable" not in json.dumps(summaries[0].payload_json)
+    expected_type = "UserError" if websocket_failure else "RuntimeError"
+    assert events[1]["error_type"] == expected_type
     assert events[1]["session_id"] == "session-flow-error"
     assert calls["unregister"] == [("session-flow-error", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-error"]
     assert len(runtime_reports) == 1
     reported_exc, report_kwargs = runtime_reports[0]
-    assert isinstance(reported_exc, RuntimeError)
+    assert type(reported_exc).__name__ == expected_type
     assert str(reported_exc) == "executor boom"
     assert report_kwargs == {
         "component": "execute_flow_stream",
         "operation": "event_generator_failed",
         "tags": {
             "ai_curation.flow.id_hash": chat.hash_sentry_identifier(flow_id),
-            "flow_failure_type": "RuntimeError",
+            "flow_failure_type": expected_type,
             "phase": "event_generator",
-            "provider": None,
+            "provider": "openai" if websocket_failure else None,
             "tool_name": None,
         },
         "context": {
@@ -2875,3 +2904,25 @@ def test_execute_flow_endpoint_cleans_up_when_commit_fails(monkeypatch):
     assert calls["clear"] == ["session-commit-failure"]
     assert "session-commit-failure" not in chat._LOCAL_CANCEL_EVENTS
     assert "session-commit-failure" not in chat._LOCAL_SESSION_OWNERS
+
+
+@pytest.mark.parametrize("error_type", ["server_error", "invalid_request_error"])
+def test_flow_provider_failure_description_handles_context_and_cycles(error_type):
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    provider_error = ResponsesWebSocketError({
+        "type": "error", "error": {
+            "type": error_type, "code": None, "message": "private data",
+        },
+    })
+    wrapper = RuntimeError("private wrapper")
+    wrapper.__context__ = provider_error
+    message, provider = chat._flow_execution_error_message(wrapper)
+    assert provider == "openai"
+    assert "private" not in message
+    assert ("try running" in message) == (error_type == "server_error")
+    cyclic = RuntimeError("private cycle")
+    cyclic.__cause__ = cyclic
+    assert chat._flow_execution_error_message(cyclic) == (
+        "Flow execution failed unexpectedly.", None,
+    )
