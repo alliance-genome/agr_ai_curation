@@ -305,24 +305,25 @@ class BenchmarkWorker:
                 return
             except TimeoutError:
                 pass
-            with self.session_factory() as session:
-                owned = BenchmarkRepository(session).heartbeat_leases(
-                    job_id=job_id,
-                    cell_id=cell_id,
-                    lease_owner=self.worker_id,
-                    lease_seconds=self.lease_seconds,
-                )
-                if not owned:
-                    session.rollback()
-                    raise BenchmarkLeaseLostError("benchmark lease heartbeat was fenced")
-                session.commit()
+            await asyncio.to_thread(self._renew_leases, job_id, cell_id)
+
+    def _renew_leases(self, job_id: UUID, cell_id: UUID) -> None:
+        with self.session_factory() as session:
+            owned = BenchmarkRepository(session).heartbeat_leases(
+                job_id=job_id,
+                cell_id=cell_id,
+                lease_owner=self.worker_id,
+                lease_seconds=self.lease_seconds,
+            )
+            if not owned:
+                session.rollback()
+                raise BenchmarkLeaseLostError("benchmark lease heartbeat was fenced")
+            session.commit()
 
     async def _execute_cell(self, cell_id: UUID) -> None:
         cell: BenchmarkCell | None = None
-        stopped: asyncio.Event | None = None
-        heartbeat: asyncio.Task[None] | None = None
         try:
-            cell, user_query = self._load_cell(cell_id)
+            cell, user_query = await asyncio.to_thread(self._load_cell, cell_id)
             resolved = ResolvedBenchmarkCell.model_validate(
                 {
                     "cell_id": cell.cell_key,
@@ -340,98 +341,115 @@ class BenchmarkWorker:
                     "user_query": user_query,
                 }
             )
-            stopped = asyncio.Event()
-            heartbeat = asyncio.create_task(
-                self._heartbeat(cell.job_id, cell.id, stopped)
-            )
             executor = self.agent_executor if cell.target_kind == "agent" else self.flow_executor
+            outcome = await self._run_with_heartbeat(executor, resolved, cell)
+            if any(invocation.status == "failed" for invocation in outcome.invocations):
+                raise RuntimeError("benchmark cell has a failed provider invocation")
+            if not isinstance(outcome.output, dict):
+                raise ValueError("benchmark target result must be a JSON object envelope")
+            await asyncio.to_thread(self._finish_successful_cell, cell, outcome)
+        except BenchmarkLeaseLostError:
+            raise
+        except BenchmarkCancellationRequestedError:
+            if cell is None:
+                raise
+            await asyncio.to_thread(self._finish_cancelled_cell, cell)
+        except Exception as exc:
+            await asyncio.to_thread(self._finish_failed_cell, cell_id, cell, exc)
+
+    async def _run_with_heartbeat(
+        self, executor: Callable[..., Any], resolved: ResolvedBenchmarkCell, cell: BenchmarkCell,
+    ) -> Any:
+        stopped = asyncio.Event()
+        heartbeat = asyncio.create_task(self._heartbeat(cell.job_id, cell.id, stopped))
+        try:
             outcome = await asyncio.wait_for(
                 self._run_authorized_cell(executor, resolved, str(cell.id), cell),
                 timeout=self.cell_timeout_seconds,
             )
             if heartbeat.done():
                 heartbeat.result()
-            if any(invocation.status == "failed" for invocation in outcome.invocations):
-                raise RuntimeError("benchmark cell has a failed provider invocation")
-            if not isinstance(outcome.output, dict):
-                raise ValueError("benchmark target result must be a JSON object envelope")
-            completed_at = _utcnow()
-            with self.session_factory() as session:
-                repository = BenchmarkRepository(session)
-                if repository.cancellation_requested(
-                    job_id=cell.job_id,
-                    lease_owner=self.worker_id,
-                    now=completed_at,
-                ):
-                    repository.finish_cell(
-                        cell_id=cell.id,
-                        lease_owner=self.worker_id,
-                        status=BenchmarkCellStatus.CANCELLED,
-                        completed_at=completed_at,
-                    )
-                else:
-                    repository.finish_cell(
-                        cell_id=cell.id,
-                        lease_owner=self.worker_id,
-                        status=BenchmarkCellStatus.SUCCEEDED,
-                        completed_at=completed_at,
-                        generated_envelope=outcome.output,
-                        result=outcome.model_dump(mode="json"),
-                    )
-                session.commit()
-        except BenchmarkLeaseLostError:
-            raise
-        except BenchmarkCancellationRequestedError:
-            if cell is None:
-                raise
-            with self.session_factory() as session:
-                BenchmarkRepository(session).finish_cell(
+            return outcome
+        finally:
+            # Stop renewal before terminalization releases the cell lease. An
+            # already-running SQL thread may finish, but its cancelled task must
+            # not mistake our own terminal update for external lease loss.
+            stopped.set()
+            if not heartbeat.done():
+                heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+
+    def _finish_successful_cell(self, cell: BenchmarkCell, outcome: Any) -> None:
+        completed_at = _utcnow()
+        with self.session_factory() as session:
+            repository = BenchmarkRepository(session)
+            if repository.cancellation_requested(
+                job_id=cell.job_id,
+                lease_owner=self.worker_id,
+                now=completed_at,
+            ):
+                repository.finish_cell(
                     cell_id=cell.id,
                     lease_owner=self.worker_id,
                     status=BenchmarkCellStatus.CANCELLED,
+                    completed_at=completed_at,
+                )
+            else:
+                repository.finish_cell(
+                    cell_id=cell.id,
+                    lease_owner=self.worker_id,
+                    status=BenchmarkCellStatus.SUCCEEDED,
+                    completed_at=completed_at,
+                    generated_envelope=outcome.output,
+                    result=outcome.model_dump(mode="json"),
+                )
+            session.commit()
+
+    def _finish_cancelled_cell(self, cell: BenchmarkCell) -> None:
+        with self.session_factory() as session:
+            BenchmarkRepository(session).finish_cell(
+                cell_id=cell.id,
+                lease_owner=self.worker_id,
+                status=BenchmarkCellStatus.CANCELLED,
+                completed_at=_utcnow(),
+            )
+            session.commit()
+
+    def _finish_failed_cell(
+        self, cell_id: UUID, cell: BenchmarkCell | None, exc: Exception,
+    ) -> None:
+        if cell is None:
+            with self.session_factory() as lookup_session:
+                cell = lookup_session.get(BenchmarkCell, cell_id)
+                if cell is None:
+                    raise exc
+                lookup_session.expunge(cell)
+        category = "timeout" if isinstance(exc, TimeoutError) else "runtime_error"
+        if isinstance(exc, (ValueError, LookupError)):
+            category = "configuration_error"
+        with self.session_factory() as session:
+            try:
+                BenchmarkRepository(session).finish_cell(
+                    cell_id=cell.id,
+                    lease_owner=self.worker_id,
+                    status=BenchmarkCellStatus.FAILED,
                     completed_at=_utcnow(),
+                    failure=_bounded_failure(category, exc),
                 )
                 session.commit()
-        except Exception as exc:
-            if cell is None:
-                with self.session_factory() as lookup_session:
-                    cell = lookup_session.get(BenchmarkCell, cell_id)
-                    if cell is None:
-                        raise
-                    lookup_session.expunge(cell)
-            category = "timeout" if isinstance(exc, TimeoutError) else "runtime_error"
-            if isinstance(exc, (ValueError, LookupError)):
-                category = "configuration_error"
-            with self.session_factory() as session:
-                try:
-                    BenchmarkRepository(session).finish_cell(
-                        cell_id=cell.id,
-                        lease_owner=self.worker_id,
-                        status=BenchmarkCellStatus.FAILED,
-                        completed_at=_utcnow(),
-                        failure=_bounded_failure(category, exc),
-                    )
-                    session.commit()
-                except BenchmarkLeaseLostError:
-                    session.rollback()
-                    raise
-                except Exception as terminalization_exc:
-                    session.rollback()
-                    _report_failure(
-                        terminalization_exc,
-                        job_id=cell.job_id,
-                        cell_id=cell.id,
-                        operation="cell_terminalization_failed",
-                    )
-            _report_failure(exc, job_id=cell.job_id, cell_id=cell.id)
-        finally:
-            if stopped is not None:
-                stopped.set()
-            if heartbeat is not None:
-                if not heartbeat.done():
-                    heartbeat.cancel()
-                with suppress(asyncio.CancelledError):
-                    await heartbeat
+            except BenchmarkLeaseLostError:
+                session.rollback()
+                raise
+            except Exception as terminalization_exc:
+                session.rollback()
+                _report_failure(
+                    terminalization_exc,
+                    job_id=cell.job_id,
+                    cell_id=cell.id,
+                    operation="cell_terminalization_failed",
+                )
+        _report_failure(exc, job_id=cell.job_id, cell_id=cell.id)
 
     def _finish_or_cancel_job(self, job_id: UUID) -> bool:
         now = _utcnow()

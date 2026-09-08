@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -170,6 +171,9 @@ class PreparationStageCheckpoint:
         self.started_at = time.monotonic()
 
     async def __call__(self, stage: str) -> None:
+        await asyncio.to_thread(self._commit_checkpoint, stage)
+
+    def _commit_checkpoint(self, stage: str) -> None:
         with self.session_factory() as session:
             BenchmarkPreparationRepository(session).checkpoint(
                 job_id=self.job_id, snapshot_id=self.snapshot_id,

@@ -355,3 +355,90 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
             session.execute(delete(PDFDocument).where(PDFDocument.id == document_id))
             session.execute(delete(User).where(User.id == user_id))
             session.commit()
+
+
+@pytest.mark.asyncio
+async def test_blocked_snapshot_read_allows_worker_heartbeats_and_timeout(monkeypatch):
+    import asyncio
+    import threading
+
+    from src.lib.benchmarks.preparation_repository import (
+        BenchmarkPreparationRepository, BenchmarkPreparationUncertainError,
+    )
+    from tests.integration.persistence.test_benchmark_repository import _create_job
+
+    lease_owner = uuid4()
+    with SessionLocal() as session:
+        job = _create_job(session, owner=f"blocked-preparation-{uuid4()}", cells=1)
+        job_id = job.id
+        repository = BenchmarkRepository(session)
+        claimed = repository.claim_next_job(
+            lease_owner=lease_owner,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        assert claimed is not None and claimed.id == job_id
+        cell = repository.claim_next_cell(
+            job_id=job_id, lease_owner=lease_owner,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        assert cell is not None
+        cell_id, snapshot_id = cell.id, cell.input_snapshot_id
+        session.commit()
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    heartbeat_count = 0
+    heartbeat_leases = BenchmarkRepository.heartbeat_leases
+
+    def heartbeat(self, **kwargs):
+        nonlocal heartbeat_count
+        owned = heartbeat_leases(self, **kwargs)
+        if entered.is_set() and not release.is_set():
+            heartbeat_count += int(owned)
+        return owned
+
+    class BlockedStore:
+        def read(self, **kwargs):
+            entered.set()
+            try:
+                assert release.wait(5), "test failed to release snapshot storage"
+                return b"[]"
+            finally:
+                finished.set()
+
+    monkeypatch.setattr(BenchmarkRepository, "heartbeat_leases", heartbeat)
+    monkeypatch.setattr(preparation_service, "configured_benchmark_snapshot_store", BlockedStore)
+    monkeypatch.setattr(preparation_service, "authorize_benchmark_curator", AsyncMock())
+    paid_preparation = AsyncMock(side_effect=AssertionError("paid work must not start"))
+    monkeypatch.setattr(preparation_service, "prepare_frozen_document", paid_preparation)
+    worker = BenchmarkWorker(worker_id=lease_owner)
+    monkeypatch.setattr(worker, "heartbeat_seconds", 0.02)
+    worker.cell_timeout_seconds = 0.3
+    # Independent watchdog makes the pre-fix event-loop deadlock fail boundedly.
+    watchdog = threading.Timer(2, release.set)
+    watchdog.start()
+    try:
+        await worker._execute_cell(cell_id)
+        assert entered.is_set()
+        assert not release.is_set(), "cell timeout waited for blocked storage"
+        assert heartbeat_count > 0
+        with SessionLocal() as session:
+            cell = session.get(BenchmarkCell, cell_id)
+            assert cell.status == BenchmarkCellStatus.FAILED
+            assert cell.failure["category"] == "timeout"
+            with pytest.raises(BenchmarkPreparationUncertainError):
+                BenchmarkPreparationRepository(session).begin(
+                    job_id=job_id, snapshot_id=snapshot_id, lease_owner=lease_owner,
+                )
+        paid_preparation.assert_not_awaited()
+    finally:
+        release.set()
+        watchdog.cancel()
+        if entered.is_set():
+            assert await asyncio.to_thread(finished.wait, 5)
+        with SessionLocal() as session:
+            BenchmarkRepository(session).complete_job(
+                job_id=job_id, lease_owner=lease_owner, completed_at=datetime.now(timezone.utc),
+            )
+            session.execute(delete(BenchmarkJob).where(BenchmarkJob.id == job_id))
+            session.execute(delete(BenchmarkInputSnapshot).where(BenchmarkInputSnapshot.id == snapshot_id))
+            session.commit()
