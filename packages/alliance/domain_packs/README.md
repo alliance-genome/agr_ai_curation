@@ -37,3 +37,19 @@ The Gene Expression 0.7.0 release contract is documented in
 `docs/developer/guides/GENE_EXPRESSION_0_7_0.md`. It records the pinned
 `agr_curation_schema` commit, curator-guidance fixtures, validation/export
 behavior, known limitations, and the tested non-Alliance domain-pack pattern.
+
+Horizontal review-grid decisions are declared per object in
+`metadata.workspace_display.review_policy`. The optional declaration supports
+`{mode: all}`, `{mode: groups, decision_groups: [identity, annotation]}`, or
+`{mode: fields, decision_fields: [label, description]}`. Group selections match
+workspace group IDs; field selections match full envelope payload field paths.
+Gene, GO, and generic record packs own their selections here. Other objects and
+packages with no declaration show every projected field, including new fields.
+
+The materializer carries the declaration in review-row `workspace_display`,
+which the workspace exposes as candidate
+`metadata.review_row_metadata.workspace_display`. Agent Studio also projects
+`workspace_display` on object definitions. The policy only selects peer decision
+columns and preview-validation controls in the horizontal grid; it does not
+remove supporting fields from the envelope or metadata projections. Invalid
+explicit review declarations are errors, not an implicit show-all policy.

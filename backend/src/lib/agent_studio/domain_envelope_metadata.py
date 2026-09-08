@@ -153,6 +153,7 @@ def _object_definition_payload(
             for field_definition in object_definition.fields
         ],
         "field_groups": _field_groups_payload(object_definition.metadata),
+        "workspace_display": dict(object_definition.metadata.get("workspace_display") or {}),
     }
 
 

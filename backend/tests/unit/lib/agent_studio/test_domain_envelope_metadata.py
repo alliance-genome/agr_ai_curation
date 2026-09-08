@@ -32,6 +32,7 @@ object_definitions:
     metadata:
       object_role: curatable_unit
       workspace_display:
+        review_policy: {mode: groups, decision_groups: [subject]}
         primary_label_field: subject.label
         groups:
           - id: provenance
@@ -183,6 +184,7 @@ def test_field_groups_do_not_change_other_object_keys(monkeypatch, tmp_path):
         "validation_attachments",
         "fields",
         "field_groups",
+        "workspace_display",
     }
     assert annotation["object_role"] == "curatable_unit"
     assert [field["field_path"] for field in annotation["fields"]] == [
@@ -260,3 +262,13 @@ def test_group_without_id_is_skipped(monkeypatch, tmp_path):
         "provenance",
         "evidence",
     ]
+
+
+def test_workspace_display_policy_is_projected_without_filtering_fields(monkeypatch, tmp_path):
+    payload = _catalog(monkeypatch, tmp_path)
+    annotation = _object_definition(payload, "Annotation")
+    assert annotation["workspace_display"]["review_policy"] == {
+        "mode": "groups", "decision_groups": ["subject"],
+    }
+    assert len(annotation["fields"]) == 4
+    assert _object_definition(payload, "Note")["workspace_display"] == {}

@@ -41,6 +41,9 @@ object_definitions:
           - description
           - confidence
       workspace_display:
+        review_policy:
+          mode: fields
+          decision_fields: [label, class_key, semantic_class, description, attributes]
         primary_label_field: label
         secondary_label_field: semantic_class
         summary_fields:
@@ -103,6 +106,9 @@ object_definitions:
           - claim_text
           - confidence
       workspace_display:
+        review_policy:
+          mode: fields
+          decision_fields: [label, class_key, claim_text, claim_type]
         primary_label_field: label
         secondary_label_field: claim_type
         summary_fields:
@@ -161,6 +167,9 @@ object_definitions:
           - count
           - reagent_type
       workspace_display:
+        review_policy:
+          mode: fields
+          decision_fields: [label, class_key, source, source_identifier, count, reagent_type]
         primary_label_field: label
         secondary_label_field: source_identifier
         summary_fields:

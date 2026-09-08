@@ -374,3 +374,42 @@ def test_phenotype_term_curie_workspace_field_carries_term_chip_hint():
     by_path = {field["field_path"]: field for field in fields}
 
     assert by_path["phenotype_terms[0].curie"]["metadata"]["render_as"] == "term-chip"
+
+
+@pytest.mark.parametrize(
+    "pack_name,object_type,expected_policy",
+    [
+        ("gene", "gene_mention_evidence", {"mode": "groups", "decision_groups": ["identity"]}),
+        ("go", "GOCuratableObject", {"mode": "groups", "decision_groups": ["identity", "annotation"]}),
+        ("generic", "generic_object", {"mode": "fields", "decision_fields": ["label", "class_key", "semantic_class", "description", "attributes"]}),
+        ("generic", "generic_claim", {"mode": "fields", "decision_fields": ["label", "class_key", "claim_text", "claim_type"]}),
+        ("generic", "generic_reagent_candidate", {"mode": "fields", "decision_fields": ["label", "class_key", "source", "source_identifier", "count", "reagent_type"]}),
+        ("disease", "DiseaseAnnotation", None),
+    ],
+)
+def test_package_review_policies_reach_review_rows(pack_name, object_type, expected_policy):
+    metadata = load_domain_pack_metadata(PACK_ROOT / pack_name / "domain_pack.yaml")
+    definition = next(item for item in metadata.object_definitions if item.object_type == object_type)
+    display = definition.metadata["workspace_display"]
+    assert display.get("review_policy") == expected_policy
+    if expected_policy is not None:
+        if expected_policy["mode"] == "groups":
+            assert set(expected_policy["decision_groups"]) <= {group["id"] for group in display["groups"]}
+        else:
+            assert set(expected_policy["decision_fields"]) <= {field.field_path for field in definition.fields}
+    envelope = DomainEnvelope(
+        envelope_id="review-policy",
+        domain_pack_id=metadata.pack_id,
+        domain_pack_version=metadata.version,
+        status=DomainEnvelopeStatus.EXTRACTED,
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type=object_type,
+            object_id="record",
+            status=CuratableObjectStatus.PENDING,
+            payload={"label": "record", "confidence": "high"},
+            metadata={"object_role": "curatable_unit"},
+        )],
+    )
+    rows = DomainPackMetadataReviewRowMaterializer(metadata).materialize(envelope, envelope_revision=1)
+    assert rows[0].metadata["workspace_display"].get("review_policy") == expected_policy
+    assert envelope.extracted_objects[0].payload["confidence"] == "high"

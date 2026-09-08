@@ -297,6 +297,9 @@ describe('buildHorizontalGridModel', () => {
       ...geneCandidate.metadata,
       domain_pack_id: 'gene',
       object_type: 'gene_mention_evidence',
+      review_row_metadata: {
+        workspace_display: { review_policy: { mode: 'groups', decision_groups: ['identity'] } },
+      },
     }
 
     const model = modelForRows([workspaceRow({ candidate: geneCandidate })])

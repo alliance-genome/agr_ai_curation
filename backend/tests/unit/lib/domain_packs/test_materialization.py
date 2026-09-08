@@ -1721,3 +1721,28 @@ def test_materialized_field_path_resolves_bare_field_unchanged():
         )
         == "evidence_code_curies"
     )
+
+
+@pytest.mark.parametrize("policy", [None, {"mode": "fields", "decision_fields": ["gene.symbol"]}])
+def test_custom_review_policy_preserves_all_summary_fields(policy):
+    metadata = _metadata()
+    display = metadata.object_definitions[0].metadata["workspace_display"]
+    if policy is not None:
+        display["review_policy"] = policy
+    envelope = DomainEnvelope(
+        envelope_id="custom-review-policy",
+        domain_pack_id=metadata.pack_id,
+        domain_pack_version=metadata.version,
+        status=DomainEnvelopeStatus.EXTRACTED,
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type="GeneAssertion",
+            object_id="record",
+            status=CuratableObjectStatus.PENDING,
+            payload={"gene": {"symbol": "demo"}, "condition": {"label": "context"}, "evidence": [{"quote": "support"}]},
+        )],
+    )
+    rows = DomainPackMetadataReviewRowMaterializer(metadata).materialize(envelope, envelope_revision=1)
+    assert rows[0].metadata["workspace_display"].get("review_policy") == policy
+    assert {field.field_path for field in rows[0].summary_fields} == {
+        "gene.symbol", "condition.label", "evidence[0].quote",
+    }
