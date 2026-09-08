@@ -13,6 +13,20 @@ from src.services.trace_extractor import (
 
 
 class TraceExtractorTests(unittest.TestCase):
+    def test_score_provider_failure_is_captured_even_when_reporter_fails(self):
+        from src import observability
+        for reporter_broken in (False, True):
+            extractor = self._make_extractor()
+            extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+            with patch.object(observability, "_client") as reporter:
+                if reporter_broken:
+                    reporter.capture_event.side_effect = RuntimeError("sentry unavailable")
+                self.assertEqual(extractor.get_scores("private-trace"), [])
+                reporter.capture_event.assert_called_once()
+                event = reporter.capture_event.call_args.args[0]
+                self.assertEqual(event["tags"]["operation"], "scores")
+                self.assertNotIn("private-", str(event))
+
     def _make_extractor(self) -> TraceExtractor:
         extractor = object.__new__(TraceExtractor)
         credentials = {"public": "pk-test", "private": "unit-test-credential"}

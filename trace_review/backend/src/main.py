@@ -16,6 +16,8 @@ from .services.cache_manager import CacheManager
 from .services.trace_extractor import TraceExtractor
 from .config import get_trace_review_preflight_diagnostics, validate_trace_source
 
+from .observability import initialize_sentry, close_sentry
+
 configure_logging()
 
 logger = logging.getLogger(__name__)
@@ -120,11 +122,15 @@ def _health_response(app: FastAPI) -> JSONResponse:
 async def lifespan(app: FastAPI):
     """Initialize and cleanup application resources"""
     # Startup
+    initialize_sentry()
     ttl_hours = int(os.getenv("CACHE_TTL_HOURS", "1"))
     app.state.cache_manager = CacheManager(ttl_hours=ttl_hours)
     logger.info("Cache manager initialized with TTL: %s hours", ttl_hours)
 
-    yield
+    try:
+        yield
+    finally:
+        close_sentry()
 
     # Shutdown
     app.state.cache_manager.clear_all()

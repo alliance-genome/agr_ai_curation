@@ -15,6 +15,92 @@ EMPTY_TRACE_SUMMARY = {
 
 
 class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
+    @patch("src.observability._client")
+    @patch("src.api.traces.TraceExtractor")
+    async def test_unexpected_setup_failures_are_reported_and_reraised(self, extractor_cls, reporter):
+        failure = OSError("private-setup-error")
+        extractor_cls.side_effect = failure
+        reporter.capture_event.side_effect = RuntimeError("reporter down")
+        for operation in ("export", "session"):
+            reporter.reset_mock()
+            with self.assertRaises(OSError) as raised:
+                if operation == "export":
+                    await traces.export_trace("private-trace", self._make_request(), source="remote", refresh=False)
+                else:
+                    await traces.export_session("private-session", self._make_request(), source="remote")
+            self.assertIs(raised.exception, failure)
+            reporter.capture_event.assert_called_once()
+
+    @patch("src.observability._client")
+    @patch("src.api.traces.TraceExtractor")
+    async def test_session_failures_emit_one_event_and_preserve_bundle(self, extractor_cls, reporter):
+        extractor = extractor_cls.return_value
+        extractor.list_session_traces.return_value = {
+            "traces": [{"id": "private-1"}, {"id": "private-2"}],
+            "meta": {"complete": True},
+        }
+        extractor.extract_complete_trace.side_effect = RuntimeError("private-response")
+        for broken in (False, True):
+            reporter.reset_mock()
+            reporter.capture_event.side_effect = RuntimeError("reporter down") if broken else None
+            response = await traces.export_session("private-session", self._make_request(), source="local")
+            self.assertEqual(response["status"], "success")
+            self.assertEqual(response["session"]["failed_trace_count"], 2)
+            self.assertFalse(response["session"]["complete"])
+            reporter.capture_event.assert_called_once()
+            event = reporter.capture_event.call_args.args[0]
+            self.assertEqual(event["contexts"]["trace_review"]["extraction_failures"], 2)
+            self.assertNotIn("private-", str(event))
+
+    @patch("src.observability._client")
+    @patch("src.api.traces.TraceExtractor")
+    async def test_search_and_session_listing_failures_capture(self, extractor_cls, reporter):
+        from fastapi import HTTPException
+        for failure, status in ((ValueError("private-config"), 503), (RuntimeError("private-response"), 502)):
+            extractor_cls.side_effect = failure
+            for operation in ("search", "session_listing"):
+                reporter.reset_mock()
+                with self.assertRaises(HTTPException) as raised:
+                    if operation == "search":
+                        await traces.search_traces(source="remote", session_id="private-session")
+                    else:
+                        await traces.export_session("private-session", self._make_request(), source="remote")
+                self.assertEqual(raised.exception.status_code, status)
+                reporter.capture_event.assert_called_once()
+                self.assertNotIn("private-", str(reporter.capture_event.call_args))
+
+    @patch("src.observability._client")
+    @patch("src.api.traces.TraceExtractor")
+    async def test_provider_extraction_and_analysis_failures_capture(self, extractor_cls, reporter):
+        from fastapi import HTTPException
+        extractor = extractor_cls.return_value
+        extractor.extract_complete_trace.side_effect = RuntimeError("private-response")
+        with self.assertRaises(HTTPException) as raised:
+            await traces.export_trace("private-trace", self._make_request(), source="remote", refresh=False)
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertEqual(reporter.capture_event.call_args.args[0]["tags"]["operation"], "extraction")
+        reporter.reset_mock()
+        extractor.extract_complete_trace.side_effect = None
+        extractor.extract_complete_trace.return_value = {}
+        with self.assertRaises(HTTPException) as raised:
+            await traces.export_trace("private-trace", self._make_request(), source="remote", refresh=False)
+        self.assertEqual(raised.exception.status_code, 500)
+        reporter.capture_event.assert_called_once()
+        self.assertEqual(reporter.capture_event.call_args.args[0]["tags"]["operation"], "analysis")
+
+    @patch("src.observability._client")
+    @patch("src.api.traces.TraceExtractor")
+    def test_direct_extraction_reports_provider_failure_but_not_missing_trace(self, extractor_cls, reporter):
+        from fastapi import HTTPException
+        from src.services.trace_extractor import TraceNotFoundError
+        for failure, captures in ((RuntimeError("private-response"), 1), (TraceNotFoundError("missing"), 0)):
+            reporter.reset_mock()
+            extractor_cls.return_value.extract_complete_trace.side_effect = failure
+            with self.assertRaises(HTTPException) as raised:
+                traces._extract_langfuse_trace("private-trace", "remote")
+            self.assertEqual(raised.exception.status_code, 404)
+            self.assertEqual(reporter.capture_event.call_count, captures)
+
     @patch("src.api.traces.TraceExtractor")
     async def test_export_session_distinguishes_empty_complete_and_stopped_scans(self, extractor_cls):
         for complete in (True, False):

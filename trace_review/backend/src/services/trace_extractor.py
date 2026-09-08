@@ -15,6 +15,7 @@ from ..config import (
     get_langfuse_search_request_limit,
     get_trace_source_runtime_config,
 )
+from ..observability import report_failure
 from .langfuse_run_reconstruction import usage_cost_summary
 
 logger = logging.getLogger(__name__)
@@ -881,6 +882,7 @@ class TraceExtractor:
                 return [self._normalize_item(score) for score in response.items]
             return []
         except Exception:
+            report_failure("scores", source=self.source, trace_id=trace_id)
             return []
 
     def extract_complete_trace(self, trace_id: str) -> Dict:
