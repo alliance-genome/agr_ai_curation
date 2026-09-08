@@ -342,6 +342,9 @@ describe('OpusChat', () => {
     expect(prompt).toContain('compacted_tool_result')
     expect(prompt).toContain('not terminal control nodes')
     expect(prompt).toContain('Duplicate output_key is HIGH')
+    expect(prompt).toContain('section="prompt_manifest"')
+    expect(prompt).toContain('never substitute the template prompt')
+    expect(prompt).toContain('click "Choose output fields"')
   })
 
   it('publishes conversation snapshots for tool-idea transcript capture', async () => {

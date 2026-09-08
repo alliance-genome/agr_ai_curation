@@ -180,6 +180,9 @@ def test_flow_context_requires_complete_targeted_verification_evidence(monkeypat
     assert 'get_current_flow_topology(section="all")' in prompt
     assert 'view="complete_plan"' in prompt
     assert "verification INCOMPLETE" in prompt
+    assert 'section="prompt_manifest"' in prompt
+    assert "never substitute the template prompt" in prompt
+    assert 'click "Choose output fields"' in prompt
     assert "returned `next_call` until `complete=true`" in prompt
     assert "`next_call` through ordinary pages and exact record chunks until" in prompt
     assert "`truncated=false` and no `next_cursor` remains" in prompt

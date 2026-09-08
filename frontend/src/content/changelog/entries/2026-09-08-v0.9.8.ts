@@ -13,6 +13,8 @@ const entry: ChangelogEntry = {
         'AI Chat can review flow connections and export settings with fewer calls, reducing the chance of stopping before verification finishes.',
         'Final summaries now receive completed automatic validation results, including resolved identifiers and any rejected updates.',
         'Fixed a problem that could prevent Unload PDF from working after switching between browser tabs.',
+        'AI Chat can inspect long custom-agent instructions and their saved platform rules during flow review.',
+        'When an extractor change affects file output, guidance now points to Choose output fields and explains how to save the updated layout.',
         'Improved diagnostic links for AI Chat so failed conversations are easier to investigate.',
       ],
     },

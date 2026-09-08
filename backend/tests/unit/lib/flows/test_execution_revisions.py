@@ -686,7 +686,8 @@ def test_selected_export_authoring_binds_source_revision_and_field_identity(monk
     }
     assert not module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[]).findings
     definition.nodes[-1].data.projection_plan["selected_sources"][0]["schema_fingerprint"] = "old"
-    assert any("changed" in f.message for f in module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[]).findings)
+    stale = module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[]).findings
+    assert any("changed" in f.message and "Choose output fields" in f.message and "save the flow" in f.message for f in stale)
     definition.nodes[-1].data.projection_plan["selected_sources"][0] = {"node_id": "disconnected", "schema_fingerprint": fingerprint}
     assert any("no available saved structure" in f.message for f in module.resolve_flow_execution_revisions(db, definition, user_id=7, active_group_ids=[]).findings)
 

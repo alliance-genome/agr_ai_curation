@@ -105,3 +105,20 @@ Verification can read all topology sections with `get_current_flow_topology(sect
 Authoring and suggestion turns allocate 32-character lowercase hexadecimal trace IDs. An active Langfuse parent observation carries that ID, and propagated session/user attributes connect SDK child observations to the conversation. SDK metadata alone does not establish this relationship. Explicit Stop unwinds the trace scope before closing owned provider resources.
 
 Supervisor extraction manifests include bounded canonical validator decisions, including targets omitted from the main object list. Copied findings are grouped by request; rejected writeback and open findings remain visible. A validator decision does not establish accepted writeback, annotation readiness or export readiness. Omitted details must be inspected before making claims about them.
+
+### Saved custom-agent inspection and stale export guidance (0.9.8)
+
+`inspect_saved_studio_resource` reads exact revision sections (`instructions`, `prompt_manifest`, `tools`,
+`group_prompts`, `output_profile`, `settings`, or `all`). `group_id` selects one saved
+prompt group. Full prompt verification reads `prompt_manifest`, including frozen
+core/static/generated and base layers, plus applicable saved group layers;
+`instructions` alone is only editable text. Large values are lossless JSON text pages with a content hash and
+`next_call`; every continuation reauthorizes and fits the existing provider result
+character cap, including JSON escaping and metadata. Concatenate content ranges
+before parsing. A changed hash, revoked access or unusably small cap fails explicitly.
+Small `all` reads preserve their structured fields. Built-in prompt/inventory tools
+must not be used to infer a custom agent's pinned settings.
+
+For stale selected-field export layouts, both validation and AI guidance name the
+actual **Choose output fields** button on the file output step, followed by confirming
+fields and saving the flow. Other422 causes still require their own validation evidence.

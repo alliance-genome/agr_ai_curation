@@ -147,3 +147,93 @@ def test_saved_revision_includes_only_its_authorized_pinned_structure(monkeypatc
                                         "revision": 3, "fingerprint": "profile-pin", "contract": profile.contract}
     assert result["loaded_in_editor"] is False
     db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("section", ["all", "instructions", "prompt_manifest", "tools", "group_prompts", "output_profile", "settings"])
+def test_saved_revision_sections_fit_provider_and_reconstruct_exactly(monkeypatch, section):
+    import json
+    record = {
+        "saved": True, "loaded_in_editor": False, "agent_id": str(uuid4()),
+        "revision_id": str(uuid4()), "revision": 1, "fingerprint": "saved-pin",
+        "snapshot": {"instructions": ('quoted "text"\\\nλ ' * 1600),
+                     "tool_ids": ["search_document", "read_chunk"], "system_managed_tool_ids": ["record_evidence"],
+                     "group_tool_policy": {}, "model_id": "fixture-model",
+                     "group_prompt_layers": {"TEAM": "Team guidance"}, "group_prompt_overrides": {},
+                     "group_rules_enabled": True,
+                     "prompt_layer_manifest": {"layers": [
+                         {"kind": "core_static", "content": "Keep supporting evidence"},
+                         {"kind": "core_generated", "content": "Use the saved output contract"},
+                         {"kind": "base_prompt", "content": "Extract the requested items"}]}},
+        "output_profile": {"contract": {"fields": [{"key": "source"}]}},
+    }
+    read = MagicMock(return_value=record)
+    monkeypatch.setattr(inspection, "_read_saved_resource", read)
+    monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 1800)
+    request = inspection.SavedResourceInspection(action="agent_revision", agent_id=record["agent_id"],
+        revision_id=record["revision_id"], section=section)
+    chunks = []
+    calls = 0
+    while True:
+        page = inspection.inspect_saved_resource(MagicMock(), user_id=7, active_group_ids=["TEAM"], request=request)
+        calls += 1
+        assert len(api._serialize_provider_tool_result({"success": True, **page})) <= 1800
+        assert page["saved"] and not page["loaded_in_editor"]
+        if "content" in page:
+            assert page["start"] == sum(map(len, chunks))
+            chunks.append(page["content"])
+        if page["complete"]:
+            assert page["next_call"] is None
+            break
+        assert page["end"] > page["start"]
+        request = inspection.SavedResourceInspection.model_validate(page["next_call"]["arguments"])
+    assert read.call_count == calls  # Access is rechecked even on continuation pages.
+    value = json.loads("".join(chunks)) if chunks else page.get("detail", record)
+    if section == "all":
+        assert value == record
+    elif section == "instructions":
+        assert value == record["snapshot"]["instructions"]
+    elif section == "prompt_manifest":
+        assert value == record["snapshot"]["prompt_layer_manifest"]
+        assert [layer["kind"] for layer in value["layers"]] == ["core_static", "core_generated", "base_prompt"]
+    elif section == "output_profile":
+        assert value == record["output_profile"]
+    elif section == "tools":
+        assert value["tool_ids"] == record["snapshot"]["tool_ids"]
+        assert value["system_managed_tool_ids"] == ["record_evidence"]
+    elif section == "group_prompts":
+        assert value["group_prompt_layers"] == {"TEAM": "Team guidance"}
+    else:
+        assert value["model_id"] == "fixture-model"
+        assert "instructions" not in value
+
+
+def test_saved_record_continuations_reject_changed_content_and_revoked_access(monkeypatch):
+    row = {"flow_definition": {"instructions": "long content" * 1000}}
+    read = MagicMock(return_value=row)
+    monkeypatch.setattr(inspection, "_read_saved_resource", read)
+    monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 1400)
+    first = inspection.inspect_saved_resource(MagicMock(), user_id=7, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="flow", flow_id=str(uuid4())))
+    request = inspection.SavedResourceInspection.model_validate(first["next_call"]["arguments"])
+    row["flow_definition"]["instructions"] += "changed"
+    with pytest.raises(ValueError, match="changed"):
+        inspection.inspect_saved_resource(MagicMock(), user_id=7, active_group_ids=[], request=request)
+    read.side_effect = ValueError("Unavailable saved revision")
+    with pytest.raises(ValueError, match="Unavailable"):
+        inspection.inspect_saved_resource(MagicMock(), user_id=7, active_group_ids=[], request=request)
+
+
+def test_saved_section_reads_only_requested_group_and_rejects_impossible_page(monkeypatch):
+    record = {"snapshot": {"group_prompt_layers": {"TEAM": "selected", "OTHER": "unrelated"},
+                           "group_prompt_overrides": {}, "group_rules_enabled": True}}
+    request = inspection.SavedResourceInspection(action="agent_revision", agent_id=str(uuid4()),
+        revision_id=str(uuid4()), section="group_prompts", group_id="TEAM")
+    result = inspection._bounded_saved_record(record, request)
+    assert result["detail"]["group_prompt_layers"] == {"TEAM": "selected"}
+    with pytest.raises(ValueError, match="no prompt layer"):
+        inspection._bounded_saved_record(record, request.model_copy(update={"group_id": "MISSING"}))
+    with pytest.raises(ValueError, match="identity is missing"):
+        inspection._bounded_saved_record(record, request.model_copy(update={"start": 1}))
+    monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 24)
+    with pytest.raises(ValueError, match="cannot fit"):
+        inspection._bounded_saved_record(record, request)

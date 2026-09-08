@@ -25,7 +25,7 @@ def selection_errors(plan: Any, sources: dict[str, dict], output_format: str) ->
         if not catalog or not catalog.get("fields"):
             errors.append(f"Source '{source.node_id}' has no available saved structure. Reconnect or save its extractor first.")
         elif source.schema_fingerprint != catalog.get("schema_fingerprint"):
-            errors.append(f"Source '{source.node_id}' changed. Review and choose its output fields again.")
+            errors.append(f"Source '{source.node_id}' changed. Open this file output step, click 'Choose output fields', review and confirm its fields, then save the flow again.")
     headers = set()
     for column in plan.columns:
         catalog = selected.get(column.source_node_id)
