@@ -408,7 +408,11 @@ FastAPI background tasks. Background-task identifier tags are hashed before
 capture.
 
 Use the tool-failure notifier only for tool/specialist failure alerts. Do not
-use it as a generic application-error facade.
+use it as a generic application-error facade. Its Sentry events correlate through
+`ai_curation.trace.id_hash` and `ai_curation.chat.session_id_hash`, using the
+shared identifier hash function. Tool, source, and error classification remain
+tags; raw application trace/session/curator IDs are omitted from custom Sentry
+payloads. Sentry SDK tracing identifiers and the separate SNS payload are unchanged.
 
 ## Sensitive Database Wrappers
 
