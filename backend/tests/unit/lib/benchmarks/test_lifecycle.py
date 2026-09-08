@@ -204,3 +204,93 @@ async def test_duplicate_wait_keeps_loop_live_and_session_thread_owned(monkeypat
         lifecycle.BenchmarkAdmissionResult(job_id, True),
     ]
     materializer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_fails", [False, True])
+@pytest.mark.parametrize(
+    "source_code,status,operation",
+    [
+        *((code, status, "source_materialization")
+          for code, status in lifecycle._SOURCE_ERROR_STATUS.items()),
+        ("unknown-private-code", 503, "source_materialization"),
+        (None, 503, "snapshot_commit"),
+    ],
+)
+async def test_admission_failure_capture_preserves_durable_replay(
+    monkeypatch, source_code, status, operation, capture_fails,
+):
+    value = _payload()
+    plan = resolve_suite(validate_suite(value), _catalog(), max_cases=100,
+                         max_configurations=100, max_repetitions=100, max_cells=10000)
+    session = MagicMock()
+    session.__enter__.return_value = session
+    reservation = SimpleNamespace(outcome="pending")
+    repository = Mock()
+    repository.reserve_idempotency.return_value = (reservation, True)
+    monkeypatch.setattr(lifecycle, "BenchmarkRepository", Mock(return_value=repository))
+    sensitive = "private-paper-content sql-parameters bearer-value"
+    failure = (
+        lifecycle.BenchmarkSourceError(source_code, sensitive)
+        if source_code is not None else lifecycle.BenchmarkSnapshotError(sensitive)
+    )
+    failure.__cause__ = RuntimeError(sensitive)
+    materialize = AsyncMock(side_effect=failure if source_code is not None else None)
+    monkeypatch.setattr(lifecycle, "materialize_plan_inputs", materialize)
+    snapshots = Mock()
+    snapshots.freeze_plan.side_effect = failure
+    monkeypatch.setattr(lifecycle, "BenchmarkSnapshotRepository", Mock(return_value=snapshots))
+    scope = MagicMock()
+    monkeypatch.setattr("sentry_sdk.new_scope", Mock(return_value=scope))
+
+    def capture(exc):
+        # Reporting must not interfere with the durable transaction.
+        session.commit.assert_called_once()
+        if capture_fails:
+            raise RuntimeError("Synthetic capture failure")
+
+    capture_mock = Mock(side_effect=capture)
+    monkeypatch.setattr("sentry_sdk.capture_exception", capture_mock)
+    arguments: dict[str, Any] = dict(
+        session_factory=Mock(return_value=session), owner_subject="private-owner",
+        service_principal="private-principal", idempotency_key="private-key",
+        suite_value=value, submitted_plan=plan, route_catalog=_catalog(),
+        input_catalog=Mock(), source_context=Mock(), snapshot_store=Mock(),
+        curator_context=BenchmarkCuratorContext(
+            subject="private-curator", auth_provider="oidc", db_user_id=1, active_groups=(),
+        ),
+    )
+    expected_code = source_code if source_code is not None else "source_unavailable"
+    expected_message = sensitive if source_code is not None else "Benchmark input snapshot could not be committed"
+    for replayed in (False, True):
+        with pytest.raises(lifecycle.BenchmarkLifecycleFailure) as error:
+            await lifecycle.submit_job(**arguments)
+        assert (error.value.code, error.value.message, error.value.status_code) == (
+            expected_code, expected_message, status,
+        )
+        repository.fail_idempotency.assert_called_once_with(
+            reservation=reservation, error_code=expected_code,
+            error_message=expected_message, error_status=status,
+        )
+        session.commit.assert_called_once()
+        reservation.outcome = "failed"
+        reservation.error_code = expected_code
+        reservation.error_message = expected_message
+        reservation.error_status = status
+        repository.reserve_idempotency.return_value = (reservation, False)
+    materialize.assert_awaited_once()
+    repository.create_job.assert_not_called()
+    if status < 500:
+        capture_mock.assert_not_called()
+        return
+    capture_mock.assert_called_once()
+    captured = capture_mock.call_args.args[0]
+    assert str(captured) == f"Benchmark {operation} failed ({type(failure).__name__})"
+    assert captured.__traceback__ is not None
+    assert captured.__context__ is None and captured.__cause__ is None
+    scope.__enter__.return_value.set_context.assert_called_once_with(
+        "runtime_exception", {"component": "benchmark_lifecycle", "operation": operation},
+    )
+    capture_data = str(captured) + str(scope.mock_calls)
+    for private in (sensitive, "private-owner", "private-principal", "private-key", "private-curator", "unknown-private-code"):
+        assert private not in capture_data
