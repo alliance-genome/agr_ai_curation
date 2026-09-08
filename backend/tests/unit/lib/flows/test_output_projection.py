@@ -2585,6 +2585,42 @@ def test_validator_like_payload_with_legacy_items_remains_non_structured():
     assert bundle.rows_for_source("object") == []
 
 
+def test_canonical_validation_review_retains_candidates_and_field_identity():
+    step = _completed_domain_step()
+    payload = step['candidate'].payload_json
+    candidates = [{'value': 'TEST:ALLELE1', 'label': 'candidate one'},
+                  {'value': 'TEST:ALLELE2', 'label': 'candidate two'}]
+    attempts = [{'method': 'search_alleles', 'lookup_status': 'ambiguous', 'candidate_count': 2}]
+    target = {'object_id': 'gene-2', 'field_path': 'attributes.identity', 'object_type': 'Gene'}
+    payload['validation_findings'] = [{
+        'finding_id': 'canonical-ambiguous', 'status': 'open',
+        'message': 'Two possible matches require review.',
+        'field_ref': {'field_path': 'attributes.identity', 'object_ref': {'object_type': 'Gene', 'object_id': 'gene-2'}},
+        'details': {'candidate_matches': candidates, 'lookup_attempts': attempts,
+                    'execution_receipt': {'must_not_export': 'internal receipt'},
+                    'validation_result': {'request_id': 'request-2', 'target': target,
+                        'validator_binding_id': 'allele_identity', 'candidate_count': 2,
+                        'resolved_values': {}, 'missing_expected_fields': ['curie']}}
+    }]
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name='Review')
+    rows = bundle.artifacts[0].rows_by_source['validation_finding']
+    row = next(r for r in rows if r['validation.finding_id'] == 'canonical-ambiguous')
+    assert row['validation.candidate_matches'] == candidates
+    assert row['validation.lookup_attempts'] == attempts
+    assert row['validation.target'] == target
+    assert row['validation.field_path'] == 'attributes.identity'
+    assert row['object.object_id'] == 'gene-2'
+    assert row['validation.validator'] == 'allele_identity'
+    assert row['validation.resolved_values'] == {}
+    assert row['validation.missing_expected_fields'] == ['curie']
+    assert 'must_not_export' not in json.dumps(row)
+    exported = apply_projection_plan(bundle, FlowOutputProjectionPlan(
+        format='json', row_source='validation_finding',
+        columns=[FlowOutputColumnSpec(key='candidates', field_ref='validation.candidate_matches')],
+    ))
+    assert any(r['candidates'] == candidates for r in exported.rows)
+
+
 def test_typed_validator_row_without_declared_identity_fails_loudly():
     payload = _typed_validator_result_payload(
         agent_id="go_annotations_lookup",
