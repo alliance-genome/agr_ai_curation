@@ -85,18 +85,18 @@ def test_invalid_db_model_fails_without_substitution(configured):
 
 
 def test_authored_chat_has_frozen_model_slot_and_respects_visibility(configured):
-    configured.rows.append(NS(agent_key="chat_output_formatter", model_id="model-b",
+    configured.rows.append(NS(agent_key="chat_output", model_id="model-b",
                               model_reasoning="high", visibility="system"))
     configured.hydrate.return_value.nodes.append(NS(
-        type="agent", data=NS(agent_id="chat_output_formatter", model_dump=lambda: {}),
+        type="output", data=NS(agent_id="chat_output", model_dump=lambda: {}),
     ))
     catalog = runtime.build_curator_route_catalog(object(), configured.curator)
-    slot = next(slot for slot in catalog.route_slots if slot.slot == "agent:chat_output_formatter")
+    slot = next(slot for slot in catalog.route_slots if slot.slot == "agent:chat_output")
     assert slot.default_route.model == "model-b"
     flow = next(target for target in catalog.targets if target.target.kind == "flow")
-    assert "agent:chat_output_formatter" in flow.route_slots
+    assert "agent:chat_output" in flow.route_slots
     assert "agent:csv_formatter" not in flow.route_slots
-    assert not any(target.target.kind == "agent" and target.target.id == "chat_output_formatter"
+    assert not any(target.target.kind == "agent" and target.target.id == "chat_output"
                    for target in catalog.targets)
     configured.rows.pop()
     hidden = runtime.build_curator_route_catalog(object(), configured.curator)
@@ -189,9 +189,11 @@ def test_real_package_catalog_and_hydrated_recipes(monkeypatch):
         flow = _flow_from_recipe(name, list(groups))
         model_agents = {
             node["data"]["agent_id"] for node in flow.flow_definition["nodes"]
-            if node["type"] == "agent" and node["data"]["agent_id"] not in (
+            if node["type"] in ("agent", "output") and node["data"]["agent_id"] not in (
                 runtime.SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS - {"chat_output", "chat_output_formatter"}
             )
         }
         target = next(item for item in catalog.targets if item.target.kind == "flow" and item.target.id == name)
+        assert "chat_output" in model_agents
+        assert "agent:chat_output" in target.route_slots
         assert {slot.removeprefix("agent:") for slot in target.route_slots if slot.startswith("agent:")} == model_agents

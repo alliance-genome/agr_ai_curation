@@ -118,7 +118,7 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
         validators: dict[str, BenchmarkSuiteRoute] = {}
         accessible = True
         for node in definition.nodes:
-            if node.type != "agent":
+            if node.type not in ("agent", "output"):
                 continue
             agent_id = node.data.agent_id
             if agent_id not in runtime_only:
