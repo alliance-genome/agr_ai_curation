@@ -1,76 +1,39 @@
-import type { CurationCandidate, CurationDraftField } from '@/features/curation/types'
+import type { CurationDraftField } from '@/features/curation/types'
 import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
 
-type ReviewPolicy =
-  | { mode: 'all' }
-  | { mode: 'groups'; decisionGroups: readonly string[] }
-  | { mode: 'fields'; decisionFields: readonly string[] }
-
-// This catalog is intentionally exhaustive for current stageable workspace
-// envelope types. A decision field is something a curator signs off on as part
-// of the extracted/exported record. Supporting source text, confidence,
-// rationale, and provenance stay in the envelope but do not become peer grid
-// columns or acquire preview-validation controls. Unknown future envelope types
-// fall back to showing all fields so new data cannot disappear silently.
-export const HORIZONTAL_GRID_REVIEW_POLICIES: Readonly<Record<string, ReviewPolicy>> = {
-  'agr.alliance.allele:AllelePaperEvidenceAssociation': { mode: 'all' },
-  'agr.alliance.allele:Allele': { mode: 'all' },
-  'agr.alliance.disease:DiseaseAnnotation': { mode: 'all' },
-  'agr.alliance.disease:GeneDiseaseAnnotation': { mode: 'all' },
-  'agr.alliance.disease:AlleleDiseaseAnnotation': { mode: 'all' },
-  'agr.alliance.disease:AGMDiseaseAnnotation': { mode: 'all' },
-  'agr.alliance.gene_expression:GeneExpressionAnnotation': { mode: 'all' },
-  'agr.alliance.go:GOCuratableObject': {
-    mode: 'groups',
-    decisionGroups: ['identity', 'annotation'],
-  },
-  'agr.alliance.phenotype:PhenotypeAnnotation': { mode: 'all' },
-  'agr.alliance.phenotype:PhenotypeSubject': { mode: 'all' },
-  'gene:gene_mention_evidence': {
-    mode: 'groups',
-    decisionGroups: ['identity'],
-  },
-  'generic:generic_object': {
-    mode: 'fields',
-    decisionFields: ['label', 'class_key', 'semantic_class', 'description', 'attributes'],
-  },
-  'generic:generic_claim': {
-    mode: 'fields',
-    decisionFields: ['label', 'class_key', 'claim_text', 'claim_type'],
-  },
-  'generic:generic_reagent_candidate': {
-    mode: 'fields',
-    decisionFields: [
-      'label',
-      'class_key',
-      'source',
-      'source_identifier',
-      'count',
-      'reagent_type',
-    ],
-  },
-}
-
-function metadataString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
+// Packages may narrow the decision surface through workspace_display. Without
+// a declaration every projected field remains visible, including new packages.
 export function isHorizontalGridDecisionField(
-  candidate: CurationCandidate,
+  reviewRowMetadata: Record<string, unknown> | null,
   field: CurationDraftField,
 ): boolean {
-  const domainPackId = metadataString(candidate.metadata.domain_pack_id) ?? candidate.adapter_key
-  const objectType = metadataString(candidate.metadata.object_type)
-  if (!objectType) {
+  const display = reviewRowMetadata?.workspace_display
+  if (display === undefined || display === null) {
     return true
   }
-
-  const policy = HORIZONTAL_GRID_REVIEW_POLICIES[`${domainPackId}:${objectType}`]
-  if (!policy || policy.mode === 'all') {
+  if (typeof display !== 'object' || Array.isArray(display)) {
+    throw new Error('workspace_display must be an object')
+  }
+  const policy: unknown = (display as Record<string, unknown>).review_policy
+  if (policy === undefined || policy === null) {
     return true
   }
-  if (policy.mode === 'groups') {
-    return field.group_key !== null && policy.decisionGroups.includes(field.group_key)
+  if (typeof policy !== 'object' || Array.isArray(policy)) {
+    throw new Error('workspace_display.review_policy must be an object')
   }
-  return policy.decisionFields.includes(resolveEnvelopeFieldPath(field))
+  const declaration = policy as Record<string, unknown>
+  if (declaration.mode === 'all') {
+    return true
+  }
+  if (declaration.mode !== 'groups' && declaration.mode !== 'fields') {
+    throw new Error('workspace_display.review_policy.mode must be all, groups, or fields')
+  }
+  const key = declaration.mode === 'groups' ? 'decision_groups' : 'decision_fields'
+  const selection = declaration[key]
+  if (!Array.isArray(selection) || !selection.every((value) => typeof value === 'string' && value.trim())) {
+    throw new Error(`workspace_display.review_policy.${key} must be an array of non-empty strings`)
+  }
+  return declaration.mode === 'groups'
+    ? field.group_key !== null && selection.includes(field.group_key)
+    : selection.includes(resolveEnvelopeFieldPath(field))
 }

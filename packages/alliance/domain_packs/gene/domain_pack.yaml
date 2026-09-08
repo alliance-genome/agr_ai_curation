@@ -91,6 +91,9 @@ object_definitions:
           - primary_external_id
           - taxon
       workspace_display:
+        review_policy:
+          mode: groups
+          decision_groups: [identity]
         primary_label_field: mention
         secondary_label_field: gene_symbol
         summary_fields:

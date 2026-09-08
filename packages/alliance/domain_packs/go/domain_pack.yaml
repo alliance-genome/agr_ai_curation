@@ -42,6 +42,9 @@ object_definitions:
         status: omitted
         reason: Extraction confidence is not part of this contract; validation state and identity resolution are represented independently.
       workspace_display:
+        review_policy:
+          mode: groups
+          decision_groups: [identity, annotation]
         projection_type: go_curator_review
         primary_label_fields:
           - gene_product.label

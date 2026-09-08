@@ -263,7 +263,7 @@ function buildFieldColumns(
       if (isProjectedAsCanonicalComparison(row.candidate, field)) {
         continue
       }
-      if (!isHorizontalGridDecisionField(row.candidate, field)) {
+      if (!isHorizontalGridDecisionField(row.reviewRow?.metadata ?? null, field)) {
         continue
       }
       const occurrence = fieldOccurrence(row.candidate, field)
@@ -413,7 +413,7 @@ function projectRow(
   const projectedFieldsByPath = new Map(
     [...fieldsByPath.entries()].filter(([, field]) => (
       !isProjectedAsCanonicalComparison(row.candidate, field)
-      && isHorizontalGridDecisionField(row.candidate, field)
+      && isHorizontalGridDecisionField(row.reviewRow?.metadata ?? null, field)
     )),
   )
   const evidence = [...row.evidenceAnchors].sort(compareEvidence)
@@ -561,6 +561,11 @@ function sourceRows({
       if (!sameProjectionRef(candidate.projection_ref, envelopeReviewRow.projectionRef)) {
         throw new Error(
           `Envelope review row projection does not match candidate '${candidate.candidate_id}'`,
+        )
+      }
+      if (!envelopeReviewRow.reviewRow) {
+        throw new Error(
+          `Candidate '${candidate.candidate_id}' has an unresolved envelope review row`,
         )
       }
 

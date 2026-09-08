@@ -995,6 +995,9 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
                     },
                     metadata={
                         "payload_path": "extracted_objects[0].payload",
+                        "workspace_display": {
+                            "review_policy": {"mode": "groups", "decision_groups": ["subject"]},
+                        },
                         "evidence_record_ids": ["evidence-1"],
                         "metadata_refs": [
                             {
@@ -1090,6 +1093,9 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
     }
     assert candidate_row.candidate_metadata["review_row_metadata"] == {
         "payload_path": "extracted_objects[0].payload",
+        "workspace_display": {
+            "review_policy": {"mode": "groups", "decision_groups": ["subject"]},
+        },
         "evidence_record_ids": ["evidence-1"],
         "metadata_refs": [
             {

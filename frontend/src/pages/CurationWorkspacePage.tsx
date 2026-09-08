@@ -265,9 +265,12 @@ function CurationWorkspacePageContent({
   const hasUnsavedEnvelopeChanges = autosave.isDirty || candidates.some(
     (candidate) => candidate.draft.fields.some((field) => field.dirty),
   )
+  const hasUnresolvedReviewRows = envelopeObjectRows.some((row) => row.reviewRow === null)
   const horizontalGridModel = useMemo(
-    () => buildHorizontalGridModel({ candidates, envelopeReviewRows: envelopeObjectRows }),
-    [candidates, envelopeObjectRows],
+    () => hasUnresolvedReviewRows
+      ? null
+      : buildHorizontalGridModel({ candidates, envelopeReviewRows: envelopeObjectRows }),
+    [candidates, envelopeObjectRows, hasUnresolvedReviewRows],
   )
   const pendingCandidateCount = useMemo(
     () => candidates.filter((candidate) => candidate.status === 'pending').length,
@@ -283,6 +286,15 @@ function CurationWorkspacePageContent({
     () => countValidatedPending(candidates),
     [candidates],
   )
+  const openFindingCount = useMemo(() => {
+    const summaries = [
+      ...envelopeObjectRows.flatMap((row) => row.validationSummaries),
+      ...candidates
+        .filter((candidate) => !candidate.projection_ref)
+        .flatMap((candidate) => candidate.validation_summary_projections ?? []),
+    ]
+    return summaries.reduce((count, summary) => count + summary.open_finding_count, 0)
+  }, [candidates, envelopeObjectRows])
   const validationCounts = useMemo(() => candidates.reduce(
     (summary, candidate) => {
       const validation = candidate.validation
@@ -298,14 +310,11 @@ function CurationWorkspacePageContent({
     },
     {
       blocking: 0,
-      openFindings: horizontalGridModel.rows.reduce(
-        (count, row) => count + row.validation.openFindingCount,
-        0,
-      ),
+      openFindings: openFindingCount,
       stale: 0,
       validated: 0,
     },
-  ), [candidates, horizontalGridModel.rows])
+  ), [candidates, openFindingCount])
   const selectedCandidate = useMemo(
     () => findCandidate(candidates, activeCandidateId),
     [activeCandidateId, candidates],
@@ -695,7 +704,15 @@ function CurationWorkspacePageContent({
                   </Typography>
                 </Alert>
               ))}
-            <InteractiveHorizontalCurationGrid model={horizontalGridModel} />
+            {horizontalGridModel ? (
+              <InteractiveHorizontalCurationGrid model={horizontalGridModel} />
+            ) : envelopeRowsQuery.isPending ? (
+              <Typography role="status">Loading review fields…</Typography>
+            ) : !envelopeReviewRowsError ? (
+              <Alert severity="error">
+                Review fields are unavailable for one or more objects.
+              </Alert>
+            ) : null}
           </Box>
         )}
       />

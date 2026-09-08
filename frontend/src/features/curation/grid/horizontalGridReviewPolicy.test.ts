@@ -1,16 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import type { CurationCandidate, CurationDraftField } from '@/features/curation/types'
-import {
-  HORIZONTAL_GRID_REVIEW_POLICIES,
-  isHorizontalGridDecisionField,
-} from './horizontalGridReviewPolicy'
+import type { CurationDraftField } from '@/features/curation/types'
+import { isHorizontalGridDecisionField } from './horizontalGridReviewPolicy'
 
-function candidate(domainPackId: string, objectType: string): CurationCandidate {
-  return {
-    adapter_key: domainPackId,
-    metadata: { domain_pack_id: domainPackId, object_type: objectType },
-  } as unknown as CurationCandidate
+function metadata(policy: Record<string, unknown>): Record<string, unknown> {
+  return { workspace_display: { review_policy: policy } }
 }
 
 function field(fieldPath: string, groupKey: string | null): CurationDraftField {
@@ -21,67 +15,43 @@ function field(fieldPath: string, groupKey: string | null): CurationDraftField {
   } as unknown as CurationDraftField
 }
 
-function configuredDomainPackId(objectType: string): string {
-  const matchingKeys = Object.keys(HORIZONTAL_GRID_REVIEW_POLICIES)
-    .filter((key) => key.endsWith(`:${objectType}`))
-  expect(matchingKeys).toHaveLength(1)
-  return matchingKeys[0].slice(0, matchingKeys[0].indexOf(':'))
-}
-
 describe('horizontal grid review policy', () => {
-  it('catalogs every current workspace envelope object type', () => {
-    const objectTypes = Object.keys(HORIZONTAL_GRID_REVIEW_POLICIES)
-      .map((key) => key.slice(key.indexOf(':') + 1))
-      .sort()
-    expect(objectTypes).toEqual([
-      'AGMDiseaseAnnotation',
-      'Allele',
-      'AlleleDiseaseAnnotation',
-      'AllelePaperEvidenceAssociation',
-      'DiseaseAnnotation',
-      'GOCuratableObject',
-      'GeneDiseaseAnnotation',
-      'GeneExpressionAnnotation',
-      'PhenotypeAnnotation',
-      'PhenotypeSubject',
-      'gene_mention_evidence',
-      'generic_claim',
-      'generic_object',
-      'generic_reagent_candidate',
-    ])
+  it('selects custom decision groups without package or object identifiers', () => {
+    const grouped = metadata({ mode: 'groups', decision_groups: ['identity', 'decision'] })
+    expect(isHorizontalGridDecisionField(grouped, field('record.label', 'identity'))).toBe(true)
+    expect(isHorizontalGridDecisionField(grouped, field('classification', 'decision'))).toBe(true)
+    expect(isHorizontalGridDecisionField(grouped, field('notes', 'context'))).toBe(false)
+    expect(isHorizontalGridDecisionField(grouped, field('ungrouped', null))).toBe(false)
   })
 
-  it('separates gene and GO decisions from supporting envelope context', () => {
-    const gene = candidate('gene', 'gene_mention_evidence')
-    expect(isHorizontalGridDecisionField(gene, field('gene_symbol', 'identity'))).toBe(true)
-    expect(isHorizontalGridDecisionField(gene, field('section', 'evidence_location'))).toBe(false)
-    expect(isHorizontalGridDecisionField(gene, field('confidence', 'provenance'))).toBe(false)
-
-    const go = candidate(configuredDomainPackId('GOCuratableObject'), 'GOCuratableObject')
-    expect(isHorizontalGridDecisionField(go, field('go_term.curie', 'annotation'))).toBe(true)
-    expect(isHorizontalGridDecisionField(go, field('rationale', 'evidence'))).toBe(false)
-    expect(isHorizontalGridDecisionField(go, field('provider_context', 'provider'))).toBe(false)
+  it('selects full envelope field paths for a custom package', () => {
+    const selected = metadata({ mode: 'fields', decision_fields: ['record.label', 'description'] })
+    expect(isHorizontalGridDecisionField(selected, field('record.label', null))).toBe(true)
+    expect(isHorizontalGridDecisionField(selected, field('description', 'context'))).toBe(true)
+    expect(isHorizontalGridDecisionField(selected, field('label', null))).toBe(false)
+    expect(isHorizontalGridDecisionField(selected, field('confidence', null))).toBe(false)
   })
 
-  it('keeps generic record values while hiding extraction-process context', () => {
-    const genericObject = candidate('generic', 'generic_object')
-    expect(isHorizontalGridDecisionField(genericObject, field('description', null))).toBe(true)
-    expect(isHorizontalGridDecisionField(genericObject, field('confidence', null))).toBe(false)
-    expect(isHorizontalGridDecisionField(genericObject, field('classification_notes', null))).toBe(false)
+  it.each([null, {}, { workspace_display: {} }, { workspace_display: { review_policy: null } }])(
+    'keeps every field when live metadata is undeclared: %j',
+    (rowMetadata) => {
+      for (const path of ['label', 'confidence', 'notes', 'new_decision']) {
+        expect(isHorizontalGridDecisionField(rowMetadata, field(path, null))).toBe(true)
+      }
+    },
+  )
 
-    const reagent = candidate('generic', 'generic_reagent_candidate')
-    expect(isHorizontalGridDecisionField(reagent, field('source_identifier', null))).toBe(true)
-    expect(isHorizontalGridDecisionField(reagent, field('source_label', null))).toBe(false)
+  it('honors explicit all mode', () => {
+    expect(isHorizontalGridDecisionField(metadata({ mode: 'all' }), field('notes', null))).toBe(true)
   })
 
-  it('keeps all configured fields for export-shaped envelopes and unknown future types', () => {
-    const disease = candidate(configuredDomainPackId('DiseaseAnnotation'), 'DiseaseAnnotation')
-    expect(isHorizontalGridDecisionField(
-      disease,
-      field('data_provider.abbreviation', 'provenance'),
-    )).toBe(true)
-
-    const future = candidate('future.pack', 'FutureObject')
-    expect(isHorizontalGridDecisionField(future, field('new_field', 'context'))).toBe(true)
+  it.each([
+    { workspace_display: [] },
+    { workspace_display: { review_policy: [] } },
+    metadata({ mode: 'unknown' }),
+    metadata({ mode: 'groups' }),
+    metadata({ mode: 'fields', decision_fields: [''] }),
+  ])('reports malformed declarations instead of silently changing visibility: %j', (rowMetadata) => {
+    expect(() => isHorizontalGridDecisionField(rowMetadata, field('label', null))).toThrow('workspace_display')
   })
 })
