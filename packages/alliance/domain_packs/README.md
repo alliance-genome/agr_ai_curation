@@ -47,9 +47,8 @@ Gene, GO, and generic record packs own their selections here. Other objects and
 packages with no declaration show every projected field, including new fields.
 
 The materializer carries the declaration in review-row `workspace_display`,
-which the workspace exposes as candidate
-`metadata.review_row_metadata.workspace_display`. Agent Studio also projects
-`workspace_display` on object definitions. The policy only selects peer decision
-columns and preview-validation controls in the horizontal grid; it does not
+which the grid reads from the live materialized review row, so package policy
+changes apply to existing sessions as well as new ones. The policy only selects
+peer decision columns and preview-validation controls in the horizontal grid; it does not
 remove supporting fields from the envelope or metadata projections. Invalid
 explicit review declarations are errors, not an implicit show-all policy.

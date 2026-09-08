@@ -1,20 +1,13 @@
-import type { CurationCandidate, CurationDraftField } from '@/features/curation/types'
+import type { CurationDraftField } from '@/features/curation/types'
 import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
 
 // Packages may narrow the decision surface through workspace_display. Without
 // a declaration every projected field remains visible, including new packages.
 export function isHorizontalGridDecisionField(
-  candidate: CurationCandidate,
+  reviewRowMetadata: Record<string, unknown> | null,
   field: CurationDraftField,
 ): boolean {
-  const rowMetadata = candidate.metadata.review_row_metadata
-  if (rowMetadata === undefined || rowMetadata === null) {
-    return true
-  }
-  if (typeof rowMetadata !== 'object' || Array.isArray(rowMetadata)) {
-    throw new Error('review_row_metadata must be an object')
-  }
-  const display = (rowMetadata as Record<string, unknown>).workspace_display
+  const display = reviewRowMetadata?.workspace_display
   if (display === undefined || display === null) {
     return true
   }

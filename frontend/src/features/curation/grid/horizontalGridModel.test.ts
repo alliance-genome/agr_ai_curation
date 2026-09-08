@@ -237,7 +237,7 @@ function validationProjection({
 }
 
 describe('buildHorizontalGridModel', () => {
-  it('keeps gene supporting envelope context out of the curator decision grid', () => {
+  it.each([undefined, { mode: 'all' }])('uses live policy instead of a stale candidate snapshot: %j', (snapshotPolicy) => {
     const geneCandidate = candidate({
       id: 'candidate-gene',
       objectId: 'object-gene',
@@ -298,11 +298,15 @@ describe('buildHorizontalGridModel', () => {
       domain_pack_id: 'gene',
       object_type: 'gene_mention_evidence',
       review_row_metadata: {
-        workspace_display: { review_policy: { mode: 'groups', decision_groups: ['identity'] } },
+        workspace_display: { review_policy: snapshotPolicy },
       },
     }
 
-    const model = modelForRows([workspaceRow({ candidate: geneCandidate })])
+    const liveRow = reviewRow('object-gene', 'Live record')
+    liveRow.metadata = {
+      workspace_display: { review_policy: { mode: 'groups', decision_groups: ['identity'] } },
+    }
+    const model = modelForRows([workspaceRow({ candidate: geneCandidate, row: liveRow })])
 
     expect(model.columns.map((column) => column.fieldPath)).toEqual([
       null,
@@ -314,7 +318,42 @@ describe('buildHorizontalGridModel', () => {
       value: 'abc',
       valueSource: 'extractor',
     })
+
+    // Another row can expose a shared column without making it a decision here.
+    const unrestricted = candidate({
+      id: 'candidate-other', objectId: 'object-other', order: 1,
+      fields: [draftField({ fieldKey: 'confidence', label: 'Confidence', order: 0, value: 'low' })],
+    })
+    const mixed = modelForRows([
+      workspaceRow({ candidate: geneCandidate, row: liveRow }),
+      workspaceRow({ candidate: unrestricted }),
+    ])
+    expect(mixed.rows[0]!.cells.find((cell) => cell.fieldPath === 'confidence')).toMatchObject({
+      hasField: false, fieldKey: null, value: null,
+    })
+    expect(mixed.rows[1]!.cells.find((cell) => cell.fieldPath === 'confidence')).toMatchObject({
+      hasField: true, value: 'low',
+    })
   })
+
+  it.each([null, reviewRow('object-custom', 'Custom record')])(
+    'shows every field without a live policy despite a restrictive snapshot: %j',
+    (liveRow) => {
+      const custom = candidate({
+        id: 'candidate-custom', objectId: 'object-custom', order: 0,
+        fields: [
+          draftField({ fieldKey: 'label', label: 'Label', order: 0, value: 'Record' }),
+          draftField({ fieldKey: 'notes', label: 'Notes', order: 1, value: 'Context' }),
+        ],
+      })
+      custom.metadata.review_row_metadata = {
+        workspace_display: { review_policy: { mode: 'fields', decision_fields: ['label'] } },
+      }
+      const model = modelForRows([workspaceRow({ candidate: custom, row: liveRow })])
+      expect(model.columns.map((column) => column.fieldPath)).toEqual([null, 'label', 'notes'])
+      expect(model.rows[0]!.cells.map((cell) => cell.value)).toEqual(['Record', 'Context'])
+    },
+  )
 
   it('projects extractor proposals into their canonical field instead of peer columns', () => {
     const confirmedCandidate = candidate({
