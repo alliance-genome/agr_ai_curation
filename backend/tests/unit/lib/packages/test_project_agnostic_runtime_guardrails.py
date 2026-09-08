@@ -29,7 +29,6 @@ from src.lib.config.tool_policy_defaults_loader import load_tool_policy_defaults
 from src.lib.curation_workspace.adapter_registry import build_curation_adapter_registry
 from src.lib.curation_workspace.export_adapters.registry import ExportAdapterRegistry
 from src.lib.document_sources.registry import (
-    get_configured_document_source_dev_mode_static_curator_token,
     get_configured_document_source_provider,
     get_document_source_provider_metadata,
 )
@@ -400,7 +399,8 @@ def _iter_backend_and_frontend_test_files() -> tuple[Path, ...]:
     return tuple(sorted((*backend_tests, *frontend_tests)))
 
 
-def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch, tmp_path):
     packages_dir = tmp_path / "runtime-packages"
     _copy_runtime_package(REPO_ROOT / "packages" / "core", packages_dir, "agr.core")
     _copy_runtime_package(ORG_CUSTOM_FIXTURE, packages_dir, "org.custom")
@@ -506,25 +506,41 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
         loaded_document_source.registration.factory,
         "__globals__",
     )["CALLBACK_CALLS"]
-    assert callback_calls == {"factory": 0, "development_token_resolver": 0}
+    assert callback_calls == {"factory": 0, "development_credential_resolver": 0}
     assert loaded_document_source.source.package_id == "org.custom"
     assert get_document_source_provider_metadata("example_literature") == {
         "display_label": "Example Literature",
         "reference_label_priority": ["reference_curie", "reference_id"],
     }
-    assert callback_calls == {"factory": 0, "development_token_resolver": 0}
-    assert (
-        get_configured_document_source_dev_mode_static_curator_token(
-            "example_literature"
-        )
-        == "fixture-development-token"
+    assert callback_calls == {"factory": 0, "development_credential_resolver": 0}
+    from src.lib.document_sources import access, dev_curator_auth
+
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_ENABLED", "true")
+    monkeypatch.setenv("DOCUMENT_SOURCE_PROVIDER", "example_literature")
+    monkeypatch.setattr(dev_curator_auth, "_credential_service", dev_curator_auth.DevCuratorCredentialService())
+    monkeypatch.setattr(access, "get_group_claim_key", lambda: "groups")
+    monkeypatch.setattr(access, "get_groups_for_provider_groups", lambda groups: ["CUSTOM"] if groups == ["custom-staff"] else [])
+    context = await access.build_document_source_request_context(
+        request=None, user_claims={"sub": "dev-user", "groups": ["untrusted-staff"]}
     )
-    assert callback_calls == {"factory": 0, "development_token_resolver": 1}
+    assert context.curator_token == "fixture-development-token"
+    assert context.provider_groups == ("custom-staff",)
+    assert context.authorized_group_ids == ("CUSTOM",)
+    assert await access.build_document_source_request_context(request=None, user_claims={}) == context
+    assert callback_calls == {"factory": 0, "development_credential_resolver": 1}
+    # Advancing beyond expiry must invoke the package callback again through the
+    # real request path, without any Cognito configuration or Alliance package.
+    now = dev_curator_auth.time.time()
+    with monkeypatch.context() as clock_patch:
+        clock_patch.setattr(dev_curator_auth.time, "time", lambda: now + 3601)
+        assert await access.build_document_source_request_context(request=None, user_claims={}) == context
+    assert callback_calls == {"factory": 0, "development_credential_resolver": 2}
     assert (
         get_configured_document_source_provider("example_literature").provider_id
         == "example_literature"
     )
-    assert callback_calls == {"factory": 1, "development_token_resolver": 1}
+    assert callback_calls == {"factory": 1, "development_credential_resolver": 2}
 
     registry = build_agent_registry()
     assert "demo_agent_validation" in registry

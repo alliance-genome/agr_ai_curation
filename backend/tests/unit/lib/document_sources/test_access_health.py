@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.lib.document_sources.access import build_document_source_request_context
-from src.lib.document_sources.dev_curator_auth import DevCuratorCredentials
+from src.lib.packages.document_source_provider_models import DevCuratorCredentials
 from src.lib.document_sources.health import check_configured_document_source_health
 from src.lib.document_sources.models import (
     DocumentSourceConfigError,
@@ -416,7 +416,7 @@ async def test_document_source_health_auth_failure_precedes_provider_constructio
     )
 
     async def _unavailable():
-        from src.lib.document_sources.dev_curator_auth import (
+        from src.lib.packages.document_source_provider_models import (
             DevCuratorCredentialUnavailable,
         )
 

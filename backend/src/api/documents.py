@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 from ..config import get_pdf_storage_path
 from ..lib.document_cleanup import cleanup_document_curation_dependencies
 from ..lib.document_sources.access import build_document_source_request_context
-from ..lib.document_sources.dev_curator_auth import DevCuratorCredentialUnavailable
+from ..lib.packages.document_source_provider_models import DevCuratorCredentialUnavailable
 from ..lib.document_sources.identifier_import import (
     IdentifierImportService,
     IdentifierImportValidationError,

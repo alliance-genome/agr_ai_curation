@@ -9,10 +9,10 @@ from src.lib.document_sources.models import (
     DocumentSourceHealth,
 )
 from src.lib.document_sources.dev_curator_auth import (
-    DevCuratorCredentialUnavailable,
     get_dev_curator_credentials,
     renewable_dev_curator_auth_required,
 )
+from src.lib.packages.document_source_provider_models import DevCuratorCredentialUnavailable
 from src.lib.document_sources.registry import (
     LOCAL_PDF_PROVIDER_ID,
     get_configured_document_source_provider,

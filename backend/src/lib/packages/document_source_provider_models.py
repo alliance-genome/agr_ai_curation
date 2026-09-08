@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable
@@ -14,6 +14,28 @@ if TYPE_CHECKING:
 
 _PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _CAPABILITY_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+class DevCuratorCredentialUnavailable(RuntimeError):
+    """Raised with a sanitized message when the dev curator token is unavailable."""
+
+
+@dataclass(frozen=True, slots=True)
+class DevCuratorCredentials:
+    """Package-validated bearer, identity claims, and Unix expiry timestamp.
+
+    The resolver must validate the bearer and claims for the same identity before
+    returning. Core uses these claims for authorization without decoding tokens.
+    Expiry must cover both the bearer and claims. Resolver failures must use
+    sanitized messages when raising ``DevCuratorCredentialUnavailable``.
+    """
+
+    token: str = field(repr=False)
+    claims: Mapping[str, Any] = field(repr=False)
+    expires_at: float
+
+
+DevelopmentCredentialResolver = Callable[[], Awaitable[DevCuratorCredentials]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +100,7 @@ class DocumentSourceProviderRegistration:
     factory: Callable[[], "DocumentSourceProvider"]
     presentation: DocumentSourceProviderPresentation
     capabilities: Mapping[str, bool] = field(default_factory=dict)
-    development_token_resolver: Callable[[], str | None] | None = None
+    development_credential_resolver: DevelopmentCredentialResolver | None = None
 
     def __post_init__(self) -> None:
         provider_id = self.provider_id.strip()
@@ -97,19 +119,19 @@ class DocumentSourceProviderRegistration:
                 f"document-source provider '{provider_id}' presentation must use "
                 "DocumentSourceProviderPresentation"
             )
-        if self.development_token_resolver is not None and not callable(
-            self.development_token_resolver
+        if self.development_credential_resolver is not None and not callable(
+            self.development_credential_resolver
         ):
             raise ValueError(
                 f"document-source provider '{provider_id}' "
-                "development_token_resolver must be callable"
+                "development_credential_resolver must be callable"
             )
 
         capabilities = dict(self.capabilities)
         for capability_id, enabled in capabilities.items():
-            if not isinstance(capability_id, str) or not _CAPABILITY_ID_PATTERN.fullmatch(
-                capability_id
-            ):
+            if not isinstance(
+                capability_id, str
+            ) or not _CAPABILITY_ID_PATTERN.fullmatch(capability_id):
                 raise ValueError(
                     f"document-source provider '{provider_id}' capability IDs must "
                     "use lowercase snake_case"
