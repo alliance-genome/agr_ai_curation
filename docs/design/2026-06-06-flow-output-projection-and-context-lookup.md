@@ -4,6 +4,13 @@ Date: 2026-06-06
 Status: Design and implementation tracking; revised after read-only `gpt-5.5` high review
 Scope: follow-up lookup support for review sessions/files, then deterministic agent-guided CSV/TSV/JSON/chat output from flow artifacts
 
+Implementation update (2026-09-08): the deterministic chat-rendering portions of
+this historical plan are superseded. Chat terminals now use the authored formatter
+with all saved artifact rows and curator instructions; there is no deterministic
+chat renderer or layout fallback. CSV/TSV/JSON projection and shared chat artifact
+bundle construction remain. `FLOW_CHAT_MAX_ROWS` still controls the file formatter's
+row-inspection page size, not authored chat length.
+
 Implementation note: the "Current Code Map" section below records the
 pre-implementation baseline that motivated this design. Branch changes should
 be evaluated against the goals, non-goals, and acceptance criteria later in this
@@ -331,7 +338,6 @@ class FlowOutputProjectionPlan(BaseModel):
     sort: list[FlowOutputSortSpec] = []
     group_by: list[str] = []
     json_shape: Literal["rows", "grouped", "bundle"] = "rows"
-    chat_layout: Literal["table", "sections", "bullets"] = "table"
     missing_value: str = ""
     max_rows: int | None = None
 ```

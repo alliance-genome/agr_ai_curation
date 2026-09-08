@@ -17,7 +17,6 @@ from src.lib.curation_workspace.domain_envelope_normalization import (
     is_canonical_domain_envelope_payload,
 )
 from src.lib.openai_agents.config import (
-    get_flow_chat_max_rows,
     get_flow_output_projection_preview_max_depth,
     get_flow_projection_max_field_examples,
     get_flow_projection_max_list_items,
@@ -34,7 +33,6 @@ FlowOutputFormat = Literal["csv", "tsv", "json", "chat"]
 FlowOutputRowSource = Literal["artifact", "object", "evidence", "validation_finding"]
 FlowOutputRowStrategy = Literal["object", "object_ledger", "wide_union"]
 FlowOutputJsonShape = Literal["rows", "grouped", "bundle"]
-FlowOutputChatLayout = Literal["table", "sections", "bullets"]
 FlowOutputTransformType = Literal[
     "literal",
     "first_non_empty",
@@ -63,7 +61,6 @@ FlowOutputSortDirection = Literal["asc", "desc"]
 # Env-configurable (defaults unchanged); see config.py getters and .env.example
 # (flow projection tooling group).
 MAX_PROJECTION_ROWS = get_flow_projection_max_rows()
-MAX_CHAT_ROWS = get_flow_chat_max_rows()
 MAX_FIELD_EXAMPLES = get_flow_projection_max_field_examples()
 MAX_PROJECTION_TEXT_CHARS = get_flow_projection_max_text_chars()
 MAX_PROJECTION_LIST_ITEMS = get_flow_projection_max_list_items()
@@ -294,7 +291,6 @@ class FlowOutputProjectionPlan(BaseModel):
     sort: list[FlowOutputSortSpec] = Field(default_factory=list)
     group_by: list[str] = Field(default_factory=list)
     json_shape: FlowOutputJsonShape = "rows"
-    chat_layout: FlowOutputChatLayout = "table"
     row_strategy: FlowOutputRowStrategy = "object"
     source_extraction_result_ids: list[str] = Field(default_factory=list)
     source_keys: list[str] = Field(default_factory=list)
@@ -364,7 +360,6 @@ class FlowOutputProjectionResult(BaseModel):
     truncated: bool = False
     warnings: list[str] = Field(default_factory=list)
     json_data: Any = None
-    chat_output: str | None = None
     group_by: list[str] = Field(default_factory=list)
 
 
@@ -2269,7 +2264,7 @@ def validate_projection_plan(
     if plan.group_by and plan.format in {"csv", "tsv"}:
         errors.append(
             f"group_by is not supported for {plan.format.upper()} projections; "
-            "use sort/group columns in a flat export or choose JSON/chat output."
+            "use sort/group columns in a flat export or choose JSON output."
         )
     if plan.group_by and plan.format == "json" and plan.json_shape != "grouped":
         errors.append("JSON projection group_by requires json_shape='grouped'.")
@@ -2482,7 +2477,6 @@ def apply_projection_plan(
     ]
 
     json_data: Any = None
-    chat_output: str | None = None
     if plan.format == "json":
         if plan.json_shape == "grouped":
             json_data = _group_projected_rows(limited_rows, projected_rows, plan.group_by)
@@ -2502,26 +2496,6 @@ def apply_projection_plan(
             }
         else:
             json_data = projected_rows
-    elif plan.format == "chat":
-        source_chat_rows = limited_rows[:MAX_CHAT_ROWS]
-        chat_rows = projected_rows[:MAX_CHAT_ROWS]
-        chat_truncated = truncated or len(projected_rows) > len(chat_rows)
-        if plan.group_by:
-            chat_output = render_grouped_chat_projection(
-                groups=_group_projected_rows(source_chat_rows, chat_rows, plan.group_by),
-                columns=columns,
-                layout=plan.chat_layout,
-                total_count=total_count,
-                truncated=chat_truncated,
-            )
-        else:
-            chat_output = render_chat_projection(
-                rows=chat_rows,
-                columns=columns,
-                layout=plan.chat_layout,
-                total_count=total_count,
-                truncated=chat_truncated,
-            )
 
     return FlowOutputProjectionResult(
         format=plan.format,
@@ -2532,7 +2506,6 @@ def apply_projection_plan(
         truncated=truncated,
         warnings=warnings,
         json_data=json_data,
-        chat_output=chat_output,
         group_by=list(plan.group_by),
     )
 
@@ -2606,95 +2579,6 @@ def finalize_output_projection(
     return apply_projection_plan(bundle, plan)
 
 
-def render_chat_projection(
-    *,
-    rows: Sequence[Mapping[str, Any]],
-    columns: Sequence[FlowOutputColumnSpec],
-    layout: FlowOutputChatLayout,
-    total_count: int,
-    truncated: bool,
-) -> str:
-    if not rows:
-        return "No rows matched the requested output projection."
-
-    if layout == "bullets":
-        lines = []
-        for row in rows:
-            bits = [
-                f"{column.header or column.key}: {_string_value(row.get(column.key))}"
-                for column in columns
-                if not _is_empty(row.get(column.key))
-            ]
-            lines.append("- " + "; ".join(bits))
-    elif layout == "sections":
-        lines = []
-        for index, row in enumerate(rows, start=1):
-            lines.append(f"### Row {index}")
-            for column in columns:
-                lines.append(f"- {column.header or column.key}: {_string_value(row.get(column.key))}")
-    else:
-        headers = [column.header or column.key for column in columns]
-        divider = ["---" for _ in columns]
-        lines = [
-            "| " + " | ".join(_markdown_cell(header) for header in headers) + " |",
-            "| " + " | ".join(divider) + " |",
-        ]
-        for row in rows:
-            lines.append(
-                "| "
-                + " | ".join(_markdown_cell(row.get(column.key)) for column in columns)
-                + " |"
-            )
-
-    if truncated:
-        lines.append(f"\nShowing {len(rows)} of {total_count} projected rows.")
-    return "\n".join(lines)
-
-
-def render_grouped_chat_projection(
-    *,
-    groups: Sequence[Mapping[str, Any]],
-    columns: Sequence[FlowOutputColumnSpec],
-    layout: FlowOutputChatLayout,
-    total_count: int,
-    truncated: bool,
-) -> str:
-    if not groups:
-        return "No rows matched the requested output projection."
-
-    lines: list[str] = []
-    shown_rows = 0
-    for group in groups:
-        group_values = group.get("group")
-        group_rows = group.get("rows")
-        if not isinstance(group_values, Mapping) or not isinstance(group_rows, list):
-            continue
-        heading_bits = [
-            f"{_field_label(str(field_ref))}: {_string_value(value)}"
-            for field_ref, value in group_values.items()
-        ]
-        lines.append(f"## {'; '.join(heading_bits) or 'Ungrouped'}")
-        lines.append(
-            render_chat_projection(
-                rows=group_rows,
-                columns=columns,
-                layout=layout,
-                total_count=len(group_rows),
-                truncated=False,
-            )
-        )
-        shown_rows += len(group_rows)
-
-    if truncated:
-        lines.append(f"\nShowing {shown_rows} of {total_count} projected rows.")
-    return "\n\n".join(lines)
-
-
-def _markdown_cell(value: Any) -> str:
-    text = _string_value(value)
-    return text.replace("|", "\\|").replace("\n", " ")
-
-
 __all__ = [
     "ARTIFACT_DEFAULT_FIELD_REFS",
     "FlowOutputArtifact",
@@ -2716,7 +2600,5 @@ __all__ = [
     "inspect_output_artifacts",
     "projection_plan_allows_empty_bundle",
     "preview_output_projection",
-    "render_grouped_chat_projection",
-    "render_chat_projection",
     "validate_projection_plan",
 ]
