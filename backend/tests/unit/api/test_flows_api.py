@@ -650,7 +650,8 @@ def _legacy_allele_flow_definition_payload() -> dict:
     return payload
 
 
-def test_flow_response_repairs_retired_allele_selections_on_read(monkeypatch):
+@pytest.mark.parametrize("canonical", [False, True])
+def test_flow_response_requires_persisted_retired_attachment_repair(monkeypatch, canonical):
     now = datetime.now(timezone.utc)
     stored_flow = SimpleNamespace(
         id=uuid4(),
@@ -674,6 +675,18 @@ def test_flow_response_repairs_retired_allele_selections_on_read(monkeypatch):
         lambda *_args, **_kwargs: {"category": "Extraction"},
     )
 
+    if not canonical:
+        with pytest.raises(HTTPException) as exc:
+            flows._flow_to_response(stored_flow)
+        assert exc.value.status_code == 422
+        assert "2026-09-03.remove-allele-pending-envelope-validator" in exc.value.detail
+        assert "Alembic upgrade head" in exc.value.detail
+        assert len(stored_flow.flow_definition["nodes"][1]["data"]["validation_attachments"]) == 7
+        return
+
+    stored_flow.flow_definition["nodes"][1]["data"]["validation_attachments"] = [
+        stored_flow.flow_definition["nodes"][1]["data"]["validation_attachments"][-1]
+    ]
     response = flows._flow_to_response(stored_flow)
 
     attachment_ids = {
@@ -682,35 +695,17 @@ def test_flow_response_repairs_retired_allele_selections_on_read(monkeypatch):
     }
     assert attachment_ids == {"fixture:current"}
     assert response.has_critical_issues is False
-    assert response.validation_warnings[0].type == "WARNING"
-    assert "retired validation selections" in response.validation_warnings[0].message
-    assert len(stored_flow.flow_definition["nodes"][1]["data"]["validation_attachments"]) == 7
+    assert response.validation_warnings == []
 
 
 def test_create_validation_does_not_apply_persisted_flow_migrations(monkeypatch):
-    def _reject_unknown(flow_definition, **_kwargs):
-        attachment_ids = {
-            attachment.attachment_id
-            for attachment in flow_definition.nodes[1].data.validation_attachments
-        }
-        assert attachment_ids.intersection(
-            RETIRED_ATTACHMENT_IDS
-        )
-        raise flows.FlowValidationAttachmentError("Unknown validation attachment selections")
-
-    monkeypatch.setattr(
-        flows,
-        "apply_flow_validation_attachment_defaults",
-        _reject_unknown,
-    )
-
     with pytest.raises(HTTPException) as exc:
         flows._validated_flow_definition_payload(
             FlowDefinition.model_validate(_legacy_allele_flow_definition_payload())
         )
 
     assert exc.value.status_code == 422
-    assert "Unknown validation attachment selections" in str(exc.value.detail)
+    assert "retired validation references" in str(exc.value.detail)
 
 
 def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(

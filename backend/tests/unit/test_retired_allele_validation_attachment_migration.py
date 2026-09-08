@@ -158,3 +158,20 @@ def test_post_head_reconciliation_reapplies_the_same_idempotent_repair(monkeypat
 
     assert reapply_migration.down_revision == "h5c6d7e8f9a0"
     assert calls == [(connection, SHIPPED_MIGRATION)]
+
+
+def test_upgrade_rejects_failed_persisted_postcondition(monkeypatch):
+    import pytest
+
+    connection = _Connection(uuid4(), _definition())
+    execute = connection.execute
+
+    def remaining_references(statement, parameters=None):
+        if "SELECT count(*)" in str(statement):
+            return _Result(scalar=1)
+        return execute(statement, parameters)
+
+    monkeypatch.setattr(connection, "execute", remaining_references)
+    monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+    with pytest.raises(RuntimeError, match="remain after migration"):
+        migration.upgrade()

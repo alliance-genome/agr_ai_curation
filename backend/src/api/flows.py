@@ -34,7 +34,7 @@ from ..lib.flows.validation_attachments import (
 )
 from ..lib.flows.persisted_flow_migrations import (
     PersistedFlowMigrationError,
-    migrate_persisted_flow_definition,
+    validate_persisted_flow_definition,
 )
 from ..lib.agent_studio.catalog_service import (
     AGENT_REGISTRY,
@@ -498,13 +498,11 @@ def _flow_to_response(
     """Convert a stored flow to an API response with validation defaults hydrated."""
 
     try:
-        persisted_migration = migrate_persisted_flow_definition(
-            flow.flow_definition
-        )
+        validate_persisted_flow_definition(flow.flow_definition)
     except PersistedFlowMigrationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     flow_definition = _validated_flow_definition(
-        FlowDefinition.model_validate(persisted_migration.definition),
+        FlowDefinition.model_validate(flow.flow_definition),
         db_user_id=flow.user_id,
         active_group_ids=active_group_ids,
         tolerate_unresolvable_custom_agent_attachments=True,
@@ -515,17 +513,6 @@ def _flow_to_response(
         active_group_ids=active_group_ids,
     )
     validation_warnings = []
-    if persisted_migration.changed:
-        validation_warnings.append(
-            FlowValidationWarning(
-                type="WARNING",
-                message=(
-                    "This saved flow contained retired validation selections. "
-                    "They were removed from the loaded definition; save the flow "
-                    "to persist the repaired configuration."
-                ),
-            )
-        )
     if missing_references:
         validation_warnings.append(
             FlowValidationWarning(

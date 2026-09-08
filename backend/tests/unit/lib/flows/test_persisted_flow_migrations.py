@@ -9,6 +9,7 @@ import pytest
 from src.lib.flows.persisted_flow_migrations import (
     PersistedFlowMigrationError,
     migrate_persisted_flow_definition,
+    validate_persisted_flow_definition,
 )
 from src.lib.packages.persisted_flow_migration_loader import (
     PersistedFlowMigration,
@@ -88,7 +89,6 @@ def test_removes_only_exact_retired_selections_without_mutating_input():
 
     assert original == before
     assert result.applied_migrations == (MIGRATION_ID,)
-    assert set(result.removed_attachment_ids) == (ATTACHMENT_IDS)
     assert result.definition["nodes"][0]["data"]["validation_attachments"] == [
         {
             "attachment_id": "org.example.records:binding:current",
@@ -186,3 +186,33 @@ def test_binding_references_on_unrelated_agents_do_not_block_targeted_migration(
         {"binding_id": BINDING_ID}
     ]
     assert result.definition["edges"] == definition["edges"]
+
+
+@pytest.mark.parametrize("location", ["attachment", "wrong_binding", "group", "edge"])
+def test_persisted_invariant_rejects_retired_references_without_repair(location):
+    definition = _definition()
+    if location == "wrong_binding":
+        definition["nodes"][0]["data"]["validation_attachments"][0]["validator_binding_id"] = "wrong"
+    elif location in {"group", "edge"}:
+        definition["nodes"][0]["data"]["validation_attachments"] = []
+        if location == "group":
+            definition["nodes"][0]["data"]["validation_groups"] = [
+                {"attachment_id": next(iter(ATTACHMENT_IDS))}
+            ]
+        else:
+            definition["edges"] = [{"replaces_attachment_id": next(iter(ATTACHMENT_IDS))}]
+    original = deepcopy(definition)
+    with pytest.raises(PersistedFlowMigrationError, match="Alembic upgrade head") as exc:
+        validate_persisted_flow_definition(definition, migrations=(MIGRATION,))
+    assert f"migration '{MIGRATION_ID}'" in str(exc.value)
+    assert "e2f3a4b5c6d7" not in str(exc.value)
+    assert "i6j7k8l9m0n1" not in str(exc.value)
+    assert definition == original
+
+
+def test_persisted_invariant_accepts_canonical_and_unrelated_selections():
+    definition = migrate_persisted_flow_definition(_definition(), migrations=(MIGRATION,)).definition
+    original = deepcopy(definition)
+    validate_persisted_flow_definition(definition, migrations=(MIGRATION,))
+    assert definition == original
+    validate_persisted_flow_definition(_definition(), migrations=())

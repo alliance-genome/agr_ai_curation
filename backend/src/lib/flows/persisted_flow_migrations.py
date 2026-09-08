@@ -15,7 +15,58 @@ from src.lib.packages.persisted_flow_migration_loader import PersistedFlowMigrat
 
 
 class PersistedFlowMigrationError(ValueError):
-    """Raised when a retired reference is present in an unsafe shape."""
+    """Raised when a retired reference violates the saved-flow contract."""
+
+
+def validate_persisted_flow_definition(
+    definition: Mapping[str, Any],
+    *,
+    migrations: Sequence[PersistedFlowMigration] | None = None,
+) -> None:
+    """Reject retired selections without repairing or copying the definition."""
+
+    if migrations is None:
+        from src.lib.packages.persisted_flow_migration_loader import (
+            load_persisted_flow_migration_catalog,
+        )
+
+        migrations = load_persisted_flow_migration_catalog().migrations
+
+    nodes = definition.get("nodes")
+    if not isinstance(nodes, list):
+        return  # Structural validation belongs to FlowDefinition.
+    for migration in migrations:
+        attachment_ids = frozenset(
+            attachment.attachment_id for attachment in migration.retired_attachments
+        )
+        if (
+            any(
+                isinstance(node, Mapping)
+                and isinstance(node.get("data"), Mapping)
+                and _node_has_retired_attachment(node["data"], attachment_ids)
+                for node in nodes
+            )
+            or _retired_reference_in_validation_groups(
+                nodes,
+                binding_id=migration.retired_binding_id,
+                attachment_ids=attachment_ids,
+            )
+            or _retired_reference_in_edges(
+                definition.get("edges"),
+                target_node_ids=frozenset(),
+                binding_id=migration.retired_binding_id,
+                attachment_ids=attachment_ids,
+            )
+        ):
+            # Persisted repair belongs to e2f3a4b5c6d7 and i6j7k8l9m0n1.
+            raise PersistedFlowMigrationError(
+                f"Flow contains retired validation references from migration "
+                f"'{migration.migration_id}'. Re-select current "
+                "validation attachments before saving. For an existing saved flow, "
+                "ask an administrator to verify Alembic upgrade head completed "
+                "with the required package profile and investigate missed or "
+                "corrupt persisted repairs."
+            )
 
 
 @dataclass(frozen=True)
@@ -24,7 +75,6 @@ class PersistedFlowMigrationResult:
 
     definition: dict[str, Any]
     applied_migrations: tuple[str, ...] = ()
-    removed_attachment_ids: tuple[str, ...] = ()
 
     @property
     def changed(self) -> bool:
@@ -136,7 +186,6 @@ def migrate_persisted_flow_definition(
         return PersistedFlowMigrationResult(definition=migrated)
 
     applied_migrations: list[str] = []
-    removed_attachment_ids: list[str] = []
     for migration in migrations:
         expected_bindings = {
             attachment.attachment_id: attachment.validator_binding_id
@@ -197,16 +246,15 @@ def migrate_persisted_flow_definition(
 
         if removed_for_migration:
             applied_migrations.append(migration.migration_id)
-            removed_attachment_ids.extend(removed_for_migration)
 
     return PersistedFlowMigrationResult(
         definition=migrated,
         applied_migrations=tuple(applied_migrations),
-        removed_attachment_ids=tuple(removed_attachment_ids),
     )
 
 
 __all__ = [
+    "validate_persisted_flow_definition",
     "PersistedFlowMigrationError",
     "PersistedFlowMigrationResult",
     "migrate_persisted_flow_definition",

@@ -84,3 +84,14 @@ def test_alembic_revision_graph_rejects_duplicate_revision_ids(
         match=r"duplicate Alembic revision 'duplicate': .* and .*",
     ):
         _load_revision_graph()
+
+
+def test_supported_head_includes_both_retired_attachment_repairs():
+    from alembic.script import ScriptDirectory
+
+    # Loading the actual script graph also resolves historical helper imports.
+    scripts = ScriptDirectory(str(VERSIONS_DIR.parent))
+    revisions = {item.revision for item in scripts.walk_revisions()}
+    assert {"e2f3a4b5c6d7", "i6j7k8l9m0n1"} <= revisions
+    upgrade = {item.revision for item in scripts.iterate_revisions("heads", "e2f3a4b5c6d7")}
+    assert "i6j7k8l9m0n1" in upgrade

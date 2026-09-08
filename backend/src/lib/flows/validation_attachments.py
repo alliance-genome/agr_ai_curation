@@ -13,6 +13,10 @@ from src.lib.domain_packs.validation_registry import (
     validate_active_validator_agent_references,
 )
 from src.lib.flow_edge_roles import VALIDATION_ATTACHMENT_EDGE_ROLE
+from src.lib.flows.persisted_flow_migrations import (
+    PersistedFlowMigrationError,
+    validate_persisted_flow_definition,
+)
 from src.schemas.flows import (
     FlowDefinition,
     FlowValidationAttachmentGroup,
@@ -89,6 +93,11 @@ def apply_flow_validation_attachment_defaults(
     agent_registry: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> FlowDefinition:
     """Attach default validation selections to extraction nodes from metadata."""
+
+    try:
+        validate_persisted_flow_definition(flow_definition.model_dump())
+    except PersistedFlowMigrationError as exc:
+        raise FlowValidationAttachmentError(str(exc)) from exc
 
     hydrated = flow_definition.model_copy(deep=True)
     options_by_node_id: dict[str, tuple[ValidationAttachmentOption, ...]] = {}

@@ -145,6 +145,33 @@ def test_apply_defaults_selects_active_and_keeps_under_development_visible():
     )
 
 
+@pytest.mark.parametrize("agent_id", ["disease_extractor", "missing_agent"])
+def test_save_hydration_rejects_retired_selections_before_catalog_lookup(agent_id):
+    from src.lib.packages.persisted_flow_migration_loader import (
+        load_persisted_flow_migration_catalog,
+    )
+
+    migration = load_persisted_flow_migration_catalog().migrations[0]
+    retired = migration.retired_attachments[0]
+    flow = _flow_definition(
+        agent_id=agent_id,
+        attachments=[{
+            "attachment_id": retired.attachment_id,
+            "validator_binding_id": retired.validator_binding_id,
+            "domain_pack_id": "fixture.validation",
+            "validator_id": "fixture:retired",
+            "state": "under_development",
+            "scope": "field",
+        }],
+    )
+    original = flow.model_dump()
+
+    with pytest.raises(FlowValidationAttachmentError, match="retired validation references"):
+        apply_flow_validation_attachment_defaults(flow)
+
+    assert flow.model_dump() == original
+
+
 def test_apply_defaults_preserves_allowed_opt_out_selection():
     agent_registry = {
         "fixture_extractor": {
