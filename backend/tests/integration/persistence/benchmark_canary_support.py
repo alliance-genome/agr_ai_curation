@@ -30,7 +30,8 @@ from src.api import (
     benchmark_jobs,
     benchmark_sources,
 )
-from src.lib.benchmarks import curator_authorization, runtime, runtime_catalog
+from src.auth.providers import cognito_current_principal
+from src.lib.benchmarks import runtime, runtime_catalog
 from src.lib.openai_agents.provider_usage import (
     ProviderUsageRecord,
     begin_provider_invocation,
@@ -126,7 +127,7 @@ class CanaryIdentity:
         def cognito(service, **kwargs):
             assert service == "cognito-idp"
             return self
-        monkeypatch.setattr(curator_authorization.boto3, "client", cognito)
+        monkeypatch.setattr(cognito_current_principal.boto3, "client", cognito)
         with SessionLocal() as db:
             user = User(auth_sub=self.subject, is_active=True)
             db.add(user)

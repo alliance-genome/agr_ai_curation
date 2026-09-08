@@ -5,119 +5,26 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
-import boto3
-from botocore.config import Config
-from botocore.exceptions import ClientError
-
-from src.auth.base import AuthPrincipal
-from src.config import (
-    get_auth_provider,
-    get_cognito_region,
-    get_cognito_user_pool_id,
-    is_dev_mode,
-)
+from src.auth.base import AuthPrincipal, CurrentPrincipalDenied, PrincipalLookupIdentity
+from src.auth.current_principal import get_current_principal_resolver
 from src.lib.benchmarks.execution_context import (
     BenchmarkCuratorContext,
     require_current_curator_authorization,
 )
 from src.lib.benchmarks.observability import sanitized_benchmark_error
-from src.lib.openai_agents.config import (
-    get_benchmark_curator_auth_max_attempts,
-    get_benchmark_curator_auth_timeout_seconds,
-)
 from src.models.sql.database import SessionLocal
 from src.models.sql.user import User
 
 
-class _CuratorAuthorizationDenied(PermissionError):
-    """An explicit identity or account denial, not a dependency failure."""
-
-
-def _lookup_cognito_principal(
-    frozen: BenchmarkCuratorContext, *, client: Any, pool_id: str, issuer: str,
-) -> AuthPrincipal:
-    """Resolve a verified provider username and verify its stable subject.
-
-    IAM authorizes these reads. Neither a source bearer nor the historical
-    curator token is accepted. All group pages are required before success.
-    """
-    if (
-        frozen.auth_provider != "oidc"
-        or frozen.auth_issuer != issuer
-        or not frozen.provider_username
-    ):
-        raise _CuratorAuthorizationDenied("Curator identity does not match the configured provider")
-    account = client.admin_get_user(UserPoolId=pool_id, Username=frozen.provider_username)
-    if (
-        not isinstance(account["Enabled"], bool)
-        or not isinstance(account["Username"], str)
-        or not account["Username"]
-        or not isinstance(account["UserAttributes"], list)
-    ):
-        raise ValueError("Current curator account response is invalid")
-    subjects = [
-        attribute.get("Value") for attribute in account["UserAttributes"]
-        if attribute.get("Name") == "sub"
-    ]
-    if len(subjects) != 1 or not isinstance(subjects[0], str) or not subjects[0]:
-        raise ValueError("Current curator account subject response is invalid")
-    if (
-        account["Enabled"] is not True
-        or account["Username"] != frozen.provider_username
-        or subjects != [frozen.subject]
-    ):
-        raise _CuratorAuthorizationDenied("Current curator account is unavailable or mismatched")
-    groups: list[str] = []
-    request = {"UserPoolId": pool_id, "Username": frozen.provider_username}
-    seen_tokens: set[str] = set()
-    while True:
-        page = client.admin_list_groups_for_user(**request)
-        if not isinstance(page["Groups"], list):
-            raise ValueError("Current curator group response is invalid")
-        for group in page["Groups"]:
-            name = group["GroupName"]
-            if not isinstance(name, str) or not name or name != name.strip():
-                raise ValueError("Current curator group response is invalid")
-            groups.append(name)
-        token = page.get("NextToken")
-        if token is None:
-            break
-        if not isinstance(token, str) or not token or token in seen_tokens:
-            raise ValueError("Current curator group pagination is invalid")
-        seen_tokens.add(token)
-        request["NextToken"] = token
-    return AuthPrincipal(
-        subject=subjects[0], provider="oidc", groups=groups,
-        raw_claims={"iss": issuer, "cognito:username": account["Username"]},
-    )
-
-
 def _configured_current_principal(frozen: BenchmarkCuratorContext) -> AuthPrincipal:
-    # Generic OIDC does not define a token-free administrative membership API.
-    # Do not reinterpret frozen claims or use development bypass as a lookup.
-    if is_dev_mode() or get_auth_provider() != "cognito":
-        raise ValueError("Current curator lookup is not configured for this provider")
-    region = get_cognito_region()
-    pool_id = get_cognito_user_pool_id()
-    if not region or not pool_id:
-        raise ValueError("Current curator lookup requires a configured user pool")
-    issuer = f"https://cognito-idp.{region}.amazonaws.com/{pool_id}"
-    timeout = get_benchmark_curator_auth_timeout_seconds()
-    client = boto3.client(
-        "cognito-idp", region_name=region,
-        config=Config(
-            connect_timeout=timeout, read_timeout=timeout,
-            retries={"mode": "standard", "total_max_attempts": get_benchmark_curator_auth_max_attempts()},
-        ),
-    )
-    try:
-        return _lookup_cognito_principal(frozen, client=client, pool_id=pool_id, issuer=issuer)
-    except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") == "UserNotFoundException":
-            raise _CuratorAuthorizationDenied("Current curator account no longer exists") from None
-        raise
-    finally:
-        client.close()
+    resolver = get_current_principal_resolver()
+    principal = resolver(PrincipalLookupIdentity(
+        subject=frozen.subject, auth_provider=frozen.auth_provider,
+        auth_issuer=frozen.auth_issuer, provider_username=frozen.provider_username,
+    ))
+    if not isinstance(principal, AuthPrincipal):
+        raise TypeError("Current principal resolver must return AuthPrincipal")
+    return principal
 
 
 async def authorize_benchmark_curator(
@@ -137,11 +44,11 @@ async def authorize_benchmark_curator(
                     frozen, current_principal=principal, current_user=current_user,
                 )
             except PermissionError:
-                raise _CuratorAuthorizationDenied("Current curator authorization denied") from None
+                raise CurrentPrincipalDenied("Current curator authorization denied") from None
 
     try:
         return await asyncio.to_thread(check_current)
-    except _CuratorAuthorizationDenied:
+    except CurrentPrincipalDenied:
         failure = PermissionError("Current benchmark curator authorization denied")
     except Exception as exc:
         failure = sanitized_benchmark_error("curator_current_authorization", type(exc).__name__)
