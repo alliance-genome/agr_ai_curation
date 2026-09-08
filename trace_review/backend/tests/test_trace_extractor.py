@@ -638,12 +638,14 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertEqual(result["source"], "remote")
         self.assertEqual([trace["id"] for trace in result["traces"]], ["trace-1", "trace-2"])
         self.assertEqual(result["traces"][0]["name"], "first")
-        self.assertEqual(result["meta"], {
+        self.assertEqual({key: result["meta"][key] for key in ("page", "limit", "totalItems", "totalPages")}, {
             "page": 2,
             "limit": 1,
             "totalItems": 2,
             "totalPages": 2,
         })
+        self.assertTrue(result["meta"]["complete"])
+        self.assertFalse(result["meta"]["truncated"])
         calls = extractor.client.api.observations.get_many.call_args_list
         self.assertEqual(calls[0].kwargs["fields"], SESSION_OBSERVATION_FIELDS)
         self.assertEqual(calls[0].kwargs["cursor"], None)
@@ -652,6 +654,66 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertEqual(calls[0].kwargs["request_options"], {"timeout_in_seconds": 8})
         self.assertIn('"column": "sessionId"', calls[0].kwargs["filter"])
         self.assertIn('"value": "session-1"', calls[0].kwargs["filter"])
+
+    @patch("src.services.trace_extractor.get_langfuse_search_request_limit", return_value=2)
+    def test_session_request_budget_stops_even_empty_pages(self, _limit):
+        extractor = self._make_extractor()
+        extractor.client.api.observations.get_many.side_effect = [
+            SimpleNamespace(data=[], meta=SimpleNamespace(cursor=f"cursor-{i}"))
+            for i in range(3)
+        ]
+        result = extractor.list_session_traces("session-1")
+        self.assertEqual(extractor.client.api.observations.get_many.call_count, 2)
+        self.assertEqual(result["traces"], [])
+        self.assertFalse(result["meta"]["complete"])
+        self.assertTrue(result["meta"]["truncated"])
+        self.assertEqual(result["meta"]["stop_reason"], "request_limit")
+        self.assertIsNone(result["meta"]["totalItems"])
+        self.assertIsNone(result["meta"]["totalPages"])
+
+    @patch("src.services.trace_extractor.get_langfuse_search_observation_limit", return_value=3)
+    def test_session_observation_budget_counts_duplicates_and_caps_requested_rows(self, _limit):
+        extractor = self._make_extractor()
+        row = {"id": "obs-1", "trace_id": "trace-1", "session_id": "session-1"}
+        extractor.client.api.observations.get_many.side_effect = [
+            SimpleNamespace(data=[row, row], meta=SimpleNamespace(cursor="a")),
+            SimpleNamespace(data=[row], meta=SimpleNamespace(cursor="b")),
+        ]
+        result = extractor.list_session_traces("session-1", limit=2)
+        self.assertEqual([c.kwargs["limit"] for c in extractor.client.api.observations.get_many.call_args_list], [2, 1])
+        self.assertEqual(result["meta"]["observations_inspected"], 3)
+        self.assertEqual(result["meta"]["stop_reason"], "observation_limit")
+        self.assertEqual([t["id"] for t in result["traces"]], ["trace-1"])
+
+    @patch("src.services.trace_extractor.get_langfuse_search_observation_limit", return_value=2)
+    def test_session_observation_budget_handles_terminal_and_oversized_pages(self, _limit):
+        for row_count, complete in [(2, True), (3, False)]:
+            with self.subTest(row_count=row_count):
+                extractor = self._make_extractor()
+                extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+                    data=[{"id": str(i), "trace_id": str(i), "session_id": "session-1"} for i in range(row_count)],
+                    meta=SimpleNamespace(cursor=None),
+                )
+                result = extractor.list_session_traces("session-1")
+                self.assertEqual(len(result["traces"]), 2)
+                self.assertEqual(result["meta"]["observations_inspected"], 2)
+                self.assertEqual(result["meta"]["complete"], complete)
+                self.assertEqual(result["meta"]["truncated"], not complete)
+
+    def test_session_result_bound_is_independent_of_page_size(self):
+        for ids, complete in [(["a", "a"], True), (["a", "b"], False)]:
+            with self.subTest(ids=ids):
+                extractor = self._make_extractor()
+                extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+                    data=[{"id": str(i), "trace_id": tid, "session_id": "session-1"} for i, tid in enumerate(ids)],
+                    meta=SimpleNamespace(cursor=None),
+                )
+                result = extractor.list_session_traces("session-1", limit=10, max_results=1)
+                self.assertEqual(extractor.client.api.observations.get_many.call_args.kwargs["limit"], 10)
+                self.assertEqual([t["id"] for t in result["traces"]], ["a"])
+                self.assertEqual(result["meta"]["result_limit"], 1)
+                self.assertEqual(result["meta"]["complete"], complete)
+                self.assertEqual(result["meta"]["stop_reason"], None if complete else "result_limit")
 
     def test_list_session_traces_preserves_empty_result(self):
         extractor = self._make_extractor()
@@ -665,6 +727,7 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertEqual(result["traces"], [])
         self.assertEqual(result["meta"]["totalItems"], 0)
         self.assertEqual(result["meta"]["totalPages"], 1)
+        self.assertTrue(result["meta"]["complete"])
 
     def test_list_session_traces_rejects_repeated_cursor(self):
         extractor = self._make_extractor()

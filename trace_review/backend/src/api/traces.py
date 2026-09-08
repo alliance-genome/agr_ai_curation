@@ -215,16 +215,16 @@ def _sibling_trace_ids(
     source: TraceSource,
     session_id: Optional[str],
     include_sibling_traces: bool,
-) -> List[str]:
+) -> tuple[List[str], Optional[Dict[str, Any]]]:
     if not include_sibling_traces or not session_id:
-        return []
+        return [], None
     extractor = TraceExtractor(source=_effective_source(source))
     session_listing = extractor.list_session_traces(session_id)
     return [
         listed_trace["id"]
         for listed_trace in session_listing.get("traces", [])
         if listed_trace.get("id") and listed_trace.get("id") != trace_id
-    ]
+    ], session_listing["meta"]
 
 
 def _listed_trace_reference(trace: Dict[str, Any]) -> Dict[str, Any]:
@@ -718,7 +718,7 @@ async def export_session(
     user: Dict[str, Any] = get_auth_dependency()
 ) -> Dict[str, Any]:
     """
-    Export a compact analysis bundle for every trace in a Langfuse session.
+    Export discovered session traces with explicit discovery completeness.
 
     Individual trace fetch/analyzer failures are represented in the returned
     bundle so one broken trace does not prevent session reconstruction.
@@ -781,9 +781,10 @@ async def export_session(
     successful_count = sum(1 for trace in bundle_traces if trace.get("status") == "success")
 
     return {
-        "status": "success",
+        "status": "success" if session_listing["meta"]["complete"] else "partial",
         "session": {
             "session_id": session_id,
+            "complete": session_listing["meta"]["complete"] and not errors,
             "source": source,
             "trace_count": len(bundle_traces),
             "listed_trace_count": len(listed_traces),

@@ -15,6 +15,44 @@ EMPTY_TRACE_SUMMARY = {
 
 
 class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
+    @patch("src.api.traces.TraceExtractor")
+    async def test_export_session_distinguishes_empty_complete_and_stopped_scans(self, extractor_cls):
+        for complete in (True, False):
+            with self.subTest(complete=complete):
+                meta = {"complete": complete, "truncated": not complete,
+                        "stop_reason": None if complete else "request_limit"}
+                extractor_cls.return_value.list_session_traces.return_value = {
+                    "traces": [], "meta": meta,
+                }
+                response = await traces.export_session("session-1", self._make_request(), source="remote")
+                self.assertEqual(response["status"], "success" if complete else "partial")
+                self.assertEqual(response["session"]["complete"], complete)
+                self.assertEqual(response["session"]["langfuse_meta"], meta)
+                self.assertEqual(response["traces"], [])
+
+    @patch("src.api.traces._get_or_analyze_trace_export")
+    @patch("src.api.traces.TraceExtractor")
+    async def test_export_session_retains_discovered_traces_when_partial(self, extractor_cls, analyze):
+        meta = {"complete": False, "truncated": True, "stop_reason": "observation_limit"}
+        extractor_cls.return_value.list_session_traces.return_value = {
+            "traces": [{"id": "trace-1"}], "meta": meta,
+        }
+        analyze.return_value = ({"analysis": {
+            key: {} for key in (
+                "summary", "conversation", "tool_calls", "pdf_citations", "token_analysis",
+                "agent_context", "trace_summary", "domain_envelope", "document_hierarchy",
+                "agent_configs", "group_context",
+            )
+        }}, "cached", True)
+        analyze.return_value[0]["analysis"]["tool_calls"] = {
+            "tool_calls": [], "total_count": 0, "unique_tools": [], "duplicates": {},
+        }
+        response = await traces.export_session("session-1", self._make_request(), source="remote")
+        self.assertEqual(response["status"], "partial")
+        self.assertFalse(response["session"]["complete"])
+        self.assertEqual(response["session"]["successful_trace_count"], 1)
+        self.assertEqual(response["traces"][0]["trace_id"], "trace-1")
+
     def _make_request(self) -> SimpleNamespace:
         cache_manager = CacheManager(ttl_hours=1)
         return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cache_manager=cache_manager)))
@@ -230,7 +268,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
                     "sessionId": "session-123",
                 },
             ],
-            "meta": {"page": 1, "limit": 100, "totalItems": 2, "totalPages": 1},
+            "meta": {"complete": True, "truncated": False, "stop_reason": None, "page": 1, "limit": 100, "totalItems": 2, "totalPages": 1},
         }
         extractor.extract_complete_trace.side_effect = [
             self._make_trace_data(
@@ -283,7 +321,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
                     "sessionId": "session-domain",
                 },
             ],
-            "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
+            "meta": {"complete": True, "truncated": False, "stop_reason": None, "page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
         }
         trace_data = self._make_trace_data(
             {
@@ -362,7 +400,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
                     "sessionId": "session-123",
                 },
             ],
-            "meta": {"page": 1, "limit": 100, "totalItems": 2, "totalPages": 1},
+            "meta": {"complete": True, "truncated": False, "stop_reason": None, "page": 1, "limit": 100, "totalItems": 2, "totalPages": 1},
         }
         extractor.extract_complete_trace.side_effect = [
             self._make_trace_data(
@@ -404,7 +442,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
                     "sessionId": "session-123",
                 },
             ],
-            "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
+            "meta": {"complete": True, "truncated": False, "stop_reason": None, "page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
         }
         extractor.extract_complete_trace.side_effect = RuntimeError("trace not found")
 
@@ -437,7 +475,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
                     "sessionId": "session-123",
                 },
             ],
-            "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
+            "meta": {"complete": True, "truncated": False, "stop_reason": None, "page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
         }
         extractor.extract_complete_trace.return_value = self._make_trace_data(
             {"answer": "Recovered answer"},
