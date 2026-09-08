@@ -237,3 +237,29 @@ def test_saved_section_reads_only_requested_group_and_rejects_impossible_page(mo
     monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 24)
     with pytest.raises(ValueError, match="cannot fit"):
         inspection._bounded_saved_record(record, request)
+
+
+def test_flow_run_trace_resolution_is_owned_and_bounded(monkeypatch):
+    monkeypatch.setattr(inspection, "get_tool_page_default_limit", lambda: 1)
+    db = MagicMock()
+    db.scalars.return_value.all.return_value = ["trace-a", "trace-b"]
+    run_id = str(uuid4())
+    result = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="flow_run_traces", flow_run_id=run_id))
+    query = db.scalars.call_args.args[0].compile()
+    assert "users.user_id =" in str(query)
+    assert "chat_sessions.deleted_at IS NULL" in str(query)
+    assert "chat_messages.chat_kind = chat_sessions.chat_kind" in str(query)
+    assert 28 in query.params.values() and run_id in query.params.values()
+    assert result["trace_ids"] == ["trace-a"]
+    assert result["next_call"]["arguments"]["offset"] == 1
+    db.commit.assert_not_called()
+
+
+def test_missing_or_unowned_flow_run_reveals_no_traces():
+    db = MagicMock()
+    db.scalars.return_value.all.return_value = []
+    result = inspection.inspect_saved_resource(db, user_id=8, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="flow_run_traces", flow_run_id=str(uuid4())))
+    assert result["trace_ids"] == []
+    assert result["complete"] is True and result["next_call"] is None

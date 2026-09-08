@@ -21,12 +21,16 @@ from src.lib.openai_agents.config import (
     get_tool_page_default_limit, get_agent_studio_provider_tool_result_inline_max_chars,
 )
 from src.models.sql.curation_flow import CurationFlow
+from src.models.sql.chat_message import ChatMessage
+from src.models.sql.chat_session import ChatSession
+from src.models.sql.user import User
 
 
 class SavedResourceInspection(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    action: Literal["list_flows", "flow", "agent_revisions", "agent_revision"]
+    action: Literal["list_flows", "flow", "agent_revisions", "agent_revision", "flow_run_traces"]
     flow_id: str | None = None
+    flow_run_id: str | None = None
     agent_id: str | None = None
     revision_id: str | None = None
     query: str | None = None
@@ -54,6 +58,28 @@ def _read_saved_resource(db, *, user_id: int, active_group_ids: list[str], reque
     """No writes or arbitrary SQL; all selectors are constrained to the caller."""
     if user_id is None:
         raise ValueError("Authenticated saved-work access is unavailable")
+    if request.action == "flow_run_traces":
+        run_id = str(_id(request.flow_run_id, "flow run"))
+        limit = get_tool_page_default_limit()
+        statement = (
+            select(ChatMessage.trace_id).distinct()
+            .join(ChatSession, ChatSession.session_id == ChatMessage.session_id)
+            .join(User, User.auth_sub == ChatSession.user_auth_sub)
+            .where(User.id == user_id, ChatSession.deleted_at.is_(None),
+                   ChatMessage.chat_kind == ChatSession.chat_kind,
+                   ChatMessage.payload_json["flow_run_id"].astext == run_id,
+                   ChatMessage.trace_id.is_not(None), ChatMessage.trace_id != "")
+            .order_by(ChatMessage.trace_id).offset(request.offset).limit(limit + 1)
+        )
+        rows = db.scalars(statement).all()
+        return {"saved": True, "loaded_in_editor": False, "flow_run_id": run_id,
+                "source": "owned_saved_chat_run_records",
+                "trace_ids": rows[:limit], "complete": len(rows) <= limit,
+                "next_call": {"tool": "inspect_saved_studio_resource", "arguments": {
+                    "action": "flow_run_traces", "flow_run_id": run_id,
+                    "offset": request.offset + limit,
+                }} if len(rows) > limit else None}
+
     if request.action in {"list_flows", "flow"}:
         statement = select(CurationFlow).where(
             CurationFlow.user_id == user_id, CurationFlow.is_active.is_(True),
@@ -195,7 +221,7 @@ def _bounded_saved_record(record: dict, request: SavedResourceInspection) -> dic
 def inspect_saved_resource(db, *, user_id: int, active_group_ids: list[str], request: SavedResourceInspection):
     # Reauthorize on every page; hashes are continuity checks, never access grants.
     record = _read_saved_resource(db, user_id=user_id, active_group_ids=active_group_ids, request=request)
-    if request.action in {"list_flows", "agent_revisions"}:
+    if request.action in {"list_flows", "agent_revisions", "flow_run_traces"}:
         if request.section != "all" or request.start or request.content_hash or request.group_id:
             raise ValueError("Use the list's next_call to continue saved record listings")
         return record

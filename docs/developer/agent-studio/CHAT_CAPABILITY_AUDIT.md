@@ -122,3 +122,11 @@ must not be used to infer a custom agent's pinned settings.
 For stale selected-field export layouts, both validation and AI guidance name the
 actual **Choose output fields** button on the file output step, followed by confirming
 fields and saving the flow. Other422 causes still require their own validation evidence.
+
+### Run inspection and notification confirmations (0.9.8)
+
+Trace tools are exposed on all Studio tabs without requiring a preselected trace. The existing trusted caller headers and TraceReview ownership enforcement remain authoritative. A flow Run ID from the completion card resolves through `inspect_saved_studio_resource(action="flow_run_traces", flow_run_id=...)`, which reads only the caller's nondeleted durable chat run records and pages distinct trace IDs using the existing tool page setting. This differs from `search_traces(run_id=...)`, which searches Langfuse metadata. Neither a metadata label nor current editor instructions prove which prompt ran: inspect the recorded model input.
+
+`report_tool_failure` awaits SNS submission and returns `notification_submitted`. It does not claim delivery if the existing alert feature flag is disabled or publishing fails. Sentry capture remains independent and is not an email receipt. Suggestion results retain `delivery_status`, notification and suggestion references; local logging must not be described as notification. An SNS acceptance confirms submission to the notification service, not inbox receipt or developer review.
+
+Chronological TraceReview payload inventory normalizes SDK datetime timestamps alongside string timestamps, including the trace's own input/output payloads.

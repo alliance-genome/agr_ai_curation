@@ -246,3 +246,16 @@ def test_zero_usage_generation_wrapper_is_not_a_provider_call():
     assert summary["by_model"]["gpt-5-mini"]["provider_call_count"] == 1
     assert summary["totals"]["total_tokens"] == 15
     assert summary["totals"]["total_cost"] == 0.03
+
+
+def test_chronological_payload_inventory_handles_sdk_datetime_and_string_timestamps():
+    from datetime import datetime, timezone
+    trace = _trace_data()
+    trace["raw_trace"]["timestamp"] = datetime(2026, 6, 6, 3, 0, tzinfo=timezone.utc)
+    trace["observations"][0]["startTime"] = datetime(2026, 6, 6, 3, 0, 1, tzinfo=timezone.utc)
+    payloads = build_payload_inventory(trace)
+    page, pagination = paginate_payloads(payloads, limit=100, offset=0, sort="chronological")
+    assert len(page) == len(payloads)
+    assert all(isinstance(item["start_time"], (str, type(None))) for item in page)
+    assert page[0]["scope"] == "trace"
+    assert pagination["has_next"] is False

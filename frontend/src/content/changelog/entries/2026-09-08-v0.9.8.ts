@@ -15,6 +15,8 @@ const entry: ChangelogEntry = {
         'Fixed a problem that could prevent Unload PDF from working after switching between browser tabs.',
         'AI Chat can inspect long custom-agent instructions and their saved platform rules during flow review.',
         'When an extractor change affects file output, guidance now points to Choose output fields and explains how to save the updated layout.',
+        'AI Chat can inspect past runs from Flows and Agent Workshop, including the instructions actually used.',
+        'Feedback confirmations now distinguish submitted notifications from reports that could not be sent.',
         'Improved diagnostic links for AI Chat so failed conversations are easier to investigate.',
       ],
     },

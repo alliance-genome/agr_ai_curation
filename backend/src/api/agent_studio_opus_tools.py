@@ -1,6 +1,8 @@
 """AI Chat tool definitions and tab-scoping helpers for Agent Studio.
 
 The module name remains a compatibility identifier for the shared hotfix.
+
+For a flow Run ID shown in the UI, use action="flow_run_traces" and flow_run_id to read its trace IDs from your owned saved chat run records. Follow next_call; then inspect those traces. This does not grant access to another curator's runs.
 """
 
 from functools import lru_cache
@@ -1465,7 +1467,6 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
     """Check whether a tool is allowed for the current tab/context."""
 
     active_tab = get_active_tab(context)
-    has_trace = bool(context and context.trace_id)
 
     if tool_name in COMMON_TOOLS:
         return True
@@ -1498,7 +1499,8 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
         return active_tab in {"agents", "flows", "agent_workshop"}
 
     if tool_name in TRACE_TOOLS:
-        return active_tab == "agents" or has_trace
+        # Trace reads enforce caller ownership downstream; tab selection is not authorization.
+        return active_tab in {"agents", "flows", "agent_workshop"}
 
     # Unknown/legacy tools are left to existing handlers and validation paths.
     return True

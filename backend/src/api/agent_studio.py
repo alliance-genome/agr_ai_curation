@@ -3577,6 +3577,9 @@ async def _handle_tool_call(
         return {
             "success": True,
             "suggestion_id": result["suggestion_id"],
+            "notification_submitted": result.get("sns_status") == "published",
+            "delivery_status": result.get("sns_status", "unknown"),
+            "notification_id": result.get("sns_message_id"),
             "message": result["message"],
         }
 
@@ -3640,21 +3643,25 @@ async def _handle_tool_call(
             )
 
     elif tool_name == "report_tool_failure":
-        _alert_task = asyncio.create_task(
-            notify_tool_failure(
-                error_type=tool_input.get("error_type", "unexpected_error"),
-                error_message=tool_input.get("error_message", "No error message provided"),
-                source="opus_report",
-                specialist_name=tool_input.get("tool_name"),
-                trace_id=context.trace_id if context else None,
-                session_id=None,
-                curator_id=user_email,
-                context=tool_input.get("context"),
-            )
+        delivered = await notify_tool_failure(
+            error_type=tool_input.get("error_type", "unexpected_error"),
+            error_message=tool_input.get("error_message", "No error message provided"),
+            source="opus_report",
+            specialist_name=tool_input.get("tool_name"),
+            trace_id=context.trace_id if context else None,
+            session_id=context.session_id if context else None,
+            curator_id=user_email,
+            context=tool_input.get("context"),
         )
         return {
-            "status": "success",
-            "message": "Failure report sent to dev team",
+            "status": "success" if delivered else "not_sent",
+            "notification_submitted": delivered,
+            "message": (
+                "Failure report submitted to the developer notification service."
+                if delivered else
+                "The developer notification was not sent. Delivery is disabled or unavailable. "
+                "Do not say the developers were notified."
+            ),
         }
 
     # Check if this is a diagnostic tool from the registry
