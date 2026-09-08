@@ -13,6 +13,10 @@ from src.lib.packages.document_source_provider_loader import (
     LoadedDocumentSourceProviderRegistration,
     load_document_source_provider_catalog,
 )
+from src.lib.packages.document_source_provider_models import (
+    DevCuratorCredentialUnavailable,
+    DevelopmentCredentialResolver,
+)
 
 
 LOCAL_PDF_PROVIDER_ID = "local_pdf"
@@ -57,32 +61,19 @@ def _resolve_provider_id(provider_id: str | None) -> str:
     return selected_provider_id
 
 
-def get_configured_document_source_dev_mode_static_curator_token(
-    provider_id: str | None = None,
-) -> str | None:
-    """Resolve configured dev-auth token state without constructing a provider."""
+# Removed legacy static development-token resolver — superseded by package-owned
+# renewable credentials in ALL-1070.
+def get_document_source_development_credential_resolver(
+    provider_id: str,
+) -> DevelopmentCredentialResolver:
+    """Resolve the package renewal callback without constructing a provider."""
 
-    selected_provider_id = _resolve_provider_id(provider_id)
-    if selected_provider_id == LOCAL_PDF_PROVIDER_ID:
-        return None
-
-    loaded = _registered_provider(selected_provider_id)
-    if loaded is None:  # Defensive: _resolve_provider_id already validates this.
-        raise DocumentSourceConfigError(
-            f"Document-source provider registration disappeared: {selected_provider_id}"
+    loaded = _registered_provider(provider_id.strip().lower())
+    if loaded is None or loaded.registration.development_credential_resolver is None:
+        raise DevCuratorCredentialUnavailable(
+            "Development document-source curator credential resolver is unavailable."
         )
-    resolver = loaded.registration.development_token_resolver
-    if resolver is None:
-        return None
-    token = resolver()
-    if token is None:
-        return None
-    if not isinstance(token, str):
-        raise DocumentSourceConfigError(
-            f"Development token resolver for '{selected_provider_id}' from "
-            f"{loaded.source.describe()} returned a non-string value"
-        )
-    return token.strip() or None
+    return loaded.registration.development_credential_resolver
 
 
 def get_configured_document_source_provider(

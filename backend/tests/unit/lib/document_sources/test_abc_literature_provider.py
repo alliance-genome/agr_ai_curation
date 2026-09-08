@@ -29,11 +29,9 @@ from agr_ai_curation_alliance.document_sources.abc_literature import (
 )
 from agr_ai_curation_alliance.document_sources.registration import (
     _build_abc_literature_client_config,
-    _resolve_abc_literature_development_token,
     get_document_source_provider_registrations,
 )
 from src.lib.document_sources.registry import (
-    get_configured_document_source_dev_mode_static_curator_token,
     get_configured_document_source_provider,
 )
 from agr_ai_curation_alliance.literature.client import (
@@ -370,20 +368,6 @@ async def test_reference_import_uses_actual_abc_main_pdf_precedence() -> None:
     assert decision.selected.source_artifact.artifact_id == "5013742"
     assert decision.selected.converted_artifact is not None
     assert decision.selected.converted_artifact.artifact_id == "5020781"
-
-def test_dev_mode_static_curator_token_uses_static_bearer_config(monkeypatch) -> None:
-    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "static_bearer")
-    monkeypatch.setenv("ABC_LITERATURE_BEARER_TOKEN", " abc-dev-token ")
-
-    assert _resolve_abc_literature_development_token() == "abc-dev-token"
-
-
-def test_dev_mode_static_curator_token_ignores_non_static_auth_mode(monkeypatch) -> None:
-    monkeypatch.setenv("ABC_LITERATURE_AUTH_MODE", "passthrough")
-    monkeypatch.setenv("ABC_LITERATURE_BEARER_TOKEN", "abc-dev-token")
-
-    assert _resolve_abc_literature_development_token() is None
-
 
 def test_package_builds_complete_abc_client_config_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("ABC_LITERATURE_API_BASE_URL", " https://literature.example/api ")
@@ -927,7 +911,6 @@ def test_registry_rejects_local_pdf_as_external_provider() -> None:
 @pytest.mark.parametrize(
     "lookup",
     [
-        get_configured_document_source_dev_mode_static_curator_token,
         get_configured_document_source_provider,
     ],
 )

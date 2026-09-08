@@ -87,22 +87,19 @@ def _create_abc_literature_provider():
         raise DocumentSourceConfigError(str(exc)) from exc
 
 
-def _resolve_abc_literature_development_token() -> str | None:
-    if os.getenv("ABC_LITERATURE_AUTH_MODE", "none").strip().lower() != "static_bearer":
-        return None
-    token = os.getenv("ABC_LITERATURE_BEARER_TOKEN", "").strip()
-    return token or None
-
-
 def get_document_source_provider_registrations(
 ) -> tuple[DocumentSourceProviderRegistration, ...]:
     """Return Alliance-owned provider registrations without invoking callbacks."""
+
+    from agr_ai_curation_alliance.document_sources.dev_curator_auth import (
+        resolve_development_credentials,
+    )
 
     return (
         DocumentSourceProviderRegistration(
             provider_id=ABC_LITERATURE_PROVIDER_ID,
             factory=_create_abc_literature_provider,
-            development_token_resolver=_resolve_abc_literature_development_token,
+            development_credential_resolver=resolve_development_credentials,
             presentation=DocumentSourceProviderPresentation(
                 display_label="ABC Literature",
                 identifier_help_label=(

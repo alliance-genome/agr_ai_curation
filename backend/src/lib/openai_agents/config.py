@@ -1411,14 +1411,6 @@ def get_document_source_request_timeout_seconds() -> float:
     )
 
 
-def get_document_source_dev_curator_auth_mode() -> str:
-    """Server-side curator authentication mode for login-free development."""
-    return (
-        os.getenv("DOCUMENT_SOURCE_DEV_CURATOR_AUTH_MODE", "none").strip().lower()
-        or "none"
-    )
-
-
 def get_document_source_dev_curator_refresh_skew_seconds() -> int:
     """Seconds before expiry when a cached dev curator token is renewed."""
     return max(
