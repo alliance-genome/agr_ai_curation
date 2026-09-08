@@ -370,3 +370,24 @@ def test_notify_tool_failure_sentry_import_failure_does_not_block_sns(
 
     assert result is True
     mock_client.publish.assert_called_once()
+
+
+@pytest.mark.parametrize('mode,expected', [('disabled', None), ('unconfigured', 'tool_failure_sns_not_configured'), ('failed', 'tool_failure_sns_publish_failed')])
+def test_notification_delivery_failure_has_separate_sanitized_capture(monkeypatch, direct_to_thread, mode, expected):
+    captures = []
+    monkeypatch.setattr(notifier, 'report_runtime_exception', lambda *a, **k: captures.append((a, k)))
+    monkeypatch.setenv('TOOL_FAILURE_ALERTS_ENABLED', 'false' if mode == 'disabled' else 'true')
+    monkeypatch.delenv('PROMPT_SUGGESTIONS_SNS_TOPIC_ARN', raising=False)
+    if mode == 'failed':
+        monkeypatch.setenv('PROMPT_SUGGESTIONS_SNS_TOPIC_ARN', 'arn:private')
+        monkeypatch.delenv('AWS_PROFILE', raising=False)
+        def fail(*a, **kw):
+            raise RuntimeError('PRIVATE TRANSPORT CREDENTIAL')
+        import boto3
+        monkeypatch.setattr(boto3, 'client', fail)
+    result = asyncio.run(notifier.notify_tool_failure(error_type='test', error_message='PRIVATE PAPER', source='test', specialist_name=None, trace_id=None, session_id=None, curator_id=None, capture_sentry=False))
+    assert result is False
+    assert len(captures) == (1 if expected else 0)
+    if expected:
+        assert captures[0][1]['operation'] == expected
+    assert 'PRIVATE' not in str(captures)

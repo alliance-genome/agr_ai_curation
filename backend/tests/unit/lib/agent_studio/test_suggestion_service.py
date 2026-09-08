@@ -189,3 +189,25 @@ async def test_submit_suggestion_treats_missing_topic_as_failed_when_enabled(mon
     assert result["status"] == "failed"
     assert result["sns_status"] == "not_configured"
     assert "suggestion_id" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode,expected', [('disabled', None), ('unconfigured', 'suggestion_sns_not_configured'), ('failed', 'suggestion_sns_publish_failed')])
+async def test_suggestion_delivery_incident_is_explicit_and_sanitized(monkeypatch, mode, expected):
+    captures = []
+    monkeypatch.setattr(svc, 'report_runtime_exception', lambda *a, **k: captures.append((a, k)))
+    monkeypatch.setenv('PROMPT_SUGGESTIONS_USE_SNS', 'false' if mode == 'disabled' else 'true')
+    monkeypatch.delenv('PROMPT_SUGGESTIONS_SNS_TOPIC_ARN', raising=False)
+    if mode == 'failed':
+        monkeypatch.setenv('PROMPT_SUGGESTIONS_SNS_TOPIC_ARN', 'arn:private')
+        monkeypatch.delenv('AWS_PROFILE', raising=False)
+        def fail(*a, **kw):
+            raise RuntimeError('PRIVATE TRANSPORT CREDENTIAL')
+        monkeypatch.setattr(svc.boto3, 'client', fail)
+    result = await svc.submit_suggestion_sns(_build_suggestion(), submitted_by='private@example.org')
+    assert len(captures) == (1 if expected else 0)
+    if expected:
+        assert captures[0][1]['operation'] == expected
+        assert result['status'] == 'failed'
+    assert 'PRIVATE TRANSPORT' not in str(captures)
+    assert 'private@example.org' not in str(captures)

@@ -1,5 +1,7 @@
 """Runtime alert facade for infrastructure and tool-call failures."""
 
+from src.lib.observability.runtime import report_runtime_exception
+
 import asyncio
 import importlib
 import logging
@@ -134,6 +136,10 @@ async def notify_tool_failure(
         return False
 
     if not sns_topic_arn:
+        report_runtime_exception(
+            RuntimeError("Enabled tool failure notification delivery is not configured"),
+            component="notification_delivery", operation="tool_failure_sns_not_configured",
+        )
         logger.warning(
             "TOOL_FAILURE_ALERTS_ENABLED is true but PROMPT_SUGGESTIONS_SNS_TOPIC_ARN is not set"
         )
@@ -207,11 +213,17 @@ async def notify_tool_failure(
         )
         return True
     except Exception as exc:
+        report_runtime_exception(
+            RuntimeError("Tool failure notification delivery failed"),
+            component="notification_delivery", operation="tool_failure_sns_publish_failed",
+            context={"error_type": type(exc).__name__},
+        )
         logger.error(
             "Failed to send tool failure notification via SNS: %s",
             exc,
             exc_info=True,
             extra={
+                "sentry_skip_event": True,
                 "error_type": error_type,
                 "source": source,
                 "tool_name": tool_name,

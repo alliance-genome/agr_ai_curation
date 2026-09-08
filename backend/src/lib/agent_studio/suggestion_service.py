@@ -7,6 +7,8 @@ manually by users or triggered by AI Chat when it detects
 actionable improvements during conversation.
 """
 
+from src.lib.observability.runtime import report_runtime_exception
+
 import json
 import logging
 import os
@@ -192,8 +194,13 @@ async def submit_suggestion_sns(
         }
 
     if not sns_topic_arn:
+        report_runtime_exception(
+            RuntimeError("Enabled suggestion delivery is not configured"),
+            component="notification_delivery", operation="suggestion_sns_not_configured",
+        )
         logger.error(
-            "Prompt suggestion SNS is enabled but PROMPT_SUGGESTIONS_SNS_TOPIC_ARN is not configured."
+            "Prompt suggestion SNS is enabled but PROMPT_SUGGESTIONS_SNS_TOPIC_ARN is not configured.",
+            extra={"sentry_skip_event": True},
         )
         _log_suggestion_locally(message, "sns_not_configured")
         return {
@@ -257,7 +264,13 @@ async def submit_suggestion_sns(
         }
 
     except Exception as e:
-        logger.error('Failed to send suggestion %s to SNS: %s', suggestion_id, e, exc_info=True)
+        report_runtime_exception(
+            RuntimeError("Suggestion notification delivery failed"),
+            component="notification_delivery", operation="suggestion_sns_publish_failed",
+            context={"error_type": type(e).__name__},
+        )
+        logger.error('Failed to send suggestion %s to SNS: %s', suggestion_id, e, exc_info=True,
+                     extra={"sentry_skip_event": True})
         _log_suggestion_locally(message, "sns_publish_failed")
         return {
             "status": "failed",

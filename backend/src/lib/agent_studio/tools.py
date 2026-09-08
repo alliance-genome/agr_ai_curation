@@ -27,6 +27,8 @@ System Tools:
 - get_service_logs: Service log retrieval
 """
 
+from src.lib.observability.runtime import report_runtime_exception
+
 import httpx
 import os
 import re
@@ -229,6 +231,12 @@ async def _get_claude_endpoint(
                 "error": f"Invalid request: {_response_detail(resp)}",
                 "help": "Check the tool parameters and retry with a narrower request",
             }
+        if resp.status_code >= 500:
+            report_runtime_exception(
+                RuntimeError("TraceReview service returned an HTTP server error"),
+                component="agent_studio", operation="trace_review_http_failure",
+                context={"http_status": resp.status_code},
+            )
         return {
             "status": "error",
             "data": None,
@@ -237,6 +245,10 @@ async def _get_claude_endpoint(
             "help": "Check TraceReview service status",
         }
     except httpx.TimeoutException:
+        report_runtime_exception(
+            RuntimeError("TraceReview request timed out"), component="agent_studio",
+            operation="trace_review_timeout", context={"timeout_seconds": timeout_seconds},
+        )
         return {
             "status": "error",
             "data": None,
@@ -245,6 +257,11 @@ async def _get_claude_endpoint(
             "help": "Retry with a narrower request or check service load",
         }
     except Exception as e:
+        report_runtime_exception(
+            RuntimeError("TraceReview request or response processing failed"),
+            component="agent_studio", operation="trace_review_request_failed",
+            context={"error_type": type(e).__name__},
+        )
         return {
             "status": "error",
             "data": None,

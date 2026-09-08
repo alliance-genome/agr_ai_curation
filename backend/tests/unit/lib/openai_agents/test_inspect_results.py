@@ -632,3 +632,107 @@ async def test_inspect_results_validation_filters_by_object_and_field(monkeypatc
     assert payload["finding_count"] == 1
     assert payload["validation_findings"][0]["field_path"] == "curie"
     assert payload["validation_findings"][0]["message"] == "Review the mapped identifier."
+
+
+@pytest.mark.asyncio
+async def test_canonical_extraction_metadata_evidence_is_resolved(monkeypatch):
+    payload = _payload()
+    evidence = payload['metadata'].pop('evidence_records')
+    payload['metadata']['extraction_metadata'] = {'evidence_records': evidence}
+    payload['extracted_objects'][0]['payload'].pop('verified_quote')
+    _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
+    captures = []
+    monkeypatch.setattr(inspect_results_module, 'report_runtime_exception', lambda *a, **k: captures.append(k))
+    result = json.loads(await inspect_results_module.inspect_results(action='evidence', object_ref='assertion-1'))
+    assert result['status'] == 'ok'
+    assert result['evidence'][0]['verified_quote'] == evidence[0]['verified_quote']
+    assert not captures
+
+
+@pytest.mark.asyncio
+async def test_unresolved_evidence_reports_honest_error_and_sanitized_capture(monkeypatch):
+    payload = _payload()
+    payload['metadata'] = {}
+    payload['extracted_objects'][0]['payload'].pop('verified_quote')
+    _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
+    captures = []
+    monkeypatch.setattr(inspect_results_module, 'report_runtime_exception', lambda *a, **k: captures.append(k))
+    result = json.loads(await inspect_results_module.inspect_results(action='evidence', object_ref='assertion-1'))
+    assert result['status'] == 'error'
+    assert result['error_code'] == 'evidence_unavailable'
+    assert captures[0]['operation'] == 'evidence_resolution_failed'
+    assert captures[0]['context'] == {'extraction_result_id': RESULT_ID, 'requested_evidence_count': 1, 'missing_evidence_count': 1}
+
+
+@pytest.mark.asyncio
+async def test_custom_detail_navigation_preserves_parts_and_complete_text(monkeypatch):
+    payload = _payload()
+    payload['domain_pack_id'] = 'generic'
+    text = 'first line\n second line\tend'
+    payload['extracted_objects'][0]['payload']['attributes'] = {'source': {'name': text, 'number': 0, 'known': False, 'unknown': None}, 'names': ['A', 'B']}
+    _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
+    monkeypatch.setattr(inspect_results_module, '_FIELD_TEXT_LIMIT', 8)
+    async def read(**kw):
+        return json.loads(await inspect_results_module.inspect_results(action='details', object_ref='assertion-1', **kw))
+    root = await read(limit=1)
+    assert root['entries'][0]['field_path'] == 'attributes.source'
+    assert root['next_cursor'] == '1'
+    assert (await read(limit=1, cursor='1'))['entries'][0]['kind'] == 'list'
+    parts = await read(field_path='attributes.source')
+    assert [e['preview'] for e in parts['entries'][1:]] == [0, False, None]
+    reconstructed = ''
+    cursor = None
+    while True:
+        part = await read(field_path='attributes.source.name', cursor=cursor)
+        reconstructed += part['value']
+        cursor = part['next_cursor']
+        if cursor is None:
+            break
+    assert reconstructed == text
+    assert (await read(field_path='attributes.names[1]'))['value'] == 'B'
+    monkeypatch.setattr(inspect_results_module, '_FIELD_TEXT_LIMIT', 1000)
+    assert (await read(field_path='metadata'))['status'] == 'error'
+    assert (await read(field_path='attributes.absent'))['error_code'] == 'field_not_found'
+
+
+@pytest.mark.asyncio
+async def test_evidence_pages_isolate_objects_and_report_only_missing_page(monkeypatch):
+    payload = _payload()
+    first = payload['extracted_objects'][0]
+    first['payload'].pop('verified_quote')
+    second = deepcopy(first)
+    second['pending_ref_id'] = 'assertion-2'
+    second['evidence_record_ids'] = ['evidence-2']
+    payload['extracted_objects'].append(second)
+    # Both objects' quotes live in the same canonical inventory. Only the
+    # requested object's references may be exposed, even across pagination.
+    base = payload['metadata'].pop('evidence_records')[0]
+    second_quote = {**base, 'evidence_record_id': 'evidence-2', 'verified_quote': 'OTHER OBJECT'}
+    payload['metadata']['extraction_metadata'] = {'evidence_records': [base, second_quote]}
+    first['evidence_record_ids'].append('missing')
+    _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
+    captures = []
+    monkeypatch.setattr(inspect_results_module, 'report_runtime_exception', lambda *a, **k: captures.append(k))
+    good = json.loads(await inspect_results_module.inspect_results(action='evidence', object_ref='assertion-1', limit=1))
+    assert good['status'] == 'ok'
+    assert good['next_cursor'] == '1'
+    assert 'OTHER OBJECT' not in json.dumps(good)
+    assert not captures
+    bad = json.loads(await inspect_results_module.inspect_results(action='evidence', object_ref='assertion-1', limit=1, cursor=good['next_cursor']))
+    assert bad['error_code'] == 'evidence_unavailable'
+    assert len(captures) == 1
+    first['evidence_record_ids'] = []
+    empty = json.loads(await inspect_results_module.inspect_results(action='evidence', object_ref='assertion-1'))
+    assert empty['status'] == 'ok'
+    assert empty['evidence'] == []
+    assert len(captures) == 1
+
+
+@pytest.mark.asyncio
+async def test_details_preserves_existing_authorization_and_domain_boundaries(monkeypatch):
+    _patch_records(monkeypatch, [])
+    unavailable = json.loads(await inspect_results_module.inspect_results(action='details', object_ref='assertion-1'))
+    assert unavailable['status'] == 'no_context'
+    _patch_records(monkeypatch, [_InspectRecord()])
+    denied = json.loads(await inspect_results_module.inspect_results(action='details', object_ref='assertion-1'))
+    assert denied['error_code'] == 'field_not_supervisor_visible'

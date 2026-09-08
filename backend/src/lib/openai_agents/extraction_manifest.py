@@ -563,6 +563,9 @@ def _next_actions(
             f'Use inspect_results(result_ref="{result_ref}", action="evidence", object_ref="<object_ref>") for evidence.'
         )
         actions.append(
+            f'For generic/custom objects, use inspect_results(result_ref="{result_ref}", action="details", object_ref="<object_ref>") to read saved attributes and nested parts. Follow paths and cursors; do not call the extractor again to inspect prior results.'
+        )
+        actions.append(
             "Use the matching CSV/TSV/JSON formatter specialist only if the user "
             "asks for a file/export; the formatter is bound to saved extraction "
             "results and must build the file through source-backed projection tools."

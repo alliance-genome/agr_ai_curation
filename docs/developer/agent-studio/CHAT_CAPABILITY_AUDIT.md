@@ -130,3 +130,26 @@ Trace tools are exposed on all Studio tabs without requiring a preselected trace
 `report_tool_failure` awaits SNS submission and returns `notification_submitted`. It does not claim delivery if the existing alert feature flag is disabled or publishing fails. Sentry capture remains independent and is not an email receipt. Suggestion results retain `delivery_status`, notification and suggestion references; local logging must not be described as notification. An SNS acceptance confirms submission to the notification service, not inbox receipt or developer review.
 
 Chronological TraceReview payload inventory normalizes SDK datetime timestamps alongside string timestamps, including the trace's own input/output payloads.
+
+### Saved extraction details and evidence (0.9.8)
+
+Main chat uses `inspect_results(action="details", object_ref=...)` to browse
+saved generic/custom attributes. The first page lists attribute keys; `field_path`
+opens a child value or nested part, and `cursor` continues lists or long text.
+These reads preserve null, false, zero, and text whitespace. They retain the
+existing result authorization boundary and cannot expose another domain pack's
+unapproved fields or internal metadata. Compact manifests remain summaries;
+reading missing detail is not a reason to invoke extraction again.
+
+Evidence inspection resolves object references against both native envelope
+metadata and the canonical `metadata.extraction_metadata.evidence_records`
+inventory. Only the requested object's evidence is returned. A reference without
+available evidence text produces an explicit `evidence_unavailable` result with
+any available evidence preserved, plus a sanitized Sentry incident. Empty evidence
+for an object without references is a valid result, not an incident.
+
+TraceReview server/transport failures and enabled notification delivery failures
+also use explicit runtime Sentry capture. Disabled notification channels and
+ordinary 400/403/404 responses do not trigger these incidents. Diagnostic capture
+contains failure categories/counts rather than paper text, prompts, credentials,
+or notification bodies.

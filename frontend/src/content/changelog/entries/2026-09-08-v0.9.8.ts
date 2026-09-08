@@ -17,6 +17,7 @@ const entry: ChangelogEntry = {
         'When an extractor change affects file output, guidance now points to Choose output fields and explains how to save the updated layout.',
         'AI Chat can inspect past runs from Flows and Agent Workshop, including the instructions actually used.',
         'Feedback confirmations now distinguish submitted notifications from reports that could not be sent.',
+        'Chat can read the saved details and supporting evidence from custom extractions without repeating the extraction.',
         'Improved diagnostic links for AI Chat so failed conversations are easier to investigate.',
       ],
     },
