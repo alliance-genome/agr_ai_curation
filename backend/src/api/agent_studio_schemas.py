@@ -223,26 +223,31 @@ class ToolIdeaCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ToolIdeaResponseItem(BaseModel):
-    """Tool idea request row returned to curators."""
+class ToolIdeaSummaryItem(BaseModel):
+    """Project-visible request metadata, excluding embedded chat history."""
 
     id: str
     user_id: int
     project_id: Optional[str] = None
     title: str
     description: str
-    opus_conversation: List[Dict[str, Any]]
     status: Literal["submitted", "reviewed", "in_progress", "completed", "declined"]
-    developer_notes: Optional[str] = None
-    resulting_tool_key: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
 
-class ToolIdeaListResponse(BaseModel):
-    """Response payload for current user's tool idea requests."""
+class ToolIdeaResponseItem(ToolIdeaSummaryItem):
+    """Full request returned only to its owner."""
 
-    tool_ideas: List[ToolIdeaResponseItem]
+    opus_conversation: List[Dict[str, Any]]
+    developer_notes: Optional[str] = None
+    resulting_tool_key: Optional[str] = None
+
+
+class ToolIdeaListResponse(BaseModel):
+    """Owned requests and project-visible teammate summaries."""
+
+    tool_ideas: List[ToolIdeaResponseItem | ToolIdeaSummaryItem]
     total: int
 
 

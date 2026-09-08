@@ -261,3 +261,24 @@ source-development override, not a shipped mirror. When the specialist catalog
 changes in a way that affects routing or handoff style, review that override too.
 
 See [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) and [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) for the complete reference.
+
+### Workshop shared discovery API
+
+`GET /api/agent-studio/custom-agents` defaults to `scope=owned` for owner
+management. Discovery clients use `scope=visible` to include project-shared
+custom agents, optionally filtering by `template_source`. Both lists apply
+current authenticated group restrictions. `GET /api/agent-studio/custom-agents/{id}`
+uses the same visibility boundary for detail reads. Responses include `user_id`,
+`visibility`, and `project_id`; clients must compare `user_id` with the authenticated
+user before offering editing. Update, delete, revert, version history, and Workshop
+test-session routes remain owner-only. Existing catalog run, clone, and share
+routes retain their authorization policies.
+
+`GET /api/agent-studio/tool-ideas` returns owned requests plus requests assigned
+to any project the viewer currently belongs to. Unassigned requests are visible
+only to their requester. Owned responses retain their full fields; teammate
+summaries contain `id`, `user_id`, `project_id`, `title`, `description`, `status`,
+`created_at`, and `updated_at`. They omit `opus_conversation`, `developer_notes`,
+and `resulting_tool_key`. Consumers must treat these as summaries, without opening
+another curator's conversation. Runtime package tools and document access are
+unchanged.

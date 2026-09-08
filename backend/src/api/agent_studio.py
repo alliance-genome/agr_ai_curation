@@ -117,7 +117,7 @@ from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.agent_studio.tool_idea_service import (
     create_tool_idea_request,
     get_primary_project_id_for_user,
-    list_tool_idea_requests_for_user,
+    list_tool_idea_requests_visible_to_user,
     tool_idea_request_to_dict,
 )
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
@@ -624,7 +624,7 @@ async def create_tool_idea_endpoint(
         )
         db.commit()
         db.refresh(record)
-        return ToolIdeaResponseItem(**tool_idea_request_to_dict(record))
+        return ToolIdeaResponseItem(**tool_idea_request_to_dict(record, viewer_user_id=db_user.id))
     except ValueError as exc:
         db.rollback()
         _raise_agent_studio_validation_http_exception(
@@ -638,17 +638,17 @@ async def create_tool_idea_endpoint(
 @router.get(
     "/tool-ideas",
     response_model=ToolIdeaListResponse,
-    summary="List my tool idea requests",
-    description="Returns tool idea requests submitted by the current user.",
+    summary="List visible tool idea requests",
+    description="Returns owned requests and project teammate summaries without chat history.",
 )
 async def list_tool_ideas_endpoint(
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> ToolIdeaListResponse:
-    """List the authenticated curator's tool idea requests."""
+    """List owned requests and project teammate summaries."""
     db_user = set_global_user_from_cognito(db, user)
-    rows = list_tool_idea_requests_for_user(db, db_user.id)
-    items = [ToolIdeaResponseItem(**tool_idea_request_to_dict(row)) for row in rows]
+    rows = list_tool_idea_requests_visible_to_user(db, db_user.id)
+    items = [tool_idea_request_to_dict(row, viewer_user_id=db_user.id) for row in rows]
     return ToolIdeaListResponse(tool_ideas=items, total=len(items))
 
 

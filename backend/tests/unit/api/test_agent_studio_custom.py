@@ -610,7 +610,7 @@ class TestCustomAgentCrudErrorsAndBranches:
 
         monkeypatch.setattr(
             api_module,
-            "get_custom_agent_for_user",
+            "get_custom_agent_visible_to_user",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 CustomAgentNotFoundError(f"Custom agent '{custom_agent_id}' not found")
             ),
@@ -630,7 +630,7 @@ class TestCustomAgentCrudErrorsAndBranches:
 
         monkeypatch.setattr(
             api_module,
-            "get_custom_agent_for_user",
+            "get_custom_agent_visible_to_user",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(CustomAgentAccessError("forbidden")),
         )
         with pytest.raises(HTTPException) as access_exc:
@@ -1053,3 +1053,75 @@ class TestCustomAgentCrudErrorsAndBranches:
         assert "Custom-agent test failed unexpectedly." in stream_text
         assert "stream exploded" not in stream_text
         assert "stream exploded" in caplog.text
+
+
+@pytest.mark.parametrize("scope", ["owned", "visible"])
+def test_discovery_scope_preserves_management_and_group_filtering(monkeypatch, scope):
+    import src.api.agent_studio_custom as api
+
+    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "get_groups_from_provider_groups", lambda _: ["MGI"])
+    owned = MagicMock(return_value=[SimpleNamespace(allowed_group_ids=[])])
+    visible = MagicMock(return_value=[
+        SimpleNamespace(allowed_group_ids=[]),
+        SimpleNamespace(allowed_group_ids=["RGD"]),
+    ])
+    monkeypatch.setattr(api, "list_custom_agents_for_user", owned)
+    monkeypatch.setattr(api, "list_custom_agents_visible_to_user", visible)
+    payload = _custom_agent_payload("gene")
+    payload.update(user_id=2 if scope == "visible" else 1, visibility="project", project_id=str(uuid.uuid4()))
+    monkeypatch.setattr(api, "custom_agent_to_dict", lambda _: payload)
+    db = SimpleNamespace()
+    response = asyncio.run(api.list_custom_agents_endpoint(template_source="gene", scope=scope, user={}, db=db))
+    selected, unused = (visible, owned) if scope == "visible" else (owned, visible)
+    selected.assert_called_once_with(db, 1, template_source="gene")
+    unused.assert_not_called()
+    assert response.total == 1
+    assert response.custom_agents[0].user_id == payload["user_id"]
+    assert response.custom_agents[0].project_id == payload["project_id"]
+    assert response.custom_agents[0].visibility == "project"
+
+
+@pytest.mark.parametrize("groups,allowed", [([], True), (["MGI"], True), (["RGD"], False)])
+def test_shared_agent_detail_keeps_group_restrictions(monkeypatch, groups, allowed):
+    import src.api.agent_studio_custom as api
+
+    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "get_groups_from_provider_groups", lambda _: ["MGI"])
+    agent = SimpleNamespace(allowed_group_ids=groups)
+    lookup = MagicMock(return_value=agent)
+    monkeypatch.setattr(api, "get_custom_agent_visible_to_user", lookup)
+    payload = _custom_agent_payload("gene")
+    payload.update(user_id=2, visibility="project", project_id=str(uuid.uuid4()))
+    monkeypatch.setattr(api, "custom_agent_to_dict", lambda _: payload)
+    agent_id, db = uuid.uuid4(), SimpleNamespace()
+    if allowed:
+        response = asyncio.run(api.get_custom_agent_endpoint(agent_id, user={}, db=db))
+        assert response.user_id == 2
+        assert response.visibility == "project"
+    else:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(api.get_custom_agent_endpoint(agent_id, user={}, db=db))
+        assert exc.value.status_code == 404
+    lookup.assert_called_once_with(db, agent_id, 1)
+
+
+@pytest.mark.parametrize("operation", ["update", "delete", "revert"])
+def test_shared_agent_nonowner_mutation_denied(monkeypatch, operation):
+    import src.api.agent_studio_custom as api
+
+    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=1))
+    db = MagicMock()
+    db.query.return_value.filter.return_value = db.query.return_value
+    db.query.return_value.first.return_value = SimpleNamespace(user_id=2)
+    agent_id = uuid.uuid4()
+    if operation == "update":
+        call = api.update_custom_agent_endpoint(request=api.UpdateCustomAgentRequest(name="Changed"), custom_agent_id=agent_id, user={}, db=db)
+    elif operation == "delete":
+        call = api.delete_custom_agent_endpoint(custom_agent_id=agent_id, user={}, db=db)
+    else:
+        call = api.revert_custom_agent_endpoint(version=1, request=api.RevertCustomAgentRequest(), custom_agent_id=agent_id, user={}, db=db)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(call)
+    assert exc.value.status_code == 403
+    db.commit.assert_not_called()
