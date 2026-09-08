@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, List
 
@@ -26,6 +28,7 @@ from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.sns_notifier import SNSNotifier
 from src.lib.feedback.transcript import capture_feedback_conversation_transcript
 from src.lib.agent_studio.models import TraceContext
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents.config import (
     get_feedback_trace_error_chars,
     get_feedback_trace_preview_chars,
@@ -54,6 +57,88 @@ _SECRET_ASSIGNMENT_RE = re.compile(
 
 class FeedbackDebugDetailForbidden(Exception):
     """Raised when an authenticated user cannot inspect feedback debug detail."""
+
+
+class _FeedbackProcessingError(RuntimeError):
+    """Content-free diagnostic for a handled feedback processing failure."""
+
+
+class _FeedbackDependencyLogFilter(logging.Filter):
+    """Leave event ownership with feedback only in the calling execution context."""
+
+    def __init__(self):
+        super().__init__()
+        self.active = ContextVar("feedback_dependency_logs", default=False)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self.active.get() and record.levelno >= logging.WARNING:
+            record.sentry_skip_event = True
+            record.msg = FeedbackService._compact_redacted_text(
+                record.getMessage(), max_chars=MAX_TRACE_ERROR_CHARS
+            )
+            record.args = ()
+            # Keep operational diagnostics, but never let a formatter append
+            # an unredacted exception or cached traceback after the safe message.
+            exception_text = record.exc_text
+            if record.exc_info:
+                exception_text = logging.Formatter().formatException(record.exc_info)
+            record.exc_text = FeedbackService._compact_redacted_text(
+                exception_text, max_chars=MAX_TRACE_ERROR_CHARS
+            )
+            record.exc_info = None
+            record.stack_info = FeedbackService._compact_redacted_text(
+                record.stack_info, max_chars=MAX_TRACE_ERROR_CHARS
+            )
+        return True
+
+
+_feedback_log_filter = _FeedbackDependencyLogFilter()
+for _dependency_logger_name in (
+    "src.lib.feedback.email_notifier",
+    "src.lib.feedback.sns_notifier",
+    "src.lib.agent_studio.trace_context_service",
+):
+    # Register once: mutating logger filter lists during concurrent emissions
+    # can skip filters. Outside the feedback scope this filter is inert.
+    logging.getLogger(_dependency_logger_name).addFilter(_feedback_log_filter)
+
+
+@contextmanager
+def _feedback_dependency_logs():
+    token = _feedback_log_filter.active.set(True)
+    try:
+        yield
+    finally:
+        _feedback_log_filter.active.reset(token)
+
+
+def _report_feedback_failure(
+    stage: str, *, error_types: set[str], error_count: int = 1
+) -> None:
+    # Build a traceback without retaining the sensitive exception or its chain.
+    try:
+        raise _FeedbackProcessingError(
+            f"Feedback processing failed at {stage} ({', '.join(sorted(error_types))})"
+        ) from None
+    except _FeedbackProcessingError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        error = sanitized
+
+    logger.warning("%s", error, extra={"sentry_skip_event": True})
+    try:
+        report_runtime_exception(
+            error,
+            component="feedback_service",
+            operation=stage,
+            tags={"phase": stage},
+            context={"error_count": error_count},
+        )
+    except Exception:
+        # Observability must not change the feedback workflow's outcome.
+        logger.warning(
+            "Feedback failure reporting unavailable", extra={"sentry_skip_event": True}
+        )
 
 
 class FeedbackService:
@@ -215,12 +300,7 @@ class FeedbackService:
                         )
                 logger.info('Captured trace snapshot for feedback %s', feedback_id)
             except Exception as e:
-                logger.warning(
-                    'Trace snapshot capture failed for feedback %s: %s',
-                    feedback_id,
-                    str(e),
-                    exc_info=True,
-                )
+                _report_feedback_failure("trace_capture", error_types={type(e).__name__})
                 report.trace_data = self._trace_capture_failure_snapshot(report, e)
                 capture_error = self._trace_capture_error(e)
                 report.error_details = (
@@ -229,12 +309,13 @@ class FeedbackService:
 
             # Send notification (SNS or email)
             try:
-                self.notifier.send_feedback_notification(report)
+                with _feedback_dependency_logs():
+                    self.notifier.send_feedback_notification(report)
                 report.email_sent_at = datetime.now(timezone.utc)
                 logger.info('Sent notification for feedback %s', feedback_id)
-            except Exception as e:
-                logger.error('Notification failed for %s: %s', feedback_id, str(e), exc_info=True)
-                notification_error = f"Notification error: {str(e)}"
+            except Exception as exc:
+                _report_feedback_failure("notifier_delivery", error_types={type(exc).__name__})
+                notification_error = "Notification delivery failed."
                 if report.error_details:
                     report.error_details = f"{report.error_details}; {notification_error}"
                 else:
@@ -247,13 +328,12 @@ class FeedbackService:
 
             logger.info('Completed background processing for feedback %s', feedback_id)
 
-        except Exception as e:
+        except Exception as exc:
             # Catch-all for unexpected errors
-            logger.error(
-                'Unexpected error processing feedback %s: %s', feedback_id, str(e), exc_info=True
-            )
+            _report_feedback_failure("background_processing", error_types={type(exc).__name__})
+            self.db.rollback()
             report.processing_status = ProcessingStatus.FAILED
-            report.error_details = f"Unexpected error: {str(e)}"
+            report.error_details = "Unexpected feedback processing failure."
             self.db.commit()
 
     def get_feedback_debug_detail(
@@ -336,38 +416,16 @@ class FeedbackService:
                 session_id=session_id,
                 user_auth_sub=user_auth_sub,
             )
-        except ChatHistorySessionNotFoundError as exc:
-            logger.warning(
-                "Failed to capture durable transcript for feedback %s "
-                "(session_id=%s, user_auth_sub=%s): %s",
-                feedback_id,
-                session_id,
-                user_auth_sub,
-                exc,
-                exc_info=True,
-            )
+        except ChatHistorySessionNotFoundError:
+            logger.info("No durable session available for feedback transcript lookup")
             return None
         except SQLAlchemyError as exc:
+            _report_feedback_failure("transcript_lookup", error_types={type(exc).__name__})
             self.db.rollback()
-            logger.warning(
-                "Failed to capture durable transcript for feedback %s "
-                "(session_id=%s, user_auth_sub=%s): %s",
-                feedback_id,
-                session_id,
-                user_auth_sub,
-                exc,
-                exc_info=True,
-            )
             return None
 
         if transcript is None:
-            logger.warning(
-                "Durable transcript lookup returned no session for feedback %s "
-                "(session_id=%s, user_auth_sub=%s)",
-                feedback_id,
-                session_id,
-                user_auth_sub,
-            )
+            logger.info("No durable session available for feedback transcript lookup")
             return None
 
         session_payload = transcript.get("session") if isinstance(transcript, dict) else None
@@ -426,10 +484,12 @@ class FeedbackService:
         captured_at = self._utc_timestamp()
         traces = []
         error_count = 0
+        error_types: set[str] = set()
 
         for trace_id in trace_ids[:MAX_TRACE_SNAPSHOT_TRACES]:
             try:
-                trace_context = asyncio.run(get_trace_context_for_explorer(trace_id))
+                with _feedback_dependency_logs():
+                    trace_context = asyncio.run(get_trace_context_for_explorer(trace_id))
                 traces.append(
                     self._trace_context_snapshot(
                         trace_context=trace_context,
@@ -438,6 +498,7 @@ class FeedbackService:
                 )
             except Exception as exc:
                 error_count += 1
+                error_types.add(type(exc).__name__)
                 traces.append(
                     {
                         "trace_id": trace_id,
@@ -475,6 +536,9 @@ class FeedbackService:
                 "trace_error_count": error_count,
                 "message": "One or more trace snapshots could not be captured.",
             }
+            _report_feedback_failure(
+                "trace_capture", error_types=error_types, error_count=error_count
+            )
 
         return snapshot
 
@@ -686,9 +750,8 @@ class FeedbackService:
                 "check TraceReview/Langfuse URL, source, and credentials."
             )
         else:
-            message = cls._compact_redacted_text(
-                raw_message,
-                max_chars=MAX_TRACE_ERROR_CHARS,
+            message = (
+                "Trace snapshot capture failed; check TraceReview/Langfuse availability."
             )
         return {
             "type": error.__class__.__name__,
