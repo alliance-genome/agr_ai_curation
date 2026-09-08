@@ -463,3 +463,26 @@ async def test_list_recorded_evidence_text_contains_pages(many_workspace_records
     assert page["next_offset"] == 2
     assert page["truncated"] is True
     assert {r["evidence_record_id"] for r in page["evidence_records"]} == {"ev-0", "ev-2"}
+
+
+@pytest.mark.asyncio
+async def test_attach_after_field_only_target_preserves_valid_evidence(workspace_records):
+    from src.schemas.models.base import EvidenceRecord
+
+    record = workspace_records[0]
+    record['envelope_targets'] = [{'field_path': 'mention'}]
+    record['field_path'] = 'mention'
+    attach = evidence_workspace.create_attach_evidence_to_object_tool('doc-1', 'user-1')
+    detach = evidence_workspace.create_detach_evidence_from_object_tool('doc-1', 'user-1')
+    await attach('ev-active', pending_ref_id='allele-1', field_path='mention')
+    assert record['envelope_targets'] == [
+        {'field_path': 'mention'}, {'pending_ref_id': 'allele-1', 'field_path': 'mention'}]
+    assert 'object_ref' not in record
+    payload = {key: value for key, value in record.items() if key in EvidenceRecord.model_fields}
+    assert EvidenceRecord.model_validate(payload).evidence_record_id == 'ev-active'
+    assert record['verified_quote'] == 'flcn was detected in embryonic brain.'
+    await detach('ev-active', pending_ref_id='allele-1')
+    assert record['envelope_targets'] == [{'field_path': 'mention'}]
+    assert 'object_ref' not in record
+    payload = {key: value for key, value in record.items() if key in EvidenceRecord.model_fields}
+    assert EvidenceRecord.model_validate(payload).evidence_record_id == 'ev-active'

@@ -198,11 +198,13 @@ def _sync_target_fields(
             record["object_id"] = first_target["object_id"]
         if first_target.get("pending_ref_id"):
             record["pending_ref_id"] = first_target["pending_ref_id"]
-        record["object_ref"] = {
+        object_ref = {
             key: first_target[key]
             for key in ("object_id", "pending_ref_id")
             if first_target.get(key)
         }
+        if object_ref:
+            record["object_ref"] = object_ref
         record["envelope_target"] = dict(first_target)
     else:
         record.pop("envelope_targets", None)
