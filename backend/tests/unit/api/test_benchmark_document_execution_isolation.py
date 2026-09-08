@@ -35,12 +35,20 @@ def test_exclusion_does_not_replace_existing_input_validation(document_id):
     db.scalar.assert_not_called()
 
 
-def test_flow_rejects_frozen_document_before_runtime(monkeypatch):
+@pytest.mark.parametrize("shared", [False, True], ids=["private-owner", "project-member"])
+def test_flow_rejects_frozen_document_before_runtime(monkeypatch, shared):
     from src.api import chat_execute_flow as api
 
     db = MagicMock()
     db.scalar.return_value = "benchmark_frozen"
-    db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(user_id=42)
+    project_id = uuid4() if shared else None
+    db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+        user_id=7 if shared else 42,
+        is_active=True,
+        visibility="project" if shared else "private",
+        project_id=project_id,
+    )
+    db.query.return_value.filter.return_value.all.return_value = [(project_id,)] if shared else []
     monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=42))
     monkeypatch.setattr(api, "_get_chat_history_repository", lambda *_: MagicMock())
     runtime = MagicMock()
@@ -54,6 +62,8 @@ def test_flow_rejects_frozen_document_before_runtime(monkeypatch):
             db=db, user={"sub": "curator"},
         ))
     assert caught.value.status_code == 404
+    assert caught.value.detail == "Document not found"
+    db.scalar.assert_called_once()
     runtime.assert_not_called()
 
 
