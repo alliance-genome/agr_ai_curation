@@ -363,3 +363,21 @@ def test_allele_prompt_selects_literal_entity_span_without_biological_renaming()
     ]
     for fragment in forbidden_fragments:
         assert fragment not in prompt
+
+
+def test_allele_prompt_allows_abstention_and_requires_source_identity_support():
+    prompt = yaml.safe_load(
+        (ALLIANCE_AGENTS_PATH / "allele" / "prompt.yaml").read_text(encoding="utf-8")
+    )["content"]
+    for guidance in (
+        "A clear unresolved result is a successful validation outcome",
+        "A single fuzzy result is not sufficient evidence of identity",
+        "does not independently connect the record to the paper mention",
+        "return unresolved and retain the candidates",
+        "Do not reject every fuzzy match",
+        "delta glyph variation or explicit superscript markup",
+    ):
+        assert guidance in prompt
+    assert "final say on allele identity" not in prompt
+    assert "rather than as something to hand back" not in prompt
+    assert "NFAT-GFP" not in prompt  # The policy must not hardcode this paper's trap.

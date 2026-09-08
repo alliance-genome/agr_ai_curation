@@ -830,6 +830,46 @@ def _entity_mapping_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+_ALLELE_FUZZY_IDENTITY_GUIDANCE = (
+    "Fuzzy allele matches are unconfirmed candidates, even when only one is returned. "
+    "curie_validated checks identifier format only, not identity with the request. "
+    "Compare the source mention and associated-gene/context hints with the returned "
+    "symbol or matched synonym. Fetching the same candidate by ID confirms its database "
+    "record, not its identity with the source mention. Resolve only with source-compatible "
+    "identity evidence; otherwise retain the candidates and report unresolved."
+)
+
+
+def _allele_fuzzy_candidate(row: Mapping[str, Any]) -> bool:
+    return str(row.get("match_type") or "").startswith("fuzzy_")
+
+
+def _mark_allele_search_candidates(payload: Dict[str, Any]) -> Dict[str, Any]:
+    rows = payload.get("data") or []
+    if not isinstance(rows, list) or not any(_allele_fuzzy_candidate(row) for row in rows):
+        return payload
+    for row, projection in zip(rows, payload.get("result_projections") or []):
+        if _allele_fuzzy_candidate(row):
+            row["identity_status"] = "unconfirmed"
+            projection["projection_status"] = "candidate"
+    payload["message"] = _ALLELE_FUZZY_IDENTITY_GUIDANCE
+    payload["explanation"] = _ALLELE_FUZZY_IDENTITY_GUIDANCE
+    fuzzy_curies = {row.get("curie") for row in rows if _allele_fuzzy_candidate(row)}
+    for attempt in payload.get("lookup_attempts") or []:
+        projection = attempt.get("target_projection") or {}
+        if (projection.get("resolved_id") in fuzzy_curies
+                and attempt.get("lookup_status") == LOOKUP_STATUS_SUCCESS):
+            projection["projection_status"] = "candidate"
+            attempt["lookup_status"] = LOOKUP_STATUS_AMBIGUOUS
+            attempt["explanation"] = _ALLELE_FUZZY_IDENTITY_GUIDANCE
+            attempt.pop("resolved_id", None)
+            attempt.pop("resolved_label", None)
+    if all(_allele_fuzzy_candidate(row) for row in rows):
+        payload["lookup_status"] = LOOKUP_STATUS_AMBIGUOUS
+        payload["failure_classification"] = LOOKUP_STATUS_AMBIGUOUS
+    return payload
+
+
 def _lookup_response(
     *,
     method: str,
@@ -841,18 +881,23 @@ def _lookup_response(
     exact_lookup: bool = False,
     attempts: Optional[List[Dict[str, Any]]] = None,
 ) -> AgrQueryResult:
-    return _ok(
-        **_lookup_response_payload(
-            method=method,
-            data=data,
-            count=count,
-            warnings=warnings,
-            message=message,
-            attempted_query=attempted_query,
-            exact_lookup=exact_lookup,
-            attempts=attempts,
-        )
+    payload = _lookup_response_payload(
+        method=method, data=data, count=count, warnings=warnings, message=message,
+        attempted_query=attempted_query, exact_lookup=exact_lookup, attempts=attempts,
     )
+    if method == "search_alleles":
+        payload = _mark_allele_search_candidates(payload)
+    elif method == "search_alleles_bulk" and data.get("status_counts", {}).get("ambiguous"):
+        payload["message"] = _ALLELE_FUZZY_IDENTITY_GUIDANCE
+        payload["explanation"] = _ALLELE_FUZZY_IDENTITY_GUIDANCE
+        if data["resolution_status"] == "ambiguous":
+            payload["lookup_status"] = LOOKUP_STATUS_AMBIGUOUS
+            payload["failure_classification"] = LOOKUP_STATUS_AMBIGUOUS
+            if not attempts:
+                for attempt in payload.get("lookup_attempts") or []:
+                    attempt["lookup_status"] = LOOKUP_STATUS_AMBIGUOUS
+                    attempt["explanation"] = _ALLELE_FUZZY_IDENTITY_GUIDANCE
+    return _ok(**payload)
 
 
 def _normalize_limit(limit: Optional[int]) -> Tuple[int, List[str]]:
@@ -2775,21 +2820,18 @@ def agr_curation_query(
                 if invalid_curie_count > 0:
                     item_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
-                item_lookup_status = _lookup_status_from_count(
-                    len(validated_data),
-                    exact_lookup=False,
-                    attempts=lookup_attempts_by_symbol.get(symbol),
-                )
-                item_status = _bulk_item_status_from_lookup_status(
-                    item_lookup_status,
-                    count=len(validated_data),
-                    attempts=lookup_attempts_by_symbol.get(symbol),
-                )
-                item_explanation = _lookup_explanation(
-                    method=method,
-                    lookup_status=item_lookup_status,
-                    count=len(validated_data),
+                search_payload = _mark_allele_search_candidates(_lookup_response_payload(
+                    method=method, data=validated_data, count=len(validated_data),
                     attempted_query=_attempt_query(method, allele_symbol=symbol),
+                    attempts=lookup_attempts_by_symbol.get(symbol),
+                ))
+                item_lookup_status = search_payload["lookup_status"]
+                item_status = (
+                    "ambiguous" if item_lookup_status == LOOKUP_STATUS_AMBIGUOUS
+                    else _bulk_item_status_from_lookup_status(
+                        item_lookup_status, count=len(validated_data),
+                        attempts=lookup_attempts_by_symbol.get(symbol),
+                    )
                 )
                 item_payload: Dict[str, Any] = {
                     "input": symbol,
@@ -2806,14 +2848,12 @@ def agr_curation_query(
                             else item_lookup_status
                         )
                     ),
-                    "explanation": item_explanation,
+                    "explanation": search_payload["explanation"],
                     "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
                     "candidate_matches": [
                         _candidate_from_result(method, row) for row in validated_data
                     ] or None,
-                    "result_projections": [
-                        _projection_from_result(method, row) for row in validated_data
-                    ] or None,
+                    "result_projections": search_payload["result_projections"],
                 }
                 if item_warnings:
                     item_payload["warnings"] = item_warnings
@@ -2821,6 +2861,12 @@ def agr_curation_query(
 
             bulk_match_totals = _cap_bulk_total_matches(bulk_items)
             summary = _bulk_resolution_summary(bulk_items)
+            if summary["status_counts"].get("ambiguous"):
+                summary["resolved_count"] = sum(
+                    item["count"] for item in bulk_items if item["status"] == "resolved"
+                )
+                if summary["resolution_status"] == "no_matches":
+                    summary["resolution_status"] = "ambiguous"
             return _lookup_response(
                 method=method,
                 data={
@@ -2829,7 +2875,7 @@ def agr_curation_query(
                     "bulk_match_totals": bulk_match_totals,
                     "method": "search_alleles_bulk",
                 },
-                count=summary["resolved_count"],
+                count=summary["total_matches"],
                 warnings=warnings,
                 attempted_query=_attempt_query(
                     method,
