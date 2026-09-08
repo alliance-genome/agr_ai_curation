@@ -288,17 +288,23 @@ def _submit_job(
         session.commit()
         raise
     except BenchmarkSourceError as exc:
+        status_code = _SOURCE_ERROR_STATUS.get(exc.code, 503)
         repository.fail_idempotency(
             reservation=reservation,
             error_code=exc.code,
             error_message=str(exc),
-            error_status=_SOURCE_ERROR_STATUS.get(exc.code, 503),
+            error_status=status_code,
         )
         session.commit()
+        if status_code >= 500:
+            report_runtime_exception(
+                sanitized_benchmark_error("source_materialization", type(exc).__name__),
+                component="benchmark_lifecycle", operation="source_materialization",
+            )
         raise BenchmarkLifecycleFailure(
             exc.code,
             str(exc),
-            _SOURCE_ERROR_STATUS.get(exc.code, 503),
+            status_code,
         ) from exc
     except BenchmarkSnapshotError as exc:
         repository.fail_idempotency(
@@ -308,6 +314,10 @@ def _submit_job(
             error_status=503,
         )
         session.commit()
+        report_runtime_exception(
+            sanitized_benchmark_error("snapshot_commit", type(exc).__name__),
+            component="benchmark_lifecycle", operation="snapshot_commit",
+        )
         raise BenchmarkLifecycleFailure(
             "source_unavailable",
             "Benchmark input snapshot could not be committed",
