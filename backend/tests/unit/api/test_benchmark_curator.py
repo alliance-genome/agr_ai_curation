@@ -200,6 +200,8 @@ async def test_read_wrapper_preserves_current_human_verification(boundary, failu
 @pytest.mark.parametrize("reporting_fails", [False, True])
 async def test_real_current_authorizer_classifies_failures(boundary, monkeypatch, caplog, failure, reporting_fails):
     from botocore.exceptions import ClientError
+    from src.auth import current_principal as resolvers
+    from src.auth.providers import cognito_current_principal as cognito
     from src.lib.benchmarks import curator_authorization as authorization
 
     provider, _, _ = boundary
@@ -216,11 +218,12 @@ async def test_real_current_authorizer_classifies_failures(boundary, monkeypatch
     factory.return_value.__enter__.return_value.get.return_value = User(
         id=42, auth_sub="curator", is_active=failure != "inactive",
     )
-    monkeypatch.setattr(authorization, "is_dev_mode", lambda: False)
-    monkeypatch.setattr(authorization, "get_auth_provider", lambda: "cognito")
-    monkeypatch.setattr(authorization, "get_cognito_region", lambda: "us-east-1")
-    monkeypatch.setattr(authorization, "get_cognito_user_pool_id", lambda: "" if failure == "config" else "pool")
-    monkeypatch.setattr(authorization.boto3, "client", lambda *args, **kwargs: sdk)
+    monkeypatch.setattr(resolvers, "entry_points", lambda **_: ())
+    monkeypatch.setattr(resolvers, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(resolvers, "get_auth_provider", lambda: "cognito")
+    monkeypatch.setattr(cognito, "get_cognito_region", lambda: "us-east-1")
+    monkeypatch.setattr(cognito, "get_cognito_user_pool_id", lambda: "" if failure == "config" else "pool")
+    monkeypatch.setattr(cognito.boto3, "client", lambda *args, **kwargs: sdk)
     sensitive = "private-provider-text sql-parameters human-token"
     if failure == "timeout":
         sdk.admin_get_user.side_effect = TimeoutError(sensitive)
