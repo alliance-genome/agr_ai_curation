@@ -34,6 +34,7 @@ class ProviderDefinition:
     request_headers: Dict[str, str] = field(default_factory=dict)
     forbidden_request_fields: tuple[str, ...] = ()
     omit_usage_request: bool = False
+    omit_parallel_tool_calls_when_enabled: bool = False
     telemetry_adapter: Optional[str] = None
     source_label: Optional[str] = None
 
@@ -132,6 +133,14 @@ class ProviderDefinition:
                 "'request.forbidden_fields' must be a list of non-empty strings"
             )
         omit_usage_request = bool(request.get("omit_usage_request", False))
+        omit_parallel_tool_calls_when_enabled = request.get(
+            "omit_parallel_tool_calls_when_enabled", False
+        )
+        if not isinstance(omit_parallel_tool_calls_when_enabled, bool):
+            raise ValueError(
+                f"Provider '{provider_id}' in {source_label} field "
+                "'request.omit_parallel_tool_calls_when_enabled' must be a boolean"
+            )
 
         telemetry = data.get("telemetry", {})
         if telemetry is None:
@@ -163,7 +172,10 @@ class ProviderDefinition:
                     "required-parameter, metadata, forbidden-fallback, or automatic-usage policy"
                 )
         if api_mode != "chat_completions" and (
-            request_extra_body or request_headers or telemetry_adapter
+            request_extra_body
+            or request_headers
+            or telemetry_adapter
+            or omit_parallel_tool_calls_when_enabled
         ):
             raise ValueError(
                 f"Provider '{provider_id}' in {source_label} configures request policy or "
@@ -194,6 +206,7 @@ class ProviderDefinition:
                 value.strip() for value in raw_forbidden_fields
             ),
             omit_usage_request=omit_usage_request,
+            omit_parallel_tool_calls_when_enabled=omit_parallel_tool_calls_when_enabled,
             telemetry_adapter=telemetry_adapter,
             source_label=source_label,
         )

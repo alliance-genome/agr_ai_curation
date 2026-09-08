@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from agents import ModelSettings
 from openai import InternalServerError
 
 from src.lib.openai_agents.config import (
@@ -1508,6 +1509,7 @@ async def test_get_model_for_agent_builds_single_attempt_openrouter_adapter(monk
                 request_headers={"X-OpenRouter-Metadata": "enabled"},
                 forbidden_request_fields=("models", "fallbacks"),
                 omit_usage_request=True,
+                omit_parallel_tool_calls_when_enabled=True,
                 telemetry_adapter="openrouter",
             )
             if provider_id == "openrouter"
@@ -1522,6 +1524,9 @@ async def test_get_model_for_agent_builds_single_attempt_openrouter_adapter(monk
     assert type(model).__name__ == "ProviderConfiguredChatCompletionsModel"
     assert getattr(model, "model") == "deepseek/deepseek-v4-pro-0813"
     assert getattr(model, "_agr_provider_id") == "openrouter"
+    assert model._apply_provider_policy(
+        ModelSettings(parallel_tool_calls=True)
+    ).parallel_tool_calls is None
     client = getattr(model, "_client")
     assert client.max_retries == 0
 
