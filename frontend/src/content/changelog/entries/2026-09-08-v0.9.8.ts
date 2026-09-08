@@ -12,6 +12,7 @@ const entry: ChangelogEntry = {
       bullets: [
         'AI Chat can review flow connections and export settings with fewer calls, reducing the chance of stopping before verification finishes.',
         'Final summaries now receive completed automatic validation results, including resolved identifiers and any rejected updates.',
+        'Fixed a problem that could prevent Unload PDF from working after switching between browser tabs.',
         'Improved diagnostic links for AI Chat so failed conversations are easier to investigate.',
       ],
     },
