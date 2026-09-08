@@ -64,6 +64,9 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     materialize_gene_expression_builder_state,
     validate_pending_gene_expression_envelope,
 )
+from agr_ai_curation_alliance.domain_packs.gene_expression.export import (  # noqa: E402
+    gene_expression_export_blockers,
+)
 
 from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _assert_range_exists,
@@ -2235,7 +2238,7 @@ def test_gene_expression_conversion_accepts_cellular_component_only_site():
     assert validate_pending_gene_expression_envelope(converted) == ()
 
 
-def test_gene_expression_conversion_rejects_missing_anatomical_site_slots():
+def test_gene_expression_conversion_retains_unresolved_site_with_blocking_finding():
     raw_fixture = yaml.safe_load(
         GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
     )
@@ -2244,13 +2247,15 @@ def test_gene_expression_conversion_rejects_missing_anatomical_site_slots():
         "where_expressed"
     ] = {}
 
-    with pytest.raises(ValueError) as exc_info:
-        gene_expression_extraction_output_to_pending_envelope(
-            output,
-            envelope_id="gene-expression-missing-site",
-        )
-
-    assert "anatomical_structure or cellular_component" in str(exc_info.value)
+    envelope = gene_expression_extraction_output_to_pending_envelope(
+        output, envelope_id="gene-expression-missing-site",
+    )
+    finding = _finding_by_code(
+        validate_pending_gene_expression_envelope(envelope),
+        "alliance.gene_expression.anatomical_site_missing",
+    )
+    assert finding.severity is ValidationFindingSeverity.BLOCKER
+    assert finding.details["blocking"] is True
 
 
 def test_gene_expression_conversion_rejects_blank_anatomical_site_slots():
@@ -2691,6 +2696,68 @@ def _materialize_gene_expression_candidate(staged_fields: dict[str, Any]) -> Any
         evidence_records=_gene_expression_builder_evidence_records(),
         resolver_entry_lookup=None,
     )
+
+
+@pytest.mark.parametrize(
+    "gene_state,site_state",
+    [
+        ("missing", "resolved"),
+        ("resolved", "empty"),
+        ("missing", "empty"),
+        ("null", "missing"),
+    ],
+)
+def test_builder_preserves_unresolved_selectors_as_pending_blocked_observation(
+    gene_state, site_state,
+):
+    unresolved_gene = gene_state != "resolved"
+    unresolved_site = site_state != "resolved"
+    staged = _gene_expression_builder_staged_fields()
+    staged["data_provider"] = {"abbreviation": "WB"}
+    if gene_state == "missing":
+        staged["expression_annotation_subject"].pop("primary_external_id")
+    elif gene_state == "null":
+        staged["expression_annotation_subject"]["primary_external_id"] = None
+    if unresolved_site:
+        if site_state == "missing":
+            staged["expression_pattern"].pop("where_expressed")
+        else:
+            staged["expression_pattern"]["where_expressed"] = {}
+        staged["metadata"]["provenance"]["helper_selections"] = [
+            selection for selection in staged["metadata"]["provenance"]["helper_selections"]
+            if selection["field_path"] != "expression_pattern.where_expressed.anatomical_structure"
+        ]
+    result = _materialize_gene_expression_candidate(staged)
+    assert result.ok, result.issues
+    envelope = gene_expression_extraction_output_to_pending_envelope(
+        result.payload, envelope_id="unresolved-gene-expression",
+    )
+    annotation = envelope.extracted_objects[0]
+    assert annotation.status is CuratableObjectStatus.PENDING
+    assert annotation.evidence_record_ids == ["evidence-67598e5688f123c8"]
+    assert annotation.payload["where_expressed_statement"] == staged["where_expressed_statement"]
+    findings = validate_pending_gene_expression_envelope(envelope)
+    expected = []
+    if unresolved_gene:
+        assert not annotation.payload["expression_annotation_subject"].get("primary_external_id")
+        assert not annotation.payload["expression_experiment"]["entity_assayed"].get("primary_external_id")
+        expected.extend(["alliance.gene_expression.subject_gene_missing", "alliance.gene_expression.entity_assayed_missing"])
+    if unresolved_site:
+        assert annotation.payload["expression_pattern"]["where_expressed"] == {}
+        expected.append("alliance.gene_expression.anatomical_site_missing")
+    for code in expected:
+        finding = _finding_by_code(findings, code)
+        assert finding.severity is ValidationFindingSeverity.BLOCKER
+        assert finding.details["blocking"] is True
+    export_blocked_fields = {
+        blocker.field_path
+        for blocker in gene_expression_export_blockers(annotation.model_dump(mode="json"))
+    }
+    if unresolved_gene:
+        assert "expression_annotation_subject.primary_external_id" in export_blocked_fields
+        assert "expression_experiment.entity_assayed.primary_external_id" in export_blocked_fields
+    if unresolved_site:
+        assert "expression_pattern.where_expressed" in export_blocked_fields
 
 
 def test_gene_expression_builder_rejects_object_level_only_evidence():
