@@ -5,6 +5,7 @@ import pytest
 
 from src.lib.benchmarks import curator_authorization as authorization
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+from src.lib.benchmarks.observability import BenchmarkOperationError
 from src.models.sql.user import User
 
 
@@ -63,7 +64,6 @@ def test_provider_locator_mismatch_rejected_before_account_read(changes):
 
 @pytest.mark.parametrize("changes", [
     {"Enabled": False}, {"Username": "different-user"},
-    {"UserAttributes": []},
     {"UserAttributes": [{"Name": "sub", "Value": "different-sub"}]},
 ])
 def test_disabled_or_mismatched_account_never_reads_groups(changes):
@@ -74,13 +74,25 @@ def test_disabled_or_mismatched_account_never_reads_groups(changes):
     sdk.admin_list_groups_for_user.assert_not_called()
 
 
+@pytest.mark.parametrize("changes", [
+    {"Enabled": None}, {"Username": None}, {"UserAttributes": []},
+    {"UserAttributes": [{"Name": "sub", "Value": None}]},
+])
+def test_malformed_account_is_an_operational_failure(changes):
+    sdk = client()
+    sdk.admin_get_user.return_value.update(changes)
+    with pytest.raises(ValueError):
+        lookup(context(), sdk)
+    sdk.admin_list_groups_for_user.assert_not_called()
+
+
 def test_repeated_pagination_token_fails_instead_of_accepting_partial_groups():
     sdk = client()
     sdk.admin_list_groups_for_user.side_effect = [
         {"Groups": [{"GroupName": "FB"}], "NextToken": "same"},
         {"Groups": [{"GroupName": "WB"}], "NextToken": "same"},
     ]
-    with pytest.raises(PermissionError, match="pagination"):
+    with pytest.raises(ValueError, match="pagination"):
         lookup(context(), sdk)
 
 
@@ -107,16 +119,34 @@ async def test_live_provider_and_local_account_are_checked(monkeypatch, active, 
 
 
 @pytest.mark.asyncio
-async def test_lookup_failure_is_sanitized_and_cannot_reuse_frozen_claims(monkeypatch):
+@pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError, PermissionError])
+async def test_lookup_failure_is_sanitized_and_cannot_reuse_frozen_claims(monkeypatch, error_type):
     def fail(_):
-        raise RuntimeError("sensitive-provider-error")
+        raise error_type("sensitive-provider-error")
     monkeypatch.setattr(authorization, "_configured_current_principal", fail)
     factory = MagicMock()
-    with pytest.raises(PermissionError) as error:
+    with pytest.raises(BenchmarkOperationError) as error:
         await authorization.authorize_benchmark_curator(context(), session_factory=factory)
     assert "sensitive" not in str(error.value)
     assert error.value.__suppress_context__ is True
+    assert error.value.__context__ is None
+    assert error.value.__cause__ is None
     factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [RuntimeError, PermissionError])
+async def test_database_failure_is_operational_and_has_no_raw_chain(monkeypatch, error_type):
+    principal = lookup(context(), client())
+    monkeypatch.setattr(authorization, "_configured_current_principal", lambda _: principal)
+    factory = MagicMock()
+    factory.return_value.__enter__.return_value.get.side_effect = error_type("sensitive-sql-parameters")
+    with pytest.raises(BenchmarkOperationError) as error:
+        await authorization.authorize_benchmark_curator(context(), session_factory=factory)
+    assert "sensitive" not in str(error.value)
+    assert error.value.__traceback__ is not None
+    assert error.value.__context__ is None and error.value.__cause__ is None
+    factory.return_value.__exit__.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -156,7 +186,7 @@ def test_unsupported_provider_does_not_construct_aws_client(monkeypatch):
     monkeypatch.setattr(authorization, "get_auth_provider", lambda: "oidc")
     sdk_factory = MagicMock()
     monkeypatch.setattr(authorization.boto3, "client", sdk_factory)
-    with pytest.raises(PermissionError):
+    with pytest.raises(ValueError):
         authorization._configured_current_principal(context())
     sdk_factory.assert_not_called()
 
