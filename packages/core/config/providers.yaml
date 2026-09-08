@@ -50,6 +50,7 @@ providers:
       parallel_tool_calls: true
     request:
       omit_usage_request: true
+      omit_parallel_tool_calls_when_enabled: true
       headers:
         X-OpenRouter-Metadata: enabled
       extra_body:

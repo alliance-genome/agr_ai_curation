@@ -3,6 +3,10 @@
 from types import SimpleNamespace
 
 import pytest
+import httpx
+from openai import AsyncOpenAI
+from agents import function_tool
+from agents.models.interface import ModelTracing
 from agents import ModelSettings
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.retry import ModelRetrySettings
@@ -25,6 +29,91 @@ def _model(*, telemetry_adapter=None):
         telemetry_adapter=telemetry_adapter,
         disable_model_retries=True,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "enabled, requested, expected",
+    [(True, True, None), (True, False, False), (True, None, None), (False, True, True)],
+)
+async def test_parallel_request_policy_preserves_explicit_restrictions(
+    enabled, requested, expected
+):
+    import json
+
+    captured = {}
+
+    async def respond(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "synthetic-completion",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "google/gemini-3.7-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "OK"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    @function_tool
+    def synthetic_ping() -> str:
+        """Synthetic request-shape tool; never invoked by this test."""
+        raise AssertionError("No tool execution expected")
+
+    async with AsyncOpenAI(
+        api_key="synthetic-test-key",
+        base_url="https://provider.invalid/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        max_retries=0,
+    ) as client:
+        model = ProviderConfiguredChatCompletionsModel(
+            model="google/gemini-3.7-flash",
+            openai_client=client,
+            provider_id="synthetic",
+            request_extra_body={
+                "provider": {"allow_fallbacks": False, "require_parameters": True}
+            },
+            request_headers={},
+            forbidden_request_fields=(),
+            omit_usage_request=True,
+            omit_parallel_tool_calls_when_enabled=enabled,
+            telemetry_adapter=None,
+            disable_model_retries=True,
+        )
+        settings = ModelSettings(parallel_tool_calls=requested, tool_choice="auto")
+        await model._fetch_response(
+            None,
+            "Synthetic input",
+            settings,
+            [synthetic_ping],
+            None,
+            [],
+            None,
+            ModelTracing.DISABLED,
+            False,
+        )
+    assert settings.parallel_tool_calls is requested
+    if expected is None:
+        assert "parallel_tool_calls" not in captured
+    else:
+        assert captured["parallel_tool_calls"] is expected
+    assert captured["tools"][0]["function"]["name"] == "synthetic_ping"
+    assert captured["provider"] == {
+        "allow_fallbacks": False,
+        "require_parameters": True,
+    }
 
 
 @pytest.mark.asyncio

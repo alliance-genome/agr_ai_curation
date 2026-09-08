@@ -378,6 +378,7 @@ def get_model_for_agent(
             or getattr(provider, "request_headers", {})
             or getattr(provider, "forbidden_request_fields", ())
             or getattr(provider, "omit_usage_request", False)
+            or getattr(provider, "omit_parallel_tool_calls_when_enabled", False)
             or getattr(provider, "telemetry_adapter", None)
         )
         if has_configured_adapter:
@@ -396,6 +397,9 @@ def get_model_for_agent(
                     provider, "forbidden_request_fields", ()
                 ),
                 omit_usage_request=getattr(provider, "omit_usage_request", False),
+                omit_parallel_tool_calls_when_enabled=getattr(
+                    provider, "omit_parallel_tool_calls_when_enabled", False
+                ),
                 telemetry_adapter=getattr(provider, "telemetry_adapter", None),
                 disable_model_retries=(
                     getattr(provider, "telemetry_adapter", None) == "openrouter"

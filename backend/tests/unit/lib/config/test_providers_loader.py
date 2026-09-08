@@ -89,7 +89,28 @@ def test_shipped_provider_catalogs_match_direct_driver_contract():
     assert openrouter.request_headers == {"X-OpenRouter-Metadata": "enabled"}
     assert openrouter.forbidden_request_fields == ("models", "fallbacks")
     assert openrouter.omit_usage_request is True
+    assert openrouter.omit_parallel_tool_calls_when_enabled is True
     assert openrouter.telemetry_adapter == "openrouter"
+
+
+@pytest.mark.parametrize(
+    "api_mode, value", [("chat_completions", "true"), ("responses", True)]
+)
+def test_parallel_omission_policy_rejects_invalid_configuration(api_mode, value):
+    from src.lib.config.providers_loader import ProviderDefinition
+
+    with pytest.raises(ValueError):
+        ProviderDefinition.from_yaml(
+            "synthetic",
+            {
+                "driver": "openai_compatible",
+                "api_key_env": "SYNTHETIC_API_KEY",
+                "default_base_url": "https://provider.invalid/v1",
+                "api_mode": api_mode,
+                "request": {"omit_parallel_tool_calls_when_enabled": value},
+            },
+            source_label="synthetic fixture",
+        )
 
 
 def test_openrouter_adapter_requires_strict_routing_and_metadata_policy(tmp_path: Path):

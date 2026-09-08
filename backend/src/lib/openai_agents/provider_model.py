@@ -115,6 +115,7 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
         omit_usage_request: bool,
         telemetry_adapter: str | None,
         disable_model_retries: bool,
+        omit_parallel_tool_calls_when_enabled: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -125,6 +126,9 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
         self._omit_usage_request = omit_usage_request
         self._telemetry_adapter = telemetry_adapter
         self._disable_model_retries = disable_model_retries
+        self._omit_parallel_tool_calls_when_enabled = (
+            omit_parallel_tool_calls_when_enabled
+        )
 
     def _apply_provider_policy(self, settings: ModelSettings) -> ModelSettings:
         caller_body = deepcopy(dict(settings.extra_body or {}))
@@ -151,6 +155,14 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
             extra_body=caller_body or None,
             extra_headers=headers or None,
             include_usage=None if self._omit_usage_request else settings.include_usage,
+            # True permits multiple calls; omission leaves that choice to the model.
+            # Never drop False: formatters may require a single call per turn.
+            parallel_tool_calls=(
+                None
+                if self._omit_parallel_tool_calls_when_enabled
+                and settings.parallel_tool_calls is True
+                else settings.parallel_tool_calls
+            ),
             retry=None if self._disable_model_retries else settings.retry,
         )
 
