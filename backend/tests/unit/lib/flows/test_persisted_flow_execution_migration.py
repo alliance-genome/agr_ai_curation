@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import importlib
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+from src.lib.flows.persisted_flow_migrations import PersistedFlowMigrationError
 from src.lib.packages.persisted_flow_migration_loader import (
     load_persisted_flow_migration_catalog,
 )
@@ -20,8 +22,9 @@ RETIRED_ATTACHMENT_IDS = {
 
 
 @pytest.mark.asyncio
-async def test_execute_flow_uses_migrated_copy_without_mutating_stored_definition(
-    monkeypatch,
+@pytest.mark.parametrize("canonical", [False, True])
+async def test_execute_flow_requires_persisted_repair_without_mutating_definition(
+    monkeypatch, canonical,
 ):
     executor = importlib.import_module("src.lib.flows.executor")
     retired_attachment_id = next(
@@ -51,6 +54,9 @@ async def test_execute_flow_uses_migrated_copy_without_mutating_stored_definitio
         "edges": [],
         "entry_node_id": "extract",
     }
+    if canonical:
+        stored_definition["nodes"][0]["data"]["validation_attachments"] = [{"attachment_id": "current"}]
+    original = deepcopy(stored_definition)
     stored_flow = SimpleNamespace(
         id=uuid4(),
         name="Legacy allele flow",
@@ -74,6 +80,13 @@ async def test_execute_flow_uses_migrated_copy_without_mutating_stored_definitio
         user_id="curator",
         session_id="session",
     )
+    if not canonical:
+        with pytest.raises(PersistedFlowMigrationError, match="Alembic upgrade head"):
+            await anext(event_stream)
+        assert captured == {}
+        assert stored_definition == original
+        return
+
     first_event = await anext(event_stream)
     await event_stream.aclose()
 
@@ -82,4 +95,5 @@ async def test_execute_flow_uses_migrated_copy_without_mutating_stored_definitio
         "validation_attachments"
     ]
     assert runtime_attachments == [{"attachment_id": "current"}]
-    assert len(stored_definition["nodes"][0]["data"]["validation_attachments"]) == 2
+    assert captured["flow"] is stored_flow
+    assert stored_definition == original

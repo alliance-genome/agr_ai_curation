@@ -297,10 +297,27 @@ floor and may select a non-empty subset, but cannot clear or broaden it.
 
 Packages that retire catalog selections can export a strict versioned
 `persisted_flow_migrations` YAML contract. The package declares exact binding,
-attachment, and expected-binding values; the generic runtime applies
-those repairs only when reading or executing older saved flows. Startup rejects
+attachment, and expected-binding values; historical Alembic migrations apply
+those persisted repairs. Startup rejects
 malformed exports and cross-package migration or attachment collisions. A
-profile with no such export performs no saved-flow repairs.
+profile with no such export declares no retired saved-flow selections.
+
+Supported databases must complete `alembic upgrade head` with the required
+package profile before serving saved flows. This includes repair revisions
+`e2f3a4b5c6d7` and `i6j7k8l9m0n1`. Development Compose only runs migrations on
+startup when `RUN_DB_MIGRATIONS_ON_START=true`; otherwise the deployment owner
+must apply them explicitly. This requirement does not imply that every deployed
+database has already been upgraded.
+
+Reads and execution reject retired references instead of repairing them in
+memory. API create/update (including imported definitions) and Agent Studio
+save validation also reject them. Current selections, hydration, and
+unavailable-agent warnings retain their existing behavior. If a saved flow
+fails this invariant, verify the database revision and active package profile.
+If the database is already at head, investigate the missed/corrupt persisted
+repair and arrange an explicit data migration; reading or saving a repaired
+runtime copy is no longer a recovery path. Historical migration helpers must
+remain available for fresh installs and upgrades.
 
 ### Agent Studio system prompt
 
