@@ -26,6 +26,7 @@ from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.sns_notifier import SNSNotifier
 from src.lib.feedback.transcript import capture_feedback_conversation_transcript
 from src.lib.agent_studio.models import TraceContext
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents.config import (
     get_feedback_trace_error_chars,
     get_feedback_trace_preview_chars,
@@ -54,6 +55,35 @@ _SECRET_ASSIGNMENT_RE = re.compile(
 
 class FeedbackDebugDetailForbidden(Exception):
     """Raised when an authenticated user cannot inspect feedback debug detail."""
+
+
+class _FeedbackProcessingError(RuntimeError):
+    """Content-free diagnostic for a handled feedback processing failure."""
+
+
+def _report_feedback_failure(stage: str, *, error_count: int = 1) -> None:
+    # Build a traceback without retaining the sensitive exception or its chain.
+    try:
+        raise _FeedbackProcessingError(f"Feedback processing failed at {stage}") from None
+    except _FeedbackProcessingError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        error = sanitized
+
+    logger.warning("%s", error, extra={"sentry_skip_event": True})
+    try:
+        report_runtime_exception(
+            error,
+            component="feedback_service",
+            operation=stage,
+            tags={"phase": stage},
+            context={"error_count": error_count},
+        )
+    except Exception:
+        # Observability must not change the feedback workflow's outcome.
+        logger.warning(
+            "Feedback failure reporting unavailable", extra={"sentry_skip_event": True}
+        )
 
 
 class FeedbackService:
@@ -215,12 +245,7 @@ class FeedbackService:
                         )
                 logger.info('Captured trace snapshot for feedback %s', feedback_id)
             except Exception as e:
-                logger.warning(
-                    'Trace snapshot capture failed for feedback %s: %s',
-                    feedback_id,
-                    str(e),
-                    exc_info=True,
-                )
+                _report_feedback_failure("trace_capture")
                 report.trace_data = self._trace_capture_failure_snapshot(report, e)
                 capture_error = self._trace_capture_error(e)
                 report.error_details = (
@@ -232,9 +257,9 @@ class FeedbackService:
                 self.notifier.send_feedback_notification(report)
                 report.email_sent_at = datetime.now(timezone.utc)
                 logger.info('Sent notification for feedback %s', feedback_id)
-            except Exception as e:
-                logger.error('Notification failed for %s: %s', feedback_id, str(e), exc_info=True)
-                notification_error = f"Notification error: {str(e)}"
+            except Exception:
+                _report_feedback_failure("notifier_delivery")
+                notification_error = "Notification delivery failed."
                 if report.error_details:
                     report.error_details = f"{report.error_details}; {notification_error}"
                 else:
@@ -247,13 +272,12 @@ class FeedbackService:
 
             logger.info('Completed background processing for feedback %s', feedback_id)
 
-        except Exception as e:
+        except Exception:
             # Catch-all for unexpected errors
-            logger.error(
-                'Unexpected error processing feedback %s: %s', feedback_id, str(e), exc_info=True
-            )
+            _report_feedback_failure("background_processing")
+            self.db.rollback()
             report.processing_status = ProcessingStatus.FAILED
-            report.error_details = f"Unexpected error: {str(e)}"
+            report.error_details = "Unexpected feedback processing failure."
             self.db.commit()
 
     def get_feedback_debug_detail(
@@ -336,38 +360,16 @@ class FeedbackService:
                 session_id=session_id,
                 user_auth_sub=user_auth_sub,
             )
-        except ChatHistorySessionNotFoundError as exc:
-            logger.warning(
-                "Failed to capture durable transcript for feedback %s "
-                "(session_id=%s, user_auth_sub=%s): %s",
-                feedback_id,
-                session_id,
-                user_auth_sub,
-                exc,
-                exc_info=True,
-            )
+        except ChatHistorySessionNotFoundError:
+            logger.info("No durable session available for feedback transcript lookup")
             return None
-        except SQLAlchemyError as exc:
+        except SQLAlchemyError:
+            _report_feedback_failure("transcript_lookup")
             self.db.rollback()
-            logger.warning(
-                "Failed to capture durable transcript for feedback %s "
-                "(session_id=%s, user_auth_sub=%s): %s",
-                feedback_id,
-                session_id,
-                user_auth_sub,
-                exc,
-                exc_info=True,
-            )
             return None
 
         if transcript is None:
-            logger.warning(
-                "Durable transcript lookup returned no session for feedback %s "
-                "(session_id=%s, user_auth_sub=%s)",
-                feedback_id,
-                session_id,
-                user_auth_sub,
-            )
+            logger.info("No durable session available for feedback transcript lookup")
             return None
 
         session_payload = transcript.get("session") if isinstance(transcript, dict) else None
@@ -475,6 +477,7 @@ class FeedbackService:
                 "trace_error_count": error_count,
                 "message": "One or more trace snapshots could not be captured.",
             }
+            _report_feedback_failure("trace_capture", error_count=error_count)
 
         return snapshot
 
@@ -686,9 +689,8 @@ class FeedbackService:
                 "check TraceReview/Langfuse URL, source, and credentials."
             )
         else:
-            message = cls._compact_redacted_text(
-                raw_message,
-                max_chars=MAX_TRACE_ERROR_CHARS,
+            message = (
+                "Trace snapshot capture failed; check TraceReview/Langfuse availability."
             )
         return {
             "type": error.__class__.__name__,

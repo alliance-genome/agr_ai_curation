@@ -581,7 +581,7 @@ def test_process_feedback_report_persists_trace_capture_failure_metadata(monkeyp
     trace_error = report.trace_data["traces"][0]["error"]
     assert trace_error["type"] == "RuntimeError"
     assert trace_error["message"] == (
-        "Langfuse unavailable for [redacted-email] with api_key=[redacted]"
+        "Trace snapshot capture failed; check TraceReview/Langfuse availability."
     )
     assert "fixture-value" not in str(report.trace_data)
     assert "curator@example.org" not in str(report.trace_data)
@@ -641,7 +641,7 @@ def test_process_feedback_report_handles_notifier_failure(monkeypatch):
     assert report.trace_data == {"schema_version": 1, "capture_status": "success"}
     assert report.email_sent_at is None
     assert report.processing_completed_at is not None
-    assert "Notification error: smtp down" in report.error_details
+    assert report.error_details == "Notification delivery failed."
     assert db.commit.call_count == 2
 
 
@@ -663,8 +663,8 @@ def test_process_feedback_report_appends_notification_error_to_trace_capture_err
     assert report.trace_data["capture_status"] == "error"
     assert report.email_sent_at is None
     assert report.error_details == (
-        "Trace capture failed: RuntimeError: langfuse down; "
-        "Notification error: smtp down"
+        "Trace capture failed: RuntimeError: Trace snapshot capture failed; "
+        "check TraceReview/Langfuse availability.; Notification delivery failed."
     )
     assert db.commit.call_count == 2
 
@@ -681,7 +681,8 @@ def test_process_feedback_report_marks_failed_on_unexpected_error(monkeypatch):
     service.process_feedback_report(report.id)
 
     assert _status_value(report.processing_status) == "failed"
-    assert "Unexpected error: db unavailable" in report.error_details
+    assert report.error_details == "Unexpected feedback processing failure."
+    db.rollback.assert_called_once()
     assert db.commit.call_count == 2
 
 
@@ -921,3 +922,137 @@ def test_get_feedback_debug_detail_surfaces_wrong_trace_data_shapes(monkeypatch)
 
     with pytest.raises(TypeError):
         _get_debug_detail(service, report.id)
+
+
+@pytest.mark.parametrize("reporter_raises", [False, True])
+@pytest.mark.parametrize(
+    "stage", ["transcript_lookup", "trace_capture", "notifier_delivery", "background_processing"]
+)
+def test_failure_stages_report_sanitized_events_without_masking(
+    monkeypatch, caplog, stage, reporter_raises
+):
+    module = _feedback_service_module()
+    secret = "private curator transcript feedback provider payload password=fixture-secret"
+    reporter = MagicMock(side_effect=RuntimeError(secret) if reporter_raises else None)
+    monkeypatch.setattr(module, "report_runtime_exception", reporter)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    service = module.FeedbackService(db=db)
+    service.notifier = MagicMock()
+    service._capture_feedback_trace_snapshot = MagicMock(
+        return_value={"capture_status": "success"}
+    )
+
+    if stage == "transcript_lookup":
+        monkeypatch.setattr(
+            module, "capture_feedback_conversation_transcript",
+            MagicMock(side_effect=SQLAlchemyError(secret)),
+        )
+        service.create_feedback_payload(
+            session_id="session-1", curator_id="auth-sub-1", feedback_text="Looks good",
+            trace_ids=[], user_auth_sub="auth-sub-1",
+        )
+        report = db.add.call_args.args[0]
+        assert report.conversation_transcript is None
+        assert _status_value(report.processing_status) == "pending"
+        db.rollback.assert_called_once()
+        db.commit.assert_called_once()
+    else:
+        if stage == "trace_capture":
+            service._capture_feedback_trace_snapshot.side_effect = RuntimeError(secret)
+        elif stage == "notifier_delivery":
+            service.notifier.send_feedback_notification.side_effect = RuntimeError(secret)
+        else:
+            db.commit.side_effect = [SQLAlchemyError(secret), None]
+        service.process_feedback_report(report.id)
+        assert _status_value(report.processing_status) == (
+            "failed" if stage == "background_processing" else "completed"
+        )
+        if stage == "background_processing":
+            db.rollback.assert_called_once()
+        else:
+            service.notifier.send_feedback_notification.assert_called_once_with(report)
+        if stage == "notifier_delivery":
+            assert report.email_sent_at is None
+
+    reporter.assert_called_once()
+    error = reporter.call_args.args[0]
+    assert isinstance(error, module._FeedbackProcessingError)
+    assert error.__traceback__ is not None
+    assert error.__context__ is None
+    assert error.__cause__ is None
+    assert reporter.call_args.kwargs == {
+        "component": "feedback_service", "operation": stage,
+        "tags": {"phase": stage}, "context": {"error_count": 1},
+    }
+    for value in (str(error), str(reporter.call_args), caplog.text,
+                  str(report.error_details), str(report.trace_data)):
+        assert secret not in value
+        assert "fixture-secret" not in value
+    failure_logs = [record for record in caplog.records if "Feedback" in record.message]
+    assert failure_logs
+    assert all(getattr(record, "sentry_skip_event", False) for record in failure_logs)
+
+
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize("reporter_raises", [False, True])
+def test_trace_failures_report_once_per_capture(monkeypatch, partial, reporter_raises):
+    module = _feedback_service_module()
+    reporter = MagicMock(side_effect=RuntimeError("reporter failed") if reporter_raises else None)
+    monkeypatch.setattr(module, "report_runtime_exception", reporter)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    secret = "unstructured private transcript and provider response"
+
+    async def capture(trace_id):
+        if partial and trace_id == "trace-3":
+            return object()
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(module, "get_trace_context_for_explorer", capture)
+    report = _report()
+    report.trace_ids = ["trace-1", "trace-2", "trace-3"]
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    service = module.FeedbackService(db=db)
+    service.notifier = MagicMock()
+    service._trace_context_snapshot = MagicMock(return_value={"capture_status": "success"})
+    service.process_feedback_report(report.id)
+
+    reporter.assert_called_once()
+    assert reporter.call_args.kwargs["operation"] == "trace_capture"
+    assert reporter.call_args.kwargs["context"] == {"error_count": 2 if partial else 3}
+    assert report.trace_data["capture_status"] == ("partial" if partial else "error")
+    assert len(report.trace_data["traces"]) == 3
+    assert secret not in str(report.trace_data)
+    assert secret not in str(reporter.call_args)
+    assert _status_value(report.processing_status) == "completed"
+    service.notifier.send_feedback_notification.assert_called_once_with(report)
+
+
+@pytest.mark.parametrize("missing_session", [False, True])
+def test_routine_absence_does_not_report(monkeypatch, missing_session):
+    module = _feedback_service_module()
+    reporter = MagicMock()
+    monkeypatch.setattr(module, "report_runtime_exception", reporter)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    monkeypatch.setattr(
+        module, "capture_feedback_conversation_transcript",
+        MagicMock(return_value=None, side_effect=(
+            module.ChatHistorySessionNotFoundError("session missing") if missing_session else None
+        )),
+    )
+    db = MagicMock()
+    service = module.FeedbackService(db=db)
+    service.create_feedback_payload(
+        session_id="session-1", curator_id="auth-sub-1", feedback_text="Looks good",
+        trace_ids=[], user_auth_sub="auth-sub-1",
+    )
+    report = db.add.call_args.args[0]
+    db.query.return_value = _QueryChain(report)
+    service.notifier = MagicMock()
+    service.process_feedback_report(report.id)
+    assert _status_value(report.processing_status) == "completed"
+    assert report.trace_data["capture_status"] == "degraded"
+    reporter.assert_not_called()
