@@ -91,7 +91,7 @@ describe('PromptSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'GROUP_C' }))
     expect(props.onGroupChange).toHaveBeenCalledWith('GROUP_C')
 
-    const toggle = screen.getByRole('checkbox', { name: 'Add group instructions at runtime' })
+    const toggle = screen.getByRole('switch', { name: 'Add group instructions at runtime' })
     expect(toggle).toBeChecked()
     fireEvent.click(toggle)
     expect(props.onIncludeGroupRulesChange).toHaveBeenCalledWith(false)
