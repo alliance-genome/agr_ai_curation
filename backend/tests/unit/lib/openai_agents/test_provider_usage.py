@@ -2,6 +2,8 @@
 
 from decimal import Decimal
 
+from agents.items import ModelResponse
+from agents.usage import Usage
 from openai.types.chat import ChatCompletion
 import pytest
 
@@ -9,6 +11,7 @@ from src.lib.openai_agents.provider_usage import (
     PendingProviderInvocation,
     ProviderUsageRecord,
     begin_provider_invocation,
+    complete_generic_provider_invocation,
     complete_provider_invocation,
     capture_provider_usage,
     emit_provider_usage,
@@ -16,6 +19,33 @@ from src.lib.openai_agents.provider_usage import (
     normalize_openrouter_usage,
     observe_provider_invocations,
 )
+
+
+@pytest.mark.parametrize("input_tokens,output_tokens", [(12, 3), (0, 3), (12, 0), (0, 0)])
+def test_generic_usage_retains_native_sdk_dataclass_tokens(
+    monkeypatch, input_tokens, output_tokens
+):
+    monkeypatch.setattr(
+        "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event",
+        lambda _record: None,
+    )
+    response = ModelResponse(
+        output=[], response_id="response-test",
+        usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens,
+                    total_tokens=input_tokens + output_tokens),
+    )
+    with capture_provider_usage(max_records=1, max_failure_detail_chars=20) as records:
+        pending = begin_provider_invocation(
+            requested_provider="openai", requested_model="validator-model",
+            route_slot="validator:reference", reasoning_effort="low", started_at=1.0,
+        )
+        complete_generic_provider_invocation(pending, response, latency_ms=10)
+    assert len(records) == 1
+    assert records[0].input_tokens == input_tokens
+    assert records[0].output_tokens == output_tokens
+    assert records[0].total_tokens == input_tokens + output_tokens
+    assert records[0].route_slot == "validator:reference"
+    assert records[0].billed_cost is None
 
 
 def test_normalize_openrouter_usage_uses_selected_route_and_exact_billed_cost():
