@@ -8,6 +8,8 @@ from typing import Any, Dict, Mapping
 
 import requests
 
+from ..observability import report_failure
+
 logger = logging.getLogger(__name__)
 
 BACKEND_URL_ENV = "AI_CURATION_BACKEND_URL"
@@ -84,6 +86,7 @@ def fetch_feedback_trace_artifacts(
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
+        report_failure("feedback_transport", feedback_id=feedback_id)
         logger.warning(
             "Failed to fetch feedback trace artifacts for %s: %s",
             feedback_id,
@@ -103,6 +106,8 @@ def fetch_feedback_trace_artifacts(
             "trace_data": None,
         }
     if response.status_code >= 400:
+        if response.status_code >= 500:
+            report_failure("feedback_http", feedback_id=feedback_id)
         logger.warning(
             "Feedback trace artifact fetch failed for %s with HTTP %s",
             feedback_id,
@@ -118,6 +123,7 @@ def fetch_feedback_trace_artifacts(
     try:
         payload = response.json()
     except ValueError:
+        report_failure("feedback_json", feedback_id=feedback_id)
         return {
             "feedback_id": feedback_id,
             "status": "unavailable",
@@ -126,6 +132,7 @@ def fetch_feedback_trace_artifacts(
         }
 
     if not isinstance(payload, dict):
+        report_failure("feedback_payload", feedback_id=feedback_id)
         return {
             "feedback_id": feedback_id,
             "status": "unavailable",

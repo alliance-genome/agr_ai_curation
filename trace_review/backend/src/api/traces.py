@@ -8,9 +8,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from typing import Dict, Any, List, Optional, Tuple
 
+from ..observability import report_failure, session_failure_scope
 from ..models.requests import AnalyzeTraceRequest, TraceSource
 from ..models.responses import SessionTraceExportResponse
-from ..services.trace_extractor import TraceExtractor
+from ..services.trace_extractor import TraceExtractor, TraceNotFoundError
 from ..services.langfuse_run_reconstruction import (
     build_cost_summary,
     build_duplicate_report,
@@ -41,7 +42,6 @@ from ..utils.token_budget import create_lightweight_tool_call_summary
 from ..utils.trace_output import is_trace_output_cacheable
 from .auth import get_auth_dependency
 from .domain_envelope_responses import domain_envelope_response_views
-
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -193,16 +193,23 @@ def _get_or_analyze_trace_export(
             return cached_data, cache_manager.get_status(trace_id), True
         cache_manager.delete(trace_id)
 
-    active_extractor = extractor or TraceExtractor(source=_effective_source(source))
+    try:
+        active_extractor = extractor or TraceExtractor(source=_effective_source(source))
+    except Exception:
+        report_failure("extraction", source=source, trace_id=trace_id)
+        raise
 
     try:
         trace_data = active_extractor.extract_complete_trace(trace_id)
     except Exception as exc:
+        if not isinstance(exc, TraceNotFoundError):
+            report_failure("extraction", source=source, trace_id=trace_id)
         raise TraceExtractionError(str(exc)) from exc
 
     try:
         cache_data = _build_trace_cache_data(trace_id, trace_data)
     except Exception as exc:
+        report_failure("analysis", source=source, trace_id=trace_id)
         raise TraceAnalysisError(str(exc)) from exc
 
     cache_status = _store_trace_cache(cache_manager, trace_id, cache_data)
@@ -331,8 +338,11 @@ def _extract_langfuse_trace(trace_id: str, source: TraceSource) -> Dict[str, Any
         extractor = TraceExtractor(source=_effective_source(source))
         return extractor.extract_complete_trace(trace_id)
     except ValueError as exc:
+        report_failure("extraction", source=source, trace_id=trace_id)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        if not isinstance(exc, TraceNotFoundError):
+            report_failure("extraction", source=source, trace_id=trace_id)
         raise HTTPException(
             status_code=404,
             detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
@@ -475,8 +485,10 @@ async def search_traces(
             limit=limit,
         )
     except ValueError as exc:
+        report_failure("search", source=source)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        report_failure("search", source=source)
         logger.exception("Error searching Langfuse traces from %s", source)
         raise HTTPException(
             status_code=502,
@@ -723,86 +735,96 @@ async def export_session(
     Individual trace fetch/analyzer failures are represented in the returned
     bundle so one broken trace does not prevent session reconstruction.
     """
-    logger.info("Exporting session %s from source: %s", session_id, source)
-    cache_manager = request.app.state.cache_manager
-
-    try:
-        extractor = TraceExtractor(source=_effective_source(source))
-        session_listing = extractor.list_session_traces(session_id)
-    except ValueError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except RuntimeError as e:
-        logger.error("Error listing session %s from %s: %s", session_id, source, e)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Unable to list traces for session {session_id} from Langfuse ({source}): {str(e)}"
-        )
-
-    listed_traces = session_listing["traces"]
-    bundle_traces: List[Dict[str, Any]] = []
-    errors: List[Dict[str, Any]] = []
-
-    for listed_trace in listed_traces:
-        trace_id = listed_trace.get("id")
-        if not trace_id:
-            error = _trace_error(source, listed_trace, "Session trace listing did not include a trace id")
-            errors.append(error)
-            bundle_traces.append({
-                "status": "error",
-                "trace_id": "unknown",
-                "trace_id_short": None,
-                "listed_trace": _listed_trace_reference(listed_trace),
-                "error": error,
-            })
-            continue
+    with session_failure_scope(session_id, source):
+        logger.info("Exporting session %s from source: %s", session_id, source)
+        cache_manager = request.app.state.cache_manager
 
         try:
-            cache_data, _cache_status, _from_cache = _get_or_analyze_trace_export(
-                trace_id,
-                cache_manager,
-                source,
-                extractor=extractor,
+            extractor = TraceExtractor(source=_effective_source(source))
+            session_listing = extractor.list_session_traces(session_id)
+        except ValueError as e:
+            report_failure("session_listing", source=source, session_id=session_id)
+            raise HTTPException(status_code=503, detail=str(e))
+        except RuntimeError as e:
+            report_failure("session_listing", source=source, session_id=session_id)
+            logger.error("Error listing session %s from %s: %s", session_id, source, e)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Unable to list traces for session {session_id} from Langfuse ({source}): {str(e)}"
             )
-        except (TraceExtractionError, TraceAnalysisError) as e:
-            error = _trace_error(source, listed_trace, str(e))
-            errors.append(error)
-            bundle_traces.append({
-                "status": "error",
-                "trace_id": trace_id,
-                "trace_id_short": _trace_id_short(trace_id),
-                "listed_trace": _listed_trace_reference(listed_trace),
-                "error": error,
-            })
-            continue
+        except Exception:
+            report_failure("session_listing", source=source, session_id=session_id)
+            raise
 
-        bundle_traces.append(_compact_trace_bundle(trace_id, listed_trace, cache_data))
+        listed_traces = session_listing["traces"]
+        bundle_traces: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
 
-    first_timestamp, last_timestamp = _session_timestamp_bounds(listed_traces)
-    successful_count = sum(1 for trace in bundle_traces if trace.get("status") == "success")
+        for listed_trace in listed_traces:
+            trace_id = listed_trace.get("id")
+            if not trace_id:
+                report_failure("session_missing_trace_id", source=source)
+                error = _trace_error(source, listed_trace, "Session trace listing did not include a trace id")
+                errors.append(error)
+                bundle_traces.append({
+                    "status": "error",
+                    "trace_id": "unknown",
+                    "trace_id_short": None,
+                    "listed_trace": _listed_trace_reference(listed_trace),
+                    "error": error,
+                })
+                continue
 
-    return {
-        "status": "success" if session_listing["meta"]["complete"] else "partial",
-        "session": {
-            "session_id": session_id,
-            "complete": session_listing["meta"]["complete"] and not errors,
-            "source": source,
-            "trace_count": len(bundle_traces),
-            "listed_trace_count": len(listed_traces),
-            "successful_trace_count": successful_count,
-            "failed_trace_count": len(errors),
-            "trace_ids": [
-                trace.get("id")
-                for trace in listed_traces
-                if trace.get("id")
-            ],
-            "first_timestamp": first_timestamp,
-            "last_timestamp": last_timestamp,
-            "langfuse_meta": session_listing["meta"],
-            "exported_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        },
-        "traces": bundle_traces,
-        "errors": errors,
-    }
+            try:
+                cache_data, _cache_status, _from_cache = _get_or_analyze_trace_export(
+                    trace_id,
+                    cache_manager,
+                    source,
+                    extractor=extractor,
+                )
+            except (TraceExtractionError, TraceAnalysisError) as e:
+                # A listed trace disappearing makes this session export incomplete.
+                if isinstance(e.__cause__, TraceNotFoundError):
+                    report_failure("extraction", source=source, trace_id=trace_id)
+                error = _trace_error(source, listed_trace, str(e))
+                errors.append(error)
+                bundle_traces.append({
+                    "status": "error",
+                    "trace_id": trace_id,
+                    "trace_id_short": _trace_id_short(trace_id),
+                    "listed_trace": _listed_trace_reference(listed_trace),
+                    "error": error,
+                })
+                continue
+
+            bundle_traces.append(_compact_trace_bundle(trace_id, listed_trace, cache_data))
+
+        first_timestamp, last_timestamp = _session_timestamp_bounds(listed_traces)
+        successful_count = sum(1 for trace in bundle_traces if trace.get("status") == "success")
+
+        return {
+            "status": "success" if session_listing["meta"]["complete"] else "partial",
+            "session": {
+                "session_id": session_id,
+                "complete": session_listing["meta"]["complete"] and not errors,
+                "source": source,
+                "trace_count": len(bundle_traces),
+                "listed_trace_count": len(listed_traces),
+                "successful_trace_count": successful_count,
+                "failed_trace_count": len(errors),
+                "trace_ids": [
+                    trace.get("id")
+                    for trace in listed_traces
+                    if trace.get("id")
+                ],
+                "first_timestamp": first_timestamp,
+                "last_timestamp": last_timestamp,
+                "langfuse_meta": session_listing["meta"],
+                "exported_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            },
+            "traces": bundle_traces,
+            "errors": errors,
+        }
 
 
 @router.get("/{trace_id}/views/{view_name}")

@@ -540,3 +540,31 @@ Before merging a new Sentry-reporting path:
 - `.env.example` documents any new operational limit or feature flag;
 - dev smoke evidence includes release, event ID, and redaction checks for
   runtime-affecting changes.
+
+## TraceReview Error Reporting
+
+TraceReview owns `trace_review/backend/src/observability.py` and an isolated Sentry
+client. Configure `TRACE_REVIEW_SENTRY_DSN` (HTTPS),
+`TRACE_REVIEW_SENTRY_ENVIRONMENT`, and `TRACE_REVIEW_SENTRY_RELEASE` in the
+deployment environment. The application and standalone Compose files pass these
+settings to TraceReview. A blank DSN disables reporting; there is no implicit
+use of the main backend DSN or its content-capture settings.
+
+Only explicit score, search, extraction, analysis, session, and configured
+feedback-service failures create events. Session exports aggregate failures into
+one event with category counts and a hashed session ID. Ordinary missing traces,
+feedback 4xx responses, absent optional feedback configuration, and health probes
+remain quiet. A listed trace that disappears during a session export is counted
+as an incomplete-export failure. Intentional discovery budget stops retain their
+existing partial response and do not generate outage alerts.
+
+Events contain fixed operation/source tags, SHA-256 identifier hashes, and category
+counts. They contain no raw exceptions, stack locals, prompts, trace payloads,
+request data, credentials, or responses. Automatic SDK integrations are disabled;
+a dedicated empty scope and a final allowlist discard ambient enrichment. Startup,
+reporting, and shutdown are best effort and preserve application results. Langfuse
+remains the source of full trace evidence.
+
+Focused tests use an in-memory SDK transport to verify event serialization and
+privacy without contacting Sentry. Deployment acceptance still requires verifying
+ingestion against the configured TraceReview project and deployed release.
