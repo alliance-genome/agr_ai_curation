@@ -341,7 +341,13 @@ def test_custom_revision_survives_compilation_and_uses_normal_dispatch_finalizat
     def run(agent, **kwargs):
         assert 'Saved custom instructions' in agent.instructions
         finalizer = next(tool for tool in agent.tools if tool.name == 'finalize_validator_result')
-        _unwrap_function_tool(finalizer)(result=_result_payload(request, resolved_values={'identifier': 'AGR:123'}))
+        finalize = _unwrap_function_tool(finalizer)
+        payload = _result_payload(request, resolved_values={'identifier': 'AGR:123'})
+        # The shared packaged fixture includes a resolved object. A mapped
+        # custom validator must repair that extra channel before acceptance.
+        assert finalize(result=payload)['status'] == 'rejected'
+        payload['resolved_objects'] = []
+        assert finalize(result=payload)['status'] == 'accepted'
         return {'status': 'resolved'}
     monkeypatch.setattr('src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources', run)
     result = run_package_scoped_validator_agent(request, binding=binding,
