@@ -85,6 +85,13 @@ REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
 MATERIALIZER_RESOLVABLE_EXTRACTION_FIELDS = frozenset(
     {
         "expression_experiment.expression_assay_used.curie",
+        # Evidence-backed extraction may retain unresolved selectors. The
+        # pending-envelope validator still reports these as blocking findings;
+        # they are not prerequisites for preserving the extracted observation.
+        "expression_annotation_subject.primary_external_id",
+        "expression_experiment.entity_assayed.primary_external_id",
+        "expression_pattern.where_expressed",
+        "when_expressed_stage_name",
     }
 )
 FIELD_SPECIFIC_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
@@ -423,6 +430,10 @@ def validate_gene_expression_extraction_objects(
                     )
                 )
         stage_name = _payload_value(obj.payload, "when_expressed_stage_name")
+        if stage_name is not None and not isinstance(stage_name, str):
+            errors.append(
+                f"{location}.payload when_expressed_stage_name must be a string when provided"
+            )
         if isinstance(stage_name, str) and stage_name.strip():
             if not _has_helper_selection(
                 output,
@@ -474,7 +485,7 @@ def validate_gene_expression_extraction_objects(
             if isinstance(obj.payload.get("expression_pattern"), Mapping)
             else {}
         )
-        if not _has_anatomical_site_slot(where_expressed):
+        if where_expressed not in (None, {}) and not _has_anatomical_site_slot(where_expressed):
             errors.append(
                 f"{location}.payload expression_pattern.where_expressed must "
                 "include anatomical_structure or cellular_component"
@@ -1426,6 +1437,14 @@ def _selector_integrity_findings(
             code="alliance.gene_expression.subject_gene_missing",
             message="GeneExpressionAnnotation requires a subject gene symbol selector.",
             expected_selector="Alliance gene symbol",
+        ),
+        _required_selector_finding(
+            expression_object=expression_object,
+            object_ref=object_ref,
+            field_path="expression_experiment.entity_assayed.primary_external_id",
+            code="alliance.gene_expression.entity_assayed_missing",
+            message="GeneExpressionExperiment requires an entity_assayed primary_external_id selector.",
+            expected_selector="Alliance gene primary_external_id",
         ),
         _required_selector_finding(
             expression_object=expression_object,
