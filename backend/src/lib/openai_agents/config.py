@@ -1124,9 +1124,10 @@ def get_benchmark_oidc_cognito_m2m_enabled() -> bool:
     return _get_env_bool("BENCHMARK_OIDC_COGNITO_M2M_ENABLED", False)
 
 
-def get_benchmark_oidc_cognito_m2m_client_id() -> str:
-    """Exact Cognito client-credentials identity permitted by the M2M profile."""
-    return os.getenv("BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID", "").strip()
+def get_benchmark_oidc_cognito_m2m_client_ids() -> tuple[str, ...]:
+    """Explicit Cognito client-credentials identities permitted by the M2M profile."""
+    raw = os.getenv("BENCHMARK_OIDC_COGNITO_M2M_CLIENT_IDS", "")
+    return tuple(value.strip() for value in raw.split(",") if value.strip())
 
 
 def _benchmark_capability_suffix(capability: str) -> str:

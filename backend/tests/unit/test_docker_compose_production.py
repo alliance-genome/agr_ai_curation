@@ -181,7 +181,7 @@ def test_benchmark_cognito_m2m_profile_has_compose_and_env_parity():
     env_example = _load_env_assignments(ENV_EXAMPLE_PATH)
     expected = {
         "BENCHMARK_OIDC_COGNITO_M2M_ENABLED": "${BENCHMARK_OIDC_COGNITO_M2M_ENABLED:-false}",
-        "BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID": "${BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID:-}",
+        "BENCHMARK_OIDC_COGNITO_M2M_CLIENT_IDS": "${BENCHMARK_OIDC_COGNITO_M2M_CLIENT_IDS:-}",
     }
 
     for key, value in expected.items():
@@ -189,7 +189,7 @@ def test_benchmark_cognito_m2m_profile_has_compose_and_env_parity():
         assert production_env[key] == value
         assert test_env[key] == value
     assert env_example["BENCHMARK_OIDC_COGNITO_M2M_ENABLED"] == "false"
-    assert env_example["BENCHMARK_OIDC_COGNITO_M2M_CLIENT_ID"] == ""
+    assert env_example["BENCHMARK_OIDC_COGNITO_M2M_CLIENT_IDS"] == ""
 
 
 def test_backend_test_services_mount_repo_config_as_explicit_runtime_override():
