@@ -489,6 +489,19 @@ def initialize_worker_runtime() -> None:
     Prompt/agent synchronization belongs to deployment setup, not this process.
     The API's prompt cache cannot initialize the standalone worker's cache.
     """
+    # The facade enables the SDK's default atexit integration, which flushes
+    # events on process exit (including required startup failures).
+    try:
+        from src.lib.observability.sentry import initialize_sentry_if_configured
+
+        initialize_sentry_if_configured()
+    except Exception as exc:
+        logger.warning(
+            "Benchmark worker Sentry initialization failed (non-fatal): %s",
+            type(exc).__name__,
+            exc_info=False,
+        )
+
     from src.lib.config.groups_loader import load_groups
     from src.lib.prompts.cache import initialize as initialize_prompt_cache
 

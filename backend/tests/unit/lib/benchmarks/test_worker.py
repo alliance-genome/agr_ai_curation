@@ -17,11 +17,14 @@ from src.lib.benchmarks.worker import BenchmarkWorker, _report_failure
 def startup_runtime(monkeypatch):
     """Replace only startup I/O; the process entrypoint remains real."""
     from src.lib.benchmarks import worker
+    from src.lib.observability import sentry
     from src.lib.config import groups_loader
     from src.lib.openai_agents import langfuse_client
     from src.lib.prompts import cache
 
     calls = []
+    sentry_init = MagicMock(side_effect=lambda: calls.append("sentry"))
+    monkeypatch.setattr(sentry, "initialize_sentry_if_configured", sentry_init)
     session = MagicMock()
     factory = MagicMock(return_value=session)
     session.__enter__.side_effect = lambda: calls.append("open") or session
@@ -40,7 +43,7 @@ def startup_runtime(monkeypatch):
     monkeypatch.setattr(worker, "get_benchmark_execution_enabled", lambda: True)
     monkeypatch.setattr(worker, "get_benchmark_worker_concurrency", lambda: 2)
     return SimpleNamespace(
-        worker=worker, calls=calls, factory=factory, session=session,
+        worker=worker, calls=calls, factory=factory, session=session, sentry_init=sentry_init,
         prompts=prompts, groups=groups, tracing=tracing, flush=flush,
     )
 
@@ -66,12 +69,12 @@ async def test_main_initializes_once_before_all_claim_loops(monkeypatch, startup
     state = startup_runtime
 
     async def run(_self):
-        assert state.calls[:5] == ["open", "prompts", "close", "groups", "tracing"]
+        assert state.calls[:6] == ["sentry", "open", "prompts", "close", "groups", "tracing"]
         state.calls.append("claim")
 
     monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
     await state.worker._main()
-    assert state.calls == ["open", "prompts", "close", "groups", "tracing", "claim", "claim", "flush"]
+    assert state.calls == ["sentry", "open", "prompts", "close", "groups", "tracing", "claim", "claim", "flush"]
     state.prompts.assert_called_once_with(state.session)
     state.session.commit.assert_not_called()
 
@@ -391,3 +394,121 @@ async def test_worker_reports_terminalization_failure_without_raising(monkeypatc
     ]
     assert isinstance(reported[0][0], ConnectionError)
     assert isinstance(reported[1][0], ValueError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("startup_fails", [False, True])
+async def test_sentry_initialization_failure_preserves_worker_outcome(
+    monkeypatch, startup_runtime, caplog, startup_fails,
+):
+    state = startup_runtime
+    state.sentry_init.side_effect = RuntimeError("private sentry connection")
+    run = AsyncMock()
+    monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
+    if startup_fails:
+        state.prompts.side_effect = ValueError("private SQL")
+        with pytest.raises(RuntimeError, match="Benchmark worker startup failed"):
+            await state.worker._main()
+        run.assert_not_awaited()
+    else:
+        await state.worker._main()
+        assert run.await_count == 2
+    state.sentry_init.assert_called_once()
+    assert "private sentry connection" not in caplog.text
+
+
+def test_sentry_capture_failure_does_not_escape_worker_reporter(monkeypatch):
+    import sentry_sdk
+
+    capture = MagicMock(side_effect=RuntimeError("synthetic transport failure"))
+    monkeypatch.setattr(sentry_sdk, "capture_exception", capture)
+    _report_failure(ValueError("original worker failure"), job_id=uuid4(), cell_id=uuid4())
+    capture.assert_called_once()
+
+
+def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
+    """Use real worker startup/facade/SDK with only I/O replaced in a fresh process."""
+    import json
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent('''
+        import json
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from uuid import UUID
+
+        import sentry_sdk
+        from sentry_sdk.transport import Transport
+        from src.lib.benchmarks import worker
+        from src.lib.observability import sentry
+
+        class MemoryTransport(Transport):
+            def __init__(self, options):
+                super().__init__(options)
+                self.events = []
+
+            def capture_envelope(self, envelope):
+                for item in envelope.items:
+                    if item.headers.get("type") == "event":
+                        self.events.append(item.payload.json)
+
+            def flush(self, timeout, callback=None):
+                print("SENTRY_EXIT_FLUSH=" + json.dumps(self.events))
+
+        sdk_init = sentry_sdk.init
+        def initialize(**kwargs):
+            return sdk_init(**kwargs, transport=MemoryTransport)
+
+        async def run():
+            assert sentry._INITIALIZED
+            worker._report_failure(
+                ValueError("token=synthetic-private-value"),
+                job_id=UUID("00000000-0000-0000-0000-000000000001"),
+                cell_id=UUID("00000000-0000-0000-0000-000000000002"),
+            )
+
+        with (
+            patch.object(sentry_sdk, "init", side_effect=initialize) as init,
+            patch.object(worker, "SessionLocal", MagicMock()),
+            patch("src.lib.prompts.cache.initialize"),
+            patch("src.lib.config.groups_loader.load_groups"),
+            patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False),
+            patch("src.lib.openai_agents.langfuse_client.flush_langfuse"),
+            patch.object(worker.BenchmarkWorker, "run_forever", AsyncMock(side_effect=run)),
+        ):
+            worker.main()
+            init.assert_called_once()
+        # No explicit flush: verify the same SDK atexit convention as the backend.
+    ''')
+    env = {key: value for key, value in os.environ.items() if not key.startswith("SENTRY_")}
+    env.update(
+        SENTRY_DSN="https://public@example.invalid/1",
+        SENTRY_ENVIRONMENT="worker-test",
+        SENTRY_RELEASE="synthetic-worker-release",
+        SENTRY_LOG_EVENT_LEVEL="ERROR",
+        BENCHMARK_WORKER_ENABLED="true",
+        BENCHMARK_EXECUTION_ENABLED="true",
+        BENCHMARK_WORKER_CONCURRENCY="1",
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script], env=env, capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    flushes = [
+        json.loads(line.removeprefix("SENTRY_EXIT_FLUSH="))
+        for line in completed.stdout.splitlines() if line.startswith("SENTRY_EXIT_FLUSH=")
+    ]
+    assert len(flushes) == 1
+    assert len(flushes[0]) == 1
+    event = flushes[0][0]
+    assert event["event_id"]
+    assert event["release"] == "synthetic-worker-release"
+    assert event["environment"] == "worker-test"
+    assert event["tags"]["runtime_component"] == "benchmark_worker"
+    assert event["tags"]["operation"] == "cell_execution_failed"
+    serialized = json.dumps(event)
+    assert "synthetic-private-value" not in serialized
+    assert "00000000-0000-0000-0000-000000000001" not in serialized
+    assert [value["type"] for value in event["exception"]["values"]] == ["_BenchmarkWorkerError"]

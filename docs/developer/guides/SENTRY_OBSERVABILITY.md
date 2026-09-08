@@ -317,7 +317,21 @@ TraceReview with no trace errors.
 ## Initialization
 
 Backend initialization lives in `backend/src/lib/observability/sentry.py` and is
-called during app startup. The SDK setup:
+called during app startup and, when both benchmark execution gates are enabled,
+as the first step of standalone benchmark worker runtime initialization. Disabled
+workers skip Sentry and all other runtime initialization. Sentry initialization
+is best effort and does not block claims or replace required startup failures.
+Both processes use the SDK's default atexit integration to flush pending Sentry
+events on process exit; the worker also retains its explicit Langfuse flush after
+claim tasks stop.
+
+The worker uses the same Sentry configuration as its backend counterpart:
+development overrides `SENTRY_DSN` with `SENTRY_DEV_DSN` and reads release,
+environment and other settings from the shared dev env file; production passes
+the backend's explicit Sentry settings, including production DSN, release and
+environment. Production benchmark execution gates remain disabled.
+
+The SDK setup:
 
 - uses `before_send` and `before_send_transaction` to redact event payloads;
 - sets `send_default_pii=False`;
