@@ -4189,7 +4189,7 @@ async def chat_with_opus(
 
     async def generate_stream():
         source_trace_id = request.context.trace_id if request.context else None
-        run_state = AgentStudioRunState(trace_id=str(uuid.uuid4()))
+        run_state = AgentStudioRunState(trace_id=uuid.uuid4().hex)
         completed_tool_calls: List[Dict[str, Any]] = []
         domain_reference_events: List[Dict[str, Any]] = []
         workshop_proposal_state: dict = {}
@@ -4496,7 +4496,7 @@ async def chat_with_opus(
                 turn_id=prepared_turn.turn_id,
                 event_type="ERROR",
                 trace_id=run_state.trace_id,
-                message="Agent Studio reached its configured tool-turn limit without completing.",
+                message="I could not finish within this turn. Ask me to continue with the remaining work. Any verification is incomplete; review any proposed changes before applying them.",
                 error_source="turn_limit",
             )
         except openai.APIError as exc:
@@ -4700,7 +4700,7 @@ async def _process_suggestion_background(
 ) -> None:
     """Submit AI-assisted feedback through a forced Agents SDK tool call."""
 
-    state = AgentStudioRunState(trace_id=str(uuid.uuid4()))
+    state = AgentStudioRunState(trace_id=uuid.uuid4().hex)
 
     async def execute_tool(
         tool_name: str,

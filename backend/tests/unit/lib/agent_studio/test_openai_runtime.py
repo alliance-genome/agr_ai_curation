@@ -1,7 +1,7 @@
 """Focused contract tests for the Agent Studio OpenAI Agents SDK adapter."""
 
 import asyncio
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 
 import httpx
@@ -608,6 +608,27 @@ def test_stop_cancels_sdk_while_waiting_and_finishes_cleanup(monkeypatch):
         drained = asyncio.Event()
         closed = []
         calls = []
+        active = []
+        @contextmanager
+        def observation(**kwargs):
+            assert kwargs["trace_context"] == {"trace_id": "a" * 32}
+            active.append("trace")
+            try:
+                yield
+            finally:
+                active.pop()
+        @contextmanager
+        def attributes(**kwargs):
+            assert kwargs["session_id"] == "session"
+            assert kwargs["user_id"] == "owner"
+            active.append("attributes")
+            try:
+                yield
+            finally:
+                active.pop()
+        monkeypatch.setattr(runtime, "get_langfuse", lambda: SimpleNamespace(start_as_current_observation=observation))
+        monkeypatch.setattr(runtime, "is_openai_agents_tracing_enabled", lambda: True)
+        monkeypatch.setattr(runtime, "propagate_attributes", attributes)
         class Result:
             last_response_id = None
             context_wrapper = None
@@ -616,6 +637,7 @@ def test_stop_cancels_sdk_while_waiting_and_finishes_cleanup(monkeypatch):
                 calls.append('cancel')
                 drained.set()
             async def stream_events(self):
+                assert active == ["trace", "attributes"]
                 started.set()
                 await drained.wait()
                 if False:
@@ -625,11 +647,13 @@ def test_stop_cancels_sdk_while_waiting_and_finishes_cleanup(monkeypatch):
         monkeypatch.setattr(runtime, 'build_owned_openai_responses_resources', lambda: resources)
         monkeypatch.setattr(runtime, '_run_config', lambda **_kwargs: None)
         monkeypatch.setattr(runtime, '_tracked_agent_span', lambda **_kwargs: nullcontext())
-        async def close(*_args, **_kwargs): closed.append(True)
+        async def close(*_args, **_kwargs):
+            assert not active
+            closed.append(True)
         monkeypatch.setattr(runtime, 'close_owned_openai_resources', close)
         async def consume():
             return [event async for event in runtime.stream_agent_studio_run(
-                instructions='help', input_items=[], tools=[], state=runtime.AgentStudioRunState(trace_id='test'),
+                instructions='help', input_items=[], tools=[], state=runtime.AgentStudioRunState(trace_id='a' * 32),
                 session_id='session', user_id='owner', max_turns=2,
                 model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=100), cancel_event=stop,
             )]
@@ -640,3 +664,44 @@ def test_stop_cancels_sdk_while_waiting_and_finishes_cleanup(monkeypatch):
         assert calls == ['cancel']
         assert closed == [True]
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("error", [None, RuntimeError("turn limit"), asyncio.CancelledError()])
+def test_studio_trace_correlates_user_session_and_unwinds_on_all_outcomes(monkeypatch, error):
+    from contextlib import contextmanager
+    active = []
+    observed = {}
+
+    @contextmanager
+    def observation(**kwargs):
+        observed["trace"] = kwargs
+        active.append("trace")
+        try:
+            yield
+        finally:
+            active.pop()
+
+    @contextmanager
+    def attributes(**kwargs):
+        observed["attributes"] = kwargs
+        active.append("attributes")
+        try:
+            yield
+        finally:
+            active.pop()
+
+    monkeypatch.setattr(runtime, "get_langfuse", lambda: SimpleNamespace(start_as_current_observation=observation))
+    monkeypatch.setattr(runtime, "is_openai_agents_tracing_enabled", lambda: True)
+    monkeypatch.setattr(runtime, "propagate_attributes", attributes)
+    state = runtime.AgentStudioRunState(trace_id="a" * 32)
+    try:
+        with runtime._studio_trace_scope(state=state, session_id="session", user_id="curator"):
+            assert active == ["trace", "attributes"]
+            if error is not None:
+                raise error
+    except BaseException as exc:
+        assert exc is error
+    assert not active
+    assert observed["trace"]["trace_context"] == {"trace_id": state.trace_id}
+    assert observed["attributes"]["session_id"] == "session"
+    assert observed["attributes"]["user_id"] == "curator"

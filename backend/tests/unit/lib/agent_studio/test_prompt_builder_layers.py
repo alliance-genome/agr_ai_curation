@@ -176,7 +176,10 @@ def test_flow_context_requires_complete_targeted_verification_evidence(monkeypat
     assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
     assert 'view="effective_prompt"' in prompt
     assert '`compacted_tool_result`' in prompt
-    assert "every present `custom_instructions`" in prompt
+    assert "every nonempty active `custom_instructions`" in prompt
+    assert 'get_current_flow_topology(section="all")' in prompt
+    assert 'view="complete_plan"' in prompt
+    assert "verification INCOMPLETE" in prompt
     assert "returned `next_call` until `complete=true`" in prompt
     assert "`next_call` through ordinary pages and exact record chunks until" in prompt
     assert "`truncated=false` and no `next_cursor` remains" in prompt

@@ -26,6 +26,7 @@ from agents import (
     ToolsToFinalOutputResult,
     tool_namespace,
 )
+from langfuse import propagate_attributes
 from openai import BadRequestError
 from openai.types.responses import ResponseTextDeltaEvent
 
@@ -40,7 +41,7 @@ from src.lib.openai_agents.config import (
     ReasoningEffort, build_model_settings, get_agent_studio_openai_model,
     get_agent_studio_reasoning_effort, require_model_reasoning_effort,
 )
-from src.lib.openai_agents.langfuse_client import is_openai_agents_tracing_enabled
+from src.lib.openai_agents.langfuse_client import get_langfuse, is_openai_agents_tracing_enabled
 from src.lib.openai_agents.runner import (
     build_owned_openai_responses_resources,
     close_owned_openai_resources,
@@ -296,6 +297,28 @@ def build_agent_studio_model_settings(
     )
 
 
+@contextmanager
+def _studio_trace_scope(*, state: AgentStudioRunState, session_id: str, user_id: str):
+    """Parent SDK observations with the same identity exposed to the curator."""
+    client = get_langfuse()
+    if client is None or not is_openai_agents_tracing_enabled():
+        yield
+        return
+    with client.start_as_current_observation(
+        trace_context={"trace_id": state.trace_id},
+        name="agent-studio-chat",
+        as_type="span",
+        metadata={"provider": "openai", "model": AGENT_STUDIO_OPENAI_MODEL},
+    ):
+        with propagate_attributes(
+            session_id=session_id,
+            user_id=user_id,
+            trace_name="Agent Studio AI Chat",
+            tags=["agent-studio", "openai-agents"],
+        ):
+            yield
+
+
 def _run_config(
     *,
     state: AgentStudioRunState,
@@ -429,14 +452,16 @@ async def stream_agent_studio_run(
         )
         agent = Agent(
             name="Agent Studio Authoring Assistant",
-            instructions=instructions,
+            instructions=(instructions + f"\nThis request allows at most {max_turns} model turns, including "
+                          "the final response. Use consolidated inspections, reserve a turn to answer, "
+                          "and report outstanding work as incomplete instead of starting unrelated lookups."),
             model=AGENT_STUDIO_OPENAI_MODEL,
             model_settings=model_settings,
             tools=tools,
             tool_use_behavior=_proposal_review_behavior(state),
         )
         pending_calls: dict[str, tuple[str, dict[str, Any]]] = {}
-        with gen_ai_conversation_scope(session_id):
+        with _studio_trace_scope(state=state, session_id=session_id, user_id=user_id), gen_ai_conversation_scope(session_id):
             with _tracked_agent_span(
                 agent_name="Agent Studio Authoring Assistant",
                 model=AGENT_STUDIO_OPENAI_MODEL,
@@ -579,7 +604,7 @@ async def run_forced_agent_studio_tool(
             tools=tools,
             tool_use_behavior="stop_on_first_tool",
         )
-        with gen_ai_conversation_scope(session_id):
+        with _studio_trace_scope(state=state, session_id=session_id, user_id=user_id), gen_ai_conversation_scope(session_id):
             with _tracked_agent_span(
                 agent_name="Agent Studio Suggestion Assistant",
                 model=AGENT_STUDIO_OPENAI_MODEL,

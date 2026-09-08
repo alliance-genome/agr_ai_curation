@@ -3016,6 +3016,12 @@ def _get_current_flow_topology_handler():
                 sidecar.to_dict() for sidecar in projection.validation_sidecars
             ],
         }
+        if section == "all":
+            sections["all"] = [
+                {"section": name, "value": item}
+                for name, items in sections.items()
+                for item in items
+            ]
         if section not in sections:
             return _flow_detail_error(
                 f"Unknown topology section '{section}'",
@@ -3235,7 +3241,7 @@ def _get_current_flow_projection_plan_handler():
         section: str = "",
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
-        view: Literal["plan", "source_fields"] = "plan",
+        view: Literal["plan", "complete_plan", "source_fields"] = "plan",
     ) -> Dict[str, Any]:
         resolved = _current_node(node_id)
         if resolved is None:
@@ -3277,11 +3283,20 @@ def _get_current_flow_projection_plan_handler():
                 response_metadata={"success": True, "node_id": str(node_id),
                                    "view": "source_fields", "encoding": "canonical_json"},
             )
-        if view != "plan":
-            return _flow_detail_error("Unknown projection view; use plan or source_fields.")
+        if view not in {"plan", "complete_plan"}:
+            return _flow_detail_error("Unknown projection view; use plan, complete_plan or source_fields.")
         plan = _flow_node_data(resolved[0]).get("projection_plan")
         if not isinstance(plan, Mapping):
             return _flow_detail_error(f"Node '{node_id}' has no projection_plan")
+        if view == "complete_plan":
+            return _exact_chunk_response(
+                tool="get_current_flow_projection_plan",
+                arguments={"node_id": str(node_id), "view": "complete_plan"},
+                text=json.dumps(plan, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+                limit=limit, cursor=cursor,
+                response_metadata={"success": True, "node_id": str(node_id),
+                                   "view": "complete_plan", "encoding": "canonical_json"},
+            )
         fields = sorted(str(key) for key in plan)
         if field is None:
             summaries = [
@@ -3767,7 +3782,8 @@ Do not infer omitted details; use the returned bounded detail calls.""",
     registry.register(
         name="get_current_flow_topology",
         description=(
-            "Inspect one bounded canonical current-flow topology section. Use issues, "
+            "Use section=all to inspect all canonical topology sections together with bounded paging. "
+            "For focused inspection use issues, "
             "control_path, control_edges, output_bindings, or validation_sidecars."
         ),
         input_schema={
@@ -3777,6 +3793,7 @@ Do not infer omitted details; use the returned bounded detail calls.""",
                     "type": "string",
                     "enum": [
                         "issues",
+                        "all",
                         "control_path",
                         "control_edges",
                         "output_bindings",
@@ -3828,6 +3845,7 @@ Do not infer omitted details; use the returned bounded detail calls.""",
     registry.register(
         name="get_current_flow_projection_plan",
         description=(
+            "Use view=complete_plan for bounded full-plan inspection in one call when small. "
             "List projection_plan fields or retrieve one explicit field/JSON-Pointer "
             "section as exact bounded canonical JSON. Use view=source_fields to discover "
             "authorized exact saved-profile formatter refs before authoring a plan, even "
@@ -3837,7 +3855,7 @@ Do not infer omitted details; use the returned bounded detail calls.""",
             "type": "object",
             "properties": {
                 "node_id": {"type": "string"},
-                "view": {"type": "string", "enum": ["plan", "source_fields"]},
+                "view": {"type": "string", "enum": ["plan", "complete_plan", "source_fields"]},
                 "field": {"type": "string"},
                 "section": {
                     "type": "string",

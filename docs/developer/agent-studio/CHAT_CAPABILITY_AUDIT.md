@@ -96,3 +96,12 @@ to the model-turn limit. Small authorized capability details are returned whole
 within the existing provider size bound; larger details retain hash-addressed
 pagination. Draft design should reuse existing settings and avoid fetching empty
 prompts or runtime tool schemas that are irrelevant to the requested fields.
+
+
+## Flow verification and trace correlation (0.9.8)
+
+Verification can read all topology sections with `get_current_flow_topology(section="all")` and a saved export plan with `get_current_flow_projection_plan(node_id, view="complete_plan")`. Both retain bounded responses and exact continuation calls. Prefer these views over retrieving individual scalar fields. Consult the Output catalog only when the current flow metadata leaves output capability or placement uncertain. Direct-export output-node prompts do not execute; extraction prompts still do. Missing required evidence means verification is incomplete, never PASS. The existing `AGENT_STUDIO_OPENAI_MAX_TURNS` setting still governs the run.
+
+Authoring and suggestion turns allocate 32-character lowercase hexadecimal trace IDs. An active Langfuse parent observation carries that ID, and propagated session/user attributes connect SDK child observations to the conversation. SDK metadata alone does not establish this relationship. Explicit Stop unwinds the trace scope before closing owned provider resources.
+
+Supervisor extraction manifests include bounded canonical validator decisions, including targets omitted from the main object list. Copied findings are grouped by request; rejected writeback and open findings remain visible. A validator decision does not establish accepted writeback, annotation readiness or export readiness. Omitted details must be inspected before making claims about them.

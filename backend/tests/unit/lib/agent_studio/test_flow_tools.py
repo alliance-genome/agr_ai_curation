@@ -2263,3 +2263,34 @@ def test_saved_flow_null_defaults_do_not_report_removed_connections_or_settings(
     assert flow_tools._exact_flow_diff(before, candidate) == []
     assert before["nodes"][1]["data"]["projection_plan"]["missing_value"] is None
     assert saved["edges"][0]["condition"] is None
+
+
+def test_complete_plan_avoids_per_field_calls_and_preserves_pagination(monkeypatch):
+    flow = _inspection_flow()
+    flow_tools.set_current_flow_context(flow)
+    handler = flow_tools._get_current_flow_projection_plan_handler()
+    response = handler(node_id="csv", view="complete_plan")
+    assert response["complete"] is True
+    assert json.loads(response["content"]) == flow["nodes"][2]["data"]["projection_plan"]
+    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "8")
+    response = handler(node_id="csv", view="complete_plan")
+    chunks = [response["content"]]
+    assert response["complete"] is False
+    while response["next_call"]:
+        response = handler(**response["next_call"]["arguments"])
+        chunks.append(response["content"])
+    assert json.loads("".join(chunks)) == flow["nodes"][2]["data"]["projection_plan"]
+
+
+def test_all_topology_sections_preserve_exact_contents_across_pages():
+    flow_tools.set_current_flow_context(_inspection_flow())
+    handler = flow_tools._get_current_flow_topology_handler()
+    combined = handler(section="all", limit=1)
+    items = list(combined["items"])
+    while combined["next_call"]:
+        combined = handler(**combined["next_call"]["arguments"])
+        items.extend(combined["items"])
+    for section in ("issues", "control_path", "control_edges", "output_bindings", "validation_sidecars"):
+        expected = handler(section=section)
+        assert expected["complete"] is True
+        assert [item["value"] for item in items if item["section"] == section] == expected["items"]

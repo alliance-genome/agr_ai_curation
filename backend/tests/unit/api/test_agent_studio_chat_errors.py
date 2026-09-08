@@ -138,7 +138,7 @@ def _assert_provider_context_preflight(event: dict) -> None:
     assert event["type"] == "PROVIDER_CONTEXT_PREFLIGHT"
     assert event["session_id"] == "agent-studio-session-1"
     assert event["turn_id"] == "opus-turn-1"
-    assert event["trace_id"] == "12345678-1234-5678-1234-567812345678"
+    assert event["trace_id"] == "12345678123456781234567812345678"
     assert event["operation"] == "agents_sdk_run"
     assert event["provider"] == "openai"
     assert event["model"] == "gpt-6-astra"
@@ -331,7 +331,7 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "trace_id": "12345678123456781234567812345678",
             "message": "Agent Studio could not complete the model request. Please review the last step and retry.",
             "error_source": "openai",
         }
@@ -373,7 +373,7 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "trace_id": "12345678123456781234567812345678",
             "message": "The model service had a temporary problem. Check any completed tool actions before retrying.",
             "error_source": "openai",
         }
@@ -385,7 +385,7 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
             "error_message": raw_message,
             "source": "infrastructure",
             "specialist_name": "agent_studio_openai",
-            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "trace_id": "12345678123456781234567812345678",
             "session_id": "agent-studio-session-1",
             "curator_id": "curator@example.org",
             "capture_sentry": False,
@@ -419,7 +419,7 @@ def test_chat_with_opus_preserves_context_overflow_branch(monkeypatch):
             "type": "CONTEXT_OVERFLOW",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "trace_id": "12345678123456781234567812345678",
             "message": "The conversation exceeded the model context. Use a bounded recall tool or start a new chat.",
             "error_source": "openai",
         }
@@ -494,7 +494,7 @@ def test_chat_with_opus_sanitizes_unexpected_errors(monkeypatch):
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "12345678-1234-5678-1234-567812345678",
+            "trace_id": "12345678123456781234567812345678",
             "message": "Agent Studio ran into an unexpected problem. Check completed actions before retrying.",
             "error_source": "RuntimeError",
         }
@@ -528,8 +528,8 @@ def test_chat_with_opus_reports_turn_limit_without_leaking_sdk_detail(monkeypatc
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
-            "trace_id": "12345678-1234-5678-1234-567812345678",
-            "message": "Agent Studio reached its configured tool-turn limit without completing.",
+            "trace_id": "12345678123456781234567812345678",
+            "message": "I could not finish within this turn. Ask me to continue with the remaining work. Any verification is incomplete; review any proposed changes before applying them.",
             "error_source": "turn_limit",
         }
     ]
