@@ -22,6 +22,7 @@ _Primary goal: give engineers (or LLM agents) everything required to exercise th
 17. [End-to-End Workflows](#end-to-end-workflows)
 18. [Status & Error Reference](#status--error-reference)
 19. [Appendix & Resources](#appendix--resources)
+20. [Project-shared curation flows](#project-shared-curation-flows)
 
 ---
 
@@ -1134,3 +1135,32 @@ Armed with the instructions above, an automated agent can:
 3. Load processed docs into the chat orchestrator, stream responses, and capture Langfuse traces.
 4. Reprocess/re-embed as needed, download structured outputs, and file curator feedback with trace IDs.
 5. Validate chunk provenance and settings to ensure regression coverage.
+
+## Project-shared curation flows
+
+Flows are private on creation, including all flows migrated from before project
+sharing. The flow owner controls editing, deletion and visibility. Sharing uses
+the owner's earliest project membership, matching the agent-sharing selection
+rule; sharing without project membership returns HTTP 422.
+
+| Endpoint | Authorization and behavior |
+| --- | --- |
+| `GET /api/flows` | Paginated active owned and project-shared flows visible to the caller; `total` uses the same visibility filter. |
+| `GET /api/flows/{flow_id}` | Owner or current member of the shared project. |
+| `POST /api/flows/{flow_id}/share` | Owner only. Body `{"visibility":"project"}` shares; `{"visibility":"private"}` unshares and clears `project_id`/`shared_at`. |
+| `POST /api/flows/{flow_id}/clone` | Visible caller. Body `{}` generates `Name (Copy)`, then `Name (Copy 2)`; `{"name":"My flow"}` chooses an explicit name. Returns 201 with a new private flow owned by the caller, with zero execution count and no last execution timestamp. Active name collisions return 409. |
+| `PUT /api/flows/{flow_id}` and `DELETE /api/flows/{flow_id}` | Owner only, including for shared flows. Deletion remains soft. |
+| `POST /api/chat/execute-flow` | Owner or current member of the shared project, subject to existing agent, document and session access checks. |
+
+Both summary and full responses include `user_id` (owner), `is_owner` (relative
+to the caller), `visibility`, nullable `project_id`, and nullable `shared_at`.
+Inactive flows return 404; unauthorized access to an active flow returns 403.
+Unsharing or removing project membership revokes subsequent shared access.
+
+Sharing a flow does not share its agents or their private prompts. Full reads
+resolve agent metadata with the viewer's identity and current groups; unavailable
+references appear as critical validation warnings. Cloning rejects unavailable
+dependencies with 422 and execution rejects them with 403. The owner can repair
+the source by selecting available agents. Execution continues to use the caller's
+identity for documents, sessions, evidence and outputs. Flow sharing grants no
+access to source execution history, evidence exports or batches.

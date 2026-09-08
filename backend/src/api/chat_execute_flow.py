@@ -41,6 +41,7 @@ from src.lib.flows.outcome import (
     flow_typed_output_transcript_values,
 )
 from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
+from src.lib.flows.access import get_visible_flow
 from src.services.document_access import exclude_benchmark_document
 
 
@@ -750,7 +751,7 @@ async def execute_flow_endpoint(
     """Execute a curation flow with SSE streaming response.
 
     Executes a user-defined curation flow, streaming events back via SSE.
-    Flow ownership is verified before execution.
+    Flow visibility is verified before execution.
 
     Returns:
         StreamingResponse with Server-Sent Events
@@ -759,21 +760,13 @@ async def execute_flow_endpoint(
         200: Success (streaming response)
         400: Validation error (Pydantic)
         401: Unauthorized
-        403: User doesn't own this flow
+        403: Flow or its agents are unavailable to the caller
         404: Flow not found or soft-deleted
     """
     db_user = set_global_user_from_cognito(db, user)
     repository = _get_chat_history_repository(db)
 
-    flow = db.query(CurationFlow).filter(
-        CurationFlow.id == request.flow_id,
-        CurationFlow.is_active == True,  # noqa: E712 - SQLAlchemy requires == for SQL
-    ).first()
-
-    if not flow:
-        raise HTTPException(status_code=404, detail="Flow not found")
-    if flow.user_id != db_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    flow = get_visible_flow(db, request.flow_id, db_user.id)
 
     exclude_benchmark_document(db, request.document_id)
     user_id = _require_user_sub(user)

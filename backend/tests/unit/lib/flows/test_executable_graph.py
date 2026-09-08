@@ -476,6 +476,7 @@ async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
         def commit(self):
             now = datetime.now(timezone.utc)
             self.added.id = uuid4()
+            self.added.visibility = "private"
             self.added.execution_count = 0
             self.added.last_executed_at = None
             self.added.created_at = now
@@ -483,6 +484,7 @@ async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
             self.stored = SimpleNamespace(
                 id=self.added.id,
                 user_id=self.added.user_id,
+                visibility="private", project_id=None, shared_at=None,
                 name=self.added.name,
                 description=self.added.description,
                 flow_definition=json.loads(json.dumps(self.added.flow_definition)),
@@ -538,7 +540,7 @@ async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
     )
     monkeypatch.setattr(
         flows_api,
-        "verify_flow_ownership",
+        "get_visible_flow",
         lambda *_args, **_kwargs: db.stored,
     )
     loaded = await flows_api.get_flow(
@@ -589,6 +591,7 @@ def test_unavailable_step_fixture_has_consistent_save_load_runtime_and_batch_dia
             SimpleNamespace(
                 id=uuid4(),
                 user_id=17,
+                visibility="private", project_id=None, shared_at=None,
                 name="Unavailable step",
                 description=None,
                 flow_definition=definition.model_dump(),
@@ -597,7 +600,8 @@ def test_unavailable_step_fixture_has_consistent_save_load_runtime_and_batch_dia
                 created_at=now,
                 updated_at=now,
             ),
-        )
+        ),
+        viewer_user_id=17,
     )
     assert loaded.has_critical_issues is True
     assert "unavailable_agent" in loaded.validation_warnings[0].message

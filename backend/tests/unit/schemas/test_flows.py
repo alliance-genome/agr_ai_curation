@@ -752,3 +752,23 @@ class TestFlowDefinitionOtherValidations:
 
         with pytest.raises(ValidationError):
             FlowDefinition(**flow_data)
+
+
+@pytest.mark.parametrize("visibility", ["private", "project"])
+def test_share_flow_request_visibility(visibility):
+    from src.schemas.flows import ShareFlowRequest
+    assert ShareFlowRequest(visibility=visibility).visibility == visibility
+
+
+def test_share_flow_request_rejects_public():
+    from src.schemas.flows import ShareFlowRequest
+    with pytest.raises(ValidationError):
+        ShareFlowRequest(visibility="public")
+
+
+def test_clone_flow_request_validates_name():
+    from src.schemas.flows import CloneFlowRequest
+    assert CloneFlowRequest().name is None
+    assert CloneFlowRequest(name=" Copy ").name == "Copy"
+    with pytest.raises(ValidationError):
+        CloneFlowRequest(name="   ")
