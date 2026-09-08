@@ -21,6 +21,7 @@ from src.lib.document_sources.figure_metadata import (
 )
 from src.lib.document_sources.provenance import sanitize_document_source_provenance
 from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.pipeline.orchestrator import ProcessingResult
 from src.lib.storage_permissions import ensure_writable_directory
 from src.models.pipeline import ProcessingStage
@@ -42,6 +43,37 @@ class DocumentSourceIngestionError(DocumentSourceError):
 
 class DocumentSourceMarkdownValidationError(DocumentSourceIngestionError):
     """Raised when provider-backed Markdown fails validation."""
+
+
+class _DocumentHierarchyError(RuntimeError):
+    """Content-free hierarchy failure safe for operational reporting."""
+
+
+def _report_hierarchy_failure(exc: Exception, document_id: str) -> None:
+    # Model and database exceptions can contain document text or SQL params.
+    try:
+        raise _DocumentHierarchyError(
+            f"Document hierarchy resolution or persistence failed ({type(exc).__name__})"
+        ) from None
+    except _DocumentHierarchyError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        error = sanitized
+
+    logger.warning("%s; continuing flat", error, extra={"sentry_skip_event": True})
+    try:
+        report_runtime_exception(
+            error,
+            component="document_ingestion",
+            operation="hierarchy_resolution_failed",
+            context={"document_id": document_id},
+        )
+    except Exception:
+        # Reporting must not interrupt the explicitly supported flat indexing.
+        logger.warning(
+            "Document hierarchy failure reporting unavailable",
+            extra={"sentry_skip_event": True},
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,11 +258,7 @@ async def index_owned_document_elements(
                 document_id, user_id, owner_user_id, hierarchy_metadata
             )
     except Exception as exc:
-        logger.warning(
-            "Document hierarchy resolution failed for %s; continuing flat: %s",
-            document_id,
-            exc,
-        )
+        _report_hierarchy_failure(exc, document_id)
 
     await _sync_sql_document_status(
         document_id, user_id=user_id, owner_user_id=owner_user_id, status="processing"
