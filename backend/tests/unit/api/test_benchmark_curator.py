@@ -193,3 +193,71 @@ async def test_read_wrapper_preserves_current_human_verification(boundary, failu
             await admission.require_benchmark_read_curator(request(), owner, "Bearer human-token")
         assert error.value.status_code == expected
         assert "private" not in str(error.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "throttling", "database", "config", "page", "revoked", "inactive", "missing", "mismatch"])
+@pytest.mark.parametrize("reporting_fails", [False, True])
+async def test_real_current_authorizer_classifies_failures(boundary, monkeypatch, caplog, failure, reporting_fails):
+    from botocore.exceptions import ClientError
+    from src.lib.benchmarks import curator_authorization as authorization
+
+    provider, _, _ = boundary
+    principal = provider.extract_principal.return_value
+    principal.raw_claims["iss"] = "https://cognito-idp.us-east-1.amazonaws.com/pool"
+    principal.groups = ["flybase-curators"]
+    sdk = MagicMock()
+    sdk.admin_get_user.return_value = {
+        "Enabled": True, "Username": "curator-name",
+        "UserAttributes": [{"Name": "sub", "Value": "curator"}],
+    }
+    sdk.admin_list_groups_for_user.return_value = {"Groups": [{"GroupName": "flybase-curators"}]}
+    factory = MagicMock()
+    factory.return_value.__enter__.return_value.get.return_value = User(
+        id=42, auth_sub="curator", is_active=failure != "inactive",
+    )
+    monkeypatch.setattr(authorization, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(authorization, "get_auth_provider", lambda: "cognito")
+    monkeypatch.setattr(authorization, "get_cognito_region", lambda: "us-east-1")
+    monkeypatch.setattr(authorization, "get_cognito_user_pool_id", lambda: "" if failure == "config" else "pool")
+    monkeypatch.setattr(authorization.boto3, "client", lambda *args, **kwargs: sdk)
+    sensitive = "private-provider-text sql-parameters human-token"
+    if failure == "timeout":
+        sdk.admin_get_user.side_effect = TimeoutError(sensitive)
+    elif failure in {"throttling", "missing"}:
+        sdk.admin_get_user.side_effect = ClientError(
+            {"Error": {"Code": "UserNotFoundException" if failure == "missing" else "TooManyRequestsException", "Message": sensitive}},
+            "AdminGetUser",
+        )
+    elif failure == "database":
+        factory.return_value.__enter__.return_value.get.side_effect = RuntimeError(sensitive)
+    elif failure == "page":
+        sdk.admin_list_groups_for_user.return_value = {"Groups": [{"GroupName": " "}]}
+    elif failure == "revoked":
+        sdk.admin_list_groups_for_user.return_value = {"Groups": []}
+    elif failure == "mismatch":
+        sdk.admin_get_user.return_value["Username"] = "another-user"
+
+    async def real_authorizer(context):
+        return await authorization.authorize_benchmark_curator(context, session_factory=factory)
+
+    monkeypatch.setattr(admission, "authorize_benchmark_curator", real_authorizer)
+    reporter = Mock(side_effect=RuntimeError("reporting unavailable") if reporting_fails else None)
+    monkeypatch.setattr("src.lib.http_errors.report_runtime_exception", reporter)
+    with pytest.raises(HTTPException) as error:
+        await admission.require_benchmark_curator(request("human-token"), {"sub": "curator"}, None)
+    denial = failure in {"revoked", "inactive", "missing", "mismatch"}
+    assert error.value.status_code == (403 if denial else 503)
+    assert error.value.detail["code"] == (
+        "curator_authorization_required" if denial else "curator_authorization_unavailable"
+    )
+    if denial:
+        reporter.assert_not_called()
+    else:
+        reporter.assert_called_once()
+        captured = reporter.call_args.args[0]
+        assert captured.__traceback__ is not None
+        assert captured.__context__ is None and captured.__cause__ is None
+        assert "BenchmarkOperationError" in str(captured)
+    for value in sensitive.split():
+        assert value not in caplog.text + str(error.value.detail)
