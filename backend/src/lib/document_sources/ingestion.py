@@ -60,7 +60,9 @@ def _report_hierarchy_failure(exc: Exception, document_id: str) -> None:
         sanitized.__cause__ = None
         error = sanitized
 
-    logger.warning("%s; continuing flat", error, extra={"sentry_skip_event": True})
+    logger.warning(
+        "%s for %s; continuing flat", error, document_id, extra={"sentry_skip_event": True}
+    )
     try:
         report_runtime_exception(
             error,
@@ -71,7 +73,8 @@ def _report_hierarchy_failure(exc: Exception, document_id: str) -> None:
     except Exception:
         # Reporting must not interrupt the explicitly supported flat indexing.
         logger.warning(
-            "Document hierarchy failure reporting unavailable",
+            "Document hierarchy failure reporting unavailable for %s",
+            document_id,
             extra={"sentry_skip_event": True},
         )
 

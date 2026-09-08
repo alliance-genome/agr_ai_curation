@@ -246,7 +246,10 @@ async def test_shared_indexing_reports_hierarchy_failure_and_continues(
     }
     assert sensitive not in str(reported)
     assert sensitive not in caplog.text
-    assert all(record.sentry_skip_event for record in caplog.records if record.name == ingestion.__name__)
+    records = [record for record in caplog.records if record.name == ingestion.__name__]
+    assert len(records) == (2 if reporter_fails else 1)
+    assert all("doc-1" in record.getMessage() for record in records)
+    assert all(record.sentry_skip_event for record in records)
 
 
 @pytest.mark.asyncio
