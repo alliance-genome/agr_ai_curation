@@ -73,11 +73,22 @@ class _FeedbackDependencyLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if self.active.get() and record.levelno >= logging.WARNING:
             record.sentry_skip_event = True
-            record.msg = "Feedback dependency failed; feedback service owns failure reporting."
+            record.msg = FeedbackService._compact_redacted_text(
+                record.getMessage(), max_chars=MAX_TRACE_ERROR_CHARS
+            )
             record.args = ()
+            # Keep operational diagnostics, but never let a formatter append
+            # an unredacted exception or cached traceback after the safe message.
+            exception_text = record.exc_text
+            if record.exc_info:
+                exception_text = logging.Formatter().formatException(record.exc_info)
+            record.exc_text = FeedbackService._compact_redacted_text(
+                exception_text, max_chars=MAX_TRACE_ERROR_CHARS
+            )
             record.exc_info = None
-            record.exc_text = None
-            record.stack_info = None
+            record.stack_info = FeedbackService._compact_redacted_text(
+                record.stack_info, max_chars=MAX_TRACE_ERROR_CHARS
+            )
         return True
 
 
@@ -101,10 +112,14 @@ def _feedback_dependency_logs():
         _feedback_log_filter.active.reset(token)
 
 
-def _report_feedback_failure(stage: str, *, error_count: int = 1) -> None:
+def _report_feedback_failure(
+    stage: str, *, error_types: set[str], error_count: int = 1
+) -> None:
     # Build a traceback without retaining the sensitive exception or its chain.
     try:
-        raise _FeedbackProcessingError(f"Feedback processing failed at {stage}") from None
+        raise _FeedbackProcessingError(
+            f"Feedback processing failed at {stage} ({', '.join(sorted(error_types))})"
+        ) from None
     except _FeedbackProcessingError as sanitized:
         sanitized.__context__ = None
         sanitized.__cause__ = None
@@ -285,7 +300,7 @@ class FeedbackService:
                         )
                 logger.info('Captured trace snapshot for feedback %s', feedback_id)
             except Exception as e:
-                _report_feedback_failure("trace_capture")
+                _report_feedback_failure("trace_capture", error_types={type(e).__name__})
                 report.trace_data = self._trace_capture_failure_snapshot(report, e)
                 capture_error = self._trace_capture_error(e)
                 report.error_details = (
@@ -298,8 +313,8 @@ class FeedbackService:
                     self.notifier.send_feedback_notification(report)
                 report.email_sent_at = datetime.now(timezone.utc)
                 logger.info('Sent notification for feedback %s', feedback_id)
-            except Exception:
-                _report_feedback_failure("notifier_delivery")
+            except Exception as exc:
+                _report_feedback_failure("notifier_delivery", error_types={type(exc).__name__})
                 notification_error = "Notification delivery failed."
                 if report.error_details:
                     report.error_details = f"{report.error_details}; {notification_error}"
@@ -313,9 +328,9 @@ class FeedbackService:
 
             logger.info('Completed background processing for feedback %s', feedback_id)
 
-        except Exception:
+        except Exception as exc:
             # Catch-all for unexpected errors
-            _report_feedback_failure("background_processing")
+            _report_feedback_failure("background_processing", error_types={type(exc).__name__})
             self.db.rollback()
             report.processing_status = ProcessingStatus.FAILED
             report.error_details = "Unexpected feedback processing failure."
@@ -404,8 +419,8 @@ class FeedbackService:
         except ChatHistorySessionNotFoundError:
             logger.info("No durable session available for feedback transcript lookup")
             return None
-        except SQLAlchemyError:
-            _report_feedback_failure("transcript_lookup")
+        except SQLAlchemyError as exc:
+            _report_feedback_failure("transcript_lookup", error_types={type(exc).__name__})
             self.db.rollback()
             return None
 
@@ -469,6 +484,7 @@ class FeedbackService:
         captured_at = self._utc_timestamp()
         traces = []
         error_count = 0
+        error_types: set[str] = set()
 
         for trace_id in trace_ids[:MAX_TRACE_SNAPSHOT_TRACES]:
             try:
@@ -482,6 +498,7 @@ class FeedbackService:
                 )
             except Exception as exc:
                 error_count += 1
+                error_types.add(type(exc).__name__)
                 traces.append(
                     {
                         "trace_id": trace_id,
@@ -519,7 +536,9 @@ class FeedbackService:
                 "trace_error_count": error_count,
                 "message": "One or more trace snapshots could not be captured.",
             }
-            _report_feedback_failure("trace_capture", error_count=error_count)
+            _report_feedback_failure(
+                "trace_capture", error_types=error_types, error_count=error_count
+            )
 
         return snapshot
 

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -933,6 +934,7 @@ def test_failure_stages_report_sanitized_events_without_masking(
 ):
     module = _feedback_service_module()
     secret = "private curator transcript feedback provider payload password=fixture-secret"
+    caplog.set_level(logging.INFO)
     reporter = MagicMock(side_effect=RuntimeError(secret) if reporter_raises else None)
     monkeypatch.setattr(module, "report_runtime_exception", reporter)
     monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
@@ -983,6 +985,11 @@ def test_failure_stages_report_sanitized_events_without_masking(
     assert error.__traceback__ is not None
     assert error.__context__ is None
     assert error.__cause__ is None
+    expected_type = (
+        "SQLAlchemyError" if stage in {"transcript_lookup", "background_processing"}
+        else "RuntimeError"
+    )
+    assert str(error) == f"Feedback processing failed at {stage} ({expected_type})"
     assert reporter.call_args.kwargs == {
         "component": "feedback_service", "operation": stage,
         "tags": {"phase": stage}, "context": {"error_count": 1},
@@ -991,7 +998,10 @@ def test_failure_stages_report_sanitized_events_without_masking(
                   str(report.error_details), str(report.trace_data)):
         assert secret not in value
         assert "fixture-secret" not in value
-    failure_logs = [record for record in caplog.records if "Feedback" in record.message]
+    failure_logs = [
+        record for record in caplog.records
+        if record.name == module.__name__ and record.levelno >= logging.WARNING
+    ]
     assert failure_logs
     assert all(getattr(record, "sentry_skip_event", False) for record in failure_logs)
 
@@ -1008,6 +1018,8 @@ def test_trace_failures_report_once_per_capture(monkeypatch, partial, reporter_r
     async def capture(trace_id):
         if partial and trace_id == "trace-3":
             return object()
+        if trace_id == "trace-2":
+            raise ValueError(secret)
         raise RuntimeError(secret)
 
     monkeypatch.setattr(module, "get_trace_context_for_explorer", capture)
@@ -1023,6 +1035,9 @@ def test_trace_failures_report_once_per_capture(monkeypatch, partial, reporter_r
     reporter.assert_called_once()
     assert reporter.call_args.kwargs["operation"] == "trace_capture"
     assert reporter.call_args.kwargs["context"] == {"error_count": 2 if partial else 3}
+    assert str(reporter.call_args.args[0]) == (
+        "Feedback processing failed at trace_capture (RuntimeError, ValueError)"
+    )
     assert report.trace_data["capture_status"] == ("partial" if partial else "error")
     assert len(report.trace_data["traces"]) == 3
     assert secret not in str(report.trace_data)
@@ -1130,7 +1145,13 @@ def test_real_dependency_failures_have_one_event_owner(monkeypatch, caplog, fail
     # Exercise the actual promotion hook: these records would otherwise become
     # separate Sentry events when ERROR log promotion is enabled.
     assert all(before_send({"level": "error"}, {"log_record": r}) is None for r in dependency_errors)
-    assert secret not in caplog.text
+    assert "fixture-secret" not in caplog.text
+    assert "password=[redacted]" in caplog.text
+    if failure == "sns_client":
+        assert "InternalError" in caplog.text
+    if failure == "email":
+        assert "SMTPException" in str(reporter.call_args.args[0])
+    assert secret not in str(reporter.call_args)
     assert "fixture-secret" not in str(report.trace_data)
     assert "fixture-secret" not in str(report.error_details)
 
@@ -1138,6 +1159,25 @@ def test_real_dependency_failures_have_one_event_owner(monkeypatch, caplog, fail
     caplog.clear()
     logging.getLogger(dependency_errors[0].name).error("Unrelated caller failure")
     assert before_send({"level": "error"}, {"log_record": caplog.records[-1]}) is not None
+
+
+def test_dependency_log_redacts_formatted_exception_and_stack(caplog):
+    module = _feedback_service_module()
+    dependency_logger = logging.getLogger("src.lib.feedback.email_notifier")
+    with module._feedback_dependency_logs():
+        try:
+            raise RuntimeError("SMTP unavailable password=fixture-secret")
+        except RuntimeError:
+            dependency_logger.exception("Delivery failed token=fixture-secret", stack_info=True)
+
+    record = caplog.records[-1]
+    assert record.sentry_skip_event is True
+    assert record.exc_info is None
+    assert "RuntimeError: SMTP unavailable password=[redacted]" in record.exc_text
+    assert "Traceback" in record.exc_text
+    assert "Stack" in record.stack_info
+    assert "token=[redacted]" in record.getMessage()
+    assert "fixture-secret" not in caplog.text
 
 
 def test_feedback_log_ownership_isolates_concurrent_callers(caplog):
