@@ -529,7 +529,9 @@ def test_feedback_submission_persists_trace_capture_failure_metadata(
     assert report.trace_data["error_summary"]["trace_error_count"] == 1
     trace_error = report.trace_data["traces"][0]["error"]
     assert trace_error["type"] == "RuntimeError"
-    assert trace_error["message"] == "Langfuse disabled in feedback integration test"
+    assert trace_error["message"] == (
+        "Trace snapshot capture failed; check TraceReview/Langfuse availability."
+    )
     assert len(captured_email_messages) == 1
 
     debug_response = client.get(f"/api/feedback/{report.id}/debug")
@@ -544,7 +546,9 @@ def test_feedback_submission_persists_trace_capture_failure_metadata(
         {
             "trace_id": "trace-capture-failure-1",
             "type": "RuntimeError",
-            "message": "Langfuse disabled in feedback integration test",
+            "message": (
+                "Trace snapshot capture failed; check TraceReview/Langfuse availability."
+            ),
         }
     ]
 
