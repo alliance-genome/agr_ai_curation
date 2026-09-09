@@ -12,6 +12,8 @@ const serviceMocks = vi.hoisted(() => ({
   listFlows: vi.fn(),
   getFlow: vi.fn(),
   deleteFlow: vi.fn(),
+  shareFlow: vi.fn(),
+  cloneFlow: vi.fn(),
 }))
 
 const invalidationMocks = vi.hoisted(() => ({
@@ -39,9 +41,11 @@ const reactFlowMocks = vi.hoisted(() => ({
 vi.mock('@/services/agentStudioService', () => ({
   createFlow: serviceMocks.createFlow,
   updateFlow: serviceMocks.updateFlow,
-  listFlows: serviceMocks.listFlows,
+  listAllFlows: serviceMocks.listFlows,
   getFlow: serviceMocks.getFlow,
   deleteFlow: serviceMocks.deleteFlow,
+  shareFlow: serviceMocks.shareFlow,
+  cloneFlow: serviceMocks.cloneFlow,
 }))
 
 vi.mock('@/features/flows/flowListInvalidation', () => ({
@@ -99,9 +103,15 @@ vi.mock('reactflow', async () => {
       onConnect,
       onNodeClick,
       onPaneClick,
+      nodesDraggable,
+      nodesConnectable,
+      deleteKeyCode,
       nodes = [],
       edges = [],
     }: {
+      nodesDraggable?: boolean
+      nodesConnectable?: boolean
+      deleteKeyCode?: unknown
       children?: React.ReactNode
       onInit?: (instance: {
         fitView: typeof reactFlowMocks.fitView
@@ -139,7 +149,7 @@ vi.mock('reactflow', async () => {
       }, [onNodeClick, onPaneClick])
 
       return (
-        <div data-testid="react-flow" onDrop={onDrop} onDragOver={onDragOver}>
+        <div data-testid="react-flow" data-draggable={nodesDraggable} data-connectable={nodesConnectable} data-delete-key={JSON.stringify(deleteKeyCode)} onDrop={onDrop} onDragOver={onDragOver}>
           {nodes.filter((node) => node.type === 'output').map((node) => (
             <div
               className="react-flow__node-output selectable"
@@ -195,7 +205,7 @@ vi.mock('./NodePanel', async (importOriginal) => {
   const react = await vi.importActual<typeof import('react')>('react')
   return {
     ...(await importOriginal<typeof import('./NodePanel')>()),
-    NodePanel: ({ leaveGuardRef }: { leaveGuardRef?: { current: unknown } }) => {
+    NodePanel: ({ leaveGuardRef, readOnly }: { leaveGuardRef?: { current: unknown }; readOnly?: boolean }) => {
       react.useEffect(() => {
         if (!leaveGuardRef) return
         const guard = { requestLeave: nodePanelMocks.requestLeave }
@@ -204,7 +214,7 @@ vi.mock('./NodePanel', async (importOriginal) => {
           if (leaveGuardRef.current === guard) leaveGuardRef.current = null
         }
       }, [leaveGuardRef])
-      return null
+      return <div data-testid="node-panel" data-readonly={readOnly} />
     },
   }
 })
@@ -213,6 +223,10 @@ function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse 
   return {
     id: overrides.id ?? 'flow-1',
     user_id: 7,
+    visibility: 'private',
+    project_id: null,
+    shared_at: null,
+    is_owner: true,
     name: overrides.name ?? 'Fresh Flow',
     description: overrides.description ?? 'Saved from builder',
     execution_count: 0,
@@ -240,6 +254,7 @@ function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse 
       ],
       edges: [],
     },
+    ...overrides,
   }
 }
 
@@ -249,6 +264,10 @@ function buildFlowListResponse(name: string) {
       {
         id: 'flow-1',
         user_id: 7,
+    visibility: 'private',
+    project_id: null,
+    shared_at: null,
+    is_owner: true,
         name,
         description: 'Saved from builder',
         step_count: 1,
@@ -282,6 +301,124 @@ function expectedPrimaryShortcutLabel() {
 }
 
 describe('FlowBuilder', () => {
+  it('opens a teammate flow read-only and clones into a private editable copy', async () => {
+    const user = userEvent.setup()
+    const shared = buildFlowResponse({ name: 'Teammate Flow', user_id: 8, is_owner: false, visibility: 'project', project_id: 'project-a' })
+    serviceMocks.getFlow.mockResolvedValue(shared)
+    serviceMocks.cloneFlow.mockResolvedValue(buildFlowResponse({ id: 'copy', name: 'Teammate Flow (Copy)' }))
+    const onFlowSaved = vi.fn()
+    render(<FlowBuilder flowId="flow-1" onFlowSaved={onFlowSaved} />)
+    await screen.findByText('Teammate Flow')
+    expect(screen.getByText(/Owner #8/)).toHaveTextContent('Read-only')
+    expect(screen.queryByTestId('agent-palette')).not.toBeInTheDocument()
+    expect(screen.getByTestId('react-flow')).toHaveAttribute('data-draggable', 'false')
+    expect(screen.getByTestId('react-flow')).toHaveAttribute('data-connectable', 'false')
+    expect(screen.getByTestId('react-flow')).toHaveAttribute('data-delete-key', 'null')
+    expect(screen.getByRole('button', { name: /^Save flow$/ })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Share with project' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Run in workspace' })).toHaveAttribute('href', '/?flow=flow-1')
+    act(() => reactFlowMocks.onNodeClick?.({} as never, { id: 'node_0', data: shared.flow_definition.nodes[0].data } as never))
+    expect(screen.getByTestId('node-panel')).toHaveAttribute('data-readonly', 'true')
+    act(() => reactFlowMocks.onConnect?.({ source: 'node_0', target: 'another' }))
+    expect(reactFlowMocks.edges).toHaveLength(0)
+    dispatchKeyboardShortcut(window, { key: 's', ctrlKey: true })
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Clone to edit' }))
+    await screen.findByText('Teammate Flow (Copy)')
+    expect(serviceMocks.cloneFlow).toHaveBeenCalledWith('flow-1')
+    expect(onFlowSaved).toHaveBeenCalledWith('copy')
+    expect(screen.getByText('Private · You')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-palette')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Save flow$/ })).toBeEnabled()
+    expect(invalidationMocks.notifyFlowListInvalidated).toHaveBeenCalledWith({ flowId: 'copy', reason: 'created' })
+    serviceMocks.updateFlow.mockResolvedValue(buildFlowResponse({ id: 'copy', name: 'Teammate Flow (Copy)' }))
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Teammate Flow (Copy)'))
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalledWith('copy', expect.objectContaining({ name: 'Teammate Flow (Copy)' })))
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalledWith('flow-1', expect.anything())
+  })
+
+  it('keeps node drafts when switching from an owned flow to a teammate flow', async () => {
+    const user = userEvent.setup()
+    const owned = buildFlowResponse()
+    serviceMocks.getFlow.mockResolvedValue(owned)
+    serviceMocks.listFlows.mockResolvedValue({ ...buildFlowListResponse('Shared Flow'), flows: [{ ...buildFlowListResponse('Shared Flow').flows[0], id: 'shared', is_owner: false, visibility: 'project' }] })
+    render(<FlowBuilder flowId="flow-1" />)
+    await screen.findByText('Fresh Flow')
+    act(() => reactFlowMocks.onNodeClick?.({} as never, { id: 'node_0', data: owned.flow_definition.nodes[0].data } as never))
+    nodePanelMocks.requestLeave.mockResolvedValueOnce(false)
+    await user.click(screen.getByRole('button', { name: 'Open flow' }))
+    await user.click(await screen.findByText('Shared Flow'))
+    expect(nodePanelMocks.requestLeave).toHaveBeenCalled()
+    expect(serviceMocks.getFlow).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('dialog', { name: 'Open Flow' })).toBeInTheDocument()
+  })
+
+  it('lets owners share and unshare while preserving the loaded graph', async () => {
+    const user = userEvent.setup()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse())
+    serviceMocks.shareFlow.mockResolvedValueOnce(buildFlowResponse({ visibility: 'project', project_id: 'project-a' }))
+      .mockResolvedValueOnce(buildFlowResponse())
+    render(<FlowBuilder flowId="flow-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Share with project' }))
+    expect(serviceMocks.shareFlow).toHaveBeenCalledWith('flow-1', 'project')
+    await user.click(await screen.findByRole('button', { name: 'Make private' }))
+    expect(serviceMocks.shareFlow).toHaveBeenLastCalledWith('flow-1', 'private')
+    await screen.findByText('Private · You')
+    expect(reactFlowMocks.nodes).toHaveLength(1)
+  })
+
+  it('ignores a late owner share response after opening a teammate flow', async () => {
+    const user = userEvent.setup()
+    let finishShare!: (flow: FlowResponse) => void
+    serviceMocks.shareFlow.mockReturnValue(new Promise<FlowResponse>((resolve) => { finishShare = resolve }))
+    serviceMocks.getFlow.mockResolvedValueOnce(buildFlowResponse())
+      .mockResolvedValueOnce(buildFlowResponse({ id: 'shared', name: 'Shared Original', visibility: 'project', is_owner: false }))
+    const { rerender } = render(<FlowBuilder flowId="flow-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Share with project' }))
+    rerender(<FlowBuilder flowId="shared" />)
+    await screen.findByText('Shared Original')
+    await act(async () => finishShare(buildFlowResponse({ visibility: 'project' })))
+    expect(screen.getByRole('button', { name: /^Save flow$/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Clone to edit' })).toBeInTheDocument()
+  })
+
+  it('filters shared browse results and hides teammate management actions', async () => {
+    const user = userEvent.setup()
+    const owned = buildFlowListResponse('My Flow').flows[0]
+    const shared = { ...owned, id: 'shared', name: 'Shared Flow', user_id: 8, is_owner: false, visibility: 'project' }
+    serviceMocks.listFlows.mockResolvedValue({ flows: [owned, shared], total: 2, page: 1, page_size: 50 })
+    render(<FlowBuilder />)
+    await user.click(screen.getByRole('button', { name: 'Open flow' }))
+    await screen.findByText('Shared Flow')
+    await user.click(screen.getByRole('button', { name: 'Shared with me' }))
+    expect(screen.queryByText('My Flow')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await user.click(await screen.findByRole('button', { name: 'Manage flows' }))
+    const sharedRow = (await screen.findByText('Shared Flow')).closest('li')!
+    expect(within(sharedRow).queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument()
+    expect(within(sharedRow).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument()
+  })
+
+  it('does not expose a forbidden flow and displays actionable access failures', async () => {
+    serviceMocks.getFlow.mockRejectedValue(new Error('Flow not found'))
+    render(<FlowBuilder flowId="not-visible" />)
+    expect(await screen.findByText('Flow not found')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clone to edit' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Run in workspace' })).not.toBeInTheDocument()
+  })
+
+  it('keeps a shared original open when cloning fails due to agent access', async () => {
+    const user = userEvent.setup()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ is_owner: false, visibility: 'project' }))
+    serviceMocks.cloneFlow.mockRejectedValue(new Error('Referenced agent is unavailable to your group'))
+    render(<FlowBuilder flowId="flow-1" />)
+    await user.click(await screen.findByRole('button', { name: 'Clone to edit' }))
+    expect(await screen.findByText('Referenced agent is unavailable to your group')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Save flow$/ })).toBeDisabled()
+  })
+
   it('gives the canvas row an explicit flex basis so React Flow gets a width inside the Panel', async () => {
     render(<FlowBuilder />)
     const split = await screen.findByTestId('flow-canvas-split')
@@ -296,6 +433,8 @@ describe('FlowBuilder', () => {
     serviceMocks.listFlows.mockReset()
     serviceMocks.getFlow.mockReset()
     serviceMocks.deleteFlow.mockReset()
+    serviceMocks.shareFlow.mockReset()
+    serviceMocks.cloneFlow.mockReset()
     invalidationMocks.notifyFlowListInvalidated.mockReset()
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
@@ -515,7 +654,10 @@ describe('FlowBuilder', () => {
 
     await screen.findByText('2 steps')
 
+    const discard = vi.spyOn(window, 'confirm').mockReturnValueOnce(true)
     await user.click(within(fileActions).getByRole('button', { name: 'New flow' }))
+    expect(discard).toHaveBeenCalledWith('Discard unsaved flow changes?')
+    discard.mockRestore()
     await screen.findByText('1 step')
     expect(screen.queryByText('2 steps')).not.toBeInTheDocument()
 

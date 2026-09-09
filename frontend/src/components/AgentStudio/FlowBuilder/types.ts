@@ -126,9 +126,18 @@ export type FlowDefinition = FlowDefinitionBody & { version: '1.1' }
 // API Response Types
 // ============================================================================
 
-export interface FlowResponse {
-  id: string
+export type FlowVisibility = 'private' | 'project'
+
+export interface FlowAccess {
   user_id: number
+  visibility: FlowVisibility
+  project_id: string | null
+  shared_at: string | null
+  is_owner: boolean
+}
+
+export interface FlowResponse extends FlowAccess {
+  id: string
   name: string
   description: string | null
   // Migration d6e7f8a9b0c1 guarantees persisted flows are v1.1.
@@ -144,9 +153,8 @@ export interface FlowResponse {
   has_critical_issues?: boolean
 }
 
-export interface FlowSummaryResponse {
+export interface FlowSummaryResponse extends FlowAccess {
   id: string
-  user_id: number
   name: string
   description: string | null
   step_count: number

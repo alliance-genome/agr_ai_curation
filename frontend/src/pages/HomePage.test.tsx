@@ -157,6 +157,14 @@ describe('HomePage durable session bootstrap', () => {
     vi.restoreAllMocks()
   })
 
+  it('opens Tools when a flow is routed from Agent Studio', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(jsonResponse({ session_id: 'my-session' }))
+    renderHomePage('/?flow=shared-flow')
+    await waitFor(() => expect(rightPanelRenderSpy).toHaveBeenCalled())
+    expect(rightPanelRenderSpy.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ activeTabIndex: 1 }))
+    expect(chatStreamStub.executeFlow).not.toHaveBeenCalled()
+  })
+
   it('restores the requested session before mounting the chat surface and rehydrates document state', async () => {
     localStorage.setItem(chatStorageKeys.sessionId, 'stale-local-session')
     localStorage.setItem(chatStorageKeys.messages, JSON.stringify({

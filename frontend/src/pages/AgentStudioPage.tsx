@@ -235,6 +235,7 @@ function AgentStudioPage() {
 
   // UI state (with persistence)
   const [activeTab, setActiveTab] = useState<TabValue>(() => {
+    if (searchParams.get('tab') === 'flows') return 'flows'
     const storedResult = safeGetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, {
       owner: 'preferences',
       key: AGENT_STUDIO_TAB_KEY,
@@ -292,7 +293,7 @@ function AgentStudioPage() {
   // A deep link into the Agent Browser (from the Flow Builder node panel or the Workshop).
   const [agentDetailsRequest, setAgentDetailsRequest] = useState<AgentDetailsRequest | null>(null)
   const agentDetailsRequestCounterRef = useRef(0)
-  const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
+  const [currentFlowId, setCurrentFlowId] = useState<string | null>(() => searchParams.get('flow'))
   const [agentWorkshopTemplateSource, setAgentWorkshopTemplateSource] = useState<string | null>(null)
   const [agentWorkshopCustomAgentId, setAgentWorkshopCustomAgentId] = useState<string | null>(null)
   const [agentWorkshopContext, setAgentWorkshopContext] = useState<AgentWorkshopContext | null>(null)

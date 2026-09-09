@@ -7,6 +7,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import Chat from '@/components/Chat'
 import RightPanel from '@/components/RightPanel'
+import { INITIAL_TABS } from '@/types/ComponentProps'
 import { useAuth } from '@/contexts/AuthContext'
 import { useChatStream } from '@/hooks/useChatStream'
 import {
@@ -178,6 +179,7 @@ function HomePage() {
 
   // Right panel tab state (persisted)
   const [rightPanelTab, setRightPanelTab] = useState<number>(() => {
+    if (searchParams.get('flow')) return INITIAL_TABS.findIndex((tab) => tab.id === 'tools')
     const stored = safeGetItem(() => window.localStorage, RIGHT_PANEL_TAB_KEY, {
       owner: 'preferences',
       key: RIGHT_PANEL_TAB_KEY,

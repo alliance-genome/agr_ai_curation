@@ -41,6 +41,24 @@ Curation Flows are guided supervisor conversations that run multiple AI agents i
 2. Select the **"Flows"** tab
 3. The Flow Builder canvas appears on the right, with Opus chat on the left
 
+## Reusing project-shared flows
+
+In Agent Studio's **Flows** tab, choose **Open flow** and filter by **My flows** or
+**Shared with me**. Each entry shows **Private** or **Shared** and its owner.
+Private flows are visible only to their owner; shared flows are visible to members
+of the owner's project.
+
+Owners can select **Share with project** or **Make private** on an open saved flow.
+Teammates can inspect the canvas and step settings read-only. Select **Clone to
+edit** to open your own private copy. The copy starts without the original's run
+history or statistics. Only the owner can change or delete the original.
+
+Select **Run in workspace** to open the flow in Home's **Tools → Curation Flows**.
+Check your current document and click **Run**; execution uses your session and
+document. Home also lists shared flows and links back to Flow Builder. Project
+sharing does not grant access to restricted agents: if an agent is unavailable to
+your group, resolve that access issue before running the flow.
+
 ## Flow Builder Interface
 
 **Opus Chat (Left Panel)**

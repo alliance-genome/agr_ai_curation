@@ -273,3 +273,21 @@ describe('NodePanel', () => {
     })
   })
 })
+
+describe('shared flow step inspection', () => {
+  it('keeps instructions and checks inspectable while hiding mutation actions', async () => {
+    metadataMocks.agents = extractionMetadata
+    const user = userEvent.setup()
+    const { onApply, onDelete } = renderPanel(buildNode({ custom_instructions: 'Shared instructions' }), { readOnly: true })
+    expect(screen.getByRole('textbox', { name: 'Instructions for this step' })).toBeDisabled()
+    expect(screen.getByDisplayValue('Shared instructions')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'More step actions' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Adjust optional checks/ }))
+    expect(screen.getByRole('switch')).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Output variable' }))
+    expect(screen.getByRole('textbox', { name: 'Output variable name' })).toBeDisabled()
+    expect(onApply).not.toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
+  })
+})
