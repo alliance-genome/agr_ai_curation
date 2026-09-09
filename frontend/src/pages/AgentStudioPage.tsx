@@ -301,6 +301,7 @@ function AgentStudioPage() {
   const [agentDetailsRequest, setAgentDetailsRequest] = useState<AgentDetailsRequest | null>(null)
   const agentDetailsRequestCounterRef = useRef(0)
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(() => searchParams.get('flow'))
+  const [flowOpenRequestId, setFlowOpenRequestId] = useState(0)
   const [agentWorkshopTemplateSource, setAgentWorkshopTemplateSource] = useState<string | null>(null)
   const [agentWorkshopCustomAgentId, setAgentWorkshopCustomAgentId] = useState<string | null>(null)
   const [agentWorkshopContext, setAgentWorkshopContext] = useState<AgentWorkshopContext | null>(null)
@@ -946,6 +947,7 @@ Agent ID: ${agentId}`
                     }}
                     onOpenFlow={(id) => {
                       setCurrentFlowId(id)
+                      setFlowOpenRequestId((requestId) => requestId + 1)
                       applyTab('flows')
                     }}
                     onReuseToolIdea={(idea) => {
@@ -963,6 +965,7 @@ Agent ID: ${agentId}`
                 >
                   <FlowBuilder
                     flowId={currentFlowId}
+                    flowOpenRequestId={flowOpenRequestId}
                     onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
                     onFlowChange={handleFlowChange}
                     onVerifyRequest={handleVerifyRequest}

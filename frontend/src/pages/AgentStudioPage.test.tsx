@@ -160,11 +160,13 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
   return {
   FlowBuilder: ({
     flowId,
+    flowOpenRequestId,
     onFlowChange,
     onVerifyRequest,
     active,
   }: {
     flowId?: string | null
+    flowOpenRequestId?: number
     onFlowChange?: (flow: Record<string, unknown>) => void
     onVerifyRequest?: () => void
     active?: boolean
@@ -175,7 +177,7 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
       return flowBuilderInstances.count
     })
     return (
-    <div data-testid="flow-builder" data-flow-id={flowId} data-instance={instance} data-active={String(active ?? true)}>
+    <div data-testid="flow-builder" data-flow-id={flowId} data-open-request={flowOpenRequestId} data-instance={instance} data-active={String(active ?? true)}>
       Flow
       <button
         onClick={() => onFlowChange?.({
@@ -413,6 +415,12 @@ describe('AgentStudioPage', () => {
     const builder = await screen.findByTestId('flow-builder')
     const instance = builder.getAttribute('data-instance')
     expect(builder).toHaveAttribute('data-flow-id', 'shared-flow')
+    const firstRequest = builder.getAttribute('data-open-request')
+    fireEvent.click(screen.getByRole('tab', { name: 'Shared Library' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open read-only' }))
+    expect(builder).toHaveAttribute('data-flow-id', 'shared-flow')
+    expect(builder.getAttribute('data-open-request')).not.toBe(firstRequest)
+    expect(builder).toHaveAttribute('data-instance', instance)
     fireEvent.click(screen.getByRole('tab', { name: 'Shared Library' }))
     expect(screen.getByLabelText('Search artifacts')).toHaveValue('Library flow')
     expect(builder).toHaveAttribute('data-active', 'false')

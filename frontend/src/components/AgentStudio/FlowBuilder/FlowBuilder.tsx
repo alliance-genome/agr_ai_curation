@@ -626,7 +626,7 @@ const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
   return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? 'Cmd' : 'Ctrl';
 }
 
-function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, onOpenAgent, active = true }: FlowBuilderProps) {
+function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange, onVerifyRequest, onOpenAgent, active = true }: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   const isValidationAgentDynamic = useCallback(
@@ -948,13 +948,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     ))
   }, [edges]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load flow if flowId provided (and different from current)
+  // Each explicit open request can retry a cancelled navigation or reopen a flow
+  // after New flow, even when the parent's requested flowId has not changed.
   useEffect(() => {
     // Only load if flowId is provided AND different from what we already have
     if (flowId && flowId !== currentFlowId) {
       void confirmLeaveFlow().then((leave) => { if (leave) void loadFlow(flowId) })
     }
-  }, [flowId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [flowId, flowOpenRequestId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Note: We intentionally exclude loadFlow and currentFlowId from deps
   // to prevent re-loading after save (which updates currentFlowId)
 

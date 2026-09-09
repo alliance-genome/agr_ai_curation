@@ -415,6 +415,45 @@ describe('FlowBuilder', () => {
     expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
   })
 
+  it('retries a cancelled request for the same shared flow through the discard guard', async () => {
+    serviceMocks.getFlow.mockResolvedValueOnce(buildFlowResponse())
+      .mockResolvedValueOnce(buildFlowResponse({ id: 'shared', name: 'Shared Original', visibility: 'project', is_owner: false }))
+    const { rerender } = render(<FlowBuilder flowId="flow-1" flowOpenRequestId={0} />)
+    await screen.findByText('Fresh Flow')
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320,
+      clientY: 220,
+      dataTransfer: { getData: (format: string) => format === 'application/reactflow'
+        ? JSON.stringify({ type: 'agent', agentId: 'draft_agent', agentName: 'Draft Agent' }) : '' },
+    })
+    await screen.findByText('2 steps')
+    const discard = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+    rerender(<FlowBuilder flowId="shared" flowOpenRequestId={1} />)
+    await waitFor(() => expect(discard).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.getFlow).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('2 steps')).toBeInTheDocument()
+    rerender(<FlowBuilder flowId="shared" flowOpenRequestId={2} />)
+    await screen.findByText('Shared Original')
+    expect(discard).toHaveBeenCalledTimes(2)
+    expect(discard).toHaveBeenLastCalledWith('Discard unsaved flow changes?')
+    expect(screen.getByRole('button', { name: /^Save flow$/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Clone to edit' })).toBeInTheDocument()
+    discard.mockRestore()
+  })
+
+  it('reopens the same shared flow after starting a new flow without remounting', async () => {
+    const user = userEvent.setup()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ visibility: 'project', is_owner: false }))
+    const { rerender } = render(<FlowBuilder flowId="flow-1" flowOpenRequestId={1} />)
+    await screen.findByText('Fresh Flow')
+    await user.click(screen.getByRole('button', { name: 'New flow' }))
+    await screen.findByText('Untitled')
+    rerender(<FlowBuilder flowId="flow-1" flowOpenRequestId={2} />)
+    await screen.findByText('Fresh Flow')
+    expect(serviceMocks.getFlow).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole('button', { name: /^Save flow$/ })).toBeDisabled()
+  })
+
   it('ignores a late owner share response after opening a teammate flow', async () => {
     const user = userEvent.setup()
     let finishShare!: (flow: FlowResponse) => void
