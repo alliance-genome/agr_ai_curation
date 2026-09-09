@@ -39,6 +39,115 @@ async def run_direct(resources, agent, trace):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["persisted", "persistence_failed", "missing_owner", "missing_session",
+                                     "missing_finalization", "validator_failed"])
+async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkeypatch, outcome):
+    from uuid import UUID
+    from agr_ai_curation_alliance.tools.gene_builder_tools import finalize_gene_extraction
+    from src.api import chat_common
+    from src.schemas.execution_provenance import SourceDocumentProvenance
+    from src.lib.openai_agents import extraction_trace_events
+
+    document_id = "2a66f37b-1536-4eab-894e-d421046c838e"
+    agent = Agent(name="Direct synthetic gene", model="gpt-5.6-sol", tools=[finalize_gene_extraction])
+    agent.agent_key = "gene_extractor"
+    agent.curation_metadata = {"launchable": True, "adapter_key": "gene"}
+    payload = {"extracted_objects": [], "domain_pack_id": "gene"}
+    validated = {**payload, "metadata": {"inline_validator_dispatch_complete": True}}
+    calls = []
+    trace_records = []
+    monkeypatch.setattr(runner, "write_stream_event", extraction_trace_events.write_stream_event)
+    monkeypatch.setattr(extraction_trace_events, "write_extraction_trace_event",
+                        lambda **kwargs: trace_records.append(kwargs))
+
+    def capture(doc, user):
+        assert (doc, user) == (document_id, "synthetic-owner")
+        return None if outcome == "missing_owner" else SourceDocumentProvenance(document_id=UUID(doc))
+
+    def persist(**kwargs):
+        calls.append(kwargs)
+        if outcome == "persistence_failed":
+            raise RuntimeError("synthetic persistence failure")
+        return SimpleNamespace(extraction_result_id="571bb209-fd16-4516-8142-68f19ec06739",
+                               result_ref="extraction-result:571bb209-fd16-4516-8142-68f19ec06739",
+                               created_new=True, idempotency_key="synthetic-key", payload_hash="synthetic-hash")
+
+    async def dispatch(value, **kwargs):
+        assert json.loads(value) == payload
+        if outcome == "validator_failed":
+            raise streaming_tools.SpecialistOutputError(agent.name, "builder_finalization")
+        return json.dumps(validated)
+
+    class Result:
+        final_output = "Completion manifest, not the canonical payload"
+
+        async def stream_events(self):
+            workspace = builder.get_active_extraction_builder_workspace()
+            workspace.upsert_candidate(candidate_id="materialized", staged_fields=payload)
+            if outcome != "missing_finalization":
+                workspace.finalize(candidate_ids=["materialized"])
+            if False:
+                yield None
+
+    monkeypatch.setattr(runner, "capture_source_document", capture)
+    monkeypatch.setattr(runner, "persist_inline_validated_extraction_result", persist)
+    monkeypatch.setattr(runner, "_dispatch_domain_envelope_validators_for_chat", dispatch)
+    monkeypatch.setattr(runner.Runner, "run_streamed", lambda *a, **k: Result())
+    events = []
+
+    async def consume():
+        async for event in runner._run_agent_with_owned_resources(
+            owned_openai_resources=runtime, agent=agent, input_items=[], user_id="synthetic-owner",
+            document_id=document_id, document_name="Synthetic paper", user_message="Extract this paper",
+            trace_id="synthetic-trace", direct_chat_context=runner._DirectBuilderChatContext(
+                session_id=None if outcome == "missing_session" else "synthetic-session", turn_id="synthetic-turn"),
+        ):
+            if event["type"] in {"INTERNAL_EXTRACTION_RESULT", "STRUCTURED_RESULT", "RUN_FINISHED"}:
+                assert len(calls) == 1, "Success must follow durable persistence"
+            if event["type"] == "INTERNAL_EXTRACTION_RESULT":
+                recorded = [record for record in trace_records
+                            if record["event_type"] == "extraction_builder.internal_result"]
+                assert len(recorded) == 1, "Internal ref must be trace-recorded before yield"
+                assert recorded[0]["trace_id"] == "synthetic-trace"
+                assert recorded[0]["input_summary"]["extraction_result_id"] == event["details"]["extraction_result_id"]
+                assert recorded[0]["input_summary"]["persistence"] == event["details"]["persistence"]
+            events.append(event)
+
+    if outcome == "missing_finalization":
+        await consume()
+        assert any(event["type"] == "RUN_ERROR" for event in events)
+        assert not calls
+        assert not any(event["type"] in {"INTERNAL_EXTRACTION_RESULT", "STRUCTURED_RESULT", "RUN_FINISHED"}
+                       for event in events)
+        return
+    if outcome != "persisted":
+        with pytest.raises(streaming_tools.SpecialistOutputError):
+            await consume()
+        assert not any(event["type"] in {"INTERNAL_EXTRACTION_RESULT", "STRUCTURED_RESULT", "RUN_FINISHED"}
+                       for event in events)
+        assert len(calls) == (1 if outcome == "persistence_failed" else 0)
+        return
+
+    await consume()
+    assert len(calls) == 1
+    stored = calls[0]
+    assert stored["payload_json"] == validated
+    assert (stored["document_id"], stored["user_id"], stored["origin_session_id"], stored["trace_id"]) == (
+        document_id, "synthetic-owner", "synthetic-session", "synthetic-trace")
+    assert stored["agent_key"] == stored["tool_name"] == "gene_extractor"
+    assert stored["metadata"]["execution_context"]["executed_query"] == "Extract this paper"
+    assert stored["metadata"]["chat_turn_id"] == "synthetic-turn"
+    internal = [event for event in events if event["type"] == "INTERNAL_EXTRACTION_RESULT"]
+    assert len(internal) == 1
+    assert events.index(internal[0]) < next(i for i, event in enumerate(events) if event["type"] == "STRUCTURED_RESULT")
+    ref = chat_common._build_persisted_extraction_result_ref_from_tool_event(internal[0], tool_agent_map={})
+    assert str(ref.extraction_result_id) == internal[0]["details"]["extraction_result_id"]
+    assert ref.agent_key == "gene_extractor"
+    assert chat_common._build_extraction_candidate_from_tool_event(
+        internal[0], tool_agent_map={}, conversation_summary=None) is None
+
+
+@pytest.mark.asyncio
 async def test_direct_builder_binds_actual_package_stage_tool(runtime, monkeypatch):
     context = catalog_service.ToolExecutionContext(database_url="unused")
     stage = catalog_service._resolve_package_tool("stage_gene_mention_evidence", context)
@@ -136,7 +245,8 @@ async def test_direct_builder_requires_and_harvests_canonical_finalization(runti
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["accepted", "missing", "validator_failed"])
-async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch, outcome):
+@pytest.mark.parametrize("launchable", [True, False])
+async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch, outcome, launchable):
     from src.lib.benchmarks import runtime as adapter
     from src.lib.benchmarks.models import ResolvedBenchmarkCell
     from src.lib.openai_agents.tools import evidence_workspace
@@ -149,6 +259,7 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
     ])
     agent.agent_key = "gene_extractor"
     agent.authenticated_groups = ("synthetic-curator",)
+    agent.curation_metadata = {"launchable": launchable, "adapter_key": "gene"}
     captured = {}
     trace_events = []
     monkeypatch.setattr(runner, "write_extraction_trace_event", lambda **k: trace_events.append(k))
@@ -198,18 +309,29 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
             raise streaming_tools.SpecialistOutputError("Synthetic gene extractor", "builder_finalization")
         return payload
 
-    async def actual_runner(**kwargs):
+    async def with_resources(**kwargs):
         async for event in runner._run_agent_with_owned_resources(
-            owned_openai_resources=runtime, agent=kwargs["agent"],
-            input_items=kwargs["context_messages"], user_id=kwargs["user_id"],
-            document_id="synthetic-document", document_name="Synthetic paper",
-            user_message="Extract", trace_id=kwargs["session_id"],
+            owned_openai_resources=runtime, **kwargs,
         ):
+            assert event["type"] != "INTERNAL_EXTRACTION_RESULT"
             yield event
+
+    def reject_chat_io(*args, **kwargs):
+        raise AssertionError("Benchmark entered CHAT persistence/ownership capture")
+
+    monkeypatch.setattr(runner, "capture_source_document", reject_chat_io)
+    monkeypatch.setattr(runner, "persist_inline_validated_extraction_result", reject_chat_io)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+    for name in ("commit_pending_prompts", "_log_used_prompts_to_db", "provider_context_preflight",
+                 "start_extraction_trace_run", "clear_extraction_trace_run"):
+        monkeypatch.setattr(runner, name, lambda *a, **k: None)
+    doc_context = SimpleNamespace(hierarchy={}, abstract="", section_count=lambda: 0, to_agent_kwargs=lambda: {})
+    monkeypatch.setattr(adapter.DocumentContext, "fetch", lambda *a, **k: doc_context)
 
     monkeypatch.setattr(runner.Runner, "run_streamed", lambda active, **k: Result(active))
     monkeypatch.setattr(runner, "_dispatch_domain_envelope_validators_for_chat", dispatch)
-    monkeypatch.setattr(adapter, "run_agent_streamed", actual_runner)
+    # Keep the real adapter -> run_agent_streamed call, including route=agent.
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", with_resources)
     monkeypatch.setattr(adapter, "get_agent_by_id", lambda *a, **k: agent)
     cell = ResolvedBenchmarkCell.model_validate({
         "cell_id": "cell", "case_id": "case", "configuration_id": "config", "repetition": 1,
@@ -219,6 +341,7 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
     })
     call = adapter.execute_resolved_agent_cell(cell, {
         "messages": [{"role": "user", "content": "Extract"}], "user_id": "synthetic-owner",
+        "document_id": "2a66f37b-1536-4eab-894e-d421046c838e", "document_name": "Synthetic paper",
     }, "synthetic-cell")
     if outcome == "accepted":
         result = await call

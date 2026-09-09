@@ -58,6 +58,10 @@ from .audit_labels import (
     build_tool_complete_friendly_name as _shared_build_tool_complete_friendly_name,
 )
 from src.lib.config.providers_loader import get_default_runner_provider
+from src.lib.curation_workspace.execution_provenance import capture_source_document
+from src.lib.curation_workspace.extraction_results import persist_inline_validated_extraction_result
+from src.schemas.curation_workspace import CurationExtractionSourceKind
+from src.schemas.execution_provenance import ExtractionExecutionContext
 from .config import (
     get_api_key,
     get_base_url,
@@ -81,6 +85,7 @@ from .extraction_trace_events import (
 )
 from .extraction_builder_workspace import (
     ExtractionBuilderWorkspace,
+    build_internal_extraction_result_event,
     reset_active_extraction_builder_workspace,
     set_active_extraction_builder_workspace,
     stage_extraction_payload,
@@ -869,6 +874,14 @@ def _safe_reset_run_context_token(
         )
 
 
+@dataclass(frozen=True)
+class _DirectBuilderChatContext:
+    """Explicit CHAT ownership, independent of SDK compaction and benchmark sessions."""
+
+    session_id: str | None
+    turn_id: str | None
+
+
 async def _run_agent_with_groq_retry(
     *,
     agent: Agent,
@@ -883,6 +896,7 @@ async def _run_agent_with_groq_retry(
     sentry_workflow: Optional[str] = None,
     sentry_span_data: Optional[Dict[str, Any]] = None,
     defer_terminal_failure_capture: bool = False,
+    direct_chat_context: _DirectBuilderChatContext | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Run tracing stream with Groq-specific retry on transient tool-call parse failures."""
     max_retries = get_groq_tool_call_max_retries() if _is_groq_runtime_model(getattr(agent, "model", None)) else 0
@@ -904,6 +918,7 @@ async def _run_agent_with_groq_retry(
                 sentry_workflow=sentry_workflow,
                 sentry_span_data=sentry_span_data,
                 defer_terminal_failure_capture=defer_terminal_failure_capture,
+                direct_chat_context=direct_chat_context,
             )
             try:
                 async for event in tracing_stream:
@@ -1080,6 +1095,7 @@ async def _run_agent_with_tracing(
     sentry_workflow: Optional[str] = None,
     sentry_span_data: Optional[Dict[str, Any]] = None,
     defer_terminal_failure_capture: bool = False,
+    direct_chat_context: _DirectBuilderChatContext | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Run one request while owning its OpenAI resources for the full lifetime."""
 
@@ -1098,6 +1114,7 @@ async def _run_agent_with_tracing(
         sentry_workflow=sentry_workflow,
         sentry_span_data=sentry_span_data,
         defer_terminal_failure_capture=defer_terminal_failure_capture,
+        direct_chat_context=direct_chat_context,
     )
     try:
         async for event in request_events:
@@ -1127,6 +1144,7 @@ async def _run_agent_with_owned_resources(
     sentry_workflow: Optional[str] = None,
     sentry_span_data: Optional[Dict[str, Any]] = None,
     defer_terminal_failure_capture: bool = False,
+    direct_chat_context: _DirectBuilderChatContext | None = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Internal generator that runs the agent within Langfuse trace context.
@@ -1148,6 +1166,26 @@ async def _run_agent_with_owned_resources(
     builder_materializer_agent = is_builder_materializer_agent(agent)
     if builder_materializer_agent and getattr(agent, "output_type", None) is not None:
         raise ValueError("Builder agents must use backend finalization, not an output schema")
+    direct_execution_context = None
+    direct_agent_key = ""
+    direct_adapter_key = ""
+    if builder_materializer_agent and direct_chat_context is not None:
+        # Capture ownership before model execution. Supplied agents also serve
+        # benchmark/FLOW calls, so their session IDs alone cannot select CHAT.
+        direct_agent_key = _agent_runtime_canonical_agent_key(agent) or ""
+        direct_adapter_key = _agent_runtime_curation_adapter_key(agent) or ""
+        if not all((document_id, user_id, direct_chat_context.session_id,
+                    direct_agent_key, direct_adapter_key, user_message)):
+            raise SpecialistOutputError(current_agent, "inline_extraction_persistence",
+                                        message="Direct CHAT extraction is missing persistence context.")
+        source_document = await asyncio.to_thread(capture_source_document, document_id, user_id)
+        if source_document is None:
+            raise SpecialistOutputError(current_agent, "inline_extraction_persistence",
+                                        message="Direct CHAT extraction requires an owned source document.")
+        direct_execution_context = ExtractionExecutionContext(
+            captured_at=datetime.now(timezone.utc), source_kind="chat",
+            agent_key=direct_agent_key, executed_query=user_message, document=source_document,
+        )
     agents_used = [agent.name]
     custom_tool_display_names = _build_custom_tool_display_names(agent)
     is_generating = False  # Track if we've emitted AGENT_GENERATING for current generation phase
@@ -2224,6 +2262,46 @@ async def _run_agent_with_owned_resources(
         except ValidationError:
             pass
 
+        if direct_execution_context is not None:
+            # Use the same canonical persistence/event boundary as specialists.
+            # Explicit provenance survives the run ContextVars being reset above.
+            assert direct_chat_context is not None and document_id is not None
+            finalization = builder_workspace.finalization
+            assert finalization is not None  # Missing finalization returned RUN_ERROR above.
+            try:
+                persisted = await asyncio.to_thread(
+                    persist_inline_validated_extraction_result,
+                    payload_json=finalization.payload,
+                    document_id=document_id, agent_key=direct_agent_key,
+                    adapter_key=direct_adapter_key, tool_name=direct_agent_key,
+                    source_kind=CurationExtractionSourceKind.CHAT,
+                    origin_session_id=direct_chat_context.session_id,
+                    trace_id=trace_id, user_id=user_id, builder_finalization=finalization,
+                    metadata={
+                        "specialist_name": current_agent,
+                        "domain_pack_id": builder_workspace.domain_pack_id,
+                        "chat_turn_id": direct_chat_context.turn_id,
+                        "execution_context": direct_execution_context.model_dump(mode="json"),
+                    },
+                )
+            except Exception as exc:
+                raise SpecialistOutputError(
+                    current_agent, "inline_extraction_persistence",
+                    message="Validated direct CHAT extraction could not be persisted.",
+                ) from exc
+            internal_event = build_internal_extraction_result_event(
+                tool_name=direct_agent_key, specialist_name=current_agent,
+                finalization=finalization, extraction_result_id=persisted.extraction_result_id,
+                result_ref=persisted.result_ref,
+                persistence_status={
+                    "phase": "inline_validated_extraction", "created_new": persisted.created_new,
+                    "idempotency_key": persisted.idempotency_key, "payload_hash": persisted.payload_hash,
+                },
+            )
+            internal_event["details"]["agent_key"] = direct_agent_key
+            write_stream_event(internal_event, trace_id=trace_id)
+            yield internal_event
+
         structured_event = {
             "type": "STRUCTURED_RESULT",
             "data": {
@@ -2306,6 +2384,7 @@ async def run_agent_streamed(
     chat_route_mode: Literal["automatic", "agent", "flow"] | None = None,
     chat_route_target_id: str | None = None,
     propagate_runtime_exceptions: bool = False,
+    inline_chat_persistence: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Run an agent with streaming output.
@@ -2349,6 +2428,9 @@ async def run_agent_streamed(
                           span data for the manual AI span.
         chat_route_mode: Optional server-resolved ordinary-chat route mode.
         chat_route_target_id: Optional server-resolved agent or flow identity.
+        inline_chat_persistence: Ordinary-chat caller capability to persist direct
+                                 builder results. Route labels alone also describe
+                                 benchmark execution and do not authorize CHAT writes.
         propagate_runtime_exceptions: Re-raise traced runtime failures so a
                                       caller such as the flow executor can
                                       classify them using its own lifecycle
@@ -2402,6 +2484,10 @@ async def run_agent_streamed(
         abstract = doc_context.abstract
 
     provided_runtime_agent = agent is not None
+    direct_chat_context = (
+        _DirectBuilderChatContext(session_id=session_id, turn_id=turn_id)
+        if inline_chat_persistence and chat_route_mode == "agent" else None
+    )
     # Use provided agent OR create the supervisor agent with all domain specialists
     # All agent settings come from environment variables (see config.py)
     if agent is None:
@@ -2637,6 +2723,7 @@ async def run_agent_streamed(
                         sentry_workflow=sentry_workflow,
                         sentry_span_data=sentry_span_data,
                         defer_terminal_failure_capture=propagate_runtime_exceptions,
+                        direct_chat_context=direct_chat_context,
                     )
                     try:
                         with (
@@ -2921,6 +3008,7 @@ async def run_agent_streamed(
                     sentry_workflow=sentry_workflow,
                     sentry_span_data=sentry_span_data,
                     defer_terminal_failure_capture=propagate_runtime_exceptions,
+                    direct_chat_context=direct_chat_context,
                 )
                 try:
                     with (
@@ -2982,6 +3070,7 @@ async def run_agent_streamed(
                 sentry_workflow=sentry_workflow,
                 sentry_span_data=sentry_span_data,
                 defer_terminal_failure_capture=propagate_runtime_exceptions,
+                direct_chat_context=direct_chat_context,
             )
             try:
                 with (

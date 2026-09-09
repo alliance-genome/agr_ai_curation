@@ -1398,6 +1398,7 @@ async def _run_resolved_chat_route(
         ),
         chat_route_mode=route.mode,
         chat_route_target_id=route.target_id,
+        inline_chat_persistence=True,
     )
     try:
         async for event in agent_stream:
