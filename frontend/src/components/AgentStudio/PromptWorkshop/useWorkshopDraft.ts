@@ -15,6 +15,7 @@ import type {
   WorkshopPromptUpdateRequest,
 } from '@/types/promptExplorer'
 import {
+  cloneAgentToWorkshop,
   createCustomAgent,
   deleteCustomAgent,
   fetchAgentTemplates,
@@ -80,7 +81,11 @@ export interface WorkshopDraft {
   selectedTemplate: AgentTemplate | undefined
   /** The saved agent names a template that is no longer installed. */
   templateMissing: boolean
+  /** Canonical owner-management list; auth subjects are not database user IDs. */
   customAgents: CustomAgent[]
+  /** Backend-authorized discovery list, including accessible teammate agents. */
+  visibleAgents: CustomAgent[]
+  cloneSharedAgent: (agentId: string) => Promise<boolean>
   selectedCustomAgentId: string
   selectedCustomAgent: CustomAgent | undefined
   selectCustomAgent: (agentId: string) => void
@@ -201,6 +206,7 @@ export function useWorkshopDraft({
 
   const [parentAgentId, setParentAgentId] = useState('')
   const [gettingStartedMode, setGettingStartedMode] = useState<GettingStartedMode>('template')
+  const [visibleAgents, setVisibleAgents] = useState<CustomAgent[]>([])
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([])
   const [selectedCustomAgentId, setSelectedCustomAgentId] = useState<string>('')
   const [cloneSourceAgentId, setCloneSourceAgentId] = useState<string>('')
@@ -543,7 +549,8 @@ export function useWorkshopDraft({
     }
 
     try {
-      const response = await listCustomAgents()
+      const [response, visible] = await Promise.all([listCustomAgents(), listCustomAgents(undefined, 'visible')])
+      setVisibleAgents(visible.custom_agents)
       setCustomAgents(response.custom_agents)
 
       const templateAlignedAgentId = getTemplateAlignedAgentId(response.custom_agents)
@@ -887,6 +894,7 @@ export function useWorkshopDraft({
   }, [dirty.any])
 
   const selectCustomAgent = useCallback((agentId: string) => {
+    if (!customAgents.some((agent) => agent.id === agentId)) return
     setSelectedCustomAgentId(agentId)
     setSaveState('idle')
     setLastSavedAt(null)
@@ -917,7 +925,8 @@ export function useWorkshopDraft({
   }, [selectedCustomAgent])
 
   const reloadAfterSave = useCallback(async (keepId?: string) => {
-    const response = await listCustomAgents()
+    const [response, visible] = await Promise.all([listCustomAgents(), listCustomAgents(undefined, 'visible')])
+    setVisibleAgents(visible.custom_agents)
     setCustomAgents(response.custom_agents)
     if (keepId) {
       setSelectedCustomAgentId(keepId)
@@ -932,6 +941,24 @@ export function useWorkshopDraft({
     }
     await refreshAgentMetadata()
   }, [getTemplateAlignedAgentId, refreshAgentMetadata])
+
+  const cloneSharedAgent = useCallback(async (agentId: string): Promise<boolean> => {
+    const source = visibleAgents.find((agent) => agent.id === agentId)
+    if (!source || saving) return false
+    setSaving(true)
+    setError(null)
+    try {
+      const cloned = await cloneAgentToWorkshop(source.agent_id)
+      await reloadAfterSave(cloned.id)
+      setStatus(`Cloned "${source.name}" into a private copy`)
+      return true
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clone shared agent')
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }, [visibleAgents, saving, reloadAfterSave])
 
   const handleSave = useCallback(async (options?: SaveOptions, selfExclusionConfirmed = false) => {
     const forceCreate = options?.forceCreate ?? false
@@ -1071,6 +1098,7 @@ export function useWorkshopDraft({
   }, [])
 
   const handleDeleteById = useCallback(async (agent: CustomAgent) => {
+    if (!customAgents.some((owned) => owned.id === agent.id)) return
     setSaving(true)
     setError(null)
     try {
@@ -1197,6 +1225,8 @@ export function useWorkshopDraft({
     selectedTemplate,
     templateMissing,
     customAgents,
+    visibleAgents,
+    cloneSharedAgent,
     selectedCustomAgentId,
     selectedCustomAgent,
     selectCustomAgent,

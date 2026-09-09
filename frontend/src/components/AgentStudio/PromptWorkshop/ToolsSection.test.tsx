@@ -128,3 +128,17 @@ describe('ToolsSection', () => {
     expect(toolPolicyBadge(toolLibrary[2])).toBe('disabled by policy')
   })
 })
+
+it('renders teammate request summaries alongside owned requests without private details', () => {
+  renderTools({ requests: [
+    buildRequest({ title: 'My request', opus_conversation: [{ role: 'user', content: 'Private conversation' }], developer_notes: 'Private notes' }),
+    { id: 'shared', user_id: 2, project_id: 'team', title: 'Team request', description: 'Reuse this batch lookup request', status: 'completed', created_at: '2026-09-09', updated_at: '2026-09-09' },
+  ] })
+  const items = within(screen.getByRole('list', { name: 'Requests to developers' })).getAllByRole('listitem')
+  expect(items[0]).toHaveTextContent('Your request')
+  expect(items[1]).toHaveTextContent('Project request · Shared by user 2')
+  expect(items[1]).toHaveTextContent('Reuse this batch lookup request')
+  expect(items[1]).toHaveTextContent('Shipped')
+  expect(screen.queryByText('Private conversation')).not.toBeInTheDocument()
+  expect(screen.queryByText('Private notes')).not.toBeInTheDocument()
+})

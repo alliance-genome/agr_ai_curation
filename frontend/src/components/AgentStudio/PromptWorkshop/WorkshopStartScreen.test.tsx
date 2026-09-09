@@ -11,15 +11,15 @@ describe('WorkshopStartScreen', () => {
     expect(screen.getByRole('group', { name: 'Start a new agent' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /From a template/ }))
     fireEvent.click(screen.getByRole('button', { name: /From scratch/ }))
-    fireEvent.click(screen.getByRole('button', { name: /Clone one of yours/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Clone an agent/ }))
     expect(onChoose.mock.calls.map((call) => call[0])).toEqual(['template', 'scratch', 'clone'])
   })
 
   it('disables cloning when there are no saved agents and says why', () => {
     render(<WorkshopStartScreen onChoose={vi.fn()} hasTemplates hasSavedAgents={false} />)
-    const clone = screen.getByRole('button', { name: /Clone one of yours/ })
+    const clone = screen.getByRole('button', { name: /Clone an agent/ })
     expect(clone).toBeDisabled()
-    expect(clone).toHaveTextContent('You have no saved agents yet.')
+    expect(clone).toHaveTextContent('No agents are available to clone yet.')
   })
 
   it('disables the template choice when no templates are installed', () => {

@@ -267,6 +267,15 @@ function PromptWorkshop({
     setOpenDialogOpen(false)
   })
 
+  const cloneSharedAgent = (agentId: string) => guard(() => {
+    void draft.cloneSharedAgent(agentId).then((cloned) => {
+      if (!cloned) return
+      setStartScreenRequested(false)
+      setOpenDialogOpen(false)
+      setSection('setup')
+    })
+  })
+
   const handleSaveClick = () => {
     if (!draft.canSave) return
     setSaveDialogOpen(true)
@@ -384,7 +393,7 @@ function PromptWorkshop({
             <WorkshopStartScreen
               onChoose={handleChooseStart}
               hasTemplates={draft.templateOptions.length > 0}
-              hasSavedAgents={draft.customAgents.length > 0}
+              hasSavedAgents={draft.visibleAgents.length > 0}
             />
           ) : section === 'setup' ? (
             <SetupSection
@@ -395,9 +404,16 @@ function PromptWorkshop({
               onTemplateChange={handleTemplateChange}
               missingTemplateId={templateMissing ? selectedCustomAgent?.template_source || null : null}
               templateAllowedGroupIds={selectedTemplate?.allowed_group_ids || []}
-              customAgents={draft.customAgents}
+              customAgents={draft.visibleAgents}
+              ownedAgentIds={draft.customAgents.map((agent) => agent.id)}
               cloneSourceAgentId={draft.cloneSourceAgentId}
-              onCloneSourceChange={draft.setCloneSourceAgentId}
+              onCloneSourceChange={(agentId) => {
+                if (draft.customAgents.some((agent) => agent.id === agentId)) {
+                  guard(() => draft.setCloneSourceAgentId(agentId))
+                } else {
+                  cloneSharedAgent(agentId)
+                }
+              }}
               isExistingAgent={Boolean(selectedCustomAgent)}
               focusOriginToken={focusOriginToken}
               icon={draft.icon}
@@ -494,7 +510,11 @@ function PromptWorkshop({
       />
       <OpenAgentDialog
         open={openDialogOpen}
-        agents={draft.customAgents}
+        agents={draft.visibleAgents}
+        ownedAgentIds={draft.customAgents.map((agent) => agent.id)}
+        cloning={draft.saving}
+        error={draft.error}
+        onClone={cloneSharedAgent}
         loading={draft.loading}
         selectedAgentId={selectedCustomAgentId}
         onSelect={openAgent}
