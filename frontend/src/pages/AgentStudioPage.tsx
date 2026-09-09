@@ -2,7 +2,7 @@
  * Agent Studio Page
  *
  * Adaptive shell for exploring agent prompts, building flows, and chatting with Claude:
- * - Left: work surface with the Agents, Flows, and Agent Workshop tabs
+ * - Left: work surface with Agents, Flows, Agent Workshop, and Shared Library tabs
  * - Right: Claude copilot pane (30% by default) that collapses to a 44px rail
  * - Below 1100px: the pane becomes a right-side drawer opened from the tab bar
  *
@@ -43,6 +43,7 @@ import { buildFlowVerificationPrompt } from '@/components/AgentStudio/flowVerifi
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
 import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
 import type { AgentBrowserRequest, AgentDetailsRequest } from '@/components/AgentStudio/agentBrowserRequest'
+import SharedLibrary from '@/components/AgentStudio/SharedLibrary'
 import PromptWorkshop, { type WorkshopLeaveGuard } from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
 import {
   useChatHistoryDetailQuery,
@@ -174,7 +175,7 @@ const TabContent = styled(Box)(() => ({
   overflow: 'hidden',
 }))
 
-type TabValue = 'agents' | 'flows' | 'agent_workshop'
+type TabValue = 'agents' | 'flows' | 'agent_workshop' | 'shared_library'
 
 // localStorage key for tab persistence
 const AGENT_STUDIO_TAB_KEY = 'agent-studio-tab'
@@ -235,7 +236,8 @@ function AgentStudioPage() {
 
   // UI state (with persistence)
   const [activeTab, setActiveTab] = useState<TabValue>(() => {
-    if (searchParams.get('tab') === 'flows') return 'flows'
+    const requestedTab = searchParams.get('tab')
+    if (requestedTab === 'agents' || requestedTab === 'flows' || requestedTab === 'agent_workshop' || requestedTab === 'shared_library') return requestedTab
     const storedResult = safeGetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, {
       owner: 'preferences',
       key: AGENT_STUDIO_TAB_KEY,
@@ -250,7 +252,7 @@ function AgentStudioPage() {
       })
       return 'agents'
     }
-    return (stored === 'agents' || stored === 'flows' || stored === 'agent_workshop') ? stored : 'agents'
+    return (stored === 'agents' || stored === 'flows' || stored === 'agent_workshop' || stored === 'shared_library') ? stored : 'agents'
   })
 
   const workshopLeaveGuardRef = useRef<WorkshopLeaveGuard | null>(null)
@@ -290,10 +292,16 @@ function AgentStudioPage() {
   // The Flows tab mounts on first visit and then stays mounted (hidden) so an
   // unsaved flow graph survives a trip to the Agent Browser or the Workshop.
   const [flowsVisited, setFlowsVisited] = useState(false)
+  // Keep local library filters while refreshing authorized data on each visit.
+  const [libraryVisited, setLibraryVisited] = useState(activeTab === 'shared_library')
+  useEffect(() => {
+    if (activeTab === 'shared_library') setLibraryVisited(true)
+  }, [activeTab])
   // A deep link into the Agent Browser (from the Flow Builder node panel or the Workshop).
   const [agentDetailsRequest, setAgentDetailsRequest] = useState<AgentDetailsRequest | null>(null)
   const agentDetailsRequestCounterRef = useRef(0)
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(() => searchParams.get('flow'))
+  const [flowOpenRequestId, setFlowOpenRequestId] = useState(0)
   const [agentWorkshopTemplateSource, setAgentWorkshopTemplateSource] = useState<string | null>(null)
   const [agentWorkshopCustomAgentId, setAgentWorkshopCustomAgentId] = useState<string | null>(null)
   const [agentWorkshopContext, setAgentWorkshopContext] = useState<AgentWorkshopContext | null>(null)
@@ -637,7 +645,8 @@ function AgentStudioPage() {
     trace_id: traceId || undefined,
     session_id: effectiveDurableSessionId || undefined,
     // Flow context (when on flows tab)
-    active_tab: activeTab,
+    // The library has no editable agent or flow context for chat tools.
+    active_tab: activeTab === 'shared_library' ? undefined : activeTab,
     flow_name: activeTab === 'flows' ? flowState?.flowName : undefined,
     flow_definition: flowDefinition,
     agent_workshop: activeTab === 'agent_workshop' ? (agentWorkshopContext || undefined) : undefined,
@@ -840,6 +849,8 @@ Agent ID: ${agentId}`
           <PanelCard>
             <TabBar>
               <StyledTabs
+                variant="scrollable"
+                scrollButtons="auto"
                 value={activeTab}
                 onChange={handleTabChange}
                 aria-label="Agent Studio tabs"
@@ -862,6 +873,7 @@ Agent ID: ${agentId}`
                   icon={<ScienceIcon sx={{ fontSize: 18 }} />}
                   iconPosition="start"
                 />
+                <StyledTab value="shared_library" label="Shared Library" />
               </StyledTabs>
               {isNarrow && (
                 <>
@@ -924,6 +936,27 @@ Agent ID: ${agentId}`
                   detailsRequest={agentDetailsRequest}
                 />
               )}
+              {libraryVisited && (
+                <Box hidden={activeTab !== 'shared_library'} sx={{ height: '100%', '&[hidden]': { display: 'none' } }}>
+                  <SharedLibrary
+                    active={activeTab === 'shared_library'}
+                    onOpenAgent={(id) => {
+                      setAgentWorkshopTemplateSource(null)
+                      setAgentWorkshopCustomAgentId(id)
+                      applyTab('agent_workshop')
+                    }}
+                    onOpenFlow={(id) => {
+                      setCurrentFlowId(id)
+                      setFlowOpenRequestId((requestId) => requestId + 1)
+                      applyTab('flows')
+                    }}
+                    onReuseToolIdea={(idea) => {
+                      showClaude()
+                      setDiscussMessage(`Discuss this Tool Idea request using its shared summary context:\nTitle: ${idea.title}\nDescription: ${idea.description}\nStatus: ${idea.status}\nOwner: ${idea.user_id}\nProject: ${idea.project_id ?? 'No project'}`)
+                    }}
+                  />
+                </Box>
+              )}
               {flowsVisited && (
                 <Box
                   data-testid="flows-tab-panel"
@@ -932,6 +965,7 @@ Agent ID: ${agentId}`
                 >
                   <FlowBuilder
                     flowId={currentFlowId}
+                    flowOpenRequestId={flowOpenRequestId}
                     onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
                     onFlowChange={handleFlowChange}
                     onVerifyRequest={handleVerifyRequest}

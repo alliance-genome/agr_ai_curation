@@ -259,8 +259,10 @@ export interface FlowState {
 }
 
 export interface FlowBuilderProps {
-  /** Currently editing flow ID (null for new flow) */
+  /** Flow to open through the unsaved-draft guard. */
   flowId?: string | null
+  /** Change for each explicit open action, including retries of the same flow ID. */
+  flowOpenRequestId?: number
   /** Callback when flow is saved */
   onFlowSaved?: (flowId: string) => void
   /** Callback when flow state changes (for sharing context with chat) */

@@ -8,7 +8,7 @@ Click **"Agent Studio"** in the navigation bar at the top of the application.
 
 ## What You'll Find
 
-Agent Studio has three main tabs: **Agents**, **Flows**, and **Agent Workshop**. The tabs sit on the left. The Claude chat sits in a panel on the right, and it is available from every tab.
+Agent Studio has four main tabs: **Agents**, **Flows**, **Agent Workshop**, and **Shared Library**. The tabs sit on the left. The Claude chat sits in a panel on the right, and it is available from every tab.
 
 ### Claude Chat (Right Panel)
 
@@ -30,6 +30,18 @@ interpret prompts, domain-envelope metadata, validation choices, trace context,
 and flow structure. It does not replace the curation workspace readiness checks:
 final export and submission still depend on the saved envelope, validation
 findings, and domain-pack policy.
+
+### Shared Library Tab
+
+Use **Shared Library** to discover custom agents, Tool Idea requests, and curation flows available to you. Filter by artifact type, **Mine**, **Shared with project**, or text. Filters stay in Agent Studio while you switch tabs; **Refresh** reloads the authorized list. Each entry shows its owner, project, and private/shared status. Tool Ideas show their request status as well.
+
+- Open your agents in Workshop, or use **Clone to Workshop** to create a private editable copy of a shared agent.
+- Open teammate flows read-only, choose **Clone to edit** for a private copy, or **Run in workspace** to select inputs and run through the existing workspace checks.
+- Open a Tool Idea's request context and choose **Discuss request with Claude** to reuse its title, description, status, and ownership context. This does not include private conversation history or developer notes.
+
+Editing, deleting, and changing visibility remain owner actions in the focused editing surfaces. The library only lists artifacts authorized by the server; it does not expand project access. Existing system agents remain in **Agents**, and package tools remain in Workshop's tool library.
+
+You can link directly to this tab with `/agent-studio?tab=shared_library`.
 
 ### Agents Tab
 
