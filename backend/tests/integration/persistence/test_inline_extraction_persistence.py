@@ -159,6 +159,150 @@ _BUILDER_FINALIZATION = {
 }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_mode", ["agent", "flow", None])
+async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, document_id, db_session, route_mode):
+    """Actual package stage/finalize -> runner -> committed SQL -> chat ref, no provider."""
+    import json
+    from types import SimpleNamespace
+    from agents import Agent
+    from agents.tool_context import ToolContext
+    from src.api import chat_common
+    from src.lib.agent_studio import catalog_service
+    from src.lib.openai_agents import runner, extraction_builder_workspace as builder
+    from src.lib.openai_agents.tools import evidence_workspace
+    from src.lib.domain_packs import validator_dispatch
+
+    for name in ("write_stream_event", "write_extraction_trace_event", "set_live_event_list"):
+        monkeypatch.setattr(runner, name, lambda *a, **k: None)
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **k: None)
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "_build_agents_run_config", lambda **k: SimpleNamespace())
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+    for name in ("commit_pending_prompts", "_log_used_prompts_to_db", "provider_context_preflight",
+                 "start_extraction_trace_run", "clear_extraction_trace_run"):
+        monkeypatch.setattr(runner, name, lambda *a, **k: None)
+
+    async def with_resources(**kwargs):
+        async for event in runner._run_agent_with_owned_resources(
+            owned_openai_resources=SimpleNamespace(client=None, provider=None), **kwargs
+        ):
+            yield event
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", with_resources)
+    tool_context = catalog_service.ToolExecutionContext(database_url="unused")
+    agent = Agent(name="Synthetic direct gene", model="gpt-5.6-sol", tools=[
+        catalog_service._resolve_package_tool(name, tool_context)
+        for name in ("stage_gene_mention_evidence", "finalize_gene_extraction")
+    ])
+    agent.agent_key = "gene_extractor"
+    agent.curation_metadata = {"launchable": True, "adapter_key": "gene"}
+    captured = {}
+
+    class Result:
+        final_output = "Finalized one synthetic gene; not a canonical envelope."
+
+        def __init__(self, active):
+            self.agent = active
+
+        async def stream_events(self):
+            evidence_workspace._workspace_records().append({
+                "evidence_record_id": "evidence-1", "entity": "synthetic gene",
+                "verified_quote": "The synthetic gene was measured.",
+                "chunk_id": "synthetic-chunk", "page": 1, "section": "Results",
+            })
+            arguments = [
+                {"pending_ref_id": "pending:gene:1", "mention": "synthetic gene",
+                 "evidence_record_ids": ["evidence-1"], "confidence": "high",
+                 "identity_resolution_notes": ["Synthetic unresolved identity"]},
+                {"candidate_ids": ["gene-candidate-1"]},
+            ]
+            for tool, args in zip(self.agent.tools, arguments):
+                output = await tool.on_invoke_tool(ToolContext(
+                    context=None, tool_name=tool.name, tool_call_id="synthetic-call",
+                    tool_arguments=json.dumps(args)), json.dumps(args))
+                assert "An error occurred" not in str(output)
+            workspace = builder.get_active_extraction_builder_workspace()
+            captured["finalization"] = workspace.finalization
+            captured["trace_id"] = workspace.run_id
+            if False:
+                yield None
+
+    def validate(envelope, domain_pack, **kwargs):
+        # Keep real package normalization, replacing only paid validator execution.
+        assert envelope.domain_pack_id == "gene"
+        captured["validated"] = envelope
+        return SimpleNamespace(envelope=envelope, matched_bindings=(), validator_results=(), appended_findings=())
+
+    monkeypatch.setattr(runner.Runner, "run_streamed", lambda active, **k: Result(active))
+    monkeypatch.setattr(validator_dispatch, "dispatch_active_validator_bindings", validate)
+    session_id, turn_id = (str(uuid4()) for _ in range(2))
+    events = []
+    async for event in runner.run_agent_streamed(
+        agent=agent, context_messages=[{"role": "user", "content": "Extract the synthetic paper"}],
+        user_id="test_pdf_owner_inline_extraction", document_id=document_id,
+        document_name="Synthetic paper", session_id=session_id, turn_id=turn_id,
+        chat_route_mode=route_mode, chat_route_target_id="gene_extractor",
+        doc_context=SimpleNamespace(hierarchy={}, abstract="", section_count=lambda: 0),
+    ):
+        if event["type"] in {"INTERNAL_EXTRACTION_RESULT", "STRUCTURED_RESULT", "RUN_FINISHED"}:
+            # Independent session sees the commit before success/transcript handling.
+            with SessionLocal() as reader:
+                records = reader.scalars(select(ExtractionResultModel).where(
+                    ExtractionResultModel.document_id == document_id)).all()
+                if route_mode != "agent":
+                    assert not records
+                    events.append(event)
+                    continue
+                assert len(records) == 1
+                record = records[0]
+                assert record.payload_json == captured["validated"].model_dump(mode="json")
+                assert record.origin_session_id == session_id
+                assert record.trace_id == captured["trace_id"]
+                assert record.user_id == "test_pdf_owner_inline_extraction"
+                assert record.agent_key == "gene_extractor"
+                assert record.source_kind == CurationExtractionSourceKind.CHAT
+                metadata = record.extraction_metadata
+                assert metadata["chat_turn_id"] == turn_id
+                assert metadata["execution_context"]["document"]["document_id"] == document_id
+                assert metadata["execution_context"]["executed_query"] == "Extract the synthetic paper"
+        events.append(event)
+    assert events[-1]["type"] == "RUN_FINISHED"
+    internal = [event for event in events if event["type"] == "INTERNAL_EXTRACTION_RESULT"]
+    if route_mode != "agent":
+        assert not internal
+        return
+    assert len(internal) == 1
+    persisted_ref = chat_common._build_persisted_extraction_result_ref_from_tool_event(
+        internal[0], tool_agent_map={})
+    assert persisted_ref is not None
+    assert chat_common._build_extraction_candidate_from_tool_event(
+        internal[0], tool_agent_map={}, conversation_summary=None) is None
+    # The actual persistence primitive's stable identity is reusable, not another row.
+    again = persist_inline_validated_extraction_result(
+        payload_json=captured["validated"].model_dump(mode="json"), document_id=document_id, agent_key="gene_extractor",
+        adapter_key="gene", tool_name="gene_extractor", source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id=session_id, trace_id=captured["trace_id"], user_id="test_pdf_owner_inline_extraction",
+        builder_finalization=captured["finalization"],
+    )
+    assert not again.created_new
+    assert str(persisted_ref.extraction_result_id) == again.extraction_result_id
+    # This is the session/user/document-filtered repository consumed by preparation.
+    visible = extraction_results_module.list_extraction_results(
+        document_id=document_id, origin_session_id=session_id, user_id="test_pdf_owner_inline_extraction")
+    assert len(visible) == 1
+    assert not extraction_results_module.list_extraction_results(
+        document_id=document_id, origin_session_id=session_id, user_id="synthetic-foreign-owner")
+    from src.lib.curation_workspace.curation_prep_invocation import build_chat_curation_prep_preview
+
+    with SessionLocal() as reader:
+        preview = build_chat_curation_prep_preview(
+            session_id=session_id, user_id="test_pdf_owner_inline_extraction", db=reader)
+    assert preview.ready
+    assert preview.extraction_result_count == 1
+    assert preview.preparable_candidate_count == 1
+
+
 def _persist(
     db_session,
     document_id,
