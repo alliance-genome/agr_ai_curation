@@ -368,6 +368,53 @@ describe('FlowBuilder', () => {
     expect(reactFlowMocks.nodes).toHaveLength(1)
   })
 
+  it('retains shared permissions when an earlier owner save completes', async () => {
+    const user = userEvent.setup()
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    let finishSave!: (flow: FlowResponse) => void
+    serviceMocks.updateFlow.mockReturnValue(new Promise<FlowResponse>((resolve) => { finishSave = resolve }))
+    serviceMocks.getFlow.mockResolvedValueOnce(buildFlowResponse())
+      .mockResolvedValueOnce(buildFlowResponse({ id: 'shared', name: 'Shared Original', visibility: 'project', is_owner: false }))
+    const onFlowSaved = vi.fn()
+    const { rerender } = render(<FlowBuilder flowId="flow-1" onFlowSaved={onFlowSaved} />)
+    await screen.findByText('Fresh Flow')
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalled())
+    rerender(<FlowBuilder flowId="shared" onFlowSaved={onFlowSaved} />)
+    await screen.findByText('Shared Original')
+    await act(async () => finishSave(buildFlowResponse()))
+    expect(screen.getByRole('button', { name: /^Save flow$/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Clone to edit' })).toBeInTheDocument()
+    expect(screen.getByText('Shared Original')).toBeInTheDocument()
+    expect(screen.getByTestId('react-flow')).toHaveAttribute('data-draggable', 'false')
+    expect(onFlowSaved).not.toHaveBeenCalled()
+    expect(invalidationMocks.notifyFlowListInvalidated).toHaveBeenCalledWith({ flowId: 'flow-1', reason: 'updated' })
+  })
+
+  it('keeps a new flow draft when an earlier Save As completes', async () => {
+    const user = userEvent.setup()
+    let finishSave!: (flow: FlowResponse) => void
+    serviceMocks.createFlow.mockReturnValue(new Promise<FlowResponse>((resolve) => { finishSave = resolve }))
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse())
+    const onFlowSaved = vi.fn()
+    render(<FlowBuilder flowId="flow-1" onFlowSaved={onFlowSaved} />)
+    await screen.findByText('Fresh Flow')
+    await user.click(screen.getByRole('button', { name: 'Save flow as' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Save Flow As' })
+    await user.click(within(dialog).getByRole('button', { name: 'Save As' }))
+    await waitFor(() => expect(serviceMocks.createFlow).toHaveBeenCalled())
+    await user.click(await screen.findByRole('button', { name: 'New flow' }))
+    await screen.findByText('Untitled')
+    await act(async () => finishSave(buildFlowResponse({ id: 'copy', name: 'Saved Copy' })))
+    expect(screen.getByText('Untitled')).toBeInTheDocument()
+    expect(onFlowSaved).not.toHaveBeenCalled()
+    expect(invalidationMocks.notifyFlowListInvalidated).toHaveBeenCalledWith({ flowId: 'copy', reason: 'created' })
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    expect(await screen.findByRole('dialog', { name: 'Save Flow' })).toBeInTheDocument()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+  })
+
   it('ignores a late owner share response after opening a teammate flow', async () => {
     const user = userEvent.setup()
     let finishShare!: (flow: FlowResponse) => void

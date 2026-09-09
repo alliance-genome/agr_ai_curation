@@ -1113,6 +1113,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       return
     }
 
+    const loadRequestAtSave = loadRequestRef.current
     setSaving(true)
     try {
       // Convert to API format
@@ -1163,13 +1164,20 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           description: flowDescription || undefined,
           flow_definition: flowDefinition,
         })
-        setCurrentFlowId(savedFlow.id)
       }
 
       const flowMutationReason = currentFlowId && !forceCreate ? 'updated' : 'created'
+      notifyFlowListInvalidated({
+        flowId: savedFlow.id,
+        reason: flowMutationReason,
+      })
       await refreshFlowLists()
 
+      // Navigation or New Flow owns the editor now; only refresh the persisted artifact's lists.
+      if (loadRequestRef.current !== loadRequestAtSave) return
+
       // Update flowName state to match saved name
+      setCurrentFlowId(savedFlow.id)
       displayedFlowIdRef.current = savedFlow.id
       unsavedFlowRef.current = false
       setFlowAccess(savedFlow)
@@ -1178,10 +1186,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       setTaskInstructionsDefaultOnly(
         savedFlow.flow_definition.task_instructions_default_only === true
       )
-      notifyFlowListInvalidated({
-        flowId: savedFlow.id,
-        reason: flowMutationReason,
-      })
       setSnackbar({
         message: forceCreate ? 'Flow saved as new flow' : 'Flow saved successfully',
         severity: 'success'
