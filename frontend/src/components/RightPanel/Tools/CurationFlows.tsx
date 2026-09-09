@@ -162,17 +162,23 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
 
     try {
       const data = await listAllFlows()
-      const visibleFlows = data.flows
+      if (request !== fetchRequestRef.current) return
+      let visibleFlows = data.flows
       if (requestedFlowId) {
-        const requested = await getFlow(requestedFlowId)
-        if (request !== fetchRequestRef.current) return
-        const summary = { ...requested, step_count: requested.flow_definition.nodes.length }
-        setFlows([summary, ...visibleFlows.filter((flow) => flow.id !== requested.id)])
-        setExpandedFlowId(requested.id)
-      } else {
-        if (request !== fetchRequestRef.current) return
-        setFlows(visibleFlows)
+        try {
+          const requested = await getFlow(requestedFlowId)
+          if (request !== fetchRequestRef.current) return
+          const summary = { ...requested, step_count: requested.flow_definition.nodes.length }
+          visibleFlows = [summary, ...visibleFlows.filter((flow) => flow.id !== requested.id)]
+          setExpandedFlowId(requested.id)
+        } catch (err) {
+          if (request !== fetchRequestRef.current) return
+          // Access may have been revoked since the list request completed.
+          visibleFlows = visibleFlows.filter((flow) => flow.id !== requestedFlowId)
+          setRunError(err instanceof Error ? err.message : 'Failed to open the requested flow')
+        }
       }
+      setFlows(visibleFlows)
     } catch (err) {
       if (request !== fetchRequestRef.current) return
       const error = err as Error

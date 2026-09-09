@@ -455,11 +455,38 @@ describe('project-shared flows in Home Tools', () => {
   })
 
   it('does not present a flow revoked before the routed read', async () => {
-    mockFetch.mockResolvedValueOnce(flowListResponse([]))
+    const user = userEvent.setup()
+    const execute = vi.fn().mockResolvedValue(undefined)
+    mockFetch.mockResolvedValueOnce(flowListResponse([
+      shared,
+      { ...shared, id: 'available-flow', name: 'Available Flow' },
+    ]))
     mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Flow not found' }), { status: 404 }))
-    render(<MemoryRouter initialEntries={['/?flow=shared-flow']}><CurationFlows sessionId="non-member-session" sseEvents={[]} onExecuteFlow={vi.fn()} /></MemoryRouter>)
+    render(<MemoryRouter initialEntries={['/?flow=shared-flow']}><CurationFlows sessionId="non-member-session" sseEvents={[]} onExecuteFlow={execute} /></MemoryRouter>)
     expect(await screen.findByText('Flow not found')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Teammate Flow/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Available Flow/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Run' }))
+    expect(execute).toHaveBeenCalledWith('available-flow', undefined)
+  })
+
+  it('ignores a stale routed failure after a newer refresh succeeds', async () => {
+    let resolveRead!: (response: Response) => void
+    mockFetch.mockResolvedValueOnce(flowListResponse([]))
+    mockFetch.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRead = resolve }))
+    render(<MemoryRouter initialEntries={['/?flow=shared-flow']}><CurationFlows sessionId="my-session" sseEvents={[]} onExecuteFlow={vi.fn()} /></MemoryRouter>)
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/flows/shared-flow'))
+
+    mockFetch.mockResolvedValueOnce(flowListResponse([shared]))
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ...shared, flow_definition: { nodes: [] } })))
+    act(() => notifyFlowListInvalidated({ flowId: 'shared-flow', reason: 'updated' }))
+    expect(await screen.findByText(/Teammate Flow/)).toBeInTheDocument()
+
+    await act(async () => {
+      resolveRead(new Response(JSON.stringify({ detail: 'Stale access error' }), { status: 403 }))
+    })
+    expect(screen.queryByText('Stale access error')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled()
   })
 })
 
