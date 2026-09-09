@@ -470,6 +470,42 @@ describe('agentStudioService', () => {
   })
 })
 
+describe('flow sharing contracts', () => {
+  beforeEach(() => mockFetch.mockReset())
+
+  it('posts visibility and returns viewer metadata', async () => {
+    const { shareFlow } = await import('./agentStudioService')
+    const shared = { id: 'owned', user_id: 7, is_owner: true, visibility: 'project', project_id: 'project-a', shared_at: '2026-09-09' }
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(shared)))
+    await expect(shareFlow('owned', 'project')).resolves.toEqual(shared)
+    expect(mockFetch).toHaveBeenCalledWith('/api/flows/owned/share', expect.objectContaining({ method: 'POST', body: JSON.stringify({ visibility: 'project' }) }))
+  })
+
+  it('clones with an optional name and preserves private owner metadata', async () => {
+    const { cloneFlow } = await import('./agentStudioService')
+    const copy = { id: 'copy', user_id: 8, is_owner: true, visibility: 'private', project_id: null, shared_at: null, execution_count: 0 }
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(copy)))
+    await expect(cloneFlow('shared', 'My copy')).resolves.toEqual(copy)
+    expect(mockFetch).toHaveBeenCalledWith('/api/flows/shared/clone', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'My copy' }) }))
+  })
+
+  it('surfaces authorization and unavailable-agent errors without changing policy', async () => {
+    const { cloneFlow, getFlow, shareFlow } = await import('./agentStudioService')
+    for (const request of [() => cloneFlow('shared'), () => getFlow('shared'), () => shareFlow('shared', 'private')]) {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Referenced agent is unavailable to your group' }), { status: 403 }))
+      await expect(request()).rejects.toThrow('Referenced agent is unavailable to your group')
+    }
+  })
+
+  it('includes shared flows on later browse pages', async () => {
+    const { listAllFlows } = await import('./agentStudioService')
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ flows: [{ id: 'owned' }], total: 2, page: 1, page_size: 1 })))
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ flows: [{ id: 'shared', is_owner: false }], total: 2, page: 2, page_size: 1 })))
+    expect((await listAllFlows()).flows.map((flow) => flow.id)).toEqual(['owned', 'shared'])
+    expect(mockFetch).toHaveBeenLastCalledWith('/api/flows?page=2&page_size=1', { credentials: 'include' })
+  })
+})
+
 describe('shared Workshop contracts', () => {
   beforeEach(() => mockFetch.mockReset())
   it('requests visible scope for discovery while preserving template filtering', async () => {

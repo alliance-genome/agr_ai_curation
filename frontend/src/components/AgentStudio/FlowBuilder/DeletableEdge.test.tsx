@@ -75,3 +75,8 @@ describe('DeletableEdge', () => {
     expect(onDeleteEdge).toHaveBeenCalledWith('edge-1')
   })
 })
+
+it('does not offer deletion for a read-only connection', () => {
+  render(<svg><TestEdge {...baseProps} data={{ role: 'control_flow' }} /></svg>)
+  expect(screen.queryByTitle('Delete connection')).not.toBeInTheDocument()
+})

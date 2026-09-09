@@ -866,11 +866,15 @@ import type {
   FlowListResponse,
   CreateFlowRequest,
   UpdateFlowRequest,
+  FlowVisibility,
 } from '@/components/AgentStudio/FlowBuilder/types'
 
 export type {
   FlowListResponse,
   FlowSummaryResponse,
+  FlowResponse,
+  FlowVisibility,
+  FlowAccess,
 } from '@/components/AgentStudio/FlowBuilder/types'
 
 const FLOWS_URL = '/api/flows'
@@ -896,7 +900,7 @@ function createFlowListLoadError(status?: number): FlowListLoadError {
 }
 
 /**
- * List all flows for the current user
+ * List owned and authorized project-shared flows
  */
 export async function listFlows(page = 1, pageSize = DEFAULT_FLOW_LIST_PAGE_SIZE): Promise<FlowListResponse> {
   let response: Response
@@ -923,13 +927,25 @@ export async function listFlows(page = 1, pageSize = DEFAULT_FLOW_LIST_PAGE_SIZE
   }
 }
 
+/** Collect the visible browse list across the server's paginated responses. */
+export async function listAllFlows(): Promise<FlowListResponse> {
+  const first = await listFlows()
+  const flows = [...first.flows]
+  for (let page = 2; page <= Math.ceil(first.total / first.page_size); page += 1) {
+    const next = await listFlows(page, first.page_size)
+    flows.push(...next.flows)
+  }
+  return { ...first, flows }
+}
+
 /**
  * Get a single flow by ID
  */
 export async function getFlow(flowId: string): Promise<FlowResponse> {
   const response = await fetch(`${FLOWS_URL}/${flowId}`)
   if (!response.ok) {
-    throw new Error(`Failed to get flow: ${response.status}`)
+    const error = await response.json().catch(() => ({}))
+    throw new Error(extractErrorMessage(error, `Failed to get flow: ${response.status}`))
   }
   return response.json()
 }
@@ -993,4 +1009,32 @@ export async function deleteFlow(flowId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to delete flow: ${response.status}`)
   }
+}
+
+/** Set visibility of an owned flow. */
+export async function shareFlow(flowId: string, visibility: FlowVisibility): Promise<FlowResponse> {
+  const response = await fetch(`${FLOWS_URL}/${flowId}/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ visibility }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(extractErrorMessage(error, `Failed to change flow visibility: ${response.status}`))
+  }
+  return response.json()
+}
+
+/** Clone a visible flow into a caller-owned private copy. */
+export async function cloneFlow(flowId: string, name?: string): Promise<FlowResponse> {
+  const response = await fetch(`${FLOWS_URL}/${flowId}/clone`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(name === undefined ? {} : { name }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(extractErrorMessage(error, `Failed to clone flow: ${response.status}`))
+  }
+  return response.json()
 }

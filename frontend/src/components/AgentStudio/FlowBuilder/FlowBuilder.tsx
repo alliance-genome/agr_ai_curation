@@ -41,6 +41,8 @@ import {
   InputAdornment,
   IconButton,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
@@ -74,6 +76,7 @@ import type {
   FlowDefinition,
   FlowNodeData,
   FlowResponse,
+  FlowAccess,
   FlowEdge,
   FlowEdgeRole,
   NodeType,
@@ -85,8 +88,10 @@ import {
   getFlow,
   createFlow,
   updateFlow,
-  listFlows,
+  listAllFlows,
   deleteFlow,
+  shareFlow,
+  cloneFlow,
 } from '@/services/agentStudioService'
 import type { FlowSummaryResponse } from './types'
 import logger from '@/services/logger'
@@ -652,6 +657,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   const getNodeId = useCallback(() => `node_${nodeIdRef.current++}`, [])
 
   // UI state
+  const [flowAccess, setFlowAccess] = useState<FlowAccess | null>(null)
+  const [sharing, setSharing] = useState(false)
+  const [cloning, setCloning] = useState(false)
+  const readOnly = flowAccess !== null && !flowAccess.is_owner
+  const [flowScope, setFlowScope] = useState<'all' | 'owned' | 'shared'>('all')
   const [flowName, setFlowName] = useState('New Flow')
   const [flowDescription, setFlowDescription] = useState('')
   const [taskInstructionsDefaultOnly, setTaskInstructionsDefaultOnly] = useState(false)
@@ -669,6 +679,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   // before the selection changes so unapplied edits are never dropped silently.
   const [nodePanelCollapsed, setNodePanelCollapsed] = useState(false)
   const nodePanelGuardRef = useRef<NodePanelLeaveGuard | null>(null)
+  const unsavedFlowRef = useRef(false)
+  const confirmLeaveNode = useCallback((): Promise<boolean> => {
+    return nodePanelGuardRef.current?.requestLeave() ?? Promise.resolve(true)
+  }, [])
+  const confirmLeaveFlow = useCallback(async (): Promise<boolean> => {
+    if (!await confirmLeaveNode()) return false
+    return !unsavedFlowRef.current || window.confirm('Discard unsaved flow changes?')
+  }, [confirmLeaveNode])
+
   const [canvasSplitRef, canvasAreaWidth] = useContainerWidth<HTMLDivElement>()
 
   // Menu bar state
@@ -693,18 +712,20 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   } | null>(null)
 
   const handleDeleteEdge = useCallback((edgeId: string) => {
+    if (readOnly) return
+    unsavedFlowRef.current = true
     setEdges((currentEdges) => currentEdges.filter((edge) => edge.id !== edgeId))
-  }, [setEdges])
+  }, [readOnly, setEdges])
 
   const canvasEdges = useMemo(
     () => edges.map((edge) => ({
       ...edge,
       data: {
         ...edge.data,
-        onDeleteEdge: handleDeleteEdge,
+        onDeleteEdge: readOnly ? undefined : handleDeleteEdge,
       },
     })),
-    [edges, handleDeleteEdge]
+    [edges, handleDeleteEdge, readOnly]
   )
 
   const outputBindingsByNodeId = useMemo(() => {
@@ -807,7 +828,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   const [deletingFromManage, setDeletingFromManage] = useState(false)
 
   // Current flow ID (null for new flow)
-  const [currentFlowId, setCurrentFlowId] = useState<string | null>(flowId || null)
+  const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
+  const displayedFlowIdRef = useRef<string | null>(null)
+  const loadRequestRef = useRef(0)
 
   // Ref for cleanup of setTimeout
   const fitViewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -816,84 +839,95 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   // Ref to hold revalidateValidators function (defined later, needed in loadFlow)
   const revalidateValidatorsRef = useRef<(() => void) | null>(null)
 
-  // Load flow from API
+  const applyFlow = useCallback((flow: FlowResponse) => {
+    unsavedFlowRef.current = false
+    setFlowAccess(flow)
+    setSelectedNode(null)
+    setFlowName(flow.name)
+    setFlowDescription(flow.description || '')
+    setTaskInstructionsDefaultOnly(flow.flow_definition.task_instructions_default_only === true)
+    displayedFlowIdRef.current = flow.id
+    setCurrentFlowId(flow.id)
+
+    // Convert flow definition to React Flow format
+    const flowNodes = flow.flow_definition.nodes.map((n) => (
+      {
+        id: n.id,
+        type: n.type === 'task_input'
+          ? 'task_input'
+          : n.type === 'output'
+            || isOutputFormatterAgentFromMetadata(n.data.agent_id, agentMetadata)
+            ? 'output'
+            : 'agent',
+        position: n.position,
+        data: n.data,
+      }
+    ))
+    const flowEdges = flow.flow_definition.edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: 'deletable',
+      animated: isAnimatedEdgeRole(e.role ?? 'control_flow'),
+      data: {
+        role: e.role ?? 'control_flow',
+        satisfies_binding_id: e.satisfies_binding_id,
+        replaces_attachment_id: e.replaces_attachment_id,
+      },
+    }))
+
+    setNodes(flowNodes)
+    setEdges(flowEdges)
+    if (flow.validation_warnings?.length) {
+      const warningMessages = flow.validation_warnings.map((warning) => warning.message).join(' ')
+      const hasCriticalWarning = flow.has_critical_issues
+      setSnackbar({
+        message: `Flow loaded with validation ${hasCriticalWarning ? 'issue' : 'warning'}: ${warningMessages}`,
+        severity: hasCriticalWarning ? 'error' : 'warning',
+      })
+    }
+
+    // Update nodeId counter to avoid collisions
+    const maxId = Math.max(...flowNodes.map((n) => parseInt(n.id.replace('node_', '')) || 0), 0)
+    nodeIdRef.current = maxId + 1
+
+    // Fit view after loading (with slight delay to ensure nodes are rendered)
+    // Clear any existing timeout first
+    if (fitViewTimeoutRef.current) {
+      clearTimeout(fitViewTimeoutRef.current)
+    }
+    fitViewTimeoutRef.current = setTimeout(() => {
+      reactFlowInstance?.fitView({ padding: 0.2, maxZoom: 1 })
+      fitViewTimeoutRef.current = null
+    }, 50)
+
+    // Trigger validation after load to ensure error banners reflect current state
+    // This handles cases where loaded flow has same node/edge count as previous
+    if (revalidateTimeoutRef.current) {
+      clearTimeout(revalidateTimeoutRef.current)
+    }
+    revalidateTimeoutRef.current = setTimeout(() => {
+      revalidateValidatorsRef.current?.()
+      revalidateTimeoutRef.current = null
+    }, 100)
+  }, [setNodes, setEdges, reactFlowInstance, agentMetadata])
+
+  // Read failures retain the current graph and expose the backend access error.
   const loadFlow = useCallback(async (id: string) => {
+    const request = ++loadRequestRef.current
     setLoading(true)
     try {
       const flow = await getFlow(id)
-      setFlowName(flow.name)
-      setFlowDescription(flow.description || '')
-      setTaskInstructionsDefaultOnly(flow.flow_definition.task_instructions_default_only === true)
-      setCurrentFlowId(flow.id)
-
-      // Convert flow definition to React Flow format
-      const flowNodes = flow.flow_definition.nodes.map((n) => (
-        {
-          id: n.id,
-          type: n.type === 'task_input'
-            ? 'task_input'
-            : n.type === 'output'
-              || isOutputFormatterAgentFromMetadata(n.data.agent_id, agentMetadata)
-              ? 'output'
-              : 'agent',
-          position: n.position,
-          data: n.data,
-        }
-      ))
-      const flowEdges = flow.flow_definition.edges.map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        type: 'deletable',
-        animated: isAnimatedEdgeRole(e.role ?? 'control_flow'),
-        data: {
-          role: e.role ?? 'control_flow',
-          satisfies_binding_id: e.satisfies_binding_id,
-          replaces_attachment_id: e.replaces_attachment_id,
-        },
-      }))
-
-      setNodes(flowNodes)
-      setEdges(flowEdges)
-      if (flow.validation_warnings?.length) {
-        const warningMessages = flow.validation_warnings.map((warning) => warning.message).join(' ')
-        const hasCriticalWarning = flow.has_critical_issues
-        setSnackbar({
-          message: `Flow loaded with validation ${hasCriticalWarning ? 'issue' : 'warning'}: ${warningMessages}`,
-          severity: hasCriticalWarning ? 'error' : 'warning',
-        })
-      }
-
-      // Update nodeId counter to avoid collisions
-      const maxId = Math.max(...flowNodes.map((n) => parseInt(n.id.replace('node_', '')) || 0), 0)
-      nodeIdRef.current = maxId + 1
-
-      // Fit view after loading (with slight delay to ensure nodes are rendered)
-      // Clear any existing timeout first
-      if (fitViewTimeoutRef.current) {
-        clearTimeout(fitViewTimeoutRef.current)
-      }
-      fitViewTimeoutRef.current = setTimeout(() => {
-        reactFlowInstance?.fitView({ padding: 0.2, maxZoom: 1 })
-        fitViewTimeoutRef.current = null
-      }, 50)
-
-      // Trigger validation after load to ensure error banners reflect current state
-      // This handles cases where loaded flow has same node/edge count as previous
-      if (revalidateTimeoutRef.current) {
-        clearTimeout(revalidateTimeoutRef.current)
-      }
-      revalidateTimeoutRef.current = setTimeout(() => {
-        revalidateValidatorsRef.current?.()
-        revalidateTimeoutRef.current = null
-      }, 100)
+      if (request !== loadRequestRef.current) return
+      applyFlow(flow)
     } catch (err) {
+      if (request !== loadRequestRef.current) return
       logger.error('Failed to load flow', err as Error, { component: 'FlowBuilder' })
-      setSnackbar({ message: 'Failed to load flow', severity: 'error' })
+      setSnackbar({ message: err instanceof Error ? err.message : 'Failed to load flow', severity: 'error' })
     } finally {
-      setLoading(false)
+      if (request === loadRequestRef.current) setLoading(false)
     }
-  }, [setNodes, setEdges, reactFlowInstance, agentMetadata])
+  }, [applyFlow])
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -918,7 +952,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   useEffect(() => {
     // Only load if flowId is provided AND different from what we already have
     if (flowId && flowId !== currentFlowId) {
-      loadFlow(flowId)
+      void confirmLeaveFlow().then((leave) => { if (leave) void loadFlow(flowId) })
     }
   }, [flowId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Note: We intentionally exclude loadFlow and currentFlowId from deps
@@ -1007,10 +1041,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   }, [revalidateValidators])
 
   const refreshFlowLists = useCallback(async () => {
-    const response = await listFlows()
-    setSavedFlows(response.flows)
-    setManageFlows(response.flows)
-    return response.flows
+    const response = await listAllFlows()
+    const flows = response.flows
+    setSavedFlows(flows)
+    setManageFlows(flows)
+    return flows
   }, [])
 
   // Stable key for edge topology - triggers revalidation when edges are rewired (not just added/removed)
@@ -1035,6 +1070,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     nameOverride?: string,
     options?: { forceCreate?: boolean }
   ) => {
+    if (readOnly || loading) return
     const forceCreate = options?.forceCreate ?? false
     const nameToUse = nameOverride || flowName
 
@@ -1077,6 +1113,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       return
     }
 
+    const loadRequestAtSave = loadRequestRef.current
     setSaving(true)
     try {
       // Convert to API format
@@ -1127,22 +1164,28 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           description: flowDescription || undefined,
           flow_definition: flowDefinition,
         })
-        setCurrentFlowId(savedFlow.id)
       }
 
       const flowMutationReason = currentFlowId && !forceCreate ? 'updated' : 'created'
+      notifyFlowListInvalidated({
+        flowId: savedFlow.id,
+        reason: flowMutationReason,
+      })
       await refreshFlowLists()
 
+      // Navigation or New Flow owns the editor now; only refresh the persisted artifact's lists.
+      if (loadRequestRef.current !== loadRequestAtSave) return
+
       // Update flowName state to match saved name
+      setCurrentFlowId(savedFlow.id)
+      displayedFlowIdRef.current = savedFlow.id
+      unsavedFlowRef.current = false
+      setFlowAccess(savedFlow)
       setFlowName(savedFlow.name)
       setFlowDescription(savedFlow.description || '')
       setTaskInstructionsDefaultOnly(
         savedFlow.flow_definition.task_instructions_default_only === true
       )
-      notifyFlowListInvalidated({
-        flowId: savedFlow.id,
-        reason: flowMutationReason,
-      })
       setSnackbar({
         message: forceCreate ? 'Flow saved as new flow' : 'Flow saved successfully',
         severity: 'success'
@@ -1159,12 +1202,17 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
   // Handle new flow
   const handleNewFlow = () => {
+    loadRequestRef.current += 1
+    displayedFlowIdRef.current = null
+    setLoading(false)
+    unsavedFlowRef.current = false
     setNodes([createInitialTaskInputNode()])
     setEdges([])
     setFlowName('New Flow')
     setFlowDescription('')
     setTaskInstructionsDefaultOnly(false)
     setCurrentFlowId(null)
+    setFlowAccess(null)
     setSelectedNode(null)
     nodeIdRef.current = 1  // Start from 1 since node_0 is used
   }
@@ -1204,6 +1252,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
         },
       }
       const nextEdges = [...existing, edge]
+      unsavedFlowRef.current = true
       setEdges(nextEdges)
       setNodes((currentNodes) => rebuildValidationGroupsFromEdges(
         currentNodes as AgentNode[],
@@ -1226,6 +1275,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   // Handle connection between nodes
   const onConnect = useCallback(
     (params: Connection) => {
+      if (readOnly) return
       const sourceNode = params.source
         ? nodes.find((n) => n.id === params.source) as AgentNode | undefined
         : undefined
@@ -1318,14 +1368,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       canSourceOutputAttachmentDynamic,
       isValidationAgentDynamic,
       addValidationAttachmentEdge,
+      readOnly,
     ]
   )
-
-  const confirmLeaveNode = useCallback((): Promise<boolean> => {
-    const guard = nodePanelGuardRef.current
-    if (!guard) return Promise.resolve(true)
-    return guard.requestLeave()
-  }, [])
 
   // Handle node selection. Clicking another node while the panel holds
   // unapplied edits asks Apply, Discard, or Keep editing first.
@@ -1360,7 +1405,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     (event: React.DragEvent) => {
       event.preventDefault()
 
-      if (!reactFlowInstance || !reactFlowWrapper.current) return
+      if (readOnly || !reactFlowInstance || !reactFlowWrapper.current) return
 
       const data = event.dataTransfer.getData('application/reactflow')
       if (!data) return
@@ -1431,12 +1476,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           },
         }
 
+        unsavedFlowRef.current = true
         setNodes((nds) => [...nds, newNode])
       } catch (err) {
         logger.error('Failed to parse drag data', err as Error, { component: 'FlowBuilder' })
       }
     },
     [
+      readOnly,
       reactFlowInstance,
       setNodes,
       getNodeId,
@@ -1448,6 +1495,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   // Handle node data update from editor
   const handleNodeDataUpdate = useCallback(
     (nodeId: string, data: Partial<AgentNodeData>) => {
+      if (readOnly) return
+      unsavedFlowRef.current = true
       setNodes((nds) => {
         const updatedNodes = nds.map((node) =>
           node.id === nodeId
@@ -1466,17 +1515,19 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
         revalidateTimeoutRef.current = null
       }, 50)
     },
-    [setNodes, edges, revalidateValidators]
+    [readOnly, setNodes, edges, revalidateValidators]
   )
 
   // Handle node deletion by ID (for the step panel Delete step action)
   const handleDeleteNode = useCallback((nodeId: string) => {
+    if (readOnly) return
+    unsavedFlowRef.current = true
     setNodes((nds) => nds.filter((n) => n.id !== nodeId))
     setEdges((eds) =>
       eds.filter((e) => e.source !== nodeId && e.target !== nodeId)
     )
     setSelectedNode(null)
-  }, [setNodes, setEdges])
+  }, [readOnly, setNodes, setEdges])
 
   // Step numbers for the panel header and its cross-step sentences.
   const stepIds = useMemo(
@@ -1548,20 +1599,25 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
   // Handle selecting a flow to load
   const handleSelectFlow = useCallback((selectedFlowId: string) => {
-    setOpenDialogOpen(false)
-    loadFlow(selectedFlowId)
-  }, [loadFlow])
+    void confirmLeaveFlow().then((leave) => {
+      if (!leave) return
+      setOpenDialogOpen(false)
+      void loadFlow(selectedFlowId)
+    })
+  }, [loadFlow, confirmLeaveFlow])
 
   // Filtered flows based on search
   const filteredFlows = useMemo(() => {
-    if (!flowSearchTerm.trim()) return savedFlows
-    const term = flowSearchTerm.toLowerCase()
-    return savedFlows.filter((flow) => flow.name.toLowerCase().includes(term))
-  }, [savedFlows, flowSearchTerm])
+    const term = flowSearchTerm.trim().toLowerCase()
+    return savedFlows.filter((flow) => (
+      (flowScope === 'all' || (flowScope === 'owned' ? flow.is_owner : !flow.is_owner))
+      && flow.name.toLowerCase().includes(term)
+    ))
+  }, [savedFlows, flowSearchTerm, flowScope])
 
   // Save Dialog handlers
   const handleSaveClick = useCallback(() => {
-    if (saving) return
+    if (saving || readOnly || loading) return
 
     setFileMenuAnchor(null)
     if (nodes.length === 0) {
@@ -1577,10 +1633,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       setSaveDialogName(flowName === 'New Flow' ? '' : flowName)
       setSaveDialogOpen(true)
     }
-  }, [currentFlowId, flowName, nodes.length, saving, handleSave])
+  }, [currentFlowId, flowName, nodes.length, saving, handleSave, readOnly, loading])
 
   const handleSaveAsClick = useCallback(() => {
     setFileMenuAnchor(null)
+    if (readOnly || loading) return
     if (nodes.length === 0) {
       setSnackbar({ message: 'Add at least one agent to the flow', severity: 'error' })
       return
@@ -1592,7 +1649,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     setSaveDialogMode('save_as')
     setSaveDialogName(suggestedName)
     setSaveDialogOpen(true)
-  }, [flowName, nodes.length])
+  }, [flowName, nodes.length, readOnly, loading])
 
   const handleSaveDialogClose = useCallback(() => {
     setSaveDialogOpen(false)
@@ -1636,6 +1693,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
   // Start editing a flow name
   const handleRenameStart = useCallback((flow: FlowSummaryResponse) => {
+    if (!flow.is_owner) return
     setEditingFlowId(flow.id)
     setEditingFlowName(flow.name)
   }, [])
@@ -1648,7 +1706,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
   // Confirm rename
   const handleRenameConfirm = useCallback(async () => {
-    if (!editingFlowId || !editingFlowName.trim()) return
+    if (!editingFlowId || !editingFlowName.trim() || !manageFlows.find((flow) => flow.id === editingFlowId)?.is_owner) return
 
     setRenamingFlow(true)
     try {
@@ -1680,10 +1738,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     } finally {
       setRenamingFlow(false)
     }
-  }, [editingFlowId, editingFlowName, currentFlowId, refreshFlowLists])
+  }, [editingFlowId, editingFlowName, currentFlowId, refreshFlowLists, manageFlows])
 
   // Delete flow from Manage dialog
   const handleDeleteFromManageClick = useCallback((flow: FlowSummaryResponse) => {
+    if (!flow.is_owner) return
     setFlowToDeleteFromManage(flow)
     setDeleteManageConfirmOpen(true)
   }, [])
@@ -1694,7 +1753,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
   }, [])
 
   const handleDeleteFromManageConfirm = useCallback(async () => {
-    if (!flowToDeleteFromManage) return
+    if (!flowToDeleteFromManage?.is_owner) return
 
     setDeletingFromManage(true)
     try {
@@ -1751,12 +1810,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
 
   // Handle delete all selected nodes and edges (for Edit menu and keyboard shortcut)
   const handleDeleteAllSelected = useCallback(() => {
+    if (readOnly) return
     setEditMenuAnchor(null)
     if (selectedNodeIds.length === 0 && selectedEdgeIds.length === 0) {
       setSnackbar({ message: 'No nodes or connections selected', severity: 'error' })
       return
     }
 
+    unsavedFlowRef.current = true
     setNodes((nds) => nds.filter((n) => !n.selected))
     setEdges((eds) => eds.filter((e) => (
       !selectedEdgeIds.includes(e.id)
@@ -1764,21 +1825,21 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       && !selectedNodeIds.includes(e.target)
     )))
     setSelectedNode(null)
-  }, [selectedNodeIds, selectedEdgeIds, setNodes, setEdges])
+  }, [readOnly, selectedNodeIds, selectedEdgeIds, setNodes, setEdges])
 
   // Handle delete flow - show confirmation dialog
   const handleDeleteFlowClick = useCallback(() => {
     setFileMenuAnchor(null)
-    if (!currentFlowId) {
+    if (readOnly || !currentFlowId) {
       setSnackbar({ message: 'No flow to delete', severity: 'error' })
       return
     }
     setDeleteConfirmOpen(true)
-  }, [currentFlowId])
+  }, [currentFlowId, readOnly])
 
   // Confirm delete flow
   const handleDeleteFlowConfirm = useCallback(async () => {
-    if (!currentFlowId) return
+    if (readOnly || !currentFlowId) return
 
     setDeleting(true)
     try {
@@ -1793,7 +1854,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
       setDeleting(false)
       setDeleteConfirmOpen(false)
     }
-  }, [currentFlowId, handleNewFlow])
+  }, [currentFlowId, handleNewFlow, readOnly])
 
   // Cancel delete
   const handleDeleteFlowCancel = useCallback(() => {
@@ -1856,7 +1917,37 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [active, builderRootRef, handleSaveClick, handleSelectAll, handleDeleteAllSelected, nodes.length, selectedElementsCount])
 
-  const saveActionsDisabled = saving || nodes.length === 0
+  const handleClone = async () => {
+    if (!currentFlowId || !readOnly || cloning) return
+    if (!await confirmLeaveNode()) return
+    const loadRequestAtClone = loadRequestRef.current
+    setCloning(true)
+    try {
+      const copy = await cloneFlow(currentFlowId)
+      notifyFlowListInvalidated({ flowId: copy.id, reason: 'created' })
+      if (displayedFlowIdRef.current === currentFlowId && loadRequestRef.current === loadRequestAtClone) {
+        loadRequestRef.current += 1
+        applyFlow(copy)
+        onFlowSaved?.(copy.id)
+      }
+    } catch (err) {
+      setSnackbar({ message: err instanceof Error ? err.message : 'Failed to clone flow', severity: 'error' })
+    } finally { setCloning(false) }
+  }
+
+  const handleShare = async () => {
+    if (!currentFlowId || !flowAccess?.is_owner || sharing) return
+    setSharing(true)
+    try {
+      const updated = await shareFlow(currentFlowId, flowAccess?.visibility === 'project' ? 'private' : 'project')
+      if (displayedFlowIdRef.current === updated.id) setFlowAccess(updated)
+      notifyFlowListInvalidated({ flowId: updated.id, reason: 'updated' })
+    } catch (err) {
+      setSnackbar({ message: err instanceof Error ? err.message : 'Failed to change flow visibility', severity: 'error' })
+    } finally { setSharing(false) }
+  }
+
+  const saveActionsDisabled = readOnly || loading || saving || nodes.length === 0
 
   return (
     <BuilderContainer ref={builderRootRef}>
@@ -1878,7 +1969,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
           transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         >
-          <StyledMenuItem onClick={() => { handleFileMenuClose(); handleNewFlow(); }}>
+          <StyledMenuItem onClick={() => { handleFileMenuClose(); void confirmLeaveFlow().then((leave) => { if (leave) handleNewFlow() }); }}>
             <span>New Flow</span>
           </StyledMenuItem>
           <StyledMenuItem onClick={handleOpenDialogOpen}>
@@ -1896,7 +1987,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
             <span>Save As...</span>
           </StyledMenuItem>
           <Divider sx={{ my: 0.5 }} />
-          <StyledMenuItem onClick={handleDeleteFlowClick} disabled={!currentFlowId}>
+          <StyledMenuItem onClick={handleDeleteFlowClick} disabled={readOnly || !currentFlowId}>
             <Typography sx={{ color: currentFlowId ? 'error.main' : 'inherit', fontSize: '0.8rem' }}>
               Delete Flow
             </Typography>
@@ -1923,7 +2014,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
             <span>Select All</span>
             <Shortcut>{primaryShortcutLabel}+A</Shortcut>
           </StyledMenuItem>
-          <StyledMenuItem onClick={handleDeleteAllSelected} disabled={selectedElementsCount === 0}>
+          <StyledMenuItem onClick={handleDeleteAllSelected} disabled={readOnly || selectedElementsCount === 0}>
             <Typography sx={{ color: selectedElementsCount > 0 ? 'error.main' : 'inherit', fontSize: '0.8rem' }}>
               Delete Selected {selectedElementsCount > 0 && `(${selectedElementsCount})`}
             </Typography>
@@ -1937,7 +2028,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
               <FileActionButton
                 aria-label="New flow"
                 size="small"
-                onClick={handleNewFlow}
+                onClick={() => { void confirmLeaveFlow().then((leave) => { if (leave) handleNewFlow() }) }}
               >
                 <NoteAddIcon />
               </FileActionButton>
@@ -2029,12 +2120,26 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
         </ToolbarStatus>
       </Toolbar>
 
+        {currentFlowId && !loading && <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, px: 1, py: 0.5, borderBottom: 1, borderColor: 'divider' }}>
+          {flowAccess && <Typography variant="caption" sx={{ mr: 'auto' }}>{flowAccess.visibility === 'project' ? 'Shared' : 'Private'} · {flowAccess.is_owner ? 'You' : `Owner #${flowAccess.user_id}`} {readOnly && '· Read-only'}</Typography>}
+          {readOnly ? (
+            <Button size="small" disabled={cloning} onClick={handleClone}>Clone to edit</Button>
+          ) : (
+            <Button size="small" disabled={sharing || saving} onClick={handleShare}>{flowAccess?.visibility === 'project' ? 'Make private' : 'Share with project'}</Button>
+          )}
+          <Button size="small" href={`/?flow=${encodeURIComponent(currentFlowId)}`} onClick={async (event) => {
+            event.preventDefault()
+            if (await confirmLeaveFlow()) window.location.assign(`/?flow=${encodeURIComponent(currentFlowId)}`)
+          }}>Run in workspace</Button>
+        </Box>}
+
       <BuilderContent>
         <PanelGroup
           direction="horizontal"
           autoSaveId="flow-builder-palette"
           style={{ width: '100%', height: '100%' }}
         >
+          {!readOnly && <>
           <Panel defaultSize={28} minSize={15} maxSize={40}>
             <SidePanel>
               <AgentPalette
@@ -2056,6 +2161,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           </Panel>
 
           <ResizeHandle />
+          </>}
 
           <Panel defaultSize={72} minSize={60}>
             <CanvasSplit ref={canvasSplitRef} data-testid="flow-canvas-split">
@@ -2074,9 +2180,19 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
                 <ReactFlow
                   nodes={canvasNodes}
                   edges={canvasEdges}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  onConnect={onConnect}
+                  nodesDraggable={!readOnly}
+                  nodesConnectable={!readOnly}
+                  edgesUpdatable={!readOnly}
+                  deleteKeyCode={readOnly ? null : 'Backspace'}
+                  onNodesChange={(changes) => {
+                    if (!readOnly && changes.some((change) => change.type !== 'select' && change.type !== 'dimensions')) unsavedFlowRef.current = true
+                    onNodesChange(readOnly ? changes.filter((change) => change.type === 'select' || change.type === 'dimensions') : changes)
+                  }}
+                  onEdgesChange={(changes) => {
+                    if (!readOnly && changes.some((change) => change.type !== 'select')) unsavedFlowRef.current = true
+                    onEdgesChange(readOnly ? changes.filter((change) => change.type === 'select') : changes)
+                  }}
+                  onConnect={(connection) => { if (!readOnly) unsavedFlowRef.current = true; onConnect(connection) }}
                   onInit={setReactFlowInstance}
                   onNodeClick={onNodeClick}
                   onPaneClick={onPaneClick}
@@ -2111,6 +2227,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
                 onClose={onPaneClick}
               >
                 <NodePanel
+                  readOnly={readOnly}
                   node={selectedEditorNode}
                   stepNumber={stepNumbersById[selectedEditorNode.id]}
                   stepCount={stepIds.length}
@@ -2209,6 +2326,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
           </Typography>
         </DialogTitle>
         <DialogContent sx={{ pt: 1 }}>
+          <ToggleButtonGroup size="small" exclusive value={flowScope} onChange={(_, value) => { if (value) setFlowScope(value) }} aria-label="Flow ownership" sx={{ mb: 1 }}>
+            <ToggleButton value="all">All flows</ToggleButton>
+            <ToggleButton value="owned">My flows</ToggleButton>
+            <ToggleButton value="shared">Shared with me</ToggleButton>
+          </ToggleButtonGroup>
           <TextField
             fullWidth
             size="small"
@@ -2255,7 +2377,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
                       <DescriptionOutlinedIcon sx={{ fontSize: 18, mr: 1.5, color: 'text.secondary' }} />
                       <ListItemText
                         primary={flow.name}
-                        secondary={`${flow.step_count} step${flow.step_count !== 1 ? 's' : ''}`}
+                        secondary={`${flow.step_count} step${flow.step_count !== 1 ? 's' : ''} · ${flow.visibility === 'project' ? 'Shared' : 'Private'} · ${flow.is_owner ? 'You' : `Owner #${flow.user_id}`}`}
                         slotProps={{
                           primary: { sx: { fontSize: '0.85rem' } },
                           secondary: { sx: { fontSize: '0.7rem' } }
@@ -2470,10 +2592,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
                           <Typography variant="caption" sx={{
                             color: "text.secondary"
                           }}>
-                            {flow.step_count} step{flow.step_count !== 1 ? 's' : ''}
+                            {flow.visibility === 'project' ? 'Shared' : 'Private'} · {flow.is_owner ? 'You' : `Owner #${flow.user_id}`} · {flow.step_count} step{flow.step_count !== 1 ? 's' : ''}
                             {flow.id === currentFlowId && ' • Currently open'}
                           </Typography>
                         </Box>
+                        {flow.is_owner && <>
                         <Tooltip title="Rename">
                           <IconButton
                             size="small"
@@ -2492,6 +2615,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest, 
                             <DeleteIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
+                        </>}
                       </Box>
                     )}
                   </ListItem>

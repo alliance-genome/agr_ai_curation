@@ -30,6 +30,10 @@ global.URL.revokeObjectURL = mockRevokeObjectURL
 function flowListResponse(
   flows: Array<{
     id: string
+    visibility?: 'private' | 'project'
+    project_id?: string | null
+    shared_at?: string | null
+    is_owner?: boolean
     user_id: number
     name: string
     description: string | null
@@ -54,7 +58,7 @@ function flowListResponse(
 ) {
   return new Response(
     JSON.stringify({
-      flows,
+      flows: flows.map((flow) => ({ visibility: 'private', project_id: null, shared_at: null, is_owner: true, ...flow })),
       total: flows.length,
       page: 1,
       page_size: 50,
@@ -406,4 +410,101 @@ describe('CurationFlows', () => {
 
     expect(await screen.findByText(/Fresh Flow/)).toBeInTheDocument()
   })
+})
+
+describe('project-shared flows in Home Tools', () => {
+  beforeEach(() => mockFetch.mockReset())
+
+  const shared = {
+    id: 'shared-flow', user_id: 8, name: 'Teammate Flow', description: 'Shared extraction',
+    visibility: 'project' as const, is_owner: false, project_id: 'project-a', shared_at: '2026-09-09',
+    step_count: 1, execution_count: 0, last_executed_at: null,
+    created_at: '2026-09-09', updated_at: '2026-09-09',
+  }
+
+  it('runs a teammate flow with the current curator document and hides delete', async () => {
+    const user = userEvent.setup()
+    mockFetch.mockResolvedValueOnce(flowListResponse([shared]))
+    const execute = vi.fn().mockResolvedValue(undefined)
+    render(<MemoryRouter><CurationFlows sessionId="teammate-session" currentDocumentId="my-document" sseEvents={[]} onExecuteFlow={execute} /></MemoryRouter>)
+    await screen.findByText(/Teammate Flow/)
+    expect(screen.getByText(/Shared · Owner #8/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete this flow' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Run' }))
+    expect(execute).toHaveBeenCalledWith('shared-flow', 'my-document')
+  })
+
+  it('shows actionable run errors', async () => {
+    const user = userEvent.setup()
+    mockFetch.mockResolvedValueOnce(flowListResponse([shared]))
+    const execute = vi.fn().mockRejectedValue(new Error('Referenced agent is unavailable to your group'))
+    render(<MemoryRouter><CurationFlows sessionId="teammate-session" sseEvents={[]} onExecuteFlow={execute} /></MemoryRouter>)
+    await user.click(await screen.findByRole('button', { name: 'Run' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Referenced agent is unavailable to your group')
+  })
+
+  it('selects a flow routed from Studio and waits for an explicit run', async () => {
+    const execute = vi.fn()
+    mockFetch.mockResolvedValueOnce(flowListResponse([]))
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ...shared, flow_definition: { version: '1.1', nodes: [], edges: [], entry_node_id: 'node_0' } })))
+    render(<MemoryRouter initialEntries={['/?flow=shared-flow']}><CurationFlows sessionId="my-session" sseEvents={[]} onExecuteFlow={execute} /></MemoryRouter>)
+    expect(await screen.findByText(/Teammate Flow/)).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'View in Flow Builder' })).toBeVisible()
+    expect(execute).not.toHaveBeenCalled()
+    expect(mockFetch).toHaveBeenCalledWith('/api/flows/shared-flow')
+  })
+
+  it('does not present a flow revoked before the routed read', async () => {
+    const user = userEvent.setup()
+    const execute = vi.fn().mockResolvedValue(undefined)
+    mockFetch.mockResolvedValueOnce(flowListResponse([
+      shared,
+      { ...shared, id: 'available-flow', name: 'Available Flow' },
+    ]))
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Flow not found' }), { status: 404 }))
+    render(<MemoryRouter initialEntries={['/?flow=shared-flow']}><CurationFlows sessionId="non-member-session" sseEvents={[]} onExecuteFlow={execute} /></MemoryRouter>)
+    expect(await screen.findByText('Flow not found')).toBeInTheDocument()
+    expect(screen.queryByText(/Teammate Flow/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Available Flow/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Run' }))
+    expect(execute).toHaveBeenCalledWith('available-flow', undefined)
+  })
+
+  it('ignores a stale routed failure after a newer refresh succeeds', async () => {
+    let resolveRead!: (response: Response) => void
+    mockFetch.mockResolvedValueOnce(flowListResponse([]))
+    mockFetch.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRead = resolve }))
+    render(<MemoryRouter initialEntries={['/?flow=shared-flow']}><CurationFlows sessionId="my-session" sseEvents={[]} onExecuteFlow={vi.fn()} /></MemoryRouter>)
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/flows/shared-flow'))
+
+    mockFetch.mockResolvedValueOnce(flowListResponse([shared]))
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ...shared, flow_definition: { nodes: [] } })))
+    act(() => notifyFlowListInvalidated({ flowId: 'shared-flow', reason: 'updated' }))
+    expect(await screen.findByText(/Teammate Flow/)).toBeInTheDocument()
+
+    await act(async () => {
+      resolveRead(new Response(JSON.stringify({ detail: 'Stale access error' }), { status: 403 }))
+    })
+    expect(screen.queryByText('Stale access error')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled()
+  })
+})
+
+it('deletes an owned routed flow and keeps the remaining browse list available', async () => {
+  const user = userEvent.setup()
+  mockFetch.mockReset()
+  mockFetch.mockImplementation(async (input: string, options?: RequestInit) => {
+    if (options?.method === 'DELETE') return new Response(null, { status: 204 })
+    if (input === '/api/flows/flow-1') return new Response(JSON.stringify({
+      id: 'flow-1', user_id: 7, name: 'Evidence Flow', is_owner: true, visibility: 'private',
+      project_id: null, shared_at: null, execution_count: 0,
+      flow_definition: { nodes: [], edges: [], entry_node_id: 'node_0', version: '1.1' },
+    }))
+    return flowListResponse([])
+  })
+  render(<MemoryRouter initialEntries={['/?flow=flow-1']}><CurationFlows sessionId="my-session" sseEvents={[]} onExecuteFlow={vi.fn()} /></MemoryRouter>)
+  await user.click(await screen.findByRole('button', { name: 'Delete this flow' }))
+  await user.click(screen.getByRole('button', { name: /^Delete$/ }))
+  expect(await screen.findByText('No flows yet')).toBeInTheDocument()
+  expect(mockFetch).toHaveBeenCalledWith('/api/flows/flow-1', { method: 'DELETE' })
 })

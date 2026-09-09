@@ -18,6 +18,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined'
 export type NodePanelStatus = 'clean' | 'dirty' | 'error'
 
 interface NodePanelHeaderProps {
+  readOnly?: boolean
   icon: string
   name: string
   /** "Step 2 of 4" */
@@ -42,6 +43,7 @@ const STATUS_PILL: Record<Exclude<NodePanelStatus, 'clean'>, { label: string; to
 }
 
 function NodePanelHeader({
+  readOnly = false,
   icon,
   name,
   stepLabel,
@@ -161,6 +163,7 @@ function NodePanelHeader({
               {pill.label}
             </Box>
           )}
+          {!readOnly && <>
           <Button size="small" variant="outlined" onClick={onCancel} sx={{ textTransform: 'none', height: 26, fontSize: 12 }}>
             Cancel
           </Button>
@@ -174,6 +177,7 @@ function NodePanelHeader({
           >
             Apply
           </Button>
+          </>}
         </Box>
       </Box>
 

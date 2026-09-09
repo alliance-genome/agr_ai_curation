@@ -5,8 +5,8 @@
  * Allows viewing flow details, executing flows, and creating new flows.
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Box,
   Button,
@@ -20,6 +20,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
+  Alert,
 } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
@@ -33,8 +34,8 @@ import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import { getStreamEventSessionId } from '@/lib/streamEventSession'
 import FlowRunCompletionCard, { type FlowRunCompletionSummary } from './FlowRunCompletionCard'
-import { subscribeToFlowListInvalidation } from '@/features/flows/flowListInvalidation'
-import { listFlows, type FlowSummaryResponse } from '@/services/agentStudioService'
+import { notifyFlowListInvalidated, subscribeToFlowListInvalidation } from '@/features/flows/flowListInvalidation'
+import { listAllFlows, getFlow, deleteFlow, type FlowSummaryResponse } from '@/services/agentStudioService'
 import logger from '@/services/logger'
 
 /**
@@ -126,6 +127,10 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
 }) => {
   const navigate = useNavigate()
   const theme = useTheme()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const fetchRequestRef = useRef(0)
+  const requestedFlowId = searchParams.get('flow')
+  const [runError, setRunError] = useState<string | null>(null)
   const [flows, setFlows] = useState<FlowSummaryResponse[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -151,20 +156,38 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
    * Fetch flows from API
    */
   const fetchFlows = useCallback(async () => {
+    const request = ++fetchRequestRef.current
     setIsLoading(true)
     setError(null)
 
     try {
-      const data = await listFlows()
-      setFlows(data.flows)
+      const data = await listAllFlows()
+      if (request !== fetchRequestRef.current) return
+      let visibleFlows = data.flows
+      if (requestedFlowId) {
+        try {
+          const requested = await getFlow(requestedFlowId)
+          if (request !== fetchRequestRef.current) return
+          const summary = { ...requested, step_count: requested.flow_definition.nodes.length }
+          visibleFlows = [summary, ...visibleFlows.filter((flow) => flow.id !== requested.id)]
+          setExpandedFlowId(requested.id)
+        } catch (err) {
+          if (request !== fetchRequestRef.current) return
+          // Access may have been revoked since the list request completed.
+          visibleFlows = visibleFlows.filter((flow) => flow.id !== requestedFlowId)
+          setRunError(err instanceof Error ? err.message : 'Failed to open the requested flow')
+        }
+      }
+      setFlows(visibleFlows)
     } catch (err) {
+      if (request !== fetchRequestRef.current) return
       const error = err as Error
       logger.error('Failed to load flows', error, { component: 'CurationFlows' })
       setError(error.message)
     } finally {
-      setIsLoading(false)
+      if (request === fetchRequestRef.current) setIsLoading(false)
     }
-  }, [])
+  }, [requestedFlowId])
 
   // Fetch flows on mount
   useEffect(() => {
@@ -186,12 +209,13 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
       return
     }
 
+    setRunError(null)
     setExecutingFlowId(flow.id)
 
     try {
       await onExecuteFlow(flow.id, currentDocumentId)
     } catch (err) {
-      console.error('Error executing flow:', err)
+      setRunError(err instanceof Error ? err.message : 'Failed to run flow')
     } finally {
       setExecutingFlowId(null)
     }
@@ -213,7 +237,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
    * Navigate to Agent Studio to create new flow
    */
   const handleCreateNewFlow = () => {
-    navigate('/agent-studio')
+    navigate('/agent-studio?tab=flows')
   }
 
   /**
@@ -228,6 +252,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
    */
   const handleDeleteClick = (flow: FlowSummaryResponse, e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!flow.is_owner) return
     setFlowToDelete(flow)
     setDeleteDialogOpen(true)
   }
@@ -244,26 +269,25 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
    * Confirm and execute delete
    */
   const handleDeleteConfirm = async () => {
-    if (!flowToDelete) return
+    if (!flowToDelete?.is_owner) return
 
     setIsDeleting(true)
 
     try {
-      const response = await fetch(`/api/flows/${flowToDelete.id}`, {
-        method: 'DELETE',
-      })
-
-      if (!response.ok) {
-        console.error('Failed to delete flow:', response.status)
-        return
+      await deleteFlow(flowToDelete.id)
+      if (requestedFlowId === flowToDelete.id) {
+        const nextParams = new URLSearchParams(searchParams)
+        nextParams.delete('flow')
+        setSearchParams(nextParams, { replace: true })
       }
+      notifyFlowListInvalidated({ flowId: flowToDelete.id, reason: 'deleted' })
 
       // Remove from local state
       setFlows(prev => prev.filter(f => f.id !== flowToDelete.id))
       setDeleteDialogOpen(false)
       setFlowToDelete(null)
     } catch (err) {
-      console.error('Error deleting flow:', err)
+      setRunError(err instanceof Error ? err.message : 'Failed to delete flow')
     } finally {
       setIsDeleting(false)
     }
@@ -411,6 +435,8 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
           {latestCompletedRun && (
             <FlowRunCompletionCard run={latestCompletedRun} />
           )}
+
+          {runError && <Alert severity="error" onClose={() => setRunError(null)} sx={{ mb: 1 }}>{runError}</Alert>}
 
           {/* Loading State */}
           {isLoading && (
@@ -563,7 +589,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                             mt: 0.25,
                           }}
                         >
-                          {flow.step_count} step{flow.step_count !== 1 ? 's' : ''}
+                          {flow.visibility === 'project' ? 'Shared' : 'Private'} · {flow.is_owner ? 'You' : `Owner #${flow.user_id}`} · {flow.step_count} step{flow.step_count !== 1 ? 's' : ''}
                           {flow.execution_count > 0 && (
                             <span style={{ marginLeft: '8px' }}>
                               • Run {flow.execution_count}×
@@ -655,7 +681,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                         )}
 
                         {/* Delete Button */}
-                        <Tooltip title="Delete this flow">
+                        {flow.is_owner && <Tooltip title="Delete this flow">
                           <IconButton
                             size="small"
                             onClick={(e) => handleDeleteClick(flow, e)}
@@ -670,7 +696,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                           >
                             <DeleteIcon sx={{ fontSize: '1.1rem' }} />
                           </IconButton>
-                        </Tooltip>
+                        </Tooltip>}
                       </Box>
                     </Box>
 
@@ -684,6 +710,9 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                           borderTop: `1px solid ${theme.palette.divider}`,
                         }}
                       >
+                        <Button size="small" onClick={() => navigate(`/agent-studio?tab=flows&flow=${encodeURIComponent(flow.id)}`)}>
+                          {flow.is_owner ? 'Edit in Flow Builder' : 'View in Flow Builder'}
+                        </Button>
                         {flow.description && (
                           <Typography
                             variant="body2"

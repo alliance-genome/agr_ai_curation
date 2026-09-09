@@ -25,6 +25,7 @@ import {
 import type { AutomaticChecksView } from './automaticChecks'
 
 interface AutomaticChecksProps {
+  readOnly?: boolean
   view: AutomaticChecksView
   envelopeAgentId: string
   agentMetadata: Record<string, AgentMetadata>
@@ -32,7 +33,7 @@ interface AutomaticChecksProps {
   onOpenAgent?: (request: AgentBrowserRequest) => void
 }
 
-function AutomaticChecks({ view, envelopeAgentId, agentMetadata, onToggle, onOpenAgent }: AutomaticChecksProps) {
+function AutomaticChecks({ readOnly = false, view, envelopeAgentId, agentMetadata, onToggle, onOpenAgent }: AutomaticChecksProps) {
   const [open, setOpen] = useState(false)
   const helper = checksHelperSentence(view)
   const extra = customValidatorSentences(view)
@@ -80,6 +81,7 @@ function AutomaticChecks({ view, envelopeAgentId, agentMetadata, onToggle, onOpe
                       sx={{ m: 0, flex: 1, minWidth: 0, gap: 0.75, '& .MuiFormControlLabel-label': { fontSize: 12.5, minWidth: 0 } }}
                       control={(
                         <Switch
+                          disabled={readOnly}
                           size="small"
                           checked={check.enabled}
                           onChange={(event) => onToggle(check.attachmentIds, event.target.checked)}

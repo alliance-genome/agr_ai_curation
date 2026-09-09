@@ -10,7 +10,6 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
-  useReactFlow,
   type EdgeProps,
 } from 'reactflow'
 import { styled } from '@mui/material/styles'
@@ -64,7 +63,6 @@ function DeletableEdge({
   markerEnd,
   data,
 }: EdgeProps) {
-  const { setEdges } = useReactFlow()
   const [isHovered, setIsHovered] = useState(false)
   const isValidationAttachment = data?.role === 'validation_attachment'
 
@@ -82,13 +80,9 @@ function DeletableEdge({
   const onDelete = useCallback(
     (event: React.MouseEvent) => {
       event.stopPropagation()
-      if (data?.onDeleteEdge) {
-        data.onDeleteEdge(id)
-        return
-      }
-      setEdges((edges) => edges.filter((edge) => edge.id !== id))
+      data?.onDeleteEdge?.(id)
     },
-    [data, id, setEdges]
+    [data, id]
   )
 
   // Handle hover states
@@ -151,13 +145,13 @@ function DeletableEdge({
               <CheckCircleOutlineIcon sx={{ fontSize: 14 }} />
             </span>
           )}
-          <DeleteButton
+          {data?.onDeleteEdge && <DeleteButton
             visible={isHovered}
             onClick={onDelete}
             title="Delete connection"
           >
             <CloseIcon />
-          </DeleteButton>
+          </DeleteButton>}
         </div>
       </EdgeLabelRenderer>
     </>

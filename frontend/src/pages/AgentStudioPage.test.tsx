@@ -155,10 +155,12 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
   const react = await import('react')
   return {
   FlowBuilder: ({
+    flowId,
     onFlowChange,
     onVerifyRequest,
     active,
   }: {
+    flowId?: string | null
     onFlowChange?: (flow: Record<string, unknown>) => void
     onVerifyRequest?: () => void
     active?: boolean
@@ -169,7 +171,7 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
       return flowBuilderInstances.count
     })
     return (
-    <div data-testid="flow-builder" data-instance={instance} data-active={String(active ?? true)}>
+    <div data-testid="flow-builder" data-flow-id={flowId} data-instance={instance} data-active={String(active ?? true)}>
       Flow
       <button
         onClick={() => onFlowChange?.({
@@ -392,6 +394,13 @@ describe('AgentStudioPage', () => {
     })
     historyMocks.useChatHistoryDetailQuery.mockReturnValue(buildEmptyHistoryQueryResult())
     historyMocks.useChatHistoryTranscriptQuery.mockReturnValue(buildEmptyHistoryQueryResult())
+  })
+
+  it('opens the Flows tab and requested shared flow from Home Tools', async () => {
+    await renderStudio(['/agent-studio?tab=flows&flow=shared-flow'])
+    const builder = await screen.findByTestId('flow-builder')
+    expect(builder).toHaveAttribute('data-flow-id', 'shared-flow')
+    expect(builder).toHaveAttribute('data-active', 'true')
   })
 
   it('maps verification fields from FlowBuilder state into chat context', async () => {

@@ -71,6 +71,7 @@ export interface ValidatorAttachmentView {
 }
 
 export interface NodePanelProps {
+  readOnly?: boolean
   node: AgentNode
   stepNumber: number
   stepCount: number
@@ -119,6 +120,7 @@ function OptionalMark() {
 const textFieldSx = { '& .MuiInputBase-root': { fontSize: 13 } } as const
 
 function NodePanel({
+  readOnly = false,
   node,
   stepNumber,
   stepCount,
@@ -159,12 +161,13 @@ function NodePanel({
   )
 
   const applyDraft = useCallback((): boolean => {
+    if (readOnly) return false
     const payload = draft.buildPayload()
     if (!payload) return false
     onApply(node.id, payload)
     if (isTaskInput) onTaskInstructionsAuthored?.()
     return true
-  }, [draft, isTaskInput, node.id, onApply, onTaskInstructionsAuthored])
+  }, [readOnly, draft, isTaskInput, node.id, onApply, onTaskInstructionsAuthored])
 
   const requestLeave = useCallback((): Promise<boolean> => {
     if (!draft.dirty) return Promise.resolve(true)
@@ -220,6 +223,7 @@ function NodePanel({
       sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, backgroundColor: 'background.paper' }}
     >
       <NodePanelHeader
+        readOnly={readOnly}
         icon={icon}
         name={node.data.agent_display_name}
         stepLabel={stepLabel}
@@ -231,7 +235,7 @@ function NodePanel({
         mode={mode}
         onApply={() => { applyDraft() }}
         onCancel={draft.reset}
-        onDelete={() => onDelete(node.id)}
+        onDelete={readOnly ? undefined : () => onDelete(node.id)}
         onHide={guardedHide}
       />
 
@@ -242,6 +246,7 @@ function NodePanel({
             help="Passed to the first agent in the flow. Describe the curation task in plain words."
           >
             <TextField
+              disabled={readOnly}
               fullWidth
               size="small"
               multiline
@@ -283,6 +288,7 @@ function NodePanel({
             help="Added to this validator's prompt for this step only."
           >
             <TextField
+              disabled={readOnly}
               fullWidth
               size="small"
               multiline
@@ -305,6 +311,7 @@ function NodePanel({
             help="Added to the agent's prompt for this flow only."
           >
             <TextField
+              disabled={readOnly}
               fullWidth
               size="small"
               multiline
@@ -322,6 +329,7 @@ function NodePanel({
 
         {(kind === 'extraction' || kind === 'agent') && (envelopeMetadata || draft.values.attachments.length > 0) && (
           <AutomaticChecks
+            readOnly={readOnly}
             view={checksView}
             envelopeAgentId={agentId}
             agentMetadata={agentMetadata}
@@ -366,6 +374,7 @@ function NodePanel({
               sx={{ m: 0, gap: 0.75, '& .MuiFormControlLabel-label': { fontSize: 12.5 } }}
               control={(
                 <Switch
+                  disabled={readOnly}
                   size="small"
                   checked={draft.values.includeEvidence}
                   onChange={(event) => draft.set('includeEvidence', event.target.checked)}
@@ -387,9 +396,9 @@ function NodePanel({
               onChange={(event) => draft.set('outputFilenameMode', event.target.value as OutputFilenameMode)}
               sx={{ gap: 0.25, '& .MuiFormControlLabel-label': { fontSize: 12.5 } }}
             >
-              <FormControlLabel value="source_pdf" control={<Radio size="small" />} label="Use the paper's file name (recommended)" />
-              <FormControlLabel value="custom" control={<Radio size="small" />} label="Custom prefix" />
-              <FormControlLabel value="formatter_default" control={<Radio size="small" />} label="Let the formatter decide" />
+              <FormControlLabel value="source_pdf" control={<Radio size="small" disabled={readOnly} />} label="Use the paper's file name (recommended)" />
+              <FormControlLabel value="custom" control={<Radio size="small" disabled={readOnly} />} label="Custom prefix" />
+              <FormControlLabel value="formatter_default" control={<Radio size="small" disabled={readOnly} />} label="Let the formatter decide" />
             </RadioGroup>
 
             <Collapse in={draft.values.outputFilenameMode === 'custom'} unmountOnExit>
@@ -398,6 +407,7 @@ function NodePanel({
                   {BUILT_IN_TEMPLATE_VARIABLES.map((variable) => (
                     <Button
                       key={variable}
+                      disabled={readOnly}
                       size="small"
                       variant="outlined"
                       onClick={() => draft.set('outputFilenameTemplate', `${draft.values.outputFilenameTemplate}{{${variable}}}`)}
@@ -408,6 +418,7 @@ function NodePanel({
                   ))}
                 </Box>
                 <TextField
+              disabled={readOnly}
                   fullWidth
                   required
                   size="small"
@@ -443,6 +454,7 @@ function NodePanel({
           <Collapse in={advancedOpen} unmountOnExit>
             <Box sx={{ pt: 0.75 }}>
               <TextField
+              disabled={readOnly}
                 fullWidth
                 size="small"
                 label="Output variable name"
