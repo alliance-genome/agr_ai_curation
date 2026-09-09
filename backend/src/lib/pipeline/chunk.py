@@ -157,6 +157,13 @@ async def chunk_parsed_document(
         else:
             raise ChunkingError(f"Unknown chunking method: {strategy.chunking_method}")
 
+        # Large table spacing can yield blank slices even when the source
+        # element contains useful text. Filter after splitting so all methods
+        # retain substantive content without creating invalid DocumentChunks.
+        chunks = [chunk for chunk in chunks if chunk["content"].strip()]
+        if not chunks:
+            raise ChunkingError("No non-whitespace content to chunk")
+
         # Convert to DocumentChunk objects
         document_chunks = []
         for idx, chunk_data in enumerate(chunks):

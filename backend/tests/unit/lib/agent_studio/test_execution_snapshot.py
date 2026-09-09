@@ -180,7 +180,10 @@ def test_item_guidance_supplements_saved_prompt_and_uses_pinned_description(monk
     pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
                             fingerprint=contract.fingerprint())
     profile = ResolvedGenericProfile(pin, contract)
-    saved = capture_execution_snapshot(None, agent(), AgentOutputContract(
+    from src.lib.agent_studio.profile_builder_contract import profile_builder_tool_ids
+    profile_agent = agent()
+    profile_agent.tool_ids = profile_builder_tool_ids(profile_agent.tool_ids)
+    saved = capture_execution_snapshot(None, profile_agent, AgentOutputContract(
         output_state="structured_extraction", output_mode="profile_bound_generic", generic_profile_ref=pin,
     ))
     # Later authoring edits must not change the instructions used by a pinned run.

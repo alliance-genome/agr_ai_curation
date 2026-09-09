@@ -53,6 +53,9 @@ def capture_execution_snapshot(
     from src.lib.agent_studio.domain_output_contract import require_no_output_without_builder_tools
 
     require_no_output_without_builder_tools(output, tools)
+    from src.lib.agent_studio.profile_builder_contract import validate_profile_builder_tools
+
+    validate_profile_builder_tools(output, tools)
     curation_definition = catalog_service._inherited_curation_definition_for_db_agent(
         agent
     )

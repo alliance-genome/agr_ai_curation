@@ -28,6 +28,9 @@ supervisor_routing:
   description: >
     Use for extracting allele/variant assertions from the loaded paper,
     including exact notation, gene context, and explicit exclusion reasons.
+    Not for database identity lookup of a supplied allele symbol or ID. For
+    that request use an available database lookup specialist, or explain that
+    direct lookup is unavailable; do not substitute PDF extraction.
   batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------

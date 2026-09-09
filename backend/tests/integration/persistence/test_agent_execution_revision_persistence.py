@@ -306,7 +306,8 @@ def test_durable_receipt_executes_original_revision_after_head_edit(execution_db
         _authorize_chat_route(db=db, db_user_id=2, active_groups=[], route=route)
 
 
-def test_saved_profile_builds_real_closed_agent_from_postgres(execution_db, monkeypatch):
+@pytest.mark.parametrize("repair_legacy_builders", [False, True])
+def test_saved_profile_builds_real_closed_agent_from_postgres(execution_db, monkeypatch, repair_legacy_builders):
     from contextlib import nullcontext
     from src.lib.agent_studio import catalog_service
     from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
@@ -330,7 +331,35 @@ def test_saved_profile_builds_real_closed_agent_from_postgres(execution_db, monk
         fingerprint=profile_revision.fingerprint)
     saved = capture_execution_snapshot(db, head, AgentOutputContract(
         output_state="structured_extraction", output_mode="profile_bound_generic", generic_profile_ref=pin))
-    revision = append_execution_revision(db, head, saved, user_id=1, expected_revision_id=None)
+    if repair_legacy_builders:
+        # Reproduce an old immutable receipt, not a newly valid snapshot: its
+        # profile was saved with inherited allele builders before this repair.
+        from src.lib.agent_studio import custom_agent_service as service
+        from src.lib.agent_studio.profile_builder_contract import profile_builder_tool_ids
+        old_tools = ["stage_allele_observation", "finalize_allele_extraction"]
+        saved = saved.model_copy(update={"tool_ids": old_tools,
+                                        "system_managed_tool_ids": old_tools})
+        old_revision = append_execution_revision(db, head, saved, user_id=1, expected_revision_id=None)
+        old_bytes = old_revision.snapshot.copy()
+        head.tool_ids = list(old_tools)
+        for tool_key in set(profile_builder_tool_ids(old_tools)) - {
+            "stage_generic_object", "patch_generic_object", "finalize_generic_extraction"
+        }:
+            db.add(ToolPolicy(tool_key=tool_key, display_name=tool_key, description="Test",
+                              category="Test", curator_visible=False, allow_attach=False, allow_execute=True))
+        revision = service._record_execution_save(
+            db, head, expected_revision_id=old_revision.id,
+            previous_output=saved.output_contract, previous_snapshot=saved,
+        )
+        db.flush()
+        db.refresh(old_revision)
+        assert old_revision.snapshot == old_bytes
+        assert head.instructions == saved.instructions
+        assert head.model_id == saved.model_id
+        assert set(head.tool_ids) == set(profile_builder_tool_ids(old_tools))
+        assert revision.id != old_revision.id
+    else:
+        revision = append_execution_revision(db, head, saved, user_id=1, expected_revision_id=None)
     monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(db))
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-a-credential")
     monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **kwargs: None)
@@ -949,6 +978,7 @@ def test_service_profile_pin_uses_exact_revision_and_historical_access(
     monkeypatch.setattr(custom_agent_service, "_system_managed_tool_ids", lambda *_: [])
     db, agent_id, _, profile = execution_db
     head = db.get(Agent, agent_id)
+    head.tool_ids = ["stage_generic_object", "finalize_generic_extraction"]
     output = AgentOutputContract(
         output_state="structured_extraction",
         output_mode="profile_bound_generic",

@@ -214,6 +214,10 @@ class CurationPrepScopeConfirmation(CurationPrepBaseModel):
         default_factory=list,
         description="Additional scope confirmation notes",
     )
+    expected_review_row_count: int | None = Field(
+        default=None, ge=1,
+        description="Exact previewed row count; abort the transaction if materialization changes it",
+    )
 
     @model_validator(mode="after")
     def validate_confirmed_scope(self) -> "CurationPrepScopeConfirmation":

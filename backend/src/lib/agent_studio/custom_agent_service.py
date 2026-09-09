@@ -417,6 +417,9 @@ def _system_managed_tool_ids(db: Session, tool_ids: List[str]) -> List[str]:
         return []
     policy_by_key = _tool_policy_by_key(db)
     builder_finalization_tool_ids = _builder_finalization_tool_ids()
+    from src.lib.agent_studio.profile_builder_contract import declared_builder_tool_ids
+
+    builder_lifecycle_tool_ids = declared_builder_tool_ids()
     managed: List[str] = []
     for tool_id in _dedupe_tool_ids(tool_ids):
         policy = policy_by_key.get(tool_id)
@@ -428,6 +431,7 @@ def _system_managed_tool_ids(db: Session, tool_ids: List[str]) -> List[str]:
         if (
             tool_id not in _SYSTEM_MANAGED_INHERITED_TOOL_IDS
             and tool_id not in builder_finalization_tool_ids
+            and tool_id not in builder_lifecycle_tool_ids
             and not is_runtime_formatter_tool(tool_id)
             and not designated
         ):
@@ -862,6 +866,20 @@ def _record_execution_save(
         selected = initial_agent_output_contract(agent)
     else:
         selected = previous_output
+    if selected.output_mode == "profile_bound_generic":
+        from src.lib.agent_studio.profile_builder_contract import profile_builder_tool_ids
+
+        agent.tool_ids = profile_builder_tool_ids(list(agent.tool_ids or []))
+    elif (
+        selected.output_state == "none" and previous_output is not None
+        and previous_output.output_mode in {"profile_bound_generic", "unprofiled_generic"}
+    ):
+        # An explicit transition out of custom extraction removes only its
+        # mechanical generic builders, not document/evidence capabilities.
+        from src.lib.agent_studio.profile_builder_contract import declared_builder_tool_ids
+
+        generic_builders = declared_builder_tool_ids("generic")
+        agent.tool_ids = [tool for tool in (agent.tool_ids or []) if tool not in generic_builders]
     saved = capture_execution_snapshot(db, agent, selected, active_group_ids=active_group_ids)
     mode = default_export_execution_mode if default_export_execution_mode is not None else (
         previous_snapshot.default_export_execution_mode if previous_snapshot is not None else None
@@ -881,7 +899,7 @@ def _record_execution_save(
         # catalog. New selectable tools are validated separately at this save.
         saved = saved.model_copy(update={
             "system_managed_tool_ids": _dedupe_tool_ids([
-                *previous_snapshot.system_managed_tool_ids,
+                *(tool for tool in previous_snapshot.system_managed_tool_ids if tool in saved.tool_ids),
                 *saved.system_managed_tool_ids,
             ]),
             "group_tool_policy": previous_snapshot.group_tool_policy,

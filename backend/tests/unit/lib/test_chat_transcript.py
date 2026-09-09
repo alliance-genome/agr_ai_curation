@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from src.lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
     ChatHistorySessionNotFoundError,
@@ -67,6 +69,31 @@ class _FakeRepository:
         items = page_sets[page_index]
         next_cursor = page_index + 1 if page_index + 1 < len(page_sets) else None
         return SimpleNamespace(items=items, next_cursor=next_cursor)
+
+
+@pytest.mark.parametrize("roles, expected", [
+    (["assistant"], "preview-trace"),
+    (["assistant", "user"], "preview-trace"),
+    (["assistant", "user", "user"], None),
+    (["assistant", "flow", "user"], None),
+    ([], None),
+])
+def test_preceding_assistant_trace_rejects_intervening_turns(monkeypatch, roles, expected):
+    from unittest.mock import MagicMock
+    from src.lib import chat_transcript as module
+    db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: db)
+    captured = {}
+
+    def messages(**kwargs):
+        captured.update(kwargs)
+        return [SimpleNamespace(role=role, message_type="text", content="message",
+                                trace_id="preview-trace") for role in roles]
+
+    monkeypatch.setattr(module, "_list_session_messages", messages)
+    assert module.latest_assistant_trace_for_session(session_id="session", user_id="owner") == expected
+    assert captured["session_id"] == "session"
+    assert captured["user_id"] == "owner"
 
 
 def test_collect_durable_text_exchanges_preserves_completed_pairs_and_flow_refs():

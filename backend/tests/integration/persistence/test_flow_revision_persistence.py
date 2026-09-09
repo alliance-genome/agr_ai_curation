@@ -31,6 +31,8 @@ def migrate(db):
 
 
 def add_revision(db, agent, contract):
+    if contract.output_mode == "profile_bound_generic":
+        agent.tool_ids = ["stage_generic_object", "finalize_generic_extraction"]
     snapshot = capture_execution_snapshot(db, agent, contract)
     return append_execution_revision(db, agent, snapshot, user_id=1,
                                      expected_revision_id=agent.execution_revision_id)

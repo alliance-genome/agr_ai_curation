@@ -42,6 +42,27 @@ def _make_scope_confirmation() -> CurationPrepScopeConfirmation:
     )
 
 
+@pytest.mark.asyncio
+async def test_changed_confirmed_count_rolls_back_before_persisting_prep(monkeypatch):
+    from unittest.mock import MagicMock
+    db = MagicMock()
+    db.in_transaction.return_value = True
+    monkeypatch.setattr(module, "SessionLocal", lambda: db)
+    persist = MagicMock()
+    monkeypatch.setattr(module, "persist_extraction_result", persist)
+    monkeypatch.setattr(module, "ensure_domain_envelope_materialization", lambda *args, **kwargs:
+        CurationPrepEnvelopeRef(envelope_id="env-gene-1", envelope_revision=2,
+            source_extraction_result_id="extract-domain-1", domain_pack_id="gene", review_row_count=14))
+    confirmation = _make_scope_confirmation().model_copy(update={"expected_review_row_count": 4})
+    with pytest.raises(ValueError, match="candidate count changed"):
+        await module.run_curation_prep([_make_domain_envelope_extraction_result()],
+                                      scope_confirmation=confirmation)
+    persist.assert_not_called()
+    db.commit.assert_not_called()
+    db.rollback.assert_called_once()
+    db.close.assert_called_once()
+
+
 def _make_item(
     *,
     label: str | None = "Candidate Alpha",

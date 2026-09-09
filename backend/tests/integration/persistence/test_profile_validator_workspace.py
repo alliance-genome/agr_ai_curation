@@ -48,6 +48,7 @@ def manual_profile_record(migrated_database, example, monkeypatch):
                 name="Profile validation fixture", instructions="Fixture", model_id="test-model",
                 model_temperature=0.0, visibility="private", tool_ids=[], group_rules_enabled=False)
             db.add(agent)
+            agent.tool_ids = ["stage_generic_object", "finalize_generic_extraction"]
             db.flush()
             contract = AgentOutputContract.model_validate({"output_state": "structured_extraction",
                 "output_mode": "profile_bound_generic", "generic_profile_ref": {

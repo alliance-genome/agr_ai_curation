@@ -32,7 +32,7 @@ async def get_redis() -> redis.Redis:
 
     if _redis_client is None:
         redis_url = get_redis_url()
-        logger.info('Connecting to Redis at %s', redis_url)
+        logger.info('Connecting to Redis')
         _redis_client = redis.from_url(
             redis_url,
             encoding="utf-8",

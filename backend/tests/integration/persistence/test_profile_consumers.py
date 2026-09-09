@@ -32,6 +32,7 @@ def consumers_db(execution_db, monkeypatch):  # noqa: F811
     other.user_id = 2
 
     def save(head, revision, groups=()):
+        head.tool_ids = ["stage_generic_object", "finalize_generic_extraction"]
         head.allowed_group_ids = list(groups)
         head.inherited_allowed_group_ids = list(groups)
         output = AgentOutputContract(output_state="structured_extraction", output_mode="profile_bound_generic",

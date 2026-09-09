@@ -1157,6 +1157,11 @@ def get_rna_gene_product_cache_ttl_seconds() -> float:
     )
 
 
+def get_chat_curation_confirmation_ttl_seconds() -> int:
+    """Expiration of an unconsumed, scope-bound chat preparation preview."""
+    return max(1, _get_env_int_with_fallback("CHAT_CURATION_CONFIRMATION_TTL_SECONDS", 1800))
+
+
 def get_rna_gene_product_cache_max_entries() -> int:
     """Maximum process-local RNA gene-product resolution cache entries."""
     return max(
