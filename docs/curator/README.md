@@ -112,7 +112,9 @@ Tools for understanding, building, and improving AI behavior:
 **Agent Workshop Tab**
 - Clone any system agent's prompt to create a custom version
 - Edit instructions, choose an icon, and add per-group prompt overrides
-- File menu for managing agents (New, Open, Save, Manage, Delete)
+- File menu for managing agents (New, Open, Save, Manage, Delete). Open also shows agents shared with your project, subject to group access. Owned agents are marked Yours and Private or Project shared.
+- Preview a teammate’s shared agent read-only, then choose Clone to Workshop to create a private editable copy. Shared agents are also available in the Clone source selector. Only your own agents appear in Manage; teammates cannot edit, delete, change visibility, or revert your originals.
+- The Tools section includes your requests to developers and project-visible teammate requests, with descriptions, ownership, and status. Teammate summaries do not include private conversations or developer notes.
 - Version history with revert support and save notes
 - Custom agents appear in Flow Builder for use in workflows
 

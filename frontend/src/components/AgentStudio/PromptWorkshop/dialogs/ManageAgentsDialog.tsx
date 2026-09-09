@@ -84,7 +84,7 @@ export default function ManageAgentsDialog({
                           {agent.name}
                         </Typography>
                         <Typography sx={{ fontSize: 12, color: 'text.secondary' }} noWrap>
-                          {agent.description || 'Custom agent'}
+                          Yours · {agent.visibility === 'project' ? 'Project shared' : 'Private'} · {agent.description || 'Custom agent'}
                           {isOpen ? ' · Currently open' : ''}
                         </Typography>
                       </Box>

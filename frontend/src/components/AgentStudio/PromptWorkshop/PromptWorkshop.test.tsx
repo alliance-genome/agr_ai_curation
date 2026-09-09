@@ -15,6 +15,7 @@ import type {
 } from '@/types/promptExplorer'
 
 const serviceMocks = vi.hoisted(() => ({
+  cloneAgentToWorkshop: vi.fn(),
   createCustomAgent: vi.fn(),
   deleteCustomAgent: vi.fn(),
   fetchAgentTemplates: vi.fn(),
@@ -431,7 +432,7 @@ describe('PromptWorkshop', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'New agent' })).toBeInTheDocument()
     expect(screen.getByText('Not saved yet')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /Clone one of yours/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Clone an agent/ })).toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: /From scratch/ }))
     expect(screen.queryByRole('group', { name: 'Start a new agent' })).not.toBeInTheDocument()
@@ -485,8 +486,8 @@ describe('PromptWorkshop', () => {
     expect(screen.getByText('Template: Gene Specialist')).toBeInTheDocument()
   }, 15000)
 
-  it('asks for a note, lists changed sections, and sends the note with the update', async () => {
-    const existing = buildCustomAgent({ tool_ids: ['search_document'] })
+  it.each(['private', 'project'])('updates an owned %s agent with a note and changed sections', async (visibility) => {
+    const existing = buildCustomAgent({ visibility, tool_ids: ['search_document'] })
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
     serviceMocks.listCustomAgentVersions.mockResolvedValue([buildVersion(1, 'First'), buildVersion(2)])
     serviceMocks.updateCustomAgent.mockResolvedValue(existing)
@@ -742,11 +743,12 @@ describe('PromptWorkshop', () => {
     serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: [], group_options: groupOptions })
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [existing], total: 1 })
-      .mockResolvedValueOnce({ custom_agents: [existing, cloned], total: 2 })
+      .mockResolvedValueOnce({ custom_agents: [existing], total: 1 })
+      .mockResolvedValue({ custom_agents: [existing, cloned], total: 2 })
 
     render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={cloned.id} />)
 
-    await waitFor(() => expect(serviceMocks.listCustomAgents).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(serviceMocks.listCustomAgents).toHaveBeenCalledTimes(4))
     await waitForHeaderName('Cloned Agent')
   })
 
@@ -1037,7 +1039,7 @@ describe('PromptWorkshop', () => {
 
     gotoSection('Setup')
     fireEvent.click(screen.getByRole('button', { name: 'Clone' }))
-    await selectOption('Clone source', 'Disease Agent')
+    await selectOption('Clone source', 'Disease Agent · Yours · Private')
     await waitForHeaderName('Disease Agent (Copy)')
 
     await assertGroupOptions(['WB'], ['FB', 'MGI'])
@@ -1333,4 +1335,118 @@ describe('PromptWorkshop', () => {
       expect(screen.queryByLabelText(/output schema key/i)).toBeNull()
     }
   }, 15000)
+  it('shows owned private/shared agents and previews a teammate without exposing management actions', async () => {
+    const ownedPrivate = buildCustomAgent({ id: 'private', name: 'My private agent' })
+    const ownedShared = buildCustomAgent({ id: 'owned-shared', name: 'My shared agent', visibility: 'project' })
+    const teammate = buildCustomAgent({ id: 'teammate', agent_id: 'ca_teammate', user_id: 2, name: 'Team agent', visibility: 'project', custom_prompt: 'Teammate instructions' })
+    serviceMocks.listCustomAgents.mockImplementation((_template, scope) => Promise.resolve({ custom_agents: scope === 'visible' ? [ownedPrivate, ownedShared, teammate] : [ownedPrivate, ownedShared], total: scope === 'visible' ? 3 : 2 }))
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Open agent' })
+    expect(await within(dialog).findByText(/Yours · Private/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Yours · Project shared/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Shared by user 2 · Project shared/)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByText('Team agent'))
+    expect(within(dialog).getByLabelText('Shared agent prompt')).toHaveValue('Teammate instructions')
+    expect(within(dialog).getByLabelText('Shared agent prompt')).toHaveAttribute('readonly')
+    expect(within(dialog).getByText('Team agent · Read-only')).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: /^(Delete|Save|Share|Revert)( |$)/ })).not.toBeInTheDocument()
+    expect(serviceMocks.listCustomAgentVersions).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Manage agents/ }))
+    const manage = await screen.findByRole('dialog', { name: /Manage agents/ })
+    expect(within(manage).queryByText('Team agent')).not.toBeInTheDocument()
+    expect(within(manage).getByRole('button', { name: 'Delete My private agent' })).toBeEnabled()
+    expect(within(manage).getByRole('button', { name: 'Delete My shared agent' })).toBeEnabled()
+  })
+
+  it('clones a shared preview through the API and opens only the private owned copy for editing', async () => {
+    const teammate = buildCustomAgent({ id: 'teammate', agent_id: 'ca_teammate', user_id: 2, name: 'Team agent', visibility: 'project' })
+    const copy = buildCustomAgent({ id: 'private-copy', agent_id: 'ca_private_copy', name: 'Team agent (Copy)', visibility: 'private' })
+    let owned: CustomAgent[] = []
+    serviceMocks.listCustomAgents.mockImplementation((_template, scope) => Promise.resolve({ custom_agents: scope === 'visible' ? [...owned, teammate] : owned, total: owned.length + (scope === 'visible' ? 1 : 0) }))
+    serviceMocks.cloneAgentToWorkshop.mockImplementation(async () => { owned = [copy]; return copy })
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Open agent' })
+    fireEvent.click(await within(dialog).findByText('Team agent'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Clone to Workshop' }))
+    await waitForHeaderName('Team agent (Copy)')
+    expect(serviceMocks.cloneAgentToWorkshop).toHaveBeenCalledWith('ca_teammate')
+    expect(serviceMocks.listCustomAgentVersions).toHaveBeenCalledWith(copy.id)
+    expect(serviceMocks.listCustomAgentVersions).not.toHaveBeenCalledWith(teammate.id)
+    expect(screen.getByRole('combobox', { name: 'Visibility' })).toHaveTextContent('Private')
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Edited private copy' } })
+    serviceMocks.updateCustomAgent.mockResolvedValue({ ...copy, name: 'Edited private copy' })
+    await saveFromHeader()
+    await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledWith(copy.id, expect.objectContaining({ name: 'Edited private copy' })))
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.setCustomAgentVisibility).not.toHaveBeenCalled()
+    expect(serviceMocks.deleteCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it('keeps a shared original out of editing when clone access is denied', async () => {
+    const teammate = buildCustomAgent({ id: 'teammate', agent_id: 'ca_teammate', user_id: 2, name: 'Team agent', visibility: 'project' })
+    serviceMocks.listCustomAgents.mockImplementation((_template, scope) => Promise.resolve({ custom_agents: scope === 'visible' ? [teammate] : [], total: scope === 'visible' ? 1 : 0 }))
+    serviceMocks.cloneAgentToWorkshop.mockRejectedValue(new Error('Failed to clone agent: 403'))
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Open agent' })
+    fireEvent.click(await within(dialog).findByText('Team agent'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Clone to Workshop' }))
+    await waitFor(() => expect(serviceMocks.cloneAgentToWorkshop).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Clone to Workshop' })).toBeEnabled())
+    expect(within(dialog).getByText('Team agent · Read-only')).toBeInTheDocument()
+    expect(serviceMocks.listCustomAgentVersions).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Open agent' })).not.toBeInTheDocument())
+    expect(screen.getByText('Failed to clone agent: 403')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Gene Specialist (Custom)' })).toBeInTheDocument()
+  })
+
+  it('offers shared clone sources and preserves dirty drafts until discard is confirmed', async () => {
+    const teammate = buildCustomAgent({ id: 'teammate', agent_id: 'ca_teammate', user_id: 2, name: 'Team agent', visibility: 'project' })
+    const copy = buildCustomAgent({ id: 'copy', name: 'Private copy' })
+    let owned: CustomAgent[] = []
+    serviceMocks.listCustomAgents.mockImplementation((_template, scope) => Promise.resolve({ custom_agents: scope === 'visible' ? [...owned, teammate] : owned, total: owned.length + (scope === 'visible' ? 1 : 0) }))
+    serviceMocks.cloneAgentToWorkshop.mockImplementation(async () => { owned = [copy]; return copy })
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /Clone an agent/ })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: /Clone an agent/ }))
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Unsaved work' } })
+    await selectOption('Clone source', 'Team agent · Shared by user 2 · Project shared')
+    const confirm = await screen.findByRole('dialog', { name: /unsaved changes/i })
+    expect(serviceMocks.cloneAgentToWorkshop).not.toHaveBeenCalled()
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Keep editing' }))
+    expect(screen.getByLabelText('Agent name')).toHaveValue('Unsaved work')
+    await screen.findByRole('combobox', { name: 'Clone source' })
+    await selectOption('Clone source', 'Team agent · Shared by user 2 · Project shared')
+    const discard = await screen.findByRole('dialog', { name: /unsaved changes/i })
+    fireEvent.click(within(discard).getByRole('button', { name: /Discard/ }))
+    await waitForHeaderName('Private copy')
+    expect(serviceMocks.cloneAgentToWorkshop).toHaveBeenCalledWith('ca_teammate')
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it('does not open a non-member or shared-original id through initial editor routing', async () => {
+    const shared = buildCustomAgent({ id: 'shared-original', user_id: 2, name: 'Shared original', visibility: 'project' })
+    serviceMocks.listCustomAgents.mockImplementation((_template, scope) => Promise.resolve({ custom_agents: scope === 'visible' ? [shared] : [], total: scope === 'visible' ? 1 : 0 }))
+    const { rerender } = render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={shared.id} />)
+    await waitFor(() => expect(serviceMocks.listCustomAgents).toHaveBeenCalledWith(undefined, 'visible'))
+    expect(screen.queryByRole('heading', { name: 'Shared original' })).not.toBeInTheDocument()
+    rerender(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId="non-member-private-agent" />)
+    await waitFor(() => expect(serviceMocks.listCustomAgents.mock.calls.length).toBeGreaterThanOrEqual(4))
+    expect(serviceMocks.listCustomAgentVersions).not.toHaveBeenCalled()
+    expect(serviceMocks.cloneAgentToWorkshop).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
+
 })

@@ -39,7 +39,7 @@ const agents = [buildAgent({}), buildAgent({ id: 'a2', agent_id: 'ca_a2', name: 
 describe('OpenAgentDialog', () => {
   it('searches and selects an agent', () => {
     const onSelect = vi.fn()
-    render(<OpenAgentDialog open agents={agents} loading={false} selectedAgentId="a1" onSelect={onSelect} onClose={vi.fn()} />)
+    render(<OpenAgentDialog ownedAgentIds={agents.map((agent) => agent.id)} cloning={false} error={null} onClone={vi.fn()} open agents={agents} loading={false} selectedAgentId="a1" onSelect={onSelect} onClose={vi.fn()} />)
     const dialog = screen.getByRole('dialog', { name: 'Open agent' })
     fireEvent.change(within(dialog).getByLabelText('Search agents'), { target: { value: 'two' } })
     expect(within(dialog).queryByText('Agent One')).not.toBeInTheDocument()
@@ -48,9 +48,9 @@ describe('OpenAgentDialog', () => {
   })
 
   it('shows empty and no-match states', () => {
-    const { rerender } = render(<OpenAgentDialog open agents={[]} loading={false} selectedAgentId="" onSelect={vi.fn()} onClose={vi.fn()} />)
+    const { rerender } = render(<OpenAgentDialog ownedAgentIds={agents.map((agent) => agent.id)} cloning={false} error={null} onClone={vi.fn()} open agents={[]} loading={false} selectedAgentId="" onSelect={vi.fn()} onClose={vi.fn()} />)
     expect(screen.getByText('No saved agents yet')).toBeInTheDocument()
-    rerender(<OpenAgentDialog open agents={agents} loading={false} selectedAgentId="" onSelect={vi.fn()} onClose={vi.fn()} />)
+    rerender(<OpenAgentDialog ownedAgentIds={agents.map((agent) => agent.id)} cloning={false} error={null} onClone={vi.fn()} open agents={agents} loading={false} selectedAgentId="" onSelect={vi.fn()} onClose={vi.fn()} />)
     fireEvent.change(screen.getByLabelText('Search agents'), { target: { value: 'zzz' } })
     expect(screen.getByText('No agents match your search')).toBeInTheDocument()
   })

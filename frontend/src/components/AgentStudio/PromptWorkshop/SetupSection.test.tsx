@@ -80,6 +80,7 @@ function renderSetup(overrides: Partial<SetupSectionProps> = {}) {
     missingTemplateId: null,
     templateAllowedGroupIds: [],
     customAgents,
+    ownedAgentIds: customAgents.map((agent) => agent.id),
     cloneSourceAgentId: 'a1',
     onCloneSourceChange: vi.fn(),
     isExistingAgent: false,
@@ -128,7 +129,7 @@ describe('SetupSection', () => {
   it('shows the clone source picker in clone mode', async () => {
     const props = renderSetup({ gettingStartedMode: 'clone', cloneSourceAgentId: '' })
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Clone source' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'Saved agent' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Saved agent · Yours · Private' }))
     expect(props.onCloneSourceChange).toHaveBeenCalledWith('a1')
   })
 
