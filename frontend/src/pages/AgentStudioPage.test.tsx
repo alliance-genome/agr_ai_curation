@@ -7,6 +7,10 @@ import AgentStudioPage from './AgentStudioPage'
 
 const serviceMocks = vi.hoisted(() => ({
   fetchPromptCatalog: vi.fn(),
+  listCustomAgents: vi.fn(),
+  listToolIdeaRequests: vi.fn(),
+  listAllFlows: vi.fn(),
+  cloneFlow: vi.fn(),
   cloneAgentToWorkshop: vi.fn(),
 }))
 
@@ -387,6 +391,10 @@ describe('AgentStudioPage', () => {
     localStorage.clear()
     workshopMockState.dirty = false
     mockViewportWidth(1440)
+    serviceMocks.listCustomAgents.mockImplementation((_template, scope) => Promise.resolve({ custom_agents: scope === 'visible' ? [{ id: 'shared-agent', agent_id: 'ca_shared-agent', name: 'Library agent', user_id: 20, visibility: 'project', project_id: 'team' }] : [] }))
+    serviceMocks.listToolIdeaRequests.mockResolvedValue({ tool_ideas: [{ id: 'idea', title: 'Library idea', description: 'Reusable summary', user_id: 20, project_id: 'team', status: 'submitted' }] })
+    serviceMocks.listAllFlows.mockResolvedValue({ flows: [{ id: 'shared-flow', name: 'Library flow', user_id: 20, visibility: 'project', project_id: 'team', is_owner: false }] })
+    serviceMocks.cloneFlow.mockResolvedValue({ id: 'private-flow-copy', is_owner: true, visibility: 'private' })
     serviceMocks.fetchPromptCatalog.mockResolvedValue(EMPTY_CATALOG)
     serviceMocks.cloneAgentToWorkshop.mockResolvedValue({
       id: '11111111-1111-1111-1111-111111111111',
@@ -394,6 +402,52 @@ describe('AgentStudioPage', () => {
     })
     historyMocks.useChatHistoryDetailQuery.mockReturnValue(buildEmptyHistoryQueryResult())
     historyMocks.useChatHistoryTranscriptQuery.mockReturnValue(buildEmptyHistoryQueryResult())
+  })
+
+
+  it('opens the library deep link, preserves filters and the mounted flow builder across tab visits', async () => {
+    await renderStudio(['/agent-studio?tab=shared_library'])
+    await screen.findByText('Library flow')
+    fireEvent.change(screen.getByLabelText('Search artifacts'), { target: { value: 'Library flow' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open read-only' }))
+    const builder = await screen.findByTestId('flow-builder')
+    const instance = builder.getAttribute('data-instance')
+    expect(builder).toHaveAttribute('data-flow-id', 'shared-flow')
+    fireEvent.click(screen.getByRole('tab', { name: 'Shared Library' }))
+    expect(screen.getByLabelText('Search artifacts')).toHaveValue('Library flow')
+    expect(builder).toHaveAttribute('data-active', 'false')
+    expect(localStorage.getItem('agent-studio-tab')).toBe('shared_library')
+    fireEvent.click(await screen.findByRole('button', { name: 'Clone to edit' }))
+    await waitFor(() => expect(builder).toHaveAttribute('data-flow-id', 'private-flow-copy'))
+    expect(builder).toHaveAttribute('data-instance', instance)
+  })
+
+  it('routes a library agent clone into the private Workshop copy', async () => {
+    localStorage.setItem('agent-studio-tab', 'shared_library')
+    await renderStudio()
+    fireEvent.click(await screen.findByRole('button', { name: 'Clone to Workshop' }))
+    expect(await screen.findByTestId('prompt-workshop')).toHaveTextContent('custom:11111111-1111-1111-1111-111111111111')
+    expect(serviceMocks.cloneAgentToWorkshop).toHaveBeenCalledWith('ca_shared-agent')
+  })
+
+  it('opens summary context in chat without sending an unsupported library active tab', async () => {
+    await renderStudio(['/agent-studio?tab=shared_library'])
+    fireEvent.click(await screen.findByRole('button', { name: 'Open request context' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss request with Claude' }))
+    expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Reusable summary')
+    expect(screen.getByTestId('opus-chat-context')).not.toHaveTextContent('"active_tab"')
+  })
+
+  it('guards leaving a dirty Workshop for the library', async () => {
+    workshopMockState.dirty = true
+    await renderStudio(['/agent-studio?tab=agent_workshop'])
+    await screen.findByTestId('prompt-workshop')
+    fireEvent.click(screen.getByRole('tab', { name: 'Shared Library' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument())
+    expect(screen.getByRole('tab', { name: 'Agent Workshop' })).toHaveAttribute('aria-selected', 'true')
+    expect(serviceMocks.listAllFlows).not.toHaveBeenCalled()
   })
 
   it('opens the Flows tab and requested shared flow from Home Tools', async () => {
