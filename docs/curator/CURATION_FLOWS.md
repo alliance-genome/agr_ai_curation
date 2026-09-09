@@ -173,3 +173,21 @@ Saved flow steps retain their selected agent revisions. Saving a new version in 
 **An updated agent did not change my flow.** The flow still uses its saved revision. Review and update the selected revision explicitly.
 
 For an unexpected run result, use the response's **three-dot menu (⋮)** to send feedback or **Open in Agent Studio**. Include the expected result and a specific example from the paper.
+
+
+## Keep your usual flows beside chat
+
+The **Curation Flows** panel beside chat is your personal list of shortcuts.
+Choose **Add flow** to search your saved flows and bring one into the list.
+Drag a card by its dotted handle to change the order, or use **Move up** and
+**Move down** in the card’s three-dot menu. With the handle focused, you can
+also use the up and down arrow keys. Your selection and order are saved to
+your account.
+
+**Hide** removes a shortcut from this panel. It keeps the saved flow, its agents
+and its history. Choose **Add flow** to bring it back. To edit or delete a flow,
+open **Flows workspace**. Hiding or reordering a shortcut does not change your
+chat routing choice or the flow itself.
+
+Your current flows appear initially. Once you personalize the list, use
+**Add flow** when you want another saved flow to appear there.

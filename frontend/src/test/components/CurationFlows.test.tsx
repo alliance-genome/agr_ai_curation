@@ -7,6 +7,11 @@ import CurationFlows, { mapFlowFinishedEvent } from '../../components/RightPanel
 import type { SSEEvent } from '../../hooks/useChatStream'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 
+vi.mock('@/services/flowShortcutService', () => ({
+  getFlowShortcuts: vi.fn(async () => ({ flow_ids: null, revision: 0 })),
+  saveFlowShortcuts: vi.fn(async (flow_ids: string[], revision: number) => ({ flow_ids, revision: revision + 1 })),
+}))
+
 const openCurationWorkspaceMock = vi.fn()
 vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
   const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
@@ -137,7 +142,7 @@ describe('CurationFlows', () => {
     })
 
     expect(screen.getByText('Latest flow run')).toBeInTheDocument()
-    expect(screen.getByText('Evidence Flow')).toBeInTheDocument()
+    expect(screen.getAllByText('Evidence Flow').length).toBeGreaterThan(0)
     expect(screen.getByText(/4 evidence records ready/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Review & Curate/i })).toBeEnabled()
     expect(screen.getByRole('button', { name: /Export Evidence/i })).toBeEnabled()
