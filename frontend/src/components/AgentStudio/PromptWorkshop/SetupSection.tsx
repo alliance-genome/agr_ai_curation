@@ -52,6 +52,7 @@ export interface SetupSectionProps {
   missingTemplateId: string | null
   templateAllowedGroupIds: string[]
   customAgents: CustomAgent[]
+  ownedAgentIds: string[]
   cloneSourceAgentId: string
   onCloneSourceChange: (agentId: string) => void
   isExistingAgent: boolean
@@ -112,6 +113,7 @@ export default function SetupSection(props: SetupSectionProps) {
     missingTemplateId,
     templateAllowedGroupIds,
     customAgents,
+    ownedAgentIds,
     cloneSourceAgentId,
     onCloneSourceChange,
     isExistingAgent,
@@ -226,13 +228,16 @@ export default function SetupSection(props: SetupSectionProps) {
               >
                 {customAgents.map((agent) => (
                   <MenuItem key={agent.id} value={agent.id}>
-                    {agent.name}
+                    {agent.name} · {ownedAgentIds.includes(agent.id) ? 'Yours' : `Shared by user ${agent.user_id}`} · {agent.visibility === 'project' ? 'Project shared' : 'Private'}
                   </MenuItem>
                 ))}
               </Select>
             </FormControl>
           )}
         </FieldRow>
+        {gettingStartedMode === 'clone' && !isExistingAgent && (
+          <InfoNote>Choosing a project-shared agent creates a private copy in your Workshop before editing.</InfoNote>
+        )}
         {gettingStartedMode === 'template' && !isExistingAgent && templateAllowedGroupIds.length > 0 && (
           <InfoNote>
             <LockOutlinedIcon sx={{ fontSize: 16, mt: 0.25 }} />

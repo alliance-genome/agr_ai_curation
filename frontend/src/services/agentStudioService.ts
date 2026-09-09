@@ -20,6 +20,7 @@ import type {
   AgentTemplate,
   GroupOption,
   ToolIdeaRequest,
+  OwnedToolIdeaRequest,
   ToolIdeaConversationEntry,
 } from '@/types/promptExplorer'
 import { readCurationApiError } from '@/features/curation/services/api'
@@ -410,7 +411,7 @@ export async function fetchAgentTemplates(): Promise<AgentTemplatesResponse> {
 
 export async function submitToolIdeaRequest(
   request: CreateToolIdeaRequest
-): Promise<ToolIdeaRequest> {
+): Promise<OwnedToolIdeaRequest> {
   const response = await fetch(`${BASE_URL}/tool-ideas`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -430,8 +431,9 @@ export async function listToolIdeaRequests(): Promise<ToolIdeasResponse> {
   return response.json()
 }
 
-export async function listCustomAgents(templateSource?: string): Promise<ListCustomAgentsResponse> {
+export async function listCustomAgents(templateSource?: string, scope: 'owned' | 'visible' = 'owned'): Promise<ListCustomAgentsResponse> {
   const params = new URLSearchParams()
+  if (scope === 'visible') params.set('scope', scope)
   if (templateSource) {
     params.set('template_source', templateSource)
   }

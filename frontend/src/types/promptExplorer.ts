@@ -196,19 +196,25 @@ export interface ToolIdeaConversationEntry {
   timestamp?: string | null
 }
 
-export interface ToolIdeaRequest {
+export interface ToolIdeaSummary {
   id: string
   user_id: number
-  project_id?: string
+  project_id?: string | null
   title: string
   description: string
-  opus_conversation: ToolIdeaConversationEntry[]
   status: ToolIdeaStatus
-  developer_notes?: string
-  resulting_tool_key?: string
   created_at: string
   updated_at: string
 }
+
+/** Owner records include private request details; teammate summaries omit them. */
+export interface OwnedToolIdeaRequest extends ToolIdeaSummary {
+  opus_conversation: ToolIdeaConversationEntry[]
+  developer_notes?: string | null
+  resulting_tool_key?: string | null
+}
+
+export type ToolIdeaRequest = OwnedToolIdeaRequest | ToolIdeaSummary
 
 // ============================================================================
 // Custom Agent Types (Agent Workshop)

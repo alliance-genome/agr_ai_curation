@@ -130,7 +130,7 @@ export function toolIdeaStatusLabel(request: ToolIdeaRequest): string {
     case 'in_progress':
       return 'In progress'
     case 'completed':
-      return request.resulting_tool_key ? `Shipped ${request.resulting_tool_key}` : 'Shipped'
+      return 'opus_conversation' in request && request.resulting_tool_key ? `Shipped ${request.resulting_tool_key}` : 'Shipped'
     case 'declined':
       return 'Declined'
   }

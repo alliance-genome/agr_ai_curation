@@ -30,9 +30,9 @@ export default function WorkshopStartScreen({ onChoose, hasTemplates, hasSavedAg
     },
     {
       mode: 'clone',
-      title: 'Clone one of yours',
-      description: 'Copy an agent you already saved.',
-      disabledReason: hasSavedAgents ? undefined : 'You have no saved agents yet.',
+      title: 'Clone an agent',
+      description: 'Copy one of your agents or a project-shared agent.',
+      disabledReason: hasSavedAgents ? undefined : 'No agents are available to clone yet.',
     },
   ]
 

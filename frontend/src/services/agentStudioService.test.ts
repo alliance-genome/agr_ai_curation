@@ -505,3 +505,31 @@ describe('flow sharing contracts', () => {
     expect(mockFetch).toHaveBeenLastCalledWith('/api/flows?page=2&page_size=1', { credentials: 'include' })
   })
 })
+
+describe('shared Workshop contracts', () => {
+  beforeEach(() => mockFetch.mockReset())
+  it('requests visible scope for discovery while preserving template filtering', async () => {
+    const body = { custom_agents: [{ id: 'shared', user_id: 2, visibility: 'project', project_id: 'team' }], total: 1 }
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => body })
+    await expect(listCustomAgents('gene', 'visible')).resolves.toEqual(body)
+    expect(mockFetch).toHaveBeenCalledWith('/api/agent-studio/custom-agents?scope=visible&template_source=gene')
+  })
+
+  it('preserves owner records and teammate Tool Idea summaries without adding private fields', async () => {
+    const summary = { id: 'shared', user_id: 2, project_id: 'team', title: 'Lookup', description: 'Batch lookup', status: 'completed', created_at: '2026-09-09', updated_at: '2026-09-09' }
+    const owner = { ...summary, id: 'owned', user_id: 1, opus_conversation: [], developer_notes: null, resulting_tool_key: 'lookup' }
+    const body = { tool_ideas: [owner, summary], total: 2 }
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => body })
+    const result = await listToolIdeaRequests()
+    expect(result).toEqual(body)
+    expect(result.tool_ideas[1]).not.toHaveProperty('opus_conversation')
+    expect(result.tool_ideas[1]).not.toHaveProperty('developer_notes')
+    expect(result.tool_ideas[1]).not.toHaveProperty('resulting_tool_key')
+  })
+  it.each([403, 404])('surfaces denied or inaccessible clone responses (%s)', async (status) => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status })
+    await expect(cloneAgentToWorkshop('ca_inaccessible')).rejects.toThrow(`Failed to clone agent: ${status}`)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+})

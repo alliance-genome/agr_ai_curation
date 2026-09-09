@@ -167,8 +167,12 @@ export default function ToolsSection({
                   <Typography sx={{ fontSize: 13, fontWeight: 500 }} noWrap>
                     {request.title}
                   </Typography>
+                  <Typography sx={{ fontSize: 12, color: 'text.secondary', whiteSpace: 'pre-wrap' }}>
+                    {request.description}
+                  </Typography>
                   <Typography sx={{ fontSize: 11, color: 'text.disabled' }}>
-                    Sent {new Date(request.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    {'opus_conversation' in request ? 'Your request' : `Project request · Shared by user ${request.user_id}`}
+                    {' · '}Sent {new Date(request.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                     {' · '}request {shortRequestId(request.id)}
                   </Typography>
                 </Box>
