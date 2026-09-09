@@ -16,6 +16,7 @@ from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
 from src.models.sql.agent import Agent
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.curation_flow_agent_revision import CurationFlowAgentRevision
+from src.models.sql.tool_policy import ToolPolicy
 from src.schemas.agent_execution_revision import AgentOutputContract
 from .test_agent_execution_revision_persistence import execution_db  # noqa: F401
 from .test_generic_profile_persistence import profile_db  # noqa: F401
@@ -48,6 +49,7 @@ def legacy_node(key, index=0):
 def flow_db(execution_db):  # noqa: F811 - pytest injects the imported shared fixture
     db, agent_id, _, profile = execution_db
     CurationFlow.__table__.create(db.connection())
+    ToolPolicy.__table__.create(db.connection())
     agent = db.get(Agent, agent_id)
     agent.tool_ids = []
     agent.group_rules_enabled = False
