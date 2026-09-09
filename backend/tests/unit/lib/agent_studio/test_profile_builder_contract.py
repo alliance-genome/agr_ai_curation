@@ -63,7 +63,7 @@ def test_profile_save_repairs_head_before_snapshot_without_rewriting_old_revisio
     old_tools = ["read_chunk", "record_evidence", "stage_allele_observation", "finalize_allele_extraction"]
     head = SimpleNamespace(
         tool_ids=list(old_tools), instructions="Keep one existing allele; synonyms use |.",
-        group_prompt_overrides={"MGI": "Keep curator scientific guidance."},
+        group_prompt_overrides={"TEST_GROUP": "Keep curator scientific guidance."},
         model_id="curator-model", model_reasoning="low", visibility="private",
         user_id=7,
     )

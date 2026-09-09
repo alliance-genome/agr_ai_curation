@@ -654,6 +654,7 @@ describe('HomePage durable session bootstrap', () => {
 
   it('shows a viewer restore error instead of a stale timeout after route-state backend load succeeds', async () => {
     actualChatMode.enabled = true
+    const viewerMetadataResponse = deferred<Response>()
     const viewerRestoreMessage = 'Document loaded for chat, but the PDF viewer could not be restored. Failed to fetch document viewer metadata'
     const realSetTimeout = window.setTimeout.bind(window)
     const realClearTimeout = window.clearTimeout.bind(window)
@@ -755,7 +756,7 @@ describe('HomePage durable session bootstrap', () => {
       }
 
       if (url === '/api/pdf-viewer/documents/doc-route') {
-        return jsonResponse({ detail: 'viewer metadata missing' }, 500)
+        return viewerMetadataResponse.promise
       }
 
       if (url === '/api/pdf-viewer/documents/doc-route/url') {
@@ -777,8 +778,12 @@ describe('HomePage durable session bootstrap', () => {
       },
     })
 
+    // Hold the response until the loading effect has armed its timer. An
+    // immediately resolved mock can be batched with loading=false/error and
+    // skip the timer entirely, which does not exercise stale-timeout cleanup.
+    await waitFor(() => expect(loadingTimeoutId).toBeDefined())
+    viewerMetadataResponse.resolve(jsonResponse({ detail: 'viewer metadata missing' }, 500))
     expect(await screen.findByText(viewerRestoreMessage)).toBeInTheDocument()
-    expect(loadingTimeoutId).toBeDefined()
     expect(clearedTimeouts.has(loadingTimeoutId!)).toBe(true)
 
     await act(async () => {
