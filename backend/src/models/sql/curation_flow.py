@@ -13,7 +13,7 @@ Key features:
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PostgresUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,6 +49,14 @@ class CurationFlow(Base):
         nullable=False,
         comment="Owner user ID - references users(user_id)"
     )
+
+    visibility: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="private", server_default="private"
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True), ForeignKey("projects.id"), nullable=True
+    )
+    shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     name: Mapped[str] = mapped_column(
         String(255), nullable=False, comment="User-defined flow name"
@@ -99,6 +107,16 @@ class CurationFlow(Base):
     # Note: The partial unique index for (user_id, name) WHERE is_active = TRUE
     # is created in the migration, not here, for cleaner PostgreSQL syntax
     __table_args__ = (
+        CheckConstraint("visibility IN ('private', 'project')", name="ck_flows_visibility"),
+        CheckConstraint(
+            "(visibility = 'private' AND project_id IS NULL AND shared_at IS NULL) OR "
+            "(visibility = 'project' AND project_id IS NOT NULL AND shared_at IS NOT NULL)",
+            name="ck_flows_visibility_project",
+        ),
+        Index(
+            "idx_curation_flows_project_active_updated", "project_id", "updated_at",
+            postgresql_where=(is_active.is_(True) & (visibility == "project")),
+        ),
         CheckConstraint("name <> ''", name="ck_flows_name_not_empty"),
         Index("idx_curation_flows_user_id", "user_id"),
         # Partial index - only indexes active flows (PostgreSQL-specific)

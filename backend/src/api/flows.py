@@ -4,10 +4,11 @@ Section 3 of the Curation Flows implementation.
 Provides endpoints to create, read, update, delete, and list user curation flows.
 
 All endpoints require AWS Cognito JWT authentication via Security(get_auth_dependency()).
-Flow ownership is enforced - users can only access their own flows.
+Owners control mutations; current project members can read and clone shared flows.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict
 from uuid import UUID
 
@@ -17,6 +18,9 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
+
+from ..lib.flows.access import get_visible_flow, visible_flow_filter, generate_clone_name
+from ..lib.agent_studio.tool_idea_service import get_primary_project_id_for_user
 
 from .auth import get_auth_dependency
 from ..lib.http_errors import raise_sanitized_http_exception
@@ -56,6 +60,8 @@ from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import (
     CreateFlowRequest,
+    CloneFlowRequest,
+    ShareFlowRequest,
     DEFAULT_FLOW_EDGE_ROLE,
     FlowDefinition,
     FlowListResponse,
@@ -493,6 +499,7 @@ def _missing_flow_agent_references_detail(missing_references: list[str]) -> str:
 def _flow_to_response(
     flow: CurationFlow,
     *,
+    viewer_user_id: int,
     active_group_ids: list[str] | None = None,
 ) -> FlowResponse:
     """Convert a stored flow to an API response with validation defaults hydrated."""
@@ -503,13 +510,13 @@ def _flow_to_response(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     flow_definition = _validated_flow_definition(
         FlowDefinition.model_validate(flow.flow_definition),
-        db_user_id=flow.user_id,
+        db_user_id=viewer_user_id,
         active_group_ids=active_group_ids,
         tolerate_unresolvable_custom_agent_attachments=True,
     )
     missing_references = _missing_flow_agent_reference_messages(
         flow_definition,
-        db_user_id=flow.user_id,
+        db_user_id=viewer_user_id,
         active_group_ids=active_group_ids,
     )
     validation_warnings = []
@@ -523,6 +530,10 @@ def _flow_to_response(
     return FlowResponse(
         id=flow.id,
         user_id=flow.user_id,
+        visibility=flow.visibility,
+        project_id=flow.project_id,
+        shared_at=flow.shared_at,
+        is_owner=flow.user_id == viewer_user_id,
         name=flow.name,
         description=flow.description,
         flow_definition=flow_definition,
@@ -580,7 +591,7 @@ def verify_flow_ownership(
     return flow
 
 
-def _flow_to_summary_response(flow: CurationFlow) -> FlowSummaryResponse:
+def _flow_to_summary_response(flow: CurationFlow, viewer_user_id: int) -> FlowSummaryResponse:
     """Convert CurationFlow to FlowSummaryResponse with step_count.
 
     The step_count is computed from the number of nodes in flow_definition.
@@ -592,6 +603,10 @@ def _flow_to_summary_response(flow: CurationFlow) -> FlowSummaryResponse:
     return FlowSummaryResponse(
         id=flow.id,
         user_id=flow.user_id,
+        visibility=flow.visibility,
+        project_id=flow.project_id,
+        shared_at=flow.shared_at,
+        is_owner=flow.user_id == viewer_user_id,
         name=flow.name,
         description=flow.description,
         step_count=step_count,
@@ -621,9 +636,9 @@ async def list_flows(
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> FlowListResponse:
-    """List user's flows with pagination.
+    """List visible flows with pagination.
 
-    Returns only active flows owned by the authenticated user,
+    Returns active owned and project-shared flows visible to the authenticated user,
     ordered by updated_at descending (most recently modified first).
     """
     # Get database user
@@ -631,7 +646,7 @@ async def list_flows(
 
     # Count total flows for user
     total_query = select(func.count(CurationFlow.id)).where(
-        CurationFlow.user_id == db_user.id,
+        visible_flow_filter(db_user.id),
         CurationFlow.is_active == True  # noqa: E712
     )
     total = db.scalar(total_query) or 0
@@ -641,7 +656,7 @@ async def list_flows(
     flows_query = (
         select(CurationFlow)
         .where(
-            CurationFlow.user_id == db_user.id,
+            visible_flow_filter(db_user.id),
             CurationFlow.is_active == True  # noqa: E712
         )
         .order_by(CurationFlow.updated_at.desc())
@@ -651,7 +666,7 @@ async def list_flows(
     flows = db.scalars(flows_query).all()
 
     # Convert to summary responses (excludes full flow_definition)
-    flow_summaries = [_flow_to_summary_response(flow) for flow in flows]
+    flow_summaries = [_flow_to_summary_response(flow, db_user.id) for flow in flows]
 
     logger.info('Listed %s flows for user %s (page %s)', len(flow_summaries), db_user.id, page)
 
@@ -749,12 +764,14 @@ async def get_flow(
 
     Returns the full flow including flow_definition.
     """
-    flow = verify_flow_ownership(db, flow_id, user)
+    db_user = set_global_user_from_cognito(db, user)
+    flow = get_visible_flow(db, flow_id, db_user.id)
 
-    logger.info('Retrieved flow %s for user %s', flow_id, flow.user_id)
+    logger.info('Retrieved flow %s for user %s', flow_id, db_user.id)
 
     return _flow_to_response(
         flow,
+        viewer_user_id=db_user.id,
         active_group_ids=get_groups_from_provider_groups(
             user.get("cognito:groups", [])
         ),
@@ -778,6 +795,9 @@ async def create_flow(
     # Create flow model
     flow = CurationFlow(
         user_id=db_user.id,
+        visibility="private",
+        project_id=None,
+        shared_at=None,
         name=request.name,
         description=request.description,
         flow_definition=_validated_flow_definition_payload(
@@ -812,7 +832,7 @@ async def create_flow(
 
     logger.info("Created flow %s '%s' for user %s", flow.id, flow.name, db_user.id)
 
-    return _flow_to_response(flow, active_group_ids=active_group_ids)
+    return _flow_to_response(flow, viewer_user_id=flow.user_id, active_group_ids=active_group_ids)
 
 
 @router.put("/{flow_id}", response_model=FlowResponse)
@@ -901,7 +921,7 @@ async def update_flow(
     else:
         logger.info('[Flow Update] No changes detected for flow %s', flow_id)
 
-    return _flow_to_response(flow, active_group_ids=active_group_ids)
+    return _flow_to_response(flow, viewer_user_id=flow.user_id, active_group_ids=active_group_ids)
 
 
 @router.delete("/{flow_id}", response_model=OperationResult)
@@ -927,4 +947,56 @@ async def delete_flow(
         success=True,
         message=f"Flow '{flow.name}' has been deleted",
         operation="delete_flow",
+    )
+
+
+@router.post("/{flow_id}/share", response_model=FlowResponse)
+async def share_flow(
+    flow_id: UUID,
+    request: ShareFlowRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> FlowResponse:
+    """Owner-controlled sharing; private visibility revokes project access."""
+    flow = verify_flow_ownership(db, flow_id, user)
+    project_id = None
+    if request.visibility == "project":
+        try:
+            project_id = get_primary_project_id_for_user(db, flow.user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    flow.visibility = request.visibility
+    flow.project_id = project_id
+    flow.shared_at = datetime.now(timezone.utc) if project_id is not None else None
+    db.commit()
+    db.refresh(flow)
+    return _flow_to_response(
+        flow, viewer_user_id=flow.user_id,
+        active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
+    )
+
+
+@router.post("/{flow_id}/clone", response_model=FlowResponse, status_code=201)
+async def clone_flow(
+    flow_id: UUID,
+    request: CloneFlowRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> FlowResponse:
+    """Clone a visible definition privately; never copy run history or statistics."""
+    db_user = set_global_user_from_cognito(db, user)
+    source = get_visible_flow(db, flow_id, db_user.id)
+    visible = _flow_to_response(
+        source, viewer_user_id=db_user.id,
+        active_group_ids=get_groups_from_provider_groups(user.get("cognito:groups", [])),
+    )
+    if visible.has_critical_issues:
+        raise HTTPException(status_code=422, detail=visible.validation_warnings[0].message)
+    return await create_flow(
+        CreateFlowRequest(
+            name=request.name or generate_clone_name(db, db_user.id, source.name),
+            description=source.description,
+            flow_definition=visible.flow_definition,
+        ),
+        user=user, db=db,
     )

@@ -541,7 +541,29 @@ class FlowValidationWarning(BaseModel):
     message: str
 
 
-class FlowSummaryResponse(BaseModel):
+class ShareFlowRequest(BaseModel):
+    visibility: Literal["private", "project"]
+
+
+class CloneFlowRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=FLOW_NAME_MAX_CHARS)
+
+    @field_validator("name")
+    @classmethod
+    def validate_clone_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("Name cannot be empty or whitespace only")
+        return value.strip() if value is not None else None
+
+
+class FlowSharingMetadata(BaseModel):
+    visibility: Literal["private", "project"]
+    project_id: Optional[UUID]
+    shared_at: Optional[datetime]
+    is_owner: bool
+
+
+class FlowSummaryResponse(FlowSharingMetadata):
     """Summary of a flow (for list view - excludes full flow_definition)."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -557,7 +579,7 @@ class FlowSummaryResponse(BaseModel):
     updated_at: datetime
 
 
-class FlowResponse(BaseModel):
+class FlowResponse(FlowSharingMetadata):
     """Full flow response with definition."""
 
     model_config = ConfigDict(from_attributes=True)

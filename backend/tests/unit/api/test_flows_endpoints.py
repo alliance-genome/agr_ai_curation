@@ -91,6 +91,7 @@ def _flow(name="Flow A"):
     return SimpleNamespace(
         id=uuid4(),
         user_id=17,
+        visibility="private", project_id=None, shared_at=None,
         name=name,
         description="desc",
         flow_definition=_flow_definition(),
@@ -135,9 +136,10 @@ def test_list_flows_uses_shared_default_page_size():
 
 
 @pytest.mark.asyncio
-async def test_get_flow_uses_verify_ownership(monkeypatch):
+async def test_get_flow_uses_visible_access(monkeypatch):
     owned = _flow(name="Owned")
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(flows, "get_visible_flow", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args: SimpleNamespace(id=17))
 
     response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
     assert response.id == owned.id
@@ -168,7 +170,8 @@ async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeyp
         ]
         return hydrated
 
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(flows, "get_visible_flow", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args: SimpleNamespace(id=17))
     monkeypatch.setattr(flows, "apply_flow_validation_attachment_defaults", _hydrate)
 
     response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
@@ -181,7 +184,8 @@ async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeyp
 @pytest.mark.asyncio
 async def test_get_flow_reports_missing_agent_reference_on_read(monkeypatch):
     owned = _flow(name="Owned")
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(flows, "get_visible_flow", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args: SimpleNamespace(id=17))
     monkeypatch.setattr(
         flows,
         "apply_flow_validation_attachment_defaults",
@@ -283,7 +287,7 @@ def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warn
         _policy_entry,
     )
 
-    response = flows._flow_to_response(owned)
+    response = flows._flow_to_response(owned, viewer_user_id=17)
 
     assert response.has_critical_issues is True
     assert custom_agent_id in response.validation_warnings[0].message

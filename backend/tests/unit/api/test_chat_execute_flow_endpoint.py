@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY
+from typing import cast
 from uuid import uuid4
 
 from fastapi.responses import StreamingResponse
@@ -467,6 +468,7 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow A",
         execution_count=0,
         last_executed_at=None,
@@ -518,6 +520,7 @@ def test_execute_flow_endpoint_rechecks_saved_agent_access(monkeypatch):
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Restricted flow",
         execution_count=0,
         last_executed_at=None,
@@ -556,6 +559,7 @@ def test_execute_flow_endpoint_suppresses_duplicates_but_preserves_distinct_file
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow File Dedupe",
         execution_count=0,
         last_executed_at=None,
@@ -667,6 +671,7 @@ def test_execute_flow_endpoint_replays_file_result_when_evidence_contains_nul(mo
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Tumor Terms",
         execution_count=0,
         last_executed_at=None,
@@ -804,6 +809,7 @@ def test_execute_flow_endpoint_persists_and_replays_mixed_text_and_file_outputs(
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Mixed Output Flow",
         execution_count=0,
         last_executed_at=None,
@@ -901,6 +907,7 @@ def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Stale Success Flow",
         execution_count=0,
         last_executed_at=None,
@@ -1020,6 +1027,7 @@ def test_execute_flow_endpoint_maps_real_mgi_provider_groups_to_active_groups(mo
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="MGI Alleles Test",
         execution_count=0,
         last_executed_at=None,
@@ -1072,6 +1080,7 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Title",
         execution_count=0,
         last_executed_at=None,
@@ -1182,6 +1191,7 @@ def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Cancel",
         execution_count=0,
         last_executed_at=None,
@@ -1222,6 +1232,7 @@ def test_execute_flow_endpoint_preserves_event_order_and_domain_warning(monkeypa
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Warning",
         execution_count=0,
         last_executed_at=None,
@@ -1276,6 +1287,7 @@ def test_execute_flow_endpoint_preserves_flow_step_evidence_payload(monkeypatch)
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Evidence",
         execution_count=0,
         last_executed_at=None,
@@ -1359,6 +1371,7 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Gene Selection Flow",
         execution_count=0,
         last_executed_at=None,
@@ -1471,6 +1484,7 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Replayable Flow",
         execution_count=0,
         last_executed_at=None,
@@ -1600,6 +1614,7 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Retry Flow",
         execution_count=1,
         last_executed_at=datetime(2026, 2, 26, 0, 0, tzinfo=timezone.utc),
@@ -1717,6 +1732,7 @@ def test_execute_flow_endpoint_terminal_failure_reattach_replays_trace_context(m
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Trace Reuse Flow",
         execution_count=0,
         last_executed_at=None,
@@ -1800,6 +1816,7 @@ def test_execute_flow_endpoint_terminal_replay_releases_lifecycle_before_next_tu
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Replay Cleanup Flow",
         execution_count=0,
         last_executed_at=None,
@@ -1998,6 +2015,7 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Trace Checkpoint Failure Flow",
         execution_count=0,
         last_executed_at=None,
@@ -2051,6 +2069,7 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Completion Persistence Failure Flow",
         execution_count=0,
         last_executed_at=None,
@@ -2196,6 +2215,7 @@ def test_execute_flow_endpoint_suppresses_terminal_sse_when_failure_cannot_persi
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Double Persistence Failure Flow",
         execution_count=0,
         last_executed_at=None,
@@ -2313,17 +2333,25 @@ def test_execute_flow_endpoint_suppresses_terminal_sse_when_failure_cannot_persi
     assert persistence_attempts == 2
 
 
-def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch):
+@pytest.mark.parametrize("shared", [False, True])
+def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch, shared):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-owned-elsewhere")
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Collision",
         execution_count=0,
         last_executed_at=None,
         flow_definition={},
     )
+    if shared:
+        from src.lib.flows import access
+        flow.user_id = 1234
+        flow.visibility = "project"
+        flow.project_id = uuid4()
+        monkeypatch.setattr(access, "get_project_ids_for_user", lambda *_: {flow.project_id})
     db = _DummyDB(flow=flow)
 
     _patch_chat_impl(
@@ -2366,6 +2394,7 @@ def test_execute_flow_endpoint_rejects_local_session_collision_before_register(m
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Collision",
         execution_count=0,
         last_executed_at=None,
@@ -2417,6 +2446,7 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Already Active",
         execution_count=0,
         last_executed_at=None,
@@ -2460,6 +2490,7 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Active Reattach",
         execution_count=0,
         last_executed_at=None,
@@ -2543,6 +2574,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Error",
         execution_count=0,
         last_executed_at=None,
@@ -2620,6 +2652,7 @@ def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, cap
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Runner Error Flow",
         execution_count=0,
         last_executed_at=None,
@@ -2709,6 +2742,7 @@ def test_execute_flow_endpoint_returns_403_for_cross_user_flow(monkeypatch):
     flow = SimpleNamespace(
         id=uuid4(),
         user_id=1234,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Other User Flow",
         execution_count=0,
         last_executed_at=None,
@@ -2741,6 +2775,7 @@ def test_execute_flow_endpoint_sanitizes_validation_error(monkeypatch, caplog):
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Validation",
         execution_count=0,
         last_executed_at=None,
@@ -2777,6 +2812,7 @@ def test_execute_flow_endpoint_requires_user_sub(monkeypatch):
     flow = SimpleNamespace(
         id=uuid4(),
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Valid Flow",
         execution_count=0,
         last_executed_at=None,
@@ -2811,6 +2847,7 @@ def test_execute_flow_endpoint_cleans_up_when_commit_fails(monkeypatch):
     flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        is_active=True, visibility="private", project_id=None, shared_at=None,
         name="Flow Commit Failure",
         execution_count=0,
         last_executed_at=None,
@@ -2854,3 +2891,43 @@ def test_execute_flow_endpoint_cleans_up_when_commit_fails(monkeypatch):
     assert calls["clear"] == ["session-commit-failure"]
     assert "session-commit-failure" not in chat._LOCAL_CANCEL_EVENTS
     assert "session-commit-failure" not in chat._LOCAL_SESSION_OWNERS
+
+
+@pytest.mark.parametrize("agents_available", [True, False])
+def test_shared_execution_uses_caller_identity(monkeypatch, agents_available):
+    from src.lib.flows import access
+    project = uuid4()
+    flow = SimpleNamespace(id=uuid4(), user_id=1234, is_active=True,
+        visibility="project", project_id=project, name="Shared",
+        execution_count=0, last_executed_at=None, flow_definition={})
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    monkeypatch.setattr(access, "get_project_ids_for_user", lambda *_: {project})
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _: ["WB"])
+    checks = []
+    def check_agents(*args, **kwargs):
+        checks.append(kwargs)
+        return [] if agents_available else ["ca_private"]
+    monkeypatch.setattr(chat, "inaccessible_flow_agent_keys", check_agents)
+    executed = []
+    async def run(**kwargs):
+        executed.append(kwargs)
+        yield {"type": "RUN_FINISHED", "data": {}}
+    _patch_chat_impl(monkeypatch, "execute_flow", run)
+    db = _DummyDB(flow)
+    monkeypatch.setattr(db, "scalar", lambda _: "standard", raising=False)
+    request = chat.ExecuteFlowRequest(flow_id=flow.id, session_id="shared-session", document_id=uuid4())
+    if not agents_available:
+        with pytest.raises(chat.HTTPException) as exc:
+            asyncio.run(chat.execute_flow_endpoint(request, db, {"sub": "member", "cognito:groups": ["WB"]}))
+        assert exc.value.status_code == 403
+        assert not executed and not calls["register"]
+    else:
+        response = asyncio.run(chat.execute_flow_endpoint(request, db, {"sub": "member", "cognito:groups": ["WB"]}))
+        asyncio.run(_consume_stream(response))
+        assert executed and executed[0]["db_user_id"] == 7
+        assert executed[0]["user_id"] == "member"
+        assert executed[0]["document_id"] == str(request.document_id)
+        assert ("member", "shared-session") in cast(_FakeChatHistoryRepository, calls["repository"]).sessions
+        assert calls["register"][0][1] == "member"
+    assert checks[0]["user_id"] == 7
+    assert checks[0]["active_group_ids"] == ["WB"]

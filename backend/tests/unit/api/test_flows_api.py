@@ -4,6 +4,8 @@ import asyncio
 import importlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
+from src.models.sql import CurationFlow
 from uuid import uuid4
 
 import pytest
@@ -46,12 +48,16 @@ class _DummyDB:
     def commit(self):
         self.commit_called = True
 
+    def refresh(self, _flow):
+        pass
+
 
 def test_flows_crud_enforces_ownership_and_soft_delete(monkeypatch):
     flow_id = uuid4()
     owned_flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        visibility="private", project_id=None, shared_at=None,
         name="WB Expression Flow",
         is_active=True,
     )
@@ -114,6 +120,7 @@ def test_verify_flow_ownership_returns_404_for_missing_or_deleted_flow(monkeypat
     soft_deleted_flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        visibility="private", project_id=None, shared_at=None,
         name="Deleted Flow",
         is_active=False,
     )
@@ -168,6 +175,7 @@ def test_flow_response_defaults_legacy_saved_edge_roles(monkeypatch):
     stored_flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        visibility="private", project_id=None, shared_at=None,
         name="Legacy saved flow",
         description=None,
         flow_definition=_minimal_flow_definition_payload(),
@@ -186,7 +194,7 @@ def test_flow_response_defaults_legacy_saved_edge_roles(monkeypatch):
         },
     )
 
-    response = flows._flow_to_response(stored_flow)
+    response = flows._flow_to_response(stored_flow, viewer_user_id=7)
 
     assert response.flow_definition.edges[0].role == "control_flow"
     assert response.validation_warnings == []
@@ -208,6 +216,7 @@ def test_flow_response_rejects_legacy_formatter_control_step(
     stored_flow = SimpleNamespace(
         id=uuid4(),
         user_id=7,
+        visibility="private", project_id=None, shared_at=None,
         name="Legacy formatter flow",
         description=None,
         flow_definition=payload,
@@ -228,7 +237,7 @@ def test_flow_response_rejects_legacy_formatter_control_step(
     )
 
     with pytest.raises(ValidationError, match="formatter_in_control_flow"):
-        flows._flow_to_response(stored_flow)
+        flows._flow_to_response(stored_flow, viewer_user_id=7)
 
 
 def _output_attachment_flow_payload() -> dict:
@@ -579,6 +588,7 @@ def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
     stored_flow = SimpleNamespace(
         id=flow_id,
         user_id=7,
+        visibility="private", project_id=None, shared_at=None,
         name="Broken saved flow",
         description=None,
         flow_definition=_minimal_flow_definition_payload(),
@@ -598,7 +608,7 @@ def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
         lambda *_args, **_kwargs: None,
     )
 
-    response = flows._flow_to_response(stored_flow)
+    response = flows._flow_to_response(stored_flow, viewer_user_id=7)
 
     assert response.id == flow_id
     assert response.has_critical_issues is True
@@ -656,6 +666,7 @@ def test_flow_response_requires_persisted_retired_attachment_repair(monkeypatch,
     stored_flow = SimpleNamespace(
         id=uuid4(),
         user_id=7,
+        visibility="private", project_id=None, shared_at=None,
         name="Legacy allele flow",
         description=None,
         flow_definition=_legacy_allele_flow_definition_payload(),
@@ -677,7 +688,7 @@ def test_flow_response_requires_persisted_retired_attachment_repair(monkeypatch,
 
     if not canonical:
         with pytest.raises(HTTPException) as exc:
-            flows._flow_to_response(stored_flow)
+            flows._flow_to_response(stored_flow, viewer_user_id=7)
         assert exc.value.status_code == 422
         assert "2026-09-03.remove-allele-pending-envelope-validator" in exc.value.detail
         assert "Alembic upgrade head" in exc.value.detail
@@ -687,7 +698,7 @@ def test_flow_response_requires_persisted_retired_attachment_repair(monkeypatch,
     stored_flow.flow_definition["nodes"][1]["data"]["validation_attachments"] = [
         stored_flow.flow_definition["nodes"][1]["data"]["validation_attachments"][-1]
     ]
-    response = flows._flow_to_response(stored_flow)
+    response = flows._flow_to_response(stored_flow, viewer_user_id=7)
 
     attachment_ids = {
         attachment.attachment_id
@@ -829,3 +840,135 @@ def test_flow_definition_payload_allows_supervisor_enabled_validator_step(
     )
 
     assert result["nodes"][1]["data"]["agent_id"] == "ontology_term_validation"
+
+
+@pytest.mark.parametrize("visibility,member,owner,allowed", [
+    ("private", False, True, True),
+    ("private", True, False, False),
+    ("project", True, False, True),
+    ("project", False, False, False),
+    ("project", False, True, True),
+])
+def test_visible_flow_access(monkeypatch, visibility, member, owner, allowed):
+    from src.lib.flows import access
+    project_id = uuid4()
+    flow = SimpleNamespace(id=uuid4(), user_id=7, is_active=True,
+                           visibility=visibility, project_id=project_id)
+    monkeypatch.setattr(access, "get_project_ids_for_user",
+                        lambda *_: {project_id} if member else set())
+    if allowed:
+        assert access.get_visible_flow(_DummyDB(flow), flow.id, 7 if owner else 99) is flow
+    else:
+        with pytest.raises(HTTPException) as exc:
+            access.get_visible_flow(_DummyDB(flow), flow.id, 99)
+        assert exc.value.status_code == 403
+    flow.is_active = False
+    with pytest.raises(HTTPException) as exc:
+        access.get_visible_flow(_DummyDB(flow), flow.id, 7 if owner else 99)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize("operation", ["update", "delete", "share"])
+def test_project_members_cannot_mutate_source(monkeypatch, operation):
+    from src.schemas.flows import UpdateFlowRequest, ShareFlowRequest
+    flow = SimpleNamespace(id=uuid4(), user_id=7, is_active=True,
+                           visibility="project", project_id=uuid4())
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=99))
+    kwargs = dict(flow_id=flow.id, user={"sub": "member"}, db=_DummyDB(flow))
+    if operation == "update":
+        kwargs["request"] = UpdateFlowRequest(name="Changed")
+    elif operation == "share":
+        kwargs["request"] = ShareFlowRequest(visibility="private")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(getattr(flows, f"{operation}_flow")(**kwargs))
+    assert exc.value.status_code == 403
+
+
+def test_share_unshare_and_membership_removal(monkeypatch):
+    from src.lib.flows import access
+    from src.schemas.flows import ShareFlowRequest
+    flow = SimpleNamespace(id=uuid4(), user_id=7, is_active=True,
+                           visibility="private", project_id=None, shared_at=None)
+    project_id = uuid4()
+    db = _DummyDB(flow)
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=7))
+    monkeypatch.setattr(flows, "get_primary_project_id_for_user", lambda *_: project_id)
+    monkeypatch.setattr(flows, "_flow_to_response", lambda flow, **_: flow)
+    monkeypatch.setattr(access, "get_project_ids_for_user", lambda *_: {project_id})
+    asyncio.run(flows.share_flow(flow.id, ShareFlowRequest(visibility="project"), {}, db))
+    assert flow.project_id == project_id and flow.shared_at is not None
+    assert access.can_read_flow(db, cast(CurationFlow, flow), 99)
+    monkeypatch.setattr(access, "get_project_ids_for_user", lambda *_: set())
+    assert not access.can_read_flow(db, cast(CurationFlow, flow), 99)
+    monkeypatch.setattr(access, "get_project_ids_for_user", lambda *_: {project_id})
+    asyncio.run(flows.share_flow(flow.id, ShareFlowRequest(visibility="private"), {}, db))
+    assert flow.project_id is None and flow.shared_at is None
+    assert not access.can_read_flow(db, cast(CurationFlow, flow), 99)
+
+
+def test_sharing_without_membership_is_rejected(monkeypatch):
+    from src.schemas.flows import ShareFlowRequest
+    flow = SimpleNamespace(id=uuid4(), user_id=7, is_active=True, visibility="private")
+    db = _DummyDB(flow)
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=7))
+    def missing(*_):
+        raise ValueError("User is not assigned to any project")
+    monkeypatch.setattr(flows, "get_primary_project_id_for_user", missing)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(flows.share_flow(flow.id, ShareFlowRequest(visibility="project"), {}, db))
+    assert exc.value.status_code == 422
+    assert not db.commit_called and flow.visibility == "private"
+
+
+def test_shared_read_uses_viewer_agent_permissions(monkeypatch):
+    now = datetime.now(timezone.utc)
+    definition = _minimal_flow_definition_payload()
+    definition["nodes"][1]["data"]["agent_id"] = "ca_private"
+    flow = SimpleNamespace(id=uuid4(), user_id=7, name="Shared", description=None,
+        visibility="project", project_id=uuid4(), shared_at=now,
+        flow_definition=definition, execution_count=3, last_executed_at=now,
+        created_at=now, updated_at=now)
+    calls = []
+    def metadata(agent_id, **kwargs):
+        calls.append(kwargs)
+        raise ValueError("unavailable")
+    monkeypatch.setattr(flows, "get_active_visible_agent_metadata", metadata)
+    response = flows._flow_to_response(flow, viewer_user_id=99, active_group_ids=["WB"])
+    assert response.has_critical_issues and not response.is_owner
+    assert response.visibility == "project"
+    assert calls and all(call["db_user_id"] == 99 for call in calls)
+    assert all(call["authenticated_groups"] == ["WB"] for call in calls)
+    assert "unavailable" in response.validation_warnings[0].message
+
+
+def test_clone_name_collision_and_max_length():
+    from src.lib.flows.access import generate_clone_name
+    from src.schemas.flows import FLOW_NAME_MAX_CHARS
+    source = "A" * FLOW_NAME_MAX_CHARS
+    existing = [source[:-7] + " (Copy)", source[:-9] + " (Copy 2)"]
+    db = SimpleNamespace(scalars=lambda _: SimpleNamespace(all=lambda: existing))
+    name = generate_clone_name(db, 99, source)
+    assert name == source[:-9] + " (Copy 3)"
+    assert len(name) == FLOW_NAME_MAX_CHARS
+
+
+@pytest.mark.parametrize("visibility,available,status", [
+    ("private", True, 403), ("project", False, 422),
+])
+def test_clone_rejects_private_source_or_unavailable_dependencies(monkeypatch, visibility, available, status):
+    from src.lib.flows import access
+    from src.schemas.flows import CloneFlowRequest
+    now = datetime.now(timezone.utc)
+    project_id = uuid4()
+    source = SimpleNamespace(id=uuid4(), user_id=7, is_active=True,
+        visibility=visibility, project_id=project_id, shared_at=now,
+        name="Shared", description=None, execution_count=8, last_executed_at=now,
+        created_at=now, updated_at=now, flow_definition=_minimal_flow_definition_payload())
+    db = _DummyDB(source)
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=99))
+    monkeypatch.setattr(access, "get_project_ids_for_user", lambda *_: {project_id})
+    monkeypatch.setattr(flows, "_flow_agent_policy_entry", lambda *_, **__: {} if available else None)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(flows.clone_flow(source.id, CloneFlowRequest(), {"sub": "member"}, db))
+    assert exc.value.status_code == status
+    assert not db.commit_called and source.execution_count == 8
