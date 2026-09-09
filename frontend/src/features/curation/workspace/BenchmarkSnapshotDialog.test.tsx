@@ -12,6 +12,7 @@ const serviceMocks = vi.hoisted(() => ({
   createCurationBenchmarkSnapshot: vi.fn(),
   fetchBenchmarkDestinations: vi.fn(),
   handoffCurationBenchmarkSnapshot: vi.fn(),
+  retryCurationBenchmarkHandoff: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', async () => {
@@ -23,6 +24,7 @@ vi.mock('@/features/curation/services/curationWorkspaceService', async () => {
     createCurationBenchmarkSnapshot: serviceMocks.createCurationBenchmarkSnapshot,
     fetchBenchmarkDestinations: serviceMocks.fetchBenchmarkDestinations,
     handoffCurationBenchmarkSnapshot: serviceMocks.handoffCurationBenchmarkSnapshot,
+    retryCurationBenchmarkHandoff: serviceMocks.retryCurationBenchmarkHandoff,
   }
 })
 
@@ -58,10 +60,53 @@ describe('BenchmarkSnapshotDialog', () => {
     serviceMocks.createCurationBenchmarkSnapshot.mockReset()
     serviceMocks.fetchBenchmarkDestinations.mockReset()
     serviceMocks.handoffCurationBenchmarkSnapshot.mockReset()
+    serviceMocks.retryCurationBenchmarkHandoff.mockReset()
     serviceMocks.fetchBenchmarkDestinations.mockResolvedValue({
       destinations: [{ destination_id: 'portal', label: 'Alliance Benchmark' }],
     })
     serviceMocks.createCurationBenchmarkSnapshot.mockResolvedValue(snapshot)
+  })
+
+  it('retries only on an explicit click, using the original receipt snapshot, and disables concurrent actions', async () => {
+    const unknown = { handoff_id: 'attempt', snapshot_id: 'original-snapshot', destination_id: 'portal', status: 'unknown' }
+    serviceMocks.handoffCurationBenchmarkSnapshot.mockResolvedValue(unknown)
+    let finish!: (value: unknown) => void
+    serviceMocks.retryCurationBenchmarkHandoff.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const { rerender } = renderDialog()
+    await userEvent.click(await screen.findByRole('button', { name: 'Send snapshot' }))
+    await screen.findByRole('button', { name: 'Retry delivery' })
+    rerender(dialogElement({ open: false }))
+    rerender(dialogElement())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry delivery' })).toBeEnabled())
+    expect(serviceMocks.retryCurationBenchmarkHandoff).not.toHaveBeenCalled()
+    // A later export returned snapshot-1, but the retained attempt owns the
+    // original bytes. Download and Retry must refer to that same snapshot.
+    expect(serviceMocks.createCurationBenchmarkSnapshot).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('link', { name: 'Download benchmark bundle JSON' })).toHaveAttribute(
+      'href', '/api/curation-workspace/benchmark-snapshots/original-snapshot/download',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Retry delivery' }))
+    expect(serviceMocks.retryCurationBenchmarkHandoff).toHaveBeenCalledExactlyOnceWith('original-snapshot', { destination_id: 'portal' })
+    expect(screen.getByRole('button', { name: 'Retry delivery' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled()
+    expect(screen.getByRole('link', { name: 'Download benchmark bundle JSON' })).toBeInTheDocument()
+    await act(async () => finish({ ...unknown, status: 'succeeded', redirect_path: 'https://portal.example/comparisons/receipt' }))
+    expect(await screen.findByRole('link', { name: 'Open Benchmark' })).toHaveAttribute('href', 'https://portal.example/comparisons/receipt')
+    expect(serviceMocks.createCurationBenchmarkSnapshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps another uncertain retry truthful and ignores its navigation after selection changes', async () => {
+    const unknown = { handoff_id: 'attempt', snapshot_id: 'snapshot-1', destination_id: 'portal', status: 'unknown' }
+    serviceMocks.handoffCurationBenchmarkSnapshot.mockResolvedValue(unknown)
+    serviceMocks.retryCurationBenchmarkHandoff.mockResolvedValue(unknown)
+    const { rerender } = renderDialog()
+    await userEvent.click(await screen.findByRole('button', { name: 'Send snapshot' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry delivery' }))
+    expect(await screen.findByText(/Delivery could not be confirmed/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open Benchmark' })).not.toBeInTheDocument()
+    rerender(dialogElement({ envelopes: [{ envelopeId: 'env-1', revision: 5 }] }))
+    expect(screen.queryByRole('button', { name: 'Retry delivery' })).not.toBeInTheDocument()
+    expect(serviceMocks.retryCurationBenchmarkHandoff).toHaveBeenCalledTimes(1)
   })
 
   it('sends the displayed persisted revision and reveals destination navigation only on success', async () => {

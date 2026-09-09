@@ -33,6 +33,34 @@ remains explicitly unconfirmed and is not automatically retried; the JSON
 snapshot remains downloadable. Delivery success does not mean scoring completed.
 Long-running comparison progress and accuracy belong to the private portal.
 
+After a failed or unconfirmed delivery, **Retry delivery** sends the original
+saved snapshot. It does not rerun extraction, export current edits, or create a
+new envelope revision. The action calls authenticated
+`POST /api/curation-workspace/benchmark-snapshots/{snapshot_id}/handoffs/retry`
+with the configured `destination_id`. Ordinary Send still returns a saved
+attempt without retransmitting. Refreshing or reopening the dialog never retries.
+When Send finds an older attempt for the same revision, Download also uses that
+attempt's original snapshot, not the later export's timestamp or snapshot ID.
+
+Initial delivery and retry hold a nonblocking PostgreSQL row lock until the
+bounded HTTP operation and result commit finish. Concurrent delivery returns
+`409 handoff_in_progress` without sending or changing the active attempt. After
+an interrupted process releases its lock, explicit retry can recover the saved
+unconfirmed attempt. Current ownership, session access and exact initiating
+issuer/subject are checked again. The original bytes, replay/idempotency keys
+and sender assertion are reused; missing historical identity fails closed.
+Retrying a failed attempt first commits a sending reservation, then reacquires
+and refreshes the delivery lock before HTTP. A crash during recovery therefore
+cannot leave a false durable failed outcome; a competing successful delivery is
+returned without another request.
+
+The receiver must return the same receipt for identical bytes, key and human,
+including when it committed a request whose acknowledgement was lost. Another
+uncertain failure remains unknown; a failed recovery cannot erase uncertainty
+about an earlier delivery. Only a validated receipt enables Open Benchmark.
+Existing configured HTTP timeouts apply, with one delivery per deliberate click
+and no retry loop or additional model calls.
+
 ## Extraction and document provenance
 
 New flow extractions and builder-finalized chat extractions retain a server-owned

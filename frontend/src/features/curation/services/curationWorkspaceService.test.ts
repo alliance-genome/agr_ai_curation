@@ -12,6 +12,7 @@ import {
   fetchDomainEnvelopeReviewRows,
   fetchSubmissionPreview,
   handoffCurationBenchmarkSnapshot,
+  retryCurationBenchmarkHandoff,
   patchCurationEnvelopeField,
 } from './curationWorkspaceService'
 
@@ -384,6 +385,17 @@ describe('curationWorkspaceService benchmark snapshot requests', () => {
         method: 'POST',
         body: JSON.stringify({ destination_id: 'portal' }),
       }),
+    )
+  })
+
+  it('uses the explicit retry endpoint once without resubmitting failed requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail: 'Already in progress' }, { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(retryCurationBenchmarkHandoff('original snapshot', { destination_id: 'portal' })).rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/curation-workspace/benchmark-snapshots/original%20snapshot/handoffs/retry',
+      expect.objectContaining({ credentials: 'include', method: 'POST', body: JSON.stringify({ destination_id: 'portal' }) }),
     )
   })
 })

@@ -241,7 +241,8 @@ async def test_benchmark_endpoint_reports_unexpected_failure_without_exposing_it
 
 
 @pytest.mark.asyncio
-async def test_post_benchmark_handoff_accepts_only_destination_id(monkeypatch):
+@pytest.mark.parametrize("retry", [False, True])
+async def test_post_benchmark_handoff_accepts_only_destination_id(monkeypatch, retry):
     monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
     snapshot_id = uuid4()
 
@@ -252,6 +253,7 @@ async def test_post_benchmark_handoff_accepts_only_destination_id(monkeypatch):
             "current_user_id": "curator-1",
             "sender_issuer": "https://identity.example.org/pool",
             "sender_subject": "curator-1",
+            **({"retry_delivery": True} if retry else {}),
         }
         return CurationBenchmarkHandoffResponse(
             handoff_id=str(uuid4()),
@@ -263,7 +265,8 @@ async def test_post_benchmark_handoff_accepts_only_destination_id(monkeypatch):
         )
 
     monkeypatch.setattr(module, "handoff_benchmark_snapshot", _handoff)
-    result = await module.post_benchmark_snapshot_handoff(
+    endpoint = module.retry_benchmark_snapshot_handoff if retry else module.post_benchmark_snapshot_handoff
+    result = await endpoint(
         snapshot_id,
         CurationBenchmarkHandoffRequest(destination_id="portal"),
         user={"sub": "curator-1", "iss": "https://identity.example.org/pool"},

@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
@@ -444,6 +444,7 @@ async def handoff_benchmark_snapshot(
     current_user_id: str,
     sender_issuer: str | None,
     sender_subject: str | None,
+    retry_delivery: bool = False,
 ) -> CurationBenchmarkHandoffResponse:
     """Reserve and deliver one immutable bundle without automatic retries."""
 
@@ -477,14 +478,20 @@ async def handoff_benchmark_snapshot(
     attempt = db.scalars(
         select(CurationBenchmarkHandoffAttempt)
         .where(CurationBenchmarkHandoffAttempt.replay_key == replay_key)
-        .with_for_update()
     ).first()
     if attempt is not None:
         if attempt.idempotency_key != idempotency_key or not _matches_sender(attempt, sender_issuer, sender_subject):
             raise CurationBenchmarkSnapshotError(409, "handoff_replay_conflict", "Handoff replay identity conflicts with the reserved snapshot")
-        if attempt.status == "sending":
-            return _finish_attempt(db, attempt, destination, status="unknown", failure_code="prior_delivery_ambiguous")
-        return _handoff_response(attempt, destination)
+        if not retry_delivery or attempt.status == "succeeded":
+            # Reading an active delivery must not overwrite its durable state.
+            return _handoff_response(attempt, destination)
+        return await _dispatch_reserved_handoff(
+            db, attempt, destination, current_user_id, sender_issuer, sender_subject,
+            recovering=True,
+        )
+
+    if retry_delivery:
+        raise CurationBenchmarkSnapshotError(404, "handoff_not_found", "No saved delivery was found")
 
     attempt = CurationBenchmarkHandoffAttempt(
         id=uuid4(),
@@ -511,11 +518,119 @@ async def handoff_benchmark_snapshot(
             raise CurationBenchmarkSnapshotError(409, "handoff_replay_conflict", "Handoff replay identity conflicts with the reserved snapshot") from None
         return _handoff_response(reserved, destination)
 
+    return await _dispatch_reserved_handoff(
+        db, attempt, destination, current_user_id, sender_issuer, sender_subject,
+    )
+
+
+async def _dispatch_reserved_handoff(
+    db: Session,
+    attempt: CurationBenchmarkHandoffAttempt,
+    destination: BenchmarkHandoffDestination,
+    current_user_id: str,
+    sender_issuer: str,
+    sender_subject: str,
+    recovering: bool = False,
+) -> CurationBenchmarkHandoffResponse:
+    """Hold a nonblocking database lock through one bounded delivery and commit.
+
+    The initial reservation is durable before taking this lock. A process exit
+    releases the lock without inventing an outcome; explicit recovery can then
+    deliver the same bytes/key, including when the receiver already committed.
+    """
+    observed_outcome = (attempt.status, attempt.updated_at)
+
+    def lock_attempt():
+        try:
+            return db.scalar(
+                select(CurationBenchmarkHandoffAttempt)
+                .where(CurationBenchmarkHandoffAttempt.id == attempt.id)
+                .with_for_update(nowait=True)
+                .execution_options(populate_existing=True)
+            )
+        except OperationalError as exc:
+            db.rollback()
+            if getattr(exc.orig, "pgcode", None) == "55P03":
+                raise CurationBenchmarkSnapshotError(
+                    409, "handoff_in_progress", "Delivery is already in progress; wait before trying again",
+                ) from None
+            raise
+
+    attempt = lock_attempt()
+    try:
+        if attempt is None:
+            raise CurationBenchmarkSnapshotError(404, "handoff_not_found", "No saved delivery was found")
+        if not _matches_sender(attempt, sender_issuer, sender_subject):
+            raise CurationBenchmarkSnapshotError(409, "handoff_replay_conflict", "Saved sender identity does not match")
+        # Always use the original snapshot, not a later export of this revision.
+        snapshot = db.get(CurationBenchmarkSnapshot, attempt.snapshot_id)
+        if snapshot is None or snapshot.created_by_id != current_user_id:
+            raise CurationBenchmarkSnapshotError(404, "snapshot_not_found", "Snapshot was not found")
+        _require_session_access(db, snapshot.session_id, current_user_id)
+        if (
+            attempt.replay_key != _identity_digest(attempt.destination_id, snapshot.envelope_id, str(snapshot.envelope_revision))
+            or attempt.idempotency_key != _identity_digest(
+                attempt.destination_id, snapshot.envelope_id, str(snapshot.envelope_revision),
+                snapshot.envelope_digest, SENDER_ASSERTION_VERSION, sender_issuer, sender_subject,
+            )
+        ):
+            raise CurationBenchmarkSnapshotError(409, "handoff_replay_conflict", "Saved snapshot identity does not match")
+        if (
+            attempt.status == "succeeded"
+            or (recovering and (attempt.status, attempt.updated_at) != observed_outcome)
+            or (not recovering and attempt.status != "sending")
+        ):
+            result = _handoff_response(attempt, destination)
+            db.rollback()
+            return result
+        if recovering and attempt.status == "failed":
+            # A crash during this new delivery must not leave a durable claim
+            # that it failed. Commit uncertainty before HTTP, then reacquire
+            # the same lock; another request may win this short gap.
+            attempt.status = "sending"
+            attempt.failure_code = None
+            reservation_time = datetime.now(timezone.utc)
+            attempt.updated_at = reservation_time
+            db.commit()
+            attempt = lock_attempt()
+            if attempt is None:
+                raise CurationBenchmarkSnapshotError(404, "handoff_not_found", "No saved delivery was found")
+            if attempt.updated_at != reservation_time or attempt.status != "sending":
+                result = _handoff_response(attempt, destination)
+                db.rollback()
+                return result
+        return await _deliver_handoff(
+            db, attempt, snapshot, destination, sender_issuer, sender_subject,
+            prior_delivery_uncertain=recovering,
+        )
+    except BaseException:
+        # Includes request cancellation: release the connection/lock without
+        # claiming failure or success for a potentially committed remote write.
+        db.rollback()
+        raise
+
+
+async def _deliver_handoff(
+    db: Session,
+    attempt: CurationBenchmarkHandoffAttempt,
+    snapshot: CurationBenchmarkSnapshot,
+    destination: BenchmarkHandoffDestination,
+    sender_issuer: str,
+    sender_subject: str,
+    prior_delivery_uncertain: bool,
+) -> CurationBenchmarkHandoffResponse:
+    def finish(*, status: str, **details) -> CurationBenchmarkHandoffResponse:
+        # Failure to retry does not prove that an earlier unconfirmed write
+        # failed. Only a validated receiver receipt resolves that uncertainty.
+        if prior_delivery_uncertain and status == "failed":
+            status = "unknown"
+        return _finish_attempt(db, attempt, destination, status=status, **details)
+
     client_secret = os.getenv(destination.client_secret_env, "")
     if not client_secret:
         logger.error("Benchmark snapshot handoff credential is unavailable")
         _report_handoff_failure("credential_unavailable")
-        return _finish_attempt(db, attempt, destination, status="failed", failure_code="credential_unavailable")
+        return finish(status="failed", failure_code="credential_unavailable")
 
     timeout = get_benchmark_handoff_timeout_seconds()
     async with httpx.AsyncClient(
@@ -531,14 +646,14 @@ async def handoff_benchmark_snapshot(
         except (httpx.TimeoutException, httpx.RequestError):
             logger.warning("Benchmark snapshot handoff token request failed")
             _report_handoff_failure("token_request_failed")
-            return _finish_attempt(
-                db, attempt, destination, status="failed", failure_code="token_request_failed"
+            return finish(
+                status="failed", failure_code="token_request_failed"
             )
         if not token_response.is_success:
             logger.warning("Benchmark snapshot handoff token request failed")
             _report_handoff_failure("token_request_failed")
-            return _finish_attempt(
-                db, attempt, destination, status="failed", failure_code="token_request_failed"
+            return finish(
+                status="failed", failure_code="token_request_failed"
             )
         try:
             token_payload = token_response.json()
@@ -552,8 +667,8 @@ async def handoff_benchmark_snapshot(
         if not isinstance(access_token, str) or not access_token:
             logger.warning("Benchmark snapshot handoff token response was invalid")
             _report_handoff_failure("token_response_invalid")
-            return _finish_attempt(
-                db, attempt, destination, status="failed", failure_code="token_response_invalid"
+            return finish(
+                status="failed", failure_code="token_response_invalid"
             )
         try:
             sink_response = await client.post(
@@ -562,7 +677,7 @@ async def handoff_benchmark_snapshot(
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Content-Type": "application/json",
-                    "Idempotency-Key": idempotency_key,
+                    "Idempotency-Key": attempt.idempotency_key,
                     "X-Curation-Benchmark-Sender-Version": SENDER_ASSERTION_VERSION,
                     "X-Curation-Benchmark-Sender-Issuer": sender_issuer,
                     "X-Curation-Benchmark-Sender-Subject": sender_subject,
@@ -573,18 +688,15 @@ async def handoff_benchmark_snapshot(
                 "Benchmark snapshot handoff timed out with an ambiguous delivery result"
             )
             _report_handoff_failure("delivery_timeout")
-            return _finish_attempt(
-                db, attempt, destination, status="unknown", failure_code="delivery_timeout"
+            return finish(
+                status="unknown", failure_code="delivery_timeout"
             )
         except httpx.RequestError:
             logger.warning(
                 "Benchmark snapshot handoff transport failed with an ambiguous delivery result"
             )
             _report_handoff_failure("delivery_transport_error")
-            return _finish_attempt(
-                db,
-                attempt,
-                destination,
+            return finish(
                 status="unknown",
                 failure_code="delivery_transport_error",
             )
@@ -592,7 +704,7 @@ async def handoff_benchmark_snapshot(
     if not sink_response.is_success:
         logger.warning("Benchmark snapshot handoff sink rejected the delivery")
         _report_handoff_failure("sink_rejected")
-        return _finish_attempt(db, attempt, destination, status="failed", failure_code="sink_rejected")
+        return finish(status="failed", failure_code="sink_rejected")
     try:
         sink_payload = sink_response.json()
         receipt_id = sink_payload.get("receipt_id") if isinstance(sink_payload, dict) else None
@@ -603,12 +715,9 @@ async def handoff_benchmark_snapshot(
     except (TypeError, ValueError):
         logger.warning("Benchmark snapshot handoff receipt was invalid")
         _report_handoff_failure("receipt_invalid")
-        return _finish_attempt(db, attempt, destination, status="failed", failure_code="receipt_invalid")
+        return finish(status="failed", failure_code="receipt_invalid")
 
-    return _finish_attempt(
-        db,
-        attempt,
-        destination,
+    return finish(
         status="succeeded",
         receipt_id=receipt_id,
         redirect_path=redirect_path,
