@@ -163,6 +163,16 @@ export async function handoffCurationBenchmarkSnapshot(
   )
 }
 
+export async function retryCurationBenchmarkHandoff(
+  snapshotId: string,
+  request: CurationBenchmarkHandoffRequest,
+): Promise<CurationBenchmarkHandoffResponse> {
+  return fetchCurationWorkspaceJson<CurationBenchmarkHandoffResponse>(
+    `/api/curation-workspace/benchmark-snapshots/${encodeURIComponent(snapshotId)}/handoffs/retry`,
+    { method: 'POST', body: JSON.stringify(request) },
+  )
+}
+
 export async function updateCurationSession(
   request: CurationSessionUpdateRequest,
   options: CurationWorkspaceRequestOptions = {},

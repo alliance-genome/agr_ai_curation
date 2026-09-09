@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -20,6 +20,7 @@ import {
   CurationWorkspaceRequestError,
   fetchBenchmarkDestinations,
   handoffCurationBenchmarkSnapshot,
+  retryCurationBenchmarkHandoff,
 } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationBenchmarkDestination,
@@ -64,6 +65,7 @@ export default function BenchmarkSnapshotDialog({
   const [selectedEnvelopeId, setSelectedEnvelopeId] = useState('')
   const [destinationsLoading, setDestinationsLoading] = useState(false)
   const [sending, setSending] = useState(false)
+  const requestPending = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [snapshots, setSnapshots] = useState<Record<string, CurationBenchmarkSnapshotCreateResponse>>({})
   const [handoffs, setHandoffs] = useState<Record<string, CurationBenchmarkHandoffResponse>>({})
@@ -115,8 +117,9 @@ export default function BenchmarkSnapshotDialog({
   }
 
   const handleSnapshot = async (send: boolean) => {
-    if (sending || !selectedEnvelope || hasUnsavedChanges || (send && !selectedDestinationId)) return
+    if (requestPending.current || !selectedEnvelope || hasUnsavedChanges || (send && !selectedDestinationId)) return
 
+    requestPending.current = true
     setSending(true)
     setError(null)
     try {
@@ -136,6 +139,27 @@ export default function BenchmarkSnapshotDialog({
     } catch (sendError) {
       setError(requestErrorMessage(sendError))
     } finally {
+      requestPending.current = false
+      setSending(false)
+    }
+  }
+
+  const handleRetry = async () => {
+    if (requestPending.current || !handoff || !['failed', 'unknown'].includes(handoff.status)) return
+    requestPending.current = true
+    setSending(true)
+    setError(null)
+    try {
+      const result = await retryCurationBenchmarkHandoff(handoff.snapshot_id, {
+        destination_id: handoff.destination_id,
+      })
+      setHandoffs((current) => ({ ...current, [handoffKey]: result }))
+    } catch (retryError) {
+      setError(retryError instanceof CurationWorkspaceRequestError && retryError.status === 409
+        ? 'Delivery could not be retried. It may already be in progress; wait before trying again.'
+        : requestErrorMessage(retryError))
+    } finally {
+      requestPending.current = false
       setSending(false)
     }
   }
@@ -149,6 +173,7 @@ export default function BenchmarkSnapshotDialog({
     || selectedEnvelope === null
     || handoff?.status === 'unknown'
     || handoff?.status === 'succeeded'
+    || handoff?.status === 'failed'
 
   return (
     <Dialog open={open} onClose={sending ? undefined : onClose} fullWidth maxWidth="sm">
@@ -235,7 +260,7 @@ export default function BenchmarkSnapshotDialog({
           ) : null}
           {handoff?.status === 'failed' ? (
             <Alert severity="error">
-              Snapshot delivery failed. Download the preserved bundle for manual recovery.
+              Snapshot delivery failed. You can retry delivery of the saved snapshot or download it.
             </Alert>
           ) : null}
           {handoff?.status === 'unknown' ? (
@@ -245,7 +270,9 @@ export default function BenchmarkSnapshotDialog({
           ) : null}
 
           {snapshot ? (
-            <Button component="a" href={snapshot.download_path} download variant="outlined">
+            <Button component="a" href={handoff
+              ? `/api/curation-workspace/benchmark-snapshots/${encodeURIComponent(handoff.snapshot_id)}/download`
+              : snapshot.download_path} download variant="outlined">
               Download benchmark bundle JSON
             </Button>
           ) : (
@@ -257,6 +284,12 @@ export default function BenchmarkSnapshotDialog({
               Prepare benchmark bundle JSON for download
             </Button>
           )}
+          {handoff && (handoff.status === 'failed' || handoff.status === 'unknown') ? (
+            <Button onClick={() => void handleRetry()} disabled={sending || destinationUnavailable || destinationsLoading}
+              variant="contained">
+              Retry delivery
+            </Button>
+          ) : null}
           {handoff?.status === 'succeeded' && handoff.redirect_path ? (
             <Button
               component="a"

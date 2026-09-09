@@ -472,6 +472,33 @@ async def post_benchmark_snapshot_handoff(
         _raise_benchmark_error(exc)
 
 
+@router.post(
+    "/benchmark-snapshots/{snapshot_id}/handoffs/retry",
+    response_model=CurationBenchmarkHandoffResponse,
+    response_model_exclude_none=True,
+    responses=_BENCHMARK_ERROR_RESPONSES,
+)
+async def retry_benchmark_snapshot_handoff(
+    snapshot_id: UUID,
+    request: CurationBenchmarkHandoffRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationBenchmarkHandoffResponse:
+    """Explicit recovery of a saved delivery, using its original bytes and identity."""
+    set_global_user_from_cognito(db, user)
+    try:
+        return await handoff_benchmark_snapshot(
+            db, snapshot_id=snapshot_id, destination_id=request.destination_id,
+            current_user_id=_require_current_user_id(user),
+            sender_issuer=user.get("iss"), sender_subject=user.get("sub"),
+            retry_delivery=True,
+        )
+    except CurationBenchmarkSnapshotError as exc:
+        if db.in_transaction():
+            db.rollback()
+        _raise_benchmark_error(exc)
+
+
 @router.get("/sessions", response_model=CurationSessionListResponse)
 async def list_review_sessions(
     request: CurationSessionListRequest = Depends(_build_list_request),

@@ -5,6 +5,7 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 from types import SimpleNamespace
+from typing import Any, TypedDict
 from uuid import uuid4
 
 import httpx
@@ -15,7 +16,13 @@ from src.lib.curation_workspace import benchmark_snapshots as module
 from src.lib.observability.sentry import _redact_runtime_exception_context
 from src.schemas.domain_envelope import DomainEnvelopeStatus
 
-SENDER = {"sender_issuer": "https://identity.example.org/pool", "sender_subject": "curator-1"}
+class SenderIdentity(TypedDict):
+    sender_issuer: str
+    sender_subject: str
+
+
+SENDER: SenderIdentity = {"sender_issuer": "https://identity.example.org/pool", "sender_subject": "curator-1"}
+SENDER_PARTS = (SENDER["sender_issuer"], SENDER["sender_subject"])
 
 
 class _ScalarRows:
@@ -249,6 +256,8 @@ class _HandoffDb:
         self.snapshot = snapshot
         self.session = session
         self.prior = prior
+        if prior is not None and not hasattr(prior, "updated_at"):
+            prior.updated_at = None
         self.added = None
 
     def get(self, model, _identity):
@@ -261,7 +270,7 @@ class _HandoffDb:
         return _ScalarRows(self.prior)
 
     def scalar(self, _statement):
-        return self.prior
+        return self.prior or self.added
 
     def add(self, value):
         self.added = value
@@ -317,7 +326,8 @@ def test_destination_list_is_empty_when_handoff_is_disabled(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fresh_snapshot", [False, True])
-async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(monkeypatch, fresh_snapshot):
+@pytest.mark.parametrize("retry", [False, True])
+async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(monkeypatch, fresh_snapshot, retry):
     snapshot = SimpleNamespace(
         id=uuid4(), session_id=uuid4(), envelope_id="env-1", envelope_revision=7,
         envelope_digest="sha256:" + "d" * 64, created_by_id="curator-1",
@@ -359,7 +369,7 @@ async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(mo
             setattr(prior, field, value)
         with pytest.raises(module.CurationBenchmarkSnapshotError) as rejected:
             await module.handoff_benchmark_snapshot(
-                db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
+                db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", retry_delivery=retry, **SENDER
             )
         assert rejected.value.error == "handoff_replay_conflict"
         prior.sender_version = "1"
@@ -369,7 +379,7 @@ async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(mo
     prior.idempotency_key = "sha256:" + "e" * 64
     with pytest.raises(module.CurationBenchmarkSnapshotError) as exc_info:
         await module.handoff_benchmark_snapshot(
-            db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **SENDER
+            db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", retry_delivery=retry, **SENDER
         )
     assert exc_info.value.error == "handoff_replay_conflict"
 
@@ -431,25 +441,26 @@ async def test_reservation_race_checks_sender_without_resending(monkeypatch, ide
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["missing_identity", "wrong_owner", "lost_session_access"])
-async def test_handoff_denial_precedes_reservation_and_network(monkeypatch, failure):
+@pytest.mark.parametrize("failure", ["missing_identity", "wrong_owner", "lost_session_access", "disabled", "destination"])
+@pytest.mark.parametrize("retry", [False, True])
+async def test_handoff_denial_precedes_reservation_and_network(monkeypatch, failure, retry):
     snapshot = SimpleNamespace(id=uuid4(), session_id=uuid4(), created_by_id="curator-1")
     session = SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1")
-    sender = dict(SENDER)
+    sender: dict[str, Any] = dict(SENDER)
     if failure == "missing_identity":
         sender["sender_issuer"] = None
     elif failure == "wrong_owner":
         snapshot.created_by_id = "other-curator"
-    else:
+    elif failure == "lost_session_access":
         session.created_by_id = "other-curator"
     db = _HandoffDb(snapshot, session)
-    monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
-    monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
+    monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: failure != "disabled")
+    monkeypatch.setattr(module, "_destination_registry", lambda: {} if failure == "destination" else {"portal": _destination()})
     monkeypatch.setattr(db, "scalars", lambda statement: pytest.fail("must not reserve"))
     monkeypatch.setattr(module.httpx, "AsyncClient", lambda **kwargs: pytest.fail("must not send"))
     with pytest.raises(module.CurationBenchmarkSnapshotError):
         await module.handoff_benchmark_snapshot(
-            db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", **sender
+            db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1", retry_delivery=retry, **sender
         )
     assert db.added is None
 
@@ -468,7 +479,7 @@ def test_sender_identity_rejects_missing_or_unsafe_header_values(issuer, subject
 
 
 def test_sender_identity_bound_is_environment_configurable(monkeypatch):
-    issuer, subject = SENDER.values()
+    issuer, subject = SENDER_PARTS
     monkeypatch.setenv("BENCHMARK_HANDOFF_MAX_IDENTITY_BYTES", str(len(issuer) + len(subject)))
     assert module._require_sender_identity(issuer, subject) == (issuer, subject)
     monkeypatch.setenv("BENCHMARK_HANDOFF_MAX_IDENTITY_BYTES", str(len(issuer) + len(subject) - 1))
@@ -574,7 +585,7 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
         async def post(self, _url, **_kwargs):
             nonlocal call_count
             call_count += 1
-            if call_count == 1:
+            if call_count % 2 == 1:
                 return _Response({"access_token": "fake-sensitive-access-token"})
             request = httpx.Request(
                 "POST",
@@ -626,6 +637,77 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
     )
     assert replay.status == "unknown"
     assert call_count == 2
+
+    # Recovery is an explicit action, never ordinary replay. The same timeout
+    # remains uncertain and adds exactly one token request and one delivery.
+    recovered = await module.handoff_benchmark_snapshot(
+        db, snapshot_id=snapshot.id, destination_id="portal", current_user_id="curator-1",
+        retry_delivery=True, **SENDER,
+    )
+    assert recovered.status == "unknown"
+    assert call_count == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior_status", ["failed", "unknown", "sending"])
+async def test_explicit_retry_preserves_original_delivery_and_success_never_resends(monkeypatch, prior_status):
+    original = SimpleNamespace(
+        id=uuid4(), session_id=uuid4(), envelope_id="env-1", envelope_revision=7,
+        envelope_digest="sha256:" + "d" * 64, created_by_id="curator-1",
+        bundle_json='{"original":true}',
+    )
+    attempt = SimpleNamespace(
+        id=uuid4(), snapshot_id=original.id, destination_id="portal", status=prior_status,
+        replay_key=module._identity_digest("portal", "env-1", "7"),
+        idempotency_key=module._identity_digest("portal", "env-1", "7", original.envelope_digest, "1", *SENDER_PARTS),
+        sender_version="1", receipt_id=None, redirect_path=None, **SENDER,
+    )
+    db = _HandoffDb(original, SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"), prior=attempt)
+    calls = []
+
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response({"access_token": "synthetic"} if "oauth2" in url else {
+                "receipt_id": "same-receipt", "redirect_url": "https://portal.example/comparisons/same-receipt",
+            })
+
+    monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
+    monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
+    monkeypatch.setenv("PORTAL_CLIENT_SECRET", "synthetic")
+    monkeypatch.setattr(module.httpx, "AsyncClient", Client)
+    request = dict(snapshot_id=original.id, destination_id="portal", current_user_id="curator-1", **SENDER)
+    observed = await module.handoff_benchmark_snapshot(db, **request)
+    assert not calls and attempt.status == prior_status
+    assert observed.status == ("unknown" if prior_status == "sending" else prior_status)
+    result = await module.handoff_benchmark_snapshot(db, retry_delivery=True, **request)
+    assert result.status == "succeeded" and result.snapshot_id == str(original.id)
+    assert len(calls) == 2
+    assert calls[1][1]["content"] == original.bundle_json.encode()
+    assert calls[1][1]["headers"]["Idempotency-Key"] == attempt.idempotency_key
+    assert calls[1][1]["headers"]["X-Curation-Benchmark-Sender-Subject"] == SENDER["sender_subject"]
+    await module.handoff_benchmark_snapshot(db, retry_delivery=True, **request)
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_retry_does_not_erase_prior_delivery_uncertainty(monkeypatch):
+    snapshot = SimpleNamespace(id=uuid4(), session_id=uuid4(), envelope_id="env", envelope_revision=1,
+        envelope_digest="sha256:" + "a" * 64, bundle_json="{}", created_by_id="curator-1")
+    attempt = SimpleNamespace(id=uuid4(), snapshot_id=snapshot.id, destination_id="portal", status="unknown",
+        replay_key=module._identity_digest("portal", "env", "1"),
+        idempotency_key=module._identity_digest("portal", "env", "1", snapshot.envelope_digest, "1", *SENDER_PARTS),
+        sender_version="1", receipt_id=None, redirect_path=None, **SENDER)
+    db = _HandoffDb(snapshot, SimpleNamespace(created_by_id="curator-1", assigned_curator_id=None), prior=attempt)
+    monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
+    monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
+    monkeypatch.delenv("PORTAL_CLIENT_SECRET", raising=False)
+    result = await module.handoff_benchmark_snapshot(db, snapshot_id=snapshot.id, destination_id="portal",
+        current_user_id="curator-1", retry_delivery=True, **SENDER)
+    assert result.status == "unknown" and attempt.failure_code == "credential_unavailable"
 
 
 @pytest.mark.asyncio
