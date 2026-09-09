@@ -243,6 +243,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
         user_id="test_pdf_owner_inline_extraction", document_id=document_id,
         document_name="Synthetic paper", session_id=session_id, turn_id=turn_id,
         chat_route_mode=route_mode, chat_route_target_id="gene_extractor",
+        inline_chat_persistence=True,
         doc_context=SimpleNamespace(hierarchy={}, abstract="", section_count=lambda: 0),
     ):
         if event["type"] in {"INTERNAL_EXTRACTION_RESULT", "STRUCTURED_RESULT", "RUN_FINISHED"}:

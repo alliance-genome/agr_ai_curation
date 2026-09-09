@@ -46,6 +46,7 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
     from agr_ai_curation_alliance.tools.gene_builder_tools import finalize_gene_extraction
     from src.api import chat_common
     from src.schemas.execution_provenance import SourceDocumentProvenance
+    from src.lib.openai_agents import extraction_trace_events
 
     document_id = "2a66f37b-1536-4eab-894e-d421046c838e"
     agent = Agent(name="Direct synthetic gene", model="gpt-5.6-sol", tools=[finalize_gene_extraction])
@@ -54,6 +55,10 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
     payload = {"extracted_objects": [], "domain_pack_id": "gene"}
     validated = {**payload, "metadata": {"inline_validator_dispatch_complete": True}}
     calls = []
+    trace_records = []
+    monkeypatch.setattr(runner, "write_stream_event", extraction_trace_events.write_stream_event)
+    monkeypatch.setattr(extraction_trace_events, "write_extraction_trace_event",
+                        lambda **kwargs: trace_records.append(kwargs))
 
     def capture(doc, user):
         assert (doc, user) == (document_id, "synthetic-owner")
@@ -99,6 +104,13 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
         ):
             if event["type"] in {"INTERNAL_EXTRACTION_RESULT", "STRUCTURED_RESULT", "RUN_FINISHED"}:
                 assert len(calls) == 1, "Success must follow durable persistence"
+            if event["type"] == "INTERNAL_EXTRACTION_RESULT":
+                recorded = [record for record in trace_records
+                            if record["event_type"] == "extraction_builder.internal_result"]
+                assert len(recorded) == 1, "Internal ref must be trace-recorded before yield"
+                assert recorded[0]["trace_id"] == "synthetic-trace"
+                assert recorded[0]["input_summary"]["extraction_result_id"] == event["details"]["extraction_result_id"]
+                assert recorded[0]["input_summary"]["persistence"] == event["details"]["persistence"]
             events.append(event)
 
     if outcome == "missing_finalization":
@@ -233,7 +245,8 @@ async def test_direct_builder_requires_and_harvests_canonical_finalization(runti
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["accepted", "missing", "validator_failed"])
-async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch, outcome):
+@pytest.mark.parametrize("launchable", [True, False])
+async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch, outcome, launchable):
     from src.lib.benchmarks import runtime as adapter
     from src.lib.benchmarks.models import ResolvedBenchmarkCell
     from src.lib.openai_agents.tools import evidence_workspace
@@ -246,6 +259,7 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
     ])
     agent.agent_key = "gene_extractor"
     agent.authenticated_groups = ("synthetic-curator",)
+    agent.curation_metadata = {"launchable": launchable, "adapter_key": "gene"}
     captured = {}
     trace_events = []
     monkeypatch.setattr(runner, "write_extraction_trace_event", lambda **k: trace_events.append(k))
@@ -295,18 +309,29 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
             raise streaming_tools.SpecialistOutputError("Synthetic gene extractor", "builder_finalization")
         return payload
 
-    async def actual_runner(**kwargs):
+    async def with_resources(**kwargs):
         async for event in runner._run_agent_with_owned_resources(
-            owned_openai_resources=runtime, agent=kwargs["agent"],
-            input_items=kwargs["context_messages"], user_id=kwargs["user_id"],
-            document_id="synthetic-document", document_name="Synthetic paper",
-            user_message="Extract", trace_id=kwargs["session_id"],
+            owned_openai_resources=runtime, **kwargs,
         ):
+            assert event["type"] != "INTERNAL_EXTRACTION_RESULT"
             yield event
+
+    def reject_chat_io(*args, **kwargs):
+        raise AssertionError("Benchmark entered CHAT persistence/ownership capture")
+
+    monkeypatch.setattr(runner, "capture_source_document", reject_chat_io)
+    monkeypatch.setattr(runner, "persist_inline_validated_extraction_result", reject_chat_io)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+    for name in ("commit_pending_prompts", "_log_used_prompts_to_db", "provider_context_preflight",
+                 "start_extraction_trace_run", "clear_extraction_trace_run"):
+        monkeypatch.setattr(runner, name, lambda *a, **k: None)
+    doc_context = SimpleNamespace(hierarchy={}, abstract="", section_count=lambda: 0, to_agent_kwargs=lambda: {})
+    monkeypatch.setattr(adapter.DocumentContext, "fetch", lambda *a, **k: doc_context)
 
     monkeypatch.setattr(runner.Runner, "run_streamed", lambda active, **k: Result(active))
     monkeypatch.setattr(runner, "_dispatch_domain_envelope_validators_for_chat", dispatch)
-    monkeypatch.setattr(adapter, "run_agent_streamed", actual_runner)
+    # Keep the real adapter -> run_agent_streamed call, including route=agent.
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", with_resources)
     monkeypatch.setattr(adapter, "get_agent_by_id", lambda *a, **k: agent)
     cell = ResolvedBenchmarkCell.model_validate({
         "cell_id": "cell", "case_id": "case", "configuration_id": "config", "repetition": 1,
@@ -316,6 +341,7 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
     })
     call = adapter.execute_resolved_agent_cell(cell, {
         "messages": [{"role": "user", "content": "Extract"}], "user_id": "synthetic-owner",
+        "document_id": "2a66f37b-1536-4eab-894e-d421046c838e", "document_name": "Synthetic paper",
     }, "synthetic-cell")
     if outcome == "accepted":
         result = await call

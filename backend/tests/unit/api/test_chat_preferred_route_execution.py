@@ -271,6 +271,7 @@ async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, ag
         {"role": "user", "content": message}
     ]
     assert captured["runner"]["agent"] is runtime_agent
+    assert captured["runner"]["inline_chat_persistence"] is True
     assert events[-1]["data"]["response"] == "done"
 
 

@@ -2299,6 +2299,7 @@ async def _run_agent_with_owned_resources(
                 },
             )
             internal_event["details"]["agent_key"] = direct_agent_key
+            write_stream_event(internal_event, trace_id=trace_id)
             yield internal_event
 
         structured_event = {
@@ -2383,6 +2384,7 @@ async def run_agent_streamed(
     chat_route_mode: Literal["automatic", "agent", "flow"] | None = None,
     chat_route_target_id: str | None = None,
     propagate_runtime_exceptions: bool = False,
+    inline_chat_persistence: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Run an agent with streaming output.
@@ -2426,6 +2428,9 @@ async def run_agent_streamed(
                           span data for the manual AI span.
         chat_route_mode: Optional server-resolved ordinary-chat route mode.
         chat_route_target_id: Optional server-resolved agent or flow identity.
+        inline_chat_persistence: Ordinary-chat caller capability to persist direct
+                                 builder results. Route labels alone also describe
+                                 benchmark execution and do not authorize CHAT writes.
         propagate_runtime_exceptions: Re-raise traced runtime failures so a
                                       caller such as the flow executor can
                                       classify them using its own lifecycle
@@ -2481,7 +2486,7 @@ async def run_agent_streamed(
     provided_runtime_agent = agent is not None
     direct_chat_context = (
         _DirectBuilderChatContext(session_id=session_id, turn_id=turn_id)
-        if chat_route_mode == "agent" else None
+        if inline_chat_persistence and chat_route_mode == "agent" else None
     )
     # Use provided agent OR create the supervisor agent with all domain specialists
     # All agent settings come from environment variables (see config.py)
