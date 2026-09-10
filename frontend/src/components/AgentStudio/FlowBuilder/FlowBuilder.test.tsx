@@ -4,7 +4,7 @@ import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import FlowBuilder, { rebuildValidationGroupsFromEdges } from './FlowBuilder'
-import type { FlowResponse } from './types'
+import type { AgentNodeData, FlowResponse } from './types'
 
 const serviceMocks = vi.hoisted(() => ({
   createFlow: vi.fn(),
@@ -26,6 +26,7 @@ const agentMetadataMocks = vi.hoisted(() => ({
 
 const nodePanelMocks = vi.hoisted(() => ({
   requestLeave: vi.fn(),
+  onApply: undefined as undefined | ((id: string, data: Partial<AgentNodeData>) => void),
 }))
 
 const reactFlowMocks = vi.hoisted(() => ({
@@ -205,7 +206,8 @@ vi.mock('./NodePanel', async (importOriginal) => {
   const react = await vi.importActual<typeof import('react')>('react')
   return {
     ...(await importOriginal<typeof import('./NodePanel')>()),
-    NodePanel: ({ leaveGuardRef, readOnly }: { leaveGuardRef?: { current: unknown }; readOnly?: boolean }) => {
+    NodePanel: ({ leaveGuardRef, readOnly, onApply }: { leaveGuardRef?: { current: unknown }; readOnly?: boolean; onApply: (id: string, data: Partial<AgentNodeData>) => void }) => {
+      nodePanelMocks.onApply = onApply
       react.useEffect(() => {
         if (!leaveGuardRef) return
         const guard = { requestLeave: nodePanelMocks.requestLeave }
@@ -301,6 +303,208 @@ function expectedPrimaryShortcutLabel() {
 }
 
 describe('FlowBuilder', () => {
+  it.each([undefined, false])('disables File rename for a new or teammate flow (%s)', async (isOwner) => {
+    const user = userEvent.setup()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ is_owner: false }))
+    render(<FlowBuilder flowId={isOwner === false ? 'flow-1' : undefined} />)
+    if (isOwner === false) await screen.findByText('Fresh Flow')
+    await user.click(screen.getByRole('button', { name: 'File' }))
+    const menu = screen.getByRole('menu')
+    expect(within(menu).getByRole('menuitem', { name: 'Rename Flow…' })).toHaveAttribute('aria-disabled', 'true')
+    const items = within(menu).getAllByRole('menuitem')
+    const saveAsIndex = items.findIndex((item) => item.textContent === 'Save As...')
+    expect(items[saveAsIndex + 1]).toHaveTextContent('Rename Flow…')
+  })
+
+  it.each(['Cancel', 'Escape'])('prefills File rename and preserves the saved name on %s', async (cancel) => {
+    const user = userEvent.setup()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse())
+    render(<FlowBuilder flowId="flow-1" />)
+    await screen.findByText('Fresh Flow')
+    await user.click(screen.getByRole('button', { name: 'File' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Rename Flow…' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rename Flow' })
+    const input = within(dialog).getByRole('textbox', { name: 'Flow name' })
+    expect(input).toHaveValue('Fresh Flow')
+    expect(input).toHaveFocus()
+    expect(within(dialog).getByRole('button', { name: 'Rename' })).toBeDisabled()
+    await user.clear(input)
+    await user.type(input, '   ')
+    expect(within(dialog).getByRole('button', { name: 'Rename' })).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    await user.type(input, 'Cancelled name')
+    if (cancel === 'Escape') await user.keyboard('{Escape}')
+    else await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByText('Fresh Flow')).toBeInTheDocument()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+  })
+
+  it.each(['File', 'Manage'])('renames through %s without saving draft nodes or edges, then saves with the new name', async (entry) => {
+    const user = userEvent.setup()
+    const saved = buildFlowResponse()
+    serviceMocks.getFlow.mockResolvedValue(saved)
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    serviceMocks.updateFlow.mockResolvedValue(buildFlowResponse({ name: 'Renamed Flow' }))
+    const { unmount } = render(<FlowBuilder flowId="flow-1" />)
+    await screen.findByText('Fresh Flow')
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320, clientY: 220,
+      dataTransfer: { getData: (format: string) => format === 'application/reactflow'
+        ? JSON.stringify({ type: 'agent', agentId: 'draft_agent', agentName: 'Draft Agent' }) : '' },
+    })
+    act(() => reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' }))
+    act(() => reactFlowMocks.onNodeClick?.({} as never, { id: 'node_0', data: saved.flow_definition.nodes[0].data } as never))
+    await screen.findByTestId('node-panel')
+    act(() => nodePanelMocks.onApply?.('node_0', { task_instructions: 'Unsaved instructions' }))
+    const draftNodes = structuredClone(reactFlowMocks.nodes)
+    const draftEdges = reactFlowMocks.edges.map(({ source, target }) => ({ source, target }))
+    if (entry === 'File') {
+      await user.click(screen.getByRole('button', { name: 'File' }))
+      await user.click(screen.getByRole('menuitem', { name: 'Rename Flow…' }))
+    } else {
+      await user.click(screen.getByRole('button', { name: 'Manage flows' }))
+      await user.click(await screen.findByRole('button', { name: 'Rename' }))
+    }
+    const input = screen.getByRole('textbox', { name: 'Flow name' })
+    await user.clear(input)
+    await user.type(input, ' Renamed Flow ')
+    await user.keyboard('{Enter}')
+    await screen.findByText('Flow renamed successfully')
+    expect(serviceMocks.updateFlow).toHaveBeenCalledExactlyOnceWith('flow-1', { name: 'Renamed Flow' })
+    expect(serviceMocks.getFlow).toHaveBeenCalledTimes(1)
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(reactFlowMocks.nodes).toMatchObject(draftNodes)
+    expect(reactFlowMocks.edges.map(({ source, target }) => ({ source, target }))).toEqual(draftEdges)
+    expect(invalidationMocks.notifyFlowListInvalidated).toHaveBeenCalledWith({ flowId: 'flow-1', reason: 'updated' })
+    if (entry === 'Manage') {
+      expect(within(screen.getByRole('dialog')).getByText('Renamed Flow')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Close' }))
+    }
+    const discard = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await user.click(await screen.findByRole('button', { name: 'New flow' }))
+    expect(discard).toHaveBeenCalledWith('Discard unsaved flow changes?')
+    expect(screen.getByText('Renamed Flow')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalledTimes(2))
+    expect(serviceMocks.updateFlow).toHaveBeenLastCalledWith('flow-1', expect.objectContaining({
+      name: 'Renamed Flow',
+      description: saved.description,
+      flow_definition: expect.objectContaining({
+        nodes: expect.arrayContaining([
+          expect.objectContaining({ id: 'node_1' }),
+          expect.objectContaining({ id: 'node_0', data: expect.objectContaining({ task_instructions: 'Unsaved instructions' }) }),
+        ]),
+        edges: expect.arrayContaining([expect.objectContaining({ source: 'node_0', target: 'node_1' })]),
+      }),
+    }))
+    await screen.findByText('Flow saved successfully')
+    discard.mockClear()
+    await user.click(screen.getByRole('button', { name: 'New flow' }))
+    expect(discard).not.toHaveBeenCalled()
+    discard.mockRestore()
+    unmount()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ name: 'Renamed Flow' }))
+    render(<FlowBuilder flowId="flow-1" />)
+    expect(await screen.findByText('Renamed Flow')).toBeInTheDocument()
+  })
+
+  it('retains the draft and old name on rename failure and allows retry', async () => {
+    const user = userEvent.setup()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse())
+    serviceMocks.updateFlow.mockRejectedValueOnce(new Error('A flow with this name already exists'))
+      .mockResolvedValueOnce(buildFlowResponse({ name: 'Available name' }))
+    render(<FlowBuilder flowId="flow-1" />)
+    await screen.findByText('Fresh Flow')
+    act(() => reactFlowMocks.onConnect?.({ source: 'node_0', target: 'draft' }))
+    const draft = reactFlowMocks.edges
+    await user.click(screen.getByRole('button', { name: 'File' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Rename Flow…' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rename Flow' })
+    const input = within(dialog).getByRole('textbox', { name: 'Flow name' })
+    await user.clear(input)
+    await user.type(input, 'Taken name')
+    await user.click(within(dialog).getByRole('button', { name: 'Rename' }))
+    await screen.findByText('A flow with this name already exists')
+    expect(screen.getByText('Fresh Flow')).toBeInTheDocument()
+    expect(reactFlowMocks.edges).toEqual(draft)
+    expect(invalidationMocks.notifyFlowListInvalidated).not.toHaveBeenCalled()
+    await user.clear(input)
+    await user.type(input, 'Available name')
+    await user.click(within(dialog).getByRole('button', { name: 'Rename' }))
+    await screen.findByText('Flow renamed successfully')
+    expect(screen.getByText('Available name')).toBeInTheDocument()
+    expect(reactFlowMocks.edges).toEqual(draft)
+  })
+
+  it('renames another managed flow without changing the open editor', async () => {
+    const user = userEvent.setup()
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ id: 'open', name: 'Open Flow' }))
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    serviceMocks.updateFlow.mockResolvedValue(buildFlowResponse({ name: 'Other renamed' }))
+    render(<FlowBuilder flowId="open" />)
+    await screen.findByText('Open Flow')
+    const nodes = structuredClone(reactFlowMocks.nodes)
+    await user.click(screen.getByRole('button', { name: 'Manage flows' }))
+    await user.click(await screen.findByRole('button', { name: 'Rename' }))
+    const input = screen.getByRole('textbox', { name: 'Flow name' })
+    await user.clear(input)
+    await user.type(input, 'Other renamed{Enter}')
+    await screen.findByText('Flow renamed successfully')
+    expect(serviceMocks.updateFlow).toHaveBeenCalledExactlyOnceWith('flow-1', { name: 'Other renamed' })
+    expect(within(screen.getByRole('dialog')).getByText('Other renamed')).toBeInTheDocument()
+    expect(screen.getByText('Open Flow')).toBeInTheDocument()
+    expect(reactFlowMocks.nodes).toMatchObject(nodes)
+  })
+
+  it('disables both rename entry points while saving', async () => {
+    const user = userEvent.setup()
+    let finishSave!: (flow: FlowResponse) => void
+    serviceMocks.updateFlow.mockReturnValue(new Promise<FlowResponse>((resolve) => { finishSave = resolve }))
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse())
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    render(<FlowBuilder flowId="flow-1" />)
+    await screen.findByText('Fresh Flow')
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await user.click(screen.getByRole('button', { name: 'File' }))
+    expect(screen.getByRole('menuitem', { name: 'Rename Flow…' })).toHaveAttribute('aria-disabled', 'true')
+    await user.click(screen.getByRole('menuitem', { name: 'Manage Flows...' }))
+    expect(await screen.findByRole('button', { name: 'Rename' })).toBeDisabled()
+    await act(async () => finishSave(buildFlowResponse()))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename' })).toBeEnabled())
+  })
+
+  it('blocks duplicate rename and saves in flight, and ignores a late rename after navigation', async () => {
+    const user = userEvent.setup()
+    let finishRename!: (flow: FlowResponse) => void
+    serviceMocks.updateFlow.mockReturnValue(new Promise<FlowResponse>((resolve) => { finishRename = resolve }))
+    serviceMocks.getFlow.mockResolvedValueOnce(buildFlowResponse())
+      .mockResolvedValueOnce(buildFlowResponse({ id: 'other', name: 'Other Flow' }))
+    const { rerender } = render(<FlowBuilder flowId="flow-1" />)
+    await screen.findByText('Fresh Flow')
+    await user.click(screen.getByRole('button', { name: 'File' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Rename Flow…' }))
+    const input = screen.getByRole('textbox', { name: 'Flow name' })
+    await user.clear(input)
+    await user.type(input, 'Renamed Flow{Enter}{Enter}')
+    expect(serviceMocks.updateFlow).toHaveBeenCalledTimes(1)
+    expect(input).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('dialog', { name: 'Rename Flow' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Save flow$/, hidden: true })).toBeDisabled()
+    dispatchKeyboardShortcut(window, { key: 's', ctrlKey: true })
+    expect(serviceMocks.updateFlow).toHaveBeenCalledTimes(1)
+    rerender(<FlowBuilder flowId="other" />)
+    await screen.findByText('Other Flow')
+    await act(async () => finishRename(buildFlowResponse({ name: 'Renamed Flow' })))
+    expect(screen.getByText('Other Flow')).toBeInTheDocument()
+    expect(screen.queryByText('Renamed Flow')).not.toBeInTheDocument()
+    expect(invalidationMocks.notifyFlowListInvalidated).toHaveBeenCalledWith({ flowId: 'flow-1', reason: 'updated' })
+  })
+
+
   it('opens a teammate flow read-only and clones into a private editable copy', async () => {
     const user = userEvent.setup()
     const shared = buildFlowResponse({ name: 'Teammate Flow', user_id: 8, is_owner: false, visibility: 'project', project_id: 'project-a' })
@@ -529,6 +733,7 @@ describe('FlowBuilder', () => {
     reactFlowMocks.onPaneClick = undefined
     reactFlowMocks.nodes = []
     reactFlowMocks.edges = []
+    nodePanelMocks.onApply = undefined
     nodePanelMocks.requestLeave.mockReset()
     nodePanelMocks.requestLeave.mockResolvedValue(true)
     agentMetadataMocks.agents = {}

@@ -823,6 +823,8 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
   const [editingFlowId, setEditingFlowId] = useState<string | null>(null)
   const [editingFlowName, setEditingFlowName] = useState('')
   const [renamingFlow, setRenamingFlow] = useState(false)
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false)
+  const [originalFlowName, setOriginalFlowName] = useState('')
   const [deleteManageConfirmOpen, setDeleteManageConfirmOpen] = useState(false)
   const [flowToDeleteFromManage, setFlowToDeleteFromManage] = useState<FlowSummaryResponse | null>(null)
   const [deletingFromManage, setDeletingFromManage] = useState(false)
@@ -1071,7 +1073,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     nameOverride?: string,
     options?: { forceCreate?: boolean }
   ) => {
-    if (readOnly || loading) return
+    if (readOnly || loading || saving || renamingFlow) return
     const forceCreate = options?.forceCreate ?? false
     const nameToUse = nameOverride || flowName
 
@@ -1618,7 +1620,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
 
   // Save Dialog handlers
   const handleSaveClick = useCallback(() => {
-    if (saving || readOnly || loading) return
+    if (saving || renamingFlow || readOnly || loading) return
 
     setFileMenuAnchor(null)
     if (nodes.length === 0) {
@@ -1634,11 +1636,11 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
       setSaveDialogName(flowName === 'New Flow' ? '' : flowName)
       setSaveDialogOpen(true)
     }
-  }, [currentFlowId, flowName, nodes.length, saving, handleSave, readOnly, loading])
+  }, [currentFlowId, flowName, nodes.length, saving, renamingFlow, handleSave, readOnly, loading])
 
   const handleSaveAsClick = useCallback(() => {
     setFileMenuAnchor(null)
-    if (readOnly || loading) return
+    if (readOnly || loading || saving || renamingFlow) return
     if (nodes.length === 0) {
       setSnackbar({ message: 'Add at least one agent to the flow', severity: 'error' })
       return
@@ -1650,7 +1652,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     setSaveDialogMode('save_as')
     setSaveDialogName(suggestedName)
     setSaveDialogOpen(true)
-  }, [flowName, nodes.length, readOnly, loading])
+  }, [flowName, nodes.length, readOnly, loading, saving, renamingFlow])
 
   const handleSaveDialogClose = useCallback(() => {
     setSaveDialogOpen(false)
@@ -1686,49 +1688,65 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
       .finally(() => setLoadingManageFlows(false))
   }, [refreshFlowLists])
 
+  const renameBusy = loading || saving || sharing || cloning || renamingFlow || deleting || deletingFromManage
+
   const handleManageDialogClose = useCallback(() => {
+    if (renamingFlow) return
     setManageDialogOpen(false)
     setEditingFlowId(null)
     setEditingFlowName('')
-  }, [])
+  }, [renamingFlow])
 
-  // Start editing a flow name
+  // Both entry points use the same validation and name-only persistence.
   const handleRenameStart = useCallback((flow: FlowSummaryResponse) => {
-    if (!flow.is_owner) return
+    if (!flow.is_owner || renameBusy) return
     setEditingFlowId(flow.id)
     setEditingFlowName(flow.name)
-  }, [])
+    setOriginalFlowName(flow.name)
+  }, [renameBusy])
 
-  // Cancel editing
+  const handleCurrentFlowRename = () => {
+    if (!currentFlowId || !flowAccess?.is_owner || renameBusy) return
+    handleFileMenuClose()
+    setEditingFlowId(currentFlowId)
+    setEditingFlowName(flowName)
+    setOriginalFlowName(flowName)
+    setRenameDialogOpen(true)
+  }
+
   const handleRenameCancel = useCallback(() => {
+    if (renamingFlow) return
+    setRenameDialogOpen(false)
     setEditingFlowId(null)
     setEditingFlowName('')
-  }, [])
+  }, [renamingFlow])
 
-  // Confirm rename
+  const renameUnchanged = editingFlowName.trim() === originalFlowName
   const handleRenameConfirm = useCallback(async () => {
-    if (!editingFlowId || !editingFlowName.trim() || !manageFlows.find((flow) => flow.id === editingFlowId)?.is_owner) return
+    const isOwner = renameDialogOpen
+      ? editingFlowId === currentFlowId && flowAccess?.is_owner
+      : manageFlows.find((flow) => flow.id === editingFlowId)?.is_owner
+    if (!editingFlowId || !editingFlowName.trim() || renameUnchanged || !isOwner || renameBusy) return
 
+    const loadRequestAtRename = loadRequestRef.current
     setRenamingFlow(true)
     try {
-      // First fetch the full flow to get its definition
-      const fullFlow = await getFlow(editingFlowId)
-      // Update with new name
       const updatedFlow = await updateFlow(editingFlowId, {
         name: editingFlowName.trim(),
-        description: fullFlow.description || undefined,
-        flow_definition: fullFlow.flow_definition,
       })
-      await refreshFlowLists()
-      notifyFlowListInvalidated({
-        flowId: updatedFlow.id,
-        reason: 'updated',
-      })
-      // If this is the currently loaded flow, update the flowName state too
-      if (editingFlowId === currentFlowId) {
+      // Update only the persisted name. Never replace draft fields or clear dirty state.
+      if (displayedFlowIdRef.current === updatedFlow.id && loadRequestRef.current === loadRequestAtRename) {
         setFlowName(updatedFlow.name)
-        setFlowDescription(updatedFlow.description || '')
       }
+      const updateLabel = (flows: FlowSummaryResponse[]) => flows.map((flow) => (
+        flow.id === updatedFlow.id
+          ? { ...flow, name: updatedFlow.name, updated_at: updatedFlow.updated_at }
+          : flow
+      ))
+      setSavedFlows(updateLabel)
+      setManageFlows(updateLabel)
+      notifyFlowListInvalidated({ flowId: updatedFlow.id, reason: 'updated' })
+      setRenameDialogOpen(false)
       setEditingFlowId(null)
       setEditingFlowName('')
       setSnackbar({ message: 'Flow renamed successfully', severity: 'success' })
@@ -1739,7 +1757,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     } finally {
       setRenamingFlow(false)
     }
-  }, [editingFlowId, editingFlowName, currentFlowId, refreshFlowLists, manageFlows])
+  }, [editingFlowId, editingFlowName, currentFlowId, flowAccess, manageFlows, renameDialogOpen, renameUnchanged, renameBusy])
 
   // Delete flow from Manage dialog
   const handleDeleteFromManageClick = useCallback((flow: FlowSummaryResponse) => {
@@ -1948,7 +1966,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     } finally { setSharing(false) }
   }
 
-  const saveActionsDisabled = readOnly || loading || saving || nodes.length === 0
+  const saveActionsDisabled = readOnly || loading || saving || renamingFlow || nodes.length === 0
 
   return (
     <BuilderContainer ref={builderRootRef}>
@@ -1986,6 +2004,9 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
           </StyledMenuItem>
           <StyledMenuItem onClick={handleSaveAsClick} disabled={saveActionsDisabled}>
             <span>Save As...</span>
+          </StyledMenuItem>
+          <StyledMenuItem onClick={handleCurrentFlowRename} disabled={!currentFlowId || !flowAccess?.is_owner || renameBusy}>
+            <span>Rename Flow…</span>
           </StyledMenuItem>
           <Divider sx={{ my: 0.5 }} />
           <StyledMenuItem onClick={handleDeleteFlowClick} disabled={readOnly || !currentFlowId}>
@@ -2397,6 +2418,45 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
         </DialogActions>
       </Dialog>
 
+      <Dialog
+        open={renameDialogOpen}
+        onClose={handleRenameCancel}
+        aria-labelledby="rename-flow-title"
+        maxWidth="xs"
+        fullWidth
+        slotProps={{ paper: { sx: { borderRadius: 2 } } }}
+      >
+        <DialogTitle id="rename-flow-title">Rename Flow</DialogTitle>
+        <DialogContent>
+          <TextField
+            label="Flow name"
+            fullWidth
+            size="small"
+            margin="dense"
+            autoFocus
+            value={editingFlowName}
+            disabled={renamingFlow}
+            onChange={(event) => setEditingFlowName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void handleRenameConfirm()
+              }
+            }}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={handleRenameCancel} disabled={renamingFlow}>Cancel</Button>
+          <Button
+            onClick={handleRenameConfirm}
+            disabled={!editingFlowName.trim() || renameUnchanged || renameBusy}
+            variant="contained"
+          >
+            {renamingFlow ? 'Renaming...' : 'Rename'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Save/Save As Flow Dialog */}
       <Dialog
         open={saveDialogOpen}
@@ -2545,6 +2605,8 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
                         <TextField
                           fullWidth
                           size="small"
+                          label="Flow name"
+                          disabled={renamingFlow}
                           value={editingFlowName}
                           onChange={(e) => setEditingFlowName(e.target.value)}
                           autoFocus
@@ -2558,7 +2620,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
                           <IconButton
                             size="small"
                             onClick={handleRenameConfirm}
-                            disabled={!editingFlowName.trim() || renamingFlow}
+                            disabled={!editingFlowName.trim() || renameUnchanged || renameBusy}
                             color="primary"
                           >
                             {renamingFlow ? <CircularProgress size={16} /> : <CheckIcon fontSize="small" />}
@@ -2601,6 +2663,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
                         <Tooltip title="Rename">
                           <IconButton
                             size="small"
+                            disabled={renameBusy}
                             onClick={() => handleRenameStart(flow)}
                             sx={{ ml: 1 }}
                           >
@@ -2610,6 +2673,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
                         <Tooltip title="Delete">
                           <IconButton
                             size="small"
+                            disabled={renamingFlow}
                             onClick={() => handleDeleteFromManageClick(flow)}
                             sx={{ color: 'error.main' }}
                           >
@@ -2626,7 +2690,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
           </Box>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={handleManageDialogClose} size="small">
+          <Button onClick={handleManageDialogClose} disabled={renamingFlow} size="small">
             Close
           </Button>
         </DialogActions>

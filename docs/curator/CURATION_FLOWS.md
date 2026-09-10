@@ -198,6 +198,8 @@ The Flow Builder toolbar provides quick access to common operations:
 - **Open Flow...** (Ctrl+O) - Open a previously saved flow
 - **Manage Flows...** - Rename or delete saved flows
 - **Save** (Ctrl+S) - Save the current flow
+- **Save As...** - Save a new copy of the current flow
+- **Rename Flow…** - Rename the currently open saved flow you own
 - **Delete Flow** - Remove the current flow
 
 **Edit Menu**
@@ -389,7 +391,9 @@ checks or a curator-specific steering prompt.
 
 ### Deleting Flows
 
-Use **File → Manage Flows...** to rename or delete saved flows, or **File → Delete Flow** to remove the currently loaded flow.
+Use **File → Rename Flow…** to rename the currently open saved flow you own. Enter a new name and click **Rename** (or press Enter); **Cancel** or Escape leaves the name unchanged. Rename saves only the name on the same flow: pending canvas and instruction edits remain unsaved until you use **Save**. Save a new flow before renaming it.
+
+Use **File → Manage Flows...** to rename or delete other saved flows, or **File → Delete Flow** to remove the currently loaded flow.
 
 ## Tips for Building Effective Flows
 
