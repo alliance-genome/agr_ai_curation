@@ -1237,6 +1237,88 @@ def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     assert calls["clear"] == ["session-flow-cancel"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_mode", ["stop", "complete", "consumer_error", "disconnect"])
+async def test_flow_stream_closes_in_producer_context(monkeypatch, exit_mode):
+    """A retained nested stream must close before its producer task finishes."""
+    from contextvars import ContextVar
+    from src.lib.observability.sentry import (
+        application_owned_terminal_failure_capture,
+        _TERMINAL_FAILURE_CAPTURE_OWNED,
+    )
+
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id=f"owned-{exit_mode}")
+    flow = SimpleNamespace(
+        id=flow_id, user_id=7, name="Owned stream", execution_count=0,
+        last_executed_at=None, flow_definition={},
+    )
+    _patch_stream_dependencies(monkeypatch, cancel_requested=exit_mode == "stop")
+    workspace = ContextVar[str | None]("test_flow_workspace", default=None)
+    lifecycle = []
+    retained_streams = []
+    resume = asyncio.Event()
+
+    async def provider_stream():
+        try:
+            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "hello"}}
+            if exit_mode == "disconnect":
+                await resume.wait()
+            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "again"}}
+        finally:
+            lifecycle.append("provider_closed")
+
+    async def flow_stream():
+        owner_task = asyncio.current_task()
+        token = workspace.set("flow-workspace")
+        provider = provider_stream()
+        try:
+            with application_owned_terminal_failure_capture():
+                async for event in provider:
+                    yield event
+        finally:
+            await provider.aclose()
+            assert asyncio.current_task() is owner_task
+            workspace.reset(token)
+            assert workspace.get() is None
+            assert not _TERMINAL_FAILURE_CAPTURE_OWNED.get()
+            lifecycle.append("flow_closed")
+
+    def make_flow(**_kwargs):
+        stream = flow_stream()
+        retained_streams.append(stream)  # Prevent GC from concealing missing ownership.
+        return stream
+
+    _patch_chat_impl(monkeypatch, "execute_flow", make_flow)
+    if exit_mode == "consumer_error":
+        original_sse = chat._stream_event_sse
+
+        def fail_content_serialization(event):
+            if event.get("type") == "TEXT_MESSAGE_CONTENT":
+                raise ValueError("test consumer serialization failure")
+            return original_sse(event)
+
+        monkeypatch.setattr(chat, "_stream_event_sse", fail_content_serialization)
+
+    response = await chat.execute_flow_endpoint(
+        request=request, db=_DummyDB(flow=flow),
+        user={"sub": "auth-sub", "cognito:groups": []},
+    )
+    if exit_mode == "disconnect":
+        events = await _consume_stream_prefix(response, 1)
+        # Detaching HTTP must not cancel the resumable producer.
+        assert lifecycle == []
+        run = next(iter(chat.executable_run_manager._runs.values()))
+        assert not run.task.done()
+        resume.set()
+        await run.task
+    else:
+        events = await _consume_stream(response)
+    assert events
+    assert lifecycle == ["provider_closed", "flow_closed"]
+    assert retained_streams[0].ag_frame is None
+
+
 def test_execute_flow_endpoint_preserves_event_order_and_domain_warning(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-domain-warning")

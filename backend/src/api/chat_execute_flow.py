@@ -3,6 +3,7 @@
 
 from uuid import UUID
 from typing import Annotated
+from contextlib import aclosing
 
 from .chat_common import *
 from fastapi import Header
@@ -988,7 +989,7 @@ async def execute_flow_endpoint(
         )
 
         try:
-            async for event in execute_flow(
+            async with aclosing(execute_flow(
                 flow=flow,
                 user_id=user_id,
                 session_id=current_session_id,
@@ -1003,158 +1004,159 @@ async def execute_flow_endpoint(
                     if prepared_turn.resume_trace_id
                     else None
                 ),
-            ):
-                if cancel_event.is_set() or await check_cancel_signal(current_session_id):
-                    logger.info(
-                        "Flow execution cancelled for session %s",
-                        current_session_id,
-                        extra={
-                            "session_id": current_session_id,
-                            "user_id": user_id,
-                            "trace_id": trace_id,
-                            "turn_id": current_turn_id,
-                        },
-                    )
-                    yield _stream_event_sse(
-                        _stream_event_payload(
-                            "RUN_ERROR",
-                            session_id=current_session_id,
-                            turn_id=current_turn_id,
-                            trace_id=trace_id,
-                            message="Flow execution cancelled by user",
-                            error_type="FlowCancelled",
+            )) as flow_stream:
+                async for event in flow_stream:
+                    if cancel_event.is_set() or await check_cancel_signal(current_session_id):
+                        logger.info(
+                            "Flow execution cancelled for session %s",
+                            current_session_id,
+                            extra={
+                                "session_id": current_session_id,
+                                "user_id": user_id,
+                                "trace_id": trace_id,
+                                "turn_id": current_turn_id,
+                            },
                         )
-                    )
-                    break
+                        yield _stream_event_sse(
+                            _stream_event_payload(
+                                "RUN_ERROR",
+                                session_id=current_session_id,
+                                turn_id=current_turn_id,
+                                trace_id=trace_id,
+                                message="Flow execution cancelled by user",
+                                error_type="FlowCancelled",
+                            )
+                        )
+                        break
 
-                event_type = event.get("type")
-                event_data = event.get("data", {}) or {}
-                event_details = event.get("details", {}) or {}
+                    event_type = event.get("type")
+                    event_data = event.get("data", {}) or {}
+                    event_details = event.get("details", {}) or {}
 
-                if event_type == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
-                    continue
-
-                if event_type == "RUN_STARTED" and "trace_id" in event_data:
-                    trace_id = event_data.get("trace_id")
-                    set_sentry_transaction_identifiers(trace_id=trace_id)
-                    _persist_execute_flow_runtime_state(
-                        session_id=current_session_id,
-                        user_id=user_id,
-                        turn_id=current_turn_id,
-                        flow_run_id=prepared_turn.flow_run_id,
-                        trace_id=trace_id,
-                    )
-
-                if event_type == "RUN_FINISHED":
-                    agents_used.extend([
-                        str(agent_name) for agent_name in (event_data.get("agents_used") or [])
-                        if agent_name
-                    ])
-                elif event_type == "CREW_START":
-                    crew_name = event_details.get("crewDisplayName") or event_details.get("crewName")
-                    if crew_name:
-                        agents_used.append(str(crew_name))
-                elif event_type == "DOMAIN_WARNING":
-                    domain_warning_count += 1
-                elif event_type == "FILE_READY":
-                    if not _append_deduped_file_output(file_outputs, dict(event_details)):
+                    if event_type == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
                         continue
-                elif event_type == "FLOW_FINISHED":
-                    extraction_result_refs = [
-                        dict(ref)
-                        for ref in (event_data.get("extraction_result_refs") or [])
-                        if isinstance(ref, dict)
-                    ]
-                    review_session_ids = [
-                        str(ref)
-                        for ref in (event_data.get("review_session_ids") or [])
-                        if ref
-                    ]
-                    adapter_keys = [
-                        str(ref)
-                        for ref in (event_data.get("adapter_keys") or [])
-                        if ref
-                    ]
 
-                flat_event = {
-                    "type": event_type,
-                    "session_id": current_session_id,
-                    "turn_id": current_turn_id,
-                }
-                flat_event.update(event_data)
-
-                if "timestamp" in event:
-                    flat_event["timestamp"] = event["timestamp"]
-                if "details" in event:
-                    flat_event["details"] = event["details"]
-
-                if event_type == "FLOW_STEP_EVIDENCE":
-                    for source in (event, event_details):
-                        for key in (
-                            "flow_id",
-                            "flow_name",
-                            "flow_run_id",
-                            "step",
-                            "tool_name",
-                            "agent_id",
-                            "agent_name",
-                            "evidence_preview",
-                            "evidence_records",
-                            "evidence_count",
-                            "total_evidence_records",
-                        ):
-                            if key in source and key not in flat_event:
-                                flat_event[key] = source[key]
-
-                if event_type == "RUN_STARTED":
-                    run_started_event = dict(flat_event)
-                elif event_type == "RUN_ERROR":
-                    raw_message = str(flat_event.get("message") or "").strip()
-                    if raw_message:
-                        logger.error(
-                            "Flow runner emitted RUN_ERROR: %s",
-                            raw_message,
-                            extra={
-                                "session_id": current_session_id,
-                                "user_id": user_id,
-                                "trace_id": trace_id,
-                                "turn_id": current_turn_id,
-                                "sentry_skip_event": True,
-                            },
+                    if event_type == "RUN_STARTED" and "trace_id" in event_data:
+                        trace_id = event_data.get("trace_id")
+                        set_sentry_transaction_identifiers(trace_id=trace_id)
+                        _persist_execute_flow_runtime_state(
+                            session_id=current_session_id,
+                            user_id=user_id,
+                            turn_id=current_turn_id,
+                            flow_run_id=prepared_turn.flow_run_id,
+                            trace_id=trace_id,
                         )
-                    else:
-                        logger.error(
-                            "Flow runner emitted RUN_ERROR without message field",
-                            extra={
-                                "session_id": current_session_id,
-                                "user_id": user_id,
-                                "trace_id": trace_id,
-                                "turn_id": current_turn_id,
-                                "sentry_skip_event": True,
-                            },
-                        )
-                    flat_event["message"] = "Flow execution failed unexpectedly."
-                    details = flat_event.get("details")
-                    if isinstance(details, dict) and "error" in details:
-                        flat_event["details"] = {**details, "error": "Flow execution failed unexpectedly."}
 
-                outcome.observe(flat_event)
+                    if event_type == "RUN_FINISHED":
+                        agents_used.extend([
+                            str(agent_name) for agent_name in (event_data.get("agents_used") or [])
+                            if agent_name
+                        ])
+                    elif event_type == "CREW_START":
+                        crew_name = event_details.get("crewDisplayName") or event_details.get("crewName")
+                        if crew_name:
+                            agents_used.append(str(crew_name))
+                    elif event_type == "DOMAIN_WARNING":
+                        domain_warning_count += 1
+                    elif event_type == "FILE_READY":
+                        if not _append_deduped_file_output(file_outputs, dict(event_details)):
+                            continue
+                    elif event_type == "FLOW_FINISHED":
+                        extraction_result_refs = [
+                            dict(ref)
+                            for ref in (event_data.get("extraction_result_refs") or [])
+                            if isinstance(ref, dict)
+                        ]
+                        review_session_ids = [
+                            str(ref)
+                            for ref in (event_data.get("review_session_ids") or [])
+                            if ref
+                        ]
+                        adapter_keys = [
+                            str(ref)
+                            for ref in (event_data.get("adapter_keys") or [])
+                            if ref
+                        ]
 
-                if event_type in {
-                    "RUN_FINISHED",
-                    "CHAT_OUTPUT_READY",
-                    "FILE_READY",
-                    "CURATION_HANDOFF_READY",
-                    "RUN_ERROR",
-                    "FLOW_FINISHED",
-                }:
-                    continue
+                    flat_event = {
+                        "type": event_type,
+                        "session_id": current_session_id,
+                        "turn_id": current_turn_id,
+                    }
+                    flat_event.update(event_data)
 
-                transcript_row = _build_execute_flow_transcript_row_from_event(flat_event)
-                if transcript_row is not None:
-                    transcript_rows.append(transcript_row)
+                    if "timestamp" in event:
+                        flat_event["timestamp"] = event["timestamp"]
+                    if "details" in event:
+                        flat_event["details"] = event["details"]
 
-                yield _stream_event_sse(flat_event)
+                    if event_type == "FLOW_STEP_EVIDENCE":
+                        for source in (event, event_details):
+                            for key in (
+                                "flow_id",
+                                "flow_name",
+                                "flow_run_id",
+                                "step",
+                                "tool_name",
+                                "agent_id",
+                                "agent_name",
+                                "evidence_preview",
+                                "evidence_records",
+                                "evidence_count",
+                                "total_evidence_records",
+                            ):
+                                if key in source and key not in flat_event:
+                                    flat_event[key] = source[key]
+
+                    if event_type == "RUN_STARTED":
+                        run_started_event = dict(flat_event)
+                    elif event_type == "RUN_ERROR":
+                        raw_message = str(flat_event.get("message") or "").strip()
+                        if raw_message:
+                            logger.error(
+                                "Flow runner emitted RUN_ERROR: %s",
+                                raw_message,
+                                extra={
+                                    "session_id": current_session_id,
+                                    "user_id": user_id,
+                                    "trace_id": trace_id,
+                                    "turn_id": current_turn_id,
+                                    "sentry_skip_event": True,
+                                },
+                            )
+                        else:
+                            logger.error(
+                                "Flow runner emitted RUN_ERROR without message field",
+                                extra={
+                                    "session_id": current_session_id,
+                                    "user_id": user_id,
+                                    "trace_id": trace_id,
+                                    "turn_id": current_turn_id,
+                                    "sentry_skip_event": True,
+                                },
+                            )
+                        flat_event["message"] = "Flow execution failed unexpectedly."
+                        details = flat_event.get("details")
+                        if isinstance(details, dict) and "error" in details:
+                            flat_event["details"] = {**details, "error": "Flow execution failed unexpectedly."}
+
+                    outcome.observe(flat_event)
+
+                    if event_type in {
+                        "RUN_FINISHED",
+                        "CHAT_OUTPUT_READY",
+                        "FILE_READY",
+                        "CURATION_HANDOFF_READY",
+                        "RUN_ERROR",
+                        "FLOW_FINISHED",
+                    }:
+                        continue
+
+                    transcript_row = _build_execute_flow_transcript_row_from_event(flat_event)
+                    if transcript_row is not None:
+                        transcript_rows.append(transcript_row)
+
+                    yield _stream_event_sse(flat_event)
 
             if outcome.terminal:
                 terminal_events = outcome.events_for_persistence()
