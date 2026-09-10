@@ -1532,7 +1532,7 @@ async def _collect_flow_validator_materialization_inputs(
                         "group_id": group.get("group_id"),
                         "state": state,
                         "validator_binding_id": binding_id,
-                        "status": "already_validated",
+                        "status": "already_checked",
                     }
                 )
                 continue

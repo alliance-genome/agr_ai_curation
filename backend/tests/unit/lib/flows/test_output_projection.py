@@ -2692,6 +2692,43 @@ def test_typed_validator_result_with_unknown_package_agent_fails_loudly():
         )
 
 
+def test_nested_step_finding_reference_preserves_identity_and_review_status():
+    step = _completed_domain_step()
+    payload = step["candidate"].payload_json
+    finding = {
+        "finding_id": "open-stage", "status": "open", "code": "selector_missing_field",
+        "field_ref": {"field_path": "stage", "object_ref": {
+            "object_type": "Gene", "object_id": "gene-2",
+        }},
+    }
+    payload["validation_findings"] = [finding]
+    for obj in payload["extracted_objects"]:
+        obj["status"] = "validated"
+    step["validation_findings"] = [finding]
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Review")
+    target = next(row for row in bundle.rows_for_source("object") if row["object.object_id"] == "gene-2")
+    assert target["object.status"] == "needs_review"
+    assert target["object.validation_status"] == "needs_review"
+    assert not any("unique output object" in warning for warning in bundle.warnings)
+    assert all(obj["status"] == "validated" for obj in payload["extracted_objects"])
+
+
+def test_reference_matching_is_typed_and_does_not_guess_ambiguous_rows():
+    from src.lib.flows.output_projection import _matching_object_row_for_record
+
+    rows = [
+        {"object.object_type": "Gene", "object.pending_ref_id": "same"},
+        {"object.object_type": "Allele", "object.pending_ref_id": "same"},
+    ]
+    finding = {"field_ref": {"object_ref": {
+        "object_type": "Allele", "pending_ref_id": "same",
+    }}}
+    assert _matching_object_row_for_record(finding, rows) is rows[1]
+    assert _matching_object_row_for_record({"pending_ref_id": "same"}, rows) is None
+    assert _matching_object_row_for_record(finding, [rows[1], dict(rows[1])]) is None
+    assert _matching_object_row_for_record({"status": "skipped"}, rows) is None
+
+
 def test_raw_result_list_remains_non_structured():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[

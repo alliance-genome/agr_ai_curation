@@ -997,13 +997,31 @@ def _matching_object_row_for_record(
     record: Mapping[str, Any],
     object_rows: Sequence[Mapping[str, Any]],
 ) -> Mapping[str, Any] | None:
+    field_ref = record.get("field_ref")
+    nested_ref = (
+        field_ref.get("object_ref") if isinstance(field_ref, Mapping) else None
+    )
+    explicit_ref = record.get("object_ref")
+    typed_ref = nested_ref if isinstance(nested_ref, Mapping) else explicit_ref
+    if isinstance(typed_ref, Mapping):
+        # Canonical references are typed identities, never display labels.
+        identities = {
+            key: value for key in ("object_id", "pending_ref_id")
+            if (value := _string_value(typed_ref.get(key)))
+        }
+        object_type = _string_value(typed_ref.get("object_type"))
+        matches = [
+            row for row in object_rows
+            if identities
+            and (not object_type or row.get("object.object_type") == object_type)
+            and all(row.get(f"object.{key}") == value for key, value in identities.items())
+        ]
+        return matches[0] if len(matches) == 1 else None
     refs = _object_ref_values_for_matching(record)
     if not refs:
         return None
-    for row in object_rows:
-        if refs & _object_row_ref_values(row):
-            return row
-    return None
+    matches = [row for row in object_rows if refs & _object_row_ref_values(row)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _evidence_rows_from_step_records(
@@ -1467,6 +1485,17 @@ def _build_artifact_from_step(
         profile_fields=profile_fields,
     )
     rows_by_source["object"] = object_rows
+    # Derive review status from findings, including older persisted envelopes
+    # whose lifecycle status was promoted by one successful field lookup.
+    if isinstance(payload, Mapping):
+        for finding in _explicit_validation_findings(payload):
+            if finding.get("status") != "open":
+                continue
+            target_row = _matching_object_row_for_record(finding, object_rows)
+            if target_row is not None:
+                target_row["object.validation_status"] = "needs_review"
+                if target_row.get("object.status") == "validated":
+                    target_row["object.status"] = "needs_review"
     for object_item, object_row in zip(object_items, object_rows):
         rows_by_source["evidence"].extend(
             _evidence_rows_from_records(
@@ -1551,8 +1580,8 @@ def _build_artifact_from_step(
         )
         if unassociated_validation_count and object_rows:
             warnings.append(
-                f"{unassociated_validation_count} step-level validation finding(s) had "
-                "no explicit matching object ref and were emitted with empty object refs."
+                f"{unassociated_validation_count} step-level validation record(s) could not "
+                "be associated with a unique output object; explicit source references were retained."
             )
 
     artifact_row["artifact.evidence_count"] = _step_evidence_count(

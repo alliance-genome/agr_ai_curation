@@ -3603,7 +3603,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert selector_findings == []
         assert [entry["status"] for entry in metadata] == [
             "group_scope_eligible",
-            "already_validated",
+            "already_checked",
         ]
         assert metadata[0]["group_scope_audit"]["group_context_identity"] == (
             '["MGI","ZFIN"]'
@@ -3721,7 +3721,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "group_id": "automatic-lookup",
                 "state": "automatic",
                 "validator_binding_id": "fixture.identifier_lookup",
-                "status": "already_validated",
+                "status": "already_checked",
             }
         ]
 

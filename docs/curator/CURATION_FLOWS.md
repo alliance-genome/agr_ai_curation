@@ -6,6 +6,14 @@ Open **Agent Studio → Flows**. The editor contains an agent palette, a canvas,
 
 ## Build with AI Chat
 
+### Reading validation results
+
+An `already_checked` entry means the check ran earlier; it does not mean it
+passed. Objects with open validation findings are reported as `needs_review`,
+even when other fields resolved successfully. Review missing fields, unresolved
+references, and skipped checks before submission. Exporting a CSV does not make
+the results submission-ready.
+
 Choose **Help build a flow**, or describe your task:
 
 > Help me build a flow for Drosophila stocks. Let's agree on the extraction instructions first, then the details, validation, and CSV columns.
