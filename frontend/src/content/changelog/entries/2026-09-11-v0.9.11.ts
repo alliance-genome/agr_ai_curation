@@ -1,9 +1,9 @@
 import type { ChangelogEntry } from '../types';
 
 const entry: ChangelogEntry = {
-  id: '2026-09-10-v0.9.11',
+  id: '2026-09-11-v0.9.11',
   version: '0.9.11',
-  date: 'September 10, 2026',
+  date: 'September 11, 2026',
   title: 'PDF uploads, CSV exports and flow usability',
   releaseUrl: 'https://agr-jira.atlassian.net/projects/KANBAN/versions/10842',
   sections: [
@@ -24,6 +24,7 @@ const entry: ChangelogEntry = {
     {
       heading: 'Flow and chat usability',
       bullets: [
+        'Flows now stop before execution when a required document or step is unavailable, with guidance on how to fix it.',
         'Flow titles wrap above the Stop and Hide buttons when the panel is narrow.',
         'Chat no longer asks you to start a conversation while a flow is already running.',
         'Agent Studio shows a spinner in the message box while it is working. Automatic follow-ups after Apply no longer appear as messages written by you.',
@@ -32,7 +33,10 @@ const entry: ChangelogEntry = {
     {
       heading: 'Under the hood',
       bullets: [
-        'Release checks now cover stored PDFs and recorded artifacts across all users and processing statuses, including pending and failed uploads.',
+        'Release checks now cover stored PDFs and recorded artifacts across all users and processing statuses, including pending and failed uploads, and verify server write access to document folders.',
+        'Fixed a server-side permission problem that could prevent uploaded papers from completing processing.',
+        'Stopping a flow now stops its background agent work before closing connections.',
+        'Fixed flows that failed when multiple validation checks shared the same label.',
       ],
     },
   ],
