@@ -1,5 +1,6 @@
 """Tests for flow executor custom_instructions wiring."""
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 import importlib
 import json
@@ -5397,14 +5398,14 @@ class TestBackwardCompatibility:
 
 
 class TestCreateFlowSupervisorNoTools:
-    """Tests that create_flow_supervisor raises when all tools are skipped."""
+    """Unavailable steps remain visible for the executor's structured preflight failure."""
 
     @patch("src.lib.flows.executor.build_model_settings")
     @patch("src.lib.flows.executor.get_model_for_agent")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_raises_when_no_tools_created(
+    def test_preserves_unavailable_steps_when_no_tools_created(
         self,
         mock_get_agent,
         mock_streaming,
@@ -5413,7 +5414,7 @@ class TestCreateFlowSupervisorNoTools:
         mock_settings,
         monkeypatch,
     ):
-        """Should raise ValueError when all steps are skipped."""
+        """Even an all-unavailable flow reaches the actionable preflight outcome."""
         monkeypatch.setattr(
             "src.lib.flows.executor.get_agent_metadata",
             lambda agent_id: _metadata_from_registry(
@@ -5435,8 +5436,11 @@ class TestCreateFlowSupervisorNoTools:
             _agent_node("n2", "pdf_extraction", step_goal="Extract data"),
         ])
 
-        with pytest.raises(ValueError, match="no agent tools could be created"):
-            create_flow_supervisor(flow, document_id=None)  # No doc — both steps skipped
+        mock_model.return_value = "gpt-5.6-sol"
+        mock_settings.return_value = ModelSettings()
+        supervisor = create_flow_supervisor(flow, document_id=None)
+        assert len(supervisor._flow_unavailable_steps) == 2
+        assert supervisor.tools == []
 
     @patch("src.lib.flows.executor.build_model_settings")
     @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.6-sol")
@@ -5616,6 +5620,36 @@ class TestCreateFlowSupervisorNoTools:
 
 class TestExecuteFlowTermination:
     """Tests flow-level termination behavior for success and failure paths."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("agent_id,reason", [
+        ("pdf_extraction", "requires document"),
+        ("allele_validation", "attachment-only validator"),
+        ("missing_agent", "agent could not be resolved"),
+        ("broken_agent", "private configuration must not leak"),
+    ])
+    async def test_unavailable_step_fails_before_runner_or_formatter(self, monkeypatch, agent_id, reason):
+        flow = _make_flow([
+            _task_input_node(), _agent_node("n1", agent_id), _agent_node("n2", "chat_output"),
+        ])
+        original_definition = deepcopy(flow.flow_definition)
+        supervisor = SimpleNamespace(_flow_unavailable_steps=[{
+            "step": 1, "agent_id": agent_id, "agent_name": "Required step", "reason": reason,
+        }])
+        monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **kwargs: supervisor)
+        monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *args: "fixture")
+        monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_streamed",
+                            lambda **kwargs: pytest.fail("Invalid flow started the model"))
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        assert [event["type"] for event in events] == ["FLOW_STARTED", "FLOW_ERROR", "FLOW_FINISHED"]
+        assert events[1]["details"]["reason"] == "flow_step_unavailable"
+        assert "Documents" in events[1]["details"]["message"]
+        assert "validation attachments" in events[1]["details"]["message"]
+        assert reason not in str(events)
+        assert events[-1]["data"]["status"] == "failed"
+        assert events[-1]["data"]["output_status"] == "none"
+        assert events[-1]["data"]["output_count"] == 0
+        assert flow.flow_definition == original_definition
 
     @pytest.mark.asyncio
     async def test_stops_immediately_on_specialist_error(self, monkeypatch):

@@ -162,6 +162,8 @@ Saved flow steps retain their selected agent revisions. Saving a new version in 
 
 ## Troubleshooting
 
+**Flow cannot start because a step is unavailable:** The flow stops before running any agents; it does not skip required work and continue to the output. If a step needs a paper, open **Documents** in the top navigation and load the paper into chat. In Flow Builder, check that each step uses an available agent. Validators marked as attachment-only belong on an extraction step as validation attachments, not in the ordinary execution chain. Flows whose agents do not require a document can still run without one.
+
 **The flow has no visible result.** Confirm it has a connected output, and that the output selects the intended source steps.
 
 **A CSV column is missing or empty.** Check whether the extractor collected that field, then inspect the output instructions and any saved column layout. Ask AI Chat to compare them.

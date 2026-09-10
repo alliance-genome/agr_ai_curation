@@ -1,5 +1,6 @@
 """Flow defaults and execution retain the exact selected profile mappings."""
 
+from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,9 +10,88 @@ import pytest
 from src.lib.domain_packs.profile_validation import compile_profile_validation, profile_validation_attachment_options
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 from src.lib.flows import executor, validation_attachments
-from .test_profile_validation import example as example
+from .test_profile_validation import example as example, profile_envelope, resolve
 from .test_profile_materialization import prepared, results
 from ..flows.test_validation_attachments import _flow_definition, _validator_node
+
+
+@pytest.mark.asyncio
+async def test_same_label_profile_mappings_survive_flow_default_hydration(example, monkeypatch):
+    raw, capability, pack = example
+    raw["fields"][1]["required"] = True
+    mapping = raw["validator_mappings"][0]
+    mapping["outputs"] = {}
+    second = deepcopy(mapping)
+    second.update(mapping_id="lookup_id", inputs={"mention": {"field_path": "attributes.resolved_id"}})
+    raw["validator_mappings"].append(second)
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[capability])
+    assert not context.unavailable
+    assert len(context.registry.bindings) == 2
+    options = profile_validation_attachment_options(context)
+    assert len(options) == 2
+    assert options[0].label == options[1].label
+    monkeypatch.setattr(validation_attachments, "_options_for_agent_entry", lambda entry: options)
+    definition = _flow_definition(receipt.agent_key)
+    node = definition.nodes[1]
+    node.data.agent_revision_id = receipt.agent_revision_id
+    node.data.execution_receipt = receipt
+    # A saved flow may carry the old, collapsed derived selection. Defaults must
+    # restore the missing automatic mapping without changing its pinned receipt.
+    node.data.validation_attachments = [
+        validation_attachments.FlowValidationAttachmentSelection(**options[0].to_dict(), enabled=True)
+    ]
+    hydrated = validation_attachments.apply_flow_validation_attachment_defaults(
+        definition, entries_by_node={node.id: {}}
+    )
+    assert len(definition.nodes[1].data.validation_attachments) == 1
+    assert hydrated.nodes[1].data.execution_receipt == receipt
+    assert {group.binding_id for group in hydrated.nodes[1].data.validation_groups} == {
+        binding.binding_id for binding in context.registry.bindings
+    }
+    assert all(group.state == "automatic" for group in hydrated.nodes[1].data.validation_groups)
+    source = profile_envelope({"paper_name": "A", "resolved_id": "EX:1"}, receipt, profile)
+    items = results(source, context, [{}, {}])
+    results_by_request = {item.request.request_id: item.result for item in items}
+    invoked = []
+
+    def run_validator(request, **kwargs):
+        invoked.append(request.request_id)
+        return results_by_request[request.request_id].model_dump(mode="json")
+
+    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent", run_validator)
+    inputs, findings, _ = await executor._collect_flow_validator_materialization_inputs(
+        source_envelope=source, source_envelope_revision=1, registry=context.registry,
+        groups=[group.model_dump(mode="json") for group in hydrated.nodes[1].data.validation_groups],
+        flow=SimpleNamespace(flow_definition={"nodes": []}), agent_context={}, profile_context=context,
+    )
+    assert not findings
+    assert len(inputs) == 2
+    assert sorted(invoked) == sorted(results_by_request)
+
+    # The execute path must hydrate too: merely fixing the editor would leave
+    # already-saved flows broken when run directly or from a batch.
+    runtime_entry = {"name": "Fixture extractor", "requires_document": False,
+                     "execution_receipt": receipt.model_dump(mode="json"),
+                     "curation": {"domain_pack_id": "generic"}, "supervisor": {}}
+    monkeypatch.setattr(executor, "_runtime_custom_entries", lambda *args, **kwargs: {node.id: runtime_entry})
+    runtime_definitions = []
+    monkeypatch.setattr(executor, "_runtime_output_sources_by_node_id",
+                        lambda flow, **kwargs: (runtime_definitions.append(flow.flow_definition), {})[1])
+    monkeypatch.setattr(executor, "get_agent_by_id", lambda *args, **kwargs: SimpleNamespace(name="Fixture"))
+
+    async def unused_tool(query: str) -> str:
+        pytest.fail("Hydration must not execute a tool")
+
+    monkeypatch.setattr(executor, "_create_streaming_tool", lambda **kwargs: unused_tool)
+    saved_definition = definition.model_dump(mode="json")
+    saved_flow = SimpleNamespace(id="fixture", name="Fixture", flow_definition=deepcopy(saved_definition))
+    tools, _ = executor.get_all_agent_tools(saved_flow, db_user_id=1)
+    assert len(tools) == 1
+    assert saved_flow.flow_definition == saved_definition
+    runtime_node = runtime_definitions[0]["nodes"][1]
+    assert runtime_node["data"]["execution_receipt"] == receipt.model_dump(mode="json")
+    assert len(runtime_node["data"]["validation_groups"]) == 2
 
 
 @pytest.mark.parametrize("per_element", [False, True])

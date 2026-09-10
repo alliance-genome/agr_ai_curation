@@ -2746,6 +2746,21 @@ def get_all_agent_tools(
         unavailable_steps contains skipped steps with reasons for UI warnings.
     """
     custom_entries = _runtime_custom_entries(flow, db_user_id=db_user_id, active_groups=active_groups)
+    if any(
+        (entry or {}).get("execution_receipt", {}).get("output_contract", {}).get("generic_profile_ref")
+        for entry in custom_entries.values()
+    ):
+        from src.lib.flows.validation_attachments import apply_flow_validation_attachment_defaults
+
+        # Groups are derived metadata, not revision pins. Rehydrate against the
+        # authorized exact receipts so flows saved with collapsed same-label
+        # mappings gain all their required checks. Never persist this run copy.
+        hydrated = apply_flow_validation_attachment_defaults(
+            FlowDefinition.model_validate(flow.flow_definition), entries_by_node=custom_entries,
+        )
+        flow = cast(CurationFlow, SimpleNamespace(
+            id=flow.id, name=flow.name, flow_definition=hydrated.model_dump(mode="json"),
+        ))
     nodes = _get_ordered_executable_nodes(flow)
     nodes_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
     output_source_by_node_id = _runtime_output_sources_by_node_id(
@@ -3843,7 +3858,7 @@ def create_flow_supervisor(
     # The configured flow must remain executable independently of optional
     # follow-up context. The inspection tool never substitutes for a missing
     # or inaccessible configured step.
-    if not tools:
+    if not tools and not unavailable_steps:
         step_count = sum(
             1 for n in flow.flow_definition.get("nodes", [])
             if n.get("type") != "task_input" and n.get("data", {}).get("agent_id") != "task_input"
@@ -4527,26 +4542,50 @@ async def execute_flow(
         }
     }
 
-    # Surface any unavailable flow steps to UI/audit so skipped work is explicit.
-    unavailable_steps = getattr(supervisor, "_flow_unavailable_steps", []) or []
-    for step in unavailable_steps:
-        step_num = step.get("step")
-        agent_name = step.get("agent_name", "Unknown Agent")
-        reason = step.get("reason", "unknown reason")
+    # Configured executable steps are required. Never turn an invalid flow into
+    # a smaller one and let its formatter run without the missing source work.
+    unavailable_steps = list(getattr(supervisor, "_flow_unavailable_steps", []) or [])
+    if unavailable_steps:
+        step_labels = ", ".join(
+            f"{step.get('step')} ({step.get('agent_name') or 'Unknown Agent'})"
+            for step in unavailable_steps
+        )
+        message = (
+            f"Flow cannot start because these steps are unavailable: {step_labels}. "
+            "If a step needs a PDF, open Documents in the top navigation and load "
+            "a document into chat. In Flow Builder, check that each step uses an "
+            "available agent; add validators as validation attachments, not ordinary steps."
+        )
         yield {
-            "type": "DOMAIN_WARNING",
+            "type": "FLOW_ERROR",
             "timestamp": _now_iso(),
             "details": {
                 "reason": "flow_step_unavailable",
-                "message": (
-                    f"Flow step {step_num} ({agent_name}) is unavailable and will be skipped: {reason}"
-                ),
-                "step": step_num,
-                "agent_id": step.get("agent_id"),
-                "agent_name": agent_name,
-                "unavailable_reason": reason,
-            }
+                "message": message,
+                # Omit underlying creation exceptions: they can contain private
+                # configuration. The curator needs node identity and repair steps.
+                "unavailable_steps": [
+                    {key: step.get(key) for key in ("step", "agent_id", "agent_name")}
+                    for step in unavailable_steps
+                ],
+            },
         }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": _now_iso(),
+            "data": {
+                "flow_id": str(flow.id), "flow_name": flow.name,
+                "flow_run_id": flow_run_id, "document_id": document_id,
+                "origin_session_id": session_id, "status": "failed",
+                "output_status": "none", "output_count": 0, "outputs": [],
+                "output_branches": [], "failure_reason": message,
+                "total_evidence_records": 0, "step_evidence_counts": {},
+                "adapter_keys": [], "extraction_handoff_audits": [],
+                "extraction_result_refs": [], "extraction_result_ids": [],
+                "review_session_ids": [],
+            },
+        }
+        return
 
     # Delegate to run_agent_streamed with flow supervisor
     # This gives us: Langfuse tracing, prompt logging, document metadata,

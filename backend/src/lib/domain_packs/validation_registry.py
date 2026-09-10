@@ -1717,6 +1717,7 @@ def _dedupe_validation_attachment_options(
 
     deduped: list[ValidationAttachmentOption] = []
     seen: set[tuple[str, str, str, str, str]] = set()
+    seen_bindings: set[tuple[str, str]] = set()
     for option in sorted(
         options,
         key=lambda item: (
@@ -1733,7 +1734,14 @@ def _dedupe_validation_attachment_options(
             option.object_type or "",
             option.field_path or "",
         )
-        if key in seen:
+        if option.validator_binding_id:
+            # Labels are presentation, not executable identity. In particular,
+            # one profile can map the same validator to several distinct fields.
+            binding_key = (option.validator_binding_id, option.attachment_id)
+            if binding_key in seen_bindings:
+                continue
+            seen_bindings.add(binding_key)
+        elif key in seen:
             continue
         seen.add(key)
         deduped.append(option)

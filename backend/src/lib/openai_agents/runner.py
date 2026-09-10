@@ -1502,16 +1502,16 @@ async def _run_agent_with_owned_resources(
                 yield ("live", specialist_event)
 
         finally:
-            # Clean up background task
+            # Cancel the SDK run, not its event consumer: stream_events must
+            # finish draining so the SDK joins its run/tool tasks before the
+            # owning provider and client are closed.
             if not sdk_task.done():
-                sdk_task.cancel()
-                try:
-                    await sdk_task
-                except asyncio.CancelledError:
-                    pass
+                result.cancel()
+            await sdk_task
 
+    interleaved_stream = interleaved_events()
     try:
-        async for event_source, event in interleaved_events():
+        async for event_source, event in interleaved_stream:
             # Handle live events (specialist internal tools)
             if event_source == "live":
                 if event.get("type") == "evidence_summary":
@@ -1951,45 +1951,50 @@ async def _run_agent_with_owned_resources(
             builder_workspace.mark_aborted(reason=f"{type(exc).__name__}: {exc}")
         raise
     finally:
-        # Clear the live event list reference
-        set_live_event_list(None)
-        if sentry_span is not None:
-            set_redacted_ai_span_data(sentry_span, "ai_curation.tool_call.count", tool_calls_count)
-            set_redacted_ai_span_data(
-                sentry_span,
-                "ai_curation.agent.events_collected",
-                len(live_events),
+        try:
+            # async-for does not close its iterator on early exit. Keep nested SDK
+            # teardown inside this run's lifetime rather than asyncgen finalization.
+            await interleaved_stream.aclose()
+        finally:
+            # Clear the live event list reference
+            set_live_event_list(None)
+            if sentry_span is not None:
+                set_redacted_ai_span_data(sentry_span, "ai_curation.tool_call.count", tool_calls_count)
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.agent.events_collected",
+                    len(live_events),
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.finalization.status",
+                    sentry_stream_finalization_status,
+                )
+            _safe_reset_run_context_token(
+                label="evidence_workspace",
+                reset_fn=reset_active_evidence_records,
+                token=evidence_workspace_token,
+                trace_id=trace_id,
+                user_id=user_id,
             )
-            set_redacted_ai_span_data(
-                sentry_span,
-                "ai_curation.finalization.status",
-                sentry_stream_finalization_status,
+            _safe_reset_run_context_token(
+                label="extraction_builder_workspace",
+                reset_fn=reset_active_extraction_builder_workspace,
+                token=builder_workspace_token,
+                trace_id=trace_id,
+                user_id=user_id,
             )
-        _safe_reset_run_context_token(
-            label="evidence_workspace",
-            reset_fn=reset_active_evidence_records,
-            token=evidence_workspace_token,
-            trace_id=trace_id,
-            user_id=user_id,
-        )
-        _safe_reset_run_context_token(
-            label="extraction_builder_workspace",
-            reset_fn=reset_active_extraction_builder_workspace,
-            token=builder_workspace_token,
-            trace_id=trace_id,
-            user_id=user_id,
-        )
-        _safe_reset_run_context_token(
-            label="run_config",
-            reset_fn=reset_current_run_config,
-            token=run_config_token,
-            trace_id=trace_id,
-            user_id=user_id,
-        )
-        if sentry_span_context_manager is not None:
-            sentry_span_context_manager.__exit__(None, None, None)
-        if conversation_context_manager is not None:
-            conversation_context_manager.__exit__(None, None, None)
+            _safe_reset_run_context_token(
+                label="run_config",
+                reset_fn=reset_current_run_config,
+                token=run_config_token,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
+            if sentry_span_context_manager is not None:
+                sentry_span_context_manager.__exit__(None, None, None)
+            if conversation_context_manager is not None:
+                conversation_context_manager.__exit__(None, None, None)
 
     # Get final output if not captured from streaming
     if generic_profile is not None:

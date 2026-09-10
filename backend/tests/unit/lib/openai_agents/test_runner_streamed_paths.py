@@ -44,6 +44,123 @@ class _FakeFailingRunResult:
         raise TimeoutError("Responses websocket connect timed out after 5.0 seconds.")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termination", ["close", "cancel", "complete", "error"])
+async def test_nested_runner_drains_real_sdk_before_provider_close(monkeypatch, termination):
+    from agents import Agent, RunContextWrapper
+    from agents.result import RunResultStreaming, QueueCompleteSentinel
+
+    lifecycle = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    stream_closed = asyncio.Event()
+    created_results = []
+
+    class Result(RunResultStreaming):
+        def cancel(self, mode="immediate"):
+            lifecycle.append("sdk_cancel")
+            super().cancel(mode)
+
+        async def stream_events(self):
+            try:
+                async for event in super().stream_events():
+                    yield event
+            finally:
+                stream_closed.set()
+                lifecycle.append("sdk_stream_closed")
+
+    def start_sdk(*args, **kwargs):
+        result = Result(
+            input="fixture", new_items=[], raw_responses=[], final_output="done",
+            input_guardrail_results=[], output_guardrail_results=[],
+            tool_input_guardrail_results=[], tool_output_guardrail_results=[],
+            context_wrapper=RunContextWrapper(None), current_agent=Agent(name="fixture"),
+            current_turn=0, max_turns=None, _current_agent_output_schema=None, trace=None,
+        )
+
+        async def run_loop():
+            try:
+                await result._event_queue.put(_raw_response_stream_event(_FakeTextDelta("hello")))
+                started.set()
+                await release.wait()
+                if termination == "error":
+                    failure = RuntimeError("fixture tool failure")
+                    result._stored_exception = failure
+                    raise failure
+                lifecycle.append("tool_work")
+            finally:
+                # Exercise awaited tool cleanup, not just a cancellation flag.
+                await asyncio.sleep(0)
+                lifecycle.append("sdk_run_closed")
+                result.is_complete = True
+                result._event_queue.put_nowait(QueueCompleteSentinel())
+
+        result.run_loop_task = asyncio.create_task(run_loop())
+        created_results.append(result)
+        return result
+
+    class Provider:
+        async def aclose(self):
+            assert stream_closed.is_set()
+            assert created_results[0].run_loop_task.done()
+            lifecycle.append("provider_closed")
+
+    class Client:
+        async def close(self):
+            lifecycle.append("client_closed")
+
+    _patch_common_runtime(monkeypatch, {})
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", Client)
+    monkeypatch.setattr(runner, "_build_request_openai_provider", lambda client: Provider())
+    monkeypatch.setattr(runner, "RunConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(runner, "get_collected_events", lambda: [])
+    monkeypatch.setattr(runner, "ResponseTextDeltaEvent", _FakeTextDelta)
+    monkeypatch.setattr(runner.Runner, "run_streamed", start_sdk)
+    monkeypatch.setattr(runner, "write_stream_event", lambda *args, **kwargs: None)
+    stream = runner._run_agent_with_tracing(
+        agent=SimpleNamespace(name="Supervisor", model="gpt-5", tools=[]),
+        input_items=[{"role": "user", "content": "fixture"}],
+        user_id="fixture", document_id=None, document_name=None,
+        user_message="fixture", trace_id="fixture-no-network",
+    )
+    try:
+        if termination == "cancel":
+            observed = asyncio.Event()
+            async def consume():
+                async for _ in stream:
+                    observed.set()
+            consumer = asyncio.create_task(consume())
+            await observed.wait()
+            await started.wait()
+            consumer.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await consumer
+        else:
+            await anext(stream)
+            await started.wait()
+            if termination == "close":
+                await stream.aclose()
+            else:
+                release.set()
+                if termination == "error":
+                    with pytest.raises(RuntimeError, match="fixture tool failure"):
+                        await _collect_events(stream)
+                else:
+                    await _collect_events(stream)
+        assert lifecycle.index("sdk_run_closed") < lifecycle.index("sdk_stream_closed")
+        assert lifecycle.index("sdk_stream_closed") < lifecycle.index("provider_closed")
+        assert lifecycle[-1] == "client_closed"
+        if termination in {"close", "cancel"}:
+            assert "sdk_cancel" in lifecycle
+            assert "tool_work" not in lifecycle
+        # The SDK must retrieve even a completed run-loop exception.
+        assert not created_results[0].run_loop_task._log_traceback
+    finally:
+        release.set()
+        await stream.aclose()
+        await asyncio.gather(*(result.run_loop_task for result in created_results), return_exceptions=True)
+
+
 class _FakeContextManager:
     def __init__(self, value=None):
         self.value = value
