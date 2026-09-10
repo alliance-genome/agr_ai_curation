@@ -62,6 +62,7 @@ import type {
   WorkshopAction,
 } from '@/types/promptExplorer'
 import type { FlowProposalApplyResult } from './FlowBuilder/types'
+import type { StudioApplicationEvent } from '@/services/agentStudioService'
 import SuggestionDialog from './SuggestionDialog'
 import ProfileCandidateComparison from './PromptWorkshop/ProfileCandidateComparison'
 import type { WorkshopOutputDraft } from './PromptWorkshop/workshopOutputDraft'
@@ -565,6 +566,7 @@ function OpusChat({
   const sendInFlightRef = useRef(false)
   const [applyContinuation, setApplyContinuation] = useState<{
     activeTab: ChatContext['active_tab']; sessionId: string | null | undefined
+    event: StudioApplicationEvent
   } | null>(null)
   const consumedApplyContinuationRef = useRef<typeof applyContinuation>(null)
   const [flowProposalError, setFlowProposalError] = useState<string | null>(null)
@@ -750,7 +752,7 @@ function OpusChat({
   }, [conversationKey, durableSessionId, syncDurableSessionId])
 
   // Reference for auto-sending verify message
-  const handleSendRef = useRef<(messageText: string) => Promise<void>>()
+  const handleSendRef = useRef<(messageText?: string, applicationEvent?: StudioApplicationEvent) => Promise<void>>()
   // Track which verify message was already sent to prevent duplicates
   const verifyMessageSentRef = useRef<string | null>(null)
   // Track which discuss message was already sent to prevent duplicates
@@ -944,9 +946,9 @@ function OpusChat({
   }, [setMessages, setPendingFlowProposal, setPendingWorkshopAction])
 
   // Handle sending a message (optionally with a specific message text for auto-send)
-  const handleSend = useCallback(async (messageOverride?: string) => {
+  const handleSend = useCallback(async (messageOverride?: string, applicationEvent?: StudioApplicationEvent) => {
     const messageText = messageOverride || input.trim()
-    if (!messageText || isStreaming || sendInFlightRef.current || startingNewChatRef.current) return
+    if ((!messageText && !applicationEvent) || isStreaming || sendInFlightRef.current || startingNewChatRef.current) return
     setPendingFlowProposal(null)
 
     // Calling the provider starts with a synchronous copy of editor state; its
@@ -963,9 +965,9 @@ function OpusChat({
       content: messageText,
       timestamp: new Date().toISOString(),
     }
-    const newMessages = [...messages, userMessage]
+    const newMessages = applicationEvent ? messages : [...messages, userMessage]
     setMessages(newMessages)
-    if (!messageOverride) setInput('')  // Only clear input if not using override
+    if (!messageOverride && !applicationEvent) setInput('')
     setIsStreaming(true)
     setStreamStatus('Reading your current draft…')
 
@@ -1024,7 +1026,10 @@ function OpusChat({
       if (!prepared || stopRequested) { showStopped(); return }
       const [activeSessionId, sendContext] = prepared
       streamStarted = true
-      for await (const event of streamOpusChat(apiMessages, sendContext, activeSessionId)) {
+      const stream = applicationEvent
+        ? streamOpusChat(apiMessages, sendContext, activeSessionId, applicationEvent)
+        : streamOpusChat(apiMessages, sendContext, activeSessionId)
+      for await (const event of stream) {
         stopTarget = { sessionId: event.session_id, turnId: event.turn_id }
         if (stopRequested && !stopSent) void requestStop()
         if (event.type === 'INCOMPLETE' && event.error_source === 'cancelled') {
@@ -1193,7 +1198,7 @@ function OpusChat({
       || context?.active_tab !== applyContinuation.activeTab
       || durableSessionId !== applyContinuation.sessionId) return
     void handleSendRef.current?.(
-      'The changes are applied to the draft. Continue with the next step we discussed; if this request is complete, briefly confirm that.',
+      undefined, applyContinuation.event,
     )
   }, [applyContinuation, context?.active_tab, durableSessionId, isStreaming])
 
@@ -1343,7 +1348,14 @@ function OpusChat({
             timestamp: new Date().toISOString(),
           },
         ])
-        setApplyContinuation({ activeTab: context?.active_tab, sessionId: durableSessionId })
+        setApplyContinuation({
+          activeTab: context?.active_tab, sessionId: durableSessionId,
+          event: {
+            kind: 'draft_applied', event_id: crypto.randomUUID(),
+            output_mode_node_ids: pendingFlowProposal.contract_version === 'flow_authoring_proposal.v1'
+              ? pendingFlowProposal.output_mode_node_ids ?? [] : [],
+          },
+        })
       }
     } catch (error) {
       logger.error('Could not finish applying authoring proposal', error as Error, { component: 'OpusChat' })
@@ -1742,6 +1754,7 @@ function OpusChat({
             {isStreaming && (
               <Box
                 role="status"
+                aria-label="Agent activity"
                 aria-live="polite"
                 sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary' }}
               >
@@ -1771,6 +1784,22 @@ function OpusChat({
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyPress}
           disabled={isStreaming || startingNewChat}
+          helperText={isStreaming ? 'Agent is working — you can send a message when it finishes.' : undefined}
+          FormHelperTextProps={{ role: 'status', 'aria-live': 'polite' }}
+          InputProps={{
+            endAdornment: isStreaming ? (
+              <CircularProgress
+                size={20}
+                aria-label="Agent is working"
+                sx={{
+                  flexShrink: 0,
+                  '@media (prefers-reduced-motion: reduce)': {
+                    animation: 'none', '& .MuiCircularProgress-circle': { animation: 'none' },
+                  },
+                }}
+              />
+            ) : undefined,
+          }}
           size="small"
           inputRef={inputRef}
           sx={{

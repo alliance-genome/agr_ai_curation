@@ -3,9 +3,10 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.lib.agent_studio import ChatContext, ChatMessage, PromptCatalog
+from src.lib.agent_studio.application_events import ApplicationEvent
 
 
 class ChatRequest(BaseModel):
@@ -13,6 +14,19 @@ class ChatRequest(BaseModel):
 
     messages: List[ChatMessage]
     context: Optional[ChatContext] = None
+    application_event: Optional[ApplicationEvent] = None
+
+    @model_validator(mode="after")
+    def validate_application_output_context(self):
+        event = self.application_event
+        if event is None or not event.output_mode_node_ids:
+            return self
+        if self.context is None or self.context.active_tab != "flows" or self.context.flow_definition is None:
+            raise ValueError("Output-mode reminders require the applied flow context")
+        outputs = {node.id for node in self.context.flow_definition.nodes if node.node_type == "output"}
+        if not set(event.output_mode_node_ids).issubset(outputs):
+            raise ValueError("Output-mode reminders must reference output nodes in the applied draft")
+        return self
 
 
 class StopAgentStudioRequest(BaseModel):

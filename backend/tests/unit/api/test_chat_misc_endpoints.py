@@ -2343,7 +2343,8 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
 
 
 @pytest.mark.asyncio
-async def test_get_session_history_hides_context_compaction_projection_rows(monkeypatch):
+@pytest.mark.parametrize("hidden_type", ["context_compaction", "agent_studio_application_event"])
+async def test_get_session_history_hides_internal_rows(monkeypatch, hidden_type):
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-detail")],
         detail_messages={
@@ -2359,7 +2360,7 @@ async def test_get_session_history_hides_context_compaction_projection_rows(monk
                     session_id="session-detail",
                     role="assistant",
                     content="Compacted standard-chat model-live context projection (2 item(s))",
-                    message_type="context_compaction",
+                    message_type=hidden_type,
                     payload_json={
                         "schema": "standard_chat_context_projection.v1",
                         "items": [{"role": "user", "content": "Original question"}],
@@ -2391,7 +2392,7 @@ async def test_get_session_history_hides_context_compaction_projection_rows(monk
         "Original question",
         "Visible answer",
     ]
-    assert all(message.message_type != "context_compaction" for message in payload.messages)
+    assert all(message.message_type != hidden_type for message in payload.messages)
 
 
 def test_generate_title_from_messages_ignores_context_compaction_projection_rows():

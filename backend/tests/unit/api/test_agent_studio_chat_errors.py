@@ -653,6 +653,38 @@ def test_capability_catalog_dependency_failure_is_reported_without_resource_leak
     assert "ca_not_authorized" not in str(result)
 
 
+def test_application_continuation_reaches_model_without_rewriting_curator_turn(monkeypatch):
+    from src.lib.agent_studio.application_events import ApplicationEvent, application_event_instruction
+
+    _configure_chat_endpoint(monkeypatch, RuntimeError("unused"))
+    event = ApplicationEvent(kind="draft_applied", event_id=uuid4())
+    instruction = application_event_instruction(event)
+    monkeypatch.setattr(api_module, "_prepare_agent_studio_turn", lambda **_: api_module.PreparedAgentStudioTurn(
+        session_id="agent-studio-session-1", turn_id="application-turn", user_message=instruction,
+        requested_context_session_id=None, input_role="flow", user_turn_created=False,
+    ))
+    captured = []
+
+    async def runtime(**kwargs):
+        captured.extend(kwargs["input_items"])
+        kwargs["state"].assistant_text_parts.append("Changes applied.")
+        yield {"type": "TEXT_DELTA", "delta": "Changes applied."}
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", runtime)
+    request = _chat_request()
+    request.application_event = event
+
+    async def scenario():
+        response = await api_module.chat_with_opus(request, user={"sub": "owner"})
+        await _consume_stream(response)
+
+    asyncio.run(scenario())
+    assert captured == [
+        {"role": "user", "content": "Please help"},
+        {"role": "developer", "content": instruction},
+    ]
+
+
 def test_stop_is_owned_turn_scoped_and_persists_partial_response(monkeypatch):
     _configure_chat_endpoint(monkeypatch, RuntimeError('unused'))
     saved = []

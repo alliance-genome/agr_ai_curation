@@ -439,6 +439,7 @@ export interface FlowAuthoringProposal {
   change_summary: string
   diff: FlowAuthoringDiffEntry[]
   findings: FlowAuthoringFinding[]
+  output_mode_node_ids?: string[]
   candidate: {
     name: string
     description: string

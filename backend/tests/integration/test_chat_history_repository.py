@@ -171,6 +171,38 @@ def _create_user(db_session, *, auth_sub: str) -> User:
     return user
 
 
+def test_studio_application_event_replays_and_stays_out_of_reloaded_history(db_session):
+    from src.api.agent_studio_schemas import ChatRequest
+    from src.lib.agent_studio.application_events import ApplicationEvent, APPLICATION_EVENT_MESSAGE_TYPE
+    from src.lib.agent_studio.chat_session import prepare_agent_studio_turn, AGENT_STUDIO_HIDDEN_MESSAGE_TYPES
+
+    repository = ChatHistoryRepository(db_session)
+    session_id = f"{SESSION_PREFIX}application-event"
+    _create_session(repository, session_id=session_id, user_auth_sub=USER_A, chat_kind=AGENT_STUDIO_CHAT_KIND)
+    _append_message(repository, session_id=session_id, user_auth_sub=USER_A,
+                    chat_kind=AGENT_STUDIO_CHAT_KIND, role="user", content="Actual curator words", turn_id="curator-1")
+    db_session.commit()
+    event = ApplicationEvent(kind="draft_applied", event_id=uuid4())
+    request = ChatRequest(messages=[], context={"session_id": session_id}, application_event=event)
+    first = prepare_agent_studio_turn(db=db_session, user_id=USER_A, request=request, chat_session_model=ChatSession)
+    assert first.user_turn_created
+    _append_message(repository, session_id=session_id, user_auth_sub=USER_A,
+                    chat_kind=AGENT_STUDIO_CHAT_KIND, role="assistant", content="Applied.", turn_id=first.turn_id)
+    db_session.commit()
+    db_session.expire_all()
+    replay = prepare_agent_studio_turn(db=db_session, user_id=USER_A, request=request, chat_session_model=ChatSession)
+    assert not replay.user_turn_created
+    assert replay.replay_assistant_turn.content == "Applied."
+    raw = repository.list_messages(session_id=session_id, user_auth_sub=USER_A, chat_kind=AGENT_STUDIO_CHAT_KIND).items
+    assert len(raw) == 3
+    internal = next(row for row in raw if row.message_type == APPLICATION_EVENT_MESSAGE_TYPE)
+    assert internal.role == "flow"
+    assert internal.payload_json == {"origin": "application", "event": event.model_dump(mode="json")}
+    visible = repository.get_session_detail(session_id=session_id, user_auth_sub=USER_A,
+                                            excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES))
+    assert [row.content for row in visible.messages] == ["Actual curator words", "Applied."]
+
+
 def test_append_message_persists_sanitized_nested_payload_in_postgres(db_session):
     repository = ChatHistoryRepository(db_session)
     session_id = f"{SESSION_PREFIX}nul-payload"

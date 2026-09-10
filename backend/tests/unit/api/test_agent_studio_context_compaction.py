@@ -943,12 +943,12 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
                 "turn_id": "opus-turn-early-abc123",
                 "limit": 10,
                 "cursor": None,
-                "excluded_message_types": {"context_compaction"},
+                "excluded_message_types": {"context_compaction", "agent_studio_application_event"},
             }
             return ChatMessagePage(items=durable_turn_messages, next_cursor=None)
 
         def count_messages(self, **kwargs):
-            assert kwargs["excluded_message_types"] == {"context_compaction"}
+            assert kwargs["excluded_message_types"] == {"context_compaction", "agent_studio_application_event"}
             return 2
 
         def get_message_by_id(self, **kwargs):

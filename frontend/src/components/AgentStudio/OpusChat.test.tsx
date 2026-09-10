@@ -70,11 +70,15 @@ describe('OpusChat', () => {
     render(<OpusChat context={{ active_tab: 'agents' }} captureContext={captureContext} durableSessionId="preflight-session" />)
     fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), { target: { value: 'Explain this flow.' } })
     fireEvent.keyDown(screen.getByPlaceholderText('Ask about prompts...'), { key: 'Enter', code: 'Enter' })
+    expect(await screen.findByRole('progressbar', { name: 'Agent is working' })).toBeInTheDocument()
+    expect(screen.getByText('Agent is working — you can send a message when it finishes.')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask about prompts...')).toBeDisabled()
     fireEvent.click(await screen.findByRole('button', { name: 'Stop AI Chat' }))
     expect(await screen.findByText('Stopped. You can send another message when ready.')).toBeInTheDocument()
     expect(serviceMocks.streamOpusChat).not.toHaveBeenCalled()
     expect(serviceMocks.stopAgentStudioChat).not.toHaveBeenCalled()
     expect(screen.getByPlaceholderText('Ask about prompts...')).toBeEnabled()
+    expect(screen.queryByRole('progressbar', { name: 'Agent is working' })).not.toBeInTheDocument()
   })
 
   it('does not let a stopped request with delayed session creation replace a new chat', async () => {
@@ -258,6 +262,7 @@ describe('OpusChat', () => {
       success: true, valid: true, pending_user_approval: true,
       base_draft_fingerprint: 'sha256:base', candidate_draft_fingerprint: 'sha256:candidate',
       change_summary: 'Update instructions', findings: [], diff: [],
+      output_mode_node_ids: workshop ? [] : ['new-csv-output'],
       candidate: workshop ? { draft_name: 'Reader' } : { name: 'Flow', description: '', flow_definition: { nodes: [], edges: [] } },
     }
     serviceMocks.streamOpusChat.mockImplementationOnce(async function* () {
@@ -282,13 +287,20 @@ describe('OpusChat', () => {
     finishStream()
     const button = await screen.findByRole('button', { name: 'Apply changes' })
     await waitFor(() => expect(button).toBeEnabled())
+    fireEvent.change(input, { target: { value: 'Unsent curator draft' } })
     fireEvent.click(button)
     expect(await screen.findByRole('progressbar', { name: 'Applying changes' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Applying…/ })).toBeDisabled()
     finishApply({ applied: true, message: 'Applied to draft.' })
     await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2))
     expect(serviceMocks.streamOpusChat.mock.calls[1][1]).toEqual(current)
-    expect(JSON.stringify(serviceMocks.streamOpusChat.mock.calls[1][0])).toContain('Continue with the next step we discussed')
+    expect(JSON.stringify(serviceMocks.streamOpusChat.mock.calls[1][0])).not.toContain('Continue with the next step we discussed')
+    expect(serviceMocks.streamOpusChat.mock.calls[1][3]).toEqual({
+      kind: 'draft_applied', event_id: expect.any(String),
+      output_mode_node_ids: workshop ? [] : ['new-csv-output'],
+    })
+    expect(input).toHaveValue('Unsent curator draft')
+    expect(JSON.stringify(serviceMocks.streamOpusChat.mock.calls[1][0])).not.toContain('Unsent curator draft')
     expect(apply).toHaveBeenCalledTimes(1)
     expect(captureContext).toHaveBeenCalledTimes(2)
   })
@@ -1175,11 +1187,11 @@ describe('OpusChat', () => {
     fireEvent.change(input, { target: { value: 'Check available capabilities.' } })
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Finding the right tools for your request…')
+    expect(await screen.findByRole('status', { name: 'Agent activity' })).toHaveTextContent('Finding the right tools for your request…')
     expect(screen.queryByText(/tool name/i)).not.toBeInTheDocument()
 
     releaseSearchResult()
-    expect(await screen.findByRole('status')).toHaveTextContent('Working with the information already available…')
+    expect(await screen.findByRole('status', { name: 'Agent activity' })).toHaveTextContent('Working with the information already available…')
 
     releaseDone()
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())

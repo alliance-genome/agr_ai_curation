@@ -17,13 +17,21 @@ COMMON_FIELDS = [
 
 
 def packaged_export_fields(agent_id: str, entry: dict | None = None) -> list[dict[str, Any]]:
-    from src.lib.config.agent_loader import get_agent_definition
+    from src.lib.config.agent_loader import canonical_system_agent_key, list_agents
     from src.lib.flows.validation_attachments import domain_pack_validation_registries
 
     if entry is not None:
         pack_id = (entry.get("curation") or {}).get("domain_pack_id")
     else:
-        definition = get_agent_definition(agent_id)
+        # Flows store the public system key, which need not equal agent.yaml's
+        # definition ID (e.g. gene_expression vs gene_expression_extraction).
+        matches = [
+            agent for agent in list_agents()
+            if agent_id in {canonical_system_agent_key(agent), agent.agent_id}
+        ]
+        if len(matches) > 1:
+            raise ValueError(f"Ambiguous packaged export source: {agent_id}")
+        definition = matches[0] if matches else None
         pack_id = definition.curation.domain_pack_id if definition else None
     if not pack_id or pack_id == "generic":
         return []

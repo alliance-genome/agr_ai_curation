@@ -239,6 +239,18 @@ describe('Chat persistence', () => {
     vi.useRealTimers()
   })
 
+  it('shows the empty invitation only while idle, including before the first flow output', () => {
+    const idle = renderChat({ sessionId: 'session-1', isLoading: false })
+    expect(screen.getByText('Ask a question to get started...')).toBeInTheDocument()
+    idle.unmount()
+    const running = renderChat({ sessionId: 'session-1', isLoading: true })
+    expect(screen.queryByText('Ask a question to get started...')).not.toBeInTheDocument()
+    expect(screen.getByText('Working on your request…')).toBeInTheDocument()
+    running.unmount()
+    renderChat({ sessionId: 'session-1', isLoading: false })
+    expect(screen.getByText('Ask a question to get started...')).toBeInTheDocument()
+  })
+
   it('persists pending chat data on unmount and restores it on remount', async () => {
     localStorage.setItem(chatStorageKeys.sessionId, 'session-1')
     const { unmount, sendMessage } = renderChat({ sessionId: 'session-1' })

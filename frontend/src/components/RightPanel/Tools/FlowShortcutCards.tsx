@@ -60,7 +60,8 @@ export default function FlowShortcutCards({ flows, selectedIds, onChange, saving
         onDragOver={event => { if (dragged && !saving) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropId(flow.id) } }}
         onDrop={event => { event.preventDefault(); if (dragged && !saving) move(dragged, index); setDragged(null); setDropId(null) }}
         sx={{ border: 1, borderColor: dropId === flow.id ? 'primary.main' : 'divider', borderRadius: 2, bgcolor: 'background.paper', opacity: dragged === flow.id ? 0.5 : 1, boxShadow: theme => dropId === flow.id ? `0 -3px 0 ${theme.palette.primary.main}` : undefined }}>
-        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ p: 1 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, p: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', flex: '1 1 16rem', minWidth: 0 }}>
           <Tooltip title="Drag to reorder, or use the arrow keys">
             <IconButton aria-label={`Reorder ${flow.name}`} aria-disabled={saving} draggable={!saving}
               onDragStart={event => {
@@ -82,6 +83,8 @@ export default function FlowShortcutCards({ flows, selectedIds, onChange, saving
             <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: 'anywhere' }}>{flow.name}</Typography>
             <Typography variant="caption" color="text.secondary">{flow.step_count} steps</Typography>
           </Box>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5, ml: 'auto' }}>
           {runningId === flow.id && onStop
             ? <Button size="small" startIcon={<StopIcon />} onClick={onStop}>Stop</Button>
             : <Button size="small" variant="contained" startIcon={<PlayArrowIcon />} disabled={!canRun || Boolean(runningId)} onClick={() => onRun(flow)}>Run</Button>}
@@ -89,7 +92,8 @@ export default function FlowShortcutCards({ flows, selectedIds, onChange, saving
             <IconButton aria-label={`Hide ${flow.name}`} disabled={saving || runningId === flow.id} onClick={() => void change(selectedIds.filter(id => id !== flow.id), `${flow.name} hidden. Use Add flow to bring it back.`)}><VisibilityOffOutlinedIcon fontSize="small" /></IconButton>
           </span></Tooltip>
           <IconButton aria-label={`More options for ${flow.name}`} onClick={event => setMenu({ element: event.currentTarget, id: flow.id })} disabled={saving}><MoreVertIcon fontSize="small" /></IconButton>
-        </Stack>
+          </Box>
+        </Box>
         {flow.description && <Typography variant="body2" color="text.secondary" sx={{ px: 2, pb: 1.5, pl: 6.5, overflowWrap: 'anywhere' }}>{flow.description}</Typography>}
       </Box>)}
     </Stack>

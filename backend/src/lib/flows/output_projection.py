@@ -1567,7 +1567,12 @@ def _build_artifact_from_step(
     if profile_fields is not None:
         export_fields = profile_export_fields(profile_fields)
     else:
-        export_fields = packaged_export_fields(agent_id, {"curation": {"domain_pack_id": domain_pack_id}}) if receipt else packaged_export_fields(agent_id)
+        # A persisted envelope declares its pack independently of whether the
+        # producer was a custom agent with an execution receipt.
+        export_fields = packaged_export_fields(
+            agent_id,
+            {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None,
+        )
         for row, item in zip(rows_by_source["object"], object_items):
             for field in export_fields:
                 row[field["ref"]] = packaged_field_value(item, field)

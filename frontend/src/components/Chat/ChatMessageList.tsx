@@ -59,7 +59,7 @@ function ChatMessageList({
       borderTop: `1px solid ${chatCssVariables['--chat-subtle-divider']}`,
       borderBottom: `1px solid ${chatCssVariables['--chat-subtle-divider']}`,
     }}>
-      {messages.length === 0 ? (
+      {messages.length === 0 && !isLoading ? (
         <div className="empty-state">
           Ask a question to get started...
         </div>

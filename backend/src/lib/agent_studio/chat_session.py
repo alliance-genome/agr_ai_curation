@@ -11,8 +11,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.models import ChatMessage
+from src.lib.agent_studio.application_events import (
+    APPLICATION_EVENT_MESSAGE_TYPE,
+    application_event_instruction,
+)
 from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
+    AppendMessageResult,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
     ChatMessageCursor,
@@ -28,7 +33,9 @@ from src.lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTIO
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
 
 AGENT_STUDIO_SEEDED_SESSION_PREFIX = "agent-studio-seed:"
-AGENT_STUDIO_HIDDEN_MESSAGE_TYPES = frozenset({CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE})
+AGENT_STUDIO_HIDDEN_MESSAGE_TYPES = frozenset({
+    CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE, APPLICATION_EVENT_MESSAGE_TYPE,
+})
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,7 @@ class PreparedAgentStudioTurn:
     requested_context_session_id: str | None
     user_turn_created: bool = True
     replay_assistant_turn: ChatMessageRecord | None = None
+    input_role: str = "user"
 
 
 def normalize_optional_text(value: Any) -> str | None:
@@ -790,21 +798,46 @@ def prepare_agent_studio_turn(
         requested_session_id=requested_context_session_id,
         chat_session_model=chat_session_model,
     )
-    turn_id = build_agent_studio_turn_id(request.messages)
-    user_message = extract_latest_user_message(request.messages)
+    application_event = getattr(request, "application_event", None)
+    turn_id = (
+        f"application:{application_event.event_id}" if application_event
+        else build_agent_studio_turn_id(request.messages)
+    )
+    user_message = (
+        application_event_instruction(application_event) if application_event
+        else extract_latest_user_message(request.messages)
+    )
+    # Existing flow rows represent application activity, rather than a speaker.
+    # The dedicated message type keeps this internal event out of curator history.
+    input_role = "flow" if application_event else "user"
 
     repository.get_or_create_session(
         session_id=session_id,
         user_auth_sub=user_id,
         chat_kind=AGENT_STUDIO_CHAT_KIND,
     )
-    user_turn = repository.append_message(
+    existing_event = None
+    if application_event:
+        # Flow activity normally permits multiple rows per turn. Serialize this
+        # specific event's insert per owned session so retries remain idempotent.
+        db.execute(select(chat_session_model).where(
+            chat_session_model.session_id == session_id,
+            chat_session_model.user_auth_sub == user_id,
+        ).with_for_update()).scalar_one()
+        existing_event = repository.get_message_by_turn_id(
+            session_id=session_id, user_auth_sub=user_id, turn_id=turn_id, role="flow",
+        )
+    user_turn = AppendMessageResult(message=existing_event, created=False) if existing_event else repository.append_message(
         session_id=session_id,
         user_auth_sub=user_id,
         chat_kind=AGENT_STUDIO_CHAT_KIND,
-        role="user",
+        role=input_role,
         content=user_message,
         turn_id=turn_id,
+        **({
+            "message_type": APPLICATION_EVENT_MESSAGE_TYPE,
+            "payload_json": {"origin": "application", "event": application_event.model_dump(mode="json")},
+        } if application_event else {}),
     )
     db.commit()
 
@@ -824,6 +857,7 @@ def prepare_agent_studio_turn(
         requested_context_session_id=requested_context_session_id,
         user_turn_created=user_turn.created,
         replay_assistant_turn=replay_assistant_turn,
+        input_role=input_role,
     )
 
 

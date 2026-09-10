@@ -130,6 +130,10 @@ export function PdfViewerChrome({
   return (
     <Paper
       elevation={isCurationVariant ? 0 : 3}
+      onDragEnter={!activeDocument ? onDragEnter : undefined}
+      onDragOver={!activeDocument ? onDragOver : undefined}
+      onDragLeave={!activeDocument ? onDragLeave : undefined}
+      onDrop={!activeDocument ? onDrop : undefined}
       sx={{
         height: '100%',
         minWidth: 0,
@@ -495,13 +499,10 @@ export function PdfViewerChrome({
           <Box
             role="region"
             aria-label="PDF drop zone"
-            onDragEnter={onDragEnter}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            onDrop={onDrop}
             sx={{
               position: 'absolute',
               inset: 0,
+              zIndex: 1,
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -542,7 +543,8 @@ export function PdfViewerChrome({
                   Drop a PDF here to upload and load it for chat.
                 </li>
                 <li style={{ marginBottom: '0.75rem' }}>
-                  For one or multiple uploads, open <strong>Add Literature</strong> and use Upload PDFs.
+                  For one or multiple uploads, open <strong>Documents</strong> in the top navigation bar,
+                  then select <strong>Add Literature</strong> and use Upload PDFs.
                 </li>
                 <li>To load a PDF you already uploaded, open <strong>Documents</strong>, choose Library, and click the green file icon in that row.</li>
               </ul>
@@ -611,6 +613,8 @@ export function PdfViewerChrome({
           style={{
             border: 'none',
             display: 'block',
+            // The blank frame must never intercept drops intended for the uploader.
+            pointerEvents: activeDocument ? 'auto' : 'none',
             width: '100%',
             height: '100%',
             backgroundColor: isCurationVariant ? '#030a13' : theme.palette.background.default,

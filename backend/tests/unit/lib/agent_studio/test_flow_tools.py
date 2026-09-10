@@ -1543,6 +1543,7 @@ def test_flow_proposal_compiles_semantic_operations_without_database_writes(
         ],
     )
     assert follow_up["success"] is True, follow_up
+    assert follow_up["output_mode_node_ids"] == []  # Chat output has no file-export modes.
     assert len(follow_up["candidate"]["flow_definition"]["nodes"]) == 4
     assert follow_up["candidate"]["flow_definition"]["nodes"][1]["data"][
         "custom_instructions"
@@ -1565,6 +1566,90 @@ def test_flow_proposal_compiles_semantic_operations_without_database_writes(
     )
     assert fresh["success"] is False
     assert "Unknown flow step" in fresh["error"]
+
+
+def test_output_mode_reminder_tracks_new_file_outputs_and_explicit_choices(monkeypatch):
+    from copy import deepcopy
+
+    monkeypatch.setenv("FLOW_SELECTED_FIELDS_DIRECT_EXPORT", "true")
+
+    fingerprint = "sha256:" + "b" * 64
+    base = {
+        "flow_name": "Export", "flow_draft_fingerprint": fingerprint,
+        "version": "1.1", "nodes": [{
+            "id": "task", "type": "task_input", "position": {"x": 0, "y": 0},
+            "data": {"agent_id": "task_input", "agent_display_name": "Instructions", "output_key": "task", "task_instructions": "Extract genes."},
+        }, {
+            "id": "source", "type": "agent", "position": {"x": 0, "y": 0},
+            "data": {"agent_id": "gene_extractor", "agent_display_name": "Genes", "output_key": "genes"},
+        }], "edges": [{"id": "start", "source": "task", "target": "source", "role": "control_flow"}], "entry_node_id": "task",
+    }
+    agents = {
+        "gene_extractor": {"name": "Genes", "category": "Extraction", "produces_flow_artifacts": True},
+        "csv_formatter": {"name": "CSV", "category": "Output"},
+        "chat_output": {"name": "Chat", "category": "Output"},
+    }
+    monkeypatch.setattr(flow_tools, "_accessible_flow_agents", lambda: agents)
+    monkeypatch.setattr(flow_tools, "resolve_live_flow_agent", lambda agent_id, _: agents.get(agent_id))
+    flow_tools.set_current_flow_context(base)
+    handler = flow_tools._propose_flow_draft_update_handler()
+    result = handler(base_draft_fingerprint=fingerprint, reset_candidate=True, change_summary="Add outputs", operations=[
+        {"operation": "add_agent_step", "agent_id": "csv_formatter", "step_ref": "csv", "source_refs": ["source"]},
+        {"operation": "add_agent_step", "agent_id": "chat_output", "step_ref": "chat", "source_refs": ["source"]},
+    ])
+    assert result["success"], result.get("findings", result)
+    csv_id = next(node["id"] for node in result["candidate"]["flow_definition"]["nodes"] if node["data"]["agent_id"] == "csv_formatter")
+    assert result["output_mode_node_ids"] == [csv_id]
+    monkeypatch.setenv("FLOW_SELECTED_FIELDS_DIRECT_EXPORT", "false")
+    disabled = handler(base_draft_fingerprint=fingerprint, change_summary="Refine title", operations=[
+        {"operation": "update_flow", "name": "Export draft"},
+    ])
+    assert disabled["output_mode_node_ids"] == []
+    monkeypatch.setenv("FLOW_SELECTED_FIELDS_DIRECT_EXPORT", "true")
+    chosen = handler(base_draft_fingerprint=fingerprint, change_summary="Choose AI explicitly", operations=[
+        {"operation": "update_step", "node_ref": "csv", "export_execution_mode": "ai"},
+    ])
+    assert chosen["success"], chosen
+    assert chosen["output_mode_node_ids"] == []
+    assert "output_mode_choices" not in json.dumps(chosen["candidate"])
+    replaced = handler(base_draft_fingerprint=fingerprint, change_summary="Replace file output", operations=[
+        {"operation": "remove_step", "node_ref": "csv"},
+        {"operation": "add_agent_step", "step_ref": "replacement", "agent_id": "csv_formatter", "source_refs": ["source"]},
+    ])
+    assert replaced["success"], replaced
+    assert replaced["output_mode_node_ids"] == [csv_id]
+    applied = deepcopy(base)
+    applied.update(chosen["candidate"]["flow_definition"])
+    applied["flow_draft_fingerprint"] = chosen["candidate_draft_fingerprint"]
+    flow_tools.set_current_flow_context(applied)
+    edited = handler(base_draft_fingerprint=applied["flow_draft_fingerprint"], change_summary="Edit existing output", operations=[
+        {"operation": "update_step", "node_id": csv_id, "custom_instructions": "Keep original values."},
+    ])
+    assert edited["success"], edited
+    assert edited["output_mode_node_ids"] == []
+    replaced_original = handler(base_draft_fingerprint=applied["flow_draft_fingerprint"], change_summary="Replace original output", operations=[
+        {"operation": "remove_step", "node_id": csv_id},
+        {"operation": "add_agent_step", "step_ref": "replacement", "agent_id": "csv_formatter", "source_refs": ["source"]},
+    ])
+    assert replaced_original["success"], replaced_original
+    assert replaced_original["output_mode_node_ids"] == [csv_id]
+
+    from types import SimpleNamespace
+    monkeypatch.setattr(flow_tools, "_filter_flow_templates", lambda *args, **kwargs: [
+        {"name": "Replacement", "description": "Extract genes", "steps": []},
+    ])
+    template_definition = deepcopy(chosen["candidate"]["flow_definition"])
+    template_definition.setdefault("task_instructions_default_only", False)
+    monkeypatch.setattr(flow_tools, "_build_simplified_flow_definition", lambda **kwargs: SimpleNamespace(
+        model_dump=lambda: deepcopy(template_definition),
+    ))
+    from_template = handler(base_draft_fingerprint=applied["flow_draft_fingerprint"], change_summary="Replace with template", operations=[
+        {"operation": "update_step", "node_id": csv_id, "export_execution_mode": "ai"},
+        {"operation": "apply_template", "template_name": "Replacement"},
+    ])
+    assert from_template["success"], from_template
+    assert from_template["output_mode_node_ids"] == [csv_id]
+    assert "new_output_node_ids" not in json.dumps(from_template["candidate"])
 
 
 def test_flow_proposal_rejects_stale_or_unavailable_references(monkeypatch):

@@ -28,6 +28,8 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from src.lib.executable_flow_graph import project_executable_flow_graph
+from src.lib.flows.formatter_capability import resolved_formatter_format
+from src.lib.openai_agents.config import get_flow_selected_fields_direct_export
 from src.lib.flow_edge_roles import (
     SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
     agent_can_source_output_attachment,
@@ -1401,7 +1403,7 @@ def _proposal_candidate_payload(candidate: "FlowDefinition") -> Dict[str, Any]:
 def _compile_flow_operations(
     *,
     candidate: Dict[str, Any],
-    metadata: Dict[str, str],
+    metadata: Dict[str, Any],
     operations: Sequence[Mapping[str, Any]],
     accessible_agents: Mapping[str, Mapping[str, Any]],
     semantic_refs: Dict[str, str],
@@ -1467,6 +1469,8 @@ def _compile_flow_operations(
                     )
                 semantic_refs[step_ref] = node_id
             is_output = _is_output_agent_id(agent_id, agent)
+            if is_output:
+                metadata.setdefault("new_output_node_ids", []).append(node_id)
             max_y = max(
                 (float(node.get("position", {}).get("y", 0)) for node in nodes),
                 default=0,
@@ -1606,6 +1610,12 @@ def _compile_flow_operations(
                     }
                 )
             nodes.remove(target)
+            # Mechanical IDs can be reused by a later add in this proposal.
+            # A deleted output's choice must not count as consent for its replacement.
+            metadata.get("output_mode_choices", {}).pop(node_id, None)
+            metadata["new_output_node_ids"] = [
+                value for value in metadata.get("new_output_node_ids", []) if value != node_id
+            ]
             semantic_refs_copy = dict(semantic_refs)
             semantic_refs.clear()
             semantic_refs.update(
@@ -1648,6 +1658,9 @@ def _compile_flow_operations(
             }
             for key in allowed.intersection(operation):
                 target["data"][key] = deepcopy(operation[key])
+            if "export_execution_mode" in operation:
+                choices = metadata.setdefault("output_mode_choices", {})
+                choices[target["id"]] = operation["export_execution_mode"]
             continue
 
         if op in {"connect_steps", "disconnect_steps"}:
@@ -1788,6 +1801,8 @@ def _compile_flow_operations(
             ).model_dump()
             nodes[:] = replacement["nodes"]
             edges[:] = replacement["edges"]
+            metadata["new_output_node_ids"] = [node["id"] for node in nodes if node["type"] == "output"]
+            metadata["output_mode_choices"] = {}
             semantic_refs.clear()
             candidate["version"] = replacement["version"]
             candidate["task_instructions_default_only"] = replacement[
@@ -1857,12 +1872,13 @@ def _propose_flow_draft_update_handler():
         candidate = deepcopy(proposal_state["candidate"])
         metadata = deepcopy(proposal_state["metadata"])
         semantic_refs = deepcopy(proposal_state.get("semantic_refs", {}))
+        accessible_agents = _accessible_flow_agents()
         try:
             retargeted_node_ids = _compile_flow_operations(
                 candidate=candidate,
                 metadata=metadata,
                 operations=operations,
-                accessible_agents=_accessible_flow_agents(),
+                accessible_agents=accessible_agents,
                 semantic_refs=semantic_refs,
             )
         except (_FlowProposalCompileError, _SimplifiedFlowValidationError) as exc:
@@ -1925,6 +1941,16 @@ def _propose_flow_draft_update_handler():
         )
         findings = [finding.to_dict() for finding in validation.findings]
         valid = validation.valid
+        new_output_node_ids = set(metadata.get("new_output_node_ids", []))
+        mode_choices = metadata.get("output_mode_choices", {})
+        output_mode_node_ids = [
+            node["id"] for node in candidate.get("nodes", [])
+            if node["id"] in new_output_node_ids
+            and get_flow_selected_fields_direct_export()
+            and node.get("type") == "output"
+            and resolved_formatter_format(node["data"]["agent_id"], accessible_agents.get(node["data"]["agent_id"])) is not None
+            and mode_choices.get(node["id"]) != node["data"].get("export_execution_mode", "ai")
+        ]
         logger.info(
             "Compiled transient flow proposal: valid=%s operations=%s findings=%s",
             valid,
@@ -1943,6 +1969,7 @@ def _propose_flow_draft_update_handler():
             "diff": _exact_flow_diff(base_payload, candidate_payload),
             "findings": findings,
             "candidate": candidate_payload,
+            "output_mode_node_ids": output_mode_node_ids,
             "message": (
                 "Flow proposal is ready for curator review."
                 if valid

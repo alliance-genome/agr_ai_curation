@@ -4,6 +4,7 @@
 from .chat_common import *
 from ..lib.chat_context_report import build_chat_context_report
 from ..lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+from ..lib.agent_studio.application_events import APPLICATION_EVENT_MESSAGE_TYPE
 
 
 @router.post("/chat/session", response_model=SessionResponse)
@@ -170,7 +171,7 @@ async def get_session_history(
             user_auth_sub=user_id,
             message_limit=message_limit,
             message_cursor=_decode_message_cursor(message_cursor),
-            excluded_message_types={CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
+            excluded_message_types={CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE, APPLICATION_EVENT_MESSAGE_TYPE},
         )
     except ValueError as exc:
         raise_sanitized_http_exception(

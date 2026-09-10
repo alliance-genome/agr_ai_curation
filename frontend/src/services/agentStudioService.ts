@@ -901,10 +901,17 @@ export async function stopAgentStudioChat(sessionId: string, turnId: string): Pr
   if (!response.ok && response.status !== 409) throw new Error('Could not stop AI Chat. Please try again.')
 }
 
+export interface StudioApplicationEvent {
+  kind: 'draft_applied'
+  event_id: string
+  output_mode_node_ids: string[]
+}
+
 export async function* streamOpusChat(
   messages: ChatMessage[],
   context?: ChatContext,
   sessionId?: string,
+  applicationEvent?: StudioApplicationEvent,
 ): AsyncGenerator<OpusChatEvent> {
   const requestContext = sessionId
     ? {
@@ -916,7 +923,7 @@ export async function* streamOpusChat(
   const response = await fetch(`${BASE_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context: requestContext }),
+    body: JSON.stringify({ messages, context: requestContext, application_event: applicationEvent }),
   })
 
   if (!response.ok) {

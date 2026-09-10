@@ -2371,6 +2371,9 @@ def _build_agent_studio_user_debug_payload(
         },
         "trace_capture": _trace_capture_snapshot(trace_id),
     }
+    if request.application_event is not None:
+        payload["origin"] = "application"
+        payload["event"] = request.application_event.model_dump(mode="json")
     if context and context.flow_definition:
         payload["debug_context"]["flow_authoring"] = {
             "flow_id": context.flow_id,
@@ -2424,7 +2427,7 @@ def _persist_agent_studio_user_debug_payload(
         session_id=prepared_turn.session_id,
         user_auth_sub=user_id,
         turn_id=prepared_turn.turn_id,
-        role="user",
+        role=prepared_turn.input_role,
         payload_json=payload_json,
         trace_id=trace_id,
     )
@@ -4159,12 +4162,14 @@ async def chat_with_opus(
             "role": message.role,
             "content": (
                 prepared_turn.user_message
-                if latest_user_index is not None and index == latest_user_index
+                if request.application_event is None and latest_user_index is not None and index == latest_user_index
                 else message.content
             ),
         }
         for index, message in enumerate(request.messages)
     ]
+    if request.application_event is not None:
+        input_items.append({"role": "developer", "content": prepared_turn.user_message})
     try:
         if db_user_id is None:
             raise ToolSearchAuthorizationError(

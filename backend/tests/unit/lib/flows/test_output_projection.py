@@ -384,6 +384,72 @@ def _completed_domain_source_step(
     return result
 
 
+@pytest.mark.parametrize("selection_mode", ["guided", "selected_fields"])
+def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monkeypatch, selection_mode):
+    import csv
+    import io
+    from src.lib.flows.output_projection import finalize_output_projection
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+    from src.lib.config import agent_loader
+
+    # A saved result must remain exportable without a current agent definition.
+    monkeypatch.setattr(agent_loader, "list_agents", lambda: [])
+    step = _completed_domain_step()
+    step["agent_id"] = "gene_expression"
+    step["node_id"] = "expression"
+    step["candidate"].payload_json = {
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "envelope_id": "expression-fixture",
+        "extracted_objects": [
+            {
+                "object_type": "GeneExpressionAnnotation",
+                "object_id": object_id,
+                "payload": {
+                    "expression_annotation_subject": {"gene_symbol": symbol},
+                    "expression_pattern": {
+                        "where_expressed": {
+                            "anatomical_structure": {"curie": "WBbt:0006831", "name": "PVD"},
+                        },
+                    },
+                },
+            }
+            for object_id, symbol in [
+                ("dma-1-primary", "dma-1"),
+                ("dma-1-tertiary", "dma-1"),
+                ("tiam-1-fourth", "tiam-1"),
+            ]
+        ],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step], flow_name="Expression", output_format="csv",
+    )
+    artifact = bundle.artifacts[0]
+    assert artifact.execution_receipt is None
+    gene_ref = "object.pack.GeneExpressionAnnotation.expression_annotation_subject.gene_symbol"
+    assert gene_ref in {field.ref for field in artifact.declared_fields}
+    assert [row[gene_ref] for row in artifact.rows_by_source["object"]] == ["dma-1", "dma-1", "tiam-1"]
+    anatomy_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.where_expressed.anatomical_structure"
+    assert artifact.rows_by_source["object"][0][anatomy_ref] == {"curie": "WBbt:0006831", "name": "PVD"}
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object", "row_strategy": "wide_union",
+        "selection_mode": selection_mode,
+        "selected_sources": [{"node_id": "expression", "schema_fingerprint": artifact.export_schema_fingerprint}]
+        if selection_mode == "selected_fields" else [],
+        "columns": [
+            {"key": "gene", "header": "Gene", "field_ref": gene_ref, "source_node_id": "expression"},
+            {"key": "anatomy", "header": "Anatomy", "field_ref": anatomy_ref, "source_node_id": "expression"},
+            {"key": "stage", "header": "Stage", "field_ref": "object.pack.GeneExpressionAnnotation.when_expressed_stage_name", "source_node_id": "expression"},
+        ],
+    })
+    projection = finalize_output_projection(bundle, plan)
+    csv_bytes = _projection_content_for_file_type(output_format="csv", projection=projection).encode("utf-8")
+    rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
+    assert len(rows) == 3
+    assert [row["Gene"] for row in rows] == ["dma-1", "dma-1", "tiam-1"]
+    assert all(json.loads(row["Anatomy"]) == {"curie": "WBbt:0006831", "name": "PVD"} for row in rows)
+    assert all(row["Stage"] == "" for row in rows)
+
+
 def test_default_tsv_projection_uses_canonical_object_rows():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_domain_step()],

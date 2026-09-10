@@ -699,3 +699,15 @@ def test_packaged_field_catalog_is_available_without_custom_agents_or_runtime_ro
     assert symbol["object_type"] == "gene_mention_evidence"
     assert packaged_field_value({"object_type": "gene_mention_evidence", "payload": {"gene_symbol": "ccr2"}}, symbol) == "ccr2"
     assert packaged_field_value({"object_type": "another_type", "payload": {"gene_symbol": "wrong"}}, symbol) is None
+
+
+def test_packaged_export_catalog_resolves_public_system_key():
+    from src.lib.flows.export_fields import packaged_export_fields
+
+    public_fields = packaged_export_fields("gene_expression")
+    definition_fields = packaged_export_fields("gene_expression_extraction")
+    assert public_fields == definition_fields
+    assert any(
+        field["payload_path"] == "expression_annotation_subject.gene_symbol"
+        for field in public_fields
+    )
