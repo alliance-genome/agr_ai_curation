@@ -34,6 +34,14 @@ def test_history_list_returns_live_summary_schema_and_filters_by_user(
     query = f"contract-history-{uuid4().hex[:8]}"
     visible_session_id = f"{query}-visible"
     hidden_session_id = f"{query}-hidden"
+    empty_session_id = f"{query}-empty"
+
+    seed_chat_contract_session(
+        session_id=empty_session_id,
+        title=f"{query} empty",
+        created_at=_ts(12, 0),
+        messages=[],
+    )
 
     seed_chat_contract_session(
         session_id=visible_session_id,
@@ -105,6 +113,19 @@ def test_history_list_returns_live_summary_schema_and_filters_by_user(
     assert _parse_iso8601(summary["updated_at"]) is not None
     assert _parse_iso8601(summary["last_message_at"]) == _ts(9, 2)
     assert _parse_iso8601(summary["recent_activity_at"]) == _ts(9, 2)
+
+    unsearched = contract_client.get(
+        "/api/chat/history", headers=chat_contract_auth_headers,
+        params={"limit": 100, "chat_kind": "assistant_chat"},
+    )
+    assert unsearched.status_code == 200, unsearched.text
+    assert empty_session_id not in {row["session_id"] for row in unsearched.json()["sessions"]}
+    # A current empty session remains resumable; filtering is not deletion.
+    empty_detail = contract_client.get(
+        f"/api/chat/history/{empty_session_id}", headers=chat_contract_auth_headers,
+    )
+    assert empty_detail.status_code == 200, empty_detail.text
+    assert empty_detail.json()["messages"] == []
 
 
 def test_history_list_supports_agent_studio_and_all_filters(

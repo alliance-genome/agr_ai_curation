@@ -267,6 +267,7 @@ async def get_all_sessions_stats(
     try:
         if normalized_query:
             page = repository.search_sessions(
+                require_messages=True,
                 user_auth_sub=user_id,
                 chat_kind=chat_kind,
                 query=normalized_query,
@@ -275,6 +276,7 @@ async def get_all_sessions_stats(
                 active_document_id=active_document_id,
             )
             total_sessions = repository.count_sessions(
+                require_messages=True,
                 user_auth_sub=user_id,
                 chat_kind=chat_kind,
                 query=normalized_query,
@@ -282,6 +284,7 @@ async def get_all_sessions_stats(
             )
         else:
             page = repository.list_sessions(
+                require_messages=True,
                 user_auth_sub=user_id,
                 chat_kind=chat_kind,
                 limit=limit,
@@ -289,6 +292,7 @@ async def get_all_sessions_stats(
                 active_document_id=active_document_id,
             )
             total_sessions = repository.count_sessions(
+                require_messages=True,
                 user_auth_sub=user_id,
                 chat_kind=chat_kind,
                 active_document_id=active_document_id,

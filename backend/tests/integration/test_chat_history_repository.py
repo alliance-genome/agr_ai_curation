@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -169,6 +170,47 @@ def _create_user(db_session, *, auth_sub: str) -> User:
     db_session.add(user)
     db_session.flush()
     return user
+
+
+def test_history_filters_empty_sessions_before_count_search_and_pagination(db_session):
+    repository = ChatHistoryRepository(db_session)
+    for suffix, owner, kind, with_message in (
+        ("old", USER_A, ASSISTANT_CHAT_KIND, True),
+        ("studio", USER_A, AGENT_STUDIO_CHAT_KIND, True),
+        ("empty", USER_A, ASSISTANT_CHAT_KIND, False),
+        ("other", USER_B, ASSISTANT_CHAT_KIND, True),
+    ):
+        session_id = f"{SESSION_PREFIX}history-{suffix}"
+        _create_session(repository, session_id=session_id, user_auth_sub=owner,
+                        chat_kind=kind, title="History regression")
+        if with_message:
+            _append_message(repository, session_id=session_id, user_auth_sub=owner,
+                            chat_kind=kind, role="user", content="Keep this transcript")
+    db_session.commit()
+
+    filters: dict[str, Any] = dict(user_auth_sub=USER_A, chat_kind="all", require_messages=True)
+    assert repository.count_sessions(**filters) == 2
+    assert repository.count_sessions(**filters, query="regression") == 2
+    first = repository.list_sessions(**filters, limit=1)
+    assert len(first.items) == 1
+    assert first.next_cursor is not None
+    second = repository.list_sessions(**filters, limit=1, cursor=first.next_cursor)
+    assert len(second.items) == 1
+    assert second.next_cursor is None
+    assert {row.session_id for row in first.items + second.items} == {
+        f"{SESSION_PREFIX}history-old", f"{SESSION_PREFIX}history-studio",
+    }
+    searched = repository.search_sessions(**filters, query="regression")
+    assert {row.session_id for row in searched.items} == {
+        row.session_id for row in first.items + second.items
+    }
+    # Hiding placeholders from history must not delete or invalidate an active draft.
+    empty_id = f"{SESSION_PREFIX}history-empty"
+    assert repository.get_session_detail(session_id=empty_id, user_auth_sub=USER_A) is not None
+    assert repository.count_sessions(user_auth_sub=USER_A, chat_kind="all") == 3
+    _append_message(repository, session_id=empty_id, user_auth_sub=USER_A,
+                    role="user", content="Now this is a real conversation")
+    assert repository.count_sessions(**filters) == 3
 
 
 def test_studio_application_event_replays_and_stays_out_of_reloaded_history(db_session):

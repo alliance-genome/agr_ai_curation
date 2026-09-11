@@ -130,10 +130,6 @@ describe('ProtectedRoutes logout integration', () => {
         });
       }
 
-      if (url === '/api/chat/history?chat_kind=assistant_chat') {
-        return jsonResponse({ total_sessions: 1 });
-      }
-
       if (url === '/api/auth/logout') {
         expect(init).toMatchObject({
           method: 'POST',
@@ -188,7 +184,6 @@ describe('ProtectedRoutes logout integration', () => {
     const fetchUrls = vi.mocked(global.fetch).mock.calls.map(([url]) => String(url));
     expect(fetchUrls).toEqual([
       '/api/users/me',
-      '/api/chat/history?chat_kind=assistant_chat',
       '/api/auth/logout',
     ]);
   });

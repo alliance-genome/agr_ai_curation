@@ -138,4 +138,43 @@ describe('AuthProvider dev-mode bootstrap', () => {
       expect(vi.mocked(global.fetch)).toHaveBeenCalledWith('/api/users/me', expect.any(Object))
     })
   })
+
+  it.each(['empty', 'session-only', 'complete'])(
+    'does not create conversations or clear chat state during repeated production auth checks (%s cache)',
+    async (cacheState) => {
+      vi.useFakeTimers()
+      vi.stubEnv('VITE_DEV_MODE', 'false')
+      const keys = getChatLocalStorageKeys('curator-1')
+      if (cacheState !== 'empty') localStorage.setItem(keys.sessionId, 'existing-session')
+      if (cacheState === 'complete') {
+        localStorage.setItem(keys.messages, JSON.stringify({
+          session_id: 'existing-session',
+          messages: [{ id: 'message-1', role: 'user', content: 'Keep this', timestamp: new Date().toISOString() }],
+        }))
+      }
+      const originalSession = localStorage.getItem(keys.sessionId)
+      const originalMessages = localStorage.getItem(keys.messages)
+      vi.mocked(global.fetch).mockImplementation(async (url) => {
+        if (String(url) === '/api/users/me') {
+          return new Response(JSON.stringify({ auth_sub: 'curator-1', email: 'curator@example.org' }))
+        }
+        // Reproduce the old trigger: durable history exists regardless of local cache.
+        return new Response(JSON.stringify({ total_sessions: 1053 }))
+      })
+
+      render(<AuthProvider><AuthProbe /></AuthProvider>)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      for (let poll = 0; poll < 3; poll += 1) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1000) })
+      }
+
+      expect(screen.getByTestId('auth-status')).toHaveTextContent('authenticated')
+      expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(4)
+      expect(vi.mocked(global.fetch).mock.calls.every(([url, options]) =>
+        String(url) === '/api/users/me' && options?.method === 'GET',
+      )).toBe(true)
+      expect(localStorage.getItem(keys.sessionId)).toBe(originalSession)
+      expect(localStorage.getItem(keys.messages)).toBe(originalMessages)
+    },
+  )
 })

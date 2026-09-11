@@ -435,6 +435,7 @@ class FakeChatHistoryRepository:
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
         active_document_id: UUID | None = None,
+        require_messages: bool = False,
     ) -> ChatSessionPage:
         self.list_calls.append(
             {
@@ -443,6 +444,7 @@ class FakeChatHistoryRepository:
                 "limit": limit,
                 "cursor": cursor,
                 "active_document_id": active_document_id,
+                "require_messages": require_messages,
             }
         )
         items = self._visible_sessions(
@@ -450,6 +452,8 @@ class FakeChatHistoryRepository:
             chat_kind=chat_kind,
             active_document_id=active_document_id,
         )
+        if require_messages:
+            items = [item for item in items if item.last_message_at is not None]
         return ChatSessionPage(items=items[:limit], next_cursor=None)
 
     def search_sessions(
@@ -461,6 +465,7 @@ class FakeChatHistoryRepository:
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
         active_document_id: UUID | None = None,
+        require_messages: bool = False,
     ) -> ChatSessionPage:
         self.search_calls.append(
             {
@@ -470,6 +475,7 @@ class FakeChatHistoryRepository:
                 "limit": limit,
                 "cursor": cursor,
                 "active_document_id": active_document_id,
+                "require_messages": require_messages,
             }
         )
         items = self._visible_sessions(
@@ -478,6 +484,8 @@ class FakeChatHistoryRepository:
             active_document_id=active_document_id,
             query=query,
         )
+        if require_messages:
+            items = [item for item in items if item.last_message_at is not None]
         return ChatSessionPage(items=items[:limit], next_cursor=None)
 
     def count_sessions(
@@ -487,6 +495,7 @@ class FakeChatHistoryRepository:
         chat_kind: str,
         query: str | None = None,
         active_document_id: UUID | None = None,
+        require_messages: bool = False,
     ) -> int:
         self.count_calls.append(
             {
@@ -494,15 +503,17 @@ class FakeChatHistoryRepository:
                 "chat_kind": chat_kind,
                 "query": query,
                 "active_document_id": active_document_id,
+                "require_messages": require_messages,
             }
         )
-        return len(
-            self._visible_sessions(
+        return sum(
+            1 for item in self._visible_sessions(
                 user_auth_sub=user_auth_sub,
                 chat_kind=chat_kind,
                 active_document_id=active_document_id,
                 query=query,
             )
+            if not require_messages or item.last_message_at is not None
         )
 
     def rename_session(
@@ -2178,6 +2189,10 @@ async def test_get_all_sessions_stats_returns_filtered_search_results(monkeypatc
     repository = FakeChatHistoryRepository(
         sessions=[
             _session_record(
+                session_id="empty-placeholder", title="Alpha empty",
+                active_document_id=document_a, created_at=_ts(14, 0),
+            ),
+            _session_record(
                 session_id="session-newest",
                 title="Alpha summary",
                 active_document_id=document_a,
@@ -2215,6 +2230,8 @@ async def test_get_all_sessions_stats_returns_filtered_search_results(monkeypatc
     assert filtered.total_sessions == 1
     assert [session.session_id for session in filtered.sessions] == ["session-newest"]
     assert repository.list_calls[0]["active_document_id"] == document_a
+    assert repository.list_calls[0]["require_messages"] is True
+    assert repository.count_calls[0]["require_messages"] is True
 
     searched = await chat.get_all_sessions_stats(
         chat_kind="assistant_chat",
@@ -2228,6 +2245,8 @@ async def test_get_all_sessions_stats_returns_filtered_search_results(monkeypatc
     assert searched.total_sessions == 1
     assert [session.session_id for session in searched.sessions] == ["session-newest"]
     assert repository.search_calls[0]["query"] == "Alpha"
+    assert repository.search_calls[0]["require_messages"] is True
+    assert repository.count_calls[1]["require_messages"] is True
 
 
 @pytest.mark.asyncio
