@@ -82,6 +82,7 @@ from src.lib.observability.background_tasks import (
     add_observed_background_task,
     report_background_task_exception,
 )
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.config import list_groups
 from src.lib.agent_access import is_resource_access_allowed
@@ -3566,8 +3567,18 @@ async def _handle_tool_call(
         try:
             result = tool_def.handler(**tool_input)
             return result
-        except Exception as e:
-            logger.error('Diagnostic tool %s failed: %s', tool_name, e, exc_info=True)
+        except Exception:
+            report_runtime_exception(
+                sanitized_runtime_error("Agent Studio tool handler failed"),
+                component="agent_studio",
+                operation="tool_handler_failed",
+                tags={"tool_name": tool_name},
+            )
+            logger.error(
+                'Diagnostic tool %s failed unexpectedly',
+                tool_name,
+                extra={"sentry_skip_event": True},
+            )
             return {
                 "success": False,
                 "error": "Tool execution failed unexpectedly.",
