@@ -2229,6 +2229,21 @@ def get_agent_studio_flow_catalog_chunk_max_chars() -> int:
     )
 
 
+def get_trace_review_session_page_size() -> int:
+    """Return the configured TraceReview session page size."""
+    return max(1, _get_env_int_with_fallback("TRACE_REVIEW_SESSION_TRACE_PAGE_SIZE", 100))
+
+
+def get_trace_review_session_max_traces() -> int:
+    """Return the configured TraceReview session max traces."""
+    return max(1, _get_env_int_with_fallback("TRACE_REVIEW_SESSION_MAX_TRACES", 100))
+
+
+def get_trace_review_session_max_pages() -> int:
+    """Return the configured TraceReview session max pages."""
+    return max(1, _get_env_int_with_fallback("TRACE_REVIEW_SESSION_MAX_PAGES", 200))
+
+
 def get_agent_studio_trace_review_page_size() -> int:
     """Max/default page size for exact TraceReview call listings.
 

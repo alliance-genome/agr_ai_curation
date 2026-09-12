@@ -1,3 +1,4 @@
+import os
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
@@ -161,10 +162,11 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.api.traces.TraceExtractor")
     async def test_export_session_distinguishes_empty_complete_and_stopped_scans(self, extractor_cls):
-        for complete in (True, False):
-            with self.subTest(complete=complete):
+        for reason in (None, "request_limit", "trace_limit", "page_limit"):
+            complete = reason is None
+            with self.subTest(reason=reason):
                 meta = {"complete": complete, "truncated": not complete,
-                        "stop_reason": None if complete else "request_limit"}
+                        "stop_reason": reason}
                 extractor_cls.return_value.list_session_traces.return_value = {
                     "traces": [], "meta": meta,
                 }
@@ -177,7 +179,8 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
     @patch("src.api.traces._get_or_analyze_trace_export")
     @patch("src.api.traces.TraceExtractor")
     async def test_export_session_retains_discovered_traces_when_partial(self, extractor_cls, analyze):
-        meta = {"complete": False, "truncated": True, "stop_reason": "observation_limit"}
+        meta = {"complete": False, "truncated": True, "stop_reason": "trace_limit",
+                "trace_limit": 1, "page_limit": 200, "totalItems": None}
         extractor_cls.return_value.list_session_traces.return_value = {
             "traces": [{"id": "trace-1"}], "meta": meta,
         }
@@ -195,7 +198,53 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "partial")
         self.assertFalse(response["session"]["complete"])
         self.assertEqual(response["session"]["successful_trace_count"], 1)
+        self.assertEqual(response["session"]["langfuse_meta"], meta)
+        analyze.assert_called_once()
         self.assertEqual(response["traces"][0]["trace_id"], "trace-1")
+
+    @patch("src.observability._client")
+    @patch("src.api.traces._get_or_analyze_trace_export")
+    async def test_export_session_enforces_discovery_caps_before_analysis(self, analyze, reporter):
+        from src.services.trace_extractor import TraceExtractor
+        from src.models.responses import SessionTraceExportResponse
+
+        for reason in ("trace_limit", "page_limit"):
+            with self.subTest(reason=reason), patch.dict(os.environ, {
+                "TRACE_REVIEW_SESSION_MAX_TRACES": "1",
+                "TRACE_REVIEW_SESSION_MAX_PAGES": "1",
+            }):
+                extractor = object.__new__(TraceExtractor)
+                extractor.source = "remote"
+                extractor.client = Mock()
+                rows = [{"id": "obs-1", "trace_id": "trace-1", "session_id": "session-1"}]
+                if reason == "trace_limit":
+                    rows.append({"id": "obs-2", "trace_id": "trace-2", "session_id": "session-1"})
+                extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+                    data=rows, meta=SimpleNamespace(cursor="next"),
+                )
+                analyze.reset_mock()
+                analyze.return_value = ({"analysis": {
+                    key: {} for key in (
+                        "summary", "conversation", "pdf_citations", "token_analysis",
+                        "agent_context", "trace_summary", "domain_envelope", "document_hierarchy",
+                        "agent_configs", "group_context",
+                    )
+                }}, "cached", True)
+                analyze.return_value[0]["analysis"]["tool_calls"] = {
+                    "tool_calls": [], "total_count": 0, "unique_tools": [], "duplicates": {},
+                }
+                with patch("src.api.traces.TraceExtractor", return_value=extractor):
+                    response = await traces.export_session("session-1", self._make_request(), source="remote")
+                parsed = SessionTraceExportResponse.model_validate(response)
+                self.assertEqual(parsed.status, "partial")
+                self.assertFalse(parsed.session["complete"])
+                self.assertEqual(parsed.session["langfuse_meta"]["stop_reason"], reason)
+                self.assertIsNone(parsed.session["langfuse_meta"]["totalItems"])
+                self.assertEqual([item.trace_id for item in parsed.traces], ["trace-1"])
+                analyze.assert_called_once()
+                self.assertEqual(analyze.call_args.args[0], "trace-1")
+                extractor.client.api.observations.get_many.assert_called_once()
+                reporter.capture_event.assert_not_called()
 
     def _make_request(self) -> SimpleNamespace:
         cache_manager = CacheManager(ttl_hours=1)

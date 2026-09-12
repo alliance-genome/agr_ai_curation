@@ -1,3 +1,4 @@
+import os
 import json
 import unittest
 from datetime import datetime
@@ -737,6 +738,46 @@ class TraceExtractorTests(unittest.TestCase):
                 self.assertEqual(result["meta"]["stop_reason"], None if complete else "observation_limit")
                 self.assertEqual(result["meta"]["totalItems"], 2 if complete else None)
                 self.assertEqual(result["meta"]["totalPages"], 1 if complete else None)
+
+    def test_session_unique_trace_cap_counts_duplicates_and_reports_overflow(self):
+        for overflow in (False, True):
+            with self.subTest(overflow=overflow), patch.dict(os.environ, {
+                "TRACE_REVIEW_SESSION_MAX_TRACES": "1",
+                "TRACE_REVIEW_SESSION_TRACE_PAGE_SIZE": "7",
+            }):
+                extractor = self._make_extractor()
+                rows = [{"id": str(i), "trace_id": "trace-1", "session_id": "session-1"}
+                        for i in range(2)]
+                if overflow:
+                    rows.append({"id": "extra", "trace_id": "trace-2", "session_id": "session-1"})
+                extractor.client.api.observations.get_many.side_effect = [
+                    SimpleNamespace(data=rows[:1], meta=SimpleNamespace(cursor="next")),
+                    SimpleNamespace(data=rows[1:], meta=SimpleNamespace(cursor=None)),
+                ]
+                result = extractor.list_session_traces("session-1")
+                self.assertEqual([trace["id"] for trace in result["traces"]], ["trace-1"])
+                self.assertEqual(result["meta"]["complete"], not overflow)
+                self.assertEqual(result["meta"]["stop_reason"], "trace_limit" if overflow else None)
+                self.assertEqual(result["meta"]["totalItems"], None if overflow else 1)
+                self.assertEqual(result["meta"]["trace_limit"], 1)
+                self.assertEqual(extractor.client.api.observations.get_many.call_count, 2)
+                self.assertEqual(extractor.client.api.observations.get_many.call_args.kwargs["limit"], 7)
+
+    def test_session_page_cap_stops_even_when_pages_contain_no_new_traces(self):
+        for continuation in (None, "next"):
+            with self.subTest(continuation=continuation), patch.dict(os.environ, {
+                "TRACE_REVIEW_SESSION_MAX_PAGES": "1",
+            }):
+                extractor = self._make_extractor()
+                extractor.client.api.observations.get_many.return_value = SimpleNamespace(
+                    data=[], meta=SimpleNamespace(cursor=continuation),
+                )
+                result = extractor.list_session_traces("session-1")
+                self.assertEqual(result["meta"]["complete"], continuation is None)
+                self.assertEqual(result["meta"]["stop_reason"], "page_limit" if continuation else None)
+                self.assertEqual(result["meta"]["page_limit"], 1)
+                self.assertEqual(result["meta"]["totalPages"], None if continuation else 1)
+                extractor.client.api.observations.get_many.assert_called_once()
 
     def test_list_session_traces_preserves_empty_result(self):
         extractor = self._make_extractor()
