@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 from src.lib.curation_workspace import evidence_service as module
 from src.lib.curation_workspace.session_service import PreparedEvidenceRecordInput
 from src.lib.curation_workspace.models import (
+    CurationSessionAgentRevision,
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate as CandidateModel,
     CurationDraft as DraftModel,
@@ -57,6 +58,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 TEST_TABLES = [
     PDFDocument.__table__,
     ReviewSessionModel.__table__,
+    CurationSessionAgentRevision.__table__,
     ExtractionResultModel.__table__,
     CandidateModel.__table__,
     EvidenceRecordModel.__table__,

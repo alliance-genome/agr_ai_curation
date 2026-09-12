@@ -515,6 +515,28 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert calls["clear"] == ["session-flow-1"]
 
 
+def test_execute_flow_endpoint_returns_contract_findings_before_stream_registration(monkeypatch):
+    flow_id = uuid4()
+    flow = SimpleNamespace(
+        id=flow_id, user_id=7, name="Unpinned flow", execution_count=0,
+        is_active=True, visibility="private", project_id=None,
+        last_executed_at=None, flow_definition={"nodes": []},
+    )
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    finding = {"node_id": "custom_node", "code": "missing_execution_revision", "severity": "error"}
+    monkeypatch.setattr(chat, "flow_execution_revision_findings", lambda *args, **kwargs: [finding])
+    db = _DummyDB(flow=flow)
+    with pytest.raises(chat.HTTPException) as error:
+        asyncio.run(chat.execute_flow_endpoint(
+            request=chat.ExecuteFlowRequest(flow_id=flow_id, session_id="unpinned-flow"),
+            db=db, user={"sub": "auth-sub", "cognito:groups": []},
+        ))
+    assert error.value.status_code == 422
+    assert error.value.detail == {"code": "flow_execution_contract_invalid", "findings": [finding]}
+    assert db.commit_calls == 0
+    assert calls["register"] == []
+
+
 def test_execute_flow_endpoint_rechecks_saved_agent_access(monkeypatch):
     flow_id = uuid4()
     flow = SimpleNamespace(
@@ -1224,6 +1246,89 @@ def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     assert calls["register"] == [("session-flow-cancel", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-flow-cancel", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-cancel"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_mode", ["stop", "complete", "consumer_error", "disconnect"])
+async def test_flow_stream_closes_in_producer_context(monkeypatch, exit_mode):
+    """A retained nested stream must close before its producer task finishes."""
+    from contextvars import ContextVar
+    from src.lib.observability.sentry import (
+        application_owned_terminal_failure_capture,
+        _TERMINAL_FAILURE_CAPTURE_OWNED,
+    )
+
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id=f"owned-{exit_mode}")
+    flow = SimpleNamespace(
+        id=flow_id, user_id=7, name="Owned stream", execution_count=0,
+        is_active=True, visibility="private", project_id=None,
+        last_executed_at=None, flow_definition={},
+    )
+    _patch_stream_dependencies(monkeypatch, cancel_requested=exit_mode == "stop")
+    workspace = ContextVar[str | None]("test_flow_workspace", default=None)
+    lifecycle = []
+    retained_streams = []
+    resume = asyncio.Event()
+
+    async def provider_stream():
+        try:
+            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "hello"}}
+            if exit_mode == "disconnect":
+                await resume.wait()
+            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "again"}}
+        finally:
+            lifecycle.append("provider_closed")
+
+    async def flow_stream():
+        owner_task = asyncio.current_task()
+        token = workspace.set("flow-workspace")
+        provider = provider_stream()
+        try:
+            with application_owned_terminal_failure_capture():
+                async for event in provider:
+                    yield event
+        finally:
+            await provider.aclose()
+            assert asyncio.current_task() is owner_task
+            workspace.reset(token)
+            assert workspace.get() is None
+            assert not _TERMINAL_FAILURE_CAPTURE_OWNED.get()
+            lifecycle.append("flow_closed")
+
+    def make_flow(**_kwargs):
+        stream = flow_stream()
+        retained_streams.append(stream)  # Prevent GC from concealing missing ownership.
+        return stream
+
+    _patch_chat_impl(monkeypatch, "execute_flow", make_flow)
+    if exit_mode == "consumer_error":
+        original_sse = chat._stream_event_sse
+
+        def fail_content_serialization(event):
+            if event.get("type") == "TEXT_MESSAGE_CONTENT":
+                raise ValueError("test consumer serialization failure")
+            return original_sse(event)
+
+        monkeypatch.setattr(chat, "_stream_event_sse", fail_content_serialization)
+
+    response = await chat.execute_flow_endpoint(
+        request=request, db=_DummyDB(flow=flow),
+        user={"sub": "auth-sub", "cognito:groups": []},
+    )
+    if exit_mode == "disconnect":
+        events = await _consume_stream_prefix(response, 1)
+        # Detaching HTTP must not cancel the resumable producer.
+        assert lifecycle == []
+        run = next(iter(chat.executable_run_manager._runs.values()))
+        assert not run.task.done()
+        resume.set()
+        await run.task
+    else:
+        events = await _consume_stream(response)
+    assert events
+    assert lifecycle == ["provider_closed", "flow_closed"]
+    assert retained_streams[0].ag_frame is None
 
 
 def test_execute_flow_endpoint_preserves_event_order_and_domain_warning(monkeypatch):
@@ -2568,7 +2673,8 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
     assert keepalive_calls == [True]
 
 
-def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog):
+@pytest.mark.parametrize("websocket_failure", [False, True])
+def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog, websocket_failure):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-error")
     flow = SimpleNamespace(
@@ -2592,6 +2698,17 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     async def _fake_execute_flow(**_kwargs):
         if False:
             yield {"type": "RUN_STARTED"}
+        if websocket_failure:
+            from agents import UserError
+            from agents.models.openai_responses import ResponsesWebSocketError
+            try:
+                raise ResponsesWebSocketError({
+                    "type": "error", "sequence_number": 23,
+                    "error": {"type": "server_error", "code": None,
+                              "message": "private provider payload"},
+                })
+            except ResponsesWebSocketError as cause:
+                raise UserError("executor boom") from cause
         raise RuntimeError("executor boom")
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
@@ -2607,26 +2724,43 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
 
     events = asyncio.run(_consume_stream(response))
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
-    assert events[0]["details"]["error"] == "Flow execution failed unexpectedly."
-    assert events[1]["message"] == "Flow execution failed unexpectedly."
+    expected_message = (
+        "The AI service interrupted this run before it finished. "
+        "Please try running the flow again. If this keeps happening, "
+        "report the problem using the feedback button."
+        if websocket_failure else "Flow execution failed unexpectedly."
+    )
+    assert events[0]["details"]["error"] == expected_message
+    assert events[1]["message"] == expected_message
+    assert "private provider payload" not in json.dumps(events)
     assert "executor boom" not in json.dumps(events)
     assert "executor boom" in caplog.text
-    assert events[1]["error_type"] == "RuntimeError"
+    summaries = [
+        message
+        for messages in calls["repository"].messages.values()
+        for message in messages
+        if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    ]
+    assert len(summaries) == 1
+    assert summaries[0].payload_json["failure_reason"] == expected_message
+    assert "terminal outcome was durable" not in json.dumps(summaries[0].payload_json)
+    expected_type = "UserError" if websocket_failure else "RuntimeError"
+    assert events[1]["error_type"] == expected_type
     assert events[1]["session_id"] == "session-flow-error"
     assert calls["unregister"] == [("session-flow-error", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-error"]
     assert len(runtime_reports) == 1
     reported_exc, report_kwargs = runtime_reports[0]
-    assert isinstance(reported_exc, RuntimeError)
+    assert type(reported_exc).__name__ == expected_type
     assert str(reported_exc) == "executor boom"
     assert report_kwargs == {
         "component": "execute_flow_stream",
         "operation": "event_generator_failed",
         "tags": {
             "ai_curation.flow.id_hash": chat.hash_sentry_identifier(flow_id),
-            "flow_failure_type": "RuntimeError",
+            "flow_failure_type": expected_type,
             "phase": "event_generator",
-            "provider": None,
+            "provider": "openai" if websocket_failure else None,
             "tool_name": None,
         },
         "context": {
@@ -2931,3 +3065,25 @@ def test_shared_execution_uses_caller_identity(monkeypatch, agents_available):
         assert calls["register"][0][1] == "member"
     assert checks[0]["user_id"] == 7
     assert checks[0]["active_group_ids"] == ["WB"]
+
+
+@pytest.mark.parametrize("error_type", ["server_error", "invalid_request_error"])
+def test_flow_provider_failure_description_handles_context_and_cycles(error_type):
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    provider_error = ResponsesWebSocketError({
+        "type": "error", "error": {
+            "type": error_type, "code": None, "message": "private data",
+        },
+    })
+    wrapper = RuntimeError("private wrapper")
+    wrapper.__context__ = provider_error
+    message, provider = chat._flow_execution_error_message(wrapper)
+    assert provider == "openai"
+    assert "private" not in message
+    assert ("try running" in message) == (error_type == "server_error")
+    cyclic = RuntimeError("private cycle")
+    cyclic.__cause__ = cyclic
+    assert chat._flow_execution_error_message(cyclic) == (
+        "Flow execution failed unexpectedly.", None,
+    )

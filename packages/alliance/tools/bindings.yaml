@@ -775,6 +775,7 @@ tools:
     metadata:
       name: Stage Gene Expression Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Stage Gene Expression Observation
@@ -818,6 +819,7 @@ tools:
     metadata:
       name: Patch Gene Expression Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Patch Gene Expression Observation
@@ -845,6 +847,7 @@ tools:
     metadata:
       name: Discard Gene Expression Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Discard Gene Expression Observation
@@ -868,6 +871,7 @@ tools:
     metadata:
       name: List Staged Gene Expression Observations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: List Staged Gene Expression Observations
@@ -895,6 +899,7 @@ tools:
     metadata:
       name: Find Staged Gene Expression Observations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Find Staged Gene Expression Observations
@@ -942,6 +947,7 @@ tools:
     metadata:
       name: Finalize Gene Expression Extraction
       category: Database
+      builder_output_mode: domain
       # Marks this tool as a builder-materializer finalize tool. The platform
       # runtime derives the set of builder finalize-tool names from this flag
       # (see streaming_tools.builder_finalization_tool_names) so adding a new
@@ -971,6 +977,7 @@ tools:
     metadata:
       name: Stage Gene Mention Evidence
       category: Database
+      builder_output_mode: domain
       # Run-state builder tool: the platform closure-binds the active builder workspace +
       # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
@@ -1038,6 +1045,7 @@ tools:
     metadata:
       name: Patch Gene Mention Evidence
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Patch Gene Mention Evidence
@@ -1065,6 +1073,7 @@ tools:
     metadata:
       name: Discard Gene Mention Evidence
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Discard Gene Mention Evidence
@@ -1089,6 +1098,7 @@ tools:
     metadata:
       name: List Staged Gene Mention Evidence
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: List Staged Gene Mention Evidence
@@ -1116,6 +1126,7 @@ tools:
     metadata:
       name: Find Staged Gene Mention Evidence
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Find Staged Gene Mention Evidence
@@ -1163,6 +1174,7 @@ tools:
     metadata:
       name: Finalize Gene Extraction
       category: Database
+      builder_output_mode: domain
       # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
       # the set of builder finalize-tool names from this flag
       # (streaming_tools.builder_finalization_tool_names) so this is a domain-pack edit, not a
@@ -1209,6 +1221,7 @@ tools:
     metadata:
       name: Stage Generic Object
       category: Database
+      builder_output_mode: generic
       builder_run_state: true
       audit:
         display_name: Stage Generic Object
@@ -1268,6 +1281,7 @@ tools:
     metadata:
       name: Patch Generic Object
       category: Database
+      builder_output_mode: generic
       builder_run_state: true
       audit:
         display_name: Patch Generic Object
@@ -1291,6 +1305,7 @@ tools:
     metadata:
       name: Discard Generic Object
       category: Database
+      builder_output_mode: generic
       builder_run_state: true
       audit:
         display_name: Discard Generic Object
@@ -1314,6 +1329,7 @@ tools:
     metadata:
       name: List Staged Generic Objects
       category: Database
+      builder_output_mode: generic
       builder_run_state: true
       audit:
         display_name: List Staged Generic Objects
@@ -1341,6 +1357,7 @@ tools:
     metadata:
       name: Find Staged Generic Objects
       category: Database
+      builder_output_mode: generic
       builder_run_state: true
       audit:
         display_name: Find Staged Generic Objects
@@ -1388,6 +1405,7 @@ tools:
     metadata:
       name: Finalize Generic Extraction
       category: Database
+      builder_output_mode: generic
       builder_finalization: true
       builder_run_state: true
       audit:
@@ -1415,6 +1433,7 @@ tools:
     metadata:
       name: Stage Allele Observation
       category: Database
+      builder_output_mode: domain
       # Run-state builder tool: the platform closure-binds the active builder workspace +
       # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
@@ -1473,6 +1492,7 @@ tools:
     metadata:
       name: Patch Allele Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Patch Allele Observation
@@ -1500,6 +1520,7 @@ tools:
     metadata:
       name: Discard Allele Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Discard Allele Observation
@@ -1524,6 +1545,7 @@ tools:
     metadata:
       name: List Staged Allele Observations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: List Staged Allele Observations
@@ -1551,6 +1573,7 @@ tools:
     metadata:
       name: Find Staged Allele Observations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Find Staged Allele Observations
@@ -1598,6 +1621,7 @@ tools:
     metadata:
       name: Finalize Allele Extraction
       category: Database
+      builder_output_mode: domain
       # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
       # the set of builder finalize-tool names from this flag
       # (streaming_tools.builder_finalization_tool_names) so this is a domain-pack edit, not a
@@ -1628,6 +1652,7 @@ tools:
     metadata:
       name: Stage Phenotype Observation
       category: Database
+      builder_output_mode: domain
       # Run-state builder tool: the platform closure-binds the active builder workspace +
       # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
@@ -1711,6 +1736,7 @@ tools:
     metadata:
       name: Patch Phenotype Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Patch Phenotype Observation
@@ -1738,6 +1764,7 @@ tools:
     metadata:
       name: Discard Phenotype Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Discard Phenotype Observation
@@ -1762,6 +1789,7 @@ tools:
     metadata:
       name: List Staged Phenotype Observations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: List Staged Phenotype Observations
@@ -1789,6 +1817,7 @@ tools:
     metadata:
       name: Find Staged Phenotype Observations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Find Staged Phenotype Observations
@@ -1836,6 +1865,7 @@ tools:
     metadata:
       name: Finalize Phenotype Extraction
       category: Database
+      builder_output_mode: domain
       # Marks this tool as a builder-materializer finalize tool. The platform runtime derives
       # the set of builder finalize-tool names from this flag
       # (streaming_tools.builder_finalization_tool_names) so this is a domain-pack edit, not a
@@ -1867,6 +1897,7 @@ tools:
     metadata:
       name: Stage Disease Observation
       category: Database
+      builder_output_mode: domain
       # Run-state builder tool: the platform closure-binds the active builder workspace +
       # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
@@ -1971,6 +2002,7 @@ tools:
     metadata:
       name: Patch Disease Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Patch Disease Observation
@@ -1998,6 +2030,7 @@ tools:
     metadata:
       name: Discard Disease Observation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Discard Disease Observation
@@ -2022,6 +2055,7 @@ tools:
     metadata:
       name: List Staged Disease Observations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: List Staged Disease Observations
@@ -2049,6 +2083,7 @@ tools:
     metadata:
       name: Find Staged Disease Observations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Find Staged Disease Observations
@@ -2096,6 +2131,7 @@ tools:
     metadata:
       name: Finalize Disease Extraction
       category: Database
+      builder_output_mode: domain
       # Marks this tool as a builder-materializer finalize tool. The platform runtime derives the
       # set of builder finalize-tool names from this flag
       # (streaming_tools.builder_finalization_tool_names) so this is a domain-pack edit, not a
@@ -2534,6 +2570,7 @@ tools:
     metadata:
       name: Stage GO Recommendation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Stage GO Recommendation
@@ -2548,6 +2585,7 @@ tools:
     metadata:
       name: Patch GO Recommendation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Patch GO Recommendation
@@ -2562,6 +2600,7 @@ tools:
     metadata:
       name: Discard GO Recommendation
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Discard GO Recommendation
@@ -2576,6 +2615,7 @@ tools:
     metadata:
       name: List Staged GO Recommendations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: List Staged GO Recommendations
@@ -2590,6 +2630,7 @@ tools:
     metadata:
       name: Find Staged GO Recommendations
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       audit:
         display_name: Find Staged GO Recommendations
@@ -2604,6 +2645,7 @@ tools:
     metadata:
       name: Finalize GO Extraction
       category: Database
+      builder_output_mode: domain
       builder_run_state: true
       builder_finalization: true
       audit:

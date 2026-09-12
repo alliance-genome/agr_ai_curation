@@ -2,6 +2,7 @@
  * API service for Agent Studio feature.
  */
 
+import { AGENT_STUDIO_CHAT_EVENT_TYPES } from '@/types/promptExplorer'
 import type {
   PromptCatalog,
   CombinedPromptResponse,
@@ -22,8 +23,11 @@ import type {
   ToolIdeaRequest,
   OwnedToolIdeaRequest,
   ToolIdeaConversationEntry,
+  WorkshopAction,
+  WorkshopActionRequest,
 } from '@/types/promptExplorer'
 import { readCurationApiError } from '@/features/curation/services/api'
+import { logger } from '@/services/logger'
 import {
   AGENT_STUDIO_CHAT_HISTORY_KIND,
   fetchChatHistoryDetail,
@@ -34,8 +38,120 @@ import {
   type ChatHistoryListResponse,
 } from '@/services/chatHistoryApi'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
+import type { AgentOutputContract, AgentExecutionReceipt, AgentExecutionRevision, AgentExecutionRevisionPage, GenericProfilePin } from '@/types/agentExecution'
+import type { GenericProfileContract } from '@/services/genericProfileService'
 
 const BASE_URL = '/api/agent-studio'
+
+const AGENT_STUDIO_CHAT_EVENT_TYPE_SET = new Set<string>(AGENT_STUDIO_CHAT_EVENT_TYPES)
+
+type AgentStudioStreamProtocolReason =
+  | 'malformed_json'
+  | 'invalid_shape'
+  | 'unknown_type'
+  | 'correlation_mismatch'
+  | 'missing_terminal'
+
+export class AgentStudioStreamProtocolError extends Error {
+  readonly reason: AgentStudioStreamProtocolReason
+  readonly eventType?: OpusChatEvent['type']
+
+  constructor(reason: AgentStudioStreamProtocolReason, eventType?: OpusChatEvent['type']) {
+    super('AI Chat received an unexpected stream response. Please retry.')
+    this.name = 'AgentStudioStreamProtocolError'
+    this.reason = reason
+    this.eventType = eventType
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
+function hasOptionalString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string'
+}
+
+/**
+ * Validate the public Agent Studio SSE shape before UI state sees it. Errors
+ * deliberately contain no raw event payload, provider response, or tool data.
+ */
+export function parseAgentStudioChatEvent(value: unknown): OpusChatEvent {
+  if (!isRecord(value) || !hasString(value.type)) {
+    throw new AgentStudioStreamProtocolError('invalid_shape')
+  }
+  if (!AGENT_STUDIO_CHAT_EVENT_TYPE_SET.has(value.type)) {
+    throw new AgentStudioStreamProtocolError('unknown_type')
+  }
+
+  const eventType = value.type as OpusChatEvent['type']
+  if (
+    !hasString(value.session_id)
+    || !hasString(value.turn_id)
+    || !hasOptionalString(value.trace_id)
+  ) {
+    throw new AgentStudioStreamProtocolError('invalid_shape', eventType)
+  }
+
+  const hasOptionalCorrelation = hasOptionalString(value.call_id) && hasOptionalString(value.search_id)
+  let valid = hasOptionalCorrelation
+  switch (eventType) {
+    case 'TEXT_DELTA':
+      valid = valid && typeof value.delta === 'string'
+      break
+    case 'TOOL_SEARCH':
+      valid = valid && hasString(value.status)
+      break
+    case 'TOOL_SEARCH_RESULT':
+      valid = valid
+        && hasString(value.status)
+        && typeof value.loaded_tool_count === 'number'
+        && Number.isInteger(value.loaded_tool_count)
+        && value.loaded_tool_count >= 0
+      break
+    case 'TOOL_USE':
+      valid = valid && hasString(value.tool_name) && isRecord(value.tool_input)
+      break
+    case 'TOOL_RESULT':
+      valid = valid && hasString(value.tool_name) && isRecord(value.result)
+      break
+    case 'PROVIDER_CONTEXT_PREFLIGHT':
+      valid = valid && (value.payload_summary === undefined || isRecord(value.payload_summary))
+      break
+    case 'CONTEXT_OVERFLOW':
+    case 'REFUSAL':
+    case 'INCOMPLETE':
+    case 'ERROR':
+      valid = valid && hasString(value.message)
+      break
+    case 'DONE':
+      break
+  }
+
+  if (!valid) {
+    throw new AgentStudioStreamProtocolError('invalid_shape', eventType)
+  }
+  return value as unknown as OpusChatEvent
+}
+
+function reportAgentStudioStreamProtocolError(error: AgentStudioStreamProtocolError): void {
+  logger.error(
+    'Agent Studio stream protocol failure',
+    new Error('Agent Studio stream protocol failure'),
+    {
+      component: 'agentStudioService',
+      action: 'parse_chat_event',
+      metadata: {
+        reason: error.reason,
+        eventType: error.eventType ?? 'unknown',
+      },
+    },
+  )
+}
 
 export interface AgentStudioDurableSessionResponse {
   session_id: string
@@ -64,6 +180,9 @@ export interface ValidationAttachmentOption {
   validator_package_id?: string
   validator_agent_id?: string
   state: 'active' | 'under_development'
+  /** Live execution availability is separate from the saved selection state. */
+  available?: boolean
+  unavailable_reasons?: string[]
   scope: 'pack' | 'object' | 'field'
   object_type?: string
   object_role?: string
@@ -186,6 +305,8 @@ export interface DomainEnvelopeMetadata {
 }
 
 export interface AgentMetadata {
+  default_export_execution_mode?: 'ai' | 'direct'
+  output_formatter_format?: 'csv' | 'tsv' | 'json' | null
   name: string
   icon: string
   category: string
@@ -198,6 +319,7 @@ export interface AgentMetadata {
   supervisor_tool?: string
   validation_attachments?: ValidationAttachmentOption[]
   domain_envelope?: DomainEnvelopeMetadata | null
+  domain_extraction_ref?: import('@/types/agentExecution').DomainExtractionRef | null
 }
 
 /**
@@ -295,6 +417,9 @@ export async function fetchPromptPreview(
 // =============================================================================
 
 export interface CreateCustomAgentRequest {
+  visibility?: 'private' | 'project'
+  clone_source_agent_id?: string
+  clone_source_updated_at?: string
   template_source?: string
   name: string
   custom_prompt?: string
@@ -304,14 +429,21 @@ export interface CreateCustomAgentRequest {
   include_group_rules?: boolean
   model_id?: string
   model_temperature?: number
-  model_reasoning?: string
+  default_export_execution_mode?: 'ai' | 'direct'
+  model_reasoning?: string | null
   tool_ids?: string[]
-  output_schema_key?: string
+  output_schema_key?: string | null
   category?: string
   allowed_group_ids?: string[]
+  output_contract?: AgentOutputContract
+  new_generic_profile?: GenericProfileContract
 }
 
 export interface UpdateCustomAgentRequest {
+  revise_generic_profile?: { base: GenericProfilePin; contract: GenericProfileContract }
+  visibility?: 'private' | 'project'
+  expected_updated_at?: string
+  expected_revision_id?: string
   name?: string
   custom_prompt?: string
   group_prompt_overrides?: Record<string, string>
@@ -320,12 +452,15 @@ export interface UpdateCustomAgentRequest {
   include_group_rules?: boolean
   model_id?: string
   model_temperature?: number
-  model_reasoning?: string
+  default_export_execution_mode?: 'ai' | 'direct'
+  model_reasoning?: string | null
   tool_ids?: string[]
-  output_schema_key?: string
+  output_schema_key?: string | null
   allow_empty_tool_ids?: boolean
   notes?: string
   allowed_group_ids?: string[]
+  output_contract?: AgentOutputContract
+  new_generic_profile?: GenericProfileContract
 }
 
 export interface CloneAgentRequest {
@@ -482,6 +617,55 @@ export async function updateCustomAgent(
   return response.json()
 }
 
+export async function getWorkshopSavedReference(customAgentId: string): Promise<{ agent_id: string; agent_revision_id: string; name: string }> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/authoring-reference`)
+  if (!response.ok) throw new Error('The saved agent is not available in the current flow catalog.')
+  return response.json()
+}
+
+export async function validateWorkshopAction(action: WorkshopActionRequest, context: ChatContext): Promise<WorkshopAction> {
+  const response = await fetch(`${BASE_URL}/custom-agents/authoring-actions/validate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, context }),
+  })
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
+export async function getWorkshopCloneSource(customAgentId: string): Promise<CustomAgent> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/clone-source`)
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
+export async function listAgentExecutionRevisions(
+  customAgentId: string, beforeRevision?: number,
+): Promise<AgentExecutionRevisionPage> {
+  const query = beforeRevision === undefined ? '' : `?before_revision=${beforeRevision}`
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions${query}`)
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
+export async function getAgentExecutionRevision(
+  customAgentId: string, revisionId: string,
+): Promise<AgentExecutionRevision> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions/${encodeURIComponent(revisionId)}`)
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
+export async function restoreAgentExecutionRevision(
+  customAgentId: string, revisionId: string, expectedRevisionId: string,
+): Promise<CustomAgent> {
+  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions/${encodeURIComponent(revisionId)}/restore`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expected_revision_id: expectedRevisionId }),
+  })
+  if (!response.ok) throw new Error(await readCurationApiError(response))
+  return response.json()
+}
+
 export async function deleteCustomAgent(customAgentId: string): Promise<void> {
   const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}`, {
     method: 'DELETE',
@@ -532,25 +716,6 @@ export async function listCustomAgentVersions(customAgentId: string): Promise<Cu
   const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/versions`)
   if (!response.ok) {
     throw new Error(`Failed to list custom agent versions: ${response.status}`)
-  }
-  return response.json()
-}
-
-export async function revertCustomAgentVersion(
-  customAgentId: string,
-  version: number,
-  notes?: string
-): Promise<CustomAgent> {
-  const response = await fetch(
-    `${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/revert/${version}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes }),
-    }
-  )
-  if (!response.ok) {
-    throw new Error(`Failed to revert custom agent version: ${response.status}`)
   }
   return response.json()
 }
@@ -719,7 +884,7 @@ export async function fetchAgentStudioSessionDetail(
 }
 
 /**
- * Stream chat with Opus
+ * Stream Agent Studio AI Chat
  * Returns an async generator that yields SSE events
  *
  * Uses effort="medium" on the backend for optimal quality/cost balance.
@@ -728,10 +893,27 @@ export async function fetchAgentStudioSessionDetail(
  * @param context - Optional context (selected agent, group, trace, etc.)
  * @param sessionId - Durable Agent Studio session to attach to the streamed turn
  */
+export async function stopAgentStudioChat(sessionId: string, turnId: string): Promise<void> {
+  const response = await fetch(`${BASE_URL}/chat/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, turn_id: turnId }),
+  })
+  // A completed turn can race Stop; the requested turn must never cancel its successor.
+  if (!response.ok && response.status !== 409) throw new Error('Could not stop AI Chat. Please try again.')
+}
+
+export interface StudioApplicationEvent {
+  kind: 'draft_applied'
+  event_id: string
+  output_mode_node_ids: string[]
+}
+
 export async function* streamOpusChat(
   messages: ChatMessage[],
   context?: ChatContext,
   sessionId?: string,
+  applicationEvent?: StudioApplicationEvent,
 ): AsyncGenerator<OpusChatEvent> {
   const requestContext = sessionId
     ? {
@@ -743,7 +925,7 @@ export async function* streamOpusChat(
   const response = await fetch(`${BASE_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context: requestContext }),
+    body: JSON.stringify({ messages, context: requestContext, application_event: applicationEvent }),
   })
 
   if (!response.ok) {
@@ -757,6 +939,54 @@ export async function* streamOpusChat(
 
   const decoder = new TextDecoder()
   let buffer = ''
+  let responseSessionId: string | null = null
+  let responseTurnId: string | null = null
+  let receivedTerminalEvent = false
+
+  const parseAndCorrelate = (payload: string): OpusChatEvent => {
+    let decoded: unknown
+    try {
+      decoded = JSON.parse(payload)
+    } catch {
+      const error = new AgentStudioStreamProtocolError('malformed_json')
+      reportAgentStudioStreamProtocolError(error)
+      throw error
+    }
+
+    let event: OpusChatEvent
+    try {
+      event = parseAgentStudioChatEvent(decoded)
+    } catch (error) {
+      if (error instanceof AgentStudioStreamProtocolError) {
+        reportAgentStudioStreamProtocolError(error)
+      }
+      throw error
+    }
+
+    if (responseSessionId === null) {
+      responseSessionId = event.session_id
+      responseTurnId = event.turn_id
+    } else if (event.session_id !== responseSessionId || event.turn_id !== responseTurnId) {
+      const error = new AgentStudioStreamProtocolError('correlation_mismatch', event.type)
+      reportAgentStudioStreamProtocolError(error)
+      throw error
+    }
+    if (
+      event.type === 'DONE'
+      || event.type === 'CONTEXT_OVERFLOW'
+      || event.type === 'REFUSAL'
+      || event.type === 'INCOMPLETE'
+      || event.type === 'ERROR'
+    ) {
+      receivedTerminalEvent = true
+    }
+    return event
+  }
+
+  const eventPayload = (line: string): string | null => {
+    if (!line.startsWith('data:')) return null
+    return line.slice(5).trimStart()
+  }
 
   try {
     while (true) {
@@ -768,25 +998,25 @@ export async function* streamOpusChat(
       buffer = lines.pop() || ''
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const event = JSON.parse(line.slice(6)) as OpusChatEvent
-            yield event
-          } catch {
-            // Silently skip malformed SSE events - they may be incomplete
-          }
+        const payload = eventPayload(line)
+        if (payload !== null && payload.length > 0) {
+          yield parseAndCorrelate(payload)
         }
       }
     }
 
-    // Process any remaining buffer
-    if (buffer.startsWith('data: ')) {
-      try {
-        const event = JSON.parse(buffer.slice(6)) as OpusChatEvent
-        yield event
-      } catch {
-        // Ignore incomplete final event
-      }
+    buffer += decoder.decode()
+
+    // Process a complete final event even when the stream omits a newline.
+    const payload = eventPayload(buffer)
+    if (payload !== null && payload.length > 0) {
+      yield parseAndCorrelate(payload)
+    }
+
+    if (!receivedTerminalEvent) {
+      const error = new AgentStudioStreamProtocolError('missing_terminal')
+      reportAgentStudioStreamProtocolError(error)
+      throw error
     }
   } finally {
     reader.releaseLock()
@@ -867,6 +1097,7 @@ import type {
   CreateFlowRequest,
   UpdateFlowRequest,
   FlowVisibility,
+  FlowDefinition,
 } from '@/components/AgentStudio/FlowBuilder/types'
 
 export type {
@@ -995,6 +1226,73 @@ export async function updateFlow(
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
     throw new Error(extractErrorMessage(error, `Failed to update flow: ${response.status}`))
+  }
+  return response.json()
+}
+
+export interface FlowDraftValidationResponse {
+  projection_fields_by_node?: Record<string, {
+    execution_receipt: AgentExecutionReceipt | null
+    schema_fingerprint?: string
+    fields: Array<{
+      ref: string
+      profile_path?: string
+      group?: string
+      label: string
+      value_type: string
+      schema_kind: string
+      array_depth: number
+      required: boolean
+      nullable: boolean
+      enum_values: string[]
+    }>
+  }>
+  artifact_kind: 'flow'
+  phase: 'pre_apply' | 'post_apply'
+  valid: boolean
+  findings: Array<{
+    code: string
+    severity: 'error' | 'warning' | 'info'
+    path: string
+    message: string
+    fix_hint?: string
+  }>
+}
+
+/** Canonically validate a transient proposal candidate without writing it. */
+export async function validateWorkshopDraft(
+  workshop: import('@/types/promptExplorer').AgentWorkshopContext,
+  phase: 'pre_apply' | 'post_apply',
+): Promise<FlowDraftValidationResponse> {
+  const response = await fetch('/api/agent-studio/custom-agents/validate-draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ workshop, phase }),
+  })
+  if (!response.ok) throw new Error(`Workshop validation failed (${response.status}).`)
+  return response.json()
+}
+
+export async function validateFlowDraft(
+  flowDefinition: FlowDefinition,
+  phase: 'pre_apply' | 'post_apply',
+  expectedDraftFingerprint: string,
+  currentDraftFingerprint: string,
+): Promise<FlowDraftValidationResponse> {
+  const response = await fetch(`${FLOWS_URL}/validate-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      flow_definition: flowDefinition,
+      phase,
+      expected_draft_fingerprint: expectedDraftFingerprint,
+      current_draft_fingerprint: currentDraftFingerprint,
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to validate flow proposal: ${response.status}`)
   }
   return response.json()
 }

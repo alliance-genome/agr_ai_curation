@@ -59,7 +59,7 @@ function ChatMessageList({
       borderTop: `1px solid ${chatCssVariables['--chat-subtle-divider']}`,
       borderBottom: `1px solid ${chatCssVariables['--chat-subtle-divider']}`,
     }}>
-      {messages.length === 0 ? (
+      {messages.length === 0 && !isLoading ? (
         <div className="empty-state">
           Ask a question to get started...
         </div>
@@ -185,8 +185,8 @@ function ChatMessageList({
         })
       )}
       {isLoading && (
-        <div className="loading-indicator">
-          <span>{progressMessage || 'AI is thinking...'}</span>
+        <div className="loading-indicator" role="status" aria-live="polite" aria-atomic="true">
+          <span>{progressMessage || 'Working on your request…'}</span>
         </div>
       )}
       <div ref={messagesEndRef} />

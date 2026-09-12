@@ -7,6 +7,8 @@ from uuid import NAMESPACE_URL, uuid5
 
 from src.lib.agent_studio.catalog_service import get_agent_by_id
 from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
+from src.lib.agent_studio.catalog_service import get_benchmark_agent_by_id
+from .source_revisions import benchmark_source_revisions
 from src.lib.document_context import DocumentContext
 from src.lib.flows.executor import execute_flow
 from src.lib.openai_agents.config import (
@@ -73,19 +75,21 @@ async def execute_resolved_agent_cell(
         else None
     )
     active_groups = case_input.get("active_groups") or []
-    with benchmark_route_plan(cell.routes), capture_provider_usage(
+    with benchmark_route_plan(cell.routes), benchmark_source_revisions(cell.source_execution_receipts), capture_provider_usage(
         max_records=get_benchmark_max_invocations_per_cell(),
         max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),
     ) as usage_records:
-        agent = get_agent_by_id(
+        construction = (get_benchmark_agent_by_id if cell.target.id.startswith("ca_") else get_agent_by_id)
+        routing = ({"benchmark_slot": slot} if cell.target.id.startswith("ca_") else {
+            "model_id_override": route.model, "model_provider_override": route.provider,
+            "model_reasoning_override": route.reasoning_effort, "benchmark_route_slot": slot,
+        })
+        agent = construction(
             cell.target.id,
             db_user_id=case_input.get("db_user_id"),
             active_groups=active_groups,
             authenticated_groups=active_groups,
-            model_id_override=route.model,
-            model_provider_override=route.provider,
-            model_reasoning_override=route.reasoning_effort,
-            benchmark_route_slot=slot,
+            **routing,
             **(doc_context.to_agent_kwargs() if doc_context else {}),
         )
         attach_benchmark_route(agent, slot)
@@ -158,7 +162,7 @@ async def execute_resolved_flow_cell(
     if "supervisor" not in cell.routes:
         raise ValueError("Frozen benchmark route plan has no slot 'supervisor'")
     flow = _flow_from_recipe(cell.target.id, case_input.get("active_groups", []))
-    with benchmark_route_plan(cell.routes), capture_provider_usage(
+    with benchmark_route_plan(cell.routes), benchmark_source_revisions(cell.source_execution_receipts), capture_provider_usage(
         max_records=get_benchmark_max_invocations_per_cell(),
         max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),
     ) as usage_records:

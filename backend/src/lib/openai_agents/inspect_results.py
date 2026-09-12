@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.chat_state import document_state
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.curation_workspace.extraction_results import list_extraction_results
@@ -55,6 +56,7 @@ _ACTIONS = frozenset(
         "objects",
         "object",
         "field",
+        "details",
         "evidence",
         "validation",
     }
@@ -229,6 +231,9 @@ async def inspect_results(
         return _objects_response(record, cursor=cursor, limit=limit)
     if normalized_action == "object":
         return _object_response(record, envelope=envelope, object_ref=object_ref)
+    if normalized_action == "details":
+        return _details_response(record, envelope=envelope, object_ref=object_ref,
+                                 field_path=field_path, cursor=cursor, limit=limit)
     if normalized_action == "field":
         return _field_response(
             record,
@@ -271,6 +276,7 @@ def _help_response() -> str:
         result_ref_format="extraction-result:<uuid>",
         boundaries=[
             "Default summary/object manifests use only domain-pack YAML supervisor_manifest fields.",
+            "Use details with object_ref to browse saved generic/custom attributes, including nested parts; follow child paths and cursors instead of rerunning extraction.",
             "Evidence text is excluded from summary and objects; use action=\"evidence\" with object_ref.",
             "Search returns bounded evidence snippets and YAML manifest-field previews only.",
             "Raw UUIDs and transient lookup refs are rejected as result_ref values.",
@@ -487,6 +493,61 @@ def _object_response(
     )
 
 
+def _detail_tool_response(status: str, message: str, **extra: Any) -> str:
+    # Details is already paged one level at a time. Preserve exact whitespace,
+    # null/false/zero values and continuation paths instead of preview-compacting.
+    return json.dumps({"status": status, "message": message, **extra}, ensure_ascii=True)
+
+
+def _details_response(record: Any, *, envelope: DomainEnvelope, object_ref: str | None,
+                      field_path: str | None, cursor: str | None, limit: int | None) -> str:
+    """Browse one level of saved custom attributes with explicit continuation."""
+    normalized_ref = _optional_text(object_ref)
+    path = _optional_text(field_path) or "attributes"
+    try:
+        obj = _resolve_object(envelope, normalized_ref or "")
+        parts = parse_field_path(path)
+    except ValueError:
+        return _error_response("invalid_request", "Choose a saved object and a valid detail path.", action="details")
+    # Custom attributes are an explicit data surface, not an escape from other
+    # domain packs' field visibility policies or a route to internal metadata.
+    if envelope.domain_pack_id != "generic" or not parts or parts[0] != "attributes":
+        return _error_response("field_not_supervisor_visible", "Details browses generic/custom attributes only.", action="details")
+    value: Any = obj.payload
+    for part in parts:
+        if isinstance(part, str) and isinstance(value, Mapping) and part in value:
+            value = value[part]
+        elif isinstance(part, int) and isinstance(value, list) and 0 <= part < len(value):
+            value = value[part]
+        else:
+            return _error_response("field_not_found", "This saved detail path does not exist.",
+                                   action="details", field_path=path)
+    bounded_limit = normalize_page_limit(limit, default=_RESULT_LIST_PAGE_SIZE, maximum=_MAX_LIST_LIMIT)
+    common = dict(action="details", result_ref=_record_result_ref(record), object_ref=normalized_ref, field_path=path)
+    if isinstance(value, (Mapping, list)):
+        children = list(value.items()) if isinstance(value, Mapping) else list(enumerate(value))
+        page, truncated, next_cursor = offset_page(children, limit=bounded_limit, cursor=cursor)
+        entries = []
+        for key, child in page:
+            child_path = f"{path}[{key}]" if isinstance(key, int) else f"{path}.{key}"
+            container = isinstance(child, (Mapping, list))
+            entries.append({"name": str(key), "field_path": child_path,
+                            "kind": "object" if isinstance(child, Mapping) else "list" if isinstance(child, list) else "value",
+                            "preview": None if container else child[:_FIELD_TEXT_LIMIT] if isinstance(child, str) else child,
+                            "next_call": {"action": "details", "result_ref": _record_result_ref(record),
+                                          "object_ref": normalized_ref, "field_path": child_path}})
+        return _detail_tool_response("ok", "Saved details are ready. Open a child path for its complete value or parts.",
+                              **common, entries=entries, cursor=cursor, next_cursor=next_cursor,
+                              truncated=truncated, limit=bounded_limit)
+    # Text values can exceed the preview budget. Cursor advances characters so
+    # the complete saved value remains retrievable without another extraction.
+    if isinstance(value, str):
+        page, truncated, next_cursor = offset_page(value, limit=_FIELD_TEXT_LIMIT, cursor=cursor)
+        return _detail_tool_response("ok", "Saved detail text is ready.", **common,
+                              value="".join(page), cursor=cursor, next_cursor=next_cursor, truncated=truncated)
+    return _detail_tool_response("ok", "Saved detail value is ready.", **common, value=value, truncated=False)
+
+
 def _field_response(
     record: Any,
     *,
@@ -624,9 +685,22 @@ def _evidence_response(
         limit=bounded_limit,
         cursor=cursor,
     )
+    missing = [item for item in page if not _record_has_evidence_text(item)]
+    if missing:
+        report_runtime_exception(
+            RuntimeError("Saved extraction evidence references could not be resolved to text"),
+            component="extraction_result_inspection",
+            operation="evidence_resolution_failed",
+            tags={"tool_name": "inspect_results"},
+            context={"extraction_result_id": _record_id(record),
+                     "requested_evidence_count": len(page), "missing_evidence_count": len(missing)},
+        )
     return _tool_response(
-        "ok",
-        "Bounded evidence text is ready.",
+        "error" if missing else "ok",
+        ("Some saved evidence could not be loaded. Available evidence is included; "
+         "do not rerun extraction to recover it or treat reference IDs as quotes.")
+        if missing else "Bounded evidence text is ready.",
+        **({"error_code": "evidence_unavailable", "missing_evidence_count": len(missing)} if missing else {}),
         action="evidence",
         result_ref=_record_result_ref(record),
         extraction_result_id=_record_id(record),
@@ -1239,10 +1313,16 @@ def _object_evidence_records(
 
 
 def _metadata_evidence_records(metadata: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    raw_records = metadata.get("evidence_records")
-    if not isinstance(raw_records, list):
-        return []
-    return [item for item in raw_records if isinstance(item, Mapping)]
+    # Canonical conversion retains extractor metadata under extraction_metadata.
+    # Native domain envelopes can instead carry evidence directly in metadata.
+    nested = metadata.get("extraction_metadata")
+    sources = [metadata, nested] if isinstance(nested, Mapping) else [metadata]
+    records = []
+    for source in sources:
+        raw = source.get("evidence_records")
+        if isinstance(raw, list):
+            records.extend(item for item in raw if isinstance(item, Mapping))
+    return records
 
 
 def _payload_evidence_record(obj: CuratableObjectEnvelope) -> dict[str, Any]:

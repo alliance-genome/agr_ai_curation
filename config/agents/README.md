@@ -107,9 +107,9 @@ group_tool_policy:
 output_schema: MyAgentEnvelope
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-5.6-sol}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-6-astra}"
   temperature: 0.1
-  reasoning: "medium"
+  reasoning: "low"
 
 group_rules_enabled: true
 ```
@@ -262,8 +262,8 @@ model_config:
   temperature: ${AGENT_GENE_TEMP:-0.1}
 ```
 
-Document extractors use Sol instead, for example
-`AGENT_GENE_EXTRACTOR_MODEL` defaults to `gpt-5.6-sol`.
+Document extractors use Astra low instead, for example
+`AGENT_GENE_EXTRACTOR_MODEL` defaults to `gpt-6-astra` with low reasoning.
 
 Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 

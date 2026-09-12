@@ -1,9 +1,12 @@
+import { useAuth } from '@/contexts/AuthContext'
+import { StudioNavigationContext } from '@/components/AgentStudio/studioNavigation'
+import { Root, PanelCard, ClaudePanelSection, ResizeHandle, TabBar, StyledTabs, VisuallyHidden, StyledTab, TabContent } from '@/components/AgentStudio/studioShellStyles'
 /**
  * Agent Studio Page
  *
- * Adaptive shell for exploring agent prompts, building flows, and chatting with Claude:
- * - Left: work surface with Agents, Flows, Agent Workshop, and Shared Library tabs
- * - Right: Claude copilot pane (30% by default) that collapses to a 44px rail
+ * Adaptive shell for exploring agent prompts, building flows, and using AI Chat:
+ * - Left: work surface with the Agents, Flows, Agent Workshop, and Shared Library tabs
+ * - Right: AI Chat pane (30% by default) that collapses to a 44px rail
  * - Below 1100px: the pane becomes a right-side drawer opened from the tab bar
  *
  * OpusChat stays mounted across collapse, expand, and drawer open/close so
@@ -25,12 +28,9 @@ import {
   Alert,
   Typography,
   Stack,
-  Tabs,
-  Tab,
   useMediaQuery,
 } from '@mui/material'
-import { styled } from '@mui/material/styles'
-import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels'
+import { Panel, PanelGroup, type ImperativePanelHandle } from 'react-resizable-panels'
 import DescriptionIcon from '@mui/icons-material/Description'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import ScienceIcon from '@mui/icons-material/Science'
@@ -41,139 +41,42 @@ import ClaudeRail, { formatUnreadDescription } from '@/components/AgentStudio/Cl
 import ClaudeDrawer from '@/components/AgentStudio/ClaudeDrawer'
 import { buildFlowVerificationPrompt } from '@/components/AgentStudio/flowVerificationPrompt'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
-import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
+import {
+  FlowBuilder,
+  type FlowAuthoringContextHandle,
+  type FlowState,
+} from '@/components/AgentStudio/FlowBuilder'
 import type { AgentBrowserRequest, AgentDetailsRequest } from '@/components/AgentStudio/agentBrowserRequest'
+import PromptWorkshop, {
+  type WorkshopAuthoringContextHandle,
+  type WorkshopLeaveGuard,
+} from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
+import { canonicalAuthoringJson, fingerprintAuthoringContext } from '@/components/AgentStudio/authoringContext'
 import SharedLibrary from '@/components/AgentStudio/SharedLibrary'
-import PromptWorkshop, { type WorkshopLeaveGuard } from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
 import {
   useChatHistoryDetailQuery,
   useChatHistoryTranscriptQuery,
 } from '@/features/history/useChatHistoryQuery'
-import { cloneAgentToWorkshop, fetchPromptCatalog } from '@/services/agentStudioService'
+import { cloneAgentToWorkshop, fetchPromptCatalog, getWorkshopSavedReference, validateWorkshopAction, getWorkshopCloneSource } from '@/services/agentStudioService'
 import {
   AGENT_STUDIO_CHAT_HISTORY_KIND,
   buildRestorableChatMessages,
 } from '@/services/chatHistoryApi'
 import { safeGetItem, safeRemoveItem, safeSetItem } from '@/lib/browserStorage'
+import logger from '@/services/logger'
 import type {
   PromptCatalog,
   ChatContext,
   FlowContextDefinition,
   AgentWorkshopContext,
   ToolIdeaConversationEntry,
-  WorkshopPromptUpdateProposal,
-  WorkshopPromptUpdateRequest,
+  WorkshopAuthoringProposal,
+  WorkshopContinuationOrigin,
+  WorkshopSavedHandoff,
+  FlowAuthoringProposal,
+  WorkshopAction,
+  CustomAgent,
 } from '@/types/promptExplorer'
-
-const Root = styled(Box)(({ theme }) => ({
-  flex: 1,
-  display: 'flex',
-  height: '100%',
-  overflow: 'hidden',
-  padding: theme.spacing(1),
-}))
-
-/** Paper card with the shared 1px divider border and 8px radius from the shell mockup. */
-const PanelCard = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  // The Panel element is a flex row; without these the card is sized by its
-  // content and leaves the rest of the panel empty.
-  flex: '1 1 0%',
-  width: '100%',
-  minWidth: 0,
-  minHeight: 0,
-  height: '100%',
-  backgroundColor: theme.palette.background.paper,
-  border: `1px solid ${theme.palette.divider}`,
-  ...theme.unstable_sx({ borderRadius: 2 }),
-  overflow: 'hidden',
-}))
-
-const ClaudePanelSection = styled(PanelCard, {
-  shouldForwardProp: (prop) => prop !== 'collapsed',
-})<{ collapsed: boolean }>(({ collapsed }) => ({
-  visibility: collapsed ? 'hidden' : 'visible',
-  '& > *': {
-    flex: 1,
-    minHeight: 0,
-    height: '100%',
-  },
-}))
-
-const ResizeHandle = styled(PanelResizeHandle, {
-  shouldForwardProp: (prop) => prop !== 'collapsed',
-})<{ collapsed: boolean }>(({ theme, collapsed }) => ({
-  width: 8,
-  flex: '0 0 8px',
-  display: collapsed ? 'none' : 'block',
-  cursor: 'col-resize',
-  position: 'relative',
-  '&::after': {
-    content: '""',
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 3,
-    width: 2,
-    borderRadius: 1,
-    backgroundColor: theme.palette.divider,
-    transition: 'background-color 0.2s ease',
-  },
-  '&:hover::after, &[data-resize-handle-active]::after': {
-    backgroundColor: theme.palette.primary.main,
-  },
-  '&:focus-visible': {
-    outline: `2px solid ${theme.palette.primary.main}`,
-    outlineOffset: -2,
-  },
-}))
-
-const TabBar = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  minHeight: 40,
-  borderBottom: `1px solid ${theme.palette.divider}`,
-  paddingRight: theme.spacing(1),
-  flex: 'none',
-}))
-
-const StyledTabs = styled(Tabs)(() => ({
-  minHeight: 40,
-  flex: 1,
-  minWidth: 0,
-  '& .MuiTabs-indicator': {
-    height: 3,
-  },
-}))
-
-const VisuallyHidden = styled('span')({
-  position: 'absolute',
-  width: 1,
-  height: 1,
-  padding: 0,
-  margin: -1,
-  overflow: 'hidden',
-  clip: 'rect(0, 0, 0, 0)',
-  whiteSpace: 'nowrap',
-  border: 0,
-})
-
-const StyledTab = styled(Tab)(({ theme }) => ({
-  minHeight: 40,
-  textTransform: 'none',
-  fontWeight: 500,
-  fontSize: '0.85rem',
-  '&.Mui-selected': {
-    color: theme.palette.primary.main,
-  },
-}))
-
-const TabContent = styled(Box)(() => ({
-  flex: 1,
-  minHeight: 0,
-  overflow: 'hidden',
-}))
 
 type TabValue = 'agents' | 'flows' | 'agent_workshop' | 'shared_library'
 
@@ -228,6 +131,7 @@ function buildSeededOpusConversation(messages: Parameters<typeof buildRestorable
 
 function AgentStudioPage() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const { user: draftOwner } = useAuth()
 
   // Data state
   const [catalog, setCatalog] = useState<PromptCatalog | null>(null)
@@ -256,6 +160,21 @@ function AgentStudioPage() {
   })
 
   const workshopLeaveGuardRef = useRef<WorkshopLeaveGuard | null>(null)
+  const workshopAuthoringContextRef = useRef<WorkshopAuthoringContextHandle | null>(null)
+  const flowAuthoringContextRef = useRef<FlowAuthoringContextHandle | null>(null)
+  const [workshopContinuationOrigin, setWorkshopContinuationOrigin] = useState<WorkshopContinuationOrigin>()
+  const [workshopSavedHandoff, setWorkshopSavedHandoff] = useState<WorkshopSavedHandoff>()
+  const [initialWorkshopAction, setInitialWorkshopAction] = useState<WorkshopAction>()
+  const [initialChatCloneSource, setInitialChatCloneSource] = useState<CustomAgent>()
+  const requestedWorkshopOriginRef = useRef<WorkshopContinuationOrigin | null | undefined>(undefined)
+  const [continuingToFlow, setContinuingToFlow] = useState(false)
+  const continuationBusyRef = useRef(false)
+  const continuationMountedRef = useRef(true)
+  useEffect(() => {
+    continuationMountedRef.current = true
+    return () => { continuationMountedRef.current = false }
+  }, [])
+  const previousAuthoringTabRef = useRef(activeTab)
 
   useEffect(() => {
     if (activeTab === 'flows') setFlowsVisited(true)
@@ -264,11 +183,18 @@ function AgentStudioPage() {
   // Persist tab changes
   const applyTab = useCallback((newValue: TabValue) => {
     setActiveTab(newValue)
+    setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', newValue); return next })
     safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, newValue, {
       owner: 'preferences',
       key: AGENT_STUDIO_TAB_KEY,
     })
-  }, [])
+  }, [setSearchParams])
+
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab === 'agents' || tab === 'flows' || tab === 'agent_workshop' || tab === 'shared_library') setActiveTab(tab)
+    else setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', activeTab); return next }, { replace: true })
+  }, [searchParams, setSearchParams]) // Navigation restores the tab without discarding its draft.
 
   // Ask the Workshop before leaving it so unsaved edits are not dropped silently.
   // The Workshop only mounts once the catalog is loaded; without it there is nothing to guard.
@@ -279,14 +205,10 @@ function AgentStudioPage() {
   }, [])
 
   const handleTabChange = useCallback((_e: React.SyntheticEvent, newValue: TabValue) => {
-    if (activeTab === 'agent_workshop' && newValue !== 'agent_workshop') {
-      void confirmLeaveWorkshop().then((leave) => {
-        if (leave) applyTab(newValue)
-      })
-      return
-    }
     applyTab(newValue)
-  }, [activeTab, applyTab, confirmLeaveWorkshop])
+  }, [applyTab])
+  const [workshopVisited, setWorkshopVisited] = useState(activeTab === 'agent_workshop')
+  useEffect(() => { if (activeTab === 'agent_workshop') setWorkshopVisited(true) }, [activeTab])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   // The Flows tab mounts on first visit and then stays mounted (hidden) so an
@@ -309,9 +231,7 @@ function AgentStudioPage() {
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null)
   const [discussMessage, setDiscussMessage] = useState<string | null>(null)
   const [opusConversation, setOpusConversation] = useState<ToolIdeaConversationEntry[]>([])
-  const [workshopPromptUpdateRequest, setWorkshopPromptUpdateRequest] = useState<WorkshopPromptUpdateRequest | null>(null)
   const [pendingUrlSwapSessionId, setPendingUrlSwapSessionId] = useState<string | null>(null)
-  const promptUpdateCounterRef = useRef(0)
   const hydratedConversationSessionRef = useRef<string | null>(null)
   const searchParamsRef = useRef(searchParams)
 
@@ -418,7 +338,7 @@ function AgentStudioPage() {
     writeCollapsedPreference(false)
   }, [])
 
-  // Ctrl+. / Cmd+. toggles Claude from anywhere on the page.
+  // Ctrl+. / Cmd+. toggles AI Chat from anywhere on the page.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== '.' || !(event.ctrlKey || event.metaKey) || event.altKey) {
@@ -446,7 +366,7 @@ function AgentStudioPage() {
     }
   }, [claudeHidden, isNarrow])
 
-  // Unread tracking: assistant messages appended while Claude is hidden. The
+  // Unread tracking: assistant messages appended while AI Chat is hidden. The
   // first snapshot only sets the baseline; later growth while hidden counts.
   const handleConversationSnapshotChange = useCallback((messages: ToolIdeaConversationEntry[]) => {
     setOpusConversation(messages)
@@ -571,7 +491,7 @@ function AgentStudioPage() {
   ])
 
   // Load catalog on mount
-  // Note: trace context is NOT fetched here - it's injected into Opus's prompt on the backend
+  // Trace context is not fetched here; the backend injects it into AI Chat context.
   // when the user sends a message. The trace_id is passed via chatContext.
   useEffect(() => {
     async function loadData() {
@@ -597,26 +517,32 @@ function AgentStudioPage() {
   const workshopSelectedGroupId = agentWorkshopContext?.selected_group_id
 
   const effectiveSelectedAgentId =
-    activeTab === 'agent_workshop' ? workshopSelectedAgentId : (selectedAgentId || undefined)
+    activeTab === 'shared_library' ? undefined : activeTab === 'agent_workshop' ? workshopSelectedAgentId : (selectedAgentId || undefined)
   const effectiveSelectedGroupId =
-    activeTab === 'agent_workshop' ? workshopSelectedGroupId : (selectedGroupId || undefined)
+    activeTab === 'shared_library' ? undefined : activeTab === 'agent_workshop' ? workshopSelectedGroupId : (selectedGroupId || undefined)
   const effectiveViewMode = effectiveSelectedGroupId ? 'combined' : 'base'
   const flowDefinition: FlowContextDefinition | undefined =
-    activeTab === 'flows' && flowState
+    activeTab !== 'shared_library' && flowsVisited && flowState
       ? {
           version: flowState.version,
+          task_instructions_default_only: flowState.task_instructions_default_only,
           entry_node_id: flowState.entry_node_id,
           nodes: flowState.nodes.map((node) => ({
             id: node.id,
             node_type: node.type,
+            position: { ...node.position },
             agent_id: node.agent_id,
             agent_display_name: node.agent_display_name,
+            agent_description: node.agent_description,
             task_instructions: node.task_instructions,
             step_goal: node.step_goal,
             custom_instructions: node.custom_instructions,
             prompt_version: node.prompt_version,
+            agent_revision_id: node.agent_revision_id,
+            execution_receipt: node.execution_receipt,
             include_evidence: node.include_evidence,
             output_filename_template: node.output_filename_template,
+            export_execution_mode: node.export_execution_mode,
             projection_plan: node.projection_plan,
             output_key: node.output_key,
             validation_attachments: node.validation_attachments?.map((attachment) => (({
@@ -633,23 +559,294 @@ function AgentStudioPage() {
             role: edge.role,
             satisfies_binding_id: edge.satisfies_binding_id,
             replaces_attachment_id: edge.replaces_attachment_id,
+            condition: edge.condition,
           })),
         }
       : undefined
 
-  // Build chat context for Opus (includes active tab, flow state, and agent workshop state)
+  // Build AI Chat context (active tab, flow state, and Workshop state).
   const chatContext: ChatContext = {
     selected_agent_id: effectiveSelectedAgentId,
     selected_group_id: effectiveSelectedGroupId,
     view_mode: effectiveViewMode,
     trace_id: traceId || undefined,
     session_id: effectiveDurableSessionId || undefined,
-    // Flow context (when on flows tab)
-    // The library has no editable agent or flow context for chat tools.
+    // Preserve visited flow context while moving into Workshop and back.
     active_tab: activeTab === 'shared_library' ? undefined : activeTab,
-    flow_name: activeTab === 'flows' ? flowState?.flowName : undefined,
+    flow_id: flowDefinition ? flowState?.flowId : undefined,
+    flow_name: flowDefinition ? flowState?.flowName : undefined,
+    flow_description: flowDefinition ? flowState?.flowDescription : undefined,
+    flow_updated_at: flowDefinition ? flowState?.flowUpdatedAt : undefined,
+    flow_is_dirty: flowDefinition ? flowState?.isDirty : undefined,
     flow_definition: flowDefinition,
     agent_workshop: activeTab === 'agent_workshop' ? (agentWorkshopContext || undefined) : undefined,
+  }
+
+  const captureChatContext = useCallback(async (): Promise<ChatContext> => {
+    // Both editor calls copy their current values before fingerprint hashing
+    // reaches the first await.
+    const capturedFlow = activeTab !== 'shared_library' && flowsVisited
+      ? (flowAuthoringContextRef.current?.captureAuthoringContext() ?? flowState)
+      : null
+    const capturedWorkshop = activeTab === 'agent_workshop'
+      ? (workshopAuthoringContextRef.current?.captureAuthoringContext() ?? agentWorkshopContext)
+      : null
+    const capturedFlowDefinition: FlowContextDefinition | undefined = capturedFlow
+      ? {
+          version: capturedFlow.version,
+          task_instructions_default_only: capturedFlow.task_instructions_default_only,
+          entry_node_id: capturedFlow.entry_node_id,
+          nodes: capturedFlow.nodes.map((node) => ({
+            id: node.id,
+            node_type: node.type,
+            position: { ...node.position },
+            agent_id: node.agent_id,
+            agent_display_name: node.agent_display_name,
+            agent_description: node.agent_description,
+            task_instructions: node.task_instructions,
+            step_goal: node.step_goal,
+            custom_instructions: node.custom_instructions,
+            prompt_version: node.prompt_version,
+            agent_revision_id: node.agent_revision_id,
+            execution_receipt: node.execution_receipt,
+            include_evidence: node.include_evidence,
+            output_filename_template: node.output_filename_template,
+            export_execution_mode: node.export_execution_mode,
+            projection_plan: node.projection_plan,
+            output_key: node.output_key,
+            validation_attachments: node.validation_attachments?.map((attachment) => ({ ...attachment })),
+            validation_groups: node.validation_groups?.map((group) => ({ ...group })),
+          })),
+          edges: capturedFlow.edges.map((edge) => ({ ...edge })),
+        }
+      : undefined
+    const captured: ChatContext = {
+      selected_agent_id: effectiveSelectedAgentId,
+      selected_group_id: effectiveSelectedGroupId,
+      view_mode: effectiveViewMode,
+      trace_id: traceId || undefined,
+      session_id: effectiveDurableSessionId || undefined,
+      active_tab: activeTab === 'shared_library' ? undefined : activeTab,
+      flow_id: capturedFlow?.flowId,
+      flow_name: capturedFlow?.flowName,
+      flow_description: capturedFlow?.flowDescription,
+      flow_updated_at: capturedFlow?.flowUpdatedAt,
+      flow_is_dirty: capturedFlow?.isDirty,
+      flow_definition: capturedFlowDefinition,
+      agent_workshop: capturedWorkshop || undefined,
+    }
+    const fingerprinted = await fingerprintAuthoringContext(captured)
+    logger.info('Captured Agent Studio authoring context', {
+      component: 'AgentStudioPage',
+      action: 'capture_authoring_context',
+      metadata: {
+        activeTab,
+        hasFlowDraft: Boolean(fingerprinted.flow_definition),
+        flowDirty: fingerprinted.flow_is_dirty,
+        flowNodeCount: fingerprinted.flow_definition?.nodes.length ?? 0,
+        hasWorkshopDraft: Boolean(fingerprinted.agent_workshop),
+        workshopDirty: fingerprinted.agent_workshop?.draft_is_dirty,
+        workshopToolCount: fingerprinted.agent_workshop?.draft_tool_ids?.length ?? 0,
+      },
+    })
+    return fingerprinted
+  }, [
+    activeTab,
+    agentWorkshopContext,
+    effectiveDurableSessionId,
+    effectiveSelectedAgentId,
+    effectiveSelectedGroupId,
+    effectiveViewMode,
+    flowState,
+    flowsVisited,
+    traceId,
+  ])
+
+  useEffect(() => {
+    const previousTab = previousAuthoringTabRef.current
+    previousAuthoringTabRef.current = activeTab
+    if (activeTab !== 'agent_workshop' || previousTab === 'agent_workshop') return
+    setWorkshopSavedHandoff(undefined)
+    if (requestedWorkshopOriginRef.current !== undefined) {
+      setWorkshopContinuationOrigin(requestedWorkshopOriginRef.current || undefined)
+      requestedWorkshopOriginRef.current = undefined
+      return
+    }
+    setWorkshopContinuationOrigin(undefined)
+    if (previousTab === 'flows') {
+      void captureChatContext().then((captured) => {
+        if (previousAuthoringTabRef.current === 'agent_workshop' && captured.flow_draft_fingerprint) {
+          setWorkshopContinuationOrigin({
+            flow_id: captured.flow_id, flow_draft_fingerprint: captured.flow_draft_fingerprint,
+          })
+        }
+      }).catch(() => {
+        setWorkshopSavedHandoff({ status: 'stale_origin' })
+      })
+    }
+  }, [activeTab, captureChatContext])
+
+  const handleWorkshopSavedHandoff = useCallback((handoff: WorkshopSavedHandoff) => {
+    void captureChatContext().then((captured) => {
+      const stale = handoff.origin
+        && handoff.origin.flow_draft_fingerprint !== captured.flow_draft_fingerprint
+      setWorkshopSavedHandoff(stale ? { ...handoff, status: 'stale_origin' } : handoff)
+    }).catch(() => setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' }))
+  }, [captureChatContext])
+
+  const continuationLiveRef = useRef({ activeTab, workshopSavedHandoff, isClaudeStreaming, sessionId: effectiveDurableSessionId })
+  continuationLiveRef.current = { activeTab, workshopSavedHandoff, isClaudeStreaming, sessionId: effectiveDurableSessionId }
+
+  const handleContinueInFlow = async () => {
+    const returnFromTab = activeTab
+    const returnSessionId = effectiveDurableSessionId
+    const handoff = workshopSavedHandoff
+    if (continuationBusyRef.current || isClaudeStreaming || handoff?.status !== 'ready'
+      || !handoff.origin || !handoff.saved_agent_id || !handoff.saved_custom_agent_id) return
+    const captureDrafts = () => ({
+      flow: flowAuthoringContextRef.current?.captureAuthoringContext(),
+      workshop: workshopAuthoringContextRef.current?.captureAuthoringContext(),
+    })
+    const before = captureDrafts()
+    if (!before.flow || !before.workshop || before.workshop.draft_is_dirty
+      || before.workshop.custom_agent_id !== handoff.saved_agent_id) {
+      setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
+      return
+    }
+    const beforeKey = canonicalAuthoringJson(before)
+    continuationBusyRef.current = true
+    setContinuingToFlow(true)
+    try {
+      const context = await captureChatContext()
+      if (!continuationMountedRef.current || continuationLiveRef.current.activeTab !== returnFromTab
+        || continuationLiveRef.current.sessionId !== returnSessionId
+        || continuationLiveRef.current.workshopSavedHandoff !== handoff) return
+      if (context.flow_draft_fingerprint !== handoff.origin.flow_draft_fingerprint) {
+        setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
+        return
+      }
+      const reference = await getWorkshopSavedReference(handoff.saved_custom_agent_id)
+      const live = continuationLiveRef.current
+      if (!continuationMountedRef.current || live.activeTab !== returnFromTab || live.sessionId !== returnSessionId
+        || live.workshopSavedHandoff !== handoff) return
+      if (live.isClaudeStreaming || canonicalAuthoringJson(captureDrafts()) !== beforeKey) {
+        setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
+        return
+      }
+      if (reference.agent_id !== handoff.saved_agent_id
+        || !handoff.saved_agent_revision_id
+        || reference.agent_revision_id !== handoff.saved_agent_revision_id) {
+        setWorkshopSavedHandoff({ ...handoff, status: 'catalog_unavailable' })
+        return
+      }
+      const origin = handoff.origin
+      if (origin.node_id) {
+        const node = context.flow_definition?.nodes.find((item) => item.id === origin.node_id)
+        if (!node || node.agent_id !== origin.agent_id
+          || node.agent_revision_id !== origin.agent_revision_id
+          || reference.agent_id !== origin.agent_id) {
+          setWorkshopSavedHandoff({ ...handoff, status: 'stale_origin' })
+          return
+        }
+      }
+      applyTab('flows')
+      safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'flows', {
+        owner: 'preferences', key: AGENT_STUDIO_TAB_KEY,
+      })
+      showClaude()
+      setDiscussMessage(origin.node_id
+        ? `Propose updating only flow step ${origin.node_id} to the saved revision ${reference.agent_revision_id} of agent ${reference.agent_id}. Use retarget_agent_revision in propose_flow_draft_update. Preserve the step identity, connections and unrelated settings. Do not add a duplicate, update other uses, save or execute the flow. Explain the change using the agent name ${reference.name}.`
+        : `Propose adding the saved agent ${reference.agent_id}, exact revision ${reference.agent_revision_id}, to my current Flow draft. Recheck its authenticated catalog entry, preserve unrelated steps and settings, and use propose_flow_draft_update to show the exact change for review. Do not save or execute the flow. Ask only if the insertion point is materially ambiguous.`)
+      setWorkshopSavedHandoff(undefined)
+    } catch {
+      if (continuationMountedRef.current && continuationLiveRef.current.workshopSavedHandoff === handoff) {
+        setWorkshopSavedHandoff({ ...handoff, status: 'catalog_unavailable' })
+      }
+    } finally {
+      continuationBusyRef.current = false
+      if (continuationMountedRef.current) setContinuingToFlow(false)
+    }
+  }
+
+  const continueInFlowRef = useRef(handleContinueInFlow)
+  continueInFlowRef.current = handleContinueInFlow
+  const lastResumeTabRef = useRef(activeTab)
+  const pendingFlowReturnRef = useRef(false)
+  useEffect(() => {
+    const previousTab = lastResumeTabRef.current
+    lastResumeTabRef.current = activeTab
+    if (previousTab !== activeTab) {
+      // Returning after saving an agent for this flow is the handoff gesture.
+      // Ordinary tab browsing, or manual work without a chat, must not send a turn.
+      pendingFlowReturnRef.current = previousTab === 'agent_workshop' && activeTab === 'flows'
+        && Boolean(workshopContinuationOrigin) && opusConversation.length > 0
+    }
+    if (!pendingFlowReturnRef.current || activeTab !== 'flows' || isClaudeStreaming) return
+    if (workshopSavedHandoff?.status !== 'ready' || !workshopSavedHandoff.origin) return
+    pendingFlowReturnRef.current = false
+    void continueInFlowRef.current()
+  }, [activeTab, isClaudeStreaming, workshopSavedHandoff, workshopContinuationOrigin, opusConversation.length])
+
+  const handleWorkshopAction = async (action: WorkshopAction) => {
+    if (isClaudeStreaming) throw new Error('Wait for AI Chat to finish before opening this action.')
+    const stillOnOrigin = () => continuationMountedRef.current
+      && continuationLiveRef.current.activeTab === action.active_tab
+      && !continuationLiveRef.current.isClaudeStreaming
+    const before = await captureChatContext()
+    if (!stillOnOrigin() || before.active_tab !== action.active_tab
+      || (before.flow_draft_fingerprint || null) !== action.flow_draft_fingerprint
+      || (before.agent_workshop?.draft_fingerprint || null) !== action.workshop_draft_fingerprint) {
+      throw new Error('Your work changed since this action was offered. Ask AI Chat to use your current draft.')
+    }
+    const fresh = await validateWorkshopAction(action.request, before)
+    if (!stillOnOrigin() || canonicalAuthoringJson(fresh) !== canonicalAuthoringJson(action)
+      || canonicalAuthoringJson(await captureChatContext()) !== canonicalAuthoringJson(before)
+      || !stillOnOrigin()) {
+      throw new Error('The agent or draft changed. Ask AI Chat for a fresh action; your edits have been kept.')
+    }
+    const opensDraft = action.request.action === 'open_agent' || action.request.action === 'new_agent'
+    if (opensDraft) {
+      const cloneSource = action.request.mode === 'clone' && action.source
+        ? await getWorkshopCloneSource(action.source.agent_id.replace(/^ca_/, '')) : undefined
+      if (cloneSource && (cloneSource.agent_id !== action.source?.agent_id
+        || cloneSource.execution_revision_id !== action.source.agent_revision_id)) {
+        throw new Error('The clone source changed. Ask AI Chat for a fresh action.')
+      }
+      if (!await confirmLeaveWorkshop()) throw new Error('Your current Workshop draft is still open.')
+      if (!stillOnOrigin() || canonicalAuthoringJson(await captureChatContext()) !== canonicalAuthoringJson(before)
+        || !stillOnOrigin()) {
+        throw new Error('Your draft changed. Ask AI Chat for a fresh action.')
+      }
+      const nextOrigin = action.origin || (action.request.action === 'new_agent' && workshopContinuationOrigin
+        ? { flow_id: workshopContinuationOrigin.flow_id, flow_draft_fingerprint: workshopContinuationOrigin.flow_draft_fingerprint }
+        : undefined)
+      if (activeTab === 'agent_workshop') {
+        if (!workshopAuthoringContextRef.current?.runChatAction(action, cloneSource)) {
+          throw new Error('The Workshop is still loading this agent. Please try again.')
+        }
+      } else {
+        requestedWorkshopOriginRef.current = nextOrigin || null
+        setAgentWorkshopTemplateSource(null)
+        setAgentWorkshopCustomAgentId(null)
+        setInitialChatCloneSource(cloneSource)
+        setInitialWorkshopAction(action)
+        applyTab('agent_workshop')
+      }
+      setWorkshopSavedHandoff(undefined)
+      setWorkshopContinuationOrigin(nextOrigin)
+      showClaude()
+      return
+    }
+    if (action.request.action === 'return_to_flow') {
+      if (workshopSavedHandoff?.status !== 'ready' || !workshopSavedHandoff.origin) {
+        throw new Error('Save this agent first, then use Review in Flow to review its saved revision.')
+      }
+      await handleContinueInFlow()
+      return
+    }
+    if (!workshopAuthoringContextRef.current?.runChatAction(action)) {
+      throw new Error('This Workshop action is not available yet. Review the current draft first.')
+    }
   }
 
   const selectedAgentForChat =
@@ -676,7 +873,7 @@ function AgentStudioPage() {
     setFlowState(newFlowState)
   }, [])
 
-  // Handle verify request - sends a message to Claude to validate the flow
+  // Handle a request for AI Chat to validate the flow.
   // Include timestamp to ensure each click triggers a new request
   const handleVerifyRequest = useCallback(() => {
     showClaude()
@@ -710,6 +907,7 @@ Agent ID: ${agentId}`
   }, [showClaude])
 
   const handleCloneToWorkshop = useCallback(async (agentId: string) => {
+    if (!await confirmLeaveWorkshop()) return
     try {
       if (agentId.startsWith('ca_')) {
         const cloned = await cloneAgentToWorkshop(agentId)
@@ -719,7 +917,7 @@ Agent ID: ${agentId}`
         setAgentWorkshopTemplateSource(agentId)
         setAgentWorkshopCustomAgentId(null)
       }
-      setActiveTab('agent_workshop')
+      applyTab('agent_workshop')
       safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agent_workshop', {
         owner: 'preferences',
         key: AGENT_STUDIO_TAB_KEY,
@@ -727,7 +925,7 @@ Agent ID: ${agentId}`
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to clone agent')
     }
-  }, [])
+  }, [applyTab, confirmLeaveWorkshop])
 
   const handleWorkshopVerifyRequest = useCallback((message: string) => {
     showClaude()
@@ -745,28 +943,36 @@ Agent ID: ${agentId}`
   }, [applyTab])
 
   const handleWorkshopViewEnvelope = useCallback((agentId: string) => {
-    void confirmLeaveWorkshop().then((leave) => {
-      if (!leave) return
-      openAgentBrowser({ agentId, tab: 'envelope' })
-    })
-  }, [confirmLeaveWorkshop, openAgentBrowser])
+    openAgentBrowser({ agentId, tab: 'envelope' })
+  }, [openAgentBrowser])
 
-  const handleApplyWorkshopPromptUpdate = useCallback((proposal: WorkshopPromptUpdateProposal) => {
-    promptUpdateCounterRef.current += 1
-    setActiveTab('agent_workshop')
-    safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'agent_workshop', {
-      owner: 'preferences',
-      key: AGENT_STUDIO_TAB_KEY,
-    })
-    setWorkshopPromptUpdateRequest({
-      request_id: promptUpdateCounterRef.current,
-      prompt: proposal.prompt,
-      summary: proposal.summary,
-      apply_mode: proposal.apply_mode || 'replace',
-      target_prompt: proposal.target_prompt || 'main',
-      target_group_id: proposal.target_group_id,
-    })
-  }, [])
+  const handleApplyWorkshopProposal = useCallback(async (proposal: WorkshopAuthoringProposal) => {
+    const workshop = workshopAuthoringContextRef.current
+    if (!workshop || activeTab !== 'agent_workshop') {
+      return { applied: false, message: 'Open the Workshop before applying this proposal.' }
+    }
+    return workshop.applyAuthoringProposal(proposal)
+  }, [activeTab])
+
+  const handleApplyFlowProposal = useCallback(async (proposal: FlowAuthoringProposal) => {
+    const builder = flowAuthoringContextRef.current
+    if (!builder) {
+      return {
+        applied: false,
+        reason: 'unavailable' as const,
+        message: 'Open the Flow Builder before applying this proposal.',
+      }
+    }
+    const result = await builder.applyAuthoringProposal(proposal)
+    if (result.applied) {
+      applyTab('flows')
+      safeSetItem(() => window.localStorage, AGENT_STUDIO_TAB_KEY, 'flows', {
+        owner: 'preferences',
+        key: AGENT_STUDIO_TAB_KEY,
+      })
+    }
+    return result
+  }, [applyTab])
 
   // Clear discuss message after it's been sent
   const handleDiscussMessageSent = useCallback(() => {
@@ -789,6 +995,7 @@ Agent ID: ${agentId}`
   const chatElement = (variant: 'panel' | 'drawer', panelId: string) => (
     <OpusChat
       context={chatContext}
+      captureContext={captureChatContext}
       initialConversation={seededConversation}
       durableSessionId={effectiveDurableSessionId}
       sourceSessionId={transcriptSourceSessionId}
@@ -799,7 +1006,9 @@ Agent ID: ${agentId}`
       onDiscussMessageSent={handleDiscussMessageSent}
       onDurableSessionIdChange={handleDurableSessionIdChange}
       onConversationSnapshotChange={handleConversationSnapshotChange}
-      onApplyWorkshopPromptUpdate={handleApplyWorkshopPromptUpdate}
+      onApplyFlowProposal={handleApplyFlowProposal}
+      onApplyWorkshopProposal={handleApplyWorkshopProposal}
+      onWorkshopAction={handleWorkshopAction}
       variant={variant}
       panelId={panelId}
       onHide={hideClaude}
@@ -911,7 +1120,7 @@ Agent ID: ${agentId}`
                         },
                       }}
                     >
-                      Claude
+                      AI Chat
                     </Button>
                   </Badge>
                   {unreadCount > 0 && (
@@ -923,7 +1132,11 @@ Agent ID: ${agentId}`
               )}
             </TabBar>
 
-            <TabContent>
+            <StudioNavigationContext.Provider value={{ params: searchParams, navigate: (changes) => {
+              setSearchParams((current) => { const next = new URLSearchParams(current); next.set('tab', 'agent_workshop');
+                for (const [key, value] of Object.entries(changes)) { if (value === null) next.delete(key); else next.set(key, value) }
+                return next })
+            } }}><TabContent>
               {activeTab === 'agents' && catalog && (
                 <AgentBrowser
                   catalog={catalog}
@@ -940,7 +1153,14 @@ Agent ID: ${agentId}`
                 <Box hidden={activeTab !== 'shared_library'} sx={{ height: '100%', '&[hidden]': { display: 'none' } }}>
                   <SharedLibrary
                     active={activeTab === 'shared_library'}
-                    onOpenAgent={(id) => {
+                    onOpenAgent={async (id) => {
+                      const canReplaceDraft = await confirmLeaveWorkshop()
+                      if (!continuationMountedRef.current
+                        || continuationLiveRef.current.activeTab !== 'shared_library') return
+                      if (!canReplaceDraft) {
+                        applyTab('agent_workshop')
+                        return
+                      }
                       setAgentWorkshopTemplateSource(null)
                       setAgentWorkshopCustomAgentId(id)
                       applyTab('agent_workshop')
@@ -963,31 +1183,67 @@ Agent ID: ${agentId}`
                   hidden={activeTab !== 'flows'}
                   sx={{ height: '100%', minHeight: 0, '&[hidden]': { display: 'none' } }}
                 >
+                  {activeTab === 'flows' && workshopSavedHandoff && workshopSavedHandoff.status !== 'ready' && (
+                    <Alert severity="warning" action={<Button color="inherit" onClick={() => applyTab('agent_workshop')}>Review agent</Button>}>
+                      The saved agent needs a fresh review before AI Chat can continue this flow. Your flow has been kept.
+                    </Alert>
+                  )}
                   <FlowBuilder
+                    key={draftOwner?.uid}
+                    recoveryOwnerId={draftOwner?.uid}
                     flowId={currentFlowId}
                     flowOpenRequestId={flowOpenRequestId}
                     onFlowSaved={(flowId) => setCurrentFlowId(flowId)}
                     onFlowChange={handleFlowChange}
                     onVerifyRequest={handleVerifyRequest}
                     onOpenAgent={openAgentBrowser}
+                    onOutputHelp={handleDiscussWithClaude}
                     active={activeTab === 'flows'}
+                    authoringContextRef={flowAuthoringContextRef}
                   />
                 </Box>
               )}
-              {activeTab === 'agent_workshop' && catalog && (
+              {workshopVisited && catalog && (
+                <Box sx={{ display: activeTab === 'agent_workshop' ? 'contents' : 'none' }}>
+                {workshopSavedHandoff && (
+                  <Alert severity={workshopSavedHandoff.status === 'ready' ? 'success' : 'warning'} role="status"
+                    action={workshopSavedHandoff.status === 'ready' && workshopSavedHandoff.origin ? (
+                      <Button color="inherit" disabled={continuingToFlow || isClaudeStreaming}
+                        onClick={() => void handleContinueInFlow()}>
+                        {continuingToFlow ? 'Checking…' : 'Review in Flow'}
+                      </Button>
+                    ) : undefined}>
+                    {workshopSavedHandoff.status === 'ready'
+                      ? `${workshopSavedHandoff.saved_agent_name || 'Your agent'} is saved.${workshopSavedHandoff.origin ? ' Review its use in your flow when ready.' : ''}`
+                      : 'The agent handoff needs a fresh catalog or flow review before continuation.'}
+                  </Alert>
+                )}
                 <PromptWorkshop
+                  key={draftOwner?.uid}
                   catalog={catalog}
+                  continuationOrigin={workshopContinuationOrigin}
+                  onSavedHandoff={handleWorkshopSavedHandoff}
+                  onChatContinuation={opusConversation.length > 0 ? (message) => {
+                    const live = continuationLiveRef.current
+                    if (!continuationMountedRef.current || live.activeTab !== 'agent_workshop'
+                      || live.sessionId !== effectiveDurableSessionId || live.isClaudeStreaming) return
+                    setDiscussMessage(message)
+                  } : undefined}
                   initialParentAgentId={agentWorkshopTemplateSource}
                   initialCustomAgentId={agentWorkshopCustomAgentId}
                   onContextChange={setAgentWorkshopContext}
                   onVerifyRequest={handleWorkshopVerifyRequest}
                   opusConversation={opusConversation}
-                  incomingPromptUpdate={workshopPromptUpdateRequest}
                   onViewEnvelope={handleWorkshopViewEnvelope}
                   leaveGuardRef={workshopLeaveGuardRef}
+                  authoringContextRef={workshopAuthoringContextRef}
+                  initialChatAction={initialWorkshopAction}
+                  initialChatCloneSource={initialChatCloneSource}
+                  onInitialChatActionComplete={() => setInitialWorkshopAction(undefined)}
                 />
+                </Box>
               )}
-            </TabContent>
+            </TabContent></StudioNavigationContext.Provider>
           </PanelCard>
         </Panel>
 
@@ -995,7 +1251,7 @@ Agent ID: ${agentId}`
           <>
             <ResizeHandle collapsed={claudeCollapsed} />
 
-            {/* Claude copilot pane */}
+            {/* Provider-neutral AI Chat pane */}
             <Panel
               id="claude"
               order={2}

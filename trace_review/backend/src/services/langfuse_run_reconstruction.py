@@ -145,6 +145,8 @@ def _timestamp(observation: Mapping[str, Any]) -> Optional[str]:
         observation,
         ("startTime", "start_time", "timestamp", "createdAt", "created_at"),
     )
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
     return str(value) if value is not None else None
 
 
@@ -363,7 +365,7 @@ def _payload_item(
         "kind": _observation_kind(source) if scope == "observation" else "trace",
         "observation_type": source.get("type") or source.get("observationType"),
         "parent_observation_id": _parent_observation_id(source) if scope == "observation" else None,
-        "start_time": _timestamp(source) if scope == "observation" else source.get("timestamp"),
+        "start_time": _timestamp(source),
         **_payload_size(value),
     }
     if include_value:

@@ -74,8 +74,8 @@ describe('PromptSection', () => {
     expect(props.onResetToTemplate).toHaveBeenCalledTimes(1)
   })
 
-  it('disables Reset to template when the prompt matches the template', () => {
-    renderPrompt()
+  it('disables Reset to template when no curator instructions override it', () => {
+    renderPrompt({ customPrompt: '' })
     expect(screen.getAllByRole('button', { name: 'Reset to template' })[0]).toBeDisabled()
   })
 
@@ -113,9 +113,9 @@ describe('PromptSection', () => {
     expect(screen.queryByRole('group', { name: 'Group' })).not.toBeInTheDocument()
   })
 
-  it('opens the prompt discussion with Claude', () => {
+  it('opens the prompt discussion with AI Chat', () => {
     const props = renderPrompt()
-    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with AI Chat' }))
     expect(props.onDiscussPromptWithClaude).toHaveBeenCalledTimes(1)
   })
 

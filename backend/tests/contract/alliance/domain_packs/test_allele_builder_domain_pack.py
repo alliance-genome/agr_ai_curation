@@ -365,3 +365,29 @@ def test_allele_extractor_agent_has_no_output_schema_and_builder_tools():
     assert "stage_allele_observation" in tools
     assert "finalize_allele_extraction" in tools
     assert "AlleleExtractionResultEnvelope" not in str(agent.get("output_schema"))
+
+
+def test_attached_field_only_evidence_survives_allele_materialization():
+    from src.lib.openai_agents.tools.evidence_workspace import _sync_target_fields
+
+    records = _evidence_records()
+    _sync_target_fields(records[0], [
+        {'field_path': 'mention'},
+        {'pending_ref_id': 'allele-mention-1', 'field_path': 'mention'},
+    ])
+    workspace = ExtractionBuilderWorkspace(
+        run_id='field-only-evidence', domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        agent_id='allele_extractor',
+    )
+    workspace.upsert_candidate(
+        candidate_id='allele-candidate-1', staged_fields=_staged_fields(),
+        pending_ref_ids=['allele-mention-1'], evidence_record_ids=['evidence-unc54-1'],
+        resolver_selection_refs=[], status=CANDIDATE_STATUS_VALID,
+    )
+    result = materialize_allele_builder_state(
+        workspace=workspace, candidate_ids=['allele-candidate-1'],
+        evidence_records=records, resolver_entry_lookup=None,
+    )
+    assert result.ok, result.summary()
+    assert result.payload is not None
+    assert result.payload["metadata"]["evidence_records"][0]["evidence_record_id"] == "evidence-unc54-1"

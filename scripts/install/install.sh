@@ -174,7 +174,7 @@ BANNER
   printf "\n"
   printf "    - Docker & Docker Compose (v2)\n"
   printf "    - OpenAI API key (required for embeddings)\n"
-  printf "    - Optional: Anthropic, Gemini, or Groq API keys for additional models\n"
+  printf "    - Optional: Gemini or Groq API keys for additional models\n"
   printf "    - ~8 GiB RAM recommended, ~10 GiB free disk minimum\n"
   printf "\n"
   if [[ -n "$image_tag" ]]; then

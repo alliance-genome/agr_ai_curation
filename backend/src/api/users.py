@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from .auth import get_auth_dependency
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.models.sql.database import get_db
+from src.schemas.flow_shortcuts import FlowShortcutUpdate
 from src.schemas.chat_route_preferences import (
     ChatRoutePickerResponse,
     ChatRoutePickerTarget,
@@ -185,3 +186,21 @@ async def read_chat_route_targets(
 
 # Export router
 __all__ = ["router"]
+
+
+@router.get("/me/flow-shortcuts")
+async def get_flow_shortcuts(user: Dict[str, Any] = get_auth_dependency(), db: Session = Depends(get_db)):
+    from src.services.flow_shortcut_service import read_shortcuts
+    db_user = set_global_user_from_cognito(db, user)
+    return read_shortcuts(db, db_user.id)
+
+
+@router.put("/me/flow-shortcuts")
+async def put_flow_shortcuts(request: FlowShortcutUpdate, user: Dict[str, Any] = get_auth_dependency(), db: Session = Depends(get_db)):
+    from src.services.flow_shortcut_service import save_shortcuts, ShortcutConflict, ShortcutUnavailable
+    db_user = set_global_user_from_cognito(db, user)
+    try:
+        return save_shortcuts(db, db_user.id, request)
+    except (ShortcutConflict, ShortcutUnavailable) as exc:
+        db.rollback()
+        raise HTTPException(status_code=409 if isinstance(exc, ShortcutConflict) else 404, detail=str(exc)) from exc

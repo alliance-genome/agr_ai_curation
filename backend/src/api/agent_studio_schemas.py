@@ -3,17 +3,37 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.lib.agent_studio import ChatContext, ChatMessage, PromptCatalog
+from src.lib.agent_studio.application_events import ApplicationEvent
 
 
 class ChatRequest(BaseModel):
-    """Request to send a message to Opus."""
+    """Request to send a message to Agent Studio AI Chat."""
 
     messages: List[ChatMessage]
     context: Optional[ChatContext] = None
+    application_event: Optional[ApplicationEvent] = None
 
+    @model_validator(mode="after")
+    def validate_application_output_context(self):
+        event = self.application_event
+        if event is None or not event.output_mode_node_ids:
+            return self
+        if self.context is None or self.context.active_tab != "flows" or self.context.flow_definition is None:
+            raise ValueError("Output-mode reminders require the applied flow context")
+        outputs = {node.id for node in self.context.flow_definition.nodes if node.node_type == "output"}
+        if not set(event.output_mode_node_ids).issubset(outputs):
+            raise ValueError("Output-mode reminders must reference output nodes in the applied draft")
+        return self
+
+
+class StopAgentStudioRequest(BaseModel):
+    """Stop exactly one owned Studio turn; stale requests cannot stop a later turn."""
+
+    session_id: str = Field(min_length=1)
+    turn_id: str = Field(min_length=1)
 
 class CatalogResponse(BaseModel):
     """Response for prompt catalog."""
@@ -103,6 +123,10 @@ class AgentMetadata(BaseModel):
     produces_flow_artifacts: bool = False
     validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)
     domain_envelope: Optional[Dict[str, Any]] = None
+    domain_extraction_ref: Optional[Dict[str, str]] = None
+    output_formatter_format: Optional[str] = None
+    default_export_execution_mode: str = "ai"
+    execution_metadata_error: Optional[str] = None
 
 
 class RegistryMetadataResponse(BaseModel):
@@ -176,6 +200,7 @@ class AgentTemplateItem(BaseModel):
     tool_ids: List[str]
     allowed_group_ids: List[str] = Field(default_factory=list)
     output_schema_key: Optional[str] = None
+    output_contract: Optional[Dict[str, Any]] = None
 
 
 class GroupOption(BaseModel):
@@ -206,7 +231,7 @@ class ShareAgentRequest(BaseModel):
 
 
 class ToolIdeaConversationEntry(BaseModel):
-    """Single Opus ideation conversation turn."""
+    """Single AI Chat ideation conversation turn."""
 
     role: Literal["user", "assistant", "system"]
     content: str = Field(..., min_length=1)
@@ -252,7 +277,7 @@ class ToolIdeaListResponse(BaseModel):
 
 
 class DirectSubmissionRequest(BaseModel):
-    """Request to directly trigger suggestion submission via Opus (bypassing chat UI)."""
+    """Request to directly trigger AI Chat suggestion submission (bypassing chat UI)."""
 
     context: Optional[ChatContext] = None
     messages: Optional[List[ChatMessage]] = None

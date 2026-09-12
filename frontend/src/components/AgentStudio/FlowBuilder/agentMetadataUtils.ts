@@ -88,13 +88,13 @@ export const canSourceOutputAttachmentFromMetadata = (
 
 export const isOutputFormatterAgentFromMetadata = (
   agentId: string,
-  _agentMetadata: AgentMetadataLookup
-): boolean => SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS.has(agentId)
+  agentMetadata: AgentMetadataLookup
+): boolean => SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS.has(agentId) || Boolean(agentMetadata[agentId]?.output_formatter_format)
 
 export const isFileOutputFormatterAgentFromMetadata = (
   agentId: string,
-  _agentMetadata: AgentMetadataLookup
-): boolean => FILE_OUTPUT_FORMATTER_AGENT_IDS.has(agentId)
+  agentMetadata: AgentMetadataLookup
+): boolean => FILE_OUTPUT_FORMATTER_AGENT_IDS.has(agentId) || Boolean(agentMetadata[agentId]?.output_formatter_format)
 
 export const resolveOutputFormatterIncludeEvidence = (
   agentId: string,

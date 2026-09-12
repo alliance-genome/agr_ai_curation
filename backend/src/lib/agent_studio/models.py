@@ -4,13 +4,14 @@ Pydantic models for Prompt Explorer feature.
 Defines data structures for:
 - Agent prompt metadata (base prompts, group rules)
 - Agent documentation (capabilities, data sources, limitations, usage guidance)
-- Chat messages for Opus conversations
+- Chat messages for Agent Studio AI Chat conversations
 - Trace context for execution history
 """
 
-from typing import Dict, List, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated, Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from datetime import datetime
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
 
 # ============================================================================
@@ -115,6 +116,7 @@ class PromptInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(..., description="Unique agent identifier (e.g., 'supervisor', 'gene_expression')")
+    agent_revision_id: Optional[str] = Field(None, description="Current immutable custom revision offered for explicit flow selection")
     agent_name: str = Field(..., description="Human-readable agent name")
     description: str = Field(..., description="Brief description of what the agent does")
     base_prompt: str = Field(..., description="Base prompt instructions (before group-rule injection)")
@@ -198,28 +200,33 @@ class PromptCatalog(BaseModel):
 
 
 # ============================================================================
-# Chat Models (for Opus conversations)
+# Chat models for Agent Studio AI Chat conversations
 # ============================================================================
 
 class ChatMessage(BaseModel):
-    """A single message in the Opus conversation."""
+    """A single message in an AI Chat conversation."""
     role: str = Field(..., description="Message role: 'user' or 'assistant'")
     content: str = Field(..., description="Message content")
     timestamp: Optional[datetime] = Field(None, description="When the message was sent")
 
 
 class FlowNodeContext(BaseModel):
-    """Simplified flow node for chat context."""
+    """Lossless save-equivalent flow node for chat context."""
     id: str
     node_type: str = "agent"
+    position: Dict[str, float]
     agent_id: str
+    agent_revision_id: Optional[str] = None
+    execution_receipt: Optional[AgentExecutionReceipt] = None
     agent_display_name: str
+    agent_description: Optional[str] = None
     task_instructions: Optional[str] = None  # For task_input nodes
     step_goal: Optional[str] = None
     custom_instructions: Optional[str] = None
     prompt_version: Optional[int] = None
     include_evidence: Optional[bool] = None
     output_filename_template: Optional[str] = None
+    export_execution_mode: Literal["ai", "direct"] = "ai"
     projection_plan: Optional[Dict[str, object]] = None
     output_key: str
     validation_attachments: List[Dict[str, object]] = Field(default_factory=list)
@@ -227,47 +234,67 @@ class FlowNodeContext(BaseModel):
 
 
 class FlowEdgeContext(BaseModel):
-    """Simplified flow edge for chat context."""
-    id: Optional[str] = None
+    """Lossless save-equivalent flow edge for chat context."""
+    id: str
     source: str
     target: str
     role: str = "control_flow"
     satisfies_binding_id: Optional[str] = None
     replaces_attachment_id: Optional[str] = None
+    condition: Optional[Dict[str, object]] = None
 
 
 class FlowContextDefinition(BaseModel):
-    """Flow definition passed to chat for validation/discussion."""
+    """Complete editable flow definition passed to chat at send time."""
     version: Literal["1.1"] = "1.1"
+    task_instructions_default_only: Optional[bool] = None
     entry_node_id: Optional[str] = None
     nodes: List[FlowNodeContext] = Field(default_factory=list)
     edges: List[FlowEdgeContext] = Field(default_factory=list)
 
 
 class AgentWorkshopContext(BaseModel):
-    """Agent Workshop context passed to Opus chat."""
+    """Agent Workshop context passed to AI Chat."""
 
     model_config = ConfigDict(extra="forbid")
 
+    getting_started_mode: Optional[Literal["template", "scratch", "clone"]] = None
     template_source: Optional[str] = None
+    clone_source_agent_id: Optional[str] = None
+    clone_source_updated_at: Optional[str] = None
     template_name: Optional[str] = None
     custom_agent_id: Optional[str] = None
     custom_agent_name: Optional[str] = None
+    draft_name: Optional[str] = None
+    draft_description: Optional[str] = None
+    draft_icon: Optional[str] = None
+    draft_visibility: Optional[Literal["private", "project"]] = None
+    draft_allowed_group_ids: Optional[List[str]] = None
+    inherited_allowed_group_ids: Optional[List[str]] = None
     include_group_rules: Optional[bool] = None
     selected_group_id: Optional[str] = None
     prompt_draft: Optional[str] = None
     selected_group_prompt_draft: Optional[str] = None
+    group_prompt_overrides: Optional[Dict[str, str]] = None
     draft_is_dirty: Optional[bool] = None
+    draft_fingerprint: Optional[
+        Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    ] = None
     custom_agent_updated_at: Optional[str] = None
     group_prompt_override_count: Optional[int] = None
     has_group_prompt_overrides: Optional[bool] = None
     draft_tool_ids: Optional[List[str]] = None
     draft_model_id: Optional[str] = None
+    draft_default_export_execution_mode: Literal["ai", "direct"] = "ai"
     draft_model_reasoning: Optional[str] = None
+    draft_output_schema_key: Optional[str] = None
+    # Local draft data may intentionally be incomplete. Save/conformance APIs
+    # validate it; context capture must preserve errors rather than normalize.
+    draft_output: Optional[Dict[str, Any]] = None
 
 
 class ChatContext(BaseModel):
-    """Context for the Opus chat session."""
+    """Context for the AI Chat session."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -296,10 +323,23 @@ class ChatContext(BaseModel):
         None,
         description="Which tab is active: 'agents', 'flows', or 'agent_workshop'"
     )
+    flow_id: Optional[str] = Field(None, description="Stable saved-flow identity")
     flow_name: Optional[str] = Field(
         None,
         description="Name of the flow being edited"
     )
+    flow_description: Optional[str] = Field(
+        None, description="Current editable flow description"
+    )
+    flow_updated_at: Optional[str] = Field(
+        None, description="Saved baseline identity used for stale-edit protection"
+    )
+    flow_is_dirty: Optional[bool] = Field(
+        None, description="Whether the editable flow differs from its saved baseline"
+    )
+    flow_draft_fingerprint: Optional[
+        Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    ] = Field(None, description="Transient fingerprint of the exact flow draft")
     flow_definition: Optional[FlowContextDefinition] = Field(
         None,
         description="Current flow definition being edited"
@@ -311,13 +351,48 @@ class ChatContext(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """Request to send a message to Opus."""
+    """Request to send a message to AI Chat."""
     messages: List[ChatMessage] = Field(..., description="Conversation history")
     context: Optional[ChatContext] = Field(None, description="Current UI context")
 
+    @model_validator(mode="after")
+    def validate_authoring_context_fingerprints(self) -> "ChatRequest":
+        """Reject incomplete or altered editor snapshots at the API boundary."""
+
+        from src.lib.agent_studio.authoring_context import (
+            flow_draft_fingerprint,
+            workshop_draft_fingerprint,
+        )
+
+        context = self.context
+        if context is None:
+            return self
+
+        if context.flow_definition is not None:
+            if context.flow_draft_fingerprint is None:
+                raise ValueError("flow_draft_fingerprint is required with flow_definition")
+            if bool(context.flow_id) != bool(context.flow_updated_at):
+                raise ValueError(
+                    "saved flow authoring context requires both flow_id and flow_updated_at"
+                )
+            if context.flow_draft_fingerprint != flow_draft_fingerprint(context):
+                raise ValueError("flow_draft_fingerprint does not match the flow draft")
+
+        if context.agent_workshop is not None:
+            workshop = context.agent_workshop
+            if workshop.draft_fingerprint is None:
+                raise ValueError("draft_fingerprint is required with agent_workshop")
+            if bool(workshop.custom_agent_id) != bool(workshop.custom_agent_updated_at):
+                raise ValueError(
+                    "saved Workshop context requires both custom_agent_id and custom_agent_updated_at"
+                )
+            if workshop.draft_fingerprint != workshop_draft_fingerprint(workshop):
+                raise ValueError("draft_fingerprint does not match the Workshop draft")
+        return self
+
 
 class ChatResponse(BaseModel):
-    """Non-streaming response from Opus (for error cases)."""
+    """Non-streaming AI Chat response for error cases."""
     content: str = Field(..., description="Response content")
     error: Optional[str] = Field(None, description="Error message if any")
 

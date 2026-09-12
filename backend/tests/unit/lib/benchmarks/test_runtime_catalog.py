@@ -84,6 +84,81 @@ def test_invalid_db_model_fails_without_substitution(configured):
         runtime.build_curator_route_catalog(object(), configured.curator)
 
 
+def test_custom_catalog_pins_authorized_source_and_uses_saved_model(configured, monkeypatch):
+    from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
+
+    receipt = source_receipt()
+    configured.rows.append(NS(agent_key=receipt.agent_key, model_id="unrelated-head-model",
+                              model_reasoning="high", visibility="private"))
+    capture = Mock(return_value=receipt)
+    load = Mock(return_value=(NS(), NS(model_id="model-b", model_reasoning=None, curation={})))
+    monkeypatch.setattr(runtime, "current_execution_receipt", capture)
+    monkeypatch.setattr(runtime, "get_execution_revision", load)
+    catalog = runtime.build_curator_route_catalog(object(), configured.curator)
+    target = next(t for t in catalog.targets if t.target.id == receipt.agent_key)
+    assert target.source_execution_receipts == {f"agent:{receipt.agent_key}": receipt}
+    route = next(s.default_route for s in catalog.route_slots if s.slot == f"agent:{receipt.agent_key}")
+    assert route.model == "model-b"
+    assert route.reasoning_effort is None
+    assert capture.call_args.args[1:] == (receipt.agent_key, 42)
+    assert capture.call_args.kwargs["active_group_ids"] == ["group-a"]
+
+
+def test_profile_mapping_catalog_freezes_custom_validator_source(configured, monkeypatch):
+    from uuid import uuid4
+    from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
+    from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin
+    from src.lib.curation_workspace import adapter_registry
+    from src.lib.domain_packs import profile_validation
+
+    source = source_receipt("ca_extractor")
+    source.output_contract = AgentOutputContract(output_state="structured_extraction", output_mode="profile_bound_generic",
+        generic_profile_ref=GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                                             fingerprint="sha256:" + "d" * 64))
+    validator = source_receipt("ca_validator")
+    pin = {"agent_id": str(validator.agent_id), "agent_key": validator.agent_key,
+           "revision_id": str(validator.agent_revision_id), "fingerprint": validator.fingerprint}
+    configured.rows.append(NS(agent_key=source.agent_key, model_id="unused-head", model_reasoning=None, visibility="private"))
+    monkeypatch.setattr(runtime, "current_execution_receipt", lambda *a, **k: source)
+
+    def saved(_session, agent_id, revision_id, user_id, **kwargs):
+        assert user_id == 42 and kwargs["active_group_ids"] == ["group-a"]
+        selected = source if agent_id == source.agent_id else validator
+        assert revision_id == selected.agent_revision_id
+        return NS(id=selected.agent_revision_id, agent_id=selected.agent_id, revision=1), NS(
+            model_id="model-b" if selected is validator else "model-a", model_reasoning=None,
+            curation={"domain_pack_id": "generic"}, output_contract=selected.output_contract)
+
+    monkeypatch.setattr(runtime, "get_execution_revision", saved)
+    authorize = Mock(return_value=validator)
+    monkeypatch.setattr(runtime, "authorize_execution_receipt", authorize)
+    # This synthetic catalog fixture owns its groups and profile mapping. Do not
+    # load installed Alliance packs against those groups or depend on warm caches.
+    generic_pack = object()
+
+    def resolve_pack(pack_id):
+        assert pack_id == "generic"
+        return generic_pack
+
+    def resolve_mapping(receipt, pack, **kwargs):
+        assert receipt == source and pack is generic_pack
+        assert kwargs["user_id"] == 42 and kwargs["active_group_ids"] == ("group-a",)
+        return NS(registry=NS(bindings=[NS(binding_id="mapped-custom", raw={"custom_validator": pin})]))
+
+    monkeypatch.setattr(adapter_registry, "resolve_curation_domain_pack_by_id", resolve_pack)
+    monkeypatch.setattr(profile_validation, "resolve_profile_validation", resolve_mapping)
+    monkeypatch.setattr(profile_validation, "profile_validation_attachment_options", lambda _: [NS(
+        state=NS(value="active"), to_dict=lambda: {"validator_agent_id": "semantic",
+            "validator_package_id": "package", "validator_binding_id": "mapped-custom"},
+    )])
+    catalog = runtime.build_curator_route_catalog(object(), configured.curator)
+    target = next(t for t in catalog.targets if t.target.id == source.agent_key)
+    assert target.source_execution_receipts == {"agent:ca_extractor": source, "validator:mapped-custom": validator}
+    assert next(s.default_route.model for s in catalog.route_slots if s.slot == "validator:mapped-custom") == "model-b"
+    authorize.assert_called_once()
+    assert authorize.call_args.args[1] == validator.model_dump(mode="json")
+
+
 def test_authored_chat_has_frozen_model_slot_and_respects_visibility(configured):
     configured.rows.append(NS(agent_key="chat_output", model_id="model-b",
                               model_reasoning="high", visibility="system"))

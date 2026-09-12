@@ -188,10 +188,14 @@ async def _call_figure_locator_classifier(
     from agents import Agent  # pyright: ignore[reportMissingImports]
     from src.lib.openai_agents.config import (
         build_model_settings,
+        get_figure_locator_resolution_contract_retries,
         get_figure_locator_resolution_max_turns,
         get_model_for_agent,
     )
     from src.lib.openai_agents.runner import run_agent_with_owned_openai_resources
+
+    if len({chunk.id for chunk, _ in candidates}) != len(candidates):
+        raise ValueError("figure locator input contains duplicate candidate IDs")
 
     settings = build_model_settings(
         model_name,
@@ -221,11 +225,35 @@ async def _call_figure_locator_classifier(
         finalization_required=False,
     ) as sentry_span:
         try:
-            result = await run_agent_with_owned_openai_resources(
-                agent,
-                prompt,
-                max_turns=get_figure_locator_resolution_max_turns(),
-            )
+            contract_retries = get_figure_locator_resolution_contract_retries()
+            attempt = 0
+            while True:
+                result = await run_agent_with_owned_openai_resources(
+                    agent,
+                    prompt,
+                    max_turns=get_figure_locator_resolution_max_turns(),
+                )
+                output = result.final_output
+                if not isinstance(output, FigureLocatorBatchOutput):
+                    raise ValueError("figure locator classifier returned no structured output")
+                try:
+                    _validated_outputs_by_id(output, candidates)
+                except ValueError:
+                    if attempt == contract_retries:
+                        raise
+                    set_redacted_ai_span_data(
+                        sentry_span, "ai_curation.validation.status", "retrying"
+                    )
+                    agent.instructions = _CLASSIFIER_INSTRUCTIONS + (
+                        "\nCorrection required: the previous response failed exact "
+                        "candidate_id coverage. Return every candidate_id in the "
+                        "input exactly once, unchanged, with no additional IDs. "
+                        "Include candidates with no mentions using an empty mentions "
+                        "list. Check the complete ID set before returning."
+                    )
+                    attempt += 1
+                    continue
+                break
         except Exception as exc:
             set_redacted_ai_span_data(
                 sentry_span,
@@ -243,9 +271,6 @@ async def _call_figure_locator_classifier(
             )
             raise
 
-        output = result.final_output
-        if not isinstance(output, FigureLocatorBatchOutput):
-            raise ValueError("figure locator classifier returned no structured output")
         set_redacted_ai_span_data(
             sentry_span,
             "ai_curation.validation.status",

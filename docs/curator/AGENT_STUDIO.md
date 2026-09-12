@@ -1,380 +1,190 @@
-# Agent Studio Guide
+# Agent Studio guide
 
-Agent Studio helps you understand how the AI curation agents work and gives you tools to improve them. You can browse agent prompts, build visual curation workflows, and chat with Claude Opus about any of it.
+Open **Agent Studio** from the top navigation to browse agents, create your own, or build a flow. The **Agents**, **Flows**, **Agent Workshop**, and **Shared Library** tabs share an **AI Chat** panel on the right.
 
-## Accessing Agent Studio
+## Work with AI Chat
 
-Click **"Agent Studio"** in the navigation bar at the top of the application.
+Describe the curation task in your own terms. For example:
 
-## What You'll Find
+> Help me extract the fly stocks used in a paper. I need each stock's name and its source when reported. Walk me through creating the agent and a CSV flow.
 
-Agent Studio has four main tabs: **Agents**, **Flows**, **Agent Workshop**, and **Shared Library**. The tabs sit on the left. The Claude chat sits in a panel on the right, and it is available from every tab.
+AI Chat can inspect the current agent or flow, explain settings, and propose edits. It can help with:
 
-### Claude Chat (Right Panel)
+- Agent names, descriptions, icons, models, reasoning levels, sharing, and group access.
+- Main prompts, group instructions, tools, and output choices.
+- Custom item types, details, parts, answer formats, choices, inclusion rules, and extraction instructions.
+- Compatible built-in or custom validators attached to individual details or parts.
+- Flow steps, connections, validation settings, and output columns or instructions.
 
-The panel on the right is your chat with Claude Opus. You can ask Opus about whatever you are viewing on the left - agent prompts, flows, or your workshop draft.
+It can also inspect available agent capabilities, selected validator prompts, and relevant read-only application information to explain a restriction. Available tools and your access still limit what it can do. Ask it to inspect a capability when unsure, rather than assuming that any agent or validator can be used for any task.
 
-You can make more room for your work:
+### Review, Apply, and Save
 
-- Click **Hide Claude** in the chat header to shrink the panel to a narrow strip on the right edge. Click **Show Claude** on that strip to bring it back. A small orange dot on the strip means Claude answered while the panel was hidden.
-- Press **Ctrl+.** (or **Cmd+.** on a Mac) to hide or show Claude from anywhere in Agent Studio.
-- Drag the divider between the tabs and the chat to change how much space each side gets. Your choice is remembered.
-- On a narrow browser window, the panel is replaced by a **Claude** button at the right end of the tab bar. Click it to open the chat as a slide-out sheet. Press **Escape**, click outside the sheet, or click **Close Claude** to put it away.
+AI Chat prepares a proposal for your review. Read the highlighted **Changes to your draft** summary and any warnings about removals or validation changes. **Technical details** is collapsed by default; expand it for the full configuration. Clicking outside the dialog or pressing Escape does not dismiss the proposal. Choose Apply changes or Cancel.
 
-When you click **Discuss with Claude** on an agent or **Verify with Claude** in a flow, the chat opens by itself if it was hidden.
+**Apply changes** updates the open draft. The button shows progress while the proposal is being validated. **Cancel** dismisses the proposal. After a successful Apply, AI Chat can continue the conversation using the updated draft. Saving a Workshop agent during the conversation can also trigger the next step once the saved settings have loaded.
 
-When your question is about how the application itself works, Opus can inspect the live repository in read-only mode to verify whether a feature, restriction, or code path exists before answering.
+**Save** is separate: it saves the agent or flow to your account. An AI proposal, a green Apply confirmation, or a completed wizard does not mean you have saved it.
 
-Opus is best used as an explanation and drafting assistant. It can help you
-interpret prompts, domain-envelope metadata, validation choices, trace context,
-and flow structure. It does not replace the curation workspace readiness checks:
-final export and submission still depend on the saved envelope, validation
-findings, and domain-pack policy.
+Manual edits are included when you next send a message. If you change the draft while an older proposal is pending, it may need a fresh review. Ask AI Chat to refresh its proposal. You can undo the last applied AI change while the draft still matches that change.
 
-### Shared Library Tab
+### Stop a response
 
-Use **Shared Library** to discover custom agents, Tool Idea requests, and curation flows available to you. Filter by artifact type, **Mine**, **Shared with project**, or text. Filters stay in Agent Studio while you switch tabs; **Refresh** reloads the authorized list. Each entry shows its owner, project, and private/shared status. Tool Ideas show their request status as well.
+While AI Chat is preparing, using tools, or writing, choose **Stop** beside the message box. If a review dialog is open while the response is still running, it also has a Stop button. The button shows **Stopping…** until the run ends.
 
-- Open your agents in Workshop, or use **Clone to Workshop** to create a private editable copy of a shared agent.
-- Open teammate flows read-only, choose **Clone to edit** for a private copy, or **Run in workspace** to select inputs and run through the existing workspace checks.
-- Open a Tool Idea's request context and choose **Discuss request with Claude** to reuse its title, description, status, and ownership context. This does not include private conversation history or developer notes.
+The conversation keeps the partial answer, and you can send another message to narrow or redirect the request. Stop does not undo changes you already applied or saved. If stopping fails, the chat tells you and lets you retry.
 
-Editing, deleting, and changing visibility remain owner actions in the focused editing surfaces. The library only lists artifacts authorized by the server; it does not expand project access. Existing system agents remain in **Agents**, and package tools remain in Workshop's tool library.
+### Start a fresh conversation
 
-You can link directly to this tab with `/agent-studio?tab=shared_library`.
+Choose **New chat** at the top of AI Chat to reset the conversation. This keeps the agent or flow you are editing. The new conversation can read that current editor context, but does not carry over the earlier discussion. Finish reviewing any pending proposal before resetting if you still need it.
 
-### Agents Tab
+### Make room for the editor
 
-Browse the instructions given to each AI agent and chat with Opus about them.
+- Use **Hide AI Chat** and **Show AI Chat**, or **Ctrl+.** / **Cmd+.**, to toggle the panel. An orange dot indicates a reply arrived while it was hidden.
+- Drag the divider to resize the panel.
+- On a narrow window, use the **AI Chat** button to open a sheet. Close it with **Escape**, the close button, or a click outside it.
 
-**Agent Browser (Left Panel)**
+Actions such as **Discuss with AI Chat** and **Verify with AI Chat** open the panel when needed.
 
-See all agent prompts organized by subcategory:
-- **System** - Supervisor Agent that routes your queries to specialists (internal, not available in Flow Builder)
-- **PDF Extraction** - PDF Extraction Agent and Gene Expression Extractor
-- **Data Validation** - Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, and Ontology Term Resolver agents
-- **Output** - Chat Output, CSV Formatter, TSV Formatter, JSON Formatter agents
-- **My Custom Agents** - Custom agents you have created in Agent Workshop
-- **Shared Agents** - Custom agents shared by other users in your project
+## Agents: inspect an existing agent
 
-The Agent Browser also includes filter tabs (All, Shared, Templates) at the top of the agent list to help narrow down agents quickly.
+Use the agent list and its filters to find an extractor, validator, output formatter, or accessible custom agent. The available list depends on installed packages and your access; see [available agents](AVAILABLE_AGENTS.md) for the main types.
 
-For each agent, you can view:
-- **Base Prompt** - The core instructions given to the agent
-- **Group-Specific Rules** - How the prompt is customized for each curator group (WormBase, FlyBase, MGI, ZFIN, RGD, SGD, Xenbase)
-- **Combined View** - See the base prompt with group rules injected
-- **Tools** - The tools available to each agent (listed in the agent card)
-- **Domain Envelope Metadata** - For extraction agents, the curatable objects,
-  field paths, schema/provider references, source-of-truth notes, and automatic
-  validation policy supplied by the domain pack
+The agent view lets you inspect its base prompt, group-specific rules, combined prompt, tools, and output information. Click a tool name to read what it does and which inputs it accepts.
 
-**Domain Envelope Metadata**
+For packaged extraction, the output information describes the supported objects and fields, validation, and export or submission support. You may see the term **domain envelope**: this is the saved structured record, with evidence and validation findings. A review table displays selected fields from it.
 
-Extraction agents that use domain packs show what kind of envelope they produce.
-This includes object types, fields, required fields, definition state, provider
-refs, active validator bindings, under-development validator metadata, and
-export-blocking policy. The important idea is simple: the domain envelope object
-is the saved curation record. Review tables and export payloads are generated
-from that saved object.
+A validator listed as under development is not an active validation step. Also distinguish a validator's configuration from its findings after a run. Ask AI Chat which validators actually run and what unresolved answers mean for your task.
 
-Active default validators run automatically after extraction. Under-development
-validators are shown as roadmap or context metadata and are not scheduled.
-Validation findings are separate from attachment metadata: findings are the
-current results written back to the envelope, while export and submission
-blockers describe whether the reviewed envelope is ready for final actions.
+**Clone to Workshop** creates an editable draft based on an agent. Changing its prompt does not change a packaged biological format. If you need fields that format does not support, use a custom output structure instead.
 
-Extraction and validation have separate responsibilities. First-pass extraction
-agents read uploaded papers, record evidence, and preserve paper-backed
-proposals or selector hints. They can use the narrow species/provider/taxon
-context helper when organism context is needed, but final gene, allele, disease,
-chemical, phenotype, ontology, reference, relation, and data-provider resolution
-belongs to validator agents. Validator results and materialization are what make
-resolved fields authoritative.
+## Shared Library: find reusable work
 
-**Clickable Tool Names**
+Use **Shared Library** to find custom agents, Tool Idea requests, and flows available to you. Filter by artifact type, **Mine**, **Shared with project**, or text. Filters stay while you switch tabs; **Refresh** reloads the list. Entries show their owner, project, and sharing status. Tool Ideas also show their request status.
 
-Tool names in agent cards are clickable! Click any tool name to open a detailed panel showing:
-- **Description** - What the tool does
-- **Parameters** - Input parameters with types and descriptions
-- **Methods** - For multi-method tools (like database queries), see all available methods with examples
-- **Agent Context** - Which methods are relevant to the selected agent
+- Open your agent in Workshop, or choose **Clone to Workshop** for a private copy of a shared agent.
+- Open a teammate's flow read-only, choose **Clone to edit**, or **Run in workspace** to select a paper and run it.
+- Open a Tool Idea's request context and choose **Discuss request with AI Chat** to discuss its summary. Private conversations and developer notes are not included.
 
-This helps you understand exactly what capabilities each agent has and how they interact with databases and APIs. When comparing extractor and validator agents, check which document/evidence tools the extractor can use, which broad lookup tools are deliberately unavailable to it, and which validator tools perform authoritative database, API, or ontology resolution.
+Only owners can edit, delete, or change visibility on an original. The library shows work you already have access to. System agents remain in **Agents**, and package tools are in Workshop's tool library.
 
-**Ask Opus about agents:**
-- "Why does this agent look for negative evidence?"
-- "I think this prompt is missing guidance about [organism-specific convention]"
-- "Can you help me write a suggestion to improve this?"
-- "What does this instruction mean in practice?"
-- "Can Agent Studio custom agents inspect the repository source code?"
-- "Is there a tool policy that prevents this tool from being attached?"
-- "Which tools can this extractor use, which lookup tools are deliberately unavailable, and which validator materializes the final fields?"
+Link directly to the library with `/agent-studio?tab=shared_library`.
 
-### Flows Tab
+## Agent Workshop: create or edit an agent
 
-Build visual curation workflows and chat with Opus about them. See **[Curation Flows](CURATION_FLOWS.md)** for the complete guide to building flows.
+### Choose a starting point
 
-**Flow Builder (Left Panel)**
+Open **Agent Workshop** and choose **New** if an agent is already open.
 
-Create workflows by dragging agents onto a canvas and connecting them:
-- 15 available agents from extraction to file output
-- Save, load, and reuse flows
-- Generate downloadable CSV, TSV, or JSON files
-- Adjust, per flow, which optional automatic checks run on an extraction step
-- Reach each agent's guide, envelope, and prompts from the step panel's "About this agent" row
+| Choice | Use it when… |
+|--------|--------------|
+| **Custom data extraction** | You want to define your own item type and details. This opens the extraction wizard directly. |
+| **From a template** | An existing agent is a useful starting point for your instructions and tools. |
+| **From scratch** | You want to configure the agent yourself. Built-in runtime rules still apply. |
+| **Clone an agent** | You want a private copy of your own or an accessible shared agent to adapt. |
 
-**Verify with Claude (Important!)**
+For custom extraction, follow **Name the item type → Choose its details → Review & finish**. The wizard supports one item type per agent. When finished, review the rest of the agent in Setup and save it. The [custom output guide](CUSTOM_OUTPUT_STRUCTURES.md) walks through the field editor and validation.
 
-Before running a flow, click the **"Verify with Claude"** button. Claude will:
-- Check your flow structure for issues
-- Identify missing connections or problematic configurations
-- Suggest improvements
-- Confirm your flow is ready to run
+### Setup
 
-This is especially valuable when building new flows or troubleshooting ones that aren't working as expected.
+Review these settings, manually or with AI Chat:
 
-**Automatic Checks**
+| Setting | Purpose |
+|---------|---------|
+| **Starting point** | The template or saved agent used to create this draft |
+| **Identity** | Icon, agent name, and a short description for people choosing it later |
+| **Model** | The model and supported reasoning level used when the agent runs |
+| **Sharing** | Who can see the agent and which groups may run it |
+| **Output** | Whether to produce structured extraction, and which structure to use |
 
-When an extraction agent declares domain-pack validation metadata, its automatic
-checks run after extraction. Select the node to see them in the step panel: a
-summary of how many checks run, how many always run, and one switch per check
-you may turn off for this flow. Blocking checks and checks the domain pack locks
-on are counted, not listed. The info circle beside each switch explains what the
-check does, which fields it checks, and what happens if it is off, in the same
-words the Agents tab uses. Under-development checks do not run and are not shown.
+New extraction drafts default to **GPT-6 Astra with low reasoning**. Studio AI Chat uses Astra with medium reasoning; validator agents retain their Terra settings. Existing saved agents and flow revisions retain their saved choices. Read **Model guidance** or choose **Ask AI Chat which model fits** if you want to change the model.
 
-To add a custom validation step, place a data-validation agent after the
-extractor and use its steering prompt to name the envelope object, field path, or
-curation concern you want checked. Custom validation agents are saved as regular
-flow nodes; automatic checks remain controlled by the extraction agent's
-domain-pack metadata.
+**Visibility** and **Available to groups** serve different purposes: sharing controls discovery, while groups restrict execution. A restricted template or clone source may let you narrow group access without widening it.
 
-**Ask Opus about flows:**
-- "Does this flow make sense for extracting expression data?"
-- "What agent should I add to map anatomy terms to WBbt IDs?"
-- "Why isn't my flow generating the output I expected?"
-- "Which validators will run for this extraction agent, and what prompt does each validator agent use?"
+Under **Output**, read the explanation below the selected mode. Custom Output Structure defines consistent fields; Flexible extraction allows fields to vary; Packaged domain format uses an existing biological structure. [Compare the modes](CUSTOM_OUTPUT_STRUCTURES.md#choose-an-output-mode) before changing one.
 
-When you ask Chat with Claude how validation works, Claude can inspect the
-domain-pack validation plan. If an active binding includes a validator-agent ID,
-Claude can use the existing Agent Studio prompt tools to inspect that validator
-agent's prompt, tools, and group-specific rules.
+For custom output, Setup includes a read-only details table. Choose **Add details to collect** or **Edit details to collect** above the table. This opens the same structure in the editor, where you define what the AI should collect—not actual answers from a paper. **Back to Setup** returns to the agent settings.
 
-### Agent Workshop Tab
+### Prompt
 
-Create and test custom versions of agent prompts without affecting the live system.
+The prompt view separates locked instruction layers from **Your prompt**, which you can edit. The built-in and output-structure instructions supply rules the agent must follow. Your prompt supplies task guidance. **Reset to template** restores the template text for the editable prompt.
 
-**What is a Custom Agent?**
+Use **Group-specific instructions** for conventions that apply to a particular curator group. You can edit a group's text or reset it to the template. **Add group instructions at runtime** controls whether those instructions are included when the agent runs.
 
-A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, add per-group overrides, and use it in flows without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
+Custom item-type guidance and detail instructions are also passed to the extraction AI. Use them for record boundaries and field-specific rules, in addition to the main prompt. See [where to put instructions](BEST_PRACTICES.md#put-instructions-where-they-apply).
 
-If you clone a domain-pack extraction agent, the Workshop shows what the agent produces on one line under "What it produces", with a count of automatic checks and a **View envelope** link to the full envelope in the Agents tab. Editing the prompt does not edit the domain pack schema, field paths, validators, export policy, or submission policy. Those remain controlled by the installed package metadata.
+### Tools
 
-**The Workshop Layout**
+The Tools table shows attached tools and their purposes. Choose **Add tools**, search or filter the library, select tools, then choose **Attach N tools**. A tool disabled by policy cannot be attached; its entry explains why.
 
-- **Header** - Shows the agent's icon, name, and where it came from ("Template: ...", "Cloned from ...", or "From scratch"), plus a status pill: Unsaved changes, Saving, Saved, or Save failed. The header holds the **Open**, **New**, and **Save** buttons and a **More** menu with **Save as**, **Manage agents**, and **Delete agent**.
-- **Navigation** - Four sections: **Setup**, **Prompt**, **Tools**, and **Versions**. An orange dot marks a section with unsaved edits. Tools shows how many tools are attached and Versions shows how many versions exist. The **Help** group has **Ask Claude**, which opens a discussion of your draft in the right-panel chat.
+Extraction and validation use different tools. Extractors collect paper evidence; validators resolve supported values against databases or ontologies. Attaching a lookup tool is not a substitute for configuring a field validator.
 
-**Starting a New Agent**
+If a needed tool is missing, choose **New request** to describe it for the development team. **Ask AI Chat to draft a request** can help write the request. The request list shows its status.
 
-Click **New** (or open the Workshop for the first time) to see the start screen with three choices:
+### Save and manage versions
 
-- **From a template** - Start from a package agent and adjust its prompt
-- **From scratch** - Write the prompt yourself; built-in instructions still apply
-- **Clone one of yours** - Copy an agent you already saved
+The header provides **Open**, **New**, **Save**, and a **More** menu with **Save as**, **Manage agents**, and **Delete agent**.
 
-Choosing one lands you on Setup with the origin selected. You can change the starting point later on Setup.
+**Open** includes your agents and accessible project-shared agents. You can preview a teammate's agent read-only and clone it into your Workshop. **Manage agents** lists only your agents; teammates cannot change, delete, change visibility, or revert your original.
 
-You can also get here quickly from the Agents tab: click "Clone to Workshop" on any agent's detail panel.
+The Tools section also shows project-visible teammate requests with their descriptions, owners, and status. It does not expose private conversations or developer notes.
 
-**Setup**
+**Save** opens a dialog summarizing the changes and allows a version note. **Save as** creates a separate copy. The **Versions** section lists saved versions; **Revert** creates a new version from an older one rather than deleting history.
 
-1. **Starting point** - Template, Scratch, or Clone, with the template or clone source picker beside it. A note under the picker explains any group restriction the template carries.
-2. **Identity** - Pick an icon, name the agent, and add a short description.
-3. **What it produces** - One line showing the envelope, the number of automatic checks, and the **View envelope** link.
-4. **Model** - Choose the model and, when the model supports it, a reasoning level. Higher levels are slower but better for difficult tasks. Open **Model guidance** to read the description, recommendations, and what to avoid. Not sure which to pick? Click **Ask Claude which model fits**.
-5. **Sharing** - **Visibility** sets who can see the agent (Private, or Shared with project). **Available to groups** restricts who can run it. If the template or clone source already limits groups, a locked note says you can narrow that list but not widen it.
+Saving an agent or custom structure creates or selects saved revisions. Existing flow steps keep the revisions they were configured to use. Review and explicitly update a flow when you want it to use a changed agent.
 
-**Prompt**
+### Keep and recover unsaved work
 
-The layer strip at the top shows what your prompt builds on: **Built-in**, **Output structure**, **Template**, and **Your prompt**, each with its length. The first three are read-only and marked with a lock. Click one to read it in the editor pane. **Your prompt** is the layer you edit; it replaces the template prompt. **Reset to template** puts the template text back.
+Browser Back follows Workshop sections, wizard stages, and detail pages while keeping edits. Switching between Studio tabs also keeps the current draft.
 
-Under **Group-specific instructions**, click a group button to see or edit that group's instructions. A group with your own text shows an "edited" badge. **Reset to template** removes your override for that group. The **Add group instructions at runtime** switch controls whether group instructions are included when the agent runs. Click **Discuss prompt changes with Claude** to get feedback on the prompt.
+Workshop and Flow Builder keep recovery drafts in this browser for your signed-in account, including unfinished flow-step instructions. After a reload or return, choose **Resume draft** or **Discard draft**. Local recovery is not an account save and does not transfer to another device. Clearing browser storage can remove it. If storage is unavailable, keep the page open and use **Save**.
 
-**Tools**
+Recovered flows open as unsaved copies. A recovered agent whose saved source has changed or is unavailable may also open as a new copy; a shared-agent clone needs access to its source. Review before saving. These copies avoid overwriting saved work during recovery.
 
-Attached tools appear in a table with each tool's purpose and any policy note. Click the remove button on a row to detach a tool.
+Starting or opening different work can ask how to handle unsaved edits. Read the prompt before discarding them. If another tab owns a recovery draft, follow the warning rather than assuming both tabs are keeping independent recovery copies.
 
-1. Click **Add tools** to open the tool library
-2. Search or filter by category, then check the tools you want
-3. Click **Attach N tools**
+## Flows: use agents together
 
-Tools listed as "Disabled by policy for custom agents" appear with the reason but cannot be selected.
+A flow combines initial task instructions, extraction, any additional validation, and at least one output. Use **Help build a flow** or ask AI Chat to work through it one decision at a time. You can also ask for a complete proposal when you already know the configuration.
 
-If you need a tool that does not exist yet, click **New request**, describe it, and click **Send request**. Your requests to developers appear below with their status (New, Reviewed, In progress, Shipped, or Declined). Click **Ask Claude to draft a request** if you want help writing one.
+If a suitable pre-made agent exists, inspect its fields first. If you need a custom one, AI Chat can help build it in Workshop while keeping the flow context.
 
-**Versions**
+When working with AI Chat on an agent for a flow, save the agent and return to the **Flows** tab to continue the saved-agent handoff automatically. It runs once after any current reply finishes. You can also choose **Review in Flow** in the saved-agent notice. Studio returns to the preserved flow and asks AI Chat to propose how to use the saved agent. Review and Apply that proposal, then save the flow separately. Changed drafts or unavailable agents may require a fresh review.
 
-Every save creates a new version. The Versions table lists each version with its note and date; the current version is marked. Click **Revert** on an older version to create a new version from it. Nothing is deleted.
+Use **Verify with AI Chat** to discuss structure, missing connections, or validation choices. This is assistance before running, not an extraction test or a guarantee of correct results. See [curation flows](CURATION_FLOWS.md) for connections, output instructions, and running a saved flow.
 
-**Saving**
+## Understand a result or report a problem
 
-- **Save** opens a small dialog that names the version it creates, lists which sections changed, and lets you add an optional note. The Save button is enabled only when there is something to save.
-- **Save as** (in the More menu) saves a copy under a new name and leaves the original unchanged.
-- If you click **New**, open another agent, or switch to the **Agents** or **Flows** tab while you have unsaved edits, the Workshop asks whether to discard them or keep editing. Closing the browser tab also warns you.
+In the main chat, open a response's **three-dot menu (⋮)** and choose **Open in Agent Studio**. Ask about the specific result, for example:
 
-**Icon Picker**
+> Why did this allele remain unresolved? Which information did the validator receive?
 
-When creating or editing a custom agent, select an icon on Setup to help identify your agent in the palette and flow canvas.
+When available, AI Chat can inspect the linked run's prompts, tool activity, evidence, and validation timeline. Individual failed lookup attempts can precede a successful result, so ask about the final finding as well as the activity log.
 
-**Using Custom Agents in Flows**
+Validation findings identify the affected record or field. Read unresolved or ambiguous results before export. A curator override or waiver is available only where the data type's policy allows it. A successful lookup does not, by itself, make a custom record ready for Alliance submission.
 
-Custom agents appear in the Flow Builder palette under "My Custom Agents". You can drag them into flows just like system agents.
+Choose **Send feedback** in the AI Chat header for **AI-assisted** feedback or a **Manual** report. Include the expected behavior, the observed result, and any relevant group convention. For a main-chat extraction problem, the response's feedback action keeps the report linked to that interaction.
 
-**Ask Claude**
+## Common questions
 
-Click **Ask Claude** in the Workshop navigation to send your current draft to Opus for review. When the Agent Workshop tab is active, the right-panel chat is aware of your workshop context: your selected template source, draft prompt, and group settings. You can ask Claude to:
-- "Critique this draft and suggest concrete edits"
-- "Help me restructure this prompt for clarity"
-- "What would happen if I changed this instruction?"
-- "Does this prompt still produce the required domain-envelope fields?"
-- "Which automatic validators will run for this agent?"
-- "Does this custom extractor still keep proposed fields separate from validator-materialized fields?"
+### Can AI Chat change my custom fields and validators?
 
-## Discussing a Chat Response
+Yes. It can propose edits to details, parts, instructions, inclusion rules, and compatible validator attachments. Review and Apply its proposal, then Save. It cannot attach a validator that lacks a supported contract or that you cannot access.
 
-If you want to talk about the results from a conversation you're having in the main chat, you can bring that into Agent Studio:
+### Does editing the table enter answers from a paper?
 
-1. In the main chat, find the AI response you want to discuss
-2. Click the **triple-dot menu (⋮)** on that message
-3. Select **"Open in Agent Studio"**
+No. The Workshop table defines the questions the extractor will answer. Run the saved agent or flow on a paper to obtain records, then review those results.
 
-This opens Agent Studio with your conversation loaded, so Opus knows exactly what you're referring to. You can then ask questions like:
-- "Why did the AI suggest this ontology term instead of that one?"
-- "The AI missed the gene mentioned in paragraph 3 - what went wrong?"
-- "Can you help me understand why I got this response?"
-- "Which envelope object and field path did this validation finding target?"
-- "Was this lookup attempt a final failure or just part of the audit trail?"
+### How do prompts layer together?
 
-When a trace is available, Claude can inspect the TraceReview summary,
-extraction diagnostic report, ordered model/tool/event reconstruction, exact
-prompt and tool payload chunks, validation timeline, token/cost accounting, and
-duplicate-context reports. This lets Claude explain what the AI actually did
-before suggesting whether the issue is missing routing, missing data, or prompt
-behavior.
+The agent's prompt, group instructions, flow instructions, and custom field guidance all contribute. Locked runtime and output rules still apply. See [how prompts layer together](CURATION_FLOWS.md#how-prompts-layer-together).
 
-This is the best way to get help understanding unexpected AI behavior or to formulate improvement suggestions.
+### What's the difference between AI Chat and the main chat?
 
-## Understanding Validation Findings
+Studio AI Chat helps configure and explain agents and flows. The main chat is where you ask about papers, run flows, and receive extraction or lookup results.
 
-Validation findings are attached to envelope objects or fields. A finding may be
-informational, a warning, an error, or a blocker. Findings also have a status,
-such as open, resolved, or waived. Export and submission previews block on open
-error/blocker findings unless metadata allows a curator override or waiver.
+## Choose consistent file output
 
-Database-backed lookup tools may include `lookup_attempts`. Treat those attempts
-as an audit trail. They show what was tried, which provider was used, how many
-matches were found, and whether an individual attempt was successful,
-ambiguous, not found, transient, blocked, or under development. A transient
-attempt can still appear in the audit trail even when a later retry produced a
-successful top-level lookup result.
+In a CSV, TSV, or JSON flow step, **Use selected fields** lets you choose columns from connected agents without writing formatting instructions. AI Chat can inspect those fields and propose the same layout for you. Review and apply the proposal, then save the flow. See [output steps](CURATION_FLOWS.md#output-steps) for grouped answers, missing values, and multiple sources.
 
-For domain-envelope runs, a complete-looking extraction event is not enough to
-prove validation succeeded. Check the validation findings and lookup attempts to
-see which validator binding ran, what `DomainValidationRequest` fields it
-received, what lookup it performed, and whether the final result was resolved,
-unresolved, ambiguous, unavailable, or only under-development metadata.
-
-Curator review is driven by validation findings and field paths. A review action
-may update a bounded field, resolve or waive a finding when policy allows it, or
-leave the finding open for package or data follow-up. The envelope history keeps
-that trail.
-
-## Submitting Feedback and Suggestions
-
-Your domain expertise is invaluable for improving the AI. Agent Studio provides two ways to submit suggestions:
-
-### AI-Assisted Suggestions
-
-Click **Send feedback** (the light bulb) in the chat header, then choose **AI-assisted**. Opus will:
-- Review your conversation
-- Summarize the issue you've discussed
-- Draft a concrete improvement suggestion
-- Submit it for your confirmation
-
-**When to use:** After discussing a specific issue with Opus, this is the fastest way to submit actionable feedback.
-
-### Manual Suggestions
-
-Click **Send feedback** in the chat header, then choose **Manual** to fill out a suggestion form yourself:
-
-- **Suggestion Type:**
-  - *Improvement* - General enhancement
-  - *Bug* - Incorrect or unexpected behavior
-  - *Clarification* - Ambiguous instructions
-  - *Group-Specific* - Change needed for your group
-  - *Missing Case* - Scenario the prompt doesn't handle
-  - *General* - Feedback not tied to a specific prompt
-- **Summary** - Brief description (1-2 sentences)
-- **Detailed Reasoning** - Why this change is needed
-- **Proposed Change** (optional) - Specific wording you'd suggest
-
-**When to use:** When you have a clear suggestion and don't need Opus's help drafting it.
-
-## Tips for Effective Feedback
-
-### Be Specific
-Instead of "The AI is wrong," try "When I asked about gene X, the AI said Y, but according to [source], it should be Z."
-
-### Include Examples
-If you see a pattern of errors, describe 2-3 specific cases. This helps identify whether it's a prompt issue or something else.
-
-### Share Your Group's Conventions
-If your group has specific naming conventions, annotation rules, or curation practices that the AI doesn't follow, explain them. **You're the expert on your organism!**
-
-### Check Group-Specific Rules First
-Before suggesting a change to a base prompt, check if your group already has specific rules in the Agent Browser. The issue might be that your group's rules need updating rather than the base prompt.
-
-### Use "Open in Agent Studio"
-When providing feedback about a specific interaction, always use the triple-dot menu to open it in Agent Studio rather than describing it manually. This gives Opus (and the development team) the full context.
-
-## What Happens to Your Suggestions
-
-When you submit a suggestion:
-
-1. It's sent to the development team with full context
-2. The team reviews it for feasibility and impact
-3. If approved, the prompt is updated in the next deployment
-4. Complex suggestions may require discussion before implementation
-
-Your suggestions help make the AI better for everyone!
-
-## Common Questions
-
-### Do I need to select an agent to submit feedback?
-
-No. If you have feedback based on a conversation or general observation, you can submit "General" feedback without selecting a specific agent.
-
-### Can I see what prompts are currently being used?
-
-Yes! That's the main purpose of the Agents tab. Browse all agent prompts and see exactly what instructions each agent receives.
-
-### Why are there group-specific rules?
-
-Each curator group has organism-specific conventions and curation practices. Group rules customize the AI to respect these conventions, for example using WormBase anatomy terms (WBbt) for C. elegans or FlyBase allele naming patterns.
-
-### How do prompts layer together? Can they conflict?
-
-Each agent has a base prompt, optional group-specific rules, and optional flow custom instructions. These combine in a defined priority order: flow custom instructions (highest) > base prompt > group rules. Flow instructions override everything else for that step. See **[How Prompts Layer Together](CURATION_FLOWS.md#how-prompts-layer-together)** in the Curation Flows guide for full details.
-
-### What's the difference between Agent Studio's Opus and the main chat?
-
-The main chat uses a multi-agent system optimized for curation tasks - it routes your questions to specialists who query databases. Agent Studio's Opus is for discussing how the AI works, understanding specific responses, and improving the system.
-
-### How do I build curation flows?
-
-See the **[Curation Flows](CURATION_FLOWS.md)** guide for complete documentation.
-
-## Need Help?
-
-If you have questions about using Agent Studio or need help formulating feedback, just ask Opus! It's designed to help you translate your domain expertise into actionable suggestions.
+For a custom CSV, TSV or JSON exporter, **Use direct export for new flow steps** saves a default with that agent revision. New steps start in direct mode; choose their source fields in the flow. Existing flow steps keep their settings. Direct export skips the exporter’s AI call and does not run its prompts. Turn direct mode off on a step when its output needs AI instructions.

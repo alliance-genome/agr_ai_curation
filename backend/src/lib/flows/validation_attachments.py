@@ -91,6 +91,7 @@ def apply_flow_validation_attachment_defaults(
     flow_definition: FlowDefinition,
     *,
     agent_registry: Mapping[str, Mapping[str, Any]] | None = None,
+    entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
 ) -> FlowDefinition:
     """Attach default validation selections to extraction nodes from metadata."""
 
@@ -112,10 +113,14 @@ def apply_flow_validation_attachment_defaults(
                 )
             continue
 
-        options = validation_attachment_options_for_agent(
-            node.data.agent_id,
-            agent_registry=agent_registry,
-        )
+        if entries_by_node is not None and node.id in entries_by_node:
+            entry = entries_by_node[node.id]
+            options = _options_for_agent_entry(entry) if entry is not None else ()
+        else:
+            options = validation_attachment_options_for_agent(
+                node.data.agent_id,
+                agent_registry=agent_registry,
+            )
         if not options:
             if node.data.validation_attachments:
                 raise FlowValidationAttachmentError(
@@ -246,6 +251,17 @@ def _options_for_agent_entry(
         raise FlowValidationAttachmentError(
             f"Agent declares unknown domain_pack_id '{domain_pack_id}'"
         )
+    if entry.get("execution_receipt") is not None:
+        from src.schemas.agent_execution_revision import AgentExecutionReceipt
+        from src.lib.domain_packs.profile_validation import (
+            profile_validation_attachment_options, resolve_profile_validation,
+        )
+        context = resolve_profile_validation(
+            AgentExecutionReceipt.model_validate(entry["execution_receipt"]), registry.domain_pack,
+            active_group_ids=entry.get("authenticated_group_ids") or (), user_id=entry.get("authenticated_user_id"),
+        )
+        if context is not None:
+            return profile_validation_attachment_options(context)
     return registry.validation_attachment_options()
 
 
@@ -320,6 +336,13 @@ def _validation_attachment_edge_groups_by_source(
         if target_node.type != "agent" or target_node.id == source_node.id:
             raise FlowValidationAttachmentError(
                 "validation_attachment edges must target a distinct validator agent node"
+            )
+
+        receipt = source_node.data.execution_receipt
+        if receipt is not None and receipt.output_contract.output_mode == "profile_bound_generic":
+            raise FlowValidationAttachmentError(
+                "Profile validators are pinned by the saved output structure; "
+                "edit its validator mapping instead of replacing it with a flow sidecar"
             )
 
         selections_by_attachment_id = {

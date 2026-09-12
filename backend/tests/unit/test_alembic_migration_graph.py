@@ -66,7 +66,7 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["7c9e2a4b6d80"]
+    assert heads == ["f54e2c6f6848"]
 
 
 def test_alembic_revision_graph_rejects_duplicate_revision_ids(
@@ -95,3 +95,37 @@ def test_supported_head_includes_both_retired_attachment_repairs():
     assert {"e2f3a4b5c6d7", "i6j7k8l9m0n1"} <= revisions
     upgrade = {item.revision for item in scripts.iterate_revisions("heads", "e2f3a4b5c6d7")}
     assert "i6j7k8l9m0n1" in upgrade
+
+
+@pytest.mark.parametrize(
+    ("start", "expected"),
+    [
+        (
+            "7c9e2a4b6d80",
+            {
+                "3cea536116c6", "fd396e8286ab", "314e1a470941",
+                "i6d7e8f9a0b1", "j7e8f9a0b1c2", "k8f9a0b1c2d3",
+                "l9a0b1c2d3e4", "m0b1c2d3e4f5", "n1c2d3e4f5a6",
+                "o2d3e4f5a6b7", "p3e4f5a6b7c8", "f54e2c6f6848",
+            },
+        ),
+        (
+            "p3e4f5a6b7c8",
+            {
+                "e2f3a4b5c6e8", "f3a4b5c6d7e8", "g4b5c6d7e8f9",
+                "h5c6d7e8f9a0", "i6j7k8l9m0n1", "j7k8l9m0n1o2",
+                "k8l9m0n1o2p3", "l9m0n1o2p3q4", "m0n1o2p3q4r5",
+                "n0o1p2q3r4s5", "7c9e2a4b6d80", "f54e2c6f6848",
+            },
+        ),
+    ],
+)
+def test_convergence_runs_only_the_missing_parent_branch(start, expected):
+    from alembic.script import ScriptDirectory
+
+    scripts = ScriptDirectory(str(VERSIONS_DIR.parent))
+    upgrade = {
+        # Match Alembic command.upgrade, including the other merge branch.
+        item.revision for item in scripts.iterate_revisions("heads", start, implicit_base=True)
+    }
+    assert upgrade == expected

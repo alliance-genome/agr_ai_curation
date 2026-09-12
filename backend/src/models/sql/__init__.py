@@ -14,11 +14,16 @@ from .benchmark import (
     BenchmarkJobStatus,
 )
 from .agent import Agent, Project, ProjectMember
+from .agent_execution_revision import AgentExecutionRevision
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .chat_route_preference import ChatRoutePreference
+from .flow_shortcut_preference import FlowShortcutPreference
 from .custom_agent import CustomAgentVersion
+from .generic_extraction_profile import GenericExtractionProfile, GenericExtractionProfileRevision
+from .profile_validator_capability import ProfileValidatorCapability, ProfileValidatorCapabilityReference
 from .curation_flow import CurationFlow
+from .curation_flow_agent_revision import CurationFlowAgentRevision
 from .database import Base, SessionLocal, engine, get_db
 from .file_output import FileOutput, FileType
 from .ontology import Ontology
@@ -50,13 +55,20 @@ __all__ = [
     "BenchmarkJobInputSnapshot",
     "BenchmarkJobStatus",
     "Agent",
+    "AgentExecutionRevision",
     "Project",
     "ProjectMember",
     "ChatMessage",
     "ChatSession",
     "ChatRoutePreference",
+    "FlowShortcutPreference",
     "CustomAgentVersion",
+    "GenericExtractionProfile",
+    "GenericExtractionProfileRevision",
+    "ProfileValidatorCapability",
+    "ProfileValidatorCapabilityReference",
     "CurationFlow",
+    "CurationFlowAgentRevision",
     "FileOutput",
     "FileType",
     "SessionLocal",

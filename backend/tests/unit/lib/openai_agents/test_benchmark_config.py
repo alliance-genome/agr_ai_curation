@@ -17,6 +17,7 @@ def test_approved_benchmark_models_load_from_canonical_registry(tmp_path):
     )
 
     assert [(model_id, models[model_id].provider) for model_id in models] == [
+        ("gpt-6-astra", "openai"),
         ("gpt-5.6-sol", "openai"),
         ("gpt-5.6-terra", "openai"),
         ("deepseek/deepseek-v4-pro-0813", "openrouter"),
@@ -24,7 +25,7 @@ def test_approved_benchmark_models_load_from_canonical_registry(tmp_path):
         ("qwen/qwen3.8-27b", "openrouter"),
     ]
     assert [model_id for model_id, model in models.items() if model.default] == [
-        "gpt-5.6-sol"
+        "gpt-6-astra"
     ]
 
 

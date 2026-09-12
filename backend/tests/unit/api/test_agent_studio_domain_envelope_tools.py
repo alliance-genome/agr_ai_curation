@@ -1,4 +1,4 @@
-"""Unit coverage for Agent Studio domain-envelope Opus tools."""
+"""Unit coverage for Agent Studio domain-envelope AI Chat tools."""
 
 from __future__ import annotations
 
@@ -127,7 +127,8 @@ def test_handle_tool_call_dispatches_domain_plan_section_inputs(monkeypatch):
     )
 
     assert result == {"success": True, "section": "validation_attachments"}
-    assert captured == tool_input
+    assert captured == {**tool_input, "agent_revision_id": None, "session_factory": api_module.SessionLocal,
+                        "user_id": None, "active_group_ids": []}
 
 
 def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
@@ -363,6 +364,7 @@ def test_handle_tool_call_dispatches_review_row_page_inputs(monkeypatch):
     assert captured == {
         "session_factory": api_module.SessionLocal,
         "user_auth_sub": "auth-sub-1",
+        "active_group_ids": [],
         "envelope_id": "env-1",
         "revision": 4,
         "section": "rows",

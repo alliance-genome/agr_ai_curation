@@ -320,7 +320,7 @@ def test_env_example_documents_the_development_sentry_dsn_input():
     assert assignments["SENTRY_DSN"] == ""
 
 
-def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
+def test_compose_model_defaults_match_supported_runtime_roles():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]
     )
@@ -332,15 +332,15 @@ def test_compose_model_defaults_match_supported_gpt56_runtime_contract():
     )
 
     expected_backend_defaults = {
-        "DEFAULT_AGENT_MODEL": "${DEFAULT_AGENT_MODEL:-gpt-5.6-terra}",
-        "DEFAULT_AGENT_REASONING": "${DEFAULT_AGENT_REASONING:-medium}",
+        "DEFAULT_AGENT_MODEL": "${DEFAULT_AGENT_MODEL:-gpt-6-astra}",
+        "DEFAULT_AGENT_REASONING": "${DEFAULT_AGENT_REASONING:-low}",
         "HIERARCHY_LLM_MODEL": "${HIERARCHY_LLM_MODEL:-gpt-5.6-terra}",
         "HIERARCHY_LLM_REASONING": "${HIERARCHY_LLM_REASONING:-low}",
         "FIGURE_LOCATOR_LLM_MODEL": "${FIGURE_LOCATOR_LLM_MODEL:-gpt-5.6-terra}",
         "FIGURE_LOCATOR_LLM_REASONING": "${FIGURE_LOCATOR_LLM_REASONING:-low}",
         "FIGURE_LOCATOR_RESOLUTION_MAX_TURNS": "${FIGURE_LOCATOR_RESOLUTION_MAX_TURNS:-10}",
         "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS": "${FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS:-60000}",
-        "ABSTRACT_EXTRACTION_MODEL": "${ABSTRACT_EXTRACTION_MODEL:-gpt-5.6-sol}",
+        "ABSTRACT_EXTRACTION_MODEL": "${ABSTRACT_EXTRACTION_MODEL:-gpt-6-astra}",
     }
     assert {key: dev_env[key] for key in expected_backend_defaults} == (
         expected_backend_defaults
@@ -381,24 +381,23 @@ def test_compose_and_install_surface_compatible_http_retry_limit():
     assert standalone_env["OPENAI_COMPATIBLE_HTTP_MAX_RETRIES"] == "2"
 
 
-def test_agent_studio_compose_and_env_example_default_to_opus_5():
+def test_agent_studio_has_no_retired_provider_configuration():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]
     )
     production_env = _load_compose()["services"]["backend"]["environment"]
     env_example = ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
 
-    assert dev_env["PROMPT_EXPLORER_MODEL_ID"] == (
-        "${PROMPT_EXPLORER_MODEL_ID:-claude-opus-5}"
-    )
-    assert production_env["PROMPT_EXPLORER_MODEL_ID"] == (
-        "${PROMPT_EXPLORER_MODEL_ID:-claude-opus-5}"
-    )
-    assert "PROMPT_EXPLORER_MODEL_ID=claude-opus-5" in env_example
-    retired_env_var = "ANTHROPIC_" + "OPUS_MODEL"
-    assert retired_env_var not in dev_env
-    assert retired_env_var not in production_env
-    assert f"{retired_env_var}=" not in env_example
+    retired_keys = {
+        "ANTHROPIC_API_KEY",
+        "PROMPT_EXPLORER_MODEL_ID",
+        "AGENT_STUDIO_OPUS_CONTEXT_EDITING_TRIGGER_TOKENS",
+        "AGENT_STUDIO_OPUS_CONTEXT_EDITING_KEEP_TOOL_USES",
+    }
+    assert retired_keys.isdisjoint(dev_env)
+    assert retired_keys.isdisjoint(production_env)
+    for key in retired_keys:
+        assert f"{key}=" not in env_example
 
 
 def test_pdf_size_limit_is_shared_by_backend_and_frontend_compose_services(

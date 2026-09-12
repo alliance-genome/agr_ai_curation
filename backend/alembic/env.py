@@ -65,6 +65,18 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def reject_ambiguous_revision_heads(heads: tuple[str, ...]) -> None:
+    """Do not guess which deployed history a reused intermediate ID denotes."""
+
+    ambiguous = {"f3a4b5c6d7e8", "g4b5c6d7e8f9", "h5c6d7e8f9a0"}
+    if ambiguous.intersection(heads):
+        raise RuntimeError(
+            "Ambiguous production/main Alembic revision: verify the original "
+            "release history before upgrading; do not stamp the database. "
+            "See PRODUCTION_MAIN_MIGRATION_CONVERGENCE.md."
+        )
+
+
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
 
@@ -84,6 +96,7 @@ def run_migrations_online() -> None:
         )
 
         with context.begin_transaction():
+            reject_ambiguous_revision_heads(context.get_context().get_current_heads())
             context.run_migrations()
 
 

@@ -276,13 +276,16 @@ def test_failed_terminals_discard_buffered_handoff_readiness():
         )
 
 
-def test_persistence_failure_replaces_stale_success_terminal_order():
+def test_execution_failure_replaces_stale_success_and_preserves_cause():
     outcome = FlowRunOutcome()
     outcome.observe({"type": "CHAT_OUTPUT_READY", "details": {"output": "stale"}})
     outcome.observe({"type": "FLOW_FINISHED", "status": "completed"})
 
-    outcome.replace_with_persistence_failure(
-        "The final outcome was not durable.",
+    outcome.replace_with_failure(
+        "The AI service interrupted the run.",
+        failure_type="UserError",
+        phase="event_generator",
+        provider="openai",
         terminal_events=[
             {"type": "SUPERVISOR_ERROR", "details": {"error": "failed"}},
             {"type": "RUN_ERROR", "message": "failed"},
@@ -290,6 +293,10 @@ def test_persistence_failure_replaces_stale_success_terminal_order():
     )
 
     assert outcome.status == "failed"
+    assert outcome.failure_type == "UserError"
+    assert outcome.failure_phase == "event_generator"
+    assert outcome.failure_provider == "openai"
+    assert outcome.persistence_status == "pending"
     assert outcome.final_user_visible_text is None
     assert [event["type"] for event in outcome.events_for_persistence()] == [
         "SUPERVISOR_ERROR",
@@ -298,6 +305,7 @@ def test_persistence_failure_replaces_stale_success_terminal_order():
     assert outcome.publishable_terminal_events() == []
 
     outcome.mark_persisted(transcript=True, recovered_failure=True)
+    assert outcome.persistence_status == "succeeded"
 
     assert [event["type"] for event in outcome.publishable_terminal_events()] == [
         "SUPERVISOR_ERROR",

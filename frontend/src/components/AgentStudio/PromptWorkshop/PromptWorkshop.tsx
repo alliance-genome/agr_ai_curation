@@ -1,12 +1,18 @@
+import DirectExportSetting from '../DirectExportSetting'
+import { DraftRecoveryNotice } from '../draftRecovery'
+import { useStudioLocation } from '../studioNavigation'
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
-import { Alert, Box } from '@mui/material'
+import { Alert, Box, Button, Typography } from '@mui/material'
+import type { WorkshopAuthoringProposal } from '@/types/promptExplorer'
+import type { WorkshopContinuationOrigin, WorkshopSavedHandoff } from '@/types/promptExplorer'
+import type { FlowProposalApplyResult } from '../FlowBuilder/types'
 
 import type {
   AgentWorkshopContext,
+  WorkshopAction,
   CustomAgent,
   PromptCatalog,
   ToolIdeaConversationEntry,
-  WorkshopPromptUpdateRequest,
 } from '@/types/promptExplorer'
 import type { AgentMetadata } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
@@ -24,6 +30,12 @@ import {
 import { NARROW_QUERY } from './workshopStyles'
 import WorkshopHeader from './WorkshopHeader'
 import WorkshopNav from './WorkshopNav'
+import WorkshopOutputSetup from './WorkshopOutputSetup'
+import OutputStructureWorkflow from './OutputStructureWorkflow'
+import SelectProfileDialog from './dialogs/SelectProfileDialog'
+import ProfileRevisionReview from './ProfileRevisionReview'
+import SavedExecutionSummary from './SavedExecutionSummary'
+import { workshopDraftKey } from '../authoringContext'
 import WorkshopStartScreen from './WorkshopStartScreen'
 import SetupSection, { type EnvelopeSummary } from './SetupSection'
 import PromptSection from './PromptSection'
@@ -52,6 +64,12 @@ export interface WorkshopLeaveGuard {
   requestLeave: () => Promise<boolean>
 }
 
+export interface WorkshopAuthoringContextHandle {
+  captureAuthoringContext: () => AgentWorkshopContext
+  applyAuthoringProposal: (proposal: WorkshopAuthoringProposal) => Promise<FlowProposalApplyResult>
+  runChatAction: (action: WorkshopAction, cloneSource?: CustomAgent) => boolean
+}
+
 interface GuardedAction {
   proceed: () => void
   cancel?: () => void
@@ -59,16 +77,23 @@ interface GuardedAction {
 
 interface PromptWorkshopProps {
   catalog: PromptCatalog
+  initialChatAction?: WorkshopAction
+  initialChatCloneSource?: CustomAgent
+  onInitialChatActionComplete?: () => void
+  onChatContinuation?: (message: string) => void
+  continuationOrigin?: WorkshopContinuationOrigin
+  onSavedHandoff?: (handoff: WorkshopSavedHandoff) => void
   initialParentAgentId?: string | null
   initialCustomAgentId?: string | null
   onContextChange?: (context: AgentWorkshopContext) => void
   onVerifyRequest?: (message: string) => void
   opusConversation?: ToolIdeaConversationEntry[]
-  incomingPromptUpdate?: WorkshopPromptUpdateRequest | null
   /** Open the given system agent in the Agents tab with its Envelope view. */
   onViewEnvelope?: (agentId: string) => void
   /** Receives the leave guard so the page can confirm before navigating away. */
   leaveGuardRef?: Ref<WorkshopLeaveGuard>
+  /** Synchronous access to the current draft for send-time AI Chat capture. */
+  authoringContextRef?: Ref<WorkshopAuthoringContextHandle>
 }
 
 function summarizeEnvelope(metadata: AgentMetadata | undefined): EnvelopeSummary | null {
@@ -91,25 +116,42 @@ function summarizeEnvelope(metadata: AgentMetadata | undefined): EnvelopeSummary
 
 function PromptWorkshop({
   catalog,
+  initialChatAction,
+  initialChatCloneSource,
+  onInitialChatActionComplete,
+  continuationOrigin,
+  onSavedHandoff,
+  onChatContinuation,
   initialParentAgentId,
   initialCustomAgentId,
   onContextChange,
   onVerifyRequest,
   opusConversation = [],
-  incomingPromptUpdate = null,
   onViewEnvelope,
   leaveGuardRef,
+  authoringContextRef,
 }: PromptWorkshopProps) {
+  const [pendingChatContinuation, setPendingChatContinuation] = useState<{ message: string; send: (message: string) => void } | null>(null)
+  const handleSavedHandoff = (handoff: WorkshopSavedHandoff) => {
+    onSavedHandoff?.(handoff)
+    if (handoff.status === 'ready' && onChatContinuation) {
+      setPendingChatContinuation({ send: onChatContinuation, message: 'I saved the agent. Review my current saved settings, including any changes I made in the editor, and continue with the next step we discussed. If we are finished, briefly confirm that. Do not make additional changes without a request.' })
+    }
+  }
   const { agents: agentMetadata } = useAgentMetadata()
   const draft = useWorkshopDraft({
     catalog,
+    continuationOrigin,
+    onSavedHandoff: handleSavedHandoff,
     initialParentAgentId,
     initialCustomAgentId,
     onContextChange,
-    incomingPromptUpdate,
   })
 
-  const [section, setSection] = useState<WorkshopSection>('setup')
+  const [section, navigateSection] = useStudioLocation('workshop', 'setup')
+  const setSection = (next: WorkshopSection) => { setStartScreenRequested(false); navigateSection(next) }
+  const [profilePickerBase, setProfilePickerBase] = useState<string | null>(null)
+  const visibleSection = section === 'output_structure' && draft.outputDraft.mode !== 'profile_bound_generic' ? 'setup' : section
   const [startScreenRequested, setStartScreenRequested] = useState(
     () => !(initialParentAgentId || '').trim() && !(initialCustomAgentId || '').trim()
   )
@@ -121,9 +163,10 @@ function PromptWorkshop({
   const [toolLibraryOpen, setToolLibraryOpen] = useState(false)
   const [toolRequestOpen, setToolRequestOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<CustomAgent | null>(null)
-  const [pendingRevert, setPendingRevert] = useState<number | null>(null)
+  const [pendingRevert, setPendingRevert] = useState<(typeof draft.versions)[number] | null>(null)
   const [pendingGuardedAction, setPendingGuardedAction] = useState<GuardedAction | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const handledInitialChatActionRef = useRef<WorkshopAction | undefined>(undefined)
   const [returnFocusToken, setReturnFocusToken] = useState(0)
 
   const {
@@ -140,13 +183,7 @@ function PromptWorkshop({
     versions,
   } = draft
 
-  const showStartScreen = startScreenRequested && !selectedCustomAgentId
-
-  useEffect(() => {
-    if (!incomingPromptUpdate) return
-    setStartScreenRequested(false)
-    setSection('prompt')
-  }, [incomingPromptUpdate])
+  const showStartScreen = (section === 'start' || (startScreenRequested && !draft.recoveryRestored && section === 'setup')) && !selectedCustomAgentId
 
   const guard = useCallback((action: () => void) => {
     if (dirty.any) {
@@ -171,6 +208,7 @@ function PromptWorkshop({
 
   useImperativeHandle(leaveGuardRef, () => ({ requestLeave }), [requestLeave])
 
+
   // After "Keep editing" on a leave request, the dialog hands focus back to the
   // element that opened it (a page tab). Bring it back into the Workshop instead.
   // This effect runs after the dialog's own focus restore in the same commit.
@@ -179,10 +217,10 @@ function PromptWorkshop({
     rootRef.current?.focus()
   }, [returnFocusToken])
 
-  const envelope = useMemo(
-    () => summarizeEnvelope(draft.domainEnvelopeAgentId ? agentMetadata[draft.domainEnvelopeAgentId] : undefined),
-    [agentMetadata, draft.domainEnvelopeAgentId]
-  )
+  const selectedOutputAgentId = useMemo(() => draft.outputDraft.mode === 'domain'
+    ? Object.keys(agentMetadata).find((id) => agentMetadata[id].output_schema_key === draft.outputDraft.schemaKey)
+    : undefined, [agentMetadata, draft.outputDraft.mode, draft.outputDraft.schemaKey])
+  const envelope = summarizeEnvelope(selectedOutputAgentId ? agentMetadata[selectedOutputAgentId] : undefined)
 
   const templateLabel = selectedTemplate?.name || parentAgent?.agent_name || ''
   const originLabel = (() => {
@@ -200,8 +238,10 @@ function PromptWorkshop({
     return `${base} · Not saved yet`
   })()
 
-  const targetName = selectedCustomAgent?.name || draft.name.trim() || selectedTemplate?.name || parentAgent?.agent_name || 'this agent draft'
-  const targetId = selectedCustomAgent?.agent_id || parentAgentId || 'unknown'
+  // Template/clone provenance lives in the authoring context; it is not the
+  // identity of this draft. Prefer the current name, including unsaved renames.
+  const targetName = draft.name.trim() || 'this agent draft'
+  const targetId = selectedCustomAgent?.agent_id || 'unsaved_draft'
 
   const handleAskClaude = onVerifyRequest
     ? () => onVerifyRequest(buildDiscussDraftMessage(targetName, targetId, draft.selectedGroupId))
@@ -209,7 +249,7 @@ function PromptWorkshop({
   const handleDiscussPrompt = onVerifyRequest
     ? () => {
       onVerifyRequest(buildDiscussPromptMessage(targetName, targetId, draft.selectedGroupId))
-      draft.setStatus('Opened system-prompt discussion with Claude')
+      draft.setStatus('Opened system-prompt discussion with AI Chat')
     }
     : undefined
   const handleAskAboutModels = onVerifyRequest
@@ -221,25 +261,35 @@ function PromptWorkshop({
         draft.selectedModelReasoning,
         draft.selectedToolIds
       ))
-      draft.setStatus('Opened model-selection discussion with Claude')
+      draft.setStatus('Opened model-selection discussion with AI Chat')
     }
     : undefined
   const handleAskForTool = onVerifyRequest
     ? () => {
       onVerifyRequest(buildToolRequestMessage(
         targetName,
-        selectedCustomAgent?.agent_id || parentAgentId || 'unsaved_draft',
+        targetId,
         draft.selectedToolIds
       ))
-      draft.setStatus('Opened tool-ideation discussion with Claude')
+      draft.setStatus('Opened tool-ideation discussion with AI Chat')
     }
     : undefined
 
   const handleNew = () => guard(() => {
     draft.handleNew()
+    navigateSection('start')
     setStartScreenRequested(true)
-    setSection('setup')
   })
+
+  const customExtractionTemplate = draft.templateOptions.find((template) =>
+    template.output_contract?.output_mode === 'unprofiled_generic',
+  )
+  const handleCustomExtraction = () => {
+    if (!customExtractionTemplate) return
+    draft.startDraft('template', customExtractionTemplate.agent_id)
+    setStartScreenRequested(false)
+    setSection('output_structure')
+  }
 
   const handleChooseStart = (mode: GettingStartedMode) => {
     draft.startDraft(mode)
@@ -281,6 +331,85 @@ function PromptWorkshop({
     setSaveDialogOpen(true)
   }
 
+  const runChatAction = useCallback((action: WorkshopAction, cloneSource?: CustomAgent): boolean => {
+    if (draft.recovery.pending || draft.loading || draft.saving || draft.authoringBusy || draft.outputLoading) return false
+    const request = action.request
+    if (request.action === 'open_agent' || request.action === 'new_agent') {
+      const source = action.source
+      const custom = source?.agent_id.startsWith('ca_')
+        ? (request.mode === 'clone' && cloneSource?.agent_id === source.agent_id ? cloneSource : undefined)
+          || draft.customAgents.find((agent) => agent.agent_id === source.agent_id) : undefined
+      if (source && (source.agent_id.startsWith('ca_')
+        ? !custom || custom.execution_revision_id !== source.agent_revision_id
+        : !draft.templateOptions.some((template) => template.agent_id === source.agent_id))) return false
+      if (request.action === 'open_agent') {
+        if (!custom) return false
+        draft.selectCustomAgent(custom.id)
+      } else {
+        if (!request.mode) return false
+        draft.startDraft(request.mode)
+        if (request.mode === 'template' && source) draft.setParentAgentId(source.agent_id)
+        if (request.mode === 'clone' && custom) {
+          draft.setChatCloneSource(custom)
+          draft.setCloneSourceAgentId(custom.id)
+        }
+      }
+      if (onChatContinuation) setPendingChatContinuation({ send: onChatContinuation,
+        message: 'The Workshop action is complete and the agent draft is open. Use the current draft to continue where we left off. Do not ask me to click Start agent draft again. Nothing has been saved by opening this draft.' })
+      setStartScreenRequested(false)
+      setSection('setup')
+      setFocusOriginToken((token) => token + 1)
+      return true
+    }
+    if (request.action === 'save') {
+      if (!draft.canSave) return false
+      setSaveDialogOpen(true)
+    } else if (request.action === 'save_as') {
+      setSaveAsDialogOpen(true)
+    } else if (request.action === 'show_section') {
+      if (!request.section) return false
+      if (request.section === 'tool_request') setToolRequestOpen(true)
+      else if (request.section === 'manage') setManageDialogOpen(true)
+      else {
+        if (request.section === 'output_structure' && draft.outputDraft.mode !== 'profile_bound_generic') return false
+        setSection(request.section)
+        setStartScreenRequested(false)
+      }
+    } else return false
+    return true
+  }, [draft, onChatContinuation])
+
+  useEffect(() => {
+    if (!pendingChatContinuation || !draft.isHydrated || draft.saving) return
+    setPendingChatContinuation(null)
+    pendingChatContinuation.send(pendingChatContinuation.message)
+  }, [pendingChatContinuation, draft.isHydrated, draft.saving])
+
+  useImperativeHandle(
+    authoringContextRef,
+    () => ({
+      runChatAction,
+      captureAuthoringContext: draft.captureAuthoringContext,
+      applyAuthoringProposal: async (proposal) => {
+        const result = await draft.applyAuthoringProposal(proposal)
+        if (result.applied) setStartScreenRequested(false)
+        return result
+      },
+    }),
+    [draft.captureAuthoringContext, draft.applyAuthoringProposal, runChatAction]
+  )
+
+  useEffect(() => {
+    if (!initialChatAction || handledInitialChatActionRef.current === initialChatAction
+      || draft.loading || draft.saving || draft.authoringBusy || draft.outputLoading
+      || draft.modelOptions.length === 0) return
+    handledInitialChatActionRef.current = initialChatAction
+    if (!runChatAction(initialChatAction, initialChatCloneSource)) {
+      draft.setError('The requested agent changed or is unavailable. Ask AI Chat to reopen it from the current catalog.')
+    }
+    onInitialChatActionComplete?.()
+  }, [initialChatAction, initialChatCloneSource, onInitialChatActionComplete, runChatAction, draft])
+
   const handleSaveConfirm = (note: string) => {
     setSaveDialogOpen(false)
     void draft.handleSave({ notes: note })
@@ -307,14 +436,22 @@ function PromptWorkshop({
     void draft.handleRevert(version)
   }
 
-  const nextVersion = versions.reduce((max, version) => Math.max(max, version.version), 0) + 1
+  const nextVersion = versions.reduce((max, version) => Math.max(max, version.revision), 0) + 1
   const hasTemplate = Boolean(draft.parentAgent) && (gettingStartedMode !== 'scratch' || Boolean(selectedCustomAgent?.template_source))
 
   return (
     <Box
+      component="fieldset"
+      aria-label="Workshop draft"
+      disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+      aria-busy={draft.authoringBusy || draft.outputLoading}
       ref={rootRef}
       tabIndex={-1}
       sx={{
+        border: 0,
+        padding: 0,
+        margin: 0,
+        minWidth: 0,
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
@@ -323,6 +460,8 @@ function PromptWorkshop({
         containerName: 'workshop',
       }}
     >
+      <DraftRecoveryNotice recovery={draft.recovery} />
+      <Box component="fieldset" disabled={draft.recovery.pending} sx={{ display: 'contents', border: 0, p: 0, m: 0 }}>
       <WorkshopHeader
         icon={draft.icon}
         name={showStartScreen ? '' : draft.name}
@@ -353,7 +492,8 @@ function PromptWorkshop({
         }}
       >
         <WorkshopNav
-          section={section}
+          section={(visibleSection === 'start' ? 'setup' : visibleSection) as WorkshopSection}
+          showOutputStructure={draft.outputDraft.mode === 'profile_bound_generic'}
           onSectionChange={setSection}
           dirty={dirty}
           toolCount={draft.selectedToolIds.length}
@@ -388,14 +528,22 @@ function PromptWorkshop({
               {draft.status}
             </Alert>
           )}
+          {draft.canUndoAuthoringProposal && (
+            <Button onClick={() => void draft.undoAuthoringProposal()}>Undo AI changes</Button>
+          )}
 
-          {showStartScreen ? (
+          {draft.outputLoading ? <Alert severity="info" role="status">Loading the saved executable revision and Output Structure…</Alert>
+          : draft.outputLoadError ? <Alert severity="error" action={<Button onClick={draft.retryOutputLoad}>Retry</Button>}>{draft.outputLoadError}</Alert>
+          : showStartScreen ? (
             <WorkshopStartScreen
-              onChoose={handleChooseStart}
+              onChoose={(mode) => guard(() => handleChooseStart(mode))}
+              onCustomExtraction={customExtractionTemplate ? () => guard(handleCustomExtraction) : undefined}
+              agents={agentMetadata}
               hasTemplates={draft.templateOptions.length > 0}
               hasSavedAgents={draft.visibleAgents.length > 0}
             />
-          ) : section === 'setup' ? (
+          ) : visibleSection === 'setup' ? (
+            <>
             <SetupSection
               gettingStartedMode={gettingStartedMode}
               onModeChange={handleModeChange}
@@ -404,7 +552,8 @@ function PromptWorkshop({
               onTemplateChange={handleTemplateChange}
               missingTemplateId={templateMissing ? selectedCustomAgent?.template_source || null : null}
               templateAllowedGroupIds={selectedTemplate?.allowed_group_ids || []}
-              customAgents={draft.visibleAgents}
+              customAgents={draft.selectedCloneSource && !draft.visibleAgents.some((agent) => agent.id === draft.selectedCloneSource?.id)
+                ? [...draft.visibleAgents, draft.selectedCloneSource] : draft.visibleAgents}
               ownedAgentIds={draft.customAgents.map((agent) => agent.id)}
               cloneSourceAgentId={draft.cloneSourceAgentId}
               onCloneSourceChange={(agentId) => {
@@ -424,8 +573,8 @@ function PromptWorkshop({
               description={draft.description}
               onDescriptionChange={draft.setDescription}
               envelope={envelope}
-              onViewEnvelope={onViewEnvelope && draft.domainEnvelopeAgentId
-                ? () => onViewEnvelope(draft.domainEnvelopeAgentId)
+              onViewEnvelope={onViewEnvelope && selectedOutputAgentId
+                ? () => onViewEnvelope(selectedOutputAgentId)
                 : undefined}
               modelOptions={draft.modelOptions}
               selectedModelId={draft.selectedModelId}
@@ -442,7 +591,38 @@ function PromptWorkshop({
               selectableGroupOptions={draft.selectableGroupOptions}
               inheritedAllowedGroupIds={draft.inheritedAllowedGroupIds}
             />
+            {((['csv_formatter', 'tsv_formatter', 'json_formatter'].includes(draft.domainEnvelopeAgentId) && draft.outputDraft.mode === 'none' && draft.selectedToolIds.includes('finalize_and_save')) || draft.defaultExportExecutionMode === 'direct') && <DirectExportSetting isDefault value={draft.defaultExportExecutionMode} onChange={draft.setDefaultExportExecutionMode} />}
+            <WorkshopOutputSetup value={draft.outputDraft} onChange={draft.setOutputDraft}
+              disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+              agents={agentMetadata} onEditStructure={() => setSection('output_structure')}
+              onChooseExisting={() => setProfilePickerBase(workshopDraftKey(draft.captureAuthoringContext()))} />
+            {selectedCustomAgent && draft.savedExecutionRevision && draft.savedExecutionRevision.id === selectedCustomAgent.execution_revision_id
+              && draft.savedExecutionRevision.agent_id === selectedCustomAgent.id
+              && <SavedExecutionSummary revision={draft.savedExecutionRevision} />}
+            </>
+          ) : visibleSection === 'output_structure' && draft.outputDraft.profileContract ? (
+            <>
+            {draft.outputDraft.profilePin && <Typography variant="body2" color="text.secondary">
+              Saved version {draft.outputDraft.profilePin.revision}.{' '}
+              {selectedCustomAgent && draft.profileCanEdit
+                ? 'Your changes will be saved as a new version. Other agents and flows keep their current settings.'
+                : 'Saving creates your own copy of this structure.'}
+            </Typography>}
+            <Button onClick={() => setSection('setup')} sx={{ alignSelf: 'flex-start' }}>Back to Setup</Button>
+            <OutputStructureWorkflow value={draft.outputDraft.profileContract}
+              onAskAI={onVerifyRequest ? () => onVerifyRequest(`Help me design the information collected by ${targetName} (${targetId}). Focus on the current output structure draft. Inspect my current draft, including its item guidance, detail names and parts. Help me add or edit details and parts using the current simple design. Ask a question only when my intent is unclear; otherwise propose concrete changes for review. Preserve unrelated settings and my earlier prompt.`) : undefined}
+              disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+              onChange={(profileContract) => draft.setOutputDraft({ ...draft.outputDraft, profileContract })}
+              onValidate={() => { void draft.validateOutputProfile() }}
+              issues={draft.profileIssues} validating={draft.profileValidating} />
+            {draft.outputDraft.profilePin && <Box component="details" className="collection-disclosure"><summary>Version history &amp; other uses</summary><ProfileRevisionReview key={draft.outputDraft.profilePin.profile_id}
+              disabled={draft.authoringBusy || draft.saving || draft.outputLoading}
+              value={draft.outputDraft} onLoadRevision={draft.selectOutputProfile}
+              onMakeCopy={() => draft.setOutputDraft({ ...draft.outputDraft, profilePin: null })} /></Box>}
+            </>
           ) : section === 'prompt' ? (
+            <>
+            {draft.defaultExportExecutionMode === 'direct' && <Alert severity="info">New flow steps use direct export and do not run these prompts. Your text is kept for steps using AI output. Change the export mode in a flow step to use its instructions.</Alert>}
             <PromptSection
               parentCorePrompt={draft.parentCorePrompt}
               parentGeneratedContract={draft.parentGeneratedContract}
@@ -468,6 +648,7 @@ function PromptWorkshop({
               loggedInGroupIds={draft.loggedInGroupIds}
               onDiscussPromptWithClaude={handleDiscussPrompt}
             />
+            </>
           ) : section === 'tools' ? (
             <ToolsSection
               selectedToolIds={draft.selectedToolIds}
@@ -483,9 +664,15 @@ function PromptWorkshop({
           ) : (
             <VersionsSection
               versions={versions}
+              currentRevisionId={selectedCustomAgent?.execution_revision_id}
               hasAgent={Boolean(selectedCustomAgent)}
               saving={draft.saving}
-              onRevert={setPendingRevert}
+              loading={draft.versionsLoading}
+              error={draft.versionsError}
+              hasMore={draft.hasMoreVersions}
+              onLoadMore={draft.loadMoreVersions}
+              onRetry={draft.retryVersions}
+              onRevert={(version) => guard(() => setPendingRevert(version))}
             />
           )}
         </Box>
@@ -565,11 +752,21 @@ function PromptWorkshop({
       />
       <RevertVersionDialog
         open={pendingRevert !== null}
-        version={pendingRevert}
+        version={pendingRevert?.revision ?? null}
         saving={draft.saving}
         onConfirm={handleRevertConfirm}
         onCancel={() => setPendingRevert(null)}
       />
+      {profilePickerBase !== null && <SelectProfileDialog onClose={() => setProfilePickerBase(null)}
+        onSelect={(profile) => {
+          if (profilePickerBase !== workshopDraftKey(draft.captureAuthoringContext()) || draft.authoringBusy || draft.saving) {
+            draft.setError('The Workshop draft changed while selecting a structure. Your edits are preserved; reopen the picker to try again.')
+          } else {
+            draft.selectOutputProfile(profile)
+            setSection('output_structure')
+          }
+          setProfilePickerBase(null)
+        }} />}
       <UnsavedChangesDialog
         open={Boolean(pendingGuardedAction)}
         onDiscard={() => {
@@ -583,6 +780,8 @@ function PromptWorkshop({
           action?.cancel?.()
         }}
       />
+      </Box>
+
     </Box>
   )
 }

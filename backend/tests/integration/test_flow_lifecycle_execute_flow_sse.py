@@ -648,9 +648,13 @@ def test_create_flow_rejects_unresolvable_agent(client: TestClient):
     create_resp = client.post("/api/flows", json=create_payload)
     assert create_resp.status_code == 422, create_resp.text
     detail = create_resp.json()["detail"]
-    assert "Flow references unavailable agent(s)" in detail
-    assert "unknown_agent_for_failure_path" in detail
-    assert "Re-select an available agent before saving or running this flow" in detail
+    assert detail["artifact_kind"] == "flow"
+    assert detail["phase"] == "save" and detail["valid"] is False
+    finding = next(item for item in detail["findings"] if item["code"] == "unavailable_agent")
+    assert finding["severity"] == "error"
+    assert finding["node_id"] == "agent_1"
+    assert finding["path"] == "flow_definition.nodes.agent_1.data.agent_id"
+    assert finding["fix_hint"] == "Choose an agent from the current authenticated authoring catalog."
 
 
 def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(

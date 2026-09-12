@@ -4,8 +4,11 @@
  */
 
 import type { Node, Edge } from 'reactflow'
+import type { Ref } from 'react'
 import type { ValidationAttachmentOption } from '@/services/agentStudioService'
 import type { AgentBrowserRequest } from '../agentBrowserRequest'
+import type { FlowAuthoringProposal } from '@/types/promptExplorer'
+import type { AgentExecutionReceipt } from '@/types/agentExecution'
 
 export type { AgentBrowserRequest, AgentBrowserTab, AgentBrowserFocus } from '../agentBrowserRequest'
 
@@ -15,6 +18,7 @@ export type { AgentBrowserRequest, AgentBrowserTab, AgentBrowserFocus } from '..
 
 export interface AgentInfo {
   agent_id: string
+  agent_revision_id?: string | null
   agent_name: string
   description: string
   category: string
@@ -69,6 +73,8 @@ export interface FlowNodePosition {
 
 export interface FlowNodeData {
   agent_id: string
+  agent_revision_id?: string | null
+  execution_receipt?: AgentExecutionReceipt | null
   agent_display_name: string
   agent_description?: string
   /** Curator's task/request that initiates the flow (required for task_input nodes) */
@@ -83,7 +89,8 @@ export interface FlowNodeData {
   /** For output/formatter steps only. Controls the human-readable output descriptor. */
   output_filename_template?: string
   /** For terminal formatter steps. Backend-validated projection plan for curation exports. */
-  projection_plan?: Record<string, unknown>
+  export_execution_mode?: 'ai' | 'direct'
+  projection_plan?: Record<string, unknown> | null
   output_key: string
   validation_attachments?: ValidationAttachmentSelection[]
   validation_groups?: ValidationAttachmentGroup[]
@@ -219,6 +226,7 @@ export type FlowEdge = Edge<{
   role?: FlowEdgeRole
   satisfies_binding_id?: string
   replaces_attachment_id?: string
+  condition?: FlowEdgeCondition
   validationLabel?: string
   onDeleteEdge?: (edgeId: string) => void
 }>
@@ -229,21 +237,31 @@ export type FlowEdge = Edge<{
 
 /** Flow state reported to parent for context sharing */
 export interface FlowState {
+  flowId?: string
   flowName: string
+  flowDescription: string
+  flowUpdatedAt?: string
+  isDirty: boolean
   version: FlowDefinition['version']
+  task_instructions_default_only?: boolean
   entry_node_id?: string
   nodes: Array<{
     id: string
     type: NodeType
+    position: FlowNodePosition
     agent_id: string
+    agent_revision_id?: string | null
+    execution_receipt?: AgentExecutionReceipt | null
     agent_display_name: string
+    agent_description?: string
     task_instructions?: string
     step_goal?: string
     custom_instructions?: string
     prompt_version?: number
     include_evidence?: boolean
     output_filename_template?: string
-    projection_plan?: Record<string, unknown>
+    export_execution_mode?: 'ai' | 'direct'
+  projection_plan?: Record<string, unknown> | null
     output_key: string
     validation_attachments?: ValidationAttachmentSelection[]
     validation_groups?: ValidationAttachmentGroup[]
@@ -255,11 +273,13 @@ export interface FlowState {
     role?: FlowEdgeRole
     satisfies_binding_id?: string
     replaces_attachment_id?: string
+    condition?: FlowEdgeCondition
   }>
 }
 
 export interface FlowBuilderProps {
-  /** Flow to open through the unsaved-draft guard. */
+  recoveryOwnerId?: string
+  /** Flow to open through the unsaved-draft guard (null for a new flow). */
   flowId?: string | null
   /** Change for each explicit open action, including retries of the same flow ID. */
   flowOpenRequestId?: number
@@ -267,16 +287,30 @@ export interface FlowBuilderProps {
   onFlowSaved?: (flowId: string) => void
   /** Callback when flow state changes (for sharing context with chat) */
   onFlowChange?: (flowState: FlowState) => void
-  /** Callback to trigger a verify request to Claude */
+  /** Callback to trigger an AI Chat verification request */
   onVerifyRequest?: () => void
   /** Opens the Agent Browser on an agent's Guide, Envelope, or Prompts tab. */
   onOpenAgent?: (request: AgentBrowserRequest) => void
+  onOutputHelp?: (agentId: string, agentName: string, prompt: string) => void
   /**
    * False while the Flows tab is hidden. The builder stays mounted so an
    * unsaved graph survives a visit to the Agent Browser, but a hidden builder
    * must not answer keyboard shortcuts. Defaults to true.
    */
   active?: boolean
+  /** Synchronous access to the current exact draft for AI Chat submission. */
+  authoringContextRef?: Ref<FlowAuthoringContextHandle>
+}
+
+export interface FlowAuthoringContextHandle {
+  captureAuthoringContext: () => FlowState
+  applyAuthoringProposal: (proposal: FlowAuthoringProposal) => Promise<FlowProposalApplyResult>
+}
+
+export interface FlowProposalApplyResult {
+  applied: boolean
+  reason?: 'stale' | 'invalid' | 'unavailable'
+  message: string
 }
 
 export interface AgentPaletteProps {

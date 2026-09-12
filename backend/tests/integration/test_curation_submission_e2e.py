@@ -1115,8 +1115,11 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
     assert envelope_row.envelope_json["metadata"]["semantic_source"] == (
         "domain_envelope.extracted_objects"
     )
+    # Capability metadata includes JSON-schema keys such as `items`. Guard
+    # the envelope root and extracted semantic records, not schema definitions.
+    assert FORBIDDEN_LEGACY_SEMANTIC_KEYS.isdisjoint(envelope_row.envelope_json)
     assert FORBIDDEN_LEGACY_SEMANTIC_KEYS.isdisjoint(
-        set(_iter_mapping_keys(envelope_row.envelope_json))
+        set(_iter_mapping_keys(envelope_row.envelope_json["extracted_objects"]))
     )
     assert (
         test_db.query(DomainEnvelopeObject)

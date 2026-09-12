@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .profile_validation import ProfileValidationContext
 
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -38,9 +41,19 @@ def run_domain_envelope_structural_checks(
     actor_id: str = "domain_envelope_structural_checks",
     provider_model_ref: Mapping[str, Any] | None = None,
     registry: DomainPackValidationRegistry | None = None,
+    profile_context: ProfileValidationContext | None = None,
 ) -> DomainEnvelopeStructuralCheckResult:
     """Append findings for required domain-pack fields missing from the envelope."""
 
+    if profile_context is not None:
+        # Required nested properties apply only within their containing object
+        # or array element. The closed profile validator owns that semantics;
+        # the flat packaged required-field checker below does not.
+        from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
+        require_resolved_profile_conformance(
+            profile_context.profile, profile_context.receipt, envelope.model_dump(mode="json"),
+        )
+        return DomainEnvelopeStructuralCheckResult(envelope, profile_context.registry, ())
     validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(
         domain_pack
     )

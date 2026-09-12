@@ -1,7 +1,7 @@
 /**
  * ClaudeDrawer
  *
- * Narrow-width (below 1100px) container for the Claude chat. A right-side MUI
+ * Narrow-width (below 1100px) container for AI Chat. A right-side MUI
  * Drawer with a scrim: it traps focus, closes on Escape and scrim click, and
  * keeps its children mounted while closed so the chat never remounts.
  */
@@ -25,6 +25,7 @@ function ClaudeDrawer({ id, open, fullWidth, onClose, children }: ClaudeDrawerPr
     <Drawer
       id={id}
       anchor="right"
+      sx={{ zIndex: (theme) => theme.zIndex.modal }}
       open={open}
       onClose={onClose}
       disableRestoreFocus
@@ -33,7 +34,7 @@ function ClaudeDrawer({ id, open, fullWidth, onClose, children }: ClaudeDrawerPr
         paper: {
           role: 'dialog',
           'aria-modal': true,
-          'aria-label': 'Claude',
+          'aria-label': 'AI Chat',
           sx: {
             width: fullWidth ? '100%' : CLAUDE_DRAWER_WIDTH,
             maxWidth: '100%',
@@ -46,7 +47,7 @@ function ClaudeDrawer({ id, open, fullWidth, onClose, children }: ClaudeDrawerPr
     >
       {children}
     </Drawer>
-  );
+  )
 }
 
 export default ClaudeDrawer

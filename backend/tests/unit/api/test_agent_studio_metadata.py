@@ -278,6 +278,11 @@ class TestGetRegistryMetadata:
         """Metadata endpoint should append current user's active custom agents."""
         import asyncio
         from src.api import agent_studio as api_module
+        monkeypatch.setattr(
+            "src.lib.agent_studio.domain_envelope_metadata.custom_agent_revision_metadata",
+            lambda *args, **kwargs: (SimpleNamespace(output_contract=SimpleNamespace(
+                output_state="none", output_schema_key=None)), None),
+        )
 
         fake_custom = SimpleNamespace(
             id="11111111-2222-3333-4444-555555555555",
@@ -317,15 +322,21 @@ class TestGetRegistryMetadata:
         assert custom_id in result.agents
         assert result.agents[custom_id].name == "Doug's Gene Agent"
         assert result.agents[custom_id].subcategory == "My Custom Agents"
-        assert result.agents[custom_id].output_schema_key == "GeneResultEnvelope"
+        assert result.agents[custom_id].output_schema_key is None
         assert result.agents[custom_id].is_active is True
         assert result.agents[custom_id].visible is True
-        assert result.agents[custom_id].produces_flow_artifacts is True
+        assert result.agents[custom_id].produces_flow_artifacts is False
+        assert result.agents[custom_id].domain_envelope is None
 
-    def test_get_registry_metadata_inherits_template_envelope_for_custom_agent(self, monkeypatch):
-        """Custom extraction agents should inherit template envelope authoring metadata."""
+    def test_get_registry_metadata_never_falls_back_to_template_for_unavailable_revision(self, monkeypatch):
+        """Unavailable saved metadata must not advertise template validators."""
         import asyncio
         from src.api import agent_studio as api_module
+        from unittest.mock import Mock
+        monkeypatch.setattr(
+            "src.lib.agent_studio.domain_envelope_metadata.custom_agent_revision_metadata",
+            Mock(side_effect=ValueError("Unavailable revision")),
+        )
 
         fake_custom = SimpleNamespace(
             id="22222222-3333-4444-5555-666666666666",
@@ -363,12 +374,11 @@ class TestGetRegistryMetadata:
         template = result.agents["gene_extractor"]
         custom = result.agents[custom_id]
 
-        assert custom.validation_attachments
-        assert custom.validation_attachments == template.validation_attachments
-        assert custom.domain_envelope is not None
-        assert custom.domain_envelope == template.domain_envelope
-        assert custom.domain_envelope["domain_pack_id"] == "gene"
-        assert custom.domain_envelope["validation_summary"]["default_enabled"] >= 1
+        assert template.validation_attachments
+        assert custom.validation_attachments == []
+        assert custom.domain_envelope is None
+        assert custom.execution_metadata_error
+        assert not custom.is_active and not custom.produces_flow_artifacts
 
     def test_merge_custom_agents_into_catalog(self, monkeypatch):
         """Catalog augmentation should add custom agents under a custom subcategory."""

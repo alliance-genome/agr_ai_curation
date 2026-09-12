@@ -15,7 +15,10 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Protocol, cast
+
+if TYPE_CHECKING:
+    from .profile_validation import ProfileValidationContext
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
@@ -409,23 +412,42 @@ def dispatch_active_validator_bindings(
     source_envelope_revision: int | None = None,
     max_parallel_validators: int = DEFAULT_MAX_PARALLEL_VALIDATORS,
     runtime_context: ValidatorRuntimeContext | None = None,
+    profile_context: ProfileValidationContext | None = None,
 ) -> ActiveValidatorDispatchResult:
     """Dispatch active validator bindings and append result findings."""
 
-    validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(
-        domain_pack
-    )
+    authenticated_groups = _normalized_authenticated_groups(runtime_context)
+    if profile_context is None:
+        from .profile_validation import resolve_envelope_profile_validation
+        profile_context = resolve_envelope_profile_validation(
+            envelope, domain_pack, active_group_ids=authenticated_groups or (),
+            user_id=runtime_context.user_id if runtime_context else None,
+        )
+    if profile_context is not None:
+        from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
+        from src.lib.agent_studio.profile_conformance import ProfileIdentityError
+        if envelope.metadata.get("execution_receipt") != profile_context.receipt.model_dump(mode="json"):
+            raise ProfileIdentityError("Validation context does not match the authoritative execution receipt")
+        require_resolved_profile_conformance(profile_context.profile, profile_context.receipt, envelope.model_dump(mode="json"))
+        validation_registry = profile_context.registry
+        domain_pack = validation_registry.domain_pack
+    else:
+        validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(domain_pack)
     matches = validation_registry.match_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
-    authenticated_groups = _normalized_authenticated_groups(runtime_context)
-    eligible_matches, eligibility_findings, binding_audit = (
-        resolve_group_scoped_validator_matches(
-            list(_ordered_matches(matches)),
-            authenticated_groups=authenticated_groups,
+    if profile_context is not None:
+        from .profile_validation import profile_dispatch_matches
+        eligible_matches, eligibility_findings, binding_audit = profile_dispatch_matches(
+            envelope, profile_context, authenticated_groups=authenticated_groups,
         )
-    )
+    else:
+        eligible_matches, eligibility_findings, binding_audit = (
+            resolve_group_scoped_validator_matches(
+                list(_ordered_matches(matches)), authenticated_groups=authenticated_groups,
+            )
+        )
     selector_findings: list[ValidationFinding] = list(eligibility_findings)
     jobs: list[ValidatorDispatchJob] = []
     dispatch_context = group_dispatch_context(authenticated_groups)
@@ -439,7 +461,15 @@ def dispatch_active_validator_bindings(
             continue
         selector_result = build_domain_validation_request(match)
         if selector_result.findings:
-            selector_findings.extend(selector_result.findings)
+            if profile_context is not None:
+                from .profile_validation import profile_policy_finding
+                mapping_id = match.binding.raw["profile_validation"]["mapping"]["mapping_id"]
+                mapping = next(m for m in profile_context.profile.contract.validator_mappings if m.mapping_id == mapping_id)
+                selector_findings.extend(profile_policy_finding(profile_context, mapping,
+                    code=finding.code, message=finding.message, object_ref=finding.object_ref,
+                    details=finding.details) for finding in selector_result.findings)
+            else:
+                selector_findings.extend(selector_result.findings)
             continue
         if selector_result.request is None:
             continue
@@ -483,13 +513,17 @@ def dispatch_active_validator_bindings(
             materialization_items,
         )
         materialization_started_at = time.monotonic()
-        materialization_result = materialize_validator_results_into_envelope(
-            updated_envelope,
-            domain_pack.metadata,
-            materialization_items,
-            actor_id=actor_id,
-            source_envelope_revision=source_envelope_revision,
-        )
+        if profile_context is not None:
+            from .profile_materialization import materialize_profile_validator_results
+            materialization_result = materialize_profile_validator_results(
+                updated_envelope, profile_context, materialization_items,
+                actor_id=actor_id, source_envelope_revision=source_envelope_revision,
+            )
+        else:
+            materialization_result = materialize_validator_results_into_envelope(
+                updated_envelope, domain_pack.metadata, materialization_items,
+                actor_id=actor_id, source_envelope_revision=source_envelope_revision,
+            )
         LOGGER.info(
             "Materialized %s active validator result(s) in %.3fs",
             len(materialization_items),
@@ -1463,20 +1497,24 @@ def run_package_scoped_validator_agent(
     authenticated_groups = _normalized_authenticated_groups(runtime_context)
     from src.lib.openai_agents.benchmark_routing import benchmark_route_kwargs
 
-    benchmark_kwargs = benchmark_route_kwargs(
-        f"validator:{request.validator_binding_id}"
-    )
-    agent = get_agent_by_id(
-        canonical_system_agent_key(agent_definition),
-        **benchmark_kwargs,
-        **(
-            {"authenticated_groups": list(authenticated_groups)}
-            if authenticated_groups is not None
-            else {}
-        ),
-    )
+    benchmark_slot = f"validator:{request.validator_binding_id}"
+    custom_pin = binding.raw.get("custom_validator")
+    if custom_pin:
+        from src.lib.agent_studio.custom_profile_validators import build_custom_validator_agent
+        agent = build_custom_validator_agent(custom_pin, runtime_context, benchmark_slot=benchmark_slot)
+    else:
+        agent = get_agent_by_id(
+            canonical_system_agent_key(agent_definition),
+            **benchmark_route_kwargs(benchmark_slot),
+            **(
+                {"authenticated_groups": list(authenticated_groups)}
+                if authenticated_groups is not None
+                else {}
+            ),
+        )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
+    _configure_accepted_finalization_stop(agent, finalization_state, batch=False)
     output_type = getattr(agent, "output_type", None)
     if is_domain_validator_result_schema(output_type):
         agent.output_type = AgentOutputSchema(
@@ -1490,6 +1528,7 @@ def run_package_scoped_validator_agent(
             request,
             finalization_state=finalization_state,
             function_tool_factory=function_tool,
+            profile_mapped=bool(binding.raw.get("profile_validation")),
             result_schema=(
                 output_type
                 if is_domain_validator_result_schema(output_type)
@@ -1502,7 +1541,10 @@ def run_package_scoped_validator_agent(
         batch=False,
         runtime_context=runtime_context,
     )
-    _append_validator_finalization_instructions(agent, batch=False)
+    _append_validator_finalization_instructions(
+        agent, batch=False,
+        profile_request_ids=(request.request_id,) if binding.raw.get("profile_validation") else (),
+    )
 
     provider_payload = validator_request_payload_for_agent(
         request,
@@ -1676,6 +1718,9 @@ def run_package_scoped_validator_agent_batch(
             batch_output_type,
             strict_json_schema=False,
         )
+    _configure_accepted_finalization_stop(
+        agent, finalization_state, batch=True, batch_output_type=batch_output_type,
+    )
     agent.tools = [
         *list(getattr(agent, "tools", []) or []),
         *_validator_document_tools(runtime_context),
@@ -1690,7 +1735,13 @@ def run_package_scoped_validator_agent_batch(
         batch=True,
         runtime_context=runtime_context,
     )
-    _append_validator_finalization_instructions(agent, batch=True)
+    _append_validator_finalization_instructions(
+        agent, batch=True,
+        profile_request_ids=tuple(
+            job.request.request_id for job in jobs
+            if job.match.binding.raw.get("profile_validation")
+        ),
+    )
 
     provider_payload = {
         "mode": "domain_validator_batch",
@@ -2140,7 +2191,9 @@ def validator_request_payload_for_agent(
     return payload
 
 
-def _append_validator_finalization_instructions(agent: Any, *, batch: bool) -> None:
+def _append_validator_finalization_instructions(
+    agent: Any, *, batch: bool, profile_request_ids: tuple[str, ...] = (),
+) -> None:
     tool_name = (
         "finalize_validator_batch_results" if batch else "finalize_validator_result"
     )
@@ -2157,6 +2210,17 @@ def _append_validator_finalization_instructions(agent: Any, *, batch: bool) -> N
         "rejects validator runs that do not complete this tool with "
         "`status: accepted`."
     )
+    if profile_request_ids:
+        instruction_block += (
+            "\nCustom-profile output contract for request_ids "
+            + json.dumps(profile_request_ids)
+            + ": this contract takes precedence over package instructions to populate "
+            "resolved_objects. Return resolved_objects as an empty list. Put only "
+            "tool-grounded values in resolved_values, using only the keys in that "
+            "request's expected_result_fields. Preserve lookup_attempts and candidate "
+            "evidence; do not invent values to fill mapped slots. Unresolved or "
+            "ambiguous identities must remain unresolved."
+        )
     instructions = getattr(agent, "instructions", None)
     if instructions is None:
         agent.instructions = instruction_block
@@ -2242,12 +2306,42 @@ def _effective_validator_max_tool_calls(binding: ValidatorBinding) -> int:
     return _DEFAULT_VALIDATOR_MAX_TOOL_CALLS
 
 
+def _configure_accepted_finalization_stop(
+    agent: Any,
+    state: _ValidatorFinalizationState,
+    *,
+    batch: bool,
+    batch_output_type: type[BaseModel] | None = None,
+) -> None:
+    """Let the SDK finish with the result accepted by our mandatory finalizer."""
+    from agents.agent import ToolsToFinalOutputResult
+    from src.lib.openai_agents.config import get_validator_stop_after_accepted_finalization
+
+    if not get_validator_stop_after_accepted_finalization():
+        return
+
+    def finish_when_accepted(_context, _tool_results):
+        if batch:
+            if not state.accepted_results:
+                return ToolsToFinalOutputResult(is_final_output=False)
+            payload = {"results": [result.model_dump(mode="json") for result in state.accepted_results]}
+            output = batch_output_type.model_validate(payload) if batch_output_type else payload
+        else:
+            if state.accepted_result is None:
+                return ToolsToFinalOutputResult(is_final_output=False)
+            output = state.accepted_result
+        return ToolsToFinalOutputResult(is_final_output=True, final_output=output)
+
+    agent.tool_use_behavior = finish_when_accepted
+
+
 def _build_finalize_validator_result_tool(
     request: DomainValidationRequest,
     *,
     finalization_state: _ValidatorFinalizationState,
     function_tool_factory: Any,
     result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
+    profile_mapped: bool = False,
 ) -> Any:
     @function_tool_factory(name_override="finalize_validator_result", strict_mode=False)
     def finalize_validator_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -2257,6 +2351,7 @@ def _build_finalize_validator_result_tool(
             result,
             request=request,
             result_schema=result_schema,
+            profile_mapped=profile_mapped,
         )
         if feedback.accepted_result is not None:
             finalization_state.accepted_result = feedback.accepted_result
@@ -2300,6 +2395,7 @@ def _validator_result_finalization_feedback(
     *,
     request: DomainValidationRequest,
     result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
+    profile_mapped: bool = False,
 ) -> _ValidatorFinalizationFeedback:
     try:
         payload = _extract_structured_output(raw_result)
@@ -2332,6 +2428,22 @@ def _validator_result_finalization_feedback(
             "Validator result rejected: request_id, validator_binding_id, "
             "validator_agent, and target must exactly match this "
             "DomainValidationRequest."
+        )
+        return _ValidatorFinalizationFeedback(
+            accepted_result=None,
+            message=message,
+            repair_instructions=_validator_repair_instructions(message),
+        )
+
+    if profile_mapped and (
+        result.resolved_objects
+        or set(result.resolved_values) - request.expected_result_fields.keys()
+    ):
+        message = (
+            "Validator result rejected: custom-profile results require resolved_objects "
+            "to be an empty list and resolved_values to contain only approved "
+            "expected_result_fields keys. Keep grounded mapped values and lookup "
+            "evidence; remove the unmapped output channels."
         )
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
@@ -2445,6 +2557,7 @@ def _validator_batch_results_finalization_feedback(
         feedback = _validator_result_finalization_feedback(
             raw_result,
             request=request,
+            profile_mapped=bool(job.match.binding.raw.get("profile_validation")),
         )
         if feedback.accepted_result is None:
             result_errors.append(

@@ -19,6 +19,7 @@ from src.schemas.domain_envelope import (
     validate_field_path_syntax,
 )
 from src.schemas.domain_pack_metadata import (
+    CustomProfileValidatorReuse,
     DomainPackFieldDefinition,
     DomainPackFieldType,
     DomainPackInputSelector,
@@ -147,6 +148,7 @@ class ValidatorBinding:
     input_fields: dict[str, DomainPackInputSelector] = field(default_factory=dict)
     expected_result_fields: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
+    custom_profile_reuse: CustomProfileValidatorReuse | None = None
 
     def identity_details(self) -> dict[str, Any]:
         """Return stable structured details suitable for findings."""
@@ -161,6 +163,15 @@ class ValidatorBinding:
             "required": self.required,
             "allow_opt_out": self.allow_opt_out,
         }
+        if self.raw.get("description"):
+            details["description"] = self.raw["description"]
+        if self.raw.get("custom_validator"):
+            details["origin"] = "custom_agent"
+            details["custom_validator"] = self.raw["custom_validator"]
+        else:
+            details["origin"] = "package"
+        if self.custom_profile_reuse is not None:
+            details["custom_profile_reuse"] = self.custom_profile_reuse.model_dump(mode="json")
         if self.required_any_active_group:
             details["group_scope"] = {
                 "required_any_active_group": list(self.required_any_active_group),
@@ -1087,6 +1098,10 @@ def _collect_validator_bindings(
                 curator_override_allowed=active
                 and _optional_bool(curator_override.get("allowed")),
                 raw=dict(raw_item),
+                custom_profile_reuse=(
+                    CustomProfileValidatorReuse.model_validate(raw_item["custom_profile_reuse"])
+                    if raw_item.get("custom_profile_reuse") is not None else None
+                ),
             )
         )
     return bindings
@@ -1702,6 +1717,7 @@ def _dedupe_validation_attachment_options(
 
     deduped: list[ValidationAttachmentOption] = []
     seen: set[tuple[str, str, str, str, str]] = set()
+    seen_bindings: set[tuple[str, str]] = set()
     for option in sorted(
         options,
         key=lambda item: (
@@ -1718,7 +1734,14 @@ def _dedupe_validation_attachment_options(
             option.object_type or "",
             option.field_path or "",
         )
-        if key in seen:
+        if option.validator_binding_id:
+            # Labels are presentation, not executable identity. In particular,
+            # one profile can map the same validator to several distinct fields.
+            binding_key = (option.validator_binding_id, option.attachment_id)
+            if binding_key in seen_bindings:
+                continue
+            seen_bindings.add(binding_key)
+        elif key in seen:
             continue
         seen.add(key)
         deduped.append(option)

@@ -154,6 +154,38 @@ def test_build_request_openai_provider_passes_websocket_keepalive_options(monkey
     }
 
 
+def test_build_owned_openai_responses_resources_is_explicit_and_strict(monkeypatch):
+    captured = {}
+    client = object()
+
+    def _fake_client(**kwargs):
+        captured["client_kwargs"] = kwargs
+        return client
+
+    class _FakeOpenAIProvider:
+        def __init__(self, **kwargs):
+            captured["provider_kwargs"] = kwargs
+
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_ENABLED", "true")
+    monkeypatch.setattr(runner, "get_api_key", lambda provider: "openai-test-key")
+    monkeypatch.setattr(runner, "get_base_url", lambda provider: "https://openai.example/v1")
+    monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", _fake_client)
+    monkeypatch.setattr(runner, "OpenAIProvider", _FakeOpenAIProvider)
+
+    resources = runner.build_owned_openai_responses_resources()
+
+    assert captured["client_kwargs"] == {
+        "api_key": "openai-test-key",
+        "base_url": "https://openai.example/v1",
+    }
+    assert captured["provider_kwargs"]["openai_client"] is client
+    assert captured["provider_kwargs"]["use_responses"] is True
+    assert captured["provider_kwargs"]["strict_feature_validation"] is True
+    assert captured["provider_kwargs"]["use_responses_websocket"] is True
+    assert resources.client is client
+    assert isinstance(resources.provider, _FakeOpenAIProvider)
+
+
 def test_build_isolated_openai_run_config_replaces_provider_and_preserves_trace(monkeypatch):
     client = object()
     provider = object()

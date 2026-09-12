@@ -109,6 +109,54 @@ async def test_chunk_parsed_document_filters_page_footer_and_chunks():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", list(ChunkingMethod))
+async def test_chunk_parsed_document_discards_whitespace_only_splits(method):
+    strategy = _strategy(method, max_chars=1500, overlap=200)
+    elements = [{
+        "type": "Table",
+        "text": "Table start " + " " * 4000 + " Table end",
+        "metadata": {"page_number": 34, "element_id": "table-34"},
+    }]
+
+    chunker = {
+        ChunkingMethod.BY_TITLE: _chunk_by_title,
+        ChunkingMethod.BY_PARAGRAPH: _chunk_by_paragraph,
+        ChunkingMethod.BY_CHARACTER: _chunk_by_character,
+        ChunkingMethod.BY_SENTENCE: _chunk_by_sentence,
+    }[method]
+    candidates = chunker(elements, strategy)
+    assert any(not candidate["content"].strip() for candidate in candidates)
+
+    chunks = await chunk_parsed_document(elements, strategy, "doc-table")
+
+    assert chunks
+    assert all(chunk.content.strip() for chunk in chunks)
+    assert any("Table start" in chunk.content for chunk in chunks)
+    assert any("Table end" in chunk.content for chunk in chunks)
+    assert [chunk.content for chunk in chunks] == [
+        candidate["content"] for candidate in candidates if candidate["content"].strip()
+    ]
+    assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
+    assert [chunk.id for chunk in chunks] == [
+        f"doc-table_chunk_{index:04d}" for index in range(len(chunks))
+    ]
+    if method in (ChunkingMethod.BY_TITLE, ChunkingMethod.BY_PARAGRAPH):
+        assert all(chunk.page_number == 34 for chunk in chunks)
+        assert all(chunk.element_type == ElementType.TABLE for chunk in chunks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", list(ChunkingMethod))
+@pytest.mark.parametrize("text", ["", " \t\n", " " * 4000], ids=["empty", "blank", "oversized_blank"])
+async def test_chunk_parsed_document_rejects_no_non_whitespace_content(method, text):
+    strategy = _strategy(method, max_chars=1500, overlap=200)
+    elements = [{"type": "Table", "text": text, "metadata": {}}]
+
+    with pytest.raises(ChunkingError, match="No non-whitespace content to chunk"):
+        await chunk_parsed_document(elements, strategy, "doc-empty")
+
+
+@pytest.mark.asyncio
 async def test_chunk_parsed_document_preserves_first_element_primary_page():
     strategy = _strategy(ChunkingMethod.BY_PARAGRAPH, max_chars=500, overlap=0)
     elements = [

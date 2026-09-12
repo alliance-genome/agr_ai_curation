@@ -1,7 +1,7 @@
 """
 Diagnostic Tools for Agent Studio.
 
-This module provides diagnostic tools for Opus to troubleshoot
+This module provides diagnostic tools for AI Chat to troubleshoot
 trace issues and validate agent behavior.
 
 Usage:
@@ -13,8 +13,8 @@ Usage:
     # Get singleton registry (auto-initializes with all tools)
     registry = get_diagnostic_tools_registry()
 
-    # Get tools in Anthropic format for Claude API
-    anthropic_tools = registry.get_anthropic_tools()
+    # Get provider-neutral tool definitions for the AI Chat runtime.
+    tool_definitions = registry.get_tool_definitions()
 
     # Execute a package-registered diagnostic tool by name
     tool = registry.get_tool("package_lookup_tool")

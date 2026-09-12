@@ -129,6 +129,17 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Benchmark identity integration verifies the shipped provider-group mapping.
     Path("backend/tests/unit/lib/benchmarks/test_execution_context.py"),
     Path("backend/tests/unit/lib/benchmarks/test_curator_authorization.py"),
+    # Immutable execution migrations preserve the shipped Alliance group prompts
+    # and packaged builder identities, including historical access boundaries.
+    Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),
+    Path("backend/tests/integration/persistence/test_domain_output_contract_persistence.py"),
+    Path("backend/tests/unit/lib/agent_studio/test_domain_output_contract.py"),
+    # Exercise the installed Alliance builder catalog and opt-in gene/reference
+    # validator capabilities, not a fabricated validator for generic profiles.
+    Path("backend/tests/unit/lib/agent_studio/test_workshop_authoring.py"),
+    Path("backend/tests/unit/lib/agent_studio/test_profile_mappings.py"),
+    Path("backend/tests/unit/lib/domain_packs/test_profile_validation.py"),
+    Path("backend/tests/unit/lib/domain_packs/test_profile_materialization.py"),
     # Group-tool policy contract covers Alliance package/provider examples.
     Path("backend/tests/contract/alliance/agents/test_group_tool_policy_contract.py"),
     Path("backend/tests/unit/lib/agent_studio/test_group_tool_policy.py"),
@@ -153,6 +164,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/config/test_disease_chemical_validator_result_contract.py"),
     Path("backend/tests/unit/lib/config/test_experimental_condition_validation_agent.py"),
     Path("backend/tests/unit/lib/config/test_groups_loader_identity_provider.py"),
+    # Real deployed WormBase identity aliases must reach Alliance access policy.
+    Path("backend/tests/unit/lib/config/test_wormbase_access_mapping.py"),
     Path("backend/tests/unit/lib/config/test_ontology_term_validator_contract.py"),
     Path("backend/tests/unit/lib/config/test_prompt_loader_runtime.py"),
     Path("backend/tests/unit/lib/packages/test_identifier_prefix_provider_loader.py"),
@@ -960,18 +973,18 @@ def test_generic_runtime_sources_do_not_hardcode_alliance_identifiers():
 def test_core_agent_studio_policy_does_not_own_package_diagnostic_ids():
     text = (REPO_ROOT / AGENT_STUDIO_OPUS_TOOLS_PATH).read_text(encoding="utf-8")
     module = ast.parse(text)
-    agents_only_assignment = next(
+    source_inspection_assignment = next(
         node
         for node in module.body
         if isinstance(node, ast.Assign)
         and any(
             isinstance(target, ast.Name)
-            and target.id == "AGENTS_ONLY_DIAGNOSTIC_TOOLS"
+            and target.id == "SOURCE_INSPECTION_TOOLS"
             for target in node.targets
         )
     )
 
-    assert ast.literal_eval(agents_only_assignment.value) == {
+    assert ast.literal_eval(source_inspection_assignment.value) == {
         "search_codebase",
         "read_source_file",
     }

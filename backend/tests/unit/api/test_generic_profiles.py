@@ -1,0 +1,281 @@
+"""HTTP profile contracts, caller identity and recoverable errors."""
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+from uuid import uuid4
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+import pytest
+
+from src.api import generic_profiles as api
+from src.api.auth import get_auth_dependency
+
+
+@pytest.fixture
+def client(monkeypatch):
+    db = MagicMock()
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[get_auth_dependency().dependency] = lambda: {
+        "sub": "authenticated-curator"
+    }
+    app.dependency_overrides[api.get_db] = lambda: db
+    monkeypatch.setattr(
+        api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=7)
+    )
+    with TestClient(app) as client:
+        yield client, db, app
+
+
+def contract():
+    return {
+        "name": "Example",
+        "semantic_class": "example",
+        "fields": [
+            {
+                "key": "source_status",
+                "required": True,
+                "nullable": False,
+                "value_schema": {"kind": "enum", "values": ["known", "not_stated"]},
+            },
+        ],
+    }
+
+
+def test_consumer_endpoint_uses_authenticated_identity_and_cursor(client, monkeypatch):
+    http, db, _ = client
+    profile_id = uuid4()
+    read = MagicMock(return_value=api.ProfileConsumerPage(consumers=[], next_cursor=None, head_revision=2))
+    monkeypatch.setattr(api, "list_profile_consumers", read)
+    response = http.get(f"/api/agent-studio/generic-profiles/{profile_id}/consumers", params={"after": "flow/id/node"})
+    assert response.status_code == 200 and response.json()["head_revision"] == 2
+    read.assert_called_once_with(db, profile_id, 7, after="flow/id/node", active_group_ids=[])
+    db.commit.assert_not_called()
+
+
+def test_consumer_endpoint_hides_inaccessible_profile(client, monkeypatch):
+    http, db, _ = client
+    monkeypatch.setattr(api, "list_profile_consumers", MagicMock(side_effect=api.service.ProfileNotFoundError("hidden")))
+    response = http.get(f"/api/agent-studio/generic-profiles/{uuid4()}/consumers")
+    assert response.status_code == 404 and response.json() == {"detail": "Profile not found"}
+    db.commit.assert_not_called()
+
+
+def test_validator_options_validate_shape_and_never_save(client, monkeypatch):
+    http, db, _ = client
+    read = MagicMock(return_value={"fields": [], "capabilities": [], "next_cursor": None})
+    monkeypatch.setattr(api, "profile_mapping_options", read)
+    response = http.post("/api/agent-studio/generic-profiles/validator-options?after=opaque", json=contract())
+    assert response.status_code == 200
+    assert read.call_args.kwargs == {"active_group_ids": [], "after": "opaque", "user_id": 7}
+    assert read.call_args.args[0].semantic_class == "example"
+    db.commit.assert_not_called()
+    bad = {**contract(), "fields": [{"key": "unknown", "value_schema": {"kind": "not_a_type"}}]}
+    assert http.post("/api/agent-studio/generic-profiles/validator-options", json=bad).status_code == 422
+    assert read.call_count == 1
+
+
+def rows():
+    now = datetime.now(timezone.utc)
+    profile_id = uuid4()
+    parsed = api.GenericProfileContract.model_validate(contract())
+    profile = SimpleNamespace(
+        id=profile_id,
+        owner_id=7,
+        project_id=None,
+        visibility="private",
+        name=parsed.name,
+        description="",
+        semantic_class="example",
+        head_revision=1,
+        archived=False,
+        created_at=now,
+        updated_at=now,
+    )
+    revision = SimpleNamespace(
+        id=uuid4(),
+        profile_id=profile_id,
+        revision=1,
+        fingerprint=parsed.fingerprint(),
+        contract=parsed.model_dump(mode="json"),
+        creator_id=7,
+        created_at=now,
+    )
+    return profile, revision
+
+
+def test_create_uses_authenticated_identity_and_returns_canonical_contract(
+    client, monkeypatch
+):
+    client, db, _ = client
+    create = MagicMock(return_value=rows())
+    monkeypatch.setattr(api.service, "create_profile", create)
+    response = client.post(
+        "/api/agent-studio/generic-profiles", json={"contract": contract()}
+    )
+    assert response.status_code == 201
+    assert create.call_args.args[1] == 7
+    assert response.json()["revision"]["contract"]["fields"][0]["required"] is True
+    assert response.json()["revision"]["fingerprint"].startswith("sha256:")
+    db.commit.assert_called_once()
+
+
+@pytest.mark.parametrize("owner, archived, editable", [(7, False, True), (8, False, False), (7, True, False)])
+def test_detail_exposes_current_caller_edit_permission(client, monkeypatch, owner, archived, editable):
+    client, _, _ = client
+    profile, revision = rows()
+    profile.owner_id, profile.archived = owner, archived
+    monkeypatch.setattr(api.service, "get_profile", lambda *args, **kwargs: profile)
+    monkeypatch.setattr(api.service, "get_profile_revision", lambda *args, **kwargs: revision)
+    response = client.get(f"/api/agent-studio/generic-profiles/{profile.id}")
+    assert response.status_code == 200
+    assert response.json()["can_edit"] is editable
+
+
+def test_compare_revision_reports_contract_changes_without_saving(client, monkeypatch):
+    client, db, _ = client
+    profile, revision = rows()
+    get_revision = MagicMock(return_value=revision)
+    monkeypatch.setattr(api.service, "get_profile_revision", get_revision)
+    proposed = {**contract(), "fields": []}
+    response = client.post(f"/api/agent-studio/generic-profiles/{profile.id}/revisions/1/compare", json=proposed)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["base_revision"]["fingerprint"] == revision.fingerprint
+    assert body["proposed_fingerprint"] == api.GenericProfileContract.model_validate(proposed).fingerprint()
+    assert body["compatibility"][0]["code"] == "field_removed"
+    assert body["compatibility"][0]["breaking"] is True
+    assert get_revision.call_args.args == (db, profile.id, 1, 7)
+    db.commit.assert_not_called()
+    db.add.assert_not_called()
+
+
+def test_compare_revision_does_not_expose_an_inaccessible_profile(client, monkeypatch):
+    client, db, _ = client
+    def hidden(*args, **kwargs):
+        raise api.service.ProfileNotFoundError("Private resource")
+    monkeypatch.setattr(api.service, "get_profile_revision", hidden)
+    response = client.post(f"/api/agent-studio/generic-profiles/{uuid4()}/revisions/1/compare", json=contract())
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Profile not found"
+    db.commit.assert_not_called()
+
+
+def test_invalid_field_is_addressed_and_no_service_is_called(client, monkeypatch):
+    client, db, _ = client
+    create = MagicMock()
+    monkeypatch.setattr(api.service, "create_profile", create)
+    body = contract()
+    body["fields"][0]["key"] = "label"
+    response = client.post(
+        "/api/agent-studio/generic-profiles", json={"contract": body}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == [
+        "body",
+        "contract",
+        "fields",
+        0,
+        "key",
+    ]
+    create.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_validation_is_a_non_persisting_draft_operation(client):
+    client, db, _ = client
+    response = client.post(
+        "/api/agent-studio/generic-profiles/validate", json=contract()
+    )
+    assert response.status_code == 200
+    assert response.json()["fingerprint"].startswith("sha256:")
+    db.commit.assert_not_called()
+    db.add.assert_not_called()
+
+
+def test_mapping_validation_errors_remain_machine_readable(client, monkeypatch):
+    client, db, _ = client
+    issues = [{"path": "validator_mappings[0].inputs.gene", "code": "path", "message": "Use a declared field"}]
+    monkeypatch.setattr(api, "validate_profile_mappings", MagicMock(side_effect=api.ProfileMappingError(issues)))
+    response = client.post("/api/agent-studio/generic-profiles/validate", json=contract())
+    assert response.status_code == 422
+    assert response.json()["detail"]["issues"] == issues
+    db.commit.assert_not_called()
+
+
+def test_capability_static_route_not_parsed_as_profile_uuid(client, monkeypatch):
+    client, _, _ = client
+    monkeypatch.setattr(api, "capability_catalog", lambda **kwargs: [])
+    result = client.get("/api/agent-studio/generic-profiles/validator-capabilities")
+    assert result.status_code == 200
+    assert result.json() == {"capabilities": [], "next_cursor": None}
+
+
+def test_exact_revision_mapping_inspection_is_honestly_unmapped(client, monkeypatch):
+    client, _, _ = client
+    profile, revision = rows()
+    get = MagicMock(return_value=revision)
+    monkeypatch.setattr(api.service, "get_profile_revision", get)
+    result = client.get(f"/api/agent-studio/generic-profiles/{profile.id}/revisions/1/validator-mappings")
+    assert result.status_code == 200
+    assert result.json()["state"] == "unmapped"
+    assert result.json()["semantic_execution"] == "not_executed"
+    assert result.json()["fingerprint"] == revision.fingerprint
+    assert get.call_args.args[1:4] == (profile.id, 1, 7)
+
+
+def test_stale_save_reports_conflict_and_rolls_back(client, monkeypatch):
+    client, db, _ = client
+    monkeypatch.setattr(
+        api.service,
+        "revise_profile",
+        MagicMock(
+            side_effect=api.service.ProfileConflictError("Compare before saving")
+        ),
+    )
+    response = client.post(
+        f"/api/agent-studio/generic-profiles/{uuid4()}/revisions",
+        json={"contract": contract(), "expected_revision": 1},
+    )
+    assert response.status_code == 409
+    db.rollback.assert_called_once()
+    db.commit.assert_not_called()
+
+
+def test_inaccessible_profile_returns_non_disclosing_404(client, monkeypatch):
+    client, _, _ = client
+    monkeypatch.setattr(
+        api.service,
+        "get_profile",
+        MagicMock(side_effect=api.service.ProfileNotFoundError("Private resource")),
+    )
+    response = client.get(f"/api/agent-studio/generic-profiles/{uuid4()}")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Profile not found"
+
+
+def test_every_route_is_authenticated_and_openapi_is_closed(client):
+    _, _, app = client
+    auth = get_auth_dependency().dependency
+    assert all(
+        any(dependency.call is auth for dependency in route.dependant.dependencies)
+        for route in api.router.routes
+    )
+    schema = app.openapi()
+    for model_name in ("GenericProfileContract", "ObjectValueSchema"):
+        # FastAPI distinguishes request defaults from fully serialized responses.
+        variants = [
+            definition
+            for name, definition in schema["components"]["schemas"].items()
+            if name == model_name or name.startswith(model_name + "-")
+        ]
+        assert variants
+        assert all(
+            definition["additionalProperties"] is False for definition in variants
+        )
+    assert (
+        "/api/agent-studio/generic-profiles/{profile_id}/revisions/{revision}"
+        in schema["paths"]
+    )

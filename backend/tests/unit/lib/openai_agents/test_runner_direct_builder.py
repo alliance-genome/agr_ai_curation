@@ -39,9 +39,10 @@ async def run_direct(resources, agent, trace):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile_bound", [False, True])
 @pytest.mark.parametrize("outcome", ["persisted", "persistence_failed", "missing_owner", "missing_session",
                                      "missing_finalization", "validator_failed"])
-async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkeypatch, outcome):
+async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkeypatch, outcome, profile_bound):
     from uuid import UUID
     from agr_ai_curation_alliance.tools.gene_builder_tools import finalize_gene_extraction
     from src.api import chat_common
@@ -53,6 +54,30 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
     agent.agent_key = "gene_extractor"
     agent.curation_metadata = {"launchable": True, "adapter_key": "gene"}
     payload = {"extracted_objects": [], "domain_pack_id": "gene"}
+    receipt = None
+    if profile_bound:
+        from uuid import uuid4
+        from src.schemas.agent_execution_revision import AgentExecutionReceipt, AgentOutputContract, GenericProfilePin
+
+        agent.agent_key = "ca_" + str(uuid4())
+        pin = GenericProfilePin(profile_id=uuid4(), profile_revision_id=uuid4(), revision=1,
+                                fingerprint="sha256:" + "a" * 64)
+        receipt = AgentExecutionReceipt(
+            agent_id=uuid4(), agent_key=agent.agent_key, agent_revision_id=uuid4(), revision=1,
+            fingerprint="sha256:" + "b" * 64,
+            output_contract=AgentOutputContract(output_state="structured_extraction",
+                                               output_mode="profile_bound_generic", generic_profile_ref=pin),
+        ).model_dump(mode="json")
+        agent.execution_receipt = receipt
+
+        def require_envelope(value, *, execution_receipt, agent_key):
+            assert execution_receipt == receipt
+            assert agent_key == agent.agent_key
+
+        agent.generic_profile = SimpleNamespace(
+            receipt=pin.model_dump(mode="json"), require_envelope=require_envelope,
+            require_candidate=lambda *_args, **_kwargs: None,
+        )
     validated = {**payload, "metadata": {"inline_validator_dispatch_complete": True}}
     calls = []
     trace_records = []
@@ -66,6 +91,7 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
 
     def persist(**kwargs):
         calls.append(kwargs)
+        assert kwargs["execution_receipt"] == receipt
         if outcome == "persistence_failed":
             raise RuntimeError("synthetic persistence failure")
         return SimpleNamespace(extraction_result_id="571bb209-fd16-4516-8142-68f19ec06739",
@@ -134,7 +160,7 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
     assert stored["payload_json"] == validated
     assert (stored["document_id"], stored["user_id"], stored["origin_session_id"], stored["trace_id"]) == (
         document_id, "synthetic-owner", "synthetic-session", "synthetic-trace")
-    assert stored["agent_key"] == stored["tool_name"] == "gene_extractor"
+    assert stored["agent_key"] == stored["tool_name"] == agent.agent_key
     assert stored["metadata"]["execution_context"]["executed_query"] == "Extract this paper"
     assert stored["metadata"]["chat_turn_id"] == "synthetic-turn"
     internal = [event for event in events if event["type"] == "INTERNAL_EXTRACTION_RESULT"]
@@ -142,7 +168,8 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
     assert events.index(internal[0]) < next(i for i, event in enumerate(events) if event["type"] == "STRUCTURED_RESULT")
     ref = chat_common._build_persisted_extraction_result_ref_from_tool_event(internal[0], tool_agent_map={})
     assert str(ref.extraction_result_id) == internal[0]["details"]["extraction_result_id"]
-    assert ref.agent_key == "gene_extractor"
+    assert ref.agent_key == agent.agent_key
+    assert internal[0]["internal"].get("execution_receipt") == receipt
     assert chat_common._build_extraction_candidate_from_tool_event(
         internal[0], tool_agent_map={}, conversation_summary=None) is None
 
@@ -234,7 +261,7 @@ async def test_direct_builder_requires_and_harvests_canonical_finalization(runti
         assert len(dispatches) == 1
         assert dispatches[0]["source_agent_key"] == "gene_extractor"
         assert dispatches[0]["adapter_key"] == "gene"
-        assert dispatches[0]["tool_name"] is None
+        assert dispatches[0]["tool_name"] == "gene_extractor"
         assert dispatches[0]["is_builder_envelope"] is True
         assert dispatches[0]["runtime_context"].authenticated_groups == ("synthetic-curator",)
     else:
@@ -300,7 +327,7 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
 
     async def dispatch(payload, **kwargs):
         assert kwargs["source_agent_key"] == "gene_extractor"
-        assert kwargs["tool_name"] is None
+        assert kwargs["tool_name"] == "gene_extractor"
         # The adapter's frozen plan survives into post-stream validation.
         route = active_benchmark_route("agent:gene_extractor")
         assert route is not None and route.model == "gpt-5.6-sol"

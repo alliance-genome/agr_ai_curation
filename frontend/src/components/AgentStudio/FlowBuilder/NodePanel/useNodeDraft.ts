@@ -8,7 +8,7 @@
  * variable, and validation attachment opt-outs.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { AgentMetadata } from '@/services/agentStudioService'
 import { validationAttachmentForPersistence } from '../types'
@@ -37,14 +37,18 @@ export const resolveOutputFilenameMode = (template?: string): OutputFilenameMode
   return 'custom'
 }
 
-export const outputFileExtension = (agentId: string): 'csv' | 'tsv' | 'json' => {
+export const outputFileExtension = (agentId: string, savedFormat?: 'csv' | 'tsv' | 'json' | null): 'csv' | 'tsv' | 'json' => {
+  if (savedFormat) return savedFormat
   if (agentId === 'tsv_formatter') return 'tsv'
   if (agentId === 'json_formatter') return 'json'
   return 'csv'
 }
 
 export interface NodeDraftValues {
+  executionSelection: Pick<AgentNodeData, 'agent_revision_id' | 'execution_receipt'>
   customInstructions: string
+  exportExecutionMode: 'ai' | 'direct'
+  projectionPlan: Record<string, unknown> | null
   taskInstructions: string
   includeEvidence: boolean
   outputFilenameMode: OutputFilenameMode
@@ -70,13 +74,21 @@ export interface NodeDraft {
   set: <K extends keyof NodeDraftValues>(key: K, value: NodeDraftValues[K]) => void
   setAttachmentsEnabled: (attachmentIds: string[], enabled: boolean) => void
   reset: () => void
+  /** Exact current editor projection, including values that are not yet valid to Apply. */
+  snapshotPayload: () => Partial<AgentNodeData>
   /** Payload for onApply, or null when blockingError is set. */
   buildPayload: () => Partial<AgentNodeData> | null
 }
 
 function valuesFromNode(node: AgentNode, agentMetadata: Record<string, AgentMetadata>): NodeDraftValues {
   return {
+    executionSelection: node.data.agent_id.startsWith('ca_') ? {
+      agent_revision_id: node.data.agent_revision_id,
+      execution_receipt: node.data.execution_receipt,
+    } : {},
     customInstructions: node.data.custom_instructions || '',
+    exportExecutionMode: node.data.export_execution_mode || 'ai',
+    projectionPlan: node.data.projection_plan || null,
     taskInstructions: node.data.task_instructions || '',
     includeEvidence: resolveOutputFormatterIncludeEvidence(
       node.data.agent_id,
@@ -100,6 +112,9 @@ function joinPhrases(phrases: string[]): string {
 
 function summarizeChanges(initial: NodeDraftValues, current: NodeDraftValues, isTaskInput: boolean): string {
   const phrases: string[] = []
+  if (initial.executionSelection.agent_revision_id !== current.executionSelection.agent_revision_id) {
+    phrases.push('selected a different saved agent revision')
+  }
   if (isTaskInput) {
     if (initial.taskInstructions !== current.taskInstructions) phrases.push('changed the task instructions')
   } else if (initial.customInstructions !== current.customInstructions) {
@@ -111,6 +126,8 @@ function summarizeChanges(initial: NodeDraftValues, current: NodeDraftValues, is
   const turnedOn = [...after].filter((id) => !before.has(id)).length
   if (turnedOff > 0) phrases.push(`turned off ${turnedOff === 1 ? 'one check' : `${turnedOff} checks`}`)
   if (turnedOn > 0) phrases.push(`turned on ${turnedOn === 1 ? 'one check' : `${turnedOn} checks`}`)
+  if (initial.exportExecutionMode !== current.exportExecutionMode) phrases.push('changed how the file is created')
+  if (JSON.stringify(initial.projectionPlan) !== JSON.stringify(current.projectionPlan)) phrases.push('changed the output fields')
   if (initial.includeEvidence !== current.includeEvidence) phrases.push('changed the evidence option')
   if (
     initial.outputFilenameMode !== current.outputFilenameMode
@@ -133,11 +150,29 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
     [initialKey]
   )
   const [values, setValues] = useState<NodeDraftValues>(initial)
+  const previousSource = useRef({ nodeId: node.id, agentId: node.data.agent_id, initial })
 
-  // A new node, or the same node after Apply, resets the draft to what the node holds.
+  // A save acknowledgement may only hydrate the selected revision's receipt.
+  // Preserve unapplied edits in that case, including a different draft revision.
+  // Actual node/settings changes (including Apply) still reset the draft.
   useEffect(() => {
-    setValues(initial)
-  }, [initial])
+    const previous = previousSource.current
+    const receipt = initial.executionSelection.execution_receipt
+    const receiptOnly = previous.nodeId === node.id
+      && previous.agentId === node.data.agent_id
+      && !previous.initial.executionSelection.execution_receipt
+      && receipt?.agent_key === node.data.agent_id
+      && receipt.agent_revision_id === initial.executionSelection.agent_revision_id
+      && JSON.stringify({ ...initial, executionSelection: {
+        ...initial.executionSelection, execution_receipt: undefined,
+      } }) === JSON.stringify(previous.initial)
+    previousSource.current = { nodeId: node.id, agentId: node.data.agent_id, initial }
+    setValues((current) => receiptOnly
+      ? current.executionSelection.agent_revision_id === initial.executionSelection.agent_revision_id
+        ? { ...current, executionSelection: initial.executionSelection }
+        : current
+      : initial)
+  }, [initial, node.id, node.data.agent_id])
 
   const dirty = useMemo(() => JSON.stringify(values) !== JSON.stringify(initial), [values, initial])
   const changeSummary = useMemo(
@@ -178,6 +213,33 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
     setValues(initial)
   }, [initial])
 
+  const snapshotPayload = useCallback((): Partial<AgentNodeData> => {
+    if (isTaskInput) {
+      return {
+        task_instructions: values.taskInstructions,
+        output_key: values.outputKey,
+      }
+    }
+    const includeEvidence = agentMetadata[node.data.agent_id]
+      ? resolveOutputFormatterIncludeEvidence(node.data.agent_id, agentMetadata, values.includeEvidence)
+      : node.data.include_evidence
+    return {
+      ...values.executionSelection,
+      export_execution_mode: values.exportExecutionMode,
+      projection_plan: values.projectionPlan,
+      custom_instructions: values.customInstructions,
+      include_evidence: includeEvidence,
+      output_filename_template: supportsFileOutputNaming
+        ? values.outputFilenameMode === 'source_pdf'
+          ? SOURCE_PDF_FILENAME_TEMPLATE
+          : values.outputFilenameMode === 'custom'
+            ? values.outputFilenameTemplate
+            : undefined
+        : node.data.output_filename_template,
+      output_key: values.outputKey,
+      validation_attachments: values.attachments.map(validationAttachmentForPersistence),
+    }
+  }, [agentMetadata, isTaskInput, node.data.agent_id, node.data.include_evidence, node.data.output_filename_template, supportsFileOutputNaming, values])
   const buildPayload = useCallback((): Partial<AgentNodeData> | null => {
     if (blockingError) return null
     const outputKey = values.outputKey.trim()
@@ -191,6 +253,9 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
       ? resolveOutputFormatterIncludeEvidence(node.data.agent_id, agentMetadata, values.includeEvidence)
       : node.data.include_evidence
     return {
+      ...values.executionSelection,
+      export_execution_mode: values.exportExecutionMode,
+      projection_plan: values.projectionPlan,
       custom_instructions: values.customInstructions || undefined,
       include_evidence: includeEvidence,
       output_filename_template: supportsFileOutputNaming
@@ -207,5 +272,15 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
     }
   }, [agentMetadata, blockingError, isTaskInput, node, supportsFileOutputNaming, values])
 
-  return { values, dirty, changeSummary, blockingError, set, setAttachmentsEnabled, reset, buildPayload }
+  return {
+    values,
+    dirty,
+    changeSummary,
+    blockingError,
+    set,
+    setAttachmentsEnabled,
+    reset,
+    snapshotPayload,
+    buildPayload,
+  }
 }

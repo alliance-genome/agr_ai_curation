@@ -135,10 +135,7 @@ export function useChatController({
   const [limitNotices, setLimitNotices] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const progressMessageQueueRef = useRef<string[]>([])
-  const progressMessageTimerRef = useRef<NodeJS.Timeout | null>(null)
   const sessionIdCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const lastProgressUpdateRef = useRef<number>(0)
   const assistantBuffersRef = useRef<Record<string, string>>({})
   const flowChatOutputsRef = useRef<Record<string, {
     content: string
@@ -256,12 +253,6 @@ export function useChatController({
 
   const clearProgressState = useCallback(() => {
     setProgressMessage('')
-    if (progressMessageTimerRef.current) {
-      clearTimeout(progressMessageTimerRef.current)
-      progressMessageTimerRef.current = null
-    }
-    progressMessageQueueRef.current = []
-    lastProgressUpdateRef.current = 0
   }, [])
 
   const invalidateTurnRuntimeState = useCallback(() => {
@@ -376,41 +367,9 @@ export function useChatController({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  // Minimum time to display each progress message (in ms)
-  const MIN_PROGRESS_DISPLAY_TIME = 1800
-
-  const updateProgressMessage = useCallback((newMessage: string) => {
-    const now = Date.now()
-    const timeSinceLastUpdate = now - lastProgressUpdateRef.current
-
-    if (timeSinceLastUpdate >= MIN_PROGRESS_DISPLAY_TIME) {
-      // Enough time has passed, update immediately
-      setProgressMessage(newMessage)
-      lastProgressUpdateRef.current = now
-
-      // Process next queued message if any
-      if (progressMessageQueueRef.current.length > 0) {
-        const nextMessage = progressMessageQueueRef.current.shift()!
-        progressMessageTimerRef.current = setTimeout(() => {
-          updateProgressMessage(nextMessage)
-        }, MIN_PROGRESS_DISPLAY_TIME)
-      }
-    } else {
-      // Not enough time has passed, queue the message
-      progressMessageQueueRef.current.push(newMessage)
-
-      // Set timer if not already set
-      if (!progressMessageTimerRef.current) {
-        const delay = MIN_PROGRESS_DISPLAY_TIME - timeSinceLastUpdate
-        progressMessageTimerRef.current = setTimeout(() => {
-          progressMessageTimerRef.current = null
-          if (progressMessageQueueRef.current.length > 0) {
-            const nextMessage = progressMessageQueueRef.current.shift()!
-            updateProgressMessage(nextMessage)
-          }
-        }, delay)
-      }
-    }
+  // Activity describes what is happening now; never replay outdated events.
+  const updateProgressMessage = useCallback((message: string) => {
+    setProgressMessage(message)
   }, [])
 
   useEffect(() => {
@@ -437,16 +396,9 @@ export function useChatController({
     sessionTraceIds.current = []
     latestMessagesRef.current = []
     invalidateTurnRuntimeState()
-    progressMessageQueueRef.current = []
-    lastProgressUpdateRef.current = 0
     setMessages([])
     setActiveDocument(null)
     setProgressMessage('')
-
-    if (progressMessageTimerRef.current) {
-      clearTimeout(progressMessageTimerRef.current)
-      progressMessageTimerRef.current = null
-    }
 
     if (persistTimeoutRef.current) {
       clearTimeout(persistTimeoutRef.current)
@@ -768,7 +720,11 @@ export function useChatController({
       if (shouldShowInChat(parsed.type)) {
         const friendlyMessage = getFriendlyProgressMessage(parsed)
         debug.log('[AUDIT->CHAT] Showing filtered audit event in chat progress:', parsed.type, friendlyMessage)
-        updateProgressMessage(friendlyMessage)
+        const needsAttention = ['DOMAIN_SKIPPED', 'PENDING_USER_INPUT', 'DOMAIN_WARNING'].includes(parsed.type)
+        if (!needsAttention) updateProgressMessage(friendlyMessage)
+        if (needsAttention && parsed.details?.reason !== 'bulk_guardrail') {
+          setLimitNotices(prev => prev.includes(friendlyMessage) ? prev : [...prev, friendlyMessage])
+        }
 
         if (
           parsed.details?.reason === 'bulk_guardrail'

@@ -40,9 +40,9 @@ output_schema: null
 # MODEL CONFIGURATION
 # -----------------------------------------------------------------------------
 model_config:
-  model: "${AGENT_CHAT_OUTPUT_MODEL:-gpt-5.6-sol}"
+  model: "${AGENT_CHAT_OUTPUT_MODEL:-gpt-6-astra}"
   temperature: 0.1
-  reasoning: "disabled"
+  reasoning: "low"
 
 # -----------------------------------------------------------------------------
 # EXECUTION REQUIREMENTS

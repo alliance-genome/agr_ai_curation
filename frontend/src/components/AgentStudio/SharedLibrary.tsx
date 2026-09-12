@@ -142,7 +142,7 @@ export default function SharedLibrary({ active, onOpenAgent, onOpenFlow, onReuse
     <Dialog open={Boolean(idea)} onClose={() => setIdea(null)} fullWidth maxWidth="sm">
       <DialogTitle>{idea?.title}</DialogTitle>
       <DialogContent><Typography sx={{ whiteSpace: 'pre-wrap' }}>{idea?.description}</Typography><Typography variant="caption">{idea?.status} · Owner #{idea?.user_id} · {idea?.project_id ?? 'No project'}</Typography></DialogContent>
-      <DialogActions><Button onClick={() => setIdea(null)}>Close</Button><Button onClick={() => { if (idea) onReuseToolIdea(idea); setIdea(null) }}>Discuss request with Claude</Button></DialogActions>
+      <DialogActions><Button onClick={() => setIdea(null)}>Close</Button><Button onClick={() => { if (idea) onReuseToolIdea(idea); setIdea(null) }}>Discuss request with AI Chat</Button></DialogActions>
     </Dialog>
   </Box>
 }

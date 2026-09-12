@@ -45,6 +45,8 @@ groups:
     provider_groups:
       - "wormbase-curators"
       - "wormbase-admins"
+      - "WBStaff"
+      - "WormBaseCurator"
 
   # ---------------------------------------------------------------------------
   # Mouse Genome Informatics (MGI)

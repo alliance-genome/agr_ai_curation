@@ -110,12 +110,12 @@ describe('ToolsSection', () => {
     expect(items[2]).toHaveTextContent('New')
   })
 
-  it('offers a new request and a Claude draft link', () => {
+  it('offers a new request and an AI Chat draft link', () => {
     const props = renderTools()
     expect(screen.getByText('No requests sent yet.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'New request' }))
     expect(props.onNewRequest).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude to draft a request' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat to draft a request' }))
     expect(props.onAskClaudeToDraft).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button', { name: 'Manage Tools' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Send to Developers' })).not.toBeInTheDocument()

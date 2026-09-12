@@ -254,6 +254,12 @@ async def _run_curation_prep_impl(
         ),
     )
 
+    if (
+        scope_confirmation.expected_review_row_count is not None
+        and prep_output.review_row_count != scope_confirmation.expected_review_row_count
+    ):
+        raise ValueError("The prepared candidate count changed; preview and confirm the scope again.")
+
     adapter_key = _resolve_required_adapter_key(
         extraction_results=scoped_results,
         scope_confirmation=scope_confirmation,
@@ -428,6 +434,7 @@ def ensure_domain_envelope_materialization(
                     project_key=project_key,
                     envelope=envelope,
                     expected_revision=0,
+                    execution_receipt=extraction_result.execution_receipt,
                     document_id=extraction_result.document_id,
                     flow_run_id=extraction_result.flow_run_id,
                     adapter_key=adapter_key,

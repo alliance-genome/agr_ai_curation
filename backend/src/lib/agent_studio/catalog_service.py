@@ -973,6 +973,11 @@ def has_tool_binding(tool_id: str) -> bool:
     return _canonicalize_tool_id(str(tool_id).strip()) in TOOL_BINDINGS
 
 
+def is_runtime_formatter_tool(tool_id: str) -> bool:
+    """Identify helpers inherited from a formatter's bound runtime tool set."""
+    return tool_id in _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET
+
+
 # =============================================================================
 # Method-Level Tool Entries
 # =============================================================================
@@ -991,6 +996,7 @@ class ToolExecutionContext:
     formatter_bundle: Optional[Any] = None
     formatter_output_format: Optional[str] = None
     formatter_agent_id: Optional[str] = None
+    formatter_projection_plan: Optional[Any] = None
 
 
 def _resolve_runtime_formatter_tool(
@@ -1016,6 +1022,7 @@ def _resolve_runtime_formatter_tool(
         output_format=output_format,
         formatter_agent_id=formatter_agent_id,
         save_projected_output=save_projected_file_output,
+        configured_plan=execution_context.formatter_projection_plan,
     )
     for tool in tools:
         if getattr(tool, "name", None) == tool_id:
@@ -1566,6 +1573,7 @@ def _build_tool_execution_context(
         formatter_bundle=kwargs.get("formatter_bundle"),
         formatter_output_format=formatter_output_format,
         formatter_agent_id=formatter_agent_id,
+        formatter_projection_plan=kwargs.get("formatter_projection_plan"),
     )
 
 
@@ -1751,15 +1759,59 @@ def validate_active_agent_output_schemas(db: Any) -> None:
         )
 
 
-def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
+def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile=None,
+                     _benchmark_slot: str | None = None, **kwargs: Any) -> Optional[Agent]:
     """Create an agent from a row in the unified agents table."""
+    if execution_snapshot is not None:
+        from src.schemas.agent_execution_revision import AgentExecutionSnapshot
+
+        execution_snapshot = AgentExecutionSnapshot.model_validate(
+            execution_snapshot.model_dump(mode="json")
+        )
+        from src.lib.agent_studio.domain_output_contract import require_no_output_without_builder_tools
+
+        require_no_output_without_builder_tools(execution_snapshot.output_contract, execution_snapshot.tool_ids)
+        if any(
+            key in kwargs
+            for key in (
+                "model_id_override", "model_temperature_override",
+                "model_reasoning_override", "model_provider_override",
+                "tool_ids", "tool_ids_override", "output_schema_key", "output_schema_override",
+                "output_contract", "class_key", "generic_profile_ref", "profile_id",
+            )
+        ):
+            raise ValueError("Pinned execution settings cannot be overridden")
+        # Read only presentation/identity from the live row. Every execution
+        # setting below comes from the validated immutable snapshot.
+        db_agent = SimpleNamespace(
+            name=db_agent.name,
+            agent_key=db_agent.agent_key,
+            visibility=db_agent.visibility,
+            **execution_snapshot.model_dump(),
+            output_schema_key=execution_snapshot.output_contract.output_schema_key,
+        )
+    if _benchmark_slot is not None:
+        from src.lib.benchmarks.source_revisions import require_benchmark_source
+        from src.lib.openai_agents.benchmark_routing import active_benchmark_route
+
+        source = require_benchmark_source(_benchmark_slot, db_agent.agent_key)
+        experimental_route = active_benchmark_route(_benchmark_slot)
+        if (execution_snapshot is None or experimental_route is None
+                or source.fingerprint != execution_snapshot.fingerprint()):
+            raise ValueError("Benchmark model routing requires its exact authorized source revision")
+        # Only the experiment's three route dimensions vary. Never rewrite the
+        # saved snapshot or describe the resulting model as its original model.
+        kwargs.update(model_id_override=experimental_route.model,
+                      model_provider_override=experimental_route.provider,
+                      model_reasoning_override=experimental_route.reasoning_effort,
+                      benchmark_route_slot=_benchmark_slot)
     visibility = str(getattr(db_agent, "visibility", "") or "").strip()
     if visibility == "system":
         require_canonical_agent_identity(
             getattr(db_agent, "agent_key", None),
             field_name="System agent key",
         )
-    else:
+    elif execution_snapshot is None:
         parent_key = (
             getattr(db_agent, "template_source", None)
             or getattr(db_agent, "group_rules_component", None)
@@ -1865,11 +1917,32 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     else:
         tools = []
 
-    prompt_bundle = _build_runtime_instructions(
-        db_agent=db_agent,
-        runtime_kwargs=runtime_kwargs,
-        canonical_tool_ids=canonical_tool_ids,
-    )
+    if execution_snapshot is not None:
+        from src.lib.agent_studio.execution_snapshot import saved_runtime_prompt_bundle
+
+        runtime_context = _build_runtime_context(
+            runtime_kwargs=runtime_kwargs, canonical_tool_ids=canonical_tool_ids
+        )
+        if execution_snapshot.output_contract.output_mode == "profile_bound_generic":
+            from src.lib.agent_studio.profile_tools import configure_profile_tools, profile_runtime_instruction
+
+            if resolved_profile is None:
+                raise ValueError("Profile-bound execution requires its authorized immutable profile")
+            resolved_profile.require_receipt(execution_snapshot.output_contract.generic_profile_ref.model_dump(mode="json"))
+            tools = configure_profile_tools(tools, resolved_profile)
+            runtime_context += "\n\n" + profile_runtime_instruction(resolved_profile)
+
+        prompt_bundle = saved_runtime_prompt_bundle(
+            execution_snapshot,
+            active_groups=runtime_kwargs.get("active_groups", []) or [],
+            runtime_context=runtime_context,
+        )
+    else:
+        prompt_bundle = _build_runtime_instructions(
+            db_agent=db_agent,
+            runtime_kwargs=runtime_kwargs,
+            canonical_tool_ids=canonical_tool_ids,
+        )
     instructions = prompt_bundle.render()
 
     model_id_override = str(kwargs.get("model_id_override") or "").strip()
@@ -1924,10 +1997,53 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
 
         attach_benchmark_route(runtime_agent, benchmark_route_slot)
     runtime_agent.agent_key = str(db_agent.agent_key)
+    runtime_agent.generic_profile = resolved_profile
     runtime_agent.group_tool_exposure = group_tool_audit
     runtime_agent.authenticated_groups = tuple(
         group_tool_resolution.active_group_ids
     )
+    if execution_snapshot is not None:
+        from copy import deepcopy
+
+        runtime_agent.execution_snapshot_fingerprint = execution_snapshot.fingerprint()
+        runtime_agent.output_contract = execution_snapshot.output_contract.model_dump(mode="json")
+        runtime_agent.curation_metadata = deepcopy(execution_snapshot.curation)
+        runtime_agent.curation = deepcopy(execution_snapshot.curation)
+        runtime_agent.structured_finalization = deepcopy(execution_snapshot.structured_finalization)
+    else:
+        _attach_live_curation_metadata(runtime_agent, db_agent, output_schema)
+    prompt_run_id = set_pending_prompts(
+        runtime_agent.name,
+        # Saved manifests are the prompt evidence for a pin. Resolving active
+        # PromptTemplate rows here would mislabel historical bytes as today's.
+        [] if execution_snapshot is not None else list(prompt_templates_for_bundle(prompt_bundle)),
+        effective_prompt_hash=prompt_bundle.hash,
+        layer_manifest=prompt_bundle.to_manifest(),
+    )
+    bind_prompt_run(runtime_agent, prompt_run_id)
+
+    from src.lib.openai_agents.langfuse_client import log_agent_config
+
+    log_agent_config(
+        agent_name=str(db_agent.name),
+        instructions=instructions,
+        model=str(effective_model_id),
+        tools=canonical_tool_ids,
+        model_settings={
+            "temperature": effective_temperature,
+            "reasoning": reasoning_effort,
+        },
+        metadata={
+            "agent_key": str(db_agent.agent_key),
+            "effective_prompt_hash": prompt_bundle.hash,
+            "group_tool_exposure": group_tool_audit,
+        },
+    )
+    return runtime_agent
+
+
+def _attach_live_curation_metadata(runtime_agent, db_agent, output_schema):
+    """Resolve deployment-owned metadata only for unpinned/system execution."""
     try:
         from src.lib.config.agent_loader import get_agent_by_folder, get_agent_definition
 
@@ -1971,32 +2087,6 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             getattr(db_agent, "agent_key", None),
             exc_info=True,
         )
-    prompt_run_id = set_pending_prompts(
-        runtime_agent.name,
-        list(prompt_templates_for_bundle(prompt_bundle)),
-        effective_prompt_hash=prompt_bundle.hash,
-        layer_manifest=prompt_bundle.to_manifest(),
-    )
-    bind_prompt_run(runtime_agent, prompt_run_id)
-
-    from src.lib.openai_agents.langfuse_client import log_agent_config
-
-    log_agent_config(
-        agent_name=str(db_agent.name),
-        instructions=instructions,
-        model=str(effective_model_id),
-        tools=canonical_tool_ids,
-        model_settings={
-            "temperature": effective_temperature,
-            "reasoning": reasoning_effort,
-        },
-        metadata={
-            "agent_key": str(db_agent.agent_key),
-            "effective_prompt_hash": prompt_bundle.hash,
-            "group_tool_exposure": group_tool_audit,
-        },
-    )
-    return runtime_agent
 
 
 def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
@@ -2010,12 +2100,16 @@ def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
 
     db = SessionLocal()
     try:
-        return get_agent_by_key(
+        row = get_agent_by_key(
             db,
             agent_id,
             user_id=db_user_id,
             active_group_ids=list(kwargs.get("authenticated_groups", []) or []),
         )
+        if row is not None and agent_id.startswith("ca_"):
+            from src.lib.agent_studio.custom_agent_service import saved_export_metadata
+            row._saved_export_metadata = saved_export_metadata(row)
+        return row
     except Exception:
         logger.exception("[CatalogService] Failed DB lookup for agent '%s'", agent_id)
         return None
@@ -2025,6 +2119,10 @@ def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
 
 def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
     """Create an agent by ID using the unified agents table only."""
+    if "_benchmark_slot" in kwargs:
+        raise ValueError("Use the explicit benchmark source construction boundary")
+    if agent_id.startswith("ca_") or "execution_revision_id" in kwargs:
+        return _get_pinned_agent_by_id(agent_id, **kwargs)
     db_agent = _get_db_agent_row(agent_id, kwargs)
     if db_agent is None:
         raise ValueError(
@@ -2040,6 +2138,96 @@ def get_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
         )
 
     return built
+
+
+def get_benchmark_agent_by_id(agent_id: str, *, benchmark_slot: str, **kwargs: Any) -> Agent:
+    """Reauthorize an immutable source, then apply its server-owned cell route.
+
+    execution_receipt identifies the source revision; benchmark_requested_*
+    and the durable cell/ledger identify the experimental model actually used.
+    Ordinary pinned construction continues to reject all setting overrides.
+    """
+    from src.lib.benchmarks.source_revisions import require_benchmark_source
+    from src.lib.openai_agents.benchmark_routing import active_benchmark_route
+
+    source = require_benchmark_source(benchmark_slot, agent_id)
+    if active_benchmark_route(benchmark_slot) is None:
+        raise ValueError("Benchmark source construction requires an active frozen model route")
+    if any(key in kwargs for key in ("execution_revision_id", "execution_receipt", "_benchmark_slot")):
+        raise ValueError("Benchmark source identity is selected only by the frozen cell")
+    return _get_pinned_agent_by_id(
+        agent_id, execution_revision_id=str(source.agent_revision_id),
+        execution_receipt=source.model_dump(mode="json"), _benchmark_slot=benchmark_slot, **kwargs,
+    )
+
+
+def _get_pinned_agent_by_id(agent_id: str, *, _benchmark_slot: str | None = None, **kwargs: Any) -> Agent:
+    """Authorize a pin against current visibility and saved group restrictions."""
+    from uuid import UUID
+    from sqlalchemy import select
+    from src.models.sql.agent import Agent as DBAgent
+    from src.models.sql.tool_policy import ToolPolicy
+    from src.models.sql.database import SessionLocal
+    from src.lib.agent_studio.execution_revision_service import get_execution_revision
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+
+    expected_receipt = kwargs.pop("execution_receipt", None)
+    has_explicit_pin = "execution_revision_id" in kwargs
+    revision_id = UUID(str(kwargs.pop("execution_revision_id"))) if has_explicit_pin else None
+    user_id = _coerce_db_user_id(kwargs.get("db_user_id"))
+    if user_id is None:
+        user_id = _coerce_db_user_id(kwargs.get("user_id"))
+    if user_id is None:
+        raise ValueError("Authenticated user is required for pinned execution")
+    with SessionLocal() as db:
+        head = db.execute(select(DBAgent).where(DBAgent.agent_key == agent_id)).scalar_one_or_none()
+        if head is None:
+            raise ValueError("Executable agent revision not found")
+        if not has_explicit_pin:
+            if not head.is_active:
+                raise ValueError("Custom agent is archived")
+            revision_id = head.execution_revision_id
+            if revision_id is None:
+                raise ValueError("Custom agent has no saved executable configuration")
+        revision, saved = get_execution_revision(
+            db, head.id, revision_id, user_id,
+            active_group_ids=list(kwargs.get("authenticated_groups", []) or []),
+        )
+        receipt = AgentExecutionReceipt(
+            agent_id=head.id, agent_key=head.agent_key, agent_revision_id=revision.id,
+            revision=revision.revision, fingerprint=revision.fingerprint,
+            output_contract=saved.output_contract,
+        )
+        if expected_receipt is not None and AgentExecutionReceipt.model_validate(expected_receipt) != receipt:
+            raise ValueError("Executable agent receipt does not match the authorized revision")
+        selected_tools = resolve_group_tool_policy(
+            saved.tool_ids, saved.group_tool_policy,
+            kwargs.get("authenticated_groups"),
+        ).tool_ids
+        if selected_tools:
+            policies = db.execute(
+                select(ToolPolicy).where(ToolPolicy.tool_key.in_(selected_tools))
+            ).scalars().all()
+            executable = {policy.tool_key for policy in policies if policy.allow_execute}
+            if set(selected_tools) - executable:
+                raise ValueError("A saved tool is no longer available for execution")
+        resolved_profile = None
+        if saved.output_contract.generic_profile_ref is not None:
+            from src.lib.agent_studio.generic_profile_service import get_profile_revision
+            from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
+            from src.schemas.generic_extraction_profile import normalize_profile_contract
+
+            pin = saved.output_contract.generic_profile_ref
+            profile_revision = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
+            resolved_profile = ResolvedGenericProfile(pin, normalize_profile_contract(profile_revision.contract))
+        built = _create_db_agent(head, execution_snapshot=saved, resolved_profile=resolved_profile,
+                                 _benchmark_slot=_benchmark_slot, **kwargs)
+        if built is None:
+            raise ValueError("Executable agent revision could not be built")
+        built.execution_revision_id = str(revision.id)
+        built.execution_revision = revision.revision
+        built.execution_receipt = receipt.model_dump(mode="json")
+        return built
 
 
 def _merge_registry_required_params(
@@ -2191,6 +2379,11 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
         return {
             "agent_id": agent_id,
             "display_name": db_agent.name,
+            **getattr(db_agent, "_saved_export_metadata", {}),
+            "agent_revision_id": (
+                str(db_agent.execution_revision_id)
+                if agent_id.startswith("ca_") and getattr(db_agent, "execution_revision_id", None) else None
+            ),
             "description": db_agent.description,
             "category": getattr(db_agent, "category", None)
             or (agent_definition.category if agent_definition is not None else None),
@@ -2289,12 +2482,12 @@ def list_available_agents(
 
     db = SessionLocal()
     try:
-        keys = [
+        keys = sorted(
             row[0]
             for row in db.query(AgentRecord.agent_key).filter(
                 AgentRecord.is_active == True  # noqa: E712
             ).all()
-        ]
+        )
     finally:
         db.close()
 

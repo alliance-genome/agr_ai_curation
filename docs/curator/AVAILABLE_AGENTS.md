@@ -1,147 +1,84 @@
 # Available AI Curation Agents
 
-This document lists all specialized agents available in the AI Curation System and describes what data sources they connect to.
+Use **Agent Studio → Agents** to inspect the agents available to you, including their prompts, tools, output fields, and validation. Installed packages and group access determine what appears. The list below describes the main tasks; an agent's availability does not mean its output supports final Alliance submission.
 
-## Agent Overview
+## Extraction agents
 
-The AI Curation System uses multiple specialized agents, each designed to answer specific types of biological questions. A supervisor agent coordinates these specialists to provide comprehensive answers.
+| Agent | Use it for |
+|-------|------------|
+| **General PDF Extraction Agent** | Custom information from a paper, using a custom output structure or flexible fields |
+| **Gene Expression Extractor** | Expression observations in the supported packaged expression format |
+| **Gene Extraction Agent** | Gene mentions and paper evidence |
+| **Allele/Variant Extraction Agent** | Allele or variant observations and paper evidence |
+| **Disease Extraction Agent** | Disease observations in the supported packaged format |
+| **Phenotype Extraction Agent** | Phenotype observations in the supported packaged format |
 
-All agents are defined in configuration files (YAML) and stored in the database. This means agents can be updated and new agents can be added without changing application code. You can browse agent configurations in the **Agent Browser** within Agent Studio, and create your own custom agents in the **Agent Workshop**.
+Extractors read the paper and preserve evidence. Supported attached validators resolve biological identifiers or terms afterward. Inspect the output fields before choosing an extractor: a prompt cannot add undeclared fields to a packaged format. Use [Custom data extraction](CUSTOM_OUTPUT_STRUCTURES.md) when your task needs a different set of details.
 
-## Specialist Agents
+New extraction drafts use **GPT-6 Astra with low reasoning** by default. Existing saved agents and flow revisions retain their model choices. Studio AI Chat uses Astra with medium reasoning, while validation agents retain their Terra settings.
 
-| Agent Name | Data Source | What It Does | Example Questions |
-|-----------|-------------|--------------|-------------------|
-| **Gene Expression Extractor** | Uploaded Papers + AGR Database | Extracts gene expression patterns from research papers. Captures anatomical locations, developmental stages, and subcellular locations. Coordinates with typed validation attachments or the Ontology Term Resolver Agent for term ID resolution. | "Extract gene expression patterns from this paper" "What anatomical structures show dmd-3 expression?" "Find negative evidence for gene X expression" |
-| **Ontology Term Resolver Agent** | AGR Curation Database | Resolves exact CURIEs and typed ontology labels/synonyms to official ontology terms. Use provider-scoped lookup for anatomy and life stage labels, GO lookup for GO terms, and `ontology_term_type` for generic label/synonym lookup. | "Resolve 'linker cell' using WormBase anatomy lookup" "Find CURIE for the WormBase life stage 'L3 larval stage'" "Resolve 'nucleus' as a GO cellular component term" |
-| **Disease Ontology Agent** | Disease Ontology (DOID) | Searches disease classifications, hierarchies, and term relationships. | "What is DOID:4325?" "Show me child terms of cancer" "What diseases are related to diabetes?" |
-| **Gene Validation Agent** | AGR Curation Database | Validates gene identifiers against the Alliance Curation Database. Supports lookup by symbol, name, ID, or cross-reference. | "Look up the gene daf-16" "Validate these genes: daf-16, lin-3, unc-54" "Show me gene symbols for WBGene00001345" |
-| **Allele Validation Agent** | AGR Curation Database | Validates allele/variant identifiers against the Alliance Curation Database. Supports lookup by symbol, ID, or gene association. | "Find all Ulk1 alleles in mouse" "Look up these alleles: e1370, n765, tm1234" "Tell me about MGI:3689906" |
-| **Chemical Ontology Agent** | ChEBI (EBI) | Searches chemical compounds, their properties, classifications, and relationships. | "What is cytidine?" "Show me chemical properties of aspirin" "Find compounds related to glucose" |
-| **GO Term Lookup Agent** | QuickGO (EBI) | Searches GO terms, definitions, hierarchies (parent/child terms), and relationships. | "What is GO:0008150?" "Show me child terms of DNA repair" "What does biological process mean?" |
-| **Gene GO Annotations Agent** | GO Consortium | Retrieves gene GO annotations with evidence codes (IDA, IMP, IEA, etc.). | "What GO terms are annotated to gene X?" "Show me annotations with IDA evidence" "What biological processes involve this gene?" |
-| **Ortholog Lookup Agent** | Alliance Genome | Finds cross-species orthology relationships with confidence scores. | "What are the orthologs of human TP53?" "Show me mouse genes orthologous to fly gene Y" "Find homologs across species" |
-| **PDF Extraction Agent** | Uploaded Papers | Extracts text, tables, and data from uploaded PDF documents using semantic search and section-based retrieval. | "What does paper X say about gene regulation?" "Extract the gene expression table from results section" "Read the Methods section" |
-| **Supervisor Agent** | Routes to Specialists | Coordinates other agents - analyzes your question and sends it to the right specialist(s). | Handles all questions by delegating to specialist agents. |
+RGD curators also have group-restricted [GO and disease paper-review recipes](RGD_GO_DISEASE_PAPER_REVIEW.md). Use the recipe guide for those tasks.
+
+## Lookup and validation agents
+
+These agents have different roles. Some retrieve existing annotations or relationships; others provide validators for supported extraction fields. Being listed here does not mean an agent can be attached to every custom field. The field editor's validator picker shows compatible built-in and custom choices.
+
+| Agent | Purpose | Example request |
+|-------|---------|-----------------|
+| **Gene Validation Agent** | Resolve gene symbols, names, identifiers, or cross-references against Alliance curation records | “Resolve daf-16 in C. elegans.” |
+| **Allele Validation Agent** | Resolve allele mentions using identifiers, symbols, or descriptions, with species or gene context when known | “Resolve e1370 in C. elegans, associated with daf-16.” |
+| **Ontology Term Resolver Agent** | Resolve identifiers, labels, or synonyms within supported ontology types | “Resolve linker cell using WormBase anatomy terms.” |
+| **Disease Ontology Agent** | Look up disease terms and relationships | “Show the definition and parent terms for DOID:162.” |
+| **Chemical Ontology Agent** | Look up chemicals in ChEBI | “Find cytidine and its ChEBI identifier.” |
+| **GO Term Lookup Agent** | Look up GO definitions and relationships through QuickGO | “Show child terms of DNA repair.” |
+| **Gene GO Annotations Agent** | Retrieve existing GO annotations and evidence codes | “Show human TP53 annotations with IDA evidence.” |
+| **Ortholog Lookup Agent** | Retrieve cross-species orthology relationships | “Find mouse orthologs of human TP53.” |
 
 ## Output Formatter Agents
 
-These agents are used in **[Curation Flows](CURATION_FLOWS.md)** to generate downloadable files from extracted data.
+Use these agents in [curation flows](CURATION_FLOWS.md) to present collected results in chat or as downloadable files. Configure the desired columns and formatting in the output step.
 
 | Agent Name | Output Format | Description | Use Cases |
 |-----------|---------------|-------------|-----------|
 | **Chat Output Agent** | Chat Message | Sends formatted results to the chat interface for review and discussion. | Quick review, iterative refinement, sharing results in conversation |
-| **CSV Formatter Agent** | CSV File | Generates comma-separated value files for spreadsheet applications. | Excel/Google Sheets, database import, data sharing |
-| **TSV Formatter Agent** | TSV File | Generates tab-separated value files preferred by many databases. | Database import, AGR data submission, bioinformatics tools |
-| **JSON Formatter Agent** | JSON File | Generates structured JSON files preserving complex nested data. | Data with hierarchical structure, sharing with computational biologists |
+| **CSV File Formatter** | CSV File | Generates comma-separated value files for spreadsheet applications. | Excel/Google Sheets, database import, data sharing |
+| **TSV File Formatter** | TSV File | Generates tab-separated value files preferred by many databases. | Tab-separated tables for downstream tools |
+| **JSON File Formatter** | JSON File | Generates structured JSON files preserving complex nested data. | Data with hierarchical structure, sharing with computational biologists |
 
 ### File Output Features
 
 When flows generate files, they appear in the chat as downloadable cards showing:
+
 - File name and format
 - File size
 - Generation timestamp
 - Model used for generation
 - Download count
 
-Files remain available throughout your session. Download important files before ending your session.
+Download results you need to keep. A file formatter arranges collected data; it does not make an export a valid Alliance submission.
 
-## Ontology Term Resolver Paths
+## Resolve an ontology term
 
-The **Ontology Term Resolver Agent** supports exact CURIE lookup, typed label and synonym lookup with an explicit `ontology_term_type`, provider-scoped anatomy and life-stage lookup, and GO lookup with optional `go_aspect`. Use the dedicated Chemical Ontology Agent for ChEBI chemical validation.
+Give the **Ontology Term Resolver Agent** the identifier when you have one. If you have a label, specify the organism and the kind of term you need. For example:
 
-### Common Typed Lookup Examples
+- “Resolve ‘linker cell’ using WormBase anatomy terms.”
+- “Resolve ‘L3 larval stage’ using WormBase life stage terms.”
+- “Resolve ‘nucleus’ as a GO cellular component.”
 
-#### ANATOMY ONTOLOGIES (9 types)
-- **WBBTTerm** (WBbt:) - C. elegans anatomy
-- **DAOTerm** (FBbt:) - D. melanogaster anatomy
-- **EMAPATerm** (EMAPA:) - Mouse embryo anatomy
-- **MATerm** (MA:) - Mouse adult anatomy
-- **UBERONTerm** (UBERON:) - Multi-species anatomy
-- **ZFATerm** (ZFA:) - Zebrafish anatomy
-- **XBATerm** (XAO:) - Xenopus anatomy
-- **XBSTerm** (XAO:) - Xenopus anatomy stage
-- **BTOTerm** (BTO:) - BRENDA Tissue Ontology
+Anatomy and life-stage lookups use provider context. Other label or synonym lookups need the ontology type. AI Chat can help identify the supported type; you do not need to memorize the internal type names. GO lookups can also be narrowed to molecular function, biological process, or cellular component. Use the Chemical Ontology Agent for ChEBI.
 
-#### LIFE STAGE/DEVELOPMENT ONTOLOGIES (5 types)
-- **WBLSTerm** (WBls:) - C. elegans life stage
-- **FBDVTerm** (FBdv:) - D. melanogaster development
-- **MMUSDVTerm** (MmusDv:) - Mouse development stage
-- **ZFSTerm** (ZFS:) - Zebrafish life stage
-- **XBEDTerm** (XBED:) - Xenopus development
+Supported lookup areas include anatomy, life stage, phenotype, disease, experimental conditions, cell types, sequence and genetics, evidence and quality, pathways, and taxonomy. Inspect the agent's tool documentation for the exact available types. Labels may be shared by several terms, so review unresolved or ambiguous candidates rather than choosing an identifier solely because its name looks familiar.
 
-#### PHENOTYPE ONTOLOGIES (7 types)
-- **WBPhenotypeTerm** (WBPhenotype:) - C. elegans phenotype
-- **FBCVTerm** (FBcv:) - D. melanogaster controlled vocabulary
-- **MPTerm** (MP:) - Mammalian phenotype
-- **HPTerm** (HP:) - Human phenotype
-- **XPOTerm** (XPO:) - Xenopus phenotype
-- **APOTerm** (APO:) - Ascomycete phenotype
-- **VTTerm** (VT:) - Vertebrate trait
+## Custom agents and field validators
 
-#### GENE ONTOLOGY (1 type)
-- **GOTerm** (GO:) - Gene Ontology (cellular_component, biological_process, molecular_function)
+Open **Agent Workshop → Custom data extraction** to define one item type and its details. You can also start from a template, configure an agent from scratch, or clone a saved agent. AI Chat can propose changes to prompts, settings, tools, custom fields, parts, and compatible validator attachments.
 
-#### DISEASE ONTOLOGIES (2 types)
-- **DOTerm** (DOID:) - Disease Ontology
-- **MPATHTerm** (MPATH:) - Mouse pathology
+For gene or allele identity, use a compatible validator on the relevant detail or part. The allele validator accepts a mention such as an identifier, symbol, or short description; species and associated gene can provide context. It does not require a separate paper-quote field. Ambiguous descriptions may remain unresolved. See [allele validation](CUSTOM_OUTPUT_STRUCTURES.md#validate-an-allele).
 
-#### EXPERIMENTAL/CONDITION ONTOLOGIES (4 types)
-- **XCOTerm** (XCO:) - Experimental condition
-- **ZECOTerm** (ZECO:) - Zebrafish experimental condition
-- **CMOTerm** (CMO:) - Clinical measurement
-- **MMOTerm** (MMO:) - Measurement method
+The validator picker includes eligible custom validators as well as built-in choices. A custom validator must retain a supported validator contract; an arbitrary agent named “validator” is not sufficient. No stock, supplier, or catalog-number validator is currently provided.
 
-#### CELL/TISSUE ONTOLOGIES (2 types)
-- **CLTerm** (CL:) - Cell type
-- **BSPOTerm** (BSPO:) - Spatial ontology
-
-#### SEQUENCE/GENETICS ONTOLOGIES (5 types)
-- **SOTerm** (SO:) - Sequence ontology
-- **GENOTerm** (GENO:) - Genotype ontology
-- **MITerm** (MI:) - Molecular interaction
-- **ROTerm** (RO:) - Relation ontology
-- **RSTerm** (RS:) - Rat strain
-
-#### EVIDENCE/QUALITY ONTOLOGIES (3 types)
-- **ECOTerm** (ECO:) - Evidence code
-- **PATOTerm** (PATO:) - Quality/attribute
-- **OBITerm** (OBI:) - Biomedical investigation
-
-#### PATHWAY/PROCESS ONTOLOGIES (1 type)
-- **PWTerm** (PW:) - Pathway ontology
-
-#### TAXONOMY ONTOLOGIES (1 type)
-- **NCBITaxonTerm** (NCBITaxon:) - NCBI Taxonomy
-
-### Resolution Workflow
-
-When you request ontology term resolution, the agent:
-1. Uses exact CURIE lookup first when a CURIE is supplied
-2. Uses provider-scoped anatomy or life-stage lookup when organism/provider context is supplied
-3. Uses GO lookup for Gene Ontology labels, with `go_aspect` when known
-4. Uses typed label/synonym lookup only when an `ontology_term_type` is supplied
-5. Returns resolved values or preserves unresolved and ambiguous candidates for curator review
-
-## How Agents Work Together
-
-1. **You ask a question** - The system receives your natural language query
-2. **Supervisor routes the question** - Determines which specialist agent(s) can answer
-3. **Specialists retrieve data** - Each specialist queries its specific data source
-4. **Response is synthesized** - Results are combined into a comprehensive answer
-
-## Custom Agents (Agent Workshop)
-
-You can create your own customized versions of any system agent using the **Agent Workshop** in Agent Studio. Custom agents let you:
-
-- Start from a template, from scratch, or by cloning an existing custom agent
-- Edit instructions, choose a model, and attach tools from the tool library
-- Add per-group prompt overrides with version history and revert support
-- Share custom agents with your project or keep them private
-- Use custom agents in Curation Flows alongside system agents
-
-See **[Agent Studio](AGENT_STUDIO.md)** for details on Agent Workshop.
+Save the custom agent before using it in a flow. Existing flows and validator attachments keep their saved revisions when you later edit an agent. See [Agent Studio](AGENT_STUDIO.md) for sharing, versions, and draft recovery.
 
 ## Suggestions for New Agents
 
-Have an idea for a new agent or data source? Contact the development team - we're always looking to expand the system's capabilities based on curator needs.
+If a needed capability is missing, use the tool request option in Workshop or send feedback with an example task and the data source you need.

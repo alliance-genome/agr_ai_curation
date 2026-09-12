@@ -1,4 +1,9 @@
-"""Opus tool definitions and tab-scoping helpers for Agent Studio."""
+"""AI Chat tool definitions and tab-scoping helpers for Agent Studio.
+
+The module name remains a compatibility identifier for the shared hotfix.
+
+For a flow Run ID shown in the UI, use action="flow_run_traces" and flow_run_id to read its trace IDs from your owned saved chat run records. Follow next_call; then inspect those traces. This does not grant access to another curator's runs.
+"""
 
 from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional
@@ -8,8 +13,12 @@ from .logs import (
     ALLOWED_LOG_LEVELS as LOGS_API_ALLOWED_LOG_LEVELS,
 )
 from src.lib.agent_studio import ChatContext, SUBMIT_SUGGESTION_TOOL
+from src.lib.agent_studio.capability_catalog import CAPABILITY_KINDS
 from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.flow_tools import register_flow_tools
+from src.lib.agent_studio.workshop_authoring import WorkshopOperation
+from src.lib.agent_studio.saved_resource_inspection import SavedResourceInspection
+from src.lib.agent_studio.workshop_actions import WorkshopActionRequest
 from src.lib.chat_history_repository import (
     ALL_CHAT_KINDS_SENTINEL,
     ASSISTANT_CHAT_KIND,
@@ -19,6 +28,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_chat_history_page_size,
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
+    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_service_log_max_lines,
     get_agent_studio_service_log_max_lookback_minutes,
@@ -33,6 +43,8 @@ from src.lib.openai_agents.config import (
     get_domain_pack_validation_plan_max_limit,
     get_domain_runtime_inspection_default_limit,
     get_domain_runtime_inspection_max_limit,
+    get_tool_page_default_limit,
+    get_tool_page_max_limit,
 )
 
 
@@ -86,109 +98,176 @@ _AGGREGATE_PAGE_PROPERTIES = {
     },
 }
 
-# Convert tool definition to Anthropic format
-ANTHROPIC_SUGGESTION_TOOL = {
+# Keep the public tool schema independent of the provider runtime.
+SUGGESTION_TOOL = {
     "name": SUBMIT_SUGGESTION_TOOL["name"],
     "description": SUBMIT_SUGGESTION_TOOL["description"],
     "input_schema": SUBMIT_SUGGESTION_TOOL["input_schema"],
 }
 
-UPDATE_WORKSHOP_PROMPT_TOOL = {
-    "name": "update_workshop_prompt_draft",
-    "description": """Propose a prompt update for the current Agent Workshop draft.
-
-Use this when the curator asks you to rewrite, replace, or significantly refactor
-their editable workshop layers: the main/base prompt ("main") or selected group
-override ("group"). Backend-owned core/generated layers and inherited base prompts
-are read-only context and must not be copied into updated_prompt.
-This tool does NOT auto-apply or auto-save changes.
-The UI will show the proposal and require explicit curator approval before applying.
-The continuation result is a compact approval acknowledgment and the full proposal is
-delivered to the UI. For replace mode, updated_prompt remains in the retained tool
-input. For targeted-edit mode, only the authored edits remain there; after approval,
-use refresh_workshop_prompt chunks to read the exact resulting text when needed. Do
-not replay the same proposal in another call while approval is pending.
-Before proposing edits about PDF evidence extraction, inspect current prompt and
-tool schemas so the update preserves span-id evidence recording instead of
-legacy quote-generation guidance.
-""",
+SEARCH_STUDIO_CAPABILITIES_TOOL = {
+    "name": "search_studio_capabilities",
+    "description": (
+        "Search the live, authenticated Agent Studio catalog before selecting "
+        "agents, models, tools, output contracts, flow templates, or groups. "
+        "Results use stable IDs and include an exact-detail continuation call."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "target_prompt": {
-                "type": "string",
-                "enum": ["main", "group"],
-                "description": "Which editable workshop layer to update. Use 'main' for the main/base prompt and 'group' for the selected group prompt override.",
-                "default": "main",
-            },
-            "target_group_id": {
-                "type": "string",
-                "description": "Optional group ID when target_prompt='group' (for example 'WB'). Must match the currently selected group in Agent Workshop.",
-            },
-            "updated_prompt": {
-                "type": "string",
-                "description": "Complete replacement prompt text (required when apply_mode='replace').",
-            },
-            "edits": {
+            "query": {"type": "string", "description": "Optional text search."},
+            "kinds": {
                 "type": "array",
-                "description": "Targeted edit operations (required when apply_mode='targeted_edit').",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "operation": {
-                            "type": "string",
-                            "enum": ["replace_text", "replace_section"],
-                            "description": "Edit operation type.",
-                        },
-                        "find_text": {
-                            "type": "string",
-                            "description": "Text to find when operation='replace_text'.",
-                        },
-                        "replacement_text": {
-                            "type": "string",
-                            "description": "Replacement text for the operation.",
-                        },
-                        "occurrence": {
-                            "type": "string",
-                            "enum": ["first", "last", "all"],
-                            "description": "Which occurrence to replace for replace_text (default: first).",
-                        },
-                        "section_heading": {
-                            "type": "string",
-                            "description": "Markdown section heading text to replace when operation='replace_section'.",
-                        },
-                    },
-                    "required": ["operation"],
-                },
+                "items": {"type": "string", "enum": list(CAPABILITY_KINDS)},
+                "description": "Optional capability kinds to include.",
             },
-            "change_summary": {
+            "cursor": {"type": "string", "description": "Paging cursor from next_call."},
+            "catalog_fingerprint": {
                 "type": "string",
-                "description": "Optional short summary of what changed and why.",
+                "description": "Fingerprint from the first page; required by continuation calls.",
             },
-            "apply_mode": {
-                "type": "string",
-                "enum": ["replace", "targeted_edit"],
-                "description": "How to build the proposed update.",
-                "default": "replace",
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": get_tool_page_max_limit(),
+                "default": min(get_tool_page_default_limit(), get_tool_page_max_limit()),
             },
         },
         "required": [],
     },
 }
 
-ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = UPDATE_WORKSHOP_PROMPT_TOOL
+INSPECT_SAVED_STUDIO_RESOURCE_TOOL = {
+    "name": "inspect_saved_studio_resource",
+    "description": (
+        "Read authorized saved database records without changing or opening an editor. "
+        "list_flows searches your saved flows by name; flow reads one exact owned saved flow. "
+        "agent_revisions lists accessible immutable custom-agent revisions; agent_revision reads "
+        "the exact saved prompt, model, tools, output and access settings for a revision. "
+        "For custom agents use sections instructions (editable text), prompt_manifest (all frozen base/core layers), tools, group_prompts (optionally group_id), "
+        "output_profile and settings instead of built-in-only prompt/inventory lookups. "
+        "Large sections return JSON text pages: concatenate content ranges and follow next_call "
+        "until complete=true. Each page reauthorizes access and verifies content_hash. "
+        "Use a Flow step's exact revision pin when explaining its behavior, never today's head. "
+        "Use get_current_flow or refresh_workshop_prompt for unsaved edits. Follow next_call. "
+        "Compare records to explain changes; these reads never restore, save, retarget or execute work."
+    ),
+    "input_schema": SavedResourceInspection.model_json_schema(),
+}
+
+WORKSHOP_ACTION_TOOL = {
+    "name": "request_workshop_action",
+    "description": (
+        "Offer a curator a direct button to open an owned custom agent for editing, start a scratch/template/clone draft, "
+        "open a Workshop section, open the explicit Save/Save As dialog, or review a saved agent back in its flow. "
+        "Discover the source agent in the authorized catalog first. When editing from a flow, use its exact node_id; "
+        "the return path preserves that step instead of adding a duplicate. Opening edits the current saved agent, "
+        "which may be newer than the flow's pinned revision; explain this distinction. "
+        "show_section supports setup, output_structure, prompt, tools, versions, tool_request and manage. "
+        "These actions never save or delete data themselves and preserve the existing unsaved-changes guard. "
+        "After the curator clicks, inspect the fresh Workshop context before proposing edits. Do not claim the action "
+        "already happened. Use propose_workshop_draft_update for field, part, prompt, model, tool or validator changes."
+    ),
+    "input_schema": WorkshopActionRequest.model_json_schema(),
+}
+
+GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
+    "name": "get_studio_capability_detail",
+    "description": (
+        "Reauthorize one catalog result and retrieve its exact hash-addressed "
+        "detail inline when it fits, otherwise in bounded chunks. Follow next_call only when detail is incomplete."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": list(CAPABILITY_KINDS)},
+            "resource_id": {"type": "string"},
+            "catalog_fingerprint": {"type": "string"},
+            "detail_hash": {"type": "string"},
+            "start": {"type": "integer", "minimum": 0},
+            "max_chars": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": get_agent_studio_provider_tool_result_inline_max_chars(),
+            },
+        },
+        "required": ["kind", "resource_id", "catalog_fingerprint"],
+    },
+}
+
+_WORKSHOP_OPERATION_SCHEMA = WorkshopOperation.model_json_schema()
+_WORKSHOP_OPERATION_DEFINITIONS = _WORKSHOP_OPERATION_SCHEMA.pop("$defs", {})
+
+INSPECT_WORKSHOP_PROFILE_TOOL = {
+    "name": "inspect_workshop_profile",
+    "description": (
+        "Read the active unsaved Output Structure, list accessible saved profiles, or read an exact saved revision. "
+        "validator_options discovers authorized built-in/package and eligible saved Workshop custom validators for each detail or part. It returns compatible input_paths, display names, origin, exact capability_ref/fingerprint and custom revision pins; it does not attach validators. "
+        "preview generates neutral placeholder attributes, never paper evidence. Follow next_cursor using after. "
+        "current includes every current display_name, description, key, parent/part value_schema, required and nullable setting. "
+        "Resolve user-facing names within their parent group to canonical field_path keys before proposing edits. "
+        "These reads never select, modify or save a profile."
+    ),
+    "input_schema": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "action": {"type": "string", "enum": ["current", "list_saved", "saved_revision", "validator_options", "preview"]},
+            "profile_id": {"type": "string"}, "revision": {"type": "integer", "minimum": 1},
+            "after": {"type": "string"},
+        },
+        "required": ["action"],
+    },
+}
+
+PROPOSE_WORKSHOP_TOOL = {
+    "name": "propose_workshop_draft_update",
+    "description": (
+        "Compile complete, read-only Workshop draft proposals from semantic edits. "
+        "Use for clear build/configure/edit requests without preliminary permission. "
+        "Discover current authorized models/tools/outputs/groups through the live catalog. "
+        "Preserve unrelated fields; clear_output explicitly chooses no structured output. "
+        "Curators review and Apply locally, then separately Save. edit_profile supplies "
+        "typed item guidance, details, parts, canonical field paths, source labels and exact "
+        "validator mappings. Use inspect_workshop_profile(validator_options) first; set_mapping attaches or edits by mapping_id with the exact returned capability_ref/fingerprint and input slot/field_path. remove_mapping removes only its mapping_id. A part maps its own canonical path; sibling parts and parent mappings stay unchanged. Never replace a returned custom revision pin with a current head. Select profile_bound_generic first; set basics before fields. "
+        "For add_field/reorder_fields, field_path identifies the parent (empty means root); "
+        "other field actions identify the field. update_basics/basics_update changes only supplied "
+        "name/description. update_field/field_update changes only supplied display_name, description, "
+        "required (Always include), nullable (Allow an empty answer), or value_schema. "
+        "Omit unchanged settings; false and empty text are valid changes, null is not. "
+        "The profile description supplements the saved agent prompt during extraction. "
+        "Keep one item type, one answer per detail, and only scalar/enum parts inside an object. "
+        "Do not create arrays, repeating groups or groups within parts. Preserve existing saved "
+        "shapes during unrelated edits. replace_field replaces its complete definition. "
+        "Reuse a saved structure with select_output and the output_resource_id returned by "
+        "inspect_workshop_profile(saved_revision); the backend reauthorizes that exact revision. "
+        "Never infer semantic validators by name or save on behalf of the curator."
+    ),
+    "input_schema": {
+        "type": "object",
+        "$defs": _WORKSHOP_OPERATION_DEFINITIONS,
+        "properties": {
+            "base_draft_fingerprint": {"type": "string"},
+            "operations": {"type": "array", "items": _WORKSHOP_OPERATION_SCHEMA},
+            "assumptions": {"type": "array", "items": {"type": "string"}},
+            "change_summary": {"type": "string"},
+        },
+        "required": ["base_draft_fingerprint", "operations"],
+        "additionalProperties": False,
+    },
+}
 
 REFRESH_WORKSHOP_PROMPT_TOOL = {
     "name": "refresh_workshop_prompt",
     "description": """Inspect the exact current Agent Workshop prompt before reviewing it.
 
-Use this before commenting on the current Agent Workshop prompt text, especially
+Use this before commenting on current Agent Workshop prompt text or metadata, especially
 after the curator saves manual edits or asks whether a typo, schema issue, or
 prompt-quality concern is fixed. Treat older chat history and version snapshots
 as historical after this tool returns. Omit start for a content-free identity,
 hash, length, and freshness summary. Then follow next_call with its prompt_hash,
 start, and max_chars until complete=true to reconstruct the exact prompt. Pair
-this with get_tool_inventory and get_tool_details before advising on
+Use target_prompt="metadata" to reconstruct exact authoring fields when the
+system-context metadata preview is incomplete. Pair this with get_tool_inventory and get_tool_details before advising on
 document/evidence tool instructions.
 """,
     "input_schema": {
@@ -196,13 +275,13 @@ document/evidence tool instructions.
         "properties": {
             "target_prompt": {
                 "type": "string",
-                "enum": ["main", "group"],
-                "description": "Refresh the main prompt or the currently selected group prompt.",
+                "enum": ["main", "group", "metadata"],
+                "description": "Refresh the main prompt, a captured group override, or the exact non-prompt Workshop authoring metadata.",
                 "default": "main",
             },
             "target_group_id": {
                 "type": "string",
-                "description": "Optional group ID when target_prompt='group'. Defaults to the selected Agent Workshop group.",
+                "description": "Optional group ID when target_prompt='group'. Defaults to the selected group; any group listed in the Workshop context's Group override IDs may be inspected directly.",
             },
             "prompt_hash": {
                 "type": "string",
@@ -222,8 +301,6 @@ document/evidence tool instructions.
         "required": [],
     },
 }
-
-ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL = REFRESH_WORKSHOP_PROMPT_TOOL
 
 REPORT_TOOL_FAILURE_TOOL = {
     "name": "report_tool_failure",
@@ -265,8 +342,6 @@ Do NOT use this for user input errors (e.g., invalid gene names, malformed IDs).
         "required": ["tool_name", "error_message", "error_type"],
     },
 }
-
-ANTHROPIC_REPORT_TOOL_FAILURE_TOOL = REPORT_TOOL_FAILURE_TOOL
 
 CHAT_HISTORY_TOOL_CHAT_KINDS = [
     ASSISTANT_CHAT_KIND,
@@ -1052,6 +1127,10 @@ GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
                 "type": "string",
                 "description": "Optional agent ID whose domain pack should be inspected.",
             },
+            "agent_revision_id": {
+                "type": "string",
+                "description": "Exact saved custom-agent revision UUID. Use the Flow node's pin; omit only to select today's authorized head. Returned detail requests retain the selected revision.",
+            },
             "domain_pack_id": {
                 "type": "string",
                 "description": "Optional domain pack ID to inspect directly.",
@@ -1089,7 +1168,7 @@ GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
             },
             "state": {
                 "type": "string",
-                "enum": ["active", "under_development"],
+                "enum": ["active", "under_development", "unavailable"],
                 "description": "Exact validator or binding state filter.",
             },
             "query": {
@@ -1241,8 +1320,9 @@ TOOL_METADATA_TOOLS = {
     "get_tool_details",
 }
 WORKSHOP_TOOLS = {
+    "inspect_workshop_profile",
     "refresh_workshop_prompt",
-    "update_workshop_prompt_draft",
+    "propose_workshop_draft_update",
 }
 TRACE_TOOLS = {
     "search_traces",
@@ -1265,7 +1345,7 @@ TRACE_TOOLS = {
     "get_service_logs",
 }
 FLOW_TOOLS = {
-    "create_flow",
+    "propose_flow_draft_update",
     "validate_flow",
     "get_flow_templates",
     "get_current_flow",
@@ -1277,16 +1357,33 @@ FLOW_TOOLS = {
     "get_current_flow_validation_schedule",
     "get_available_agents",
 }
-AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
+FLOW_CREATION_TOOLS = {
+    "propose_flow_draft_update",
+    "validate_flow",
+    "get_flow_templates",
+    "get_available_agents",
+}
+SOURCE_INSPECTION_TOOLS = {
     "search_codebase",
     "read_source_file",
 }
+SAVED_RESOURCE_TOOLS = {"inspect_saved_studio_resource"}
+WORKSHOP_ACTION_TOOLS = {"request_workshop_action"}
+CAPABILITY_CATALOG_TOOLS = {
+    "search_studio_capabilities",
+    "get_studio_capability_detail",
+}
 
 _BUILTIN_OPUS_TOOLS = (
-    ANTHROPIC_SUGGESTION_TOOL,
-    ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL,
-    ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
-    ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
+    SUGGESTION_TOOL,
+    INSPECT_SAVED_STUDIO_RESOURCE_TOOL,
+    WORKSHOP_ACTION_TOOL,
+    SEARCH_STUDIO_CAPABILITIES_TOOL,
+    GET_STUDIO_CAPABILITY_DETAIL_TOOL,
+    REFRESH_WORKSHOP_PROMPT_TOOL,
+    PROPOSE_WORKSHOP_TOOL,
+    INSPECT_WORKSHOP_PROFILE_TOOL,
+    REPORT_TOOL_FAILURE_TOOL,
     LIST_RECENT_CHATS_TOOL,
     SEARCH_CHAT_HISTORY_TOOL,
     GET_CHAT_CONVERSATION_TOOL,
@@ -1370,10 +1467,12 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
     """Check whether a tool is allowed for the current tab/context."""
 
     active_tab = get_active_tab(context)
-    has_trace = bool(context and context.trace_id)
 
     if tool_name in COMMON_TOOLS:
         return True
+
+    if tool_name in CAPABILITY_CATALOG_TOOLS:
+        return active_tab in {"agents", "flows", "agent_workshop"}
 
     if tool_name in DOMAIN_ENVELOPE_TOOLS:
         return active_tab in {"agents", "flows", "agent_workshop"}
@@ -1382,16 +1481,26 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
         return active_tab == "agent_workshop" and bool(context and context.agent_workshop)
 
     if tool_name in FLOW_TOOLS:
-        return active_tab == "flows"
+        return bool(
+            active_tab == "flows"
+            and (
+                tool_name in FLOW_CREATION_TOOLS
+                or bool(context and context.flow_definition)
+            )
+        )
 
-    if tool_name in AGENTS_ONLY_DIAGNOSTIC_TOOLS or tool_name in _package_agent_only_diagnostic_tools():
+    if tool_name in SOURCE_INSPECTION_TOOLS or tool_name in SAVED_RESOURCE_TOOLS or tool_name in WORKSHOP_ACTION_TOOLS:
+        return active_tab in {"agents", "flows", "agent_workshop"}
+
+    if tool_name in _package_agent_only_diagnostic_tools():
         return active_tab == "agents"
 
     if tool_name == "get_prompt" or tool_name in TOOL_METADATA_TOOLS:
         return active_tab in {"agents", "flows", "agent_workshop"}
 
     if tool_name in TRACE_TOOLS:
-        return active_tab == "agents" or has_trace
+        # Trace reads enforce caller ownership downstream; tab selection is not authorization.
+        return active_tab in {"agents", "flows", "agent_workshop"}
 
     # Unknown/legacy tools are left to existing handlers and validation paths.
     return True
@@ -1419,7 +1528,7 @@ def get_all_opus_tools(
     is_allowed: Callable[[str, Optional[ChatContext]], bool] = is_tool_allowed_for_context,
 ) -> List[dict]:
     """
-    Get all tools available to Opus in Anthropic format.
+    Get all tools available to Agent Studio AI Chat.
 
     Combines the suggestion tool, workflow analysis tools, and diagnostic tools.
     """
@@ -1444,6 +1553,6 @@ def get_all_opus_tools(
             }
         )
     tools.extend(diagnostic_tools)
-    logger.debug("Loaded %s diagnostic tools for Opus", len(diagnostic_tools))
+    logger.debug("Loaded %s diagnostic tools for Agent Studio AI Chat", len(diagnostic_tools))
 
     return tools

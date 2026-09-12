@@ -11,12 +11,16 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
+from src.lib.curation_workspace.execution_contracts import resolve_manual_candidate_receipt, profiled_draft_payload, resolve_receipt_profile
 
 from src.lib.domain_envelopes.patches import (
     EnvelopeFieldPatch,
     EnvelopeFieldPatchOperation,
     EnvelopeFieldPatchStatus,
     apply_curator_field_patch,
+    set_payload_value,
+    is_generic_attribute_path,
 )
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
@@ -405,7 +409,13 @@ def create_manual_candidate(
             detail="adapter_key must match the session adapter",
         )
 
+    receipt = resolve_manual_candidate_receipt(session_row, request.agent_revision_id)
     field_inputs = _manual_candidate_field_inputs(request.draft.fields)
+    normalized_payload = _manual_candidate_normalized_payload(field_inputs)
+    if receipt is not None:
+        profiled_payload = profiled_draft_payload(db, receipt, field_inputs)
+        if profiled_payload is not None:
+            normalized_payload = profiled_payload
     evidence_inputs = _manual_candidate_evidence_inputs(request.evidence_anchors)
     available_field_keys = {
         field_input.field_key
@@ -446,7 +456,9 @@ def create_manual_candidate(
         secondary_label=None,
         conversation_summary=None,
         extraction_result_id=None,
-        normalized_payload=_manual_candidate_normalized_payload(field_inputs),
+        agent_revision_id=receipt.agent_revision_id if receipt else None,
+        execution_receipt=receipt.model_dump(mode="json") if receipt else None,
+        normalized_payload=normalized_payload,
         candidate_metadata={},
         created_at=now,
         updated_at=now,
@@ -613,6 +625,12 @@ def update_candidate_draft(
             draft_fields[field_position] = next_field
             changed_field_keys.append(current_field.field_key)
 
+    manual_profile_payload = None
+    if candidate.source == CurationCandidateSource.MANUAL and candidate.execution_receipt is not None:
+        manual_profile_payload = profiled_draft_payload(
+            db, AgentExecutionReceipt.model_validate(candidate.execution_receipt), draft_fields,
+        )
+
     notes_changed = (
         "notes" in request.model_fields_set
         and request.notes != draft_row.notes
@@ -639,6 +657,8 @@ def update_candidate_draft(
         draft_materialized_to_envelope = True
 
     if not draft_materialized_to_envelope:
+        if manual_profile_payload is not None:
+            candidate.normalized_payload = manual_profile_payload
         draft_row.fields = [
             field.model_dump(mode="json")
             for field in draft_fields
@@ -734,6 +754,12 @@ def _materialize_candidate_draft_changes_into_envelope(
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    receipt = (
+        AgentExecutionReceipt.model_validate(envelope_row.execution_receipt)
+        if envelope_row.execution_receipt is not None else None
+    )
+    profile = resolve_receipt_profile(db, receipt) if receipt is not None else None
+    profile_bound = profile is not None
     domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
     if domain_pack is None:
         raise HTTPException(
@@ -757,7 +783,7 @@ def _materialize_candidate_draft_changes_into_envelope(
     for field_key in changed_field_keys:
         draft_field = field_by_key[field_key]
         field_path = _draft_field_projection_paths(draft_field)[0]
-        materialized_value = _draft_field_materialized_value(draft_field)
+        materialized_value = _draft_field_materialized_value(draft_field, profile_bound=profile_bound)
         current_object = _envelope_object_by_stable_id(working_envelope, object_id)
         if current_object is None:
             raise HTTPException(
@@ -780,6 +806,7 @@ def _materialize_candidate_draft_changes_into_envelope(
             ),
             current_revision=current_revision,
             actor_id=actor["actor_id"],
+            profile=profile,
         )
         if patch_result.status is EnvelopeFieldPatchStatus.STALE_REVISION:
             raise HTTPException(
@@ -796,11 +823,20 @@ def _materialize_candidate_draft_changes_into_envelope(
         for projected_field_path in _draft_field_materializes_to_paths(draft_field):
             if projected_field_path == field_path:
                 continue
-            _ensure_domain_pack_declares_field_path(
-                domain_pack,
-                object_type=domain_object.object_type,
-                field_path=projected_field_path,
-            )
+            if profile is not None and is_generic_attribute_path(projected_field_path):
+                projected_object = _envelope_object_by_stable_id(working_envelope, object_id)
+                assert projected_object is not None
+                profile.patch_attributes(
+                    projected_object.payload.get("attributes", {}),
+                    [{"field_path": projected_field_path, "value": materialized_value}],
+                    candidate_id=object_id,
+                )
+            else:
+                _ensure_domain_pack_declares_field_path(
+                    domain_pack,
+                    object_type=domain_object.object_type,
+                    field_path=projected_field_path,
+                )
             working_envelope = _replace_envelope_object_payload_value(
                 working_envelope,
                 object_id=object_id,
@@ -897,6 +933,8 @@ def patch_envelope_field(
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
     previous_revision = envelope_row.revision
+    receipt = AgentExecutionReceipt.model_validate(envelope_row.execution_receipt) if envelope_row.execution_receipt is not None else None
+    profile = resolve_receipt_profile(db, receipt) if receipt is not None else None
     domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
     if domain_pack is None:
         raise HTTPException(
@@ -923,6 +961,7 @@ def patch_envelope_field(
         EnvelopeFieldPatch(**patch_payload),
         current_revision=previous_revision,
         actor_id=_actor_claims_payload(actor_claims)["actor_id"],
+        profile=profile,
     )
 
     if patch_result.status is EnvelopeFieldPatchStatus.STALE_REVISION:
@@ -1612,8 +1651,14 @@ def _draft_field_materializes_to_paths(
     )
 
 
-def _draft_field_materialized_value(draft_field: CurationDraftFieldSchema) -> Any:
+def _draft_field_materialized_value(
+    draft_field: CurationDraftFieldSchema, *, profile_bound: bool = False,
+) -> Any:
     value = copy.deepcopy(draft_field.value)
+    if profile_bound:
+        # The saved closed profile validates the original JSON kind at the
+        # checkpoint. Presentation metadata must not coerce it before that gate.
+        return value
     field_type = (draft_field.field_type or "").strip().lower()
     if field_type == "integer":
         return _coerce_integer_draft_value(draft_field.field_key, value)
@@ -1701,7 +1746,7 @@ def _replace_envelope_object_payload_value(
 
     payload = copy.deepcopy(domain_object.payload)
     try:
-        _set_payload_value(payload, field_path, value)
+        set_payload_value(payload, field_path, value)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1713,47 +1758,6 @@ def _replace_envelope_object_payload_value(
         update={"payload": payload}
     )
     return envelope.model_copy(update={"extracted_objects": updated_objects})
-
-
-def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> None:
-    parts = parse_field_path(field_path)
-    current: Any = payload
-    for index, part in enumerate(parts[:-1]):
-        next_part = parts[index + 1]
-        if isinstance(part, str):
-            if not isinstance(current, dict):
-                raise ValueError(f"Cannot set '{field_path}' through non-object parent")
-            if part not in current or current[part] is None:
-                current[part] = [] if isinstance(next_part, int) else {}
-            current = current[part]
-            continue
-        if not isinstance(current, list) or isinstance(
-            current, (str, bytes, bytearray)
-        ):
-            raise ValueError(f"Cannot set '{field_path}' through non-array parent")
-        if part == len(current):
-            current.append([] if isinstance(next_part, int) else {})
-        if part >= len(current):
-            raise ValueError(
-                f"Cannot set '{field_path}' because a list index is missing"
-            )
-        current = current[part]
-
-    final_part = parts[-1]
-    if isinstance(final_part, str):
-        if not isinstance(current, dict):
-            raise ValueError(f"Cannot set '{field_path}' on non-object parent")
-        current[final_part] = value
-        return
-
-    if not isinstance(current, list) or isinstance(current, (str, bytes, bytearray)):
-        raise ValueError(f"Cannot set '{field_path}' on non-array parent")
-    if final_part == len(current):
-        current.append(value)
-        return
-    if final_part >= len(current):
-        raise ValueError(f"Cannot set '{field_path}' because a list index is missing")
-    current[final_part] = value
 
 
 def _dot_numeric_path_to_brackets(path: str) -> str:
@@ -2123,6 +2127,14 @@ def _reset_candidate_state(
                 next_field_payload["evidence_anchor_ids"] = remaining_anchor_ids
                 draft_fields_changed = True
             updated_fields.append(next_field_payload)
+
+        if candidate.source == CurationCandidateSource.MANUAL and candidate.execution_receipt is not None:
+            reset_payload = profiled_draft_payload(
+                db, AgentExecutionReceipt.model_validate(candidate.execution_receipt),
+                [CurationDraftFieldSchema.model_validate(field) for field in updated_fields],
+            )
+            if reset_payload is not None:
+                candidate.normalized_payload = reset_payload
 
         if draft.notes is not None:
             draft.notes = None

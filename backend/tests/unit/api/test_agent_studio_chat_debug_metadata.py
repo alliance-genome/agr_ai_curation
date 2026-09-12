@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 from src.api import agent_studio as api_module
+from src.lib.agent_studio.authoring_context import workshop_draft_fingerprint
 from src.lib.agent_studio.models import AgentWorkshopContext, ChatContext, ChatMessage
 
 
@@ -39,6 +40,19 @@ def test_user_debug_payload_summarizes_workshop_prompts_without_raw_text(monkeyp
         user_message="Review my draft",
         requested_context_session_id="agent-studio-session-1",
     )
+    workshop = AgentWorkshopContext(
+        template_source="gene",
+        template_name="Gene Specialist",
+        custom_agent_id=f"ca_{custom_agent_uuid}",
+        custom_agent_name="My Gene Agent",
+        selected_group_id="WB",
+        prompt_draft="Saved main prompt",
+        selected_group_prompt_draft="Changed WB draft",
+        draft_is_dirty=True,
+        custom_agent_updated_at=saved_updated_at.isoformat(),
+        draft_tool_ids=["agr_curation_query", "search_codebase"],
+    )
+    workshop.draft_fingerprint = workshop_draft_fingerprint(workshop)
     request = api_module.ChatRequest(
         messages=[ChatMessage(role="user", content="Review my draft")],
         context=ChatContext(
@@ -47,18 +61,7 @@ def test_user_debug_payload_summarizes_workshop_prompts_without_raw_text(monkeyp
             selected_group_id="WB",
             session_id="agent-studio-session-1",
             trace_id="trace-123",
-            agent_workshop=AgentWorkshopContext(
-                template_source="gene",
-                template_name="Gene Specialist",
-                custom_agent_id=f"ca_{custom_agent_uuid}",
-                custom_agent_name="My Gene Agent",
-                selected_group_id="WB",
-                prompt_draft="Saved main prompt",
-                selected_group_prompt_draft="Changed WB draft",
-                draft_is_dirty=True,
-                custom_agent_updated_at=saved_updated_at.isoformat(),
-                draft_tool_ids=["agr_curation_query", "search_codebase"],
-            ),
+            agent_workshop=workshop,
         ),
     )
 

@@ -4,14 +4,15 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 
-def test_submit_suggestion_direct_requires_anthropic_key(monkeypatch):
+def test_submit_suggestion_direct_requires_openai_key(monkeypatch):
     import src.api.agent_studio as api_module
 
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: None)
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -24,13 +25,13 @@ def test_submit_suggestion_direct_requires_anthropic_key(monkeypatch):
         )
 
     assert exc_info.value.status_code == 500
-    assert "Anthropic API key not configured" in str(exc_info.value.detail)
+    assert "OpenAI API key not configured" in str(exc_info.value.detail)
 
 
 def test_submit_suggestion_direct_rejects_invalid_system_agent(monkeypatch):
     import src.api.agent_studio as api_module
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(
         api_module,
         "set_global_user_from_cognito",
@@ -71,7 +72,7 @@ def test_submit_suggestion_direct_enqueues_background_job(monkeypatch):
             captured["func"] = func
             captured["kwargs"] = kwargs
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(
         api_module,
         "set_global_user_from_cognito",
@@ -112,7 +113,7 @@ def test_submit_suggestion_direct_enqueues_background_job(monkeypatch):
     }
     assert captured["kwargs"]["user_email"] == "curator@example.org"
     assert captured["kwargs"]["user_auth_sub"] == "auth-sub-1"
-    assert captured["kwargs"]["api_key"] == "test-key"
+    assert "api_key" not in captured["kwargs"]
     assert captured["kwargs"]["context"] == request.context
     assert captured["kwargs"]["messages"][0]["content"] == "Please help"
     assert captured["kwargs"]["messages"][-1]["content"].startswith(
@@ -125,20 +126,10 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
 
     notified = {}
     reported = []
-    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-opus-5")
+    async def _fake_forced_tool(**_kwargs):
+        return None
 
-    class _FakeMessagesClient:
-        @staticmethod
-        def create(**_kwargs):
-            return SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="No tool call happened")],
-            )
-
-    class _FakeAnthropicClient:
-        def __init__(self, **_kwargs):
-            self.messages = _FakeMessagesClient()
-
-    monkeypatch.setattr(api_module.anthropic, "Anthropic", _FakeAnthropicClient)
+    monkeypatch.setattr(api_module, "run_forced_agent_studio_tool", _fake_forced_tool)
     monkeypatch.setattr(
         api_module,
         "_send_error_notification_sns",
@@ -166,54 +157,36 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
             context=None,
             user_email="curator@example.org",
             user_auth_sub="auth-sub-1",
-            api_key="test-key",
         )
     )
 
     assert notified["user_email"] == "curator@example.org"
-    assert "did not call submit_prompt_suggestion" in notified["error_message"]
-    assert reported == [
-        {
-            "exc": "agent_studio_suggestion_missing_tool_use",
-            "task_name": "agent_studio.process_suggestion",
-            "tags": {
-                "component": "agent_studio",
-                "failure_stage": "missing_tool_use",
-            },
-            "context": {},
-        }
-    ]
+    assert "did not submit" in notified["error_message"]
+    assert reported[0]["task_name"] == "agent_studio.process_suggestion"
+    assert reported[0]["tags"] == {
+        "component": "agent_studio",
+        "failure_stage": "openai_agents_sdk",
+    }
 
 
-def test_process_suggestion_background_uses_opus_5_request_contract(monkeypatch):
+def test_process_suggestion_background_uses_openai_agents_sdk_contract(monkeypatch):
     import src.api.agent_studio as api_module
 
     captured = {}
-    monkeypatch.setenv("PROMPT_EXPLORER_MODEL_ID", "claude-opus-5")
-
-    class _FakeMessagesClient:
-        @staticmethod
-        def create(**kwargs):
-            captured["request"] = kwargs
-            return SimpleNamespace(
-                content=[
-                    SimpleNamespace(
-                        type="tool_use",
-                        name="submit_prompt_suggestion",
-                        input={"summary": "Focused request contract"},
-                    )
-                ],
-            )
-
-    class _FakeAnthropicClient:
-        def __init__(self, **_kwargs):
-            self.messages = _FakeMessagesClient()
+    async def _fake_forced_tool(**kwargs):
+        captured["request"] = kwargs
+        result = await kwargs["executor"](
+            "submit_prompt_suggestion",
+            {"summary": "Focused request contract"},
+            "call-1",
+        )
+        return SimpleNamespace(output=result.full_output)
 
     async def _fake_handle_tool_call(**kwargs):
         captured["tool_call"] = kwargs
         return {"success": True, "suggestion_id": "suggestion-1"}
 
-    monkeypatch.setattr(api_module.anthropic, "Anthropic", _FakeAnthropicClient)
+    monkeypatch.setattr(api_module, "run_forced_agent_studio_tool", _fake_forced_tool)
     monkeypatch.setattr(api_module, "_handle_tool_call", _fake_handle_tool_call)
 
     asyncio.run(
@@ -223,34 +196,96 @@ def test_process_suggestion_background_uses_opus_5_request_contract(monkeypatch)
             context=None,
             user_email="curator@example.org",
             user_auth_sub="auth-sub-1",
-            api_key="test-key",
         )
     )
 
     request = captured["request"]
-    assert request["model"] == "claude-opus-5"
-    assert request["max_tokens"] == 4096
-    assert request["system"] == "system"
-    assert request["messages"] == [{"role": "user", "content": "hello"}]
-    assert request["tools"] == [api_module.ANTHROPIC_SUGGESTION_TOOL]
-    assert request["tool_choice"] == {
-        "type": "tool",
-        "name": "submit_prompt_suggestion",
-    }
-    assert "thinking" not in request
-    assert "output_config" not in request
-    assert "temperature" not in request
-    assert "top_k" not in request
-    assert "top_p" not in request
+    assert request["instructions"] == "system"
+    assert request["input_items"] == [{"role": "user", "content": "hello"}]
+    assert request["tool_definition"] == api_module.SUGGESTION_TOOL
+    assert request["max_turns"] == api_module.get_agent_studio_suggestion_max_turns()
+    assert request["max_output_tokens"] == api_module.get_agent_studio_suggestion_max_output_tokens()
+    assert request["user_id"] == "auth-sub-1"
     assert captured["tool_call"]["tool_input"] == {
         "summary": "Focused request contract"
     }
 
 
+@pytest.mark.parametrize(
+    ("error", "expected_outcome"),
+    [
+        pytest.param("refusal", "refusal", id="refusal"),
+        pytest.param("incomplete", "incomplete", id="incomplete"),
+        pytest.param(
+            "context_overflow",
+            "context_overflow",
+            id="context-overflow",
+        ),
+    ],
+)
+def test_process_suggestion_background_does_not_report_typed_outcomes_as_crashes(
+    monkeypatch,
+    error,
+    expected_outcome,
+):
+    import src.api.agent_studio as api_module
+
+    provider_error = {
+        "refusal": api_module.ModelRefusalError("sensitive refusal"),
+        "incomplete": api_module.ModelBehaviorError(
+            "Responses stream ended with terminal event `response.incomplete`."
+        ),
+        "context_overflow": api_module.openai.BadRequestError(
+            "Sensitive request exceeded the context length token limit",
+            response=httpx.Response(
+                400,
+                request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+            ),
+            body={},
+        ),
+    }[error]
+    notifications = []
+    reports = []
+
+    async def _raise_typed_outcome(**_kwargs):
+        raise provider_error
+
+    monkeypatch.setattr(
+        api_module,
+        "run_forced_agent_studio_tool",
+        _raise_typed_outcome,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "report_background_task_exception",
+        lambda *args, **kwargs: reports.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "_send_error_notification_sns",
+        lambda *args: notifications.append(args),
+    )
+
+    asyncio.run(
+        api_module._process_suggestion_background(
+            messages=[{"role": "user", "content": "hello"}],
+            system_prompt="system",
+            context=None,
+            user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
+        )
+    )
+
+    assert reports == []
+    assert len(notifications) == 1
+    assert expected_outcome.replace("_", " ") in notifications[0][1]
+    assert "sensitive" not in notifications[0][1].lower()
+
+
 def test_submit_suggestion_direct_sanitizes_unexpected_errors(monkeypatch, caplog):
     import src.api.agent_studio as api_module
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(
         api_module,
         "set_global_user_from_cognito",

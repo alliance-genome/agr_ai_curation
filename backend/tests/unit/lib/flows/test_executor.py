@@ -1,5 +1,6 @@
 """Tests for flow executor custom_instructions wiring."""
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 import importlib
 import json
@@ -3633,7 +3634,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert selector_findings == []
         assert [entry["status"] for entry in metadata] == [
             "group_scope_eligible",
-            "already_validated",
+            "already_checked",
         ]
         assert metadata[0]["group_scope_audit"]["group_context_identity"] == (
             '["MGI","ZFIN"]'
@@ -3751,7 +3752,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "group_id": "automatic-lookup",
                 "state": "automatic",
                 "validator_binding_id": "fixture.identifier_lookup",
-                "status": "already_validated",
+                "status": "already_checked",
             }
         ]
 
@@ -5146,7 +5147,7 @@ class TestGetAllAgentToolsCreatedNames:
         assert "ask_pdf_step1_specialist" not in created_names
         assert "ask_pdf_step3_specialist" not in created_names
 
-    @patch("src.lib.flows.executor.get_agent_metadata")
+    @patch("src.lib.flows.executor._runtime_custom_entries")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_custom_agent_tool_names_are_sanitized(
@@ -5154,23 +5155,30 @@ class TestGetAllAgentToolsCreatedNames:
     ):
         """Custom agent IDs with hyphens should be normalized for tool naming."""
         custom_id = "ca_11111111-2222-3333-4444-555555555555"
-        mock_get_agent_metadata.return_value = {
+        mock_get_agent_metadata.return_value = {"n1": {
             "agent_id": custom_id,
+            "name": "Doug's Gene Agent",
             "display_name": "Doug's Gene Agent",
             "description": "Custom gene agent",
             "requires_document": False,
             "required_params": [],
-        }
+            "execution_receipt": {"agent_revision_id": "11111111-2222-3333-4444-555555555555"},
+        }}
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
 
         flow = _make_flow([_agent_node("n1", custom_id)])
-        tools, created_names = get_all_agent_tools(flow)
+        tools, created_names = get_all_agent_tools(
+            flow, db_user_id=7, model_id_override="flow-model", model_provider_override="openai",
+        )
 
         assert len(tools) == 1
         assert "ask_ca_11111111_2222_3333_4444_555555555555_specialist" in created_names
+        assert mock_get_agent.call_args.kwargs["db_user_id"] == 7
+        assert "model_id_override" not in mock_get_agent.call_args.kwargs
+        assert "model_provider_override" not in mock_get_agent.call_args.kwargs
 
-    @patch("src.lib.flows.executor.get_agent_metadata")
+    @patch("src.lib.flows.executor._runtime_custom_entries")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_empty_metadata_description_uses_fallback_tool_description(
@@ -5178,13 +5186,15 @@ class TestGetAllAgentToolsCreatedNames:
     ):
         """Empty metadata descriptions should fall back to 'Ask the <display_name>'."""
         custom_id = "ca_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        mock_get_agent_metadata.return_value = {
+        mock_get_agent_metadata.return_value = {"n1": {
             "agent_id": custom_id,
+            "name": "Gene Validation Agent (Custom)",
             "display_name": "Gene Validation Agent (Custom)",
             "description": "",
             "requires_document": False,
             "required_params": [],
-        }
+            "execution_receipt": {"agent_revision_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+        }}
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
 
@@ -5419,14 +5429,14 @@ class TestBackwardCompatibility:
 
 
 class TestCreateFlowSupervisorNoTools:
-    """Tests that create_flow_supervisor raises when all tools are skipped."""
+    """Unavailable steps remain visible for the executor's structured preflight failure."""
 
     @patch("src.lib.flows.executor.build_model_settings")
     @patch("src.lib.flows.executor.get_model_for_agent")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_raises_when_no_tools_created(
+    def test_preserves_unavailable_steps_when_no_tools_created(
         self,
         mock_get_agent,
         mock_streaming,
@@ -5435,7 +5445,7 @@ class TestCreateFlowSupervisorNoTools:
         mock_settings,
         monkeypatch,
     ):
-        """Should raise ValueError when all steps are skipped."""
+        """Even an all-unavailable flow reaches the actionable preflight outcome."""
         monkeypatch.setattr(
             "src.lib.flows.executor.get_agent_metadata",
             lambda agent_id: _metadata_from_registry(
@@ -5457,8 +5467,11 @@ class TestCreateFlowSupervisorNoTools:
             _agent_node("n2", "pdf_extraction", step_goal="Extract data"),
         ])
 
-        with pytest.raises(ValueError, match="no agent tools could be created"):
-            create_flow_supervisor(flow, document_id=None)  # No doc — both steps skipped
+        mock_model.return_value = "gpt-5.6-sol"
+        mock_settings.return_value = ModelSettings()
+        supervisor = create_flow_supervisor(flow, document_id=None)
+        assert len(supervisor._flow_unavailable_steps) == 2
+        assert supervisor.tools == []
 
     @patch("src.lib.flows.executor.build_model_settings")
     @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-5.6-sol")
@@ -5638,6 +5651,36 @@ class TestCreateFlowSupervisorNoTools:
 
 class TestExecuteFlowTermination:
     """Tests flow-level termination behavior for success and failure paths."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("agent_id,reason", [
+        ("pdf_extraction", "requires document"),
+        ("allele_validation", "attachment-only validator"),
+        ("missing_agent", "agent could not be resolved"),
+        ("broken_agent", "private configuration must not leak"),
+    ])
+    async def test_unavailable_step_fails_before_runner_or_formatter(self, monkeypatch, agent_id, reason):
+        flow = _make_flow([
+            _task_input_node(), _agent_node("n1", agent_id), _agent_node("n2", "chat_output"),
+        ])
+        original_definition = deepcopy(flow.flow_definition)
+        supervisor = SimpleNamespace(_flow_unavailable_steps=[{
+            "step": 1, "agent_id": agent_id, "agent_name": "Required step", "reason": reason,
+        }])
+        monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **kwargs: supervisor)
+        monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *args: "fixture")
+        monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_streamed",
+                            lambda **kwargs: pytest.fail("Invalid flow started the model"))
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        assert [event["type"] for event in events] == ["FLOW_STARTED", "FLOW_ERROR", "FLOW_FINISHED"]
+        assert events[1]["details"]["reason"] == "flow_step_unavailable"
+        assert "Documents" in events[1]["details"]["message"]
+        assert "validation attachments" in events[1]["details"]["message"]
+        assert reason not in str(events)
+        assert events[-1]["data"]["status"] == "failed"
+        assert events[-1]["data"]["output_status"] == "none"
+        assert events[-1]["data"]["output_count"] == 0
+        assert flow.flow_definition == original_definition
 
     @pytest.mark.asyncio
     async def test_stops_immediately_on_specialist_error(self, monkeypatch):
@@ -8607,7 +8650,9 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
         flow_name="Phenotype flow", artifacts=[FlowOutputArtifact(
             source_key="phenotypes", envelope_id="saved-envelope", object_count=82,
             rows_by_source={"object": rows, "evidence": [{"evidence.evidence_record_id": "evidence-81", "evidence.verified_quote": "Exact source quote"}],
-                            "validation_finding": [{"validation.message": "Requires review"}]},
+                            "validation_finding": [{"validation.message": "Requires review",
+                                "validation.candidate_matches": [{"value": "TEST:1", "label": "Possible match"}],
+                                "validation.target": {"object_id": "observation-81", "field_path": "attributes.identity"}}]},
         )], field_catalog=[FlowOutputField(ref="object.attribute.phenotype", label="Phenotype", row_source="object", value_type="string")],
     )
     monkeypatch.setattr(executor, "_build_terminal_flow_artifact_bundle", lambda **kwargs: bundle)
@@ -8657,5 +8702,7 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
     assert payload["rows"]["object"] == rows
     assert payload["rows"]["evidence"][0]["evidence.verified_quote"] == "Exact source quote"
     assert payload["rows"]["validation_finding"][0]["validation.message"] == "Requires review"
+    assert payload["rows"]["validation_finding"][0]["validation.candidate_matches"] == [{"value": "TEST:1", "label": "Possible match"}]
+    assert payload["rows"]["validation_finding"][0]["validation.target"]["object_id"] == "observation-81"
     assert payload["curator_output_request"]["custom_instructions"] == instructions
     assert captured["query"] == "Use the requested six columns"

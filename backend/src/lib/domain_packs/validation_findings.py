@@ -8,6 +8,7 @@ from hashlib import sha256
 from typing import Any, Iterable, Mapping, Sequence
 
 from src.schemas.domain_envelope import (
+    CuratableObjectStatus,
     DomainEnvelope,
     FieldRef,
     HistoryActorType,
@@ -98,9 +99,28 @@ def append_validation_findings_to_envelope(
             )
         )
 
+    # An individual resolved field cannot certify an object with other open
+    # findings. This boundary also covers selector failures without dispatch.
+    objects = []
+    for obj in envelope.extracted_objects:
+        has_open_finding = False
+        for finding in existing_findings:
+            ref = finding.field_ref.object_ref if finding.field_ref else finding.object_ref
+            if (finding.status is ValidationFindingStatus.OPEN and ref is not None
+                    and ref.object_type == obj.object_type
+                    and (ref.object_id is not None or ref.pending_ref_id is not None)
+                    and (ref.object_id is None or ref.object_id == obj.object_id)
+                    and (ref.pending_ref_id is None or ref.pending_ref_id == obj.pending_ref_id)):
+                has_open_finding = True
+                break
+        if obj.status is CuratableObjectStatus.VALIDATED and has_open_finding:
+            obj = obj.model_copy(update={"status": CuratableObjectStatus.NEEDS_REVIEW})
+        objects.append(obj)
+
     return (
         envelope.model_copy(
             update={
+                "extracted_objects": objects,
                 "validation_findings": existing_findings,
                 "history": history_events,
             }

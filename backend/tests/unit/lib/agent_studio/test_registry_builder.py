@@ -69,7 +69,7 @@ class TestBuildConfigDefaults:
     def test_returns_multiple_non_default_values(self):
         """When multiple values differ, include all of them."""
         config = ModelConfig(
-            model="claude-3-opus",
+            model="gpt-5.6-sol",
             temperature=0.5,
             reasoning="low",
         )
@@ -77,7 +77,7 @@ class TestBuildConfigDefaults:
         result = _build_config_defaults(config)
 
         assert result == {
-            "model": "claude-3-opus",
+            "model": "gpt-5.6-sol",
             "temperature": 0.5,
             "reasoning": "low",
         }
@@ -203,15 +203,15 @@ class TestAgentDocumentationCoverage:
             assert registry.get(canonical_id) is not None
             assert registry.get(alias) is None
 
-    def test_supervisor_declares_medium_reasoning_default(self, monkeypatch):
-        """Supervisor reasoning should not inherit the low global agent default."""
+    def test_supervisor_declares_low_reasoning_default(self, monkeypatch):
+        """The supervisor declaration overrides the global reasoning default."""
         monkeypatch.delenv("AGENT_SUPERVISOR_REASONING", raising=False)
-        monkeypatch.setenv("DEFAULT_AGENT_REASONING", "low")
+        monkeypatch.setenv("DEFAULT_AGENT_REASONING", "high")
         agent_loader.reset_cache()
 
         registry = build_agent_registry()
 
-        assert registry["supervisor"]["config_defaults"]["reasoning"] == "medium"
+        assert registry["supervisor"]["config_defaults"]["reasoning"] == "low"
 
         agent_loader.reset_cache()
 

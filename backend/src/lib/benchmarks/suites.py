@@ -212,6 +212,11 @@ def resolve_suite(
                         for slot, route in cell_routes.items()
                     },
                 }
+                if target.source_execution_receipts:
+                    identity["source_execution_receipts"] = {
+                        slot: receipt.model_dump(mode="json")
+                        for slot, receipt in target.source_execution_receipts.items()
+                    }
                 cells.append(
                     ResolvedBenchmarkCell(
                         cell_id=_digest(identity),
@@ -222,6 +227,7 @@ def resolve_suite(
                         input=case.input,
                         user_query=case.user_query,
                         routes=cell_routes,
+                        source_execution_receipts=target.source_execution_receipts,
                     )
                 )
 

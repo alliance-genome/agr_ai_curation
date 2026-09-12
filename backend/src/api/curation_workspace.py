@@ -142,6 +142,7 @@ from src.schemas.curation_workspace import (
     DomainEnvelopeReviewRowsResponse,
 )
 from src.services.user_service import set_global_user_from_cognito
+from src.lib.agent_studio.profile_conformance import ProfileConformanceError, ProfileIdentityError
 
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,16 @@ def _run_curation_mutation(
         result = mutation()
         db.commit()
         return result
+    except (ProfileConformanceError, ProfileIdentityError) as exc:
+        if db.in_transaction():
+            db.rollback()
+        detail: dict[str, object] = {
+            "code": "output_structure_conformance" if isinstance(exc, ProfileConformanceError) else "output_structure_identity",
+            "message": str(exc),
+        }
+        if isinstance(exc, ProfileConformanceError):
+            detail["findings"] = exc.issues
+        raise HTTPException(status_code=422, detail=detail) from exc
     except RejectedEnvelopeFieldPatchError:
         # Rejected patches intentionally retain their checkpoint and audit row.
         try:
@@ -632,12 +643,13 @@ async def get_domain_envelope_review_rows(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> DomainEnvelopeReviewRowsResponse:
-    set_global_user_from_cognito(db, user)
+    acting_user = set_global_user_from_cognito(db, user)
     try:
         return materialize_persisted_envelope_review_rows(
             db,
             envelope_id,
             revision=revision,
+            active_group_ids=_authenticated_active_groups(user), user_id=acting_user.id,
         )
     except DomainEnvelopeRevisionUnavailableError as exc:
         raise_sanitized_http_exception(

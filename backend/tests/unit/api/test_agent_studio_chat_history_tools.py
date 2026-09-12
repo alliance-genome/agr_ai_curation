@@ -26,6 +26,7 @@ from src.lib.chat_history_repository import (
     encode_chat_session_cursor,
 )
 from src.lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
+from src.lib.agent_studio.application_events import APPLICATION_EVENT_MESSAGE_TYPE
 
 
 def _session_record(*, session_id: str, chat_kind: str) -> ChatSessionRecord:
@@ -488,7 +489,7 @@ def test_handle_tool_call_get_chat_conversation_pages_summaries_and_hides_compac
     monkeypatch,
 ):
     captured: list[dict[str, object]] = []
-    hidden_types = {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE}
+    hidden_types = {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE, APPLICATION_EVENT_MESSAGE_TYPE}
     visible_user = _message_record(
         session_id="assistant-session-1",
         turn_id="turn-1",
@@ -577,7 +578,7 @@ def test_handle_tool_call_get_chat_conversation_pages_summaries_and_hides_compac
 def test_handle_tool_call_get_chat_turn_chunks_large_exact_fields_with_replayable_calls(
     monkeypatch,
 ):
-    hidden_types = {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE}
+    hidden_types = {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE, APPLICATION_EVENT_MESSAGE_TYPE}
     content = "quoted \\\"value\\\" and slash \\\\ " * 600
     message = _message_record(
         session_id="agent-studio-session-1",
@@ -711,7 +712,7 @@ def test_handle_tool_call_get_chat_turn_same_turn_returns_only_persisted_rows(mo
             )
 
         def list_messages_for_turn_page(self, **kwargs):
-            assert kwargs["excluded_message_types"] == {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE}
+            assert kwargs["excluded_message_types"] == {CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE, APPLICATION_EVENT_MESSAGE_TYPE}
             return ChatMessagePage(
                 items=[_message_record(
                     session_id=kwargs["session_id"],

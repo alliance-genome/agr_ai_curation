@@ -1038,6 +1038,7 @@ def build_output_formatter_tools(
     output_format: str,
     formatter_agent_id: str,
     save_projected_output: FormatterSaveCallback,
+    configured_plan: Any = None,
 ) -> list[Any]:
     """Build runtime-bound CSV/TSV/JSON formatter tools over a saved artifact bundle."""
 
@@ -1046,6 +1047,20 @@ def build_output_formatter_tools(
         supported = ", ".join(sorted(_SUPPORTED_FILE_FORMATS))
         raise ValueError(f"output_format must be one of: {supported}.")
     resolved_output_format = cast(FlowOutputFormat, normalized_format)
+    locked_plan = None
+    if isinstance(configured_plan, Mapping) and configured_plan.get("selection_mode") == "selected_fields":
+        locked_plan = FlowOutputProjectionPlan.model_validate(configured_plan)
+        if locked_plan.format != normalized_format:
+            raise ValueError("Saved field layout does not match this file format.")
+        errors, _, _ = validate_projection_plan(bundle, locked_plan)
+        if errors:
+            raise ValueError("; ".join(errors))
+
+    def enforce_selection(plan: FlowOutputProjectionPlan) -> FlowOutputProjectionPlan:
+        if locked_plan is not None and plan != locked_plan:
+            raise ValueError("The curator selected fixed output fields. Use build_default_projection_plan and keep that exact plan; edit the flow to change it.")
+        return plan
+
     saver = save_projected_output
     finalization_lock = asyncio.Lock()
     finalized_file_info: dict[str, Any] | None = None
@@ -1224,6 +1239,8 @@ def build_output_formatter_tools(
         source_ref: str = "",
     ) -> str:
         try:
+            if locked_plan is not None:
+                return _tool_json(_validate_plan_payload(bundle, locked_plan))
             selected_row_source = _coerce_row_source(row_source, bundle.default_row_source)
             selected_row_strategy = _coerce_row_strategy(row_strategy)
             plan = _default_projection_plan_for_formatter(
@@ -1251,7 +1268,7 @@ def build_output_formatter_tools(
                 plan_json,
                 output_format=resolved_output_format,
             )
-            plan = _apply_bundle_default_source(bundle, plan)
+            plan = enforce_selection(plan) if locked_plan is not None else _apply_bundle_default_source(bundle, plan)
             return _tool_json(_validate_plan_payload(bundle, plan))
         except Exception as exc:
             return _tool_json({"status": "invalid", "errors": [str(exc)]})
@@ -1270,7 +1287,7 @@ def build_output_formatter_tools(
                 plan_json,
                 output_format=resolved_output_format,
             )
-            plan = _apply_bundle_default_source(bundle, plan)
+            plan = enforce_selection(plan) if locked_plan is not None else _apply_bundle_default_source(bundle, plan)
             errors, warnings, columns = validate_projection_plan(bundle, plan)
             if not errors:
                 errors.extend(_formatter_plan_constraint_errors(plan, columns))
@@ -1338,7 +1355,9 @@ def build_output_formatter_tools(
                         plan_json,
                         output_format=resolved_output_format,
                     )
-                    plan = _apply_bundle_default_source(bundle, plan)
+                    plan = enforce_selection(plan) if locked_plan is not None else _apply_bundle_default_source(bundle, plan)
+                elif locked_plan is not None:
+                    plan = locked_plan.model_copy(deep=True)
                 else:
                     plan = _default_projection_plan_for_formatter(
                         bundle,
@@ -1371,7 +1390,7 @@ def build_output_formatter_tools(
                         }
                     )
                 projection = finalize_output_projection(bundle, plan)
-                if projection.total_count < 1:
+                if projection.total_count < 1 and locked_plan is None:
                     return _tool_json(
                         {
                             "status": "invalid",

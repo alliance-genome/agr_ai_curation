@@ -60,17 +60,19 @@ export function SectionHeading({ children, id, action }: SectionHeadingProps) {
   )
 }
 
-export type StateDotTone = 'active' | 'under_development' | 'none'
+export type StateDotTone = 'active' | 'under_development' | 'unavailable' | 'none'
 
 const STATE_DOT_LABEL: Record<StateDotTone, string> = {
   active: 'Active',
   under_development: 'Under development',
+  unavailable: 'Unavailable',
   none: 'Not checked',
 }
 
 const STATE_DOT_COLOR: Record<StateDotTone, string> = {
   active: 'success.main',
   under_development: 'warning.main',
+  unavailable: 'warning.main',
   none: 'text.disabled',
 }
 

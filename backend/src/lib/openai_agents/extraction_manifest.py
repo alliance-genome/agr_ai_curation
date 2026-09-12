@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any, Mapping
 
@@ -93,6 +94,7 @@ def build_extraction_manifest_page(
             for domain_object in page_objects
         ],
         "validation": _validation_counts(envelope.validation_findings),
+        "validator_results": _validator_results_summary(envelope.validation_findings),
         "next_actions": _next_actions(
             result_ref=manifest_result_ref,
             has_objects=bool(manifest_objects),
@@ -237,6 +239,22 @@ def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
             f"errors={int(validation.get('error_count') or 0)}, "
             f"warnings={int(validation.get('warning_count') or 0)}, "
             f"unresolved={int(validation.get('unresolved_count') or 0)}."
+        )
+
+    results = page.get("validator_results")
+    if isinstance(results, Mapping):
+        lines.append(
+            "Automatic validator results (target-level, not submission readiness): "
+            + json.dumps(results, ensure_ascii=False, separators=(",", ":"))
+        )
+        lines.append(
+            "These are validator decisions, not proof of accepted writeback. A writeback_rejected "
+            "result must not be described as an accepted identity. Preserve open findings. "
+            "Use these automatic results when describing validation, even if "
+            "extractor instructions said not to resolve identities. A resolved target does "
+            "not establish annotation or export readiness. Missing or omitted result details "
+            "mean unknown, not that no identifiers were resolved. Inspect the saved result "
+            "for omitted details before making a claim about them."
         )
 
     next_actions = page.get("next_actions")
@@ -431,6 +449,59 @@ def _parse_path(field_path: str) -> tuple[str | int, ...]:
     return tuple(parts)
 
 
+def _validator_results_summary(findings: list[ValidationFinding]) -> dict[str, Any]:
+    """Expose canonical validator decisions, including targets hidden by object policy."""
+    decisions: dict[str, dict[str, Any]] = {}
+    for index, finding in enumerate(findings):
+        details = finding.details or {}
+        result = details.get("validation_result")
+        if not isinstance(result, Mapping) or not isinstance(result.get("status"), str):
+            continue
+        request_id = result.get("request_id")
+        key = f"request:{request_id}" if request_id else f"finding:{index}"
+        entry = decisions.setdefault(key, {
+            name: result[name]
+            for name in ("status", "request_id", "validator_binding_id", "resolved_values", "missing_expected_fields")
+            if name in result
+        })
+        target = result.get("target")
+        if isinstance(target, Mapping):
+            entry["target"] = {
+                name: target[name]
+                for name in ("object_type", "object_id", "field_path")
+                if target.get(name) is not None
+            }
+        # Per-field copies can include later rejection: never let the first result
+        # hide a failed writeback or an associated open finding.
+        if finding.status is ValidationFindingStatus.OPEN:
+            entry["open_finding"] = True
+        if (details.get("materialization") == "rejected"
+                or details.get("failure_classification") == "invalid_materialization_input"
+                or finding.code == "domain_pack.validator_materialization_invalid"):
+            entry["writeback_rejected"] = True
+    counts: dict[str, int] = {}
+    entries: list[dict[str, Any]] = []
+    for entry in decisions.values():
+        status = entry["status"]
+        counts[status] = counts.get(status, 0) + 1
+        if len(entries) >= get_supervisor_manifest_page_size():
+            continue
+        # Keep complete identifiers; never render a truncated CURIE as a resolved value.
+        if len(json.dumps(entry, ensure_ascii=False)) > get_supervisor_field_text_limit():
+            entry = {key: value for key, value in entry.items()
+                     if key in {"status", "open_finding", "writeback_rejected"}}
+            entry["details_omitted"] = True
+        entries.append(entry)
+    return {
+        "total": len(decisions),
+        "status_counts": counts,
+        "results": entries,
+        "details_complete": len(decisions) == len(entries) and not any(
+            entry.get("details_omitted") for entry in entries
+        ),
+    }
+
+
 def _validation_counts(findings: list[ValidationFinding]) -> dict[str, int]:
     error_count = 0
     warning_count = 0
@@ -490,6 +561,9 @@ def _next_actions(
             )
         actions.append(
             f'Use inspect_results(result_ref="{result_ref}", action="evidence", object_ref="<object_ref>") for evidence.'
+        )
+        actions.append(
+            f'For generic/custom objects, use inspect_results(result_ref="{result_ref}", action="details", object_ref="<object_ref>") to read saved attributes and nested parts. Follow paths and cursors; do not call the extractor again to inspect prior results.'
         )
         actions.append(
             "Use the matching CSV/TSV/JSON formatter specialist only if the user "

@@ -33,7 +33,7 @@ def _validate_flow_agent_id(value: str) -> str:
 
 
 class FlowRecipeStep(BaseModel):
-    """One simplified step consumed by Agent Studio's shared flow validator."""
+    """One simplified source step consumed by the flow recipe compiler."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 

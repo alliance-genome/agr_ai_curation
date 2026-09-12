@@ -1,3 +1,6 @@
+import { isFlowRecovery } from '../draftRecoveryValidation'
+import { DraftRecoveryNotice, useDraftRecovery } from '../draftRecovery'
+import type { NodePanelAuthoringDraft } from './NodePanel/NodePanel'
 /**
  * FlowBuilder Component
  *
@@ -5,7 +8,8 @@
  * Supports drag-drop from palette, node editing, and save/load.
  */
 
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
+import { useState, useCallback, useRef, useMemo, useEffect, useImperativeHandle } from 'react'
+import { flushSync } from 'react-dom'
 import ReactFlow, {
   ReactFlowProvider,
   Controls,
@@ -59,6 +63,7 @@ import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
 import CheckIcon from '@mui/icons-material/Check'
 import CloseIcon from '@mui/icons-material/Close'
+import UndoIcon from '@mui/icons-material/Undo'
 
 import FlowNode from './FlowNode'
 import DeletableEdge from './DeletableEdge'
@@ -83,7 +88,9 @@ import type {
   OutputBindingView,
   ValidationAttachmentGroup,
   ValidationAttachmentSelection,
+  FlowProposalApplyResult,
 } from './types'
+import type { ChatContext, FlowAuthoringProposal, FlowContextDefinition } from '@/types/promptExplorer'
 import {
   getFlow,
   createFlow,
@@ -92,6 +99,7 @@ import {
   deleteFlow,
   shareFlow,
   cloneFlow,
+  validateFlowDraft,
 } from '@/services/agentStudioService'
 import type { FlowSummaryResponse } from './types'
 import logger from '@/services/logger'
@@ -104,6 +112,7 @@ import {
   isValidationAgentFromMetadata,
 } from './agentMetadataUtils'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
+import { canonicalAuthoringJson, fingerprintFlowDraft } from '../authoringContext'
 
 /**
  * Helper to create initial task_input node for new flows.
@@ -155,12 +164,19 @@ const flowNodeDataForPersistence = (data: AgentNodeData): FlowNodeData => {
   if (data.prompt_version !== undefined) {
     persisted.prompt_version = data.prompt_version
   }
+  if (data.agent_revision_id !== undefined) {
+    persisted.agent_revision_id = data.agent_revision_id
+  }
+  if (data.execution_receipt !== undefined) {
+    persisted.execution_receipt = data.execution_receipt
+  }
   if (data.include_evidence !== undefined) {
     persisted.include_evidence = data.include_evidence
   }
   if (data.output_filename_template !== undefined) {
     persisted.output_filename_template = data.output_filename_template
   }
+  if (data.export_execution_mode !== undefined) persisted.export_execution_mode = data.export_execution_mode
   if (data.projection_plan !== undefined) {
     persisted.projection_plan = data.projection_plan
   }
@@ -170,6 +186,134 @@ const flowNodeDataForPersistence = (data: AgentNodeData): FlowNodeData => {
 
   return persisted
 }
+
+const buildFlowDefinition = (
+  nodes: AgentNode[],
+  edges: FlowEdge[],
+  taskInstructionsDefaultOnly: boolean,
+): FlowDefinition => {
+  const taskInputNode = nodes.find((node) => node.data.agent_id === 'task_input')
+  return {
+    version: '1.1',
+    ...(taskInstructionsDefaultOnly ? { task_instructions_default_only: true } : {}),
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      type: node.data.agent_id === 'task_input'
+        ? 'task_input'
+        : node.type === 'output'
+          ? 'output'
+          : 'agent',
+      position: { ...node.position },
+      data: flowNodeDataForPersistence(node.data),
+    })),
+    edges: edges.map((edge) => {
+      const role = edgeRole(edge)
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        role,
+        satisfies_binding_id: role === 'validation_attachment'
+          ? edge.data?.satisfies_binding_id
+          : undefined,
+        replaces_attachment_id: role === 'validation_attachment'
+          ? edge.data?.replaces_attachment_id
+          : undefined,
+        condition: edge.data?.condition,
+      }
+    }),
+    entry_node_id: taskInputNode?.id ?? '',
+  }
+}
+
+interface FlowDraftBaseline {
+  name: string
+  description: string
+  definition: FlowDefinition
+}
+
+interface FlowProposalUndo {
+  draft: FlowDraftBaseline
+  appliedCanonical: string
+}
+
+const initialFlowDraftBaseline = (): FlowDraftBaseline => ({
+  name: 'New Flow',
+  description: '',
+  definition: buildFlowDefinition([createInitialTaskInputNode()], [], false),
+})
+
+const flowStateDefinition = (state: FlowState): FlowDefinition => ({
+  version: state.version,
+  ...(state.task_instructions_default_only ? { task_instructions_default_only: true } : {}),
+  entry_node_id: state.entry_node_id ?? '',
+  nodes: state.nodes.map((node) => ({
+    id: node.id,
+    type: node.type,
+    position: { ...node.position },
+    data: {
+      agent_id: node.agent_id,
+      agent_display_name: node.agent_display_name,
+      ...(node.agent_description !== undefined ? { agent_description: node.agent_description } : {}),
+      ...(node.task_instructions !== undefined ? { task_instructions: node.task_instructions } : {}),
+      ...(node.step_goal !== undefined ? { step_goal: node.step_goal } : {}),
+      ...(node.custom_instructions !== undefined ? { custom_instructions: node.custom_instructions } : {}),
+      ...(node.prompt_version !== undefined ? { prompt_version: node.prompt_version } : {}),
+      ...(node.agent_revision_id !== undefined ? { agent_revision_id: node.agent_revision_id } : {}),
+      ...(node.execution_receipt !== undefined ? { execution_receipt: node.execution_receipt } : {}),
+      ...(node.include_evidence !== undefined ? { include_evidence: node.include_evidence } : {}),
+      ...(node.output_filename_template !== undefined
+        ? { output_filename_template: node.output_filename_template }
+        : {}),
+      ...(node.export_execution_mode !== undefined ? { export_execution_mode: node.export_execution_mode } : {}),
+      ...(node.projection_plan !== undefined ? { projection_plan: node.projection_plan } : {}),
+      output_key: node.output_key,
+      ...(node.validation_attachments !== undefined
+        ? { validation_attachments: node.validation_attachments }
+        : {}),
+      ...(node.validation_groups !== undefined ? { validation_groups: node.validation_groups } : {}),
+    },
+  })),
+  edges: state.edges.map((edge) => ({ ...edge })),
+})
+
+// Compare curator-owned state, not validation groups rebuilt from attachments/edges.
+// Keep identity, positions and unapplied node-panel edits in the conflict guard.
+const flowEditKey = (state: FlowState): string => {
+  const { isDirty: _isDirty, nodes, ...rest } = state
+  return canonicalAuthoringJson({
+    ...rest,
+    nodes: nodes.map(({ validation_groups: _groups, ...node }) => node),
+  })
+}
+
+const flowDefinitionContext = (definition: FlowDefinition): FlowContextDefinition => ({
+  version: definition.version,
+  task_instructions_default_only: definition.task_instructions_default_only,
+  entry_node_id: definition.entry_node_id,
+  nodes: definition.nodes.map((node) => ({
+    id: node.id,
+    node_type: node.type,
+    position: { ...node.position },
+    ...node.data,
+    validation_attachments: node.data.validation_attachments?.map((attachment) => ({ ...attachment })),
+    validation_groups: node.data.validation_groups?.map((group) => ({ ...group })),
+  })),
+  edges: definition.edges.map((edge) => ({ ...edge })),
+})
+
+const flowFingerprintContext = (
+  state: Pick<FlowState, 'flowId' | 'flowUpdatedAt'>,
+  name: string,
+  description: string,
+  definition: FlowDefinition,
+): ChatContext => ({
+  flow_id: state.flowId,
+  flow_name: name,
+  flow_description: description,
+  flow_updated_at: state.flowUpdatedAt,
+  flow_definition: flowDefinitionContext(definition),
+})
 
 const activeValidationBindingOptions = (
   node?: AgentNode
@@ -626,7 +770,18 @@ const getPrimaryShortcutLabel = (): 'Ctrl' | 'Cmd' => {
   return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? 'Cmd' : 'Ctrl';
 }
 
-function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange, onVerifyRequest, onOpenAgent, active = true }: FlowBuilderProps) {
+function FlowBuilderInner({
+  recoveryOwnerId,
+  flowId,
+  flowOpenRequestId,
+  onFlowSaved,
+  onFlowChange,
+  onVerifyRequest,
+  onOpenAgent,
+  onOutputHelp,
+  active = true,
+  authoringContextRef,
+}: FlowBuilderProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   const isValidationAgentDynamic = useCallback(
@@ -644,16 +799,18 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
 
   // React Flow state
   // The drawer-vs-docked breakpoint reads the whole builder (palette, canvas,
-  // dock), not the canvas row, which is far narrower once the Claude pane is open.
+  // dock), not the canvas row, which is far narrower once AI Chat is open.
   const [builderRootRef, builderWidth] = useContainerWidth<HTMLDivElement>()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const primaryShortcutLabel = useMemo(getPrimaryShortcutLabel, [])
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
-  const [nodes, setNodes, onNodesChange] = useNodesState<AgentNodeData>([])
+  const [nodes, setNodes, onNodesChange] = useNodesState<AgentNodeData>(
+    flowId ? [] : [createInitialTaskInputNode()]
+  )
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge['data']>([])
 
   // Node ID counter - useRef to persist across renders without causing HMR issues
-  const nodeIdRef = useRef(0)
+  const nodeIdRef = useRef(flowId ? 0 : 1)
   const getNodeId = useCallback(() => `node_${nodeIdRef.current++}`, [])
 
   // UI state
@@ -668,7 +825,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
   const [selectedNode, setSelectedNode] = useState<AgentNode | null>(null)
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(Boolean(flowId))
   const [snackbar, setSnackbar] = useState<{
     message: string
     severity: 'success' | 'warning' | 'error'
@@ -680,12 +837,10 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
   const [nodePanelCollapsed, setNodePanelCollapsed] = useState(false)
   const nodePanelGuardRef = useRef<NodePanelLeaveGuard | null>(null)
   const unsavedFlowRef = useRef(false)
-  const [flowUnsaved, setFlowUnsavedState] = useState(false)
   const flowEditRevisionRef = useRef(0)
   const setFlowUnsaved = useCallback((unsaved: boolean) => {
     unsavedFlowRef.current = unsaved
     if (unsaved) flowEditRevisionRef.current += 1
-    setFlowUnsavedState(unsaved)
   }, [])
   const confirmLeaveNode = useCallback((): Promise<boolean> => {
     return nodePanelGuardRef.current?.requestLeave() ?? Promise.resolve(true)
@@ -695,6 +850,8 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     return !unsavedFlowRef.current || window.confirm('Discard unsaved flow changes?')
   }, [confirmLeaveNode])
 
+  const [nodePanelDraftDirty, setNodePanelDraftDirty] = useState(false)
+  const [nodePanelRecovery, setNodePanelRecovery] = useState<NodePanelAuthoringDraft | null>(null)
   const [canvasSplitRef, canvasAreaWidth] = useContainerWidth<HTMLDivElement>()
 
   // Menu bar state
@@ -840,6 +997,69 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
   const displayedFlowIdRef = useRef<string | null>(null)
   const loadRequestRef = useRef(0)
+  const [flowUpdatedAt, setFlowUpdatedAt] = useState<string | null>(null)
+  const [savedBaseline, setSavedBaseline] = useState<FlowDraftBaseline>(() => ({
+    name: flowName,
+    description: flowDescription,
+    definition: buildFlowDefinition(nodes as AgentNode[], edges as FlowEdge[], taskInstructionsDefaultOnly),
+  }))
+  const [proposalUndo, setProposalUndo] = useState<FlowProposalUndo | null>(null)
+  const [applyingProposal, setApplyingProposal] = useState(false)
+  const applyingProposalRef = useRef(false)
+  const recoveryBlockedRef = useRef(false)
+  const authoringMountedRef = useRef(true)
+  useEffect(() => {
+    authoringMountedRef.current = true
+    return () => { authoringMountedRef.current = false }
+  }, [])
+  const initialBaselineCapturedRef = useRef(Boolean(flowId))
+  const [pendingFlowReplacement, setPendingFlowReplacement] = useState<{
+    label: string
+    proceed: () => void
+  } | null>(null)
+
+  const currentFlowDefinition = useMemo(
+    () => buildFlowDefinition(nodes as AgentNode[], edges as FlowEdge[], taskInstructionsDefaultOnly),
+    [edges, nodes, taskInstructionsDefaultOnly]
+  )
+  const currentDraftCanonical = useMemo(
+    () => canonicalAuthoringJson({
+      name: flowName,
+      description: flowDescription,
+      definition: currentFlowDefinition,
+    }),
+    [currentFlowDefinition, flowDescription, flowName]
+  )
+  const currentEditorDraftRef = useRef<FlowDraftBaseline>({
+    name: flowName,
+    description: flowDescription,
+    definition: currentFlowDefinition,
+  })
+  currentEditorDraftRef.current = {
+    name: flowName,
+    description: flowDescription,
+    definition: currentFlowDefinition,
+  }
+  const appliedFlowIsDirty = useMemo(
+    () => currentDraftCanonical !== canonicalAuthoringJson(savedBaseline),
+    [currentDraftCanonical, savedBaseline]
+  )
+  const flowIsDirty = appliedFlowIsDirty || nodePanelDraftDirty
+  const appliedFlowIsDirtyRef = useRef(appliedFlowIsDirty)
+  const flowIsDirtyRef = useRef(flowIsDirty)
+  appliedFlowIsDirtyRef.current = appliedFlowIsDirty
+  flowIsDirtyRef.current = flowIsDirty
+  unsavedFlowRef.current = flowIsDirty
+
+  useEffect(() => {
+    if (initialBaselineCapturedRef.current) return
+    initialBaselineCapturedRef.current = true
+    setSavedBaseline({
+      name: flowName,
+      description: flowDescription,
+      definition: currentFlowDefinition,
+    })
+  }, [currentFlowDefinition, flowDescription, flowName])
 
   // Ref for cleanup of setTimeout
   const fitViewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -857,6 +1077,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     setTaskInstructionsDefaultOnly(flow.flow_definition.task_instructions_default_only === true)
     displayedFlowIdRef.current = flow.id
     setCurrentFlowId(flow.id)
+    setFlowUpdatedAt(flow.updated_at)
 
     // Convert flow definition to React Flow format
     const flowNodes = flow.flow_definition.nodes.map((n) => (
@@ -882,11 +1103,14 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
         role: e.role ?? 'control_flow',
         satisfies_binding_id: e.satisfies_binding_id,
         replaces_attachment_id: e.replaces_attachment_id,
+        condition: e.condition,
       },
     }))
 
     setNodes(flowNodes)
     setEdges(flowEdges)
+    setSavedBaseline({ name: flow.name, description: flow.description || '',
+      definition: buildFlowDefinition(flowNodes as AgentNode[], flowEdges as FlowEdge[], flow.flow_definition.task_instructions_default_only === true) })
     if (flow.validation_warnings?.length) {
       const warningMessages = flow.validation_warnings.map((warning) => warning.message).join(' ')
       const hasCriticalWarning = flow.has_critical_issues
@@ -968,51 +1192,364 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
   // Note: We intentionally exclude loadFlow and currentFlowId from deps
   // to prevent re-loading after save (which updates currentFlowId)
 
-  // Initialize new flow with task_input node when no flowId is provided
-  useEffect(() => {
-    // Only run once on mount when there's no flowId
-    if (!flowId && nodes.length === 0) {
-      setNodes([createInitialTaskInputNode()])
-      nodeIdRef.current = 1
+  const captureAuthoringContext = useCallback((): FlowState => {
+    const nodePanelDraft = nodePanelGuardRef.current?.captureAuthoringDraft?.()
+    const capturedNodes = nodes.map((node) => (
+      nodePanelDraft?.nodeId === node.id
+        ? { ...node, data: { ...node.data, ...nodePanelDraft.data } }
+        : node
+    ))
+    return {
+      flowId: currentFlowId || undefined,
+      flowName,
+      flowDescription,
+      flowUpdatedAt: flowUpdatedAt || undefined,
+      isDirty: flowIsDirty,
+      version: '1.1',
+      task_instructions_default_only: taskInstructionsDefaultOnly || undefined,
+      entry_node_id: nodes.find(node => node.data.agent_id === 'task_input')?.id,
+      nodes: capturedNodes.map((n) => ({
+        id: n.id,
+        type: (n.type ?? 'agent') as NodeType,
+        position: { ...n.position },
+        agent_id: n.data.agent_id,
+        agent_display_name: n.data.agent_display_name,
+        agent_description: n.data.agent_description,
+        task_instructions: n.data.task_instructions,
+        step_goal: n.data.step_goal,
+        custom_instructions: n.data.custom_instructions,
+        prompt_version: n.data.prompt_version,
+        agent_revision_id: n.data.agent_revision_id,
+        execution_receipt: n.data.execution_receipt,
+        include_evidence: n.data.include_evidence,
+        output_filename_template: n.data.output_filename_template,
+        export_execution_mode: n.data.export_execution_mode,
+        projection_plan: n.data.projection_plan,
+        output_key: n.data.output_key,
+        validation_attachments: n.data.validation_attachments,
+        validation_groups: n.data.validation_groups,
+      })),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        role: edgeRole(e as FlowEdge),
+        satisfies_binding_id: e.data?.satisfies_binding_id,
+        replaces_attachment_id: e.data?.replaces_attachment_id,
+        condition: e.data?.condition,
+      })),
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  // Note: Only run on mount - empty deps is intentional
-
-  // Report flow state changes to parent (for context sharing with Claude)
-  useEffect(() => {
-    if (onFlowChange) {
-      const flowState: FlowState = {
+  }, [
+        currentFlowId,
+        edges,
+        flowDescription,
+        flowIsDirty,
         flowName,
-        version: '1.1',
-        entry_node_id: nodes.find(node => node.data.agent_id === 'task_input')?.id,
-        nodes: nodes.map((n) => ({
-          id: n.id,
-          type: (n.type ?? 'agent') as NodeType,
-          agent_id: n.data.agent_id,
-          agent_display_name: n.data.agent_display_name,
-          task_instructions: n.data.task_instructions,
-          step_goal: n.data.step_goal,
-          custom_instructions: n.data.custom_instructions,
-          prompt_version: n.data.prompt_version,
-          include_evidence: n.data.include_evidence,
-          output_filename_template: n.data.output_filename_template,
-          projection_plan: n.data.projection_plan,
-          output_key: n.data.output_key,
-          validation_attachments: n.data.validation_attachments,
-          validation_groups: n.data.validation_groups,
-        })),
-        edges: edges.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-          role: edgeRole(e as FlowEdge),
-          satisfies_binding_id: e.data?.satisfies_binding_id,
-          replaces_attachment_id: e.data?.replaces_attachment_id,
-        })),
-      }
-      onFlowChange(flowState)
+        flowUpdatedAt,
+        nodes,
+    taskInstructionsDefaultOnly,
+  ])
+
+  const liveAuthoringRef = useRef({ captureAuthoringContext, saving, loading })
+  liveAuthoringRef.current = { captureAuthoringContext, saving, loading }
+
+  const applyDefinitionToEditor = useCallback((draft: FlowDraftBaseline) => {
+    const nextNodes: AgentNode[] = draft.definition.nodes.map((node) => ({
+      id: node.id,
+      type: node.type === 'task_input'
+        ? 'task_input'
+        : node.type === 'output'
+          || isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
+          ? 'output'
+          : 'agent',
+      position: { ...node.position },
+      data: { ...node.data },
+    }))
+    const nextEdges: FlowEdge[] = draft.definition.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'deletable',
+      animated: isAnimatedEdgeRole(edge.role ?? 'control_flow'),
+      data: {
+        role: edge.role ?? 'control_flow',
+        satisfies_binding_id: edge.satisfies_binding_id,
+        replaces_attachment_id: edge.replaces_attachment_id,
+        condition: edge.condition,
+      },
+    }))
+    const appliedDraft: FlowDraftBaseline = {
+      name: draft.name,
+      description: draft.description,
+      definition: buildFlowDefinition(
+        nextNodes,
+        nextEdges,
+        draft.definition.task_instructions_default_only === true,
+      ),
     }
-  }, [nodes, edges, flowName, onFlowChange])
+    currentEditorDraftRef.current = appliedDraft
+    setFlowName(draft.name)
+    setFlowDescription(draft.description)
+    setTaskInstructionsDefaultOnly(draft.definition.task_instructions_default_only === true)
+    setNodes(nextNodes)
+    setEdges(nextEdges)
+    setSelectedNode(null)
+    setNodePanelDraftDirty(false)
+    nodePanelGuardRef.current = null
+    const maxId = Math.max(
+      ...nextNodes.map((node) => Number.parseInt(node.id.replace('node_', ''), 10) || 0),
+      0,
+    )
+    nodeIdRef.current = maxId + 1
+  }, [agentMetadata, setEdges, setNodes])
+
+  const applyAuthoringCandidate = useCallback(async (
+    proposal: FlowAuthoringProposal,
+  ): Promise<FlowProposalApplyResult> => {
+    if (proposal.contract_version !== 'flow_authoring_proposal.v1') {
+      return { applied: false, reason: 'invalid', message: 'This flow proposal format is not supported.' }
+    }
+    const captured = liveAuthoringRef.current.captureAuthoringContext()
+    const capturedKey = flowEditKey(captured)
+    const capturedDefinition = flowStateDefinition(captured)
+    const currentFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
+      captured,
+      captured.flowName,
+      captured.flowDescription,
+      capturedDefinition,
+    ))
+    if (currentFingerprint !== proposal.base_draft_fingerprint) {
+      logger.info('Rejected stale transient flow proposal', {
+        component: 'FlowBuilder',
+        action: 'apply_flow_authoring_proposal',
+        metadata: { outcome: 'stale' },
+      })
+      return {
+        applied: false,
+        reason: 'stale',
+        message: 'The flow changed after this proposal was prepared. Ask AI Chat to refresh it.',
+      }
+    }
+
+    const candidateFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
+      captured,
+      proposal.candidate.name,
+      proposal.candidate.description,
+      proposal.candidate.flow_definition,
+    ))
+    if (candidateFingerprint !== proposal.candidate_draft_fingerprint) {
+      logger.error('Rejected invalid transient flow proposal', new Error('Flow proposal fingerprint mismatch'), {
+        component: 'FlowBuilder',
+        action: 'apply_flow_authoring_proposal',
+        metadata: { outcome: 'invalid_candidate' },
+      })
+      return {
+        applied: false,
+        reason: 'invalid',
+        message: 'The proposal could not be verified. Ask AI Chat to prepare it again.',
+      }
+    }
+
+    let canonicalPreApply
+    try {
+      canonicalPreApply = await validateFlowDraft(
+        proposal.candidate.flow_definition,
+        'pre_apply',
+        proposal.base_draft_fingerprint,
+        currentFingerprint,
+      )
+    } catch (error) {
+      logger.error('Flow proposal pre-apply validation failed', error as Error, {
+        component: 'FlowBuilder',
+        action: 'apply_flow_authoring_proposal',
+      })
+      return {
+        applied: false,
+        reason: 'unavailable',
+        message: 'Canonical validation is temporarily unavailable; the draft was not changed.',
+      }
+    }
+    if (!canonicalPreApply.valid) {
+      return {
+        applied: false,
+        reason: canonicalPreApply.findings.some((finding) => finding.code === 'stale_draft_fingerprint')
+          ? 'stale'
+          : 'invalid',
+        message: canonicalPreApply.findings[0]?.message ?? 'The proposal is no longer valid.',
+      }
+    }
+
+    if (!authoringMountedRef.current
+      || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading
+      || flowEditKey(liveAuthoringRef.current.captureAuthoringContext()) !== capturedKey) {
+      return { applied: false, reason: 'stale', message: 'The flow changed during validation. Ask AI Chat to refresh it.' }
+    }
+
+    const candidateNodes = proposal.candidate.flow_definition.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: node.position,
+      data: node.data,
+    })) as AgentNode[]
+    const candidateEdges = proposal.candidate.flow_definition.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      data: { role: edge.role ?? 'control_flow' },
+    })) as FlowEdge[]
+    const localFindings = computeValidationErrors(candidateNodes, candidateEdges)
+    if (localFindings.length > 0) {
+      return { applied: false, reason: 'invalid', message: localFindings[0].message }
+    }
+
+    const undoDraft = {
+      name: captured.flowName,
+      description: captured.flowDescription,
+      definition: capturedDefinition,
+    }
+    const requestedDraft = {
+      name: proposal.candidate.name,
+      description: proposal.candidate.description,
+      definition: proposal.candidate.flow_definition,
+    }
+    setProposalUndo(null)
+    flushSync(() => applyDefinitionToEditor(requestedDraft))
+    const actualAppliedDraft = currentEditorDraftRef.current
+    const appliedKey = flowEditKey(liveAuthoringRef.current.captureAuthoringContext())
+    const appliedDraftStillCurrent = () => authoringMountedRef.current
+      && flowEditKey(liveAuthoringRef.current.captureAuthoringContext()) === appliedKey
+    try {
+      const actualAppliedFingerprint = await fingerprintFlowDraft(flowFingerprintContext(
+        captured,
+        actualAppliedDraft.name,
+        actualAppliedDraft.description,
+        actualAppliedDraft.definition,
+      ))
+      const canonicalPostApply = await validateFlowDraft(
+        actualAppliedDraft.definition,
+        'post_apply',
+        proposal.candidate_draft_fingerprint,
+        actualAppliedFingerprint,
+      )
+      if (!appliedDraftStillCurrent()) {
+        return { applied: false, reason: 'stale', message: 'The flow changed during validation; your latest edits were preserved.' }
+      }
+      if (!canonicalPostApply.valid) {
+        flushSync(() => applyDefinitionToEditor(undoDraft))
+        setProposalUndo(null)
+        return {
+          applied: false,
+          reason: 'invalid',
+          message: canonicalPostApply.findings[0]?.message ?? 'Post-apply validation failed; the draft was restored.',
+        }
+      }
+    } catch (error) {
+      if (appliedDraftStillCurrent()) {
+        flushSync(() => applyDefinitionToEditor(undoDraft))
+      }
+      setProposalUndo(null)
+      logger.error('Flow proposal post-apply validation failed', error as Error, {
+        component: 'FlowBuilder',
+        action: 'apply_flow_authoring_proposal',
+      })
+      return {
+        applied: false,
+        reason: 'unavailable',
+        message: 'Post-apply validation was unavailable. The proposal was not accepted; later edits were preserved.',
+      }
+    }
+    setProposalUndo({ draft: undoDraft, appliedCanonical: canonicalAuthoringJson(actualAppliedDraft) })
+    setSnackbar({
+      message: 'AI Chat proposal applied to the draft. Review it, then Save when ready.',
+      severity: 'success',
+    })
+    logger.info('Applied transient flow proposal to editor draft', {
+      component: 'FlowBuilder',
+      action: 'apply_flow_authoring_proposal',
+      metadata: {
+        outcome: 'applied',
+        nodeCount: proposal.candidate.flow_definition.nodes.length,
+        edgeCount: proposal.candidate.flow_definition.edges.length,
+      },
+    })
+    return { applied: true, message: 'Proposal applied to the draft. Save remains manual.' }
+  }, [applyDefinitionToEditor])
+
+  const applyAuthoringProposal = useCallback(async (proposal: FlowAuthoringProposal): Promise<FlowProposalApplyResult> => {
+    if (readOnly) return { applied: false, reason: 'unavailable', message: 'Clone this shared flow before editing it.' }
+    if (recoveryBlockedRef.current || applyingProposalRef.current || liveAuthoringRef.current.saving || liveAuthoringRef.current.loading) {
+      return { applied: false, reason: 'unavailable', message: 'Wait for the current flow operation to finish.' }
+    }
+    applyingProposalRef.current = true
+    setApplyingProposal(true)
+    try {
+      return await applyAuthoringCandidate(proposal)
+    } finally {
+      applyingProposalRef.current = false
+      if (authoringMountedRef.current) setApplyingProposal(false)
+    }
+  }, [applyAuthoringCandidate, readOnly])
+
+  const undoAuthoringProposal = useCallback(() => {
+    if (recoveryBlockedRef.current || !proposalUndo) return
+    const pendingNodeDraft = nodePanelGuardRef.current?.captureAuthoringDraft?.()
+    const currentCanonical = canonicalAuthoringJson(currentEditorDraftRef.current)
+    if (pendingNodeDraft?.dirty || currentCanonical !== proposalUndo.appliedCanonical) {
+      setProposalUndo(null)
+      setSnackbar({
+        message: 'Undo expired because the draft changed after the AI proposal.',
+        severity: 'warning',
+      })
+      return
+    }
+    applyDefinitionToEditor(proposalUndo.draft)
+    setProposalUndo(null)
+    setSnackbar({ message: 'AI Chat proposal undone.', severity: 'success' })
+    logger.info('Undid transient flow proposal in editor draft', {
+      component: 'FlowBuilder',
+      action: 'undo_flow_authoring_proposal',
+      metadata: { outcome: 'undone' },
+    })
+  }, [applyDefinitionToEditor, proposalUndo])
+
+  useEffect(() => {
+    if (
+      proposalUndo
+      && (nodePanelDraftDirty || currentDraftCanonical !== proposalUndo.appliedCanonical)
+    ) {
+      logger.info('Expired transient flow proposal undo after a later draft edit', {
+        component: 'FlowBuilder',
+        action: 'expire_flow_authoring_proposal_undo',
+        metadata: {
+          outcome: 'expired',
+          reason: nodePanelDraftDirty ? 'node_panel_draft_changed' : 'editor_draft_changed',
+        },
+      })
+      setProposalUndo(null)
+    }
+  }, [currentDraftCanonical, nodePanelDraftDirty, proposalUndo])
+
+  useImperativeHandle(
+    authoringContextRef,
+    () => ({ captureAuthoringContext, applyAuthoringProposal }),
+    [applyAuthoringProposal, captureAuthoringContext]
+  )
+
+  // Report flow state changes to parent for passive UI context. AI Chat uses
+  // the imperative capture above so submission never waits for this effect.
+  useEffect(() => {
+    onFlowChange?.(captureAuthoringContext())
+  }, [captureAuthoringContext, onFlowChange])
+
+  useEffect(() => {
+    if (!flowIsDirty) return
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [flowIsDirty])
 
   // Update hasError/errorMessage on nodes based on current validation state
   // Called when extractors are added/removed, connections change, or node data updates
@@ -1081,6 +1618,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     options?: { forceCreate?: boolean }
   ) => {
     if (readOnly || loading || saving || renamingFlow) return
+    if (recoveryBlockedRef.current || applyingProposalRef.current) return
     const forceCreate = options?.forceCreate ?? false
     const nameToUse = nameOverride || flowName
 
@@ -1131,34 +1669,9 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
       const entryNodeId = taskInputNode.id
 
       const editRevisionAtSave = flowEditRevisionRef.current
+      const draftAtSave = canonicalAuthoringJson(currentEditorDraftRef.current)
       const flowDefinition: FlowDefinition = {
-        version: '1.1',
-        ...(taskInstructionsDefaultOnly ? { task_instructions_default_only: true } : {}),
-        nodes: nodes.map((n) => ({
-          id: n.id,
-          type: n.data.agent_id === 'task_input'
-            ? 'task_input'
-            : n.type === 'output'
-              ? 'output'
-              : 'agent',
-          position: n.position,
-          data: flowNodeDataForPersistence(n.data),
-        })),
-        edges: edges.map((e) => {
-          const role = edgeRole(e as FlowEdge)
-          return {
-            id: e.id,
-            source: e.source,
-            target: e.target,
-            role,
-            satisfies_binding_id: role === 'validation_attachment'
-              ? e.data?.satisfies_binding_id
-              : undefined,
-            replaces_attachment_id: role === 'validation_attachment'
-              ? e.data?.replaces_attachment_id
-              : undefined,
-          }
-        }),
+        ...currentFlowDefinition,
         entry_node_id: entryNodeId,
       }
 
@@ -1176,58 +1689,120 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
           flow_definition: flowDefinition,
         })
       }
-
       const flowMutationReason = currentFlowId && !forceCreate ? 'updated' : 'created'
-      notifyFlowListInvalidated({
-        flowId: savedFlow.id,
-        reason: flowMutationReason,
-      })
+      notifyFlowListInvalidated({ flowId: savedFlow.id, reason: flowMutationReason })
       await refreshFlowLists()
 
-      // Navigation or New Flow owns the editor now; only refresh the persisted artifact's lists.
+      // A late acknowledgement must not mutate a different flow opened meanwhile.
       if (loadRequestRef.current !== loadRequestAtSave) return
+      const unchangedSinceSave = flowEditRevisionRef.current === editRevisionAtSave
+        && canonicalAuthoringJson(currentEditorDraftRef.current) === draftAtSave
+      setFlowUpdatedAt(savedFlow.updated_at)
+
+      // The server derives the complete receipt from a newly selected revision.
+      // Adopt that acknowledgement without overwriting edits made during save.
+      const savedNodes = new Map(savedFlow.flow_definition.nodes.map((node) => [node.id, node.data]))
+      const acknowledgedDefinition: FlowDefinition = {
+        ...flowDefinition,
+        nodes: flowDefinition.nodes.map((node) => {
+          const saved = savedNodes.get(node.id)
+          return saved?.execution_receipt && saved.agent_id === node.data.agent_id
+            && saved.agent_revision_id === node.data.agent_revision_id
+            ? { ...node, data: { ...node.data, execution_receipt: saved.execution_receipt } }
+            : node
+        }),
+      }
+      setNodes((current) => current.map((node) => {
+        const saved = savedNodes.get(node.id)
+        return saved?.execution_receipt && saved.agent_id === node.data.agent_id
+          && saved.agent_revision_id === node.data.agent_revision_id
+          ? { ...node, data: { ...node.data, execution_receipt: saved.execution_receipt } }
+          : node
+      }))
 
       // Update flowName state to match saved name
       setCurrentFlowId(savedFlow.id)
       displayedFlowIdRef.current = savedFlow.id
       // Edits made while the request was pending still need their own Save.
-      if (flowEditRevisionRef.current === editRevisionAtSave) setFlowUnsaved(false)
+      if (unchangedSinceSave) setFlowUnsaved(false)
       setFlowAccess(savedFlow)
-      setFlowName(savedFlow.name)
-      setFlowDescription(savedFlow.description || '')
-      setTaskInstructionsDefaultOnly(
-        savedFlow.flow_definition.task_instructions_default_only === true
-      )
+      if (unchangedSinceSave) {
+        setFlowName(savedFlow.name)
+        setFlowDescription(savedFlow.description || '')
+        setTaskInstructionsDefaultOnly(
+          savedFlow.flow_definition.task_instructions_default_only === true
+        )
+      }
+      setSavedBaseline({
+        name: savedFlow.name,
+        description: savedFlow.description || '',
+        definition: acknowledgedDefinition,
+      })
       setSnackbar({
         message: forceCreate ? 'Flow saved as new flow' : 'Flow saved successfully',
         severity: 'success'
       })
       onFlowSaved?.(savedFlow.id)
+      return true
     } catch (err) {
       logger.error('Failed to save flow', err as Error, { component: 'FlowBuilder' })
       const errorMessage = err instanceof Error ? err.message : 'Failed to save flow'
       setSnackbar({ message: errorMessage, severity: 'error' })
+      return false
     } finally {
       setSaving(false)
     }
   }
 
+  const recoveryDraft = useMemo(() => ({
+    currentFlowId,
+    draft: { name: flowName, description: flowDescription, definition: buildFlowDefinition(
+      nodes.map(node => nodePanelRecovery?.dirty && nodePanelRecovery.nodeId === node.id
+        ? { ...node, data: { ...node.data, ...nodePanelRecovery.data } } : node) as AgentNode[],
+      edges as FlowEdge[], taskInstructionsDefaultOnly,
+    ) },
+  }), [currentFlowId, flowName, flowDescription, nodes, edges, taskInstructionsDefaultOnly, nodePanelRecovery])
+  const recovery = useDraftRecovery({ ownerId: recoveryOwnerId, kind: 'flow', value: recoveryDraft,
+    dirty: flowIsDirty, ready: !loading && !saving && !applyingProposal,
+    restore: (stored) => {
+      if (!isFlowRecovery(stored)) throw new Error('Invalid flow draft')
+      const draft = structuredClone(stored.draft)
+      if (stored.currentFlowId) draft.name += ' (Recovered draft)'
+      loadRequestRef.current += 1
+      displayedFlowIdRef.current = null
+      setFlowAccess(null)
+      applyDefinitionToEditor(draft)
+      setCurrentFlowId(null); setFlowUpdatedAt(null); setSavedBaseline(initialFlowDraftBaseline())
+      setSnackbar({ severity: 'success', message: 'Recovered your flow edits, including unfinished step edits. Save this draft when ready; existing saved flows are unchanged.' })
+    },
+  })
+
+  recoveryBlockedRef.current = recovery.pending
+
   // Handle new flow
-  const handleNewFlow = () => {
+  const handleNewFlow = useCallback(() => {
     loadRequestRef.current += 1
     displayedFlowIdRef.current = null
     setLoading(false)
     setFlowUnsaved(false)
-    setNodes([createInitialTaskInputNode()])
+    const initialNode = createInitialTaskInputNode()
+    setNodes([initialNode])
     setEdges([])
     setFlowName('New Flow')
     setFlowDescription('')
     setTaskInstructionsDefaultOnly(false)
     setCurrentFlowId(null)
     setFlowAccess(null)
+    setFlowUpdatedAt(null)
     setSelectedNode(null)
     nodeIdRef.current = 1  // Start from 1 since node_0 is used
-  }
+    setSavedBaseline(initialFlowDraftBaseline())
+    logger.info('Started a new Flow Builder draft', {
+      component: 'FlowBuilder',
+      action: 'new_flow',
+      metadata: { priorArtifactPresent: Boolean(currentFlowId) },
+    })
+  }, [currentFlowId, setEdges, setNodes])
 
   const addValidationAttachmentEdge = useCallback(
     (connection: Connection, binding: ValidationAttachmentSelection) => {
@@ -1384,6 +1959,28 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     ]
   )
 
+  const requestFlowReplacement = useCallback((label: string, proceed: () => void) => {
+    void confirmLeaveNode().then((nodeMayLeave) => {
+      if (!nodeMayLeave) return
+      const leaveOutcome = nodePanelGuardRef.current?.takeLastLeaveOutcome?.()
+      const currentDirty = leaveOutcome === 'applied'
+        ? true
+        : leaveOutcome === 'discarded'
+          ? appliedFlowIsDirtyRef.current
+          : flowIsDirtyRef.current
+      if (!currentDirty) {
+        proceed()
+        return
+      }
+      logger.info('Flow Builder replacement requires curator decision', {
+        component: 'FlowBuilder',
+        action: 'confirm_flow_replacement',
+        metadata: { replacement: label, dirty: true },
+      })
+      setPendingFlowReplacement({ label, proceed })
+    })
+  }, [confirmLeaveNode])
+
   // Handle node selection. Clicking another node while the panel holds
   // unapplied edits asks Apply, Discard, or Keep editing first.
   const onNodeClick = useCallback((_event: React.MouseEvent, node: { id: string; data: AgentNodeData }) => {
@@ -1423,14 +2020,19 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
       if (!data) return
 
       try {
-        const { type, agentId, agentName, agentDescription, promptVersion } = JSON.parse(data) as {
+        const { type, agentId, agentName, agentDescription, promptVersion, agentRevisionId } = JSON.parse(data) as {
           type: 'agent' | 'task_input'
           agentId: string
           agentName: string
           agentDescription: string
           promptVersion?: number
+          agentRevisionId?: string | null
         }
         if (type !== 'agent' && type !== 'task_input') return
+        if (agentId.startsWith('ca_') && !agentRevisionId) {
+          setSnackbar({ message: 'This custom agent has no saved executable revision. Save it in Workshop and refresh the catalog.', severity: 'error' })
+          return
+        }
 
         // Check if dropping task_input and one already exists
         if (type === 'task_input' || agentId === 'task_input') {
@@ -1474,7 +2076,9 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
             agent_description: agentDescription,
             task_instructions: isTaskInput ? '' : undefined,
             custom_instructions: '',
+            export_execution_mode: isOutputFormatter ? agentMetadata[agentId]?.default_export_execution_mode || 'ai' : undefined,
             prompt_version: promptVersion,
+            ...(agentId.startsWith('ca_') ? { agent_revision_id: agentRevisionId } : {}),
             include_evidence: isTaskInput
               ? undefined
               : resolveOutputFormatterIncludeEvidence(agentId, agentMetadata),
@@ -1612,12 +2216,11 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
 
   // Handle selecting a flow to load
   const handleSelectFlow = useCallback((selectedFlowId: string) => {
-    void confirmLeaveFlow().then((leave) => {
-      if (!leave) return
+    requestFlowReplacement('open another flow', () => {
       setOpenDialogOpen(false)
       void loadFlow(selectedFlowId)
     })
-  }, [loadFlow, confirmLeaveFlow])
+  }, [loadFlow, requestFlowReplacement])
 
   // Filtered flows based on search
   const filteredFlows = useMemo(() => {
@@ -1631,6 +2234,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
   // Save Dialog handlers
   const handleSaveClick = useCallback(() => {
     if (saving || renamingFlow || readOnly || loading) return
+    if (saving || applyingProposalRef.current) return
 
     setFileMenuAnchor(null)
     if (nodes.length === 0) {
@@ -1747,6 +2351,11 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
       // Update only the persisted name. Never replace draft fields or clear dirty state.
       if (displayedFlowIdRef.current === updatedFlow.id && loadRequestRef.current === loadRequestAtRename) {
         setFlowName(updatedFlow.name)
+        setFlowUpdatedAt(updatedFlow.updated_at)
+        setSavedBaseline((baseline) => ({
+          ...baseline,
+          name: updatedFlow.name,
+        }))
       }
       const updateLabel = (flows: FlowSummaryResponse[]) => flows.map((flow) => (
         flow.id === updatedFlow.id
@@ -1915,7 +2524,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!active) return
+      if (!active || recoveryBlockedRef.current) return
       if (isEditableShortcutTarget(event.target)) return
       if (!isBuilderShortcutContext(event)) return
 
@@ -1976,10 +2585,14 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
     } finally { setSharing(false) }
   }
 
-  const saveActionsDisabled = readOnly || loading || saving || renamingFlow || nodes.length === 0
+  const saveActionsDisabled = readOnly || loading || saving || renamingFlow || applyingProposal || nodes.length === 0
+
+  if (recovery.pending) return <BuilderContainer ref={builderRootRef}><DraftRecoveryNotice recovery={recovery} /></BuilderContainer>
 
   return (
     <BuilderContainer ref={builderRootRef}>
+      <DraftRecoveryNotice recovery={recovery} />
+      <Box component="fieldset" disabled={recovery.pending} sx={{ display: 'contents', border: 0, p: 0, m: 0 }}>
       {/* Unified Toolbar */}
       <Toolbar>
         {/* File Menu */}
@@ -1998,7 +2611,10 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
           anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
           transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         >
-          <StyledMenuItem onClick={() => { handleFileMenuClose(); void confirmLeaveFlow().then((leave) => { if (leave) handleNewFlow() }); }}>
+          <StyledMenuItem onClick={() => {
+            handleFileMenuClose()
+            requestFlowReplacement('start a new flow', handleNewFlow)
+          }}>
             <span>New Flow</span>
           </StyledMenuItem>
           <StyledMenuItem onClick={handleOpenDialogOpen}>
@@ -2052,6 +2668,9 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
             </Typography>
             <Shortcut>Del</Shortcut>
           </StyledMenuItem>
+          <StyledMenuItem onClick={undoAuthoringProposal} disabled={!proposalUndo}>
+            <span>Undo AI Chat Proposal</span>
+          </StyledMenuItem>
         </StyledMenu>
 
         <FileActionStrip role="toolbar" aria-label="File actions">
@@ -2060,7 +2679,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
               <FileActionButton
                 aria-label="New flow"
                 size="small"
-                onClick={() => { void confirmLeaveFlow().then((leave) => { if (leave) handleNewFlow() }) }}
+                onClick={() => requestFlowReplacement('start a new flow', handleNewFlow)}
               >
                 <NoteAddIcon />
               </FileActionButton>
@@ -2114,7 +2733,19 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
           </Tooltip>
         </FileActionStrip>
 
-        {/* Verify with Claude Button */}
+        {proposalUndo && (
+          <Button
+            onClick={undoAuthoringProposal}
+            size="small"
+            startIcon={<UndoIcon sx={{ fontSize: 14 }} />}
+            aria-label="Undo AI Chat flow proposal"
+            sx={{ ml: 1, textTransform: 'none', fontSize: '0.75rem' }}
+          >
+            Undo AI proposal
+          </Button>
+        )}
+
+        {/* Verify with AI Chat button */}
         {onVerifyRequest && nodes.length > 0 && (
           <Button
             onClick={onVerifyRequest}
@@ -2135,7 +2766,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
               },
             }}
           >
-            Verify with Claude
+            Verify with AI Chat
           </Button>
         )}
 
@@ -2166,7 +2797,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
         </Box>}
 
       <Box role="status" aria-live="polite" aria-atomic="true" sx={{ flexShrink: 0 }}>
-        {!readOnly && !loading && flowUnsaved && (
+        {!readOnly && !loading && flowIsDirty && (
           <Alert
             severity="warning"
             role="presentation"
@@ -2281,6 +2912,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
                   stepNumber={stepNumbersById[selectedEditorNode.id]}
                   stepCount={stepIds.length}
                   stepNumbersById={stepNumbersById}
+                  flowDefinition={currentFlowDefinition}
                   outputBinding={selectedOutputBinding}
                   validatorAttachment={selectedValidatorAttachment}
                   mode={panelMode}
@@ -2289,7 +2921,10 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
                   onHide={panelMode === 'drawer' ? onPaneClick : () => setNodePanelCollapsed(true)}
                   onTaskInstructionsAuthored={() => setTaskInstructionsDefaultOnly(false)}
                   onOpenAgent={onOpenAgent}
+                  onOutputHelp={onOutputHelp}
                   leaveGuardRef={nodePanelGuardRef}
+                  onDraftDirtyChange={setNodePanelDraftDirty}
+                  onDraftChange={setNodePanelRecovery}
                 />
               </NodePanelDock>
             )}
@@ -2351,6 +2986,53 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
         </DialogContent>
         <DialogActions>
           <Button onClick={handleBindingDialogClose}>Cancel</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(pendingFlowReplacement)}
+        onClose={() => setPendingFlowReplacement(null)}
+        maxWidth="xs"
+        fullWidth
+        aria-labelledby="flow-unsaved-changes-title"
+      >
+        <DialogTitle id="flow-unsaved-changes-title">Save this flow before continuing?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This draft has unsaved edits. Choose whether to keep editing, save through the existing Save action,
+            or discard the edits and {pendingFlowReplacement?.label}.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPendingFlowReplacement(null)} size="small" autoFocus>
+            Keep editing
+          </Button>
+          <Button
+            onClick={() => {
+              setPendingFlowReplacement(null)
+              handleSaveClick()
+            }}
+            size="small"
+          >
+            Save
+          </Button>
+          <Button
+            onClick={() => {
+              const replacement = pendingFlowReplacement
+              setPendingFlowReplacement(null)
+              logger.info('Curator discarded Flow Builder draft edits', {
+                component: 'FlowBuilder',
+                action: 'discard_flow_draft',
+                metadata: { replacement: replacement?.label, dirty: true },
+              })
+              replacement?.proceed()
+            }}
+            color="error"
+            variant="contained"
+            size="small"
+          >
+            Discard
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -2768,6 +3450,7 @@ function FlowBuilderInner({ flowId, flowOpenRequestId, onFlowSaved, onFlowChange
           </Alert>
         </Snackbar>
       )}
+      </Box>
     </BuilderContainer>
   );
 }

@@ -1,7 +1,10 @@
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'studio-test-user' } }) }))
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { webcrypto } from 'node:crypto'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Ref } from 'react'
+import { createTheme } from '@mui/material/styles'
 
 import AgentStudioPage from './AgentStudioPage'
 
@@ -12,6 +15,9 @@ const serviceMocks = vi.hoisted(() => ({
   listAllFlows: vi.fn(),
   cloneFlow: vi.fn(),
   cloneAgentToWorkshop: vi.fn(),
+  getWorkshopSavedReference: vi.fn(),
+  validateWorkshopAction: vi.fn(),
+  getWorkshopCloneSource: vi.fn(),
 }))
 
 const historyMocks = vi.hoisted(() => ({
@@ -19,7 +25,7 @@ const historyMocks = vi.hoisted(() => ({
   useChatHistoryTranscriptQuery: vi.fn(),
 }))
 
-const workshopMockState = vi.hoisted(() => ({ dirty: false }))
+const workshopMockState = vi.hoisted(() => ({ dirty: false, deferActionValidation: false }))
 
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/features/history/useChatHistoryQuery', () => historyMocks)
@@ -34,7 +40,9 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     initialConversation,
     durableSessionId,
     sourceSessionId,
-    onApplyWorkshopPromptUpdate,
+    onApplyWorkshopProposal,
+    onWorkshopAction,
+    captureContext,
     onDurableSessionIdChange,
     onConversationSnapshotChange,
     verifyMessage,
@@ -49,13 +57,9 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     initialConversation?: SnapshotMessage[]
     durableSessionId?: string | null
     sourceSessionId?: string
-    onApplyWorkshopPromptUpdate?: (
-      proposal: {
-        prompt: string
-        summary?: string
-        apply_mode?: 'replace' | 'targeted_edit'
-      }
-    ) => void
+    onWorkshopAction?: (action: import('@/types/promptExplorer').WorkshopAction) => Promise<void>
+    captureContext?: () => Promise<import('@/types/promptExplorer').ChatContext>
+    onApplyWorkshopProposal?: (proposal: import('@/types/promptExplorer').WorkshopAuthoringProposal) => Promise<unknown>
     onDurableSessionIdChange?: (sessionId: string) => void
     onConversationSnapshotChange?: (
       messages: Array<{ role: 'user' | 'assistant'; content: string }>
@@ -71,6 +75,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     // Mirror the real component: the current transcript is published on mount
     // and whenever the seeded conversation changes.
     const [snapshot, setSnapshot] = React.useState<SnapshotMessage[]>(initialConversation ?? [])
+    const [captured, setCaptured] = React.useState('')
     // Key on content, not identity: some tests build fresh transcript objects per render.
     const seedKey = (initialConversation ?? []).map((message) => `${message.role}:${message.content}`).join('|')
     const appliedSeedKeyRef = React.useRef(seedKey)
@@ -90,17 +95,36 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
       onConversationSnapshotChange?.(snapshot)
     }, [snapshot, onConversationSnapshotChange])
 
+    const [actionError, setActionError] = React.useState('')
     return (
     <div data-testid="opus-chat">
       Opus
       <div data-testid="opus-chat-variant">{variant ?? 'none'}</div>
       <textarea aria-label="Ask about prompts" ref={inputRef} />
-      <button aria-label={variant === 'drawer' ? 'Close Claude' : 'Hide Claude'} aria-expanded="true" aria-controls={panelId} onClick={onHide}>
+      <button aria-label={variant === 'drawer' ? 'Close AI Chat' : 'Hide AI Chat'} aria-expanded="true" aria-controls={panelId} onClick={onHide}>
         hide
       </button>
       <button onClick={() => onStreamingChange?.(true)}>start-streaming</button>
       <button onClick={() => onStreamingChange?.(false)}>stop-streaming</button>
+      <button onClick={async () => setCaptured(JSON.stringify(await captureContext?.()))}>capture-export-context</button>
+      <div data-testid="captured-export-context">{captured}</div>
       <div data-testid="opus-chat-context">{JSON.stringify(context ?? {})}</div>
+      <div data-testid="workshop-action-error">{actionError}</div>
+      <button onClick={async () => {
+        const captured = await captureContext?.()
+        if (!captured) return
+        const selected = captured.flow_definition?.nodes.find((node) => node.id === 'extract')
+        const action: import('@/types/promptExplorer').WorkshopAction = {
+          success: true, contract_version: 'workshop_action.v1', request: { action: 'open_agent', agent_id: selected?.agent_id, node_id: selected?.id },
+          label: 'Open Stock reader', source: { agent_id: selected?.agent_id || '', name: 'Stock reader', updated_at: 'now', agent_revision_id: 'old-revision' },
+          origin: { flow_id: captured.flow_id, flow_draft_fingerprint: captured.flow_draft_fingerprint || '', node_id: selected?.id, agent_id: selected?.agent_id, agent_revision_id: selected?.agent_revision_id },
+          active_tab: 'flows', flow_draft_fingerprint: captured.flow_draft_fingerprint || null,
+          workshop_draft_fingerprint: captured.agent_workshop?.draft_fingerprint || null,
+          saved: false, message: 'Nothing saved.',
+        }
+        if (!workshopMockState.deferActionValidation) serviceMocks.validateWorkshopAction.mockResolvedValue(action)
+        try { await onWorkshopAction?.(action) } catch (error) { setActionError(String(error)) }
+      }}>open-flow-agent-in-workshop</button>
       <div data-testid="opus-chat-initial-conversation">
         {(initialConversation ?? []).map((message) => message.content).join('|') || 'none'}
       </div>
@@ -117,10 +141,13 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
       </button>
       <button
         onClick={() =>
-          onApplyWorkshopPromptUpdate?.({
-            prompt: 'Prompt from Opus',
-            summary: 'Updated from chat',
-            apply_mode: 'replace',
+          onApplyWorkshopProposal?.({
+            contract_version: 'workshop_authoring_proposal.v1',
+            candidate: { prompt_draft: 'Prompt from Opus' },
+            base_draft_fingerprint: 'base',
+            candidate_draft_fingerprint: 'candidate',
+            change_summary: 'Updated from chat',
+            diff: [], findings: [],
           })
         }
       >
@@ -153,7 +180,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
   return { default: OpusChatMock }
 })
 
-const flowBuilderInstances = vi.hoisted(() => ({ count: 0 }))
+const flowBuilderInstances = vi.hoisted(() => ({ direct: false, count: 0, draft: undefined as Record<string, any> | undefined }))
 
 vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
   const react = await import('react')
@@ -164,28 +191,35 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
     onFlowChange,
     onVerifyRequest,
     active,
+    authoringContextRef,
   }: {
     flowId?: string | null
     flowOpenRequestId?: number
     onFlowChange?: (flow: Record<string, unknown>) => void
     onVerifyRequest?: () => void
     active?: boolean
+    authoringContextRef?: Ref<any>
   }) => {
     // One id per mounted instance, so a test can prove the builder was not remounted.
     const [instance] = react.useState(() => {
       flowBuilderInstances.count += 1
       return flowBuilderInstances.count
     })
+    react.useImperativeHandle(authoringContextRef, () => ({
+      captureAuthoringContext: () => flowBuilderInstances.draft,
+    }))
     return (
     <div data-testid="flow-builder" data-flow-id={flowId} data-open-request={flowOpenRequestId} data-instance={instance} data-active={String(active ?? true)}>
       Flow
       <button
-        onClick={() => onFlowChange?.({
+        onClick={() => {
+          const draft = {
           flowName: 'Propagation Flow',
           version: '1.1',
           entry_node_id: 'extract',
           nodes: [{
             id: 'extract',
+            position: { x: 250, y: 280 },
             type: 'agent',
             agent_id: 'gene_extractor',
             agent_display_name: 'Gene Extractor',
@@ -199,7 +233,11 @@ vi.mock('@/components/AgentStudio/FlowBuilder', async () => {
             ],
           }],
           edges: [],
-        })}
+          }
+          if (flowBuilderInstances.direct) draft.nodes.push({ ...draft.nodes[0], id: 'export', type: 'output', agent_id: 'csv_formatter', agent_display_name: 'CSV', output_key: 'csv', export_execution_mode: 'direct' } as typeof draft.nodes[number])
+          flowBuilderInstances.draft = draft
+          onFlowChange?.(draft)
+        }}
       >
         emit-flow-context
       </button>
@@ -233,20 +271,36 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
   const { UnsavedChangesDialog } = await import('@/components/AgentStudio/PromptWorkshop/dialogs/ConfirmDialogs')
 
   function PromptWorkshopMock({
+    onSavedHandoff,
+    continuationOrigin,
     initialCustomAgentId,
     initialParentAgentId,
-    incomingPromptUpdate,
+    authoringContextRef,
     opusConversation,
     onViewEnvelope,
     leaveGuardRef,
   }: {
+    onSavedHandoff?: (handoff: import('@/types/promptExplorer').WorkshopSavedHandoff) => void
+    continuationOrigin?: import('@/types/promptExplorer').WorkshopContinuationOrigin
     initialCustomAgentId?: string | null
     initialParentAgentId?: string | null
-    incomingPromptUpdate?: { prompt?: string } | null
+    authoringContextRef?: Ref<import('@/components/AgentStudio/PromptWorkshop/PromptWorkshop').WorkshopAuthoringContextHandle>
     opusConversation?: Array<{ content: string }>
     onViewEnvelope?: (agentId: string) => void
     leaveGuardRef?: Ref<{ requestLeave: () => Promise<boolean> }>
   }) {
+    const [incomingPrompt, setIncomingPrompt] = React.useState('')
+    React.useImperativeHandle(authoringContextRef, () => ({
+      runChatAction: () => true,
+      captureAuthoringContext: () => ({
+        prompt_draft: incomingPrompt, custom_agent_id: 'ca_integration_saved',
+        draft_is_dirty: workshopMockState.dirty,
+      }),
+      applyAuthoringProposal: async (proposal) => {
+        setIncomingPrompt(proposal.candidate.prompt_draft ?? '')
+        return { applied: true, message: 'Applied' }
+      },
+    }))
     const [pendingLeave, setPendingLeave] = React.useState<((leave: boolean) => void) | null>(null)
     React.useImperativeHandle(leaveGuardRef, () => ({
       requestLeave: () => {
@@ -256,7 +310,12 @@ vi.mock('@/components/AgentStudio/PromptWorkshop/PromptWorkshop', async () => {
     }))
     return (
       <div data-testid="prompt-workshop">
-        custom:{initialCustomAgentId || 'none'} parent:{initialParentAgentId || 'none'} incoming:{incomingPromptUpdate?.prompt || 'none'} conversation:{(opusConversation ?? []).map((message) => message.content).join('|') || 'none'}
+        <div data-testid="continuation-origin">{continuationOrigin?.flow_draft_fingerprint}</div>
+        <button onClick={() => onSavedHandoff?.({
+          status: 'ready', saved_agent_id: 'ca_integration_saved',
+          saved_custom_agent_id: 'saved-uuid', saved_agent_revision_id: 'saved-revision', origin: continuationOrigin,
+        })}>emit-confirmed-save</button>
+        custom:{initialCustomAgentId || 'none'} parent:{initialParentAgentId || 'none'} incoming:{incomingPrompt || 'none'} conversation:{(opusConversation ?? []).map((message) => message.content).join('|') || 'none'}
         <button type="button" onClick={() => onViewEnvelope?.('gene')}>view-envelope</button>
         <UnsavedChangesDialog
           open={Boolean(pendingLeave)}
@@ -397,6 +456,10 @@ describe('AgentStudioPage', () => {
     serviceMocks.listToolIdeaRequests.mockResolvedValue({ tool_ideas: [{ id: 'idea', title: 'Library idea', description: 'Reusable summary', user_id: 20, project_id: 'team', status: 'submitted' }] })
     serviceMocks.listAllFlows.mockResolvedValue({ flows: [{ id: 'shared-flow', name: 'Library flow', user_id: 20, visibility: 'project', project_id: 'team', is_owner: false }] })
     serviceMocks.cloneFlow.mockResolvedValue({ id: 'private-flow-copy', is_owner: true, visibility: 'private' })
+    workshopMockState.deferActionValidation = false
+    flowBuilderInstances.draft = undefined
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto })
+    serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: 'ca_integration_saved', agent_revision_id: 'saved-revision', name: 'Saved agent' })
     serviceMocks.fetchPromptCatalog.mockResolvedValue(EMPTY_CATALOG)
     serviceMocks.cloneAgentToWorkshop.mockResolvedValue({
       id: '11111111-1111-1111-1111-111111111111',
@@ -438,24 +501,41 @@ describe('AgentStudioPage', () => {
     expect(serviceMocks.cloneAgentToWorkshop).toHaveBeenCalledWith('ca_shared-agent')
   })
 
+  it.each([false, true])('guards a library clone replacing the mounted Workshop (discard=%s)', async (discard) => {
+    workshopMockState.dirty = true
+    await renderStudio(['/agent-studio?tab=agent_workshop'])
+    const editor = await screen.findByTestId('prompt-workshop')
+    fireEvent.click(screen.getByRole('tab', { name: 'Shared Library' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Clone to Workshop' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    expect(editor).toHaveTextContent('custom:none')
+    fireEvent.click(within(dialog).getByRole('button', { name: discard ? 'Discard' : 'Keep editing' }))
+    await waitFor(() => expect(editor).toBeVisible())
+    expect(editor).toHaveTextContent(discard ? 'custom:11111111-1111-1111-1111-111111111111' : 'custom:none')
+    expect(screen.getByTestId('prompt-workshop')).toBe(editor)
+    expect(serviceMocks.cloneAgentToWorkshop).toHaveBeenCalledTimes(1)
+  })
+
   it('opens summary context in chat without sending an unsupported library active tab', async () => {
     await renderStudio(['/agent-studio?tab=shared_library'])
     fireEvent.click(await screen.findByRole('button', { name: 'Open request context' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Discuss request with Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss request with AI Chat' }))
     expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Reusable summary')
     expect(screen.getByTestId('opus-chat-context')).not.toHaveTextContent('"active_tab"')
   })
 
-  it('guards leaving a dirty Workshop for the library', async () => {
+  it('preserves the dirty Workshop while visiting the library', async () => {
     workshopMockState.dirty = true
     await renderStudio(['/agent-studio?tab=agent_workshop'])
-    await screen.findByTestId('prompt-workshop')
+    const editor = await screen.findByTestId('prompt-workshop')
     fireEvent.click(screen.getByRole('tab', { name: 'Shared Library' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument())
+    await screen.findByText('Library flow')
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
+    expect(editor).not.toBeVisible()
+    expect(screen.getByTestId('prompt-workshop')).toBe(editor)
+    fireEvent.click(screen.getByRole('tab', { name: 'Agent Workshop' }))
     expect(screen.getByRole('tab', { name: 'Agent Workshop' })).toHaveAttribute('aria-selected', 'true')
-    expect(serviceMocks.listAllFlows).not.toHaveBeenCalled()
+    expect(editor).toBeVisible()
   })
 
   it('opens the Flows tab and requested shared flow from Home Tools', async () => {
@@ -464,6 +544,163 @@ describe('AgentStudioPage', () => {
     expect(builder).toHaveAttribute('data-flow-id', 'shared-flow')
     expect(builder).toHaveAttribute('data-active', 'true')
   })
+  it('preserves direct export in displayed and captured Chat context', async () => {
+    flowBuilderInstances.direct = true
+    try {
+      await renderStudio()
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      fireEvent.click(await screen.findByText('emit-flow-context'))
+      await waitFor(() => {
+        const context = JSON.parse(screen.getByTestId('opus-chat-context').textContent || '{}')
+        expect(context.flow_definition.nodes.find((node: { id: string }) => node.id === 'export').export_execution_mode).toBe('direct')
+      })
+      fireEvent.click(screen.getByText('capture-export-context'))
+      await waitFor(() => {
+        const context = JSON.parse(screen.getByTestId('captured-export-context').textContent || '{}')
+        expect(context.flow_definition.nodes.find((node: { id: string }) => node.id === 'export').export_execution_mode).toBe('direct')
+      })
+    } finally { flowBuilderInstances.direct = false }
+  })
+
+  it('preserves the selected tab when it changes during Chat action validation', async () => {
+    await renderStudio()
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+    fireEvent.click(await screen.findByText('emit-flow-context'))
+    workshopMockState.deferActionValidation = true
+    let finishValidation: (() => void) | undefined
+    serviceMocks.validateWorkshopAction.mockImplementation((request, context) => new Promise((resolve) => {
+      const selected = context.flow_definition.nodes.find((node: { id: string }) => node.id === 'extract')
+      finishValidation = () => resolve({
+        success: true, contract_version: 'workshop_action.v1', request,
+        label: 'Open Stock reader', source: { agent_id: selected.agent_id, name: 'Stock reader', updated_at: 'now', agent_revision_id: 'old-revision' },
+        origin: { flow_id: context.flow_id, flow_draft_fingerprint: context.flow_draft_fingerprint, node_id: selected.id, agent_id: selected.agent_id, agent_revision_id: selected.agent_revision_id },
+        active_tab: 'flows', flow_draft_fingerprint: context.flow_draft_fingerprint || null,
+        workshop_draft_fingerprint: context.agent_workshop?.draft_fingerprint || null,
+        saved: false, message: 'Nothing saved.',
+      })
+    }))
+    fireEvent.click(screen.getByText('open-flow-agent-in-workshop'))
+    await waitFor(() => expect(finishValidation).toBeDefined())
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
+    await act(async () => finishValidation!())
+    expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByTestId('prompt-workshop')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workshop-action-error')).toHaveTextContent('your edits have been kept')
+  })
+
+  it.each(['ready', 'newer_head'])('returns an edited custom agent to its exact originating step: %s', async (outcome) => {
+    await renderStudio()
+    await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+    fireEvent.click(await screen.findByText('emit-flow-context'))
+    const first = flowBuilderInstances.draft!.nodes[0]
+    first.agent_id = 'ca_integration_saved'
+    first.agent_revision_id = 'old-revision'
+    flowBuilderInstances.draft!.nodes.push({ ...first, id: 'another-use', output_key: 'other' })
+    const unchanged = JSON.stringify(flowBuilderInstances.draft)
+    fireEvent.click(screen.getByText('open-flow-agent-in-workshop'))
+    await screen.findByTestId('prompt-workshop')
+    expect(screen.getByTestId('workshop-action-error')).toBeEmptyDOMElement()
+    fireEvent.click(screen.getByText('emit-confirmed-save'))
+    const review = await screen.findByRole('button', { name: 'Review in Flow' })
+    if (outcome === 'newer_head') serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: 'ca_integration_saved', agent_revision_id: 'someone-elses-later-save', name: 'Stock reader' })
+    fireEvent.click(review)
+    if (outcome === 'ready') {
+      await waitFor(() => expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('retarget_agent_revision'))
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('only flow step extract')
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('saved-revision')
+    } else {
+      await screen.findByText('The agent handoff needs a fresh catalog or flow review before continuation.')
+      expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-active', 'false')
+    }
+    expect(JSON.stringify(flowBuilderInstances.draft)).toBe(unchanged)
+    expect(serviceMocks.cloneAgentToWorkshop).not.toHaveBeenCalled()
+  })
+
+  it.each(['ready', 'streaming', 'manual', 'changed'])(
+    'resumes a saved-agent handoff on returning to Flows only when appropriate: %s', async outcome => {
+      render(<MemoryRouter><AgentStudioPage /></MemoryRouter>)
+      await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalled())
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      fireEvent.click(await screen.findByText('emit-flow-context'))
+      const original = JSON.stringify(flowBuilderInstances.draft)
+      if (outcome !== 'manual') fireEvent.click(screen.getByText('simulate-live-conversation'))
+      fireEvent.click(screen.getByRole('tab', { name: 'Agent Workshop' }))
+      await waitFor(() => expect(screen.getByTestId('continuation-origin')).toHaveTextContent('sha256:'))
+      fireEvent.click(screen.getByText('emit-confirmed-save'))
+      await screen.findByRole('button', { name: 'Review in Flow' })
+      if (outcome === 'streaming') fireEvent.click(screen.getByText('start-streaming'))
+      if (outcome === 'changed') workshopMockState.dirty = true
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      if (outcome === 'streaming') {
+        expect(serviceMocks.getWorkshopSavedReference).not.toHaveBeenCalled()
+        fireEvent.click(screen.getByText('stop-streaming'))
+      }
+      if (outcome === 'manual') {
+        expect(serviceMocks.getWorkshopSavedReference).not.toHaveBeenCalled()
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('none')
+      } else if (outcome === 'changed') {
+        expect(await screen.findByText(/The saved agent needs a fresh review/)).toBeVisible()
+        expect(serviceMocks.getWorkshopSavedReference).not.toHaveBeenCalled()
+      } else {
+        await waitFor(() => expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('propose_flow_draft_update'))
+        expect(serviceMocks.getWorkshopSavedReference).toHaveBeenCalledTimes(1)
+        fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
+        fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+        expect(serviceMocks.getWorkshopSavedReference).toHaveBeenCalledTimes(1)
+      }
+      expect(JSON.stringify(flowBuilderInstances.draft)).toBe(original)
+    },
+  )
+
+  it.each(['ready', 'revoked', 'wrong_identity', 'flow_changed', 'workshop_changed', 'edit_during_lookup'])(
+    'integrates Workshop Save with reviewed Flow continuation: %s', async (outcome) => {
+      render(<MemoryRouter><AgentStudioPage /></MemoryRouter>)
+      await waitFor(() => expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalled())
+      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
+      fireEvent.click(await screen.findByText('emit-flow-context'))
+      const original = JSON.stringify(flowBuilderInstances.draft)
+      const instance = screen.getByTestId('flow-builder').getAttribute('data-instance')
+      fireEvent.click(screen.getByRole('tab', { name: 'Agent Workshop' }))
+      await waitFor(() => expect(screen.getByTestId('continuation-origin')).toHaveTextContent('sha256:'))
+      expect(screen.queryByRole('button', { name: 'Review in Flow' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByText('emit-confirmed-save'))
+      const review = await screen.findByRole('button', { name: 'Review in Flow' })
+      expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('none')
+      if (outcome === 'revoked') serviceMocks.getWorkshopSavedReference.mockRejectedValue(new Error('Not available'))
+      if (outcome === 'wrong_identity') serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: 'ca_other' })
+      if (outcome === 'flow_changed') flowBuilderInstances.draft!.nodes[0].step_goal = 'Manual edit'
+      if (outcome === 'workshop_changed') workshopMockState.dirty = true
+      let completeLookup: ((value: { agent_id: string }) => void) | undefined
+      if (outcome === 'edit_during_lookup') {
+        serviceMocks.getWorkshopSavedReference.mockImplementation(() => new Promise((resolve) => { completeLookup = resolve }))
+      }
+      fireEvent.click(review)
+      if (outcome === 'edit_during_lookup') {
+        await waitFor(() => expect(completeLookup).toBeDefined())
+        expect(screen.getByRole('button', { name: 'Checking…' })).toBeDisabled()
+        flowBuilderInstances.draft!.nodes[0].step_goal = 'Manual edit'
+        await act(async () => completeLookup!({ agent_id: 'ca_integration_saved' }))
+      }
+      if (outcome === 'ready') {
+        await waitFor(() => expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-active', 'true'))
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('ca_integration_saved')
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('propose_flow_draft_update')
+        expect(serviceMocks.getWorkshopSavedReference).toHaveBeenCalledWith('saved-uuid')
+      } else {
+        await screen.findByText('The agent handoff needs a fresh catalog or flow review before continuation.')
+        expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-active', 'false')
+        expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('none')
+      }
+      expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-instance', instance)
+      if (!['flow_changed', 'edit_during_lookup'].includes(outcome)) {
+        expect(JSON.stringify(flowBuilderInstances.draft)).toBe(original)
+      } else {
+        expect(flowBuilderInstances.draft!.nodes[0].step_goal).toBe('Manual edit')
+      }
+    },
+  )
 
   it('maps verification fields from FlowBuilder state into chat context', async () => {
     render(
@@ -484,6 +721,13 @@ describe('AgentStudioPage', () => {
       expect(context).toHaveTextContent('"prompt_version":11')
       expect(context).toHaveTextContent('"state":"replaced"')
       expect(context).toHaveTextContent('"state":"supplemental"')
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Agent Workshop' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('opus-chat-context')).toHaveTextContent(
+        '"flow_name":"Propagation Flow"'
+      )
     })
   })
 
@@ -560,60 +804,30 @@ describe('AgentStudioPage', () => {
         expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true')
       })
       expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
-      expect(screen.queryByTestId('prompt-workshop')).not.toBeInTheDocument()
+      expect(screen.getByTestId('prompt-workshop')).not.toBeVisible()
       expect(localStorage.getItem('agent-studio-tab')).toBe('agents')
     })
 
-    it('stays on the Workshop after Keep editing', async () => {
+    it.each(['Flows', 'Agents'])('keeps the dirty Workshop mounted when switching to %s', async (tab) => {
       workshopMockState.dirty = true
       await renderOnWorkshop()
-
-      fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
-      const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
-
-      await waitFor(() => {
-        expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
-      })
-      expect(screen.getByRole('tab', { name: 'Agent Workshop' })).toHaveAttribute('aria-selected', 'true')
-      expect(screen.getByTestId('prompt-workshop')).toBeInTheDocument()
-      expect(localStorage.getItem('agent-studio-tab')).toBe('agent_workshop')
+      const editor = screen.getByTestId('prompt-workshop')
+      fireEvent.click(screen.getByRole('tab', { name: tab }))
+      await waitFor(() => expect(screen.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true'))
+      expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
+      expect(screen.getByTestId('prompt-workshop')).toBe(editor)
+      expect(editor).not.toBeVisible()
+      fireEvent.click(screen.getByRole('tab', { name: 'Agent Workshop' }))
+      await waitFor(() => expect(editor).toBeVisible())
     })
 
-    it('switches tabs and drops the Workshop after Discard', async () => {
+    it('preserves the Workshop while viewing an envelope', async () => {
       workshopMockState.dirty = true
       await renderOnWorkshop()
-
-      fireEvent.click(screen.getByRole('tab', { name: 'Agents' }))
-      const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }))
-
-      await waitFor(() => {
-        expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true')
-      })
-      expect(screen.queryByTestId('prompt-workshop')).not.toBeInTheDocument()
-      expect(localStorage.getItem('agent-studio-tab')).toBe('agents')
-    })
-
-    it('guards the programmatic switch to the Agents envelope view', async () => {
-      workshopMockState.dirty = true
-      await renderOnWorkshop()
-
       fireEvent.click(screen.getByRole('button', { name: 'view-envelope' }))
-      const dialog = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
-      await waitFor(() => {
-        expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
-      })
-      expect(screen.getByRole('tab', { name: 'Agent Workshop' })).toHaveAttribute('aria-selected', 'true')
-
-      fireEvent.click(screen.getByRole('button', { name: 'view-envelope' }))
-      const dialogAgain = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
-      fireEvent.click(within(dialogAgain).getByRole('button', { name: 'Discard' }))
-      await waitFor(() => {
-        expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true')
-      })
-      expect(screen.queryByTestId('prompt-workshop')).not.toBeInTheDocument()
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true'))
+      expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument()
+      expect(screen.getByTestId('prompt-workshop')).not.toBeVisible()
     })
   })
 
@@ -808,7 +1022,7 @@ describe('AgentStudioPage', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('location-search')).toHaveTextContent(
-        '?trace_id=trace-789&session_id=agent-studio-session-999'
+        '?trace_id=trace-789&tab=agents&session_id=agent-studio-session-999'
       )
     })
   })
@@ -1015,18 +1229,18 @@ describe('AgentStudioPage', () => {
       expect(panels[1]).toHaveAttribute('data-panel-size', '30.0')
       expect(panels[1]).toHaveAttribute('data-panel-collapsible', 'true')
       expect(screen.getByTestId('opus-chat-variant')).toHaveTextContent('panel')
-      expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
     })
 
     it('collapses Claude to a rail and restores it without remounting the chat', async () => {
       await renderStudio()
       const chatBefore = screen.getByTestId('opus-chat')
 
-      const hideButton = screen.getByRole('button', { name: 'Hide Claude' })
+      const hideButton = screen.getByRole('button', { name: 'Hide AI Chat' })
       expect(hideButton).toHaveAttribute('aria-controls', 'agent-studio-claude-panel')
       fireEvent.click(hideButton)
 
-      const showButton = await screen.findByRole('button', { name: 'Show Claude' })
+      const showButton = await screen.findByRole('button', { name: 'Show AI Chat' })
       expect(showButton).toHaveAttribute('aria-expanded', 'false')
       expect(showButton).toHaveAttribute('aria-controls', 'agent-studio-claude-panel')
       expect(getPanelSize('agent-studio-claude-panel')).toBe('0.0')
@@ -1040,7 +1254,7 @@ describe('AgentStudioPage', () => {
       fireEvent.click(showButton)
 
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
       })
       expect(getPanelSize('agent-studio-claude-panel')).toBe('30.0')
       expect(screen.getByTestId('opus-chat')).toBe(chatBefore)
@@ -1054,57 +1268,57 @@ describe('AgentStudioPage', () => {
     it('shows unread and streaming indicators on the rail and clears unread on show', async () => {
       await renderStudio()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Hide Claude' }))
-      const showButton = await screen.findByRole('button', { name: 'Show Claude' })
+      fireEvent.click(screen.getByRole('button', { name: 'Hide AI Chat' }))
+      const showButton = await screen.findByRole('button', { name: 'Show AI Chat' })
       expect(showButton).not.toHaveAccessibleDescription()
-      expect(screen.queryByRole('progressbar', { name: 'Claude is writing' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('progressbar', { name: 'AI Chat is responding' })).not.toBeInTheDocument()
 
       fireEvent.click(screen.getByText('start-streaming'))
-      expect(screen.getByRole('progressbar', { name: 'Claude is writing' })).toBeInTheDocument()
+      expect(screen.getByRole('progressbar', { name: 'AI Chat is responding' })).toBeInTheDocument()
 
       fireEvent.click(screen.getByText('simulate-live-conversation'))
       await waitFor(() => {
-        expect(showButton).toHaveAccessibleDescription('2 new messages from Claude')
+        expect(showButton).toHaveAccessibleDescription('2 new messages from AI Chat')
       })
 
       fireEvent.click(screen.getByText('stop-streaming'))
-      expect(screen.queryByRole('progressbar', { name: 'Claude is writing' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('progressbar', { name: 'AI Chat is responding' })).not.toBeInTheDocument()
 
       fireEvent.click(showButton)
-      fireEvent.click(await screen.findByRole('button', { name: 'Hide Claude' }))
-      expect(await screen.findByRole('button', { name: 'Show Claude' })).not.toHaveAccessibleDescription()
+      fireEvent.click(await screen.findByRole('button', { name: 'Hide AI Chat' }))
+      expect(await screen.findByRole('button', { name: 'Show AI Chat' })).not.toHaveAccessibleDescription()
     })
 
     it('does not count assistant messages that arrive while Claude is visible', async () => {
       await renderStudio()
 
       fireEvent.click(screen.getByText('simulate-live-conversation'))
-      fireEvent.click(screen.getByRole('button', { name: 'Hide Claude' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Hide AI Chat' }))
 
-      expect(await screen.findByRole('button', { name: 'Show Claude' })).not.toHaveAccessibleDescription()
+      expect(await screen.findByRole('button', { name: 'Show AI Chat' })).not.toHaveAccessibleDescription()
     })
 
     it('toggles Claude with Ctrl+. and Cmd+.', async () => {
       await renderStudio()
 
       fireEvent.keyDown(window, { key: '.', ctrlKey: true })
-      expect(await screen.findByRole('button', { name: 'Show Claude' })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: 'Show AI Chat' })).toBeInTheDocument()
 
       fireEvent.keyDown(window, { key: '.', metaKey: true })
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
       })
-      expect(screen.getByRole('button', { name: 'Hide Claude' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Hide AI Chat' })).toBeInTheDocument()
 
       fireEvent.keyDown(window, { key: '.' })
-      expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
     })
 
     it('applies a persisted collapsed flag at desktop widths', async () => {
       localStorage.setItem(COLLAPSED_KEY, 'true')
       await renderStudio()
 
-      expect(screen.getByRole('button', { name: 'Show Claude' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Show AI Chat' })).toBeInTheDocument()
       expect(getPanelSize('agent-studio-claude-panel')).toBe('0.0')
       expect(screen.getByTestId('opus-chat')).toBeInTheDocument()
     })
@@ -1145,8 +1359,8 @@ describe('AgentStudioPage', () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Flows' }))
       expect(screen.getByTestId('flow-builder')).toBeInTheDocument()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Hide Claude' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'Show Claude' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Hide AI Chat' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Show AI Chat' }))
 
       expect(screen.getByRole('tab', { name: 'Flows' })).toHaveAttribute('aria-selected', 'true')
       expect(screen.getByTestId('flow-builder')).toBeInTheDocument()
@@ -1159,10 +1373,10 @@ describe('AgentStudioPage', () => {
       await renderStudio()
 
       expect(document.querySelectorAll('[data-panel]')).toHaveLength(1)
-      expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
 
-      const launcher = screen.getByRole('button', { name: 'Claude' })
+      const launcher = screen.getByRole('button', { name: 'AI Chat' })
       expect(launcher).toHaveAttribute('aria-expanded', 'false')
       expect(launcher).toHaveAttribute('aria-controls', 'agent-studio-claude-drawer')
       const chatBefore = screen.getByTestId('opus-chat')
@@ -1170,13 +1384,15 @@ describe('AgentStudioPage', () => {
 
       fireEvent.click(screen.getByText('simulate-live-conversation'))
       await waitFor(() => {
-        expect(launcher).toHaveAccessibleDescription('2 new messages from Claude')
+        expect(launcher).toHaveAccessibleDescription('2 new messages from AI Chat')
       })
 
       fireEvent.click(launcher)
 
-      const dialog = await screen.findByRole('dialog', { name: 'Claude' })
+      const dialog = await screen.findByRole('dialog', { name: 'AI Chat' })
       expect(dialog).toHaveAttribute('aria-modal', 'true')
+      // The AppBar sits at drawer + 1; the modal root must clear it, not just its paper.
+      expect(dialog.closest('.MuiDrawer-root')).toHaveStyle({ zIndex: createTheme().zIndex.modal })
       expect(launcher).toHaveAttribute('aria-expanded', 'true')
       expect(launcher).not.toHaveAccessibleDescription()
       expect(within(dialog).getByTestId('opus-chat')).toBe(chatBefore)
@@ -1184,9 +1400,9 @@ describe('AgentStudioPage', () => {
         expect(screen.getByRole('textbox', { name: 'Ask about prompts' })).toHaveFocus()
       })
 
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Close Claude' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close AI Chat' }))
       await waitFor(() => {
-        expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
       })
       expect(screen.getByTestId('opus-chat')).toBe(chatBefore)
       await waitFor(() => {
@@ -1194,14 +1410,14 @@ describe('AgentStudioPage', () => {
       })
 
       fireEvent.click(launcher)
-      const reopened = await screen.findByRole('dialog', { name: 'Claude' })
+      const reopened = await screen.findByRole('dialog', { name: 'AI Chat' })
       fireEvent.keyDown(reopened, { key: 'Escape' })
       await waitFor(() => {
-        expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
       })
 
       fireEvent.keyDown(window, { key: '.', ctrlKey: true })
-      expect(await screen.findByRole('dialog', { name: 'Claude' })).toBeInTheDocument()
+      expect(await screen.findByRole('dialog', { name: 'AI Chat' })).toBeInTheDocument()
       // The drawer is never persisted; the collapsed flag is untouched at narrow widths.
       expect(localStorage.getItem(COLLAPSED_KEY)).toBe('true')
     })
@@ -1210,8 +1426,8 @@ describe('AgentStudioPage', () => {
       mockViewportWidth(1000)
       await renderStudio()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Claude' }))
-      await screen.findByRole('dialog', { name: 'Claude' })
+      fireEvent.click(screen.getByRole('button', { name: 'AI Chat' }))
+      await screen.findByRole('dialog', { name: 'AI Chat' })
 
       const backdrop = document.querySelector('#agent-studio-claude-drawer .MuiBackdrop-root')
       expect(backdrop).not.toBeNull()
@@ -1219,7 +1435,7 @@ describe('AgentStudioPage', () => {
         fireEvent.click(backdrop as Element)
       })
       await waitFor(() => {
-        expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
       })
     })
     it('does not count a restored conversation as unread when Claude starts collapsed', async () => {
@@ -1253,12 +1469,12 @@ describe('AgentStudioPage', () => {
           'Restored question|Restored answer'
         )
       })
-      const showButton = screen.getByRole('button', { name: 'Show Claude' })
+      const showButton = screen.getByRole('button', { name: 'Show AI Chat' })
       expect(showButton).not.toHaveAccessibleDescription()
 
       fireEvent.click(screen.getByText('append-assistant-reply'))
       await waitFor(() => {
-        expect(showButton).toHaveAccessibleDescription('1 new message from Claude')
+        expect(showButton).toHaveAccessibleDescription('1 new message from AI Chat')
       })
     })
 
@@ -1311,26 +1527,26 @@ describe('AgentStudioPage', () => {
           'Restored question|Restored answer'
         )
       })
-      const showButton = screen.getByRole('button', { name: 'Show Claude' })
+      const showButton = screen.getByRole('button', { name: 'Show AI Chat' })
       expect(showButton).not.toHaveAccessibleDescription()
 
       fireEvent.click(screen.getByText('append-assistant-reply'))
       await waitFor(() => {
-        expect(showButton).toHaveAccessibleDescription('1 new message from Claude')
+        expect(showButton).toHaveAccessibleDescription('1 new message from AI Chat')
       })
     })
 
     it('reveals a collapsed Claude and focuses the input when a discuss request arrives', async () => {
       localStorage.setItem(COLLAPSED_KEY, 'true')
       await renderStudio()
-      expect(screen.getByRole('button', { name: 'Show Claude' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Show AI Chat' })).toBeInTheDocument()
 
       fireEvent.click(screen.getByText('discuss-agent'))
 
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
       })
-      expect(screen.getByRole('button', { name: 'Hide Claude' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Hide AI Chat' })).toBeInTheDocument()
       expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Agent ID: gene')
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: 'Ask about prompts' })).toHaveFocus()
@@ -1340,11 +1556,11 @@ describe('AgentStudioPage', () => {
     it('opens the drawer and focuses the input when a discuss request arrives at narrow width', async () => {
       mockViewportWidth(1000)
       await renderStudio()
-      expect(screen.queryByRole('dialog', { name: 'Claude' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('dialog', { name: 'AI Chat' })).not.toBeInTheDocument()
 
       fireEvent.click(screen.getByText('discuss-agent'))
 
-      expect(await screen.findByRole('dialog', { name: 'Claude' })).toBeInTheDocument()
+      expect(await screen.findByRole('dialog', { name: 'AI Chat' })).toBeInTheDocument()
       expect(screen.getByTestId('opus-chat-discuss-message')).toHaveTextContent('Agent ID: gene')
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: 'Ask about prompts' })).toHaveFocus()
@@ -1359,7 +1575,7 @@ describe('AgentStudioPage', () => {
       fireEvent.click(await screen.findByText('verify-flow'))
 
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Show Claude' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Show AI Chat' })).not.toBeInTheDocument()
       })
       expect(screen.getByTestId('opus-chat-verify-message')).toHaveTextContent('get_current_flow() first')
     })

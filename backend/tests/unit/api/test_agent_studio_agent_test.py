@@ -115,7 +115,8 @@ class TestAgentTestEndpoint:
 
         async def _fake_run_agent_streamed(**kwargs):
             run_kwargs.update(kwargs)
-            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123",
+                "execution_receipt": {"agent_key": "ca_pinned", "revision": 4}}}
             yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "hello"}}
             yield {
                 "type": "RUN_FINISHED",
@@ -154,6 +155,7 @@ class TestAgentTestEndpoint:
         assert '"delta": "hello"' in stream_text
         assert '"type": "DONE"' in stream_text
         assert '"trace_id": "trace-123"' in stream_text
+        assert '"execution_receipt": {"agent_key": "ca_pinned", "revision": 4}' in stream_text
         assert '"session_id": "session-1"' in stream_text
         assert run_kwargs["active_groups"] == ["WB"]
         assert agent_kwargs["active_groups"] == ["WB"]
@@ -570,6 +572,7 @@ class TestAgentWorkshopSystemPrompt:
             "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS",
             "8",
         )
+        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "4000")
 
         draft = "A" * 15
         group_draft = "WB GROUP DRAFT CONTENT"
@@ -584,9 +587,20 @@ class TestAgentWorkshopSystemPrompt:
                 selected_group_id="WB",
                 prompt_draft=draft,
                 selected_group_prompt_draft=group_draft,
+                getting_started_mode="clone",
+                draft_name="Exact draft name",
+                draft_description="Exact draft description",
+                draft_icon="science",
+                draft_visibility="project",
+                draft_allowed_group_ids=["FB", "WB"],
+                inherited_allowed_group_ids=["MGI"],
+                group_prompt_overrides={"WB": group_draft, "FB": "FB exact override"},
                 group_prompt_override_count=2,
                 has_group_prompt_overrides=True,
                 draft_tool_ids=["search_document", "read_section", "read_subsection", "agr_curation_query"],
+                draft_output_schema_key="gene",
+                draft_is_dirty=True,
+                draft_fingerprint=f"sha256:{'a' * 64}",
             ),
         )
 
@@ -594,14 +608,24 @@ class TestAgentWorkshopSystemPrompt:
 
         assert "<agent_workshop_context>" in system_prompt
         assert "Current Context: Agent Workshop" in system_prompt
-        assert "Template source: Gene Validation" in system_prompt
-        assert "Custom agent: Gene Custom v3" in system_prompt
-        assert "Selected group: WB" in system_prompt
-        assert "Has group prompt overrides: Yes" in system_prompt
-        assert "Group override count: 2" in system_prompt
-        assert "Draft attached tools: search_document, read_section, read_subsection, agr_curation_query" in system_prompt
+        assert '"template_name":"Gene Validation"' in system_prompt
+        assert '"custom_agent_name":"Gene Custom v3"' in system_prompt
+        assert '"selected_group_id":"WB"' in system_prompt
+        assert '"getting_started_mode":"clone"' in system_prompt
+        assert '"draft_name":"Exact draft name"' in system_prompt
+        assert '"draft_description":"Exact draft description"' in system_prompt
+        assert '"draft_icon":"science"' in system_prompt
+        assert '"draft_visibility":"project"' in system_prompt
+        assert '"draft_allowed_group_ids":["FB","WB"]' in system_prompt
+        assert '"inherited_allowed_group_ids":["MGI"]' in system_prompt
+        assert '"group_prompt_override_ids":["FB","WB"]' in system_prompt
+        assert '"draft_output_schema_key":"gene"' in system_prompt
+        assert '"draft_is_dirty":true' in system_prompt
+        assert f'"draft_fingerprint":"sha256:{"a" * 64}"' in system_prompt
+        assert "every ID listed in `group_prompt_override_ids` is callable" in system_prompt
+        assert '"draft_tool_ids":["search_document","read_section","read_subsection","agr_curation_query"]' in system_prompt
         assert "proactively identify concrete prompt improvements during normal conversation" in system_prompt
-        assert "ask for permission in plain language" in system_prompt
+        assert "requires no preliminary permission" in system_prompt
         assert "distilled OpenAI-style prompt playbook" in system_prompt
         assert "put core instructions first, then separate context/examples with clear delimiters" in system_prompt
         assert "gpt-5.6-sol" in system_prompt
@@ -631,6 +655,35 @@ class TestAgentWorkshopSystemPrompt:
         assert system_prompt.count("follow each `next_call`") >= 2
         assert system_prompt.count("until `complete=true`") >= 2
         assert "Prompt injection note:" in system_prompt
+
+    def test_build_opus_system_prompt_bounds_workshop_metadata_preview(
+        self,
+        monkeypatch,
+    ):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import AgentWorkshopContext, ChatContext
+
+        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "80")
+        monkeypatch.setattr(
+            api_module,
+            "_load_agent_studio_system_prompt_template",
+            lambda: "{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+        )
+        description = "D" * 500
+        context = ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                draft_name="Large metadata draft",
+                draft_description=description,
+                draft_tool_ids=[f"tool-{index}" for index in range(100)],
+            ),
+        )
+
+        system_prompt = api_module._build_opus_system_prompt(context)
+
+        assert description not in system_prompt
+        assert "Incomplete metadata preview: retained 80 of" in system_prompt
+        assert '`target_prompt="metadata"`' in system_prompt
 
     def test_load_system_prompt_template_uses_package_selection(self, monkeypatch):
         from src.api import agent_studio as api_module
@@ -781,7 +834,7 @@ class TestAgentWorkshopSystemPrompt:
         )
 
         assert "use `refresh_workshop_prompt` before judging" in system_prompt
-        assert "use `get_tool_inventory` and `get_tool_details`" in system_prompt
+        assert "inspect runtime tool schemas only when the requested change depends on their arguments" in system_prompt
         assert "`record_evidence(span_ids=[...])` creates backend-copied evidence" in system_prompt
         assert "Do not propose instructions that ask agents to generate quote strings" in system_prompt
 
@@ -797,7 +850,26 @@ class TestAgentWorkshopSystemPrompt:
         )
         tool_names = {tool.get("name") for tool in tools}
 
-        assert "update_workshop_prompt_draft" in tool_names
+        assert "propose_workshop_draft_update" in tool_names
+
+    def test_live_capability_catalog_is_available_across_authoring_tabs(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext
+
+        for active_tab in ("agents", "flows", "agent_workshop"):
+            tools = api_module._get_all_opus_tools(ChatContext(active_tab=active_tab))
+            tool_names = {tool.get("name") for tool in tools}
+            assert {
+                "search_studio_capabilities",
+                "get_studio_capability_detail",
+            } <= tool_names
+
+        namespaces: dict[str, set[str]] = {}
+        for tool in api_module._get_all_opus_tools(ChatContext(active_tab="agents")):
+            name = str(tool.get("name") or "")
+            namespace, _ = api_module._agent_studio_tool_namespace(name)
+            namespaces.setdefault(namespace, set()).add(name)
+        assert max(map(len, namespaces.values())) < 10
 
     def test_get_all_opus_tools_excludes_flow_tools_outside_flows_tab(self):
         from src.api import agent_studio as api_module
@@ -819,9 +891,44 @@ class TestAgentWorkshopSystemPrompt:
 
     def test_get_all_opus_tools_includes_flow_tools_on_flows_tab(self):
         from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext
+        from src.lib.agent_studio.models import ChatContext, FlowContextDefinition
 
-        tools = api_module._get_all_opus_tools(ChatContext(active_tab="flows"))
+        empty_tools = api_module._get_all_opus_tools(ChatContext(active_tab="flows"))
+        empty_tool_names = {tool.get("name") for tool in empty_tools}
+        assert {
+            "propose_flow_draft_update",
+            "validate_flow",
+            "get_flow_templates",
+            "get_available_agents",
+        } <= empty_tool_names
+        assert "create_flow" not in empty_tool_names
+        assert "get_current_flow" not in empty_tool_names
+
+        tools = api_module._get_all_opus_tools(
+            ChatContext(
+                active_tab="flows",
+                flow_definition=FlowContextDefinition.model_validate(
+                    {
+                        "version": "1.1",
+                        "entry_node_id": "task",
+                        "nodes": [
+                            {
+                                "id": "task",
+                                "node_type": "task_input",
+                                "position": {"x": 0, "y": 0},
+                                "agent_id": "task_input",
+                                "agent_display_name": "Initial Instructions",
+                                "task_instructions": "Test",
+                                "output_key": "task_input",
+                                "validation_attachments": [],
+                                "validation_groups": [],
+                            }
+                        ],
+                        "edges": [],
+                    }
+                ),
+            )
+        )
         tool_names = {tool.get("name") for tool in tools}
 
         assert {
@@ -835,128 +942,16 @@ class TestAgentWorkshopSystemPrompt:
             "get_available_agents",
         } <= tool_names
 
-    def test_handle_update_workshop_prompt_tool_returns_proposal_with_approval_gate(self):
+    def test_prompt_only_tool_is_not_registered(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
 
-        updated_prompt = "x" * 40_000
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(template_source="gene"),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "updated_prompt": updated_prompt,
-                    "change_summary": "Tightened extraction and citation requirements.",
-                    "apply_mode": "replace",
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is True
-        assert result["pending_user_approval"] is True
-        assert result["approval_status"] == "pending_user_approval"
-        assert result["apply_mode"] == "replace"
-        assert result["target_prompt"] == "main"
-        assert result["proposed_prompt"] == updated_prompt
-        assert result["prompt_length"] == len(result["proposed_prompt"])
-        assert result["prompt_hash"] == api_module._prompt_hash(result["proposed_prompt"])
-        assert result["proposal_id"] == f"main:{result['prompt_hash']}"
-        assert result["change_summary"] == "Tightened extraction and citation requirements."
-
-    def test_workshop_prompt_size_limit_is_environment_backed(self, monkeypatch):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_PROMPT_MAX_CHARS", "12")
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(template_source="gene"),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "updated_prompt": "thirteen chars",
-                    "apply_mode": "replace",
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result == {
-            "success": False,
-            "error": "proposed prompt exceeds maximum size (12 characters).",
-        }
-
-    def test_handle_update_workshop_prompt_tool_rejects_locked_layer_copy(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(template_source="gene"),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "updated_prompt": "## Platform Runtime Contract\nbackend-owned instructions",
-                    "apply_mode": "replace",
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is False
-        assert "Locked core/generated prompt contracts cannot be edited" in result["error"]
-
-    def test_handle_update_workshop_prompt_tool_rejects_locked_layer_copy_for_group_target(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(
-                template_source="gene",
-                selected_group_id="WB",
-                selected_group_prompt_draft="Use WB IDs and anatomy terms.",
-            ),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "target_prompt": "group",
-                    "target_group_id": "WB",
-                    "updated_prompt": "Generated runtime contract\nUse WB IDs.",
-                    "apply_mode": "replace",
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is False
-        assert "Locked core/generated prompt contracts cannot be edited" in result["error"]
+        tools = api_module._get_all_opus_tools(ChatContext(
+            active_tab="agent_workshop", agent_workshop=AgentWorkshopContext(),
+        ))
+        names = {tool["name"] for tool in tools}
+        assert "propose_workshop_draft_update" in names
+        assert "update_workshop_prompt_draft" not in names
 
     def test_handle_tool_call_blocks_flow_tools_outside_flows_tab(self, monkeypatch):
         from src.api import agent_studio as api_module
@@ -978,106 +973,6 @@ class TestAgentWorkshopSystemPrompt:
         assert result["success"] is False
         assert "not available on the agent_workshop tab" in result["error"]
         report.assert_not_called()
-
-    def test_handle_update_workshop_prompt_tool_rejects_non_workshop_context(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={"updated_prompt": "Prompt text"},
-                context=ChatContext(active_tab="agents"),
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is False
-        assert "only available while the curator is on the Agent Workshop tab" in result["error"]
-
-    def test_handle_update_workshop_prompt_tool_supports_targeted_edit_text_replacement(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(
-                template_source="gene",
-                prompt_draft="You are a careful curator.\nAlways cite evidence.\n",
-            ),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "apply_mode": "targeted_edit",
-                    "edits": [
-                        {
-                            "operation": "replace_text",
-                            "find_text": "careful",
-                            "replacement_text": "rigorous",
-                            "occurrence": "first",
-                        }
-                    ],
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is True
-        assert result["pending_user_approval"] is True
-        assert result["apply_mode"] == "targeted_edit"
-        assert "You are a rigorous curator." in result["proposed_prompt"]
-        assert result["applied_edits"] == ["replace_text first occurrence"]
-
-    def test_handle_update_workshop_prompt_tool_supports_targeted_edit_section_replacement(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(
-                template_source="gene",
-                prompt_draft=(
-                    "## Scope\n"
-                    "Extract expression claims.\n\n"
-                    "## Output\n"
-                    "Return concise bullet points.\n"
-                ),
-            ),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "apply_mode": "targeted_edit",
-                    "edits": [
-                        {
-                            "operation": "replace_section",
-                            "section_heading": "Output",
-                            "replacement_text": "Return JSON with evidence and citations.",
-                        }
-                    ],
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is True
-        assert result["apply_mode"] == "targeted_edit"
-        assert "## Output" in result["proposed_prompt"]
-        assert "Return JSON with evidence and citations." in result["proposed_prompt"]
-        assert "Return concise bullet points." not in result["proposed_prompt"]
 
     @pytest.mark.parametrize("tool_name", ["diagnostic_tool", "get_current_flow"])
     @pytest.mark.parametrize("capture_succeeds", [True, False])
@@ -1114,7 +1009,16 @@ class TestAgentWorkshopSystemPrompt:
             api_module._handle_tool_call(
                 tool_name=tool_name,
                 tool_input={"prompt": sensitive},
-                context=ChatContext(active_tab="flows"),
+                context=ChatContext(active_tab="flows", flow_definition={
+                    "version": "1.1", "entry_node_id": "task", "edges": [],
+                    "nodes": [{
+                        "id": "task", "node_type": "task_input",
+                        "position": {"x": 0, "y": 0}, "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "Test", "output_key": "task_input",
+                        "validation_attachments": [], "validation_groups": [],
+                    }],
+                }),
                 user_email="dev@example.org",
                 user_auth_sub="auth-sub-1",
                 messages=[],
@@ -1170,165 +1074,3 @@ class TestAgentWorkshopSystemPrompt:
 
         assert result is validation_result
         report.assert_not_called()
-
-    def test_handle_update_workshop_prompt_tool_supports_group_targeted_edit(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(
-                template_source="gene",
-                selected_group_id="WB",
-                selected_group_prompt_draft="Use WB IDs and anatomy terms.\n",
-            ),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "target_prompt": "group",
-                    "target_group_id": "WB",
-                    "apply_mode": "targeted_edit",
-                    "edits": [
-                        {
-                            "operation": "replace_text",
-                            "find_text": "WB IDs",
-                            "replacement_text": "WormBase IDs",
-                            "occurrence": "first",
-                        }
-                    ],
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is True
-        assert result["target_prompt"] == "group"
-        assert result["target_group_id"] == "WB"
-        assert "target_mod_id" not in result
-        assert "WormBase IDs" in result["proposed_prompt"]
-
-    def test_handle_update_workshop_prompt_tool_rejects_legacy_mod_target_field(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(
-                template_source="gene",
-                selected_group_id="WB",
-                selected_group_prompt_draft="Use WB IDs and anatomy terms.\n",
-            ),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "target_prompt": "mod",
-                    "target_mod_id": "WB",
-                    "apply_mode": "targeted_edit",
-                    "edits": [
-                        {
-                            "operation": "replace_text",
-                            "find_text": "WB IDs",
-                            "replacement_text": "WormBase IDs",
-                            "occurrence": "first",
-                        }
-                    ],
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result == {
-            "success": False,
-            "error": "Unsupported field target_mod_id. Use target_group_id.",
-        }
-
-    def test_handle_update_workshop_prompt_tool_rejects_legacy_mod_target_prompt(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={"target_prompt": "mod"},
-                context=ChatContext(
-                    active_tab="agent_workshop",
-                    agent_workshop=AgentWorkshopContext(prompt_draft="Main prompt"),
-                ),
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result == {
-            "success": False,
-            "error": "Unsupported target_prompt. Must be 'main' or 'group'.",
-        }
-
-    def test_handle_update_workshop_prompt_tool_rejects_group_target_without_selected_group(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(
-                template_source="gene",
-                selected_group_id=None,
-                prompt_draft="Main prompt",
-            ),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={
-                    "target_prompt": "group",
-                    "updated_prompt": "WB-specific update",
-                },
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is False
-        assert "select that group in Agent Workshop first" in result["error"]
-
-    def test_handle_update_workshop_prompt_tool_rejects_targeted_edit_without_edits(self):
-        from src.api import agent_studio as api_module
-        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
-
-        context = ChatContext(
-            active_tab="agent_workshop",
-            agent_workshop=AgentWorkshopContext(
-                template_source="gene",
-                prompt_draft="## Scope\nExtract claims.\n",
-            ),
-        )
-
-        result = asyncio.run(
-            api_module._handle_tool_call(
-                tool_name="update_workshop_prompt_draft",
-                tool_input={"apply_mode": "targeted_edit", "edits": []},
-                context=context,
-                user_email="dev@example.org",
-                user_auth_sub="auth-sub-1",
-                messages=[],
-            )
-        )
-
-        assert result["success"] is False
-        assert "edits must be a non-empty array" in result["error"]

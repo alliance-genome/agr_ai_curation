@@ -1322,6 +1322,7 @@
       "display_name": "Discard Allele Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Drop one draft allele from the run's working list when it turned out to be wrong or unsupported.",
@@ -1359,6 +1360,7 @@
       "display_name": "Discard Disease Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Drop one draft disease annotation from the run's working list when it turned out to be wrong or unsupported.",
@@ -1396,6 +1398,7 @@
       "display_name": "Discard Gene Expression Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Drop one draft gene-expression observation from the run's working list when it turned out to be wrong or unsupported.",
@@ -1432,6 +1435,7 @@
       "display_name": "Discard Gene Mention Evidence"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Drop one draft gene from the run's working list when it turned out to be wrong or unsupported.",
@@ -1469,6 +1473,7 @@
       "display_name": "Discard Generic Object"
     },
     "binding_kind": "static",
+    "builder_output_mode": "generic",
     "builder_run_state": true,
     "category": "Database",
     "description": "Drop one staged generic object when it is wrong or unsupported.",
@@ -1505,6 +1510,7 @@
       "display_name": "Discard GO Recommendation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Discard a staged RGD GO recommendation that is unsupported or out of scope.",
@@ -1540,6 +1546,7 @@
       "display_name": "Discard Phenotype Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Drop one draft phenotype annotation from the run's working list when it turned out to be wrong or unsupported.",
@@ -1633,6 +1640,7 @@
     },
     "binding_kind": "static",
     "builder_finalization": true,
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Submit the run's draft allele list so the specialists can confirm each one.",
@@ -1697,6 +1705,7 @@
     },
     "binding_kind": "static",
     "builder_finalization": true,
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Submit the run's draft disease annotation list so the specialists can confirm each one.",
@@ -1728,6 +1737,7 @@
     },
     "binding_kind": "static",
     "builder_finalization": true,
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Submit the run's draft gene-expression observation list so the specialists can confirm each one.",
@@ -1759,6 +1769,7 @@
     },
     "binding_kind": "static",
     "builder_finalization": true,
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Submit the run's draft gene list so the specialists can confirm each one.",
@@ -1790,6 +1801,7 @@
     },
     "binding_kind": "static",
     "builder_finalization": true,
+    "builder_output_mode": "generic",
     "builder_run_state": true,
     "category": "Database",
     "description": "Submit the run's generic object draft list for canonical extraction finalization.",
@@ -1821,6 +1833,7 @@
     },
     "binding_kind": "static",
     "builder_finalization": true,
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Finalize staged RGD GO recommendations through canonical domain materialization.",
@@ -1851,6 +1864,7 @@
     },
     "binding_kind": "static",
     "builder_finalization": true,
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Submit the run's draft phenotype annotation list so the specialists can confirm each one.",
@@ -1881,6 +1895,7 @@
       "display_name": "Find Staged Allele Observations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Find specific draft alleles by what they contain or by their id, without listing the whole working set.",
@@ -1953,6 +1968,7 @@
       "display_name": "Find Staged Disease Observations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Find specific draft disease annotations by what they contain or by their id, without listing the whole working set.",
@@ -2025,6 +2041,7 @@
       "display_name": "Find Staged Gene Expression Observations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Find specific draft gene-expression observations by what they contain or by their id, without listing the whole working set.",
@@ -2097,6 +2114,7 @@
       "display_name": "Find Staged Gene Mention Evidence"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Find specific draft genes by what they contain or by their id, without listing the whole working set.",
@@ -2169,6 +2187,7 @@
       "display_name": "Find Staged Generic Objects"
     },
     "binding_kind": "static",
+    "builder_output_mode": "generic",
     "builder_run_state": true,
     "category": "Database",
     "description": "Find staged generic objects by content or id without listing the whole working set.",
@@ -2241,6 +2260,7 @@
       "display_name": "Find Staged GO Recommendations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Find an RGD GO draft by identity, evidence, content, or candidate ID.",
@@ -2313,6 +2333,7 @@
       "display_name": "Find Staged Phenotype Observations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Find specific draft phenotype annotations by what they contain or by their id, without listing the whole working set.",
@@ -3234,6 +3255,7 @@
       "display_name": "List Staged Allele Observations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Show a short summary of the draft alleles currently on the run's working list, one page at a time.",
@@ -3276,6 +3298,7 @@
       "display_name": "List Staged Disease Observations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Show a short summary of the draft disease annotations currently on the run's working list, one page at a time.",
@@ -3318,6 +3341,7 @@
       "display_name": "List Staged Gene Expression Observations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Show a short summary of the draft gene-expression observations currently on the run's working list, one page at a time.",
@@ -3360,6 +3384,7 @@
       "display_name": "List Staged Gene Mention Evidence"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Show a short summary of the draft genes currently on the run's working list, one page at a time.",
@@ -3402,6 +3427,7 @@
       "display_name": "List Staged Generic Objects"
     },
     "binding_kind": "static",
+    "builder_output_mode": "generic",
     "builder_run_state": true,
     "category": "Database",
     "description": "Show compact summaries for staged generic objects, one page at a time.",
@@ -3444,6 +3470,7 @@
       "display_name": "List Staged GO Recommendations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Review the bounded manifest of staged RGD GO recommendations.",
@@ -3485,6 +3512,7 @@
       "display_name": "List Staged Phenotype Observations"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Show a short summary of the draft phenotype annotations currently on the run's working list, one page at a time.",
@@ -3639,6 +3667,7 @@
       "display_name": "Patch Allele Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Make small, allowed corrections to a draft allele that is already on the run's working list.",
@@ -3681,6 +3710,7 @@
       "display_name": "Patch Disease Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Make small, allowed corrections to a draft disease annotation that is already on the run's working list.",
@@ -3723,6 +3753,7 @@
       "display_name": "Patch Gene Expression Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Make small, allowed corrections to a draft gene-expression observation that is already on the run's working list.",
@@ -3765,6 +3796,7 @@
       "display_name": "Patch Gene Mention Evidence"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Make small, allowed corrections to a draft gene that is already on the run's working list.",
@@ -3807,6 +3839,7 @@
       "display_name": "Patch Generic Object"
     },
     "binding_kind": "static",
+    "builder_output_mode": "generic",
     "builder_run_state": true,
     "category": "Database",
     "description": "Make small corrections to a generic object that is already on the run's working list.",
@@ -3843,6 +3876,7 @@
       "display_name": "Patch GO Recommendation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Correct an allowed field on a staged RGD GO recommendation.",
@@ -3877,6 +3911,7 @@
       "display_name": "Patch Phenotype Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Make small, allowed corrections to a draft phenotype annotation that is already on the run's working list.",
@@ -5032,6 +5067,7 @@
       "display_name": "Stage Allele Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Add one new draft allele to the run's working list, backed by the exact wording the agent found in the paper.",
@@ -5115,6 +5151,7 @@
       "display_name": "Stage Disease Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Add one new draft disease annotation to the run's working list, backed by the exact wording the agent found in the paper.",
@@ -5264,6 +5301,7 @@
       "display_name": "Stage Gene Expression Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Add one new draft gene-expression observation to the run's working list, backed by the exact wording the agent found in the paper.",
@@ -5330,6 +5368,7 @@
       "display_name": "Stage Gene Mention Evidence"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Add one new draft gene to the run's working list, backed by the exact wording the agent found in the paper.",
@@ -5426,6 +5465,7 @@
       "display_name": "Stage Generic Object"
     },
     "binding_kind": "static",
+    "builder_output_mode": "generic",
     "builder_run_state": true,
     "category": "Database",
     "description": "Add one new generic extraction object to the run's working list, backed by saved paper evidence.",
@@ -5516,6 +5556,7 @@
       "display_name": "Stage GO Recommendation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Stage one evidence-backed RGD GO recommendation for canonical finalization.",
@@ -5687,6 +5728,7 @@
       "display_name": "Stage Phenotype Observation"
     },
     "binding_kind": "static",
+    "builder_output_mode": "domain",
     "builder_run_state": true,
     "category": "Database",
     "description": "Add one new draft phenotype annotation to the run's working list, backed by the exact wording the agent found in the paper.",

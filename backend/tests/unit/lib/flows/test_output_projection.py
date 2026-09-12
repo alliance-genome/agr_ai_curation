@@ -384,6 +384,72 @@ def _completed_domain_source_step(
     return result
 
 
+@pytest.mark.parametrize("selection_mode", ["guided", "selected_fields"])
+def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monkeypatch, selection_mode):
+    import csv
+    import io
+    from src.lib.flows.output_projection import finalize_output_projection
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+    from src.lib.config import agent_loader
+
+    # A saved result must remain exportable without a current agent definition.
+    monkeypatch.setattr(agent_loader, "list_agents", lambda: [])
+    step = _completed_domain_step()
+    step["agent_id"] = "gene_expression"
+    step["node_id"] = "expression"
+    step["candidate"].payload_json = {
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "envelope_id": "expression-fixture",
+        "extracted_objects": [
+            {
+                "object_type": "GeneExpressionAnnotation",
+                "object_id": object_id,
+                "payload": {
+                    "expression_annotation_subject": {"gene_symbol": symbol},
+                    "expression_pattern": {
+                        "where_expressed": {
+                            "anatomical_structure": {"curie": "WBbt:0006831", "name": "PVD"},
+                        },
+                    },
+                },
+            }
+            for object_id, symbol in [
+                ("dma-1-primary", "dma-1"),
+                ("dma-1-tertiary", "dma-1"),
+                ("tiam-1-fourth", "tiam-1"),
+            ]
+        ],
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[step], flow_name="Expression", output_format="csv",
+    )
+    artifact = bundle.artifacts[0]
+    assert artifact.execution_receipt is None
+    gene_ref = "object.pack.GeneExpressionAnnotation.expression_annotation_subject.gene_symbol"
+    assert gene_ref in {field.ref for field in artifact.declared_fields}
+    assert [row[gene_ref] for row in artifact.rows_by_source["object"]] == ["dma-1", "dma-1", "tiam-1"]
+    anatomy_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.where_expressed.anatomical_structure"
+    assert artifact.rows_by_source["object"][0][anatomy_ref] == {"curie": "WBbt:0006831", "name": "PVD"}
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object", "row_strategy": "wide_union",
+        "selection_mode": selection_mode,
+        "selected_sources": [{"node_id": "expression", "schema_fingerprint": artifact.export_schema_fingerprint}]
+        if selection_mode == "selected_fields" else [],
+        "columns": [
+            {"key": "gene", "header": "Gene", "field_ref": gene_ref, "source_node_id": "expression"},
+            {"key": "anatomy", "header": "Anatomy", "field_ref": anatomy_ref, "source_node_id": "expression"},
+            {"key": "stage", "header": "Stage", "field_ref": "object.pack.GeneExpressionAnnotation.when_expressed_stage_name", "source_node_id": "expression"},
+        ],
+    })
+    projection = finalize_output_projection(bundle, plan)
+    csv_bytes = _projection_content_for_file_type(output_format="csv", projection=projection).encode("utf-8")
+    rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
+    assert len(rows) == 3
+    assert [row["Gene"] for row in rows] == ["dma-1", "dma-1", "tiam-1"]
+    assert all(json.loads(row["Anatomy"]) == {"curie": "WBbt:0006831", "name": "PVD"} for row in rows)
+    assert all(row["Stage"] == "" for row in rows)
+
+
 def test_default_tsv_projection_uses_canonical_object_rows():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_completed_domain_step()],
@@ -2555,40 +2621,6 @@ def test_validator_like_payload_with_legacy_items_remains_non_structured():
     assert bundle.rows_for_source("object") == []
 
 
-def test_canonical_validation_review_retains_candidates_and_field_identity():
-    step = _completed_domain_step()
-    payload = step['candidate'].payload_json
-    candidates = [{'value': 'TEST:ALLELE1', 'label': 'candidate one'},
-                  {'value': 'TEST:ALLELE2', 'label': 'candidate two'}]
-    attempts = [{'method': 'search_alleles', 'lookup_status': 'ambiguous', 'candidate_count': 2}]
-    target = {'object_id': 'gene-2', 'field_path': 'attributes.identity', 'object_type': 'Gene'}
-    payload['validation_findings'] = [{
-        'finding_id': 'canonical-ambiguous', 'status': 'open',
-        'message': 'Two possible matches require review.',
-        'field_ref': {'field_path': 'attributes.identity', 'object_ref': {'object_type': 'Gene', 'object_id': 'gene-2'}},
-        'details': {'candidate_matches': candidates, 'lookup_attempts': attempts,
-                    'execution_receipt': {'must_not_export': 'internal receipt'},
-                    'validation_result': {'request_id': 'request-2', 'target': target,
-                        'validator_binding_id': 'allele_identity', 'candidate_count': 2,
-                        'resolved_values': {}, 'missing_expected_fields': ['curie']}}
-    }]
-    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name='Review')
-    rows = bundle.artifacts[0].rows_by_source['validation_finding']
-    row = next(r for r in rows if r['validation.finding_id'] == 'canonical-ambiguous')
-    assert row['validation.candidate_matches'] == candidates
-    assert row['validation.lookup_attempts'] == attempts
-    assert row['validation.target'] == target
-    assert row['validation.field_path'] == 'attributes.identity'
-    assert row['object.object_id'] == 'gene-2'
-    assert row['validation.validator'] == 'allele_identity'
-    assert row['validation.resolved_values'] == {}
-    assert row['validation.missing_expected_fields'] == ['curie']
-    assert 'must_not_export' not in json.dumps(row)
-    exported = apply_projection_plan(bundle, FlowOutputProjectionPlan(
-        format='json', row_source='validation_finding',
-        columns=[FlowOutputColumnSpec(key='candidates', field_ref='validation.candidate_matches')],
-    ))
-    assert any(r['candidates'] == candidates for r in exported.rows)
 
 
 def test_typed_validator_row_without_declared_identity_fails_loudly():
@@ -2632,6 +2664,43 @@ def test_typed_validator_result_with_unknown_package_agent_fails_loudly():
         )
 
 
+def test_nested_step_finding_reference_preserves_identity_and_review_status():
+    step = _completed_domain_step()
+    payload = step["candidate"].payload_json
+    finding = {
+        "finding_id": "open-stage", "status": "open", "code": "selector_missing_field",
+        "field_ref": {"field_path": "stage", "object_ref": {
+            "object_type": "Gene", "object_id": "gene-2",
+        }},
+    }
+    payload["validation_findings"] = [finding]
+    for obj in payload["extracted_objects"]:
+        obj["status"] = "validated"
+    step["validation_findings"] = [finding]
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Review")
+    target = next(row for row in bundle.rows_for_source("object") if row["object.object_id"] == "gene-2")
+    assert target["object.status"] == "needs_review"
+    assert target["object.validation_status"] == "needs_review"
+    assert not any("unique output object" in warning for warning in bundle.warnings)
+    assert all(obj["status"] == "validated" for obj in payload["extracted_objects"])
+
+
+def test_reference_matching_is_typed_and_does_not_guess_ambiguous_rows():
+    from src.lib.flows.output_projection import _matching_object_row_for_record
+
+    rows = [
+        {"object.object_type": "Gene", "object.pending_ref_id": "same"},
+        {"object.object_type": "Allele", "object.pending_ref_id": "same"},
+    ]
+    finding = {"field_ref": {"object_ref": {
+        "object_type": "Allele", "pending_ref_id": "same",
+    }}}
+    assert _matching_object_row_for_record(finding, rows) is rows[1]
+    assert _matching_object_row_for_record({"pending_ref_id": "same"}, rows) is None
+    assert _matching_object_row_for_record(finding, [rows[1], dict(rows[1])]) is None
+    assert _matching_object_row_for_record({"status": "skipped"}, rows) is None
+
+
 def test_raw_result_list_remains_non_structured():
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[
@@ -2647,3 +2716,39 @@ def test_raw_result_list_remains_non_structured():
 
     assert bundle.artifacts == []
     assert bundle.rows_for_source("object") == []
+
+
+def test_canonical_validation_review_retains_candidates_and_field_identity():
+    step = _completed_domain_step()
+    payload = step['candidate'].payload_json
+    candidates = [{'value': 'TEST:ALLELE1', 'label': 'candidate one'},
+                  {'value': 'TEST:ALLELE2', 'label': 'candidate two'}]
+    attempts = [{'method': 'search_alleles', 'lookup_status': 'ambiguous', 'candidate_count': 2}]
+    target = {'object_id': 'gene-2', 'field_path': 'attributes.identity', 'object_type': 'Gene'}
+    payload['validation_findings'] = [{
+        'finding_id': 'canonical-ambiguous', 'status': 'open',
+        'message': 'Two possible matches require review.',
+        'field_ref': {'field_path': 'attributes.identity', 'object_ref': {'object_type': 'Gene', 'object_id': 'gene-2'}},
+        'details': {'candidate_matches': candidates, 'lookup_attempts': attempts,
+                    'execution_receipt': {'must_not_export': 'internal receipt'},
+                    'validation_result': {'request_id': 'request-2', 'target': target,
+                        'validator_binding_id': 'allele_identity', 'candidate_count': 2,
+                        'resolved_values': {}, 'missing_expected_fields': ['curie']}}
+    }]
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name='Review')
+    rows = bundle.artifacts[0].rows_by_source['validation_finding']
+    row = next(r for r in rows if r['validation.finding_id'] == 'canonical-ambiguous')
+    assert row['validation.candidate_matches'] == candidates
+    assert row['validation.lookup_attempts'] == attempts
+    assert row['validation.target'] == target
+    assert row['validation.field_path'] == 'attributes.identity'
+    assert row['object.object_id'] == 'gene-2'
+    assert row['validation.validator'] == 'allele_identity'
+    assert row['validation.resolved_values'] == {}
+    assert row['validation.missing_expected_fields'] == ['curie']
+    assert 'must_not_export' not in json.dumps(row)
+    exported = apply_projection_plan(bundle, FlowOutputProjectionPlan(
+        format='json', row_source='validation_finding',
+        columns=[FlowOutputColumnSpec(key='candidates', field_ref='validation.candidate_matches')],
+    ))
+    assert any(r['candidates'] == candidates for r in exported.rows)

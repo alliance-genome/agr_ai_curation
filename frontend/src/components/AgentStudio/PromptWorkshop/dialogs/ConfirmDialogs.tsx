@@ -43,7 +43,7 @@ export function DeleteAgentDialog({ open, agentName, saving, onConfirm, onCancel
       <DialogTitle id="delete-agent-title">Delete agent?</DialogTitle>
       <DialogContent>
         <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
-          This deletes &ldquo;{agentName}&rdquo; and its version history. This action cannot be undone.
+          This archives &ldquo;{agentName}&rdquo; so it is no longer available for new use. Saved versions and their history are retained; existing references are not silently retargeted.
         </Typography>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -96,11 +96,12 @@ export interface RevertVersionDialogProps {
 export function RevertVersionDialog({ open, version, saving, onConfirm, onCancel }: RevertVersionDialogProps) {
   return (
     <Dialog open={open} onClose={saving ? undefined : onCancel} maxWidth="xs" fullWidth aria-labelledby="revert-version-title">
-      <DialogTitle id="revert-version-title">Revert to version {version}?</DialogTitle>
+      <DialogTitle id="revert-version-title">Restore configuration {version}?</DialogTitle>
       <DialogContent>
         <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
-          This saves a new version with the prompt, group instructions, and access groups from version {version}.
-          Nothing is deleted.
+          This saves a new version with the model settings, prompts, tools, group rules,
+          access restrictions, and output structure from configuration {version}.
+          The agent name and description stay unchanged. Nothing is deleted.
         </Typography>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -108,7 +109,7 @@ export function RevertVersionDialog({ open, version, saving, onConfirm, onCancel
           Cancel
         </Button>
         <Button onClick={onConfirm} variant="contained" disabled={saving} size="small">
-          {saving ? 'Reverting…' : 'Revert'}
+          {saving ? 'Restoring…' : 'Restore'}
         </Button>
       </DialogActions>
     </Dialog>
