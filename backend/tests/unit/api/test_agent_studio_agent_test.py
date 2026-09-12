@@ -1081,8 +1081,9 @@ class TestAgentWorkshopSystemPrompt:
 
     @pytest.mark.parametrize("tool_name", ["diagnostic_tool", "get_current_flow"])
     @pytest.mark.parametrize("capture_succeeds", [True, False])
+    @pytest.mark.parametrize("error_type", [RuntimeError, TypeError])
     def test_handle_tool_call_sanitizes_diagnostic_tool_failures(
-        self, monkeypatch, caplog, tool_name, capture_succeeds
+        self, monkeypatch, caplog, tool_name, capture_succeeds, error_type
     ):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext
@@ -1090,7 +1091,7 @@ class TestAgentWorkshopSystemPrompt:
         sensitive = "private prompt; credential=fake-secret; provider response"
 
         def _raise_tool_failure(**_kwargs):
-            raise RuntimeError(sensitive)
+            raise error_type(sensitive)
 
         report = Mock(return_value=capture_succeeds)
         monkeypatch.setattr(api_module, "report_runtime_exception", report)
@@ -1124,7 +1125,7 @@ class TestAgentWorkshopSystemPrompt:
         report.assert_called_once()
         exc = report.call_args.args[0]
         assert isinstance(exc, RuntimeError)
-        assert str(exc) == "Agent Studio tool handler failed"
+        assert str(exc) == f"Agent Studio tool handler failed ({error_type.__name__})"
         assert exc.__traceback__ is not None
         assert exc.__context__ is None
         assert exc.__cause__ is None
@@ -1137,6 +1138,9 @@ class TestAgentWorkshopSystemPrompt:
         assert sensitive not in caplog.text
         records = [record for record in caplog.records if record.name == api_module.logger.name]
         assert len(records) == 1
+        assert records[0].getMessage() == (
+            f"Diagnostic tool {tool_name} failed unexpectedly ({error_type.__name__})"
+        )
         assert records[0].sentry_skip_event is True
         assert records[0].exc_info is None
 

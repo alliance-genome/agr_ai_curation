@@ -426,8 +426,9 @@ recognized keys such as `batch_id`, `document_id`, `flow_id`, `flow_run_id`,
 
 Agent Studio reports unexpected registered diagnostic and flow-tool handler
 exceptions with component `agent_studio`, operation `tool_handler_failed`, and
-the registered `tool_name` tag. The exception uses fixed text with severed
-chains; prompts, tool payloads, and raw provider errors are omitted. The
+the registered `tool_name` tag. The sanitized exception and companion log retain
+only the original exception class name as failure detail. Exception chains are
+severed; prompts, tool payloads, and raw provider errors are omitted. The
 companion log skips event promotion, and the generic tool failure result is
 unchanged when capture is unavailable. Routine validation results and tool-scope
 rejections do not report.

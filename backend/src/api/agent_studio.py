@@ -3567,16 +3567,19 @@ async def _handle_tool_call(
         try:
             result = tool_def.handler(**tool_input)
             return result
-        except Exception:
+        except Exception as exc:
             report_runtime_exception(
-                sanitized_runtime_error("Agent Studio tool handler failed"),
+                sanitized_runtime_error(
+                    f"Agent Studio tool handler failed ({type(exc).__name__})"
+                ),
                 component="agent_studio",
                 operation="tool_handler_failed",
                 tags={"tool_name": tool_name},
             )
             logger.error(
-                'Diagnostic tool %s failed unexpectedly',
+                'Diagnostic tool %s failed unexpectedly (%s)',
                 tool_name,
+                type(exc).__name__,
                 extra={"sentry_skip_event": True},
             )
             return {
