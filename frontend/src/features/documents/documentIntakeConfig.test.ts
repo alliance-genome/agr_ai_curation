@@ -53,3 +53,28 @@ describe('document intake configuration', () => {
     );
   });
 });
+
+describe('PDF progress runtime configuration', () => {
+  afterEach(() => {
+    delete window.__APP_RUNTIME_CONFIG__;
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+  it.each([
+    ['PDF_PROGRESS_CONNECT_TIMEOUT_MS', 5000],
+    ['PDF_PROGRESS_TIMEOUT_MS', 3600000],
+    ['PDF_PROGRESS_POLL_INTERVAL_MS', 1000],
+  ] as const)('configures %s at boot with a documented default', async (key, value) => {
+    const defaults = await import('./documentIntakeConfig');
+    expect(defaults[key]).toBe(value);
+    vi.resetModules();
+    vi.stubEnv(`VITE_${key}`, '999');
+    window.__APP_RUNTIME_CONFIG__ = { [`VITE_${key}`]: '1234' };
+    const runtime = await import('./documentIntakeConfig');
+    expect(runtime[key]).toBe(1234);
+  });
+  it.each(['VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS', 'VITE_PDF_PROGRESS_TIMEOUT_MS', 'VITE_PDF_PROGRESS_POLL_INTERVAL_MS'])('rejects invalid runtime %s', async (key) => {
+    window.__APP_RUNTIME_CONFIG__ = { [key]: '-1' };
+    await expect(import('./documentIntakeConfig')).rejects.toThrow(`${key} must be a positive integer.`);
+  });
+});

@@ -39,7 +39,10 @@ write_test_env() {
       'OIDC_CLIENT_ID=curation-production' \
       'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback' \
       'VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7' \
-      'VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500'
+      'VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500' \
+      'VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS=8000' \
+      'VITE_PDF_PROGRESS_TIMEOUT_MS=7200000' \
+      'VITE_PDF_PROGRESS_POLL_INTERVAL_MS=2000'
   } >"${env_file}"
 
   while IFS='|' read -r category key default services; do
@@ -81,7 +84,7 @@ assert_rejected_with() {
 }
 
 write_test_env
-grep -v '^VITE_CHAT_STREAM_RECOVERY_' "${env_file}" >"${default_env_file}"
+grep -Ev '^VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -101,10 +104,13 @@ import sys
 config = json.load(open(sys.argv[1], encoding="utf-8"))
 frontend_env = config["services"]["frontend"]["environment"]
 assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
-    "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS"
+    "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS VITE_PDF_PROGRESS_TIMEOUT_MS VITE_PDF_PROGRESS_POLL_INTERVAL_MS"
 )
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "3"
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "1000"
+assert str(frontend_env["VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS"]) == "5000"
+assert str(frontend_env["VITE_PDF_PROGRESS_TIMEOUT_MS"]) == "3600000"
+assert str(frontend_env["VITE_PDF_PROGRESS_POLL_INTERVAL_MS"]) == "1000"
 PY
 
 # Exercise the environment created by a fresh `make setup` and the effective
@@ -212,10 +218,13 @@ assert str(backend_env["SENTRY_TRANSACTION_RETAINED_SPANS_MAX"]) == "50"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
-    "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS"
+    "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS VITE_PDF_PROGRESS_TIMEOUT_MS VITE_PDF_PROGRESS_POLL_INTERVAL_MS"
 )
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "7"
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "2500"
+assert str(frontend_env["VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS"]) == "8000"
+assert str(frontend_env["VITE_PDF_PROGRESS_TIMEOUT_MS"]) == "7200000"
+assert str(frontend_env["VITE_PDF_PROGRESS_POLL_INTERVAL_MS"]) == "2000"
 assert weaviate_env["AUTHORIZATION_ADMINLIST_USERS"] == "curation-backend"
 assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
 assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"
