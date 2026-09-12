@@ -1,4 +1,9 @@
-import { PDF_UPLOAD_MAX_SELECTED_FILES } from './documentIntakeConfig';
+import {
+  PDF_UPLOAD_MAX_SELECTED_FILES,
+  PDF_PROGRESS_CONNECT_TIMEOUT_MS,
+  PDF_PROGRESS_TIMEOUT_MS,
+  PDF_PROGRESS_POLL_INTERVAL_MS,
+} from './documentIntakeConfig';
 
 const TERMINAL_STAGES = new Set([
   'completed',
@@ -25,7 +30,35 @@ const STAGE_PROGRESS_FALLBACK: Record<string, number> = {
   timeout: 100,
 };
 
-const SSE_CONNECT_TIMEOUT_MS = 5000;
+export class PdfProgressStreamError extends Error {
+  constructor(public readonly kind: 'transport' | 'producer' | 'malformed', message: string) {
+    super(message);
+    this.name = 'PdfProgressStreamError';
+  }
+}
+
+const parseProgressEvent = (data: string): ProgressSsePayload => {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    throw new PdfProgressStreamError('malformed', 'Malformed upload progress event.');
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new PdfProgressStreamError('malformed', 'Malformed upload progress event.');
+  }
+  const parsed = payload as ProgressSsePayload;
+  if ('error' in parsed && typeof parsed.error === 'string' && parsed.error.trim()) {
+    throw new PdfProgressStreamError('producer', parsed.error);
+  }
+  if ('error' in parsed || typeof parsed.stage !== 'string' || !parsed.stage.trim()
+    || (parsed.progress !== undefined && (typeof parsed.progress !== 'number' || !Number.isFinite(parsed.progress)))
+    || (parsed.message !== undefined && typeof parsed.message !== 'string')
+    || (parsed.final !== undefined && typeof parsed.final !== 'boolean')) {
+    throw new PdfProgressStreamError('malformed', 'Malformed upload progress event.');
+  }
+  return parsed;
+};
 
 interface UploadErrorDetail {
   existing_document_id?: string;
@@ -87,7 +120,6 @@ interface WaitForProcessingOptions {
 interface ResolvedWaitForProcessingOptions {
   onProgress: (update: UploadProgressUpdate) => void;
   signal?: AbortSignal;
-  timeoutMs: number;
   pollingIntervalMs: number;
 }
 
@@ -204,6 +236,10 @@ const parseErrorMessage = (payload: unknown, fallback: string): string => {
 
 const wait = async (ms: number, signal?: AbortSignal): Promise<void> => {
   await new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
     const timeoutId = window.setTimeout(() => {
       signal?.removeEventListener('abort', handleAbort);
       resolve();
@@ -306,15 +342,9 @@ const pollDocumentProcessing = async (
   documentId: string,
   options: ResolvedWaitForProcessingOptions,
 ): Promise<UploadProgressUpdate> => {
-  const startedAt = Date.now();
-
   while (true) {
     if (options.signal?.aborted) {
       throw createAbortError();
-    }
-
-    if (Date.now() - startedAt > options.timeoutMs) {
-      throw new Error('Timed out waiting for document processing to complete.');
     }
 
     const response = await fetch(`/api/weaviate/documents/${documentId}/status`, {
@@ -352,13 +382,8 @@ const streamDocumentProcessing = async (
 
     const connectTimeout = window.setTimeout(() => {
       cleanup();
-      reject(new Error('Unable to connect to upload progress stream.'));
-    }, SSE_CONNECT_TIMEOUT_MS);
-
-    const overallTimeout = window.setTimeout(() => {
-      cleanup();
-      reject(new Error('Timed out waiting for document processing to complete.'));
-    }, options.timeoutMs);
+      reject(new PdfProgressStreamError('transport', 'Unable to connect to upload progress stream.'));
+    }, PDF_PROGRESS_CONNECT_TIMEOUT_MS);
 
     const abortHandler = () => {
       cleanup();
@@ -367,12 +392,16 @@ const streamDocumentProcessing = async (
 
     const cleanup = () => {
       window.clearTimeout(connectTimeout);
-      window.clearTimeout(overallTimeout);
+      source.onopen = null;
+      source.onmessage = null;
+      source.onerror = null;
       options.signal?.removeEventListener('abort', abortHandler);
       source.close();
     };
 
     options.signal?.addEventListener('abort', abortHandler, { once: true });
+
+    source.onopen = () => window.clearTimeout(connectTimeout);
 
     source.onmessage = (event) => {
       hasReceivedMessage = true;
@@ -380,14 +409,10 @@ const streamDocumentProcessing = async (
 
       let parsed: ProgressSsePayload;
       try {
-        parsed = JSON.parse(event.data) as ProgressSsePayload;
-      } catch (_error) {
-        return;
-      }
-
-      if (typeof parsed.error === 'string' && parsed.error.trim()) {
+        parsed = parseProgressEvent(event.data);
+      } catch (error) {
         cleanup();
-        reject(new Error(parsed.error));
+        reject(error);
         return;
       }
 
@@ -403,10 +428,10 @@ const streamDocumentProcessing = async (
     source.onerror = () => {
       cleanup();
       if (!hasReceivedMessage) {
-        reject(new Error('Unable to stream upload progress.'));
+        reject(new PdfProgressStreamError('transport', 'Unable to stream upload progress.'));
         return;
       }
-      reject(new Error('Upload progress stream disconnected.'));
+      reject(new PdfProgressStreamError('transport', 'Upload progress stream disconnected.'));
     };
   });
 };
@@ -417,8 +442,8 @@ export const waitForDocumentProcessing = async (
 ): Promise<UploadProgressUpdate> => {
   const onProgress = options.onProgress ?? (() => undefined);
   const signal = options.signal;
-  const timeoutMs = options.timeoutMs ?? 15 * 60 * 1000;
-  const pollingIntervalMs = options.pollingIntervalMs ?? 1000;
+  const timeoutMs = options.timeoutMs ?? PDF_PROGRESS_TIMEOUT_MS;
+  const pollingIntervalMs = options.pollingIntervalMs ?? PDF_PROGRESS_POLL_INTERVAL_MS;
 
   if (!documentId) {
     throw new Error('Document ID is required to track processing progress.');
@@ -428,25 +453,38 @@ export const waitForDocumentProcessing = async (
     throw createAbortError();
   }
 
-  const typedOptions = {
-    onProgress,
-    signal,
-    timeoutMs,
-    pollingIntervalMs,
-  };
-
-  if (typeof EventSource !== 'undefined') {
-    try {
-      return await streamDocumentProcessing(documentId, typedOptions);
-    } catch (error) {
-      if (signal?.aborted) {
-        throw error;
+  const controller = new AbortController();
+  const abortHandler = () => controller.abort();
+  signal?.addEventListener('abort', abortHandler, { once: true });
+  let timeoutId: number | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error('Timed out waiting for document processing to complete.'));
+      controller.abort();
+    }, timeoutMs);
+  });
+  const typedOptions = { onProgress, signal: controller.signal, pollingIntervalMs };
+  const track = async () => {
+    if (typeof EventSource !== 'undefined') {
+      try {
+        return await streamDocumentProcessing(documentId, typedOptions);
+      } catch (error) {
+        // Removed broad SSE failure fallback — producer-declared and malformed events are terminal; polling is transport-only after ALL-826.
+        if (controller.signal.aborted || !(error instanceof PdfProgressStreamError) || error.kind !== 'transport') {
+          throw error;
+        }
+        console.warn('Falling back to status polling after progress stream transport failure.', error);
       }
-      console.warn('Falling back to status polling after progress stream failure.', error);
     }
+    return pollDocumentProcessing(documentId, typedOptions);
+  };
+  try {
+    return await Promise.race([track(), deadline]);
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', abortHandler);
+    controller.abort();
   }
-
-  return pollDocumentProcessing(documentId, typedOptions);
 };
 
 export interface LoadDocumentForChatOptions {
