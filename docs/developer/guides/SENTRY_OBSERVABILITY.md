@@ -413,6 +413,13 @@ report_runtime_exception(
 )
 ```
 
+Abstract extraction reports request and configuration failures at error level;
+abstract-client and owned runner provider/client cleanup failures report at warning
+level. These paths use `sanitized_runtime_error()` with fixed messages and severed
+exception chains, omit provider payloads, and mark companion logs to avoid duplicate
+promotion. Optional extraction results and cancellation behavior are unchanged when
+reporting is unavailable. Langfuse remains the source for model-call detail.
+
 Identifier-like runtime context is hashed by the global Sentry hook when it uses
 recognized keys such as `batch_id`, `document_id`, `flow_id`, `flow_run_id`,
 `job_id`, `run_id`, `session_id`, `trace_id`, or `turn_id`.

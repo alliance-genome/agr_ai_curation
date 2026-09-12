@@ -5,6 +5,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+from unittest.mock import Mock
 
 import pytest
 
@@ -283,16 +284,19 @@ async def test_extract_abstract_with_llm_returns_none_for_short_or_missing_outpu
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["success", "error", "cancelled"])
+@pytest.mark.parametrize("captured", [True, False])
+@pytest.mark.parametrize("outcome", ["success", "error", "cancelled", "configuration", "construction"])
 async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
-    monkeypatch, outcome
+    monkeypatch, outcome, captured, caplog
 ):
+    report = Mock(return_value=captured)
+    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
     lifecycle = {"created": 0, "closed": 0}
 
     class _FakeCompletions:
         async def create(self, **_kwargs):
             if outcome == "error":
-                raise RuntimeError("request failed")
+                raise RuntimeError("SECRET source prompt response credential token")
             if outcome == "cancelled":
                 raise asyncio.CancelledError
             return SimpleNamespace(
@@ -301,6 +305,8 @@ async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
 
     class _FakeAsyncOpenAI:
         def __init__(self):
+            if outcome == "construction":
+                raise RuntimeError("SECRET source prompt response credential token")
             lifecycle["created"] += 1
             self.chat = SimpleNamespace(completions=_FakeCompletions())
 
@@ -310,6 +316,9 @@ async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
     monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
 
+    if outcome == "configuration":
+        monkeypatch.delenv("ABSTRACT_EXTRACTION_MODEL")
+
     if outcome == "cancelled":
         with pytest.raises(asyncio.CancelledError):
             await prompt_utils._extract_abstract_with_llm("raw text")
@@ -317,15 +326,37 @@ async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
         result = await prompt_utils._extract_abstract_with_llm("raw text")
         assert result == ("C" * 80 if outcome == "success" else None)
 
-    assert lifecycle == {"created": 1, "closed": 1}
+    count = 0 if outcome == "construction" else 1
+    assert lifecycle == {"created": count, "closed": count}
+    if outcome in {"error", "configuration", "construction"}:
+        report.assert_called_once()
+        exc = report.call_args.args[0]
+        assert str(exc) == "LLM abstract extraction failed"
+        assert exc.__traceback__ is not None
+        assert exc.__context__ is None and exc.__cause__ is None
+        assert report.call_args.kwargs == {
+            "component": "abstract_extraction", "operation": "extraction_failed", "level": "error",
+        }
+        assert "SECRET" not in caplog.text
+        assert all(getattr(record, "sentry_skip_event", False) for record in caplog.records if record.name == prompt_utils.logger.name)
+    else:
+        report.assert_not_called()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("captured", [True, False])
+@pytest.mark.parametrize("outcome", ["success", "error", "cancelled", "close_cancelled"])
 async def test_extract_abstract_with_llm_preserves_result_when_close_fails(
-    monkeypatch, caplog
+    monkeypatch, caplog, captured, outcome
 ):
+    report = Mock(return_value=captured)
+    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
     class _FakeCompletions:
         async def create(self, **_kwargs):
+            if outcome == "error":
+                raise RuntimeError("SECRET source prompt response credential token")
+            if outcome == "cancelled":
+                raise asyncio.CancelledError
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content="D" * 80))]
             )
@@ -335,15 +366,32 @@ async def test_extract_abstract_with_llm_preserves_result_when_close_fails(
             self.chat = SimpleNamespace(completions=_FakeCompletions())
 
         async def close(self):
-            raise RuntimeError("close failed")
+            if outcome == "close_cancelled":
+                raise asyncio.CancelledError
+            raise RuntimeError("SECRET source prompt response credential token")
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
     monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
 
-    result = await prompt_utils._extract_abstract_with_llm("raw text")
+    if outcome in {"cancelled", "close_cancelled"}:
+        with pytest.raises(asyncio.CancelledError):
+            await prompt_utils._extract_abstract_with_llm("SECRET source text")
+    else:
+        result = await prompt_utils._extract_abstract_with_llm("SECRET source text")
+        assert result == ("D" * 80 if outcome == "success" else None)
 
-    assert result == "D" * 80
-    assert "Failed to close abstract extraction LLM client: RuntimeError: close failed" in caplog.text
+    assert report.call_count == (0 if outcome == "close_cancelled" else 2 if outcome == "error" else 1)
+    if outcome != "close_cancelled":
+        call = report.call_args_list[0]
+        exc = call.args[0]
+        assert str(exc) == "Failed to close abstract extraction LLM client"
+        assert exc.__traceback__ is not None
+        assert exc.__context__ is None and exc.__cause__ is None
+        assert call.kwargs == {
+            "component": "abstract_extraction", "operation": "client_close_failed", "level": "warning",
+        }
+        assert "Failed to close abstract extraction LLM client" in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 @pytest.mark.asyncio

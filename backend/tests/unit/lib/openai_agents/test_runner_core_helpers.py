@@ -209,25 +209,57 @@ async def test_close_owned_openai_resources_orders_and_deduplicates_cleanup():
 
 
 @pytest.mark.asyncio
-async def test_close_owned_openai_resources_closes_client_after_provider_error(caplog):
+@pytest.mark.parametrize("captured", [True, False])
+@pytest.mark.parametrize("provider_outcome", ["error", "cancelled", "success"])
+@pytest.mark.parametrize("client_fails", [True, False])
+async def test_close_owned_openai_resources_reports_cleanup_failures(
+    monkeypatch, caplog, captured, provider_outcome, client_fails
+):
+    from unittest.mock import Mock
+
+    report = Mock(return_value=captured)
+    monkeypatch.setattr(runner, "report_runtime_exception", report)
     calls = []
 
     class Provider:
         async def aclose(self):
             calls.append("provider")
-            raise RuntimeError("provider close failed")
+            if provider_outcome == "error":
+                raise RuntimeError("SECRET source prompt response credential token")
+            if provider_outcome == "cancelled":
+                raise asyncio.CancelledError
 
     class Client:
         async def close(self):
             calls.append("client")
+            if client_fails:
+                raise RuntimeError("SECRET source prompt response credential token")
 
     resources = runner.OwnedOpenAIResources(client=Client(), provider=Provider())
-
-    with caplog.at_level(logging.WARNING, logger=runner.logger.name):
+    if provider_outcome == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await runner.close_owned_openai_resources(resources)
+    else:
         await runner.close_owned_openai_resources(resources)
+    await runner.close_owned_openai_resources(resources)
 
     assert calls == ["provider", "client"]
-    assert "Failed to close owned provider websocket" in caplog.text
+    expected = []
+    if provider_outcome == "error":
+        expected.append(("provider websocket", "aclose_failed"))
+    if client_fails:
+        expected.append(("OpenAI client", "close_failed"))
+    assert report.call_count == len(expected)
+    for call, (resource, operation) in zip(report.call_args_list, expected):
+        exc = call.args[0]
+        assert str(exc) == f"Failed to close owned {resource}"
+        assert exc.__traceback__ is not None
+        assert exc.__context__ is None and exc.__cause__ is None
+        assert call.kwargs == {
+            "component": "openai_runner", "operation": operation, "level": "warning",
+        }
+    assert "SECRET" not in caplog.text
+    assert all(getattr(record, "sentry_skip_event", False) for record in caplog.records if record.name == runner.logger.name)
 
 
 @pytest.mark.asyncio

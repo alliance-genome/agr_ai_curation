@@ -11,6 +11,7 @@ Do not duplicate these functions in individual agent files.
 import logging
 from typing import Optional, List, Dict, Any, Type
 
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 logger = logging.getLogger(__name__)
@@ -379,15 +380,29 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
         finally:
             try:
                 await client.close()
-            except Exception as close_error:
+            except Exception:
+                report_runtime_exception(
+                    sanitized_runtime_error("Failed to close abstract extraction LLM client"),
+                    component="abstract_extraction",
+                    operation="client_close_failed",
+                    level="warning",
+                )
                 logger.warning(
-                    'Failed to close abstract extraction LLM client: %s: %s',
-                    type(close_error).__name__,
-                    close_error,
+                    'Failed to close abstract extraction LLM client',
+                    extra={"sentry_skip_event": True},
                 )
 
-    except Exception as e:
-        logger.warning('LLM abstract extraction failed: %s: %s', type(e).__name__, e)
+    except Exception:
+        report_runtime_exception(
+            sanitized_runtime_error("LLM abstract extraction failed"),
+            component="abstract_extraction",
+            operation="extraction_failed",
+            level="error",
+        )
+        logger.warning(
+            'LLM abstract extraction failed',
+            extra={"sentry_skip_event": True},
+        )
         return None
 
 

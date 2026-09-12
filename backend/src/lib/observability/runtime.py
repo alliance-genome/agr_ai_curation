@@ -51,6 +51,20 @@ def _safe_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
     return safe
 
 
+def sanitized_runtime_error(message: str) -> RuntimeError:
+    """Build a traceback-bearing wrapper from a fixed, content-free message.
+
+    Callers must not interpolate raw exception details or user/provider content.
+    Sever the active exception chain before passing the wrapper to reporting.
+    """
+    try:
+        raise RuntimeError(message) from None
+    except RuntimeError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
 def report_runtime_exception(
     exc: BaseException,
     *,

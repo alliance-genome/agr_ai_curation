@@ -41,6 +41,7 @@ from openai.types.responses import (
 from pydantic import ValidationError
 
 from langfuse import propagate_attributes
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 
 from .langfuse_client import (
     flush_langfuse,
@@ -265,11 +266,16 @@ async def close_owned_openai_resources(
         except asyncio.CancelledError as exc:
             cancellation = cancellation or exc
         except Exception:
+            report_runtime_exception(
+                sanitized_runtime_error(f"Failed to close owned {resource_name}"),
+                component="openai_runner",
+                operation=f"{close_method_name}_failed",
+                level="warning",
+            )
             logger.warning(
                 "Failed to close owned %s",
                 resource_name,
-                extra={"trace_id": trace_id, "user_id": user_id},
-                exc_info=True,
+                extra={"trace_id": trace_id, "user_id": user_id, "sentry_skip_event": True},
             )
 
     if cancellation is not None:
