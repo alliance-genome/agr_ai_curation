@@ -35,6 +35,7 @@ export type {
   // Component props
   FlowBuilderProps,
   FlowState,
+  FlowAuthoringContextHandle,
   AgentPaletteProps,
   FlowNodeProps,
   AgentBrowserRequest,

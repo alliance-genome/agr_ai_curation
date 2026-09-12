@@ -1109,6 +1109,47 @@ def _flow_persistence_request(
     )
 
 
+def _execution_receipt():
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+    return AgentExecutionReceipt(
+        agent_id=uuid4(), agent_key="ca_fixture", agent_revision_id=uuid4(), revision=1,
+        fingerprint="sha256:" + "a" * 64,
+        output_contract={"output_state": "structured_extraction", "output_mode": "unprofiled_generic"},
+    )
+
+
+def test_extraction_receipt_is_persisted_with_normalized_fk_and_roundtrips():
+    receipt = _execution_receipt()
+    request = _flow_persistence_request().model_copy(update={"agent_key": receipt.agent_key, "execution_receipt": receipt})
+    session = _FakeSession()
+    response = persist_idempotent_extraction_results([request], db=session)[0]
+    assert session.added.agent_revision_id == receipt.agent_revision_id
+    assert session.added.execution_receipt == receipt.model_dump(mode="json")
+    assert response.extraction_result.execution_receipt == receipt
+
+
+@pytest.mark.parametrize("existing_row", [False, True])
+def test_same_payload_different_receipt_cannot_reuse_idempotency_identity(existing_row):
+    receipt = _execution_receipt()
+    first = _flow_persistence_request().model_copy(update={"agent_key": receipt.agent_key, "execution_receipt": receipt})
+    second = first.model_copy(update={"execution_receipt": receipt.model_copy(update={"agent_revision_id": uuid4(), "revision": 2})})
+    record = module._build_extraction_result_record(first)
+    session = _FakeSession(existing_rows=[record] if existing_row else [])
+    with pytest.raises(ExtractionResultPayloadMismatchError, match="different execution receipt"):
+        persist_idempotent_extraction_results([second] if existing_row else [first, second], db=session)
+    assert session.added_records == []
+
+
+def test_candidate_retains_full_receipt_and_rejects_other_agent_identity():
+    receipt = _execution_receipt()
+    candidate = build_extraction_envelope_candidate(_sample_envelope_payload(), agent_key=receipt.agent_key,
+        adapter_key="gene", execution_receipt=receipt.model_dump(mode="json"))
+    assert candidate.execution_receipt == receipt
+    with pytest.raises(ValueError, match="producing custom agent"):
+        build_extraction_envelope_candidate(_sample_envelope_payload(), agent_key="ca_other",
+            adapter_key="gene", execution_receipt=receipt)
+
+
 def test_flow_idempotency_key_is_stable_and_source_scoped():
     key_material = {
         "document_id": "11111111-1111-1111-1111-111111111111",

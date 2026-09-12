@@ -495,6 +495,7 @@ class ChatHistoryRepository:
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
         active_document_id: UUID | None = None,
+        require_messages: bool = False,
     ) -> ChatSessionPage:
         """List active sessions ordered by null-safe recent activity descending."""
 
@@ -505,6 +506,7 @@ class ChatHistoryRepository:
             cursor=cursor,
             search_query=None,
             active_document_id=active_document_id,
+            require_messages=require_messages,
         )
 
     def search_sessions(
@@ -516,6 +518,7 @@ class ChatHistoryRepository:
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
         active_document_id: UUID | None = None,
+        require_messages: bool = False,
     ) -> ChatSessionPage:
         """Search active sessions with Postgres full-text search and recent ordering."""
 
@@ -527,6 +530,7 @@ class ChatHistoryRepository:
             cursor=cursor,
             search_query=normalized_query,
             active_document_id=active_document_id,
+            require_messages=require_messages,
         )
 
     def search_sessions_ranked(
@@ -626,6 +630,7 @@ class ChatHistoryRepository:
         chat_kind: str,
         query: str | None = None,
         active_document_id: UUID | None = None,
+        require_messages: bool = False,
     ) -> int:
         """Count visible sessions for the authenticated user and optional filters."""
 
@@ -639,6 +644,9 @@ class ChatHistoryRepository:
             ChatSessionModel.chat_kind.in_(normalized_chat_kinds),
             ChatSessionModel.deleted_at.is_(None),
         )
+
+        if require_messages:
+            stmt = stmt.where(self._session_has_messages())
 
         if query is not None:
             normalized_query = _normalize_required_text(query, field_name="query")
@@ -1283,6 +1291,14 @@ class ChatHistoryRepository:
             raise ChatHistorySessionNotFoundError("Chat session not found")
         return session
 
+    @staticmethod
+    def _session_has_messages():
+        """Keep history filtering separate from active, not-yet-used sessions."""
+        return select(ChatMessageModel.message_id).where(
+            ChatMessageModel.session_id == ChatSessionModel.session_id,
+            ChatMessageModel.chat_kind == ChatSessionModel.chat_kind,
+        ).exists()
+
     def _list_sessions(
         self,
         *,
@@ -1292,6 +1308,7 @@ class ChatHistoryRepository:
         cursor: ChatSessionCursor | None,
         search_query: str | None,
         active_document_id: UUID | None,
+        require_messages: bool,
     ) -> ChatSessionPage:
         page_size = _validate_page_size(
             limit,
@@ -1313,6 +1330,9 @@ class ChatHistoryRepository:
             ChatSessionModel.chat_kind.in_(normalized_chat_kinds),
             ChatSessionModel.deleted_at.is_(None),
         )
+
+        if require_messages:
+            stmt = stmt.where(self._session_has_messages())
 
         if active_document_id is not None:
             stmt = stmt.where(

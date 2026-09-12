@@ -33,6 +33,8 @@ from src.schemas.curation_workspace import (
     CurationExtractionResultRecord,
 )
 from src.schemas.domain_envelope import DomainEnvelope
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
+from src.lib.curation_workspace.execution_contracts import require_extraction_conformance
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,7 @@ class ExtractionEnvelopeCandidate:
     adapter_key: Optional[str] = None
     conversation_summary: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    execution_receipt: AgentExecutionReceipt | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,7 @@ def build_extraction_envelope_candidate(
     conversation_summary: Optional[str] = None,
     adapter_key: Optional[str] = None,
     metadata: Optional[Mapping[str, Any]] = None,
+    execution_receipt: AgentExecutionReceipt | Mapping[str, Any] | None = None,
 ) -> Optional[ExtractionEnvelopeCandidate]:
     """Convert a tool output payload into a persistable extraction candidate."""
 
@@ -218,6 +222,7 @@ def build_extraction_envelope_candidate(
 
     return ExtractionEnvelopeCandidate(
         agent_key=canonical_agent_key,
+        execution_receipt=_normalized_execution_receipt(execution_receipt, canonical_agent_key),
         payload_json=payload,
         candidate_count=max(candidate_count, 0),
         adapter_key=resolved_adapter_key,
@@ -260,6 +265,7 @@ def build_extraction_envelope_candidate_with_evidence(
     conversation_summary: Optional[str] = None,
     adapter_key: Optional[str] = None,
     metadata: Optional[Mapping[str, Any]] = None,
+    execution_receipt: AgentExecutionReceipt | Mapping[str, Any] | None = None,
 ) -> tuple[Optional[ExtractionEnvelopeCandidate], dict[str, Any]]:
     """Build one extraction candidate plus normalized evidence metadata."""
 
@@ -269,6 +275,7 @@ def build_extraction_envelope_candidate_with_evidence(
         conversation_summary=conversation_summary,
         adapter_key=adapter_key,
         metadata=metadata,
+        execution_receipt=execution_receipt,
     )
     evidence_source = candidate.payload_json if candidate is not None else raw_output
     evidence_records = extract_evidence_records_from_structured_result(evidence_source)
@@ -294,6 +301,7 @@ def persist_extraction_result(
     session = db or SessionLocal()
 
     try:
+        require_extraction_conformance(session, request.execution_receipt, request.payload_json, agent_key=request.agent_key)
         record = _build_extraction_result_record(request)
         session.add(record)
         if owns_session:
@@ -328,6 +336,7 @@ def persist_inline_validated_extraction_result(
     user_id: str | None = None,
     builder_finalization: Any | None = None,
     metadata: Mapping[str, Any] | None = None,
+    execution_receipt: AgentExecutionReceipt | Mapping[str, Any] | None = None,
     db: Optional[Session] = None,
 ) -> InlineExtractionPersistenceResult:
     """Persist a validated canonical domain envelope and return its stable ref.
@@ -341,6 +350,7 @@ def persist_inline_validated_extraction_result(
     the caller's transaction.
     """
 
+    receipt = _normalized_execution_receipt(execution_receipt, agent_key)
     canonical_payload = _validated_inline_domain_envelope_payload(payload_json)
     payload_hash = _canonical_payload_hash(canonical_payload)
     builder_summary = _builder_finalization_summary(builder_finalization)
@@ -361,11 +371,13 @@ def persist_inline_validated_extraction_result(
     session = db or SessionLocal()
 
     try:
+        require_extraction_conformance(session, receipt, dict(payload_json), agent_key=agent_key)
         existing = _load_extraction_result_by_idempotency_key(
             session,
             idempotency_key,
         )
         if existing is not None:
+            _assert_matching_execution_receipt(receipt, getattr(existing, "execution_receipt", None))
             return _inline_persistence_result(
                 existing,
                 created_new=False,
@@ -385,6 +397,7 @@ def persist_inline_validated_extraction_result(
         )
         request = CurationExtractionPersistenceRequest(
             document_id=document_id,
+            execution_receipt=receipt,
             adapter_key=adapter_key,
             agent_key=agent_key,
             source_kind=source_kind,
@@ -410,6 +423,7 @@ def persist_inline_validated_extraction_result(
                 idempotency_key,
             )
             if existing is not None:
+                _assert_matching_execution_receipt(receipt, getattr(existing, "execution_receipt", None))
                 return _inline_persistence_result(
                     existing,
                     created_new=False,
@@ -452,6 +466,8 @@ def persist_extraction_results(
     records: list[CurationExtractionResultRecordModel] = []
 
     try:
+        for request in requests:
+            require_extraction_conformance(session, request.execution_receipt, request.payload_json, agent_key=request.agent_key)
         for request in requests:
             record = _build_extraction_result_record(request)
             session.add(record)
@@ -509,6 +525,7 @@ def persist_idempotent_extraction_results(
         )
         existing_request = request_by_key.get(idempotency_key)
         if existing_request is not None:
+            _assert_matching_execution_receipt(request.execution_receipt, existing_request.execution_receipt)
             _assert_matching_payload_hash(
                 idempotency_key=idempotency_key,
                 requested_payload_hash=payload_hash,
@@ -523,6 +540,8 @@ def persist_idempotent_extraction_results(
     authoritative_records: list[CurationExtractionResultRecordModel] = []
 
     try:
+        for request in unique_requests:
+            require_extraction_conformance(session, request.execution_receipt, request.payload_json, agent_key=request.agent_key)
         for request in unique_requests:
             idempotency_key = _required_idempotent_request_field(
                 request.idempotency_key,
@@ -556,6 +575,7 @@ def persist_idempotent_extraction_results(
                 requested_payload_hash=payload_hash,
                 authoritative_payload_hash=authoritative.payload_hash,
             )
+            _assert_matching_execution_receipt(request.execution_receipt, getattr(authoritative, "execution_receipt", None))
             authoritative_records.append(authoritative)
 
         if owns_session:
@@ -897,6 +917,7 @@ def _record_to_schema(
 
     return CurationExtractionResultRecord(
         extraction_result_id=str(record.id),
+        execution_receipt=getattr(record, "execution_receipt", None),
         document_id=str(record.document_id),
         adapter_key=record.adapter_key,
         agent_key=record.agent_key,
@@ -921,6 +942,8 @@ def _build_extraction_result_record(
     """Construct an ORM extraction-result record from a validated request."""
 
     return CurationExtractionResultRecordModel(
+        agent_revision_id=request.execution_receipt.agent_revision_id if request.execution_receipt else None,
+        execution_receipt=request.execution_receipt.model_dump(mode="json") if request.execution_receipt else None,
         document_id=UUID(str(request.document_id)),
         adapter_key=request.adapter_key,
         agent_key=request.agent_key,
@@ -936,6 +959,22 @@ def _build_extraction_result_record(
         payload_hash=sanitize_persisted_text(request.payload_hash),
         extraction_metadata=sanitize_persisted_json_value(dict(request.metadata)),
     )
+
+
+def _normalized_execution_receipt(value: Any, agent_key: str) -> AgentExecutionReceipt | None:
+    if value is None:
+        return None
+    receipt = AgentExecutionReceipt.model_validate(value)
+    if not agent_key.startswith("ca_") or receipt.agent_key != agent_key:
+        raise ValueError("Extraction receipt must identify the producing custom agent")
+    return receipt
+
+
+def _assert_matching_execution_receipt(requested: Any, authoritative: Any) -> None:
+    def normalized(value: Any) -> dict[str, Any] | None:
+        return AgentExecutionReceipt.model_validate(value).model_dump(mode="json") if value is not None else None
+    if normalized(requested) != normalized(authoritative):
+        raise ExtractionResultPayloadMismatchError("Extraction idempotency key reused with a different execution receipt")
 
 
 __all__ = [

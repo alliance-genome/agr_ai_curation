@@ -20,6 +20,32 @@ from src.lib.agent_studio.custom_agent_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolate_execution_persistence(monkeypatch):
+    """These legacy unit fakes test draft policy, not SQL revision persistence.
+
+    Real create/update/head/rollback coverage is in the persistence suite.
+    """
+    from src.lib.agent_studio import custom_agent_service as service
+    from src.schemas.agent_execution_revision import initial_output_contract
+    # CRUD fakes have no application prompt-cache startup. Template creation
+    # now requires an available inherited base before saving its revision.
+    monkeypatch.setattr(service, "build_agent_prompt_layers", lambda *_args, **_kwargs: SimpleNamespace(
+        layers=[SimpleNamespace(kind="base_prompt", content="Template main instructions")],
+    ))
+    monkeypatch.setattr(service, "_record_execution_save", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        service, "_prepare_execution_update",
+        lambda _db, agent, *_args: (None, SimpleNamespace(
+            output_contract=initial_output_contract(agent.output_schema_key),
+            tool_ids=[],  # These fakes cover the saved managed floor, not historical policy backfill.
+            system_managed_tool_ids=[tool for tool in (agent.tool_ids or [])
+                                     if tool in {"record_evidence", "finalize_allele_extraction"}],
+            group_tool_policy=getattr(agent, "group_tool_policy", {}),
+        )),
+    )
+
+
 def test_make_and_parse_custom_agent_id_round_trip():
     custom_uuid = uuid.uuid4()
     agent_id = make_custom_agent_id(custom_uuid)
@@ -242,7 +268,8 @@ def test_get_custom_agent_group_prompt_falls_back_to_cached_rules(monkeypatch):
     assert content == "cached wb rules"
 
 
-def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
+@pytest.mark.parametrize("system_clone", [False, True])
+def test_create_custom_agent_creates_unified_custom_agent(monkeypatch, system_clone):
     import src.lib.agent_studio.custom_agent_service as service
 
     class FakeQuery:
@@ -275,6 +302,9 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
             output_schema_key=None,
             category="Validation",
             allowed_group_ids=[],
+            visibility="system", template_source=None, name="Gene validator",
+            description="", icon="", group_rules_enabled=False,
+            group_prompt_overrides={},
         ),
     )
     monkeypatch.setattr(
@@ -283,17 +313,56 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
         lambda _model_id: SimpleNamespace(model_id=_model_id),
     )
 
-    custom = service.create_custom_agent(
-        db=FakeDB(),
-        user_id=7,
-        template_source="gene_validation",
-        name="My Agent",
+    base = "Stage the retained candidates, then call finalize_gene_extraction."
+    monkeypatch.setattr(service, "build_agent_prompt_layers", lambda *_args, **_kwargs: SimpleNamespace(
+        layers=[SimpleNamespace(kind="core_static", content="Locked runtime contract"),
+                SimpleNamespace(kind="base_prompt", content=base)],
+    ))
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot, saved_runtime_prompt_bundle
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    from src.lib.prompts import cache
+    monkeypatch.setattr(cache, "get_all_active_prompts", lambda: {})
+    monkeypatch.setattr(service, "get_tool_policy_cache", lambda: SimpleNamespace(
+        list_all=lambda _db: [SimpleNamespace(tool_key="agr_curation_query", allow_attach=True)],
+    ))
+    snapshots = []
+    monkeypatch.setattr(service, "_record_execution_save", lambda db, head, **_kwargs: snapshots.append(
+        capture_execution_snapshot(db, head, AgentOutputContract(output_state="none"))
+    ))
+    monkeypatch.setattr(service, "get_agent_by_key", lambda *_args, **_kwargs:
+                        service._resolve_system_template_agent(None, "gene_validation"))
+    custom = (
+        service.clone_visible_agent_for_user(FakeDB(), 7, "gene_validation", name="My Agent")
+        if system_clone else service.create_custom_agent(
+            db=FakeDB(), user_id=7, template_source="gene_validation", name="My Agent",
+            output_schema_key="   ", output_schema_key_provided=True,
+        )
     )
 
     assert custom.template_source == "gene_validation"
     assert custom.user_id == 7
     assert custom.agent_key.startswith("ca_")
-    assert custom.instructions == ""
+    assert custom.instructions == base
+    assert custom.output_schema_key is None
+    base = "Changed template after save"
+    assert "Stage the retained candidates" in saved_runtime_prompt_bundle(snapshots[0]).render()
+    assert base not in saved_runtime_prompt_bundle(snapshots[0]).render()
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_inherit_empty_main_prompt_rejects_missing_template_guidance(monkeypatch, unavailable):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    def build(*_args, **_kwargs):
+        if unavailable:
+            raise RuntimeError("Prompt cache unavailable")
+        return SimpleNamespace(layers=[])
+
+    monkeypatch.setattr(service, "build_agent_prompt_layers", build)
+    with pytest.raises(ValueError, match="Cannot inherit"):
+        service.inherit_empty_main_prompt("gene_extractor", "")
+    assert service.inherit_empty_main_prompt(None, "") == ""
+    assert service.inherit_empty_main_prompt("gene_extractor", "Explicit replacement") == "Explicit replacement"
 
 
 @pytest.mark.parametrize("retired_alias", ["gene", "allele", "disease", "chemical"])
@@ -457,7 +526,7 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
                 "record_evidence",
                 "finalize_allele_extraction",
             ],
-            output_schema_key="AlleleVariantExtractionEnvelope",
+            output_schema_key=None,
             category="Extraction",
             allowed_group_ids=[],
             group_tool_policy={
@@ -506,7 +575,7 @@ def test_create_custom_agent_allows_inherited_system_managed_tool_ids(monkeypatc
     }
 
 
-def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch):
+def test_create_custom_agent_rejects_model_schema_with_finalize_tool(monkeypatch):
     import src.lib.agent_studio.custom_agent_service as service
 
     class FakeQuery:
@@ -535,7 +604,7 @@ def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
             model_id="gpt-5.5",
             model_temperature=0.1,
             model_reasoning="medium",
-            tool_ids=["search_document", "record_evidence"],
+            tool_ids=["search_document", "record_evidence", "finalize_allele_extraction"],
             output_schema_key="AlleleVariantExtractionEnvelope",
             category="Extraction",
             allowed_group_ids=[],
@@ -561,7 +630,7 @@ def test_create_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
         lambda: {"finalize_allele_extraction"},
     )
 
-    with pytest.raises(ValueError, match="envelope output schema.*finalize_\\* tool"):
+    with pytest.raises(ValueError, match="cannot be combined with builder"):
         service.create_custom_agent(
             db=FakeDB(),
             user_id=7,
@@ -605,7 +674,7 @@ def test_create_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
                 "record_evidence",
                 "finalize_allele_extraction",
             ],
-            output_schema_key="AlleleVariantExtractionEnvelope",
+            output_schema_key=None,
             category="Extraction",
             allowed_group_ids=[],
         ),
@@ -738,7 +807,7 @@ def test_update_custom_agent_rejects_unknown_tool_ids(monkeypatch):
         )
 
 
-def test_update_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch):
+def test_update_custom_agent_rejects_model_schema_with_finalize_tool(monkeypatch):
     import src.lib.agent_studio.custom_agent_service as service
 
     custom_agent = SimpleNamespace(
@@ -751,7 +820,7 @@ def test_update_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
         model_id="gpt-5.5",
         model_temperature=0.1,
         model_reasoning=None,
-        tool_ids=["search_document"],
+        tool_ids=["search_document", "finalize_allele_extraction"],
         output_schema_key="AlleleVariantExtractionEnvelope",
         template_source=None,
         allowed_group_ids=[],
@@ -764,7 +833,7 @@ def test_update_custom_agent_rejects_envelope_without_finalize_tool(monkeypatch)
         lambda: {"finalize_allele_extraction"},
     )
 
-    with pytest.raises(ValueError, match="envelope output schema.*finalize_\\* tool"):
+    with pytest.raises(ValueError, match="cannot be combined with builder"):
         service.update_custom_agent(
             db=SimpleNamespace(),
             custom_agent=custom_agent,
@@ -813,7 +882,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
         custom_prompt="Prompt",
         group_prompt_overrides={},
         include_group_rules=True,
-        model_id="gpt-5.5",
+        model_id="gpt-5.6-sol",
         model_temperature=0.1,
         model_reasoning=None,
         tool_ids=[
@@ -821,7 +890,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
             "record_evidence",
             "finalize_allele_extraction",
         ],
-        output_schema_key="AlleleVariantExtractionEnvelope",
+        output_schema_key=None,
         template_source="allele_extractor",
         allowed_group_ids=[],
         inherited_allowed_group_ids=[],
@@ -848,6 +917,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeyp
             ],
         ),
     )
+    monkeypatch.setattr(service, "resolve_output_schema", lambda _key: object())
 
     service.update_custom_agent(
         db=SimpleNamespace(),
@@ -872,7 +942,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
         custom_prompt="Prompt",
         group_prompt_overrides={},
         include_group_rules=True,
-        model_id="gpt-5.5",
+        model_id="gpt-5.6-sol",
         model_temperature=0.1,
         model_reasoning=None,
         tool_ids=[
@@ -880,7 +950,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
             "record_evidence",
             "finalize_allele_extraction",
         ],
-        output_schema_key="AlleleVariantExtractionEnvelope",
+        output_schema_key=None,
         template_source="allele_extractor",
         allowed_group_ids=[],
         inherited_allowed_group_ids=[],
@@ -906,6 +976,7 @@ def test_update_custom_agent_preserves_inherited_system_managed_tool_ids_when_po
             ],
         ),
     )
+    monkeypatch.setattr(service, "resolve_output_schema", lambda _key: object())
 
     service.update_custom_agent(
         db=SimpleNamespace(),
@@ -1131,11 +1202,13 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
         ),
     )
 
-    def _fake_create_custom_agent(**kwargs):
+    def _fake_clone_saved(_db, user_id, selected_source, **kwargs):
         observed.update(kwargs)
+        observed["user_id"] = user_id
+        observed["source"] = selected_source
         return SimpleNamespace(id=uuid.uuid4())
 
-    monkeypatch.setattr(service, "create_custom_agent", _fake_create_custom_agent)
+    monkeypatch.setattr(service, "clone_saved_custom_agent", _fake_clone_saved)
 
     service.clone_visible_agent_for_user(
         db=SimpleNamespace(),
@@ -1146,11 +1219,8 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
 
     assert observed["user_id"] == 7
     assert observed["name"] == "Shared Agent (Copy)"
-    assert observed["template_source"] == "gene_validation"
-    assert observed["custom_prompt"] == "prompt"
-    assert observed["allowed_group_ids"] == ["RGD"]
-    assert observed["inherited_allowed_group_ids"] == ["RGD"]
-    assert observed["inherited_group_tool_policy"] == source.group_tool_policy
+    assert observed["source"] is source
+    assert observed["allowed_group_ids"] is None  # resolved from the saved source, not mutable head
 
 
 def test_clone_visible_agent_rejects_widening_source_restriction(monkeypatch):
@@ -1202,7 +1272,7 @@ def _restricted_custom_agent(**overrides):
         "instructions": "Current prompt",
         "group_prompt_overrides": {},
         "template_source": "system_template",
-        "model_id": "gpt-5.5",
+        "model_id": "gpt-5.6-sol",
         "model_temperature": 0.1,
         "model_reasoning": None,
         "tool_ids": [],
@@ -1250,12 +1320,11 @@ def test_update_restricted_clone_rejects_access_widening(requested):
     assert custom_agent.version == 4
 
 
-def test_update_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
+def test_update_restricted_clone_allows_narrowing_without_legacy_prompt_writes():
     import src.lib.agent_studio.custom_agent_service as service
 
     custom_agent = _restricted_custom_agent()
     db = _AccessFloorDB()
-    monkeypatch.setattr(service, "_get_next_version", lambda *_args: 5)
 
     updated = service.update_custom_agent(
         db=db,
@@ -1265,8 +1334,26 @@ def test_update_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
 
     assert updated.allowed_group_ids == ["RGD"]
     assert updated.version == 5
-    assert len(db.added) == 1
-    assert db.added[0].allowed_group_ids == ["WB", "RGD"]
+    assert db.added == []  # Immutable revision boundary is tested in PostgreSQL.
+
+
+@pytest.mark.parametrize("cleared_schema", [None, "   "])
+def test_update_can_explicitly_clear_inherited_output_schema_to_none(cleared_schema):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = _restricted_custom_agent(
+        output_schema_key="PackagedEnvelope",
+        tool_ids=[],
+    )
+
+    updated = service.update_custom_agent(
+        db=_AccessFloorDB(),
+        custom_agent=custom_agent,
+        output_schema_key=cleared_schema,
+        output_schema_key_provided=True,
+    )
+
+    assert updated.output_schema_key is None
 
 
 def test_update_restricted_clone_missing_floor_fails_closed():
@@ -1285,55 +1372,6 @@ def test_update_restricted_clone_missing_floor_fails_closed():
     assert custom_agent.allowed_group_ids == ["WB", "RGD"]
 
 
-@pytest.mark.parametrize("target_groups", [[], ["WB", "RGD", "MGI"]])
-def test_revert_restricted_clone_rejects_access_widening(target_groups, monkeypatch):
-    import src.lib.agent_studio.custom_agent_service as service
-
-    custom_agent = _restricted_custom_agent()
-    target = SimpleNamespace(
-        custom_prompt="Historical prompt",
-        group_prompt_overrides={},
-        allowed_group_ids=target_groups,
-    )
-    db = _AccessFloorDB(target)
-    monkeypatch.setattr(
-        service,
-        "build_agent_prompt_layers",
-        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
-    )
-
-    with pytest.raises(ValueError, match="cannot widen"):
-        service.revert_custom_agent_to_version(db, custom_agent, version=2)
-
-    assert custom_agent.instructions == "Current prompt"
-    assert custom_agent.allowed_group_ids == ["WB", "RGD"]
-    assert db.added == []
-
-
-def test_revert_restricted_clone_allows_narrowing_and_snapshots(monkeypatch):
-    import src.lib.agent_studio.custom_agent_service as service
-
-    custom_agent = _restricted_custom_agent()
-    target = SimpleNamespace(
-        custom_prompt="Historical prompt",
-        group_prompt_overrides={},
-        allowed_group_ids=["RGD"],
-    )
-    db = _AccessFloorDB(target)
-    monkeypatch.setattr(service, "_get_next_version", lambda *_args: 5)
-    monkeypatch.setattr(
-        service,
-        "build_agent_prompt_layers",
-        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
-    )
-
-    updated = service.revert_custom_agent_to_version(db, custom_agent, version=2)
-
-    assert updated.instructions == "Historical prompt"
-    assert updated.allowed_group_ids == ["RGD"]
-    assert updated.version == 5
-    assert len(db.added) == 1
-    assert db.added[0].allowed_group_ids == ["WB", "RGD"]
 
 
 @pytest.mark.parametrize("visibility,owner,member,allowed", [

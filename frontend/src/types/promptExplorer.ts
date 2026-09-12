@@ -3,6 +3,9 @@
  * Mirrors the backend Pydantic models.
  */
 
+import type { AgentExecutionReceipt } from './agentExecution'
+import type { WorkshopOutputDraft } from '@/components/AgentStudio/PromptWorkshop/workshopOutputDraft'
+
 // ============================================================================
 // Agent Documentation Types
 // ============================================================================
@@ -91,6 +94,7 @@ export interface CombinedPromptResponse {
 
 // Individual agent prompt information
 export interface PromptInfo {
+  agent_revision_id?: string | null
   agent_id: string
   agent_name: string
   description: string
@@ -181,6 +185,7 @@ export interface AgentTemplate {
   tool_ids: string[]
   allowed_group_ids: string[]
   output_schema_key?: string
+  output_contract?: import('./agentExecution').AgentOutputContract
 }
 
 export interface GroupOption {
@@ -223,6 +228,7 @@ export type ToolIdeaRequest = OwnedToolIdeaRequest | ToolIdeaSummary
 export interface CustomAgent {
   id: string
   agent_id: string
+  execution_revision_id?: string | null
   user_id: number
   template_source?: string
   name: string
@@ -238,6 +244,7 @@ export interface CustomAgent {
   include_group_rules: boolean
   model_id: string
   model_temperature: number
+  default_export_execution_mode?: 'ai' | 'direct'
   model_reasoning?: string
   tool_ids: string[]
   output_schema_key?: string
@@ -249,6 +256,8 @@ export interface CustomAgent {
 }
 
 export interface CustomAgentVersion {
+  /** Historical prompt-only audit record; never runnable or restorable. */
+  executable: false
   id: string
   custom_agent_id: string
   version: number
@@ -283,28 +292,34 @@ export interface CustomAgentTestEvent {
   [key: string]: unknown
 }
 
-// Chat message for Opus conversation
+// Chat message for the Agent Studio AI Chat conversation
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
 }
 
-// Flow definition for context (simplified version for chat)
+// Lossless save-equivalent Flow Builder draft passed to AI Chat.
 export interface FlowContextDefinition {
   version: '1.1'
+  task_instructions_default_only?: boolean
   entry_node_id?: string
   nodes: Array<{
     id: string
     node_type: 'agent' | 'decision' | 'output' | 'task_input'
+    position: { x: number; y: number }
     agent_id: string
+    agent_revision_id?: string | null
+    execution_receipt?: AgentExecutionReceipt | null
     agent_display_name: string
+    agent_description?: string
     task_instructions?: string  // For task_input nodes
     step_goal?: string
     custom_instructions?: string
     prompt_version?: number
     include_evidence?: boolean
     output_filename_template?: string
-    projection_plan?: Record<string, unknown>
+    export_execution_mode?: 'ai' | 'direct'
+    projection_plan?: Record<string, unknown> | null
     output_key: string
     validation_attachments?: Array<Record<string, unknown>>
     validation_groups?: Array<Record<string, unknown>>
@@ -316,40 +331,129 @@ export interface FlowContextDefinition {
     role?: 'control_flow' | 'output_attachment' | 'validation_attachment'
     satisfies_binding_id?: string
     replaces_attachment_id?: string
+    condition?: {
+      type: 'contains' | 'not_empty' | 'matches_pattern'
+      value?: string
+    }
   }>
 }
 
 export interface AgentWorkshopContext {
+  getting_started_mode?: 'template' | 'scratch' | 'clone'
   template_source?: string
+  clone_source_agent_id?: string
+  clone_source_updated_at?: string
   template_name?: string
   custom_agent_id?: string
   custom_agent_name?: string
+  draft_name?: string
+  draft_description?: string
+  draft_icon?: string
+  draft_visibility?: 'private' | 'project'
+  draft_allowed_group_ids?: string[]
+  inherited_allowed_group_ids?: string[]
   include_group_rules?: boolean
   selected_group_id?: string
   prompt_draft?: string
   selected_group_prompt_draft?: string
+  group_prompt_overrides?: Record<string, string>
   draft_is_dirty?: boolean
+  draft_fingerprint?: string
   custom_agent_updated_at?: string
   group_prompt_override_count?: number
   has_group_prompt_overrides?: boolean
   draft_tool_ids?: string[]
   draft_model_id?: string
+  draft_default_export_execution_mode?: 'ai' | 'direct'
   draft_model_reasoning?: string
+  draft_output_schema_key?: string
+  /** Complete local structure, including incomplete unsaved input; never an execution receipt. */
+  draft_output?: WorkshopOutputDraft
 }
 
-export interface WorkshopPromptUpdateProposal {
-  prompt: string
-  summary?: string
-  apply_mode?: 'replace' | 'targeted_edit'
-  target_prompt?: 'main' | 'group'
-  target_group_id?: string
+export interface WorkshopAuthoringProposal {
+  assumptions?: string[]
+  contract_version: 'workshop_authoring_proposal.v1'
+  base_draft_fingerprint: string
+  candidate_draft_fingerprint: string
+  candidate: AgentWorkshopContext
+  change_summary: string
+  diff: FlowAuthoringDiffEntry[]
+  findings: FlowAuthoringFinding[]
 }
 
-export interface WorkshopPromptUpdateRequest extends WorkshopPromptUpdateProposal {
-  request_id: number
+export interface WorkshopContinuationOrigin {
+  flow_id?: string
+  flow_draft_fingerprint: string
+  node_id?: string
+  agent_id?: string
+  agent_revision_id?: string | null
 }
 
-// Context passed to Opus chat
+export interface WorkshopActionRequest {
+  action: 'open_agent' | 'new_agent' | 'save' | 'save_as' | 'show_section' | 'return_to_flow'
+  agent_id?: string
+  node_id?: string
+  mode?: 'scratch' | 'template' | 'clone'
+  section?: 'setup' | 'output_structure' | 'prompt' | 'tools' | 'versions' | 'tool_request' | 'manage'
+}
+
+export interface WorkshopAction {
+  success: true
+  contract_version: 'workshop_action.v1'
+  request: WorkshopActionRequest
+  label: string
+  source: { agent_id: string; name: string; updated_at: string; agent_revision_id: string | null } | null
+  origin: WorkshopContinuationOrigin | null
+  active_tab: string
+  flow_draft_fingerprint: string | null
+  workshop_draft_fingerprint: string | null
+  saved: false
+  message: string
+}
+
+export interface WorkshopSavedHandoff {
+  status: 'ready' | 'stale_origin' | 'catalog_unavailable'
+  saved_agent_id?: string
+  saved_custom_agent_id?: string
+  saved_agent_revision_id?: string
+  saved_agent_name?: string
+  origin?: WorkshopContinuationOrigin
+}
+
+export interface FlowAuthoringFinding {
+  code: string
+  severity: 'error' | 'warning' | 'info'
+  path: string
+  message: string
+  fix_hint?: string
+  node_id?: string
+  edge_id?: string
+}
+
+export interface FlowAuthoringDiffEntry {
+  kind: 'added' | 'removed' | 'changed'
+  path: string
+  before?: unknown
+  after?: unknown
+}
+
+export interface FlowAuthoringProposal {
+  contract_version: 'flow_authoring_proposal.v1'
+  base_draft_fingerprint: string
+  candidate_draft_fingerprint: string
+  change_summary: string
+  diff: FlowAuthoringDiffEntry[]
+  findings: FlowAuthoringFinding[]
+  output_mode_node_ids?: string[]
+  candidate: {
+    name: string
+    description: string
+    flow_definition: import('@/components/AgentStudio/FlowBuilder/types').FlowDefinition
+  }
+}
+
+// Context passed to Agent Studio AI Chat
 export interface ChatContext {
   selected_agent_id?: string
   selected_group_id?: string
@@ -358,7 +462,12 @@ export interface ChatContext {
   session_id?: string
   // Flow context (when on Flows tab)
   active_tab?: 'agents' | 'flows' | 'agent_workshop'
+  flow_id?: string
   flow_name?: string
+  flow_description?: string
+  flow_updated_at?: string
+  flow_is_dirty?: boolean
+  flow_draft_fingerprint?: string
   flow_definition?: FlowContextDefinition
   agent_workshop?: AgentWorkshopContext
 }
@@ -405,8 +514,23 @@ export interface TraceContext {
   agent_count: number
 }
 
-// SSE event types for Opus chat streaming
-export type OpusChatEventType = 'TEXT_DELTA' | 'TOOL_USE' | 'TOOL_RESULT' | 'DONE' | 'ERROR'
+// Provider-neutral SSE contract for Agent Studio AI Chat. The legacy Opus type
+// names remain internal compatibility identifiers until the broader cleanup.
+export const AGENT_STUDIO_CHAT_EVENT_TYPES = [
+  'TEXT_DELTA',
+  'TOOL_SEARCH',
+  'TOOL_SEARCH_RESULT',
+  'TOOL_USE',
+  'TOOL_RESULT',
+  'PROVIDER_CONTEXT_PREFLIGHT',
+  'CONTEXT_OVERFLOW',
+  'REFUSAL',
+  'INCOMPLETE',
+  'DONE',
+  'ERROR',
+] as const
+
+export type OpusChatEventType = typeof AGENT_STUDIO_CHAT_EVENT_TYPES[number]
 
 // Tool result from suggestion submission
 export interface ToolResult {
@@ -424,16 +548,48 @@ export interface ToolResult {
   [key: string]: unknown
 }
 
-export interface OpusChatEvent {
-  type: OpusChatEventType
-  delta?: string
-  message?: string
-  // For TOOL_USE events
-  tool_name?: string
-  tool_input?: Record<string, unknown>
-  // For TOOL_RESULT events
-  result?: ToolResult
+interface AgentStudioChatEventBase {
+  session_id: string
+  turn_id: string
+  trace_id?: string | null
 }
+
+export type OpusChatEvent = AgentStudioChatEventBase & (
+  | { type: 'TEXT_DELTA'; delta: string }
+  | { type: 'TOOL_SEARCH'; status: string; search_id?: string | null }
+  | {
+      type: 'TOOL_SEARCH_RESULT'
+      status: string
+      loaded_tool_count: number
+      search_id?: string | null
+    }
+  | {
+      type: 'TOOL_USE'
+      tool_name: string
+      tool_input: Record<string, unknown>
+      call_id?: string | null
+    }
+  | {
+      type: 'TOOL_RESULT'
+      tool_name: string
+      result: ToolResult
+      call_id?: string | null
+    }
+  | {
+      type: 'PROVIDER_CONTEXT_PREFLIGHT'
+      operation?: string
+      provider?: string
+      model?: string
+      model_live?: boolean
+      payload_summary?: Record<string, unknown>
+    }
+  | {
+      type: 'CONTEXT_OVERFLOW' | 'REFUSAL' | 'INCOMPLETE' | 'ERROR'
+      message: string
+      error_source?: string
+    }
+  | { type: 'DONE' }
+)
 
 // Suggestion types
 export type SuggestionType = 'improvement' | 'bug' | 'clarification' | 'group_specific' | 'missing_case' | 'general'

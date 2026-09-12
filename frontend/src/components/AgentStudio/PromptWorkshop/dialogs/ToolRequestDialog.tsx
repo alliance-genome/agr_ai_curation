@@ -30,7 +30,7 @@ export default function ToolRequestDialog({ open, submitting, onSubmit, onClose 
       <DialogContent sx={{ pt: 1 }}>
         <Stack spacing={1.5} sx={{ mt: 0.5 }}>
           <Typography sx={{ fontSize: 12.5, color: 'text.secondary' }}>
-            Describe the tool you need. You can draft it with Claude first.
+            Describe the tool you need. You can draft it with AI Chat first.
           </Typography>
           <TextField
             autoFocus

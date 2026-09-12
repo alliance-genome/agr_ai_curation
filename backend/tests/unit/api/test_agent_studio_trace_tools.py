@@ -174,7 +174,7 @@ def test_get_service_logs_tool_schema_matches_logs_api_contract():
     assert "minutes ago" in schema["since"]["description"]
 
 
-def test_langfuse_trace_tools_are_registered_and_trace_scoped():
+def test_langfuse_trace_tools_are_available_without_preselected_trace():
     agents_tools = api_module._get_all_opus_tools(_chat_context(active_tab="agents"))
     flows_tools = api_module._get_all_opus_tools(_chat_context(active_tab="flows"))
     trace_tools = api_module._get_all_opus_tools(_chat_context(active_tab="flows", trace_id="trace-1"))
@@ -196,7 +196,9 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
         "get_trace_duplicates",
     }
     assert expected <= agents_tool_names
-    assert expected.isdisjoint(flows_tool_names)
+    assert expected <= flows_tool_names
+    workshop_names = {t["name"] for t in api_module._get_all_opus_tools(_chat_context(active_tab="agent_workshop"))}
+    assert expected <= workshop_names
     assert expected <= trace_tool_names
 
     tools_by_name = {tool["name"]: tool for tool in agents_tools}
@@ -250,14 +252,13 @@ def test_langfuse_trace_tools_are_registered_and_trace_scoped():
     )
 
 
-def test_codebase_tools_are_agents_only():
-    agents_context = _chat_context(active_tab="agents")
-    flows_context = _chat_context(active_tab="flows")
-
-    assert api_module._is_tool_allowed_for_context("search_codebase", agents_context) is True
-    assert api_module._is_tool_allowed_for_context("read_source_file", agents_context) is True
-    assert api_module._is_tool_allowed_for_context("search_codebase", flows_context) is False
-    assert api_module._is_tool_allowed_for_context("read_source_file", flows_context) is False
+@pytest.mark.parametrize("tab", ["agents", "flows", "agent_workshop"])
+def test_source_inspection_is_available_while_authoring(tab):
+    context = _chat_context(active_tab=tab)
+    for name in ("search_codebase", "read_source_file"):
+        assert api_module._is_tool_allowed_for_context(name, context) is True
+    tools = {tool["name"] for tool in api_module._get_all_opus_tools(context)}
+    assert {"search_codebase", "read_source_file"} <= tools
 
 
 def test_every_registered_aggregate_trace_and_log_tool_exposes_bounded_continuation():
@@ -583,40 +584,57 @@ async def test_handle_tool_call_submit_prompt_suggestion_returns_clear_failure(m
     assert result["error"] == "Suggestion submission failed because prompt suggestion delivery is temporarily unavailable. Please try again."
 
 
-def test_fetch_trace_for_opus_returns_none_when_trace_missing(monkeypatch):
-    _install_langfuse(monkeypatch, trace_obj=None, observations=[])
-    assert api_module._fetch_trace_for_opus("trace-1") is None
-
-
-def test_fetch_trace_for_opus_formats_trace_and_tool_calls(monkeypatch):
-    trace = SimpleNamespace(
-        input={"message": "What changed?"},
-        output={"response": "x" * 2200},
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivered", [True, False])
+async def test_failure_report_waits_for_delivery_and_keeps_session(monkeypatch, delivered):
+    from unittest.mock import AsyncMock
+    notify = AsyncMock(return_value=delivered)
+    monkeypatch.setattr(api_module, "notify_tool_failure", notify)
+    result = await api_module._handle_tool_call(
+        "report_tool_failure", {"tool_name": "get_trace_summary", "error_type": "api_error"},
+        _chat_context(active_tab="flows", session_id="session-owned", trace_id="5937b55c7a6398d4de8cd6defaf4cf6b"),
+        "curator@example.org", "caller-owned", messages=[],
     )
-    observations = [
-        SimpleNamespace(type="GENERATION", name="gene_extractor_run"),
-        SimpleNamespace(
-            type="SPAN",
-            name="read_section",
-            input={"section": "Results"},
-            output="found evidence",
-            metadata=SimpleNamespace(distance=0.11),
-        ),
-    ]
-    _install_langfuse(monkeypatch, trace_obj=trace, observations=observations)
-
-    rendered = api_module._fetch_trace_for_opus("trace-abc")
-
-    assert rendered is not None
-    assert "**Trace ID:** trace-abc" in rendered
-    assert "**User Query:** What changed?" in rendered
-    assert "Final Response" in rendered
-    assert "... [truncated]" in rendered
-    assert "Agents Involved" in rendered
-    assert "Tool Calls" in rendered
-    assert "read_section" in rendered
+    notify.assert_awaited_once()
+    assert notify.call_args.kwargs["session_id"] == "session-owned"
+    assert result["notification_submitted"] is delivered
+    assert result["success"] is delivered
+    assert api_module._tool_result_status(result) == ("success" if delivered else "error")
+    assert result["status"] == ("success" if delivered else "not_sent")
+    if not delivered:
+        assert "not sent" in result["message"]
+        assert "not sent" in api_module._tool_result_error(result)
+        assert "sent to dev team" not in result["message"]
 
 
-def test_fetch_trace_for_opus_returns_none_on_exception(monkeypatch):
-    _install_langfuse(monkeypatch, raise_on_init=True)
-    assert api_module._fetch_trace_for_opus("trace-1") is None
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sns_status,notified", [("published", True), ("disabled", False)])
+async def test_suggestion_preserves_notification_delivery_status(monkeypatch, sns_status, notified):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(api_module, "submit_suggestion_sns", AsyncMock(return_value={
+        "status": "success", "sns_status": sns_status, "suggestion_id": "suggestion-1",
+        "sns_message_id": "notification-1" if notified else None,
+        "message": "Submitted" if notified else "Logged locally",
+    }))
+    result = await api_module._handle_tool_call(
+        "submit_prompt_suggestion", {"suggestion_type": "general", "summary": "Use Choose output fields", "detailed_reasoning": "Name the button"},
+        _chat_context(active_tab="flows"), "curator@example.org", "caller-owned", messages=[],
+    )
+    assert result["notification_submitted"] is notified
+    assert result["delivery_status"] == sns_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tab", ["flows", "agent_workshop"])
+async def test_pasted_trace_id_can_be_read_without_context_trace(monkeypatch, tab):
+    from unittest.mock import AsyncMock
+    from src.lib.agent_studio import tools
+    read = AsyncMock(return_value={"status": "success", "data": {"name": "extractor"}})
+    monkeypatch.setattr(tools, "get_trace_summary", read)
+    result = await api_module._handle_tool_call(
+        "get_trace_summary", {"trace_id": "5937b55c7a6398d4de8cd6defaf4cf6b"},
+        _chat_context(active_tab=tab), "curator@example.org", "caller-owned", messages=[],
+    )
+    read.assert_awaited_once_with(trace_id="5937b55c7a6398d4de8cd6defaf4cf6b")
+    assert result["status"] == "success"
+    assert tools._trusted_trace_caller_sub.get() == "caller-owned"

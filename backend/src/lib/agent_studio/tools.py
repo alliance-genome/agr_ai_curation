@@ -1,10 +1,10 @@
 """
 Workflow Analysis Tools
 
-Provides tool functions for Opus to dynamically query trace data and Loki-backed service logs.
+Provides tool functions for AI Chat to query trace data and Loki-backed service logs.
 Used in the Workflow Analysis feature (formerly Prompt Explorer).
 
-Token-Aware Tools (Claude-Specific Endpoints):
+Token-aware tools use stable TraceReview compatibility endpoints:
 - get_trace_summary: Lightweight overview (~500 tokens)
 - get_tool_calls_summary: Paginated call summaries
 - get_tool_calls_page: Paginated call metadata and exact-field references
@@ -26,6 +26,8 @@ Token-Aware Tools (Claude-Specific Endpoints):
 System Tools:
 - get_service_logs: Service log retrieval
 """
+
+from src.lib.observability.runtime import report_runtime_exception
 
 import httpx
 import os
@@ -160,11 +162,11 @@ def validate_view(view: str) -> None:
 
 
 # ============================================================================
-# Token-Aware Tool Functions (Claude-Specific Endpoints)
+# Token-aware tool functions (stable TraceReview compatibility endpoints)
 # ============================================================================
 
 def _get_claude_api_url() -> str:
-    """Get the Claude-specific TraceReview API base URL."""
+    """Get the stable compatibility route for the TraceReview API."""
     base = get_trace_review_url()
     return f"{base}/api/claude/traces"
 
@@ -229,6 +231,12 @@ async def _get_claude_endpoint(
                 "error": f"Invalid request: {_response_detail(resp)}",
                 "help": "Check the tool parameters and retry with a narrower request",
             }
+        if resp.status_code >= 500:
+            report_runtime_exception(
+                RuntimeError("TraceReview service returned an HTTP server error"),
+                component="agent_studio", operation="trace_review_http_failure",
+                context={"http_status": resp.status_code},
+            )
         return {
             "status": "error",
             "data": None,
@@ -237,6 +245,10 @@ async def _get_claude_endpoint(
             "help": "Check TraceReview service status",
         }
     except httpx.TimeoutException:
+        report_runtime_exception(
+            RuntimeError("TraceReview request timed out"), component="agent_studio",
+            operation="trace_review_timeout", context={"timeout_seconds": timeout_seconds},
+        )
         return {
             "status": "error",
             "data": None,
@@ -245,6 +257,11 @@ async def _get_claude_endpoint(
             "help": "Retry with a narrower request or check service load",
         }
     except Exception as e:
+        report_runtime_exception(
+            RuntimeError("TraceReview request or response processing failed"),
+            component="agent_studio", operation="trace_review_request_failed",
+            context={"error_type": type(e).__name__},
+        )
         return {
             "status": "error",
             "data": None,
@@ -1352,7 +1369,7 @@ async def get_service_logs(
     """
     Retrieve Loki-backed service logs for troubleshooting.
 
-    Allows Opus to access internal service logs through `/api/logs/{container}`
+    Allows AI Chat to access internal service logs through `/api/logs/{container}`
     when helping curators debug issues.
 
     Args:

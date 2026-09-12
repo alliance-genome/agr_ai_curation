@@ -151,6 +151,7 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
 
     def _run_streamed(_agent, *args, **kwargs):
         captured["run_config"] = kwargs["run_config"]
+        captured["builder_workspace"] = streaming_tools._active_builder_workspace_or_none()
         return _FakeRunResult(events=[], final_output="specialist output", new_items=[])
 
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
@@ -175,6 +176,9 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
     )
     agent = SimpleNamespace(
         name="Plain Text Specialist",
+        agent_key="ca_pinned_specialist",
+        generic_profile=SimpleNamespace(receipt={"revision": 7}),
+        execution_receipt={"agent_key": "ca_pinned_specialist", "revision": 3},
         tools=[],
         output_type=None,
         instructions="",
@@ -197,6 +201,11 @@ async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_dat
     )
 
     assert result == "specialist output"
+    workspace = captured["builder_workspace"]
+    assert workspace.agent_id == "ca_pinned_specialist"
+    assert workspace.generic_profile is agent.generic_profile
+    assert workspace.execution_receipt == agent.execution_receipt
+    assert workspace.execution_receipt is not agent.execution_receipt
     assert captured["run_config"].tracing_disabled is False
     assert captured["run_config"].trace_include_sensitive_data is True
     assert captured["run_config"].workflow_name == "parent workflow"
@@ -3117,13 +3126,29 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
 
 @pytest.mark.asyncio
-async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_agent(monkeypatch):
+@pytest.mark.parametrize("is_builder_envelope", [False, True])
+async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_agent(
+    monkeypatch, is_builder_envelope,
+):
     emitted = []
     monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
 
     from src.lib.curation_workspace import adapter_registry
     from src.lib.curation_workspace import extraction_results
     from src.lib.domain_packs import validator_dispatch
+
+    receipt = {
+        "agent_id": "11111111-2222-3333-4444-555555555555",
+        "agent_key": "ca_11111111-2222-3333-4444-555555555555",
+        "agent_revision_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "revision": 2,
+        "fingerprint": "sha256:" + "a" * 64,
+        "output_contract": {
+            "output_state": "structured_extraction",
+            "output_mode": "domain",
+            "output_schema_key": "GeneExtractionResultEnvelope",
+        },
+    }
 
     monkeypatch.setattr(
         extraction_results,
@@ -3140,6 +3165,7 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     def fake_envelope_normalizer(record):
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
+        observed_record["execution_receipt"] = record.execution_receipt
         return source_envelope
 
     monkeypatch.setattr(
@@ -3184,17 +3210,19 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
 
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         _gene_extractor_domain_output(),
-        expected_output_type=None,
+        expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Custom Gene Extraction",
         tool_name="ask_ca_11111111_2222_3333_4444_555555555555_specialist",
         adapter_key="gene",
         source_agent_key="ca_11111111-2222-3333-4444-555555555555",
-        is_builder_envelope=True,
+        is_builder_envelope=is_builder_envelope,
+        execution_receipt=receipt,
     )
 
     assert json.loads(result)["domain_pack_id"] == "gene"
     assert observed_record["agent_key"] == "ca_11111111-2222-3333-4444-555555555555"
     assert observed_record["adapter_key"] == "gene"
+    assert observed_record["execution_receipt"].model_dump(mode="json", exclude_none=True) == receipt
     assert observed["domain_pack"].pack_id == "gene"
     assert observed["envelope"] is source_envelope
     assert emitted[0]["details"]["toolName"] == "dispatch_active_validator_bindings"

@@ -18,7 +18,7 @@ backend/
 ├── src/
 │   ├── api/                        # API endpoints
 │   │   ├── chat.py                 # AI chat endpoints
-│   │   ├── agent_studio.py         # Agent Studio (catalog, Opus chat, traces)
+│   │   ├── agent_studio.py         # Agent Studio (catalog, AI Chat, traces)
 │   │   ├── agent_studio_custom.py  # Custom agent CRUD endpoints
 │   │   ├── documents.py            # Document management
 │   │   ├── chunks.py               # Document chunking
@@ -97,9 +97,10 @@ config/
 - `GET /api/chat/status` - Check chat service status
 
 ### Agent Studio (`/api/agent-studio`)
+- Agent Studio AI Chat uses its separate `gpt-6-astra` / `medium` settings. New extraction agents use the canonical catalog default, `gpt-6-astra` / `low`; validators retain `gpt-5.6-terra` / `medium`.
 - `GET /api/agent-studio/catalog` - Get all agent prompts organized by category
 - `GET /api/agent-studio/registry/metadata` - Get agent metadata, including domain-envelope and validation attachment metadata for domain-pack agents
-- `POST /api/agent-studio/chat` - Stream a conversation with Opus
+- `POST /api/agent-studio/chat` - Stream an AI Chat conversation
 - `GET /api/agent-studio/trace/{trace_id}/context` - Get enriched trace context
 - `POST /api/agent-studio/suggestion` - Submit a prompt suggestion
 - `GET /api/agent-studio/custom-agents` - List user's custom agents
@@ -308,7 +309,6 @@ full developer contract.
 - **OpenAI Agents SDK** - AI agent framework
 - **OpenAI** - LLM provider (native driver)
 - **OpenAI-compatible provider driver** - Direct Gemini and Groq routes
-- **Anthropic** - Opus chat in Agent Studio
 - **Langfuse** - Observability
 - **OpenInference** - Instrumentation
 

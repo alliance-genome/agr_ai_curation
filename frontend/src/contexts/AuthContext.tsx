@@ -5,16 +5,12 @@ import {
   cleanupAiCurationLocalCache,
 } from '../lib/aiCurationLocalCache';
 import {
-  safeGetItem,
   safeSetItem,
 } from '../lib/browserStorage';
 import {
   clearAllNamespacedChatLocalStorage,
-  clearChatLocalStorageForUser,
   clearLegacyChatLocalStorage,
-  getChatLocalStorageKeys,
 } from '../lib/chatCacheKeys';
-import { ASSISTANT_CHAT_HISTORY_KIND } from '../services/chatHistoryApi';
 
 /** User data resolved from backend auth session. */
 export interface AuthUser {
@@ -117,7 +113,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const userData = await response.json();
         // Use auth_sub (provider subject claim) as the unique user identifier
         const newUserId = userData.auth_sub;
-        const chatStorageKeys = getChatLocalStorageKeys(newUserId);
 
         setUser({
           uid: newUserId,
@@ -134,62 +129,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           metadata: { userId: newUserId },
         });
 
-        // Sync localStorage and backend memory state to ensure consistency
-        // Handles two scenarios:
-        // 1. Backend restarted (no sessions) but localStorage has stale data -> clear localStorage
-        // 2. localStorage cleared but backend has sessions (memory) -> reset backend for clean slate
-        const storedSession = safeGetItem(() => window.localStorage, chatStorageKeys.sessionId, {
-          owner: 'chat',
-          workflowCritical: true,
-        });
-        const storedMessages = safeGetItem(() => window.localStorage, chatStorageKeys.messages, {
-          owner: 'chat',
-          workflowCritical: true,
-        });
-        const storedSessionId = storedSession.ok ? storedSession.value : null;
-        const storedMessagesRaw = storedMessages.ok ? storedMessages.value : null;
-        try {
-          const historyQuery = new URLSearchParams({
-            chat_kind: ASSISTANT_CHAT_HISTORY_KIND,
-          });
-          const historyResponse = await fetch(`/api/chat/history?${historyQuery.toString()}`, {
-            method: 'GET',
-            credentials: 'include',
-          });
-          if (historyResponse.ok) {
-            const historyData = await historyResponse.json();
-
-            if (storedSessionId && storedMessagesRaw) {
-              // Case 1: localStorage has data - check if backend still has matching sessions
-              if (historyData.total_sessions === 0) {
-                logger.debug('Backend has no sessions, clearing stale localStorage chat data', {
-                  component: 'AuthContext',
-                  action: 'checkAuthStatus',
-                  metadata: { storedSessionId },
-                });
-                clearChatLocalStorageForUser(newUserId);
-              }
-            } else if (historyData.total_sessions > 0) {
-              // Case 2: localStorage is empty but backend has sessions
-              // Reset backend memory to ensure clean slate (user expects fresh start)
-              logger.debug('localStorage empty but backend has sessions, resetting backend memory', {
-                component: 'AuthContext',
-                action: 'checkAuthStatus',
-                metadata: { backendSessions: historyData.total_sessions },
-              });
-              await fetch('/api/chat/conversation/reset', {
-                method: 'POST',
-                credentials: 'include',
-              });
-            }
-          }
-        } catch (historyError) {
-          // Non-critical - log but don't fail auth
-          logger.debug('Failed to validate chat history, continuing', {
-            component: 'AuthContext',
-            action: 'checkAuthStatus',
-          });
-        }
+        // Durable conversations are independent of browser-local cache state.
+        // Authentication refresh must never create/reset a chat or clear its state.
         cleanupAiCurationLocalCache();
       } else if (response.status === 401) {
         // Not authenticated - clear state

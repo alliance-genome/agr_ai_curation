@@ -21,6 +21,7 @@ from src.lib.curation_workspace.validation_runtime import (
     field_validation_aliases,
 )
 from src.lib.curation_workspace.models import (
+    CurationSessionAgentRevision,
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
     CurationDraft as DraftModel,
@@ -69,6 +70,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 TEST_TABLES = [
     PDFDocument.__table__,
     ReviewSessionModel.__table__,
+    CurationSessionAgentRevision.__table__,
     ExtractionResultModel.__table__,
     DomainEnvelopeModel.__table__,
     CurationCandidate.__table__,

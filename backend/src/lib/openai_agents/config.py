@@ -436,7 +436,7 @@ def supports_reasoning(model: str) -> bool:
     - minimal/low -> "low" thinking level
     - medium/high/xhigh -> "high" thinking level
 
-    Future: Anthropic Claude models may be added here.
+    Additional catalog-backed providers may be added here.
     """
     model_def = _get_model_definition(model)
     return bool(model_def.supports_reasoning)
@@ -631,7 +631,7 @@ def build_model_settings(
     Build ModelSettings with appropriate reasoning and temperature for the model.
 
     This is a shared helper function for all agents to ensure consistent
-    behavior across OpenAI and Gemini models (and potentially Anthropic in future).
+    behavior across OpenAI and Gemini models.
 
     Reasoning is supported on:
     - GPT-5.6 Sol/Terra models
@@ -1377,6 +1377,11 @@ def get_rna_gene_product_cache_ttl_seconds() -> float:
     )
 
 
+def get_chat_curation_confirmation_ttl_seconds() -> int:
+    """Expiration of an unconsumed, scope-bound chat preparation preview."""
+    return max(1, _get_env_int_with_fallback("CHAT_CURATION_CONFIRMATION_TTL_SECONDS", 1800))
+
+
 def get_rna_gene_product_cache_max_entries() -> int:
     """Maximum process-local RNA gene-product resolution cache entries."""
     return max(
@@ -1521,6 +1526,11 @@ def get_figure_locator_resolution_max_turns() -> int:
     return _get_single_shot_output_agent_max_turns(
         "FIGURE_LOCATOR_RESOLUTION_MAX_TURNS"
     )
+
+
+def get_figure_locator_resolution_contract_retries() -> int:
+    """Correction attempts after invalid figure-locator candidate ID coverage."""
+    return max(0, _get_env_int_with_fallback("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", 2))
 
 
 def get_figure_locator_resolution_batch_max_chars() -> int:
@@ -1966,6 +1976,31 @@ def get_openai_responses_websocket_ping_timeout_seconds() -> Optional[float]:
     )
 
 
+def get_flow_selected_fields_direct_export() -> bool:
+    """Benchmark deterministic saved-field exports without formatter model turns."""
+    return _get_env_bool("FLOW_SELECTED_FIELDS_DIRECT_EXPORT", False)
+
+
+def get_validator_stop_after_accepted_finalization() -> bool:
+    """Benchmark accepted-finalizer completion without another model response."""
+    return _get_env_bool("VALIDATOR_STOP_AFTER_ACCEPTED_FINALIZATION", False)
+
+
+def get_package_runner_reuse_workers() -> bool:
+    """Opt into persistent isolated workers; disabled pending benchmark review."""
+    return _get_env_bool("PACKAGE_RUNNER_REUSE_WORKERS", False)
+
+
+def get_package_runner_worker_count() -> int:
+    """Maximum persistent processes per runner across all package environments."""
+    return max(1, _get_env_int_with_fallback("PACKAGE_RUNNER_WORKER_COUNT", 2))
+
+
+def get_package_runner_response_max_bytes() -> int:
+    """Bound stdout plus stderr retained for a persistent-worker response."""
+    return max(1, _get_env_int_with_fallback("PACKAGE_RUNNER_RESPONSE_MAX_BYTES", 8_388_608))
+
+
 def get_package_runner_timeout_seconds() -> float:
     """Subprocess timeout for an isolated package tool call (PACKAGE_RUNNER_TIMEOUT_SECONDS).
 
@@ -1989,41 +2024,70 @@ def get_agent_studio_trace_tool_timeout_seconds() -> float:
 
 
 def get_agent_studio_endpoint_timeout_seconds() -> float:
-    """Default HTTP timeout for Agent Studio Claude-endpoint calls (AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS).
+    """Default HTTP timeout for Agent Studio endpoint calls (AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS).
 
     Applies to trace tools that do not override it. Default 30.
     """
     return max(1.0, _get_env_float_with_fallback("AGENT_STUDIO_ENDPOINT_TIMEOUT_SECONDS", 30.0))
 
 
-def get_agent_studio_opus_context_editing_trigger_tokens() -> int:
-    """Input-token threshold for Anthropic tool context editing.
+def get_agent_studio_openai_model() -> str:
+    """Dedicated Chat model; does not change extraction or routing defaults."""
+    return os.getenv("AGENT_STUDIO_OPENAI_MODEL", "gpt-6-astra").strip()
 
-    Agent Studio Opus asks Anthropic to clear stale tool uses/results after the
-    live request context crosses this threshold. Default 140000, approximately
-    70% of the 200K-token Opus context budget used by Agent Studio.
-    """
+
+def get_agent_studio_reasoning_effort() -> str:
+    """Chat reasoning, validated against the selected model by its runtime."""
+    return os.getenv("AGENT_STUDIO_REASONING_EFFORT", "medium").strip().lower()
+
+
+def get_agent_studio_openai_max_turns() -> int:
+    """Maximum Agents SDK turns for one Agent Studio authoring response."""
+
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_OPENAI_MAX_TURNS", 24))
+
+
+def get_agent_studio_openai_max_output_tokens() -> int:
+    """Maximum output tokens requested for each Agent Studio model turn."""
+
     return max(
         1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_OPUS_CONTEXT_EDITING_TRIGGER_TOKENS",
-            140_000,
-        ),
+        _get_env_int_with_fallback("AGENT_STUDIO_OPENAI_MAX_OUTPUT_TOKENS", 16_384),
     )
 
 
-def get_agent_studio_opus_context_editing_keep_tool_uses() -> int:
-    """Recent tool-use count Anthropic should keep when context editing triggers.
+def get_agent_studio_suggestion_max_turns() -> int:
+    """Maximum Agents SDK turns for forced AI-assisted suggestion submission."""
 
-    Keeping a small tail preserves local tool-loop continuity while older tool
-    results can be rehydrated through durable chat/TraceReview recall tools.
-    Default 3.
-    """
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_SUGGESTION_MAX_TURNS", 2))
+
+
+def get_agent_studio_suggestion_max_output_tokens() -> int:
+    """Maximum output tokens requested for suggestion-submission model turns."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_SUGGESTION_MAX_OUTPUT_TOKENS", 4_096),
+    )
+
+
+def get_agent_studio_tool_search_max_candidates() -> int:
+    """Maximum authorized tools declared to hosted Agent Studio tool search."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback("AGENT_STUDIO_TOOL_SEARCH_MAX_CANDIDATES", 128),
+    )
+
+
+def get_agent_studio_capability_catalog_max_records() -> int:
+    """Maximum authorized non-callable resources compiled for one Studio request."""
+
     return max(
         1,
         _get_env_int_with_fallback(
-            "AGENT_STUDIO_OPUS_CONTEXT_EDITING_KEEP_TOOL_USES",
-            3,
+            "AGENT_STUDIO_CAPABILITY_CATALOG_MAX_RECORDS",
+            1_000,
         ),
     )
 
@@ -2132,6 +2196,21 @@ def get_agent_studio_workshop_context_group_prompt_max_chars() -> int:
         _get_env_int_with_fallback(
             "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS",
             6_000,
+        ),
+    )
+
+
+def get_agent_studio_workshop_context_metadata_max_chars() -> int:
+    """Max Workshop authoring-metadata characters included in system context.
+
+    Exact metadata remains available through the bounded Workshop refresh tool
+    when this preview is clipped. Default 2000.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS",
+            2_000,
         ),
     )
 
@@ -2527,6 +2606,23 @@ def get_agent_studio_flow_inspection_page_limit() -> int:
     )
 
 
+def get_agent_studio_workshop_proposal_max_operations() -> int:
+    """Maximum semantic operations per Workshop proposal call."""
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_WORKSHOP_PROPOSAL_MAX_OPERATIONS", 30))
+
+
+def get_agent_studio_flow_proposal_max_operations() -> int:
+    """Maximum semantic operations accepted by one flow proposal tool call."""
+
+    return max(
+        1,
+        _get_env_int_with_fallback(
+            "AGENT_STUDIO_FLOW_PROPOSAL_MAX_OPERATIONS",
+            30,
+        ),
+    )
+
+
 def get_agent_studio_flow_inspection_chunk_max_chars() -> int:
     """Maximum exact text characters returned by one flow detail call."""
 
@@ -2903,6 +2999,43 @@ def get_flow_list_page_size_default() -> int:
     Default 50.
     """
     return max(1, _get_env_int_with_fallback("FLOW_LIST_PAGE_SIZE_DEFAULT", 50))
+
+
+# --- Closed generic extraction profiles ---
+
+def get_generic_profile_max_depth() -> int:
+    """Maximum nested profile value-schema depth; raise for deeper record structures."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_DEPTH", 8))
+
+
+def get_generic_profile_list_page_size() -> int:
+    """Profile/revision/consumer page size; tune payload size for larger catalogs."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_LIST_PAGE_SIZE", 50))
+
+
+def get_generic_profile_max_fields() -> int:
+    """Maximum total canonical fields across a profile's nested objects."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_FIELDS", 200))
+
+
+def get_generic_profile_max_contract_bytes() -> int:
+    """Maximum UTF-8 serialized profile contract size, including descriptions/aliases."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_CONTRACT_BYTES", 262144))
+
+
+def get_generic_profile_max_record_bytes() -> int:
+    """Maximum UTF-8 JSON attributes size for one profile-bound record."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_RECORD_BYTES", 262144))
+
+
+def get_generic_profile_max_record_values() -> int:
+    """Maximum visited values in one profile-bound record, including array items."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_RECORD_VALUES", 10000))
+
+
+def get_generic_profile_max_issues() -> int:
+    """Maximum field-addressed conformance issues returned for one candidate."""
+    return max(1, _get_env_int_with_fallback("GENERIC_PROFILE_MAX_ISSUES", 50))
 
 
 # --- Flow output projection tooling ---

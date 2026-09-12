@@ -11,6 +11,11 @@ import type { AgentNode } from '../types'
 import NodePanel from './NodePanel'
 import type { NodePanelLeaveGuard } from './NodePanel'
 
+const revisionMocks = vi.hoisted(() => ({ list: vi.fn() }))
+vi.mock('@/services/agentStudioService', () => ({
+  listAgentExecutionRevisions: revisionMocks.list,
+}))
+
 const metadataMocks = vi.hoisted(() => ({
   agents: {} as Record<string, unknown>,
 }))
@@ -94,6 +99,65 @@ function renderPanel(node: AgentNode, props: PanelProps = {}) {
 describe('NodePanel', () => {
   beforeEach(() => {
     metadataMocks.agents = extractionMetadata
+    revisionMocks.list.mockReset()
+  })
+
+  it('keeps revision selection local until Apply and restores the exact receipt on Cancel', async () => {
+    const user = userEvent.setup()
+    const oldReceipt = {
+      agent_id: 'agent-uuid', agent_key: 'ca_agent-uuid', agent_revision_id: 'revision-old',
+      revision: 1, fingerprint: 'old-fingerprint',
+      output_contract: { output_state: 'none' as const },
+    }
+    const nextContract = {
+      output_state: 'structured_extraction', output_mode: 'unprofiled_generic',
+    }
+    revisionMocks.list.mockResolvedValue({
+      revisions: [{ id: 'revision-new', agent_id: 'agent-uuid', revision: 2,
+        fingerprint: 'new-fingerprint', snapshot: { output_contract: nextContract } }],
+      next_before_revision: null,
+    })
+    const guard = createRef<NodePanelLeaveGuard>()
+    const { onApply } = renderPanel(buildNode({
+      agent_id: oldReceipt.agent_key, agent_revision_id: oldReceipt.agent_revision_id,
+      execution_receipt: oldReceipt,
+    }), { leaveGuardRef: guard })
+    expect(revisionMocks.list).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Choose a saved revision' }))
+    expect(revisionMocks.list).toHaveBeenCalledWith('agent-uuid', undefined)
+    await user.click(await screen.findByRole('radio', { name: 'Revision 2' }))
+    expect(onApply).not.toHaveBeenCalled()
+    expect(guard.current?.captureAuthoringDraft().data).toMatchObject({
+      agent_revision_id: 'revision-new', execution_receipt: { output_contract: nextContract },
+    })
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(guard.current?.captureAuthoringDraft().data.execution_receipt).toEqual(oldReceipt)
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    await user.click(screen.getByRole('radio', { name: 'Revision 2' }))
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onApply).toHaveBeenCalledWith('node_1', expect.objectContaining({
+      agent_revision_id: 'revision-new', execution_receipt: {
+        agent_id: 'agent-uuid', agent_key: 'ca_agent-uuid', agent_revision_id: 'revision-new',
+        revision: 2, fingerprint: 'new-fingerprint', output_contract: nextContract,
+      },
+    }))
+  })
+
+  it('preserves the draft selection when history fails and supports retry and pagination', async () => {
+    const user = userEvent.setup()
+    revisionMocks.list.mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce({ revisions: [], next_before_revision: 3 })
+      .mockResolvedValueOnce({ revisions: [], next_before_revision: null })
+    const guard = createRef<NodePanelLeaveGuard>()
+    renderPanel(buildNode({ agent_id: 'ca_agent-uuid', agent_revision_id: 'saved-pin' }), { leaveGuardRef: guard })
+    await user.click(screen.getByRole('button', { name: 'Choose a saved revision' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your selection has not changed')
+    expect(guard.current?.captureAuthoringDraft().data.agent_revision_id).toBe('saved-pin')
+    await user.click(screen.getByRole('button', { name: 'Retry loading revisions' }))
+    await user.click(await screen.findByRole('button', { name: 'Load older revisions' }))
+    expect(revisionMocks.list).toHaveBeenLastCalledWith('agent-uuid', 3)
+    expect(await screen.findByText('No accessible saved revisions were found.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
   })
 
   it('shows the step header and applies a check opt-out without the deprecated export flag', async () => {
@@ -180,6 +244,34 @@ describe('NodePanel', () => {
     }))
   })
 
+  it('edits output instructions and opens AI help without discarding the draft', async () => {
+    const user = userEvent.setup()
+    const onOutputHelp = vi.fn()
+    const node = buildNode({ agent_id: 'tsv_formatter', agent_display_name: 'TSV File Formatter', custom_instructions: 'Keep one row per allele.', validation_attachments: undefined })
+    const { onApply } = renderPanel(node, { onOutputHelp })
+    const instructions = screen.getByRole('textbox', { name: 'Output instructions' })
+    await user.clear(instructions)
+    await user.type(instructions, 'Columns: allele name, identifier. Leave missing IDs blank.')
+    await user.click(screen.getByRole('button', { name: 'Need help with your output? Chat with AI' }))
+    expect(onOutputHelp).toHaveBeenCalledWith('tsv_formatter', 'TSV File Formatter', expect.stringContaining('internal step reference: node_1'))
+    expect(instructions).toHaveValue('Columns: allele name, identifier. Leave missing IDs blank.')
+    expect(onApply).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onApply).toHaveBeenCalledWith('node_1', expect.objectContaining({ custom_instructions: 'Columns: allele name, identifier. Leave missing IDs blank.' }))
+  })
+
+  it('keeps output instructions but disables them in explicit direct mode', async () => {
+    const user = userEvent.setup()
+    const node = buildNode({ agent_id: 'tsv_formatter', agent_display_name: 'TSV', custom_instructions: 'Combine suppliers.', validation_attachments: undefined }, 'output')
+    const { onApply } = renderPanel(node)
+    await user.click(screen.getByRole('switch', { name: 'Export structured data directly — faster' }))
+    const instructions = screen.getByRole('textbox', { name: 'Output instructions' })
+    expect(instructions).toBeDisabled()
+    expect(instructions).toHaveValue('Combine suppliers.')
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onApply).toHaveBeenCalledWith('node_1', expect.objectContaining({ export_execution_mode: 'direct', custom_instructions: 'Combine suppliers.' }))
+  })
+
   it('names the extraction step a custom validator attaches to', () => {
     const node = buildNode({ agent_id: 'custom_validator', agent_display_name: 'Custom validator', validation_attachments: undefined })
     renderPanel(node, { validatorAttachment: { sourceLabel: 'Gene Extractor', sourceStep: 2, replacesLabel: 'Gene lookup' } })
@@ -240,6 +332,29 @@ describe('NodePanel', () => {
       const guardRef = createRef<NodePanelLeaveGuard>()
       renderPanel(buildNode(), { leaveGuardRef: guardRef })
       await expect(guardRef.current!.requestLeave()).resolves.toBe(true)
+      expect(guardRef.current!.takeLastLeaveOutcome()).toBe('clean')
+    })
+
+    it('captures the exact unapplied keystroke for authoring context', async () => {
+      const user = userEvent.setup()
+      const guardRef = createRef<NodePanelLeaveGuard>()
+      const onDraftDirtyChange = vi.fn()
+      const { onApply } = renderPanel(
+        buildNode({ custom_instructions: 'Original' }),
+        { leaveGuardRef: guardRef, onDraftDirtyChange },
+      )
+
+      const field = screen.getByRole('textbox', { name: 'Instructions for this step' })
+      await user.clear(field)
+      await user.type(field, 'Latest unapplied text')
+
+      expect(guardRef.current!.captureAuthoringDraft()).toEqual({
+        nodeId: 'node_1',
+        data: expect.objectContaining({ custom_instructions: 'Latest unapplied text' }),
+        dirty: true,
+      })
+      expect(onApply).not.toHaveBeenCalled()
+      expect(onDraftDirtyChange).toHaveBeenLastCalledWith(true)
     })
 
     it('asks Apply, Discard, or Keep editing when the draft is dirty', async () => {
@@ -255,12 +370,14 @@ describe('NodePanel', () => {
       expect(dialog).toHaveTextContent('You turned off one check. Apply them before you leave this step, or discard them.')
       await user.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
       await expect(keep).resolves.toBe(false)
+      expect(guardRef.current!.takeLastLeaveOutcome()).toBe('kept')
       expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
       const discard = guardRef.current!.requestLeave()
       await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Discard' }))
       await expect(discard).resolves.toBe(true)
+      expect(guardRef.current!.takeLastLeaveOutcome()).toBe('discarded')
       expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
       expect(onApply).not.toHaveBeenCalled()
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -269,12 +386,49 @@ describe('NodePanel', () => {
       const apply = guardRef.current!.requestLeave()
       await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Apply' }))
       await expect(apply).resolves.toBe(true)
+      expect(guardRef.current!.takeLastLeaveOutcome()).toBe('applied')
       expect(onApply).toHaveBeenCalledTimes(1)
     })
   })
 })
 
 describe('shared flow step inspection', () => {
+  it('keeps new exporter controls read-only on a shared flow', () => {
+    metadataMocks.agents = extractionMetadata
+    const onOutputHelp = vi.fn()
+    renderPanel(buildNode({ agent_id: 'tsv_formatter', custom_instructions: 'One row per allele' }, 'output'), {
+      readOnly: true,
+      onOutputHelp,
+      flowDefinition: { version: '1.1', entry_node_id: '', nodes: [], edges: [] },
+    })
+    expect(screen.getByRole('textbox', { name: 'Output instructions' })).toBeDisabled()
+    expect(screen.getByRole('switch', { name: 'Export structured data directly — faster' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Use selected fields' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Let AI arrange the output' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Choose output fields' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Need help with your output? Chat with AI' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument()
+  })
+
+  it('allows inspecting saved revisions without changing a shared flow selection', async () => {
+    metadataMocks.agents = extractionMetadata
+    revisionMocks.list.mockResolvedValue({
+      revisions: [{ id: 'revision-new', agent_id: 'agent-uuid', revision: 2,
+        fingerprint: 'new-fingerprint', snapshot: { output_contract: { output_state: 'none' } } }],
+      next_before_revision: null,
+    })
+    const user = userEvent.setup()
+    const guard = createRef<NodePanelLeaveGuard>()
+    const { onApply } = renderPanel(buildNode({ agent_id: 'ca_agent-uuid', agent_revision_id: 'revision-old' }), {
+      readOnly: true, leaveGuardRef: guard,
+    })
+    await user.click(screen.getByRole('button', { name: 'Choose a saved revision' }))
+    const revision = await screen.findByRole('radio', { name: 'Revision 2' })
+    expect(revision).toBeDisabled()
+    expect(guard.current?.captureAuthoringDraft().data.agent_revision_id).toBe('revision-old')
+    expect(onApply).not.toHaveBeenCalled()
+  })
+
   it('keeps instructions and checks inspectable while hiding mutation actions', async () => {
     metadataMocks.agents = extractionMetadata
     const user = userEvent.setup()

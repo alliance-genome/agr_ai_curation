@@ -523,3 +523,27 @@ async def test_get_service_logs_rejects_non_integer_since(monkeypatch):
 
     assert invalid_since["status"] == "error"
     assert invalid_since["error"] == "Time filter must be an integer number of minutes"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,expected', [(200, 0), (400, 0), (403, 0), (404, 0), (500, 1), (503, 1)])
+async def test_trace_boundary_reports_server_errors_only(monkeypatch, status, expected):
+    captures = []
+    monkeypatch.setattr(tools, 'report_runtime_exception', lambda *a, **k: captures.append((a, k)))
+    _patch_async_client(monkeypatch, response=_FakeResponse(status, {'data': {}}))
+    await tools._get_claude_endpoint('/traces/private-id/payload', params={'private_text': 'DO_NOT_CAPTURE'})
+    assert len(captures) == expected
+    assert 'private-id' not in str(captures)
+    assert 'DO_NOT_CAPTURE' not in str(captures)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('exc', [httpx.TimeoutException('PRIVATE'), httpx.ConnectError('PRIVATE'), ValueError('PRIVATE')])
+async def test_trace_boundary_reports_transport_and_decode_failure_once(monkeypatch, exc):
+    captures = []
+    monkeypatch.setattr(tools, 'report_runtime_exception', lambda *a, **k: captures.append((a, k)))
+    _patch_async_client(monkeypatch, exc=exc)
+    result = await tools._get_claude_endpoint('/traces/private-id/payload')
+    assert result['status'] == 'error'
+    assert len(captures) == 1
+    assert 'PRIVATE' not in str(captures)

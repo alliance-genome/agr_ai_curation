@@ -238,52 +238,61 @@ async def test_runtime_file_formatter_rejects_empty_bundle_before_agent(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_chat_output_formatter_flow_output_uses_authored_chat(monkeypatch):
+async def test_chat_output_formatter_flow_output_renders_authored_chat_table(monkeypatch):
     executor = _executor_module()
     captured = {}
-    authored_response = "| Gene |\n| --- |\n| TP53 |\n| BRCA1 |"
+    expected = "| Symbol |\n| --- |\n| TP53 |\n| BRCA1 |"
 
-    def _fake_get_agent_by_id(agent_id, **kwargs):
+    def fake_get_agent(agent_id, **kwargs):
         captured["agent_id"] = agent_id
-        captured["context"] = kwargs["additional_runtime_context"]
-        return SimpleNamespace(name="Chat Output Formatter")
+        captured["context"] = kwargs
+        return SimpleNamespace(name="Chat Output")
 
-    def _fake_create_streaming_tool(**kwargs):
-        assert kwargs["inline_chat_persistence"] is False
-        assert kwargs["propagate_errors"] is True
+    def fake_streaming_tool(**kwargs):
+        captured["streaming"] = kwargs
 
-        async def _invoke(_ctx, arguments):
-            captured["query"] = json.loads(arguments)["query"]
-            return authored_response
+        @function_tool
+        async def render(query: str) -> str:
+            captured["query"] = query
+            return expected
 
-        return SimpleNamespace(on_invoke_tool=_invoke)
+        return render
 
-    monkeypatch.setattr(executor, "get_agent_by_id", _fake_get_agent_by_id)
-    monkeypatch.setattr(executor, "_create_streaming_tool", _fake_create_streaming_tool)
+    monkeypatch.setattr(executor, "get_agent_by_id", fake_get_agent)
+    monkeypatch.setattr(executor, "_create_streaming_tool", fake_streaming_tool)
     tool = executor._make_flow_chat_output_tool(
         agent_id="chat_output_formatter",
         output_format="chat",
         tool_name="ask_chat_output_formatter_specialist",
         tool_description="Ask chat output formatter",
-        specialist_name="Chat Output Formatter",
-        base_context={},
-        step_instruction_prefix="",
+        specialist_name="Chat Output",
+        base_context={"db_user_id": 22, "active_groups": ["demo_group"]},
+        step_instruction_prefix="Preserve the curator's requested columns.",
         completed_steps=[_completed_artifact_step()],
         flow_name="Chat Flow",
         flow_run_id="flow-run-123",
         document_id="doc-1",
-        node_data={},
+        node_data={"custom_instructions": "Only include symbols."},
     )
 
-    result_text = await _invoke_tool(tool, {"query": "Summarize results."})
+    result_text = await _invoke_tool(tool, {"query": "Render both saved genes."})
 
-    assert result_text == authored_response
+    assert result_text == expected
     assert captured["agent_id"] == "chat_output_formatter"
-    assert captured["query"] == "Summarize results."
-    payload = json.loads(captured["context"][0].split("\n", 2)[2])
-    assert [row["object.payload.symbol"] for row in payload["rows"]["object"]] == [
-        "TP53", "BRCA1",
-    ]
+    assert captured["context"]["db_user_id"] == 22
+    assert captured["context"]["active_groups"] == ["demo_group"]
+    contexts = captured["context"]["additional_runtime_context"]
+    assert contexts[0] == "Preserve the curator's requested columns."
+    payload = json.loads(contexts[1].split("\n", 2)[2])
+    assert len(payload["rows"]["object"]) == 2
+    assert "TP53" in json.dumps(payload["rows"]["object"])
+    assert "BRCA1" in json.dumps(payload["rows"]["object"])
+    assert [row["object.payload.symbol"] for row in payload["rows"]["object"]] == ["TP53", "BRCA1"]
+    assert all("step" in artifact and "node_id" in artifact for artifact in payload["artifacts"])
+    assert payload["curator_output_request"]["custom_instructions"] == "Only include symbols."
+    assert captured["query"] == "Render both saved genes."
+    assert captured["streaming"]["inline_chat_persistence"] is False
+    assert captured["streaming"]["propagate_errors"] is True
 
 
 def test_hidden_projection_planner_helpers_are_removed():

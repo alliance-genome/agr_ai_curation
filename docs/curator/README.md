@@ -1,195 +1,52 @@
-# AGR AI Curation System - Curator Guide
+# AI Curation: curator guide
 
-Welcome to the Alliance of Genome Resources (AGR) AI Curation System! This guide will help you understand the system's capabilities, from asking questions about biological data to building automated curation workflows.
+Use AI Curation to read papers, extract information for review, and look up biological identifiers. You can use a ready-made agent or design a custom extractor for the details your curation task needs.
 
-## Start Here
+## Choose where to start
 
-**New to the AI Curation System?**
+| I want to… | Guide |
+|------------|-------|
+| Upload a paper and ask a question | [Getting started](GETTING_STARTED.md) |
+| Decide what to ask and assess the results | [Best practices](BEST_PRACTICES.md) |
+| See which extractors and lookup agents are available | [Available agents](AVAILABLE_AGENTS.md) |
+| Create or edit an agent, or get help from AI Chat | [Agent Studio](AGENT_STUDIO.md) |
+| Extract my own set of details, such as stocks or reagents | [Custom output structures](CUSTOM_OUTPUT_STRUCTURES.md) |
+| Save a sequence of extraction, validation, and output steps | [Curation flows](CURATION_FLOWS.md) |
+| Run a saved flow on several papers | [Batch processing](BATCH_PROCESSING.md) |
+| Use the RGD paper-review recipes | [RGD GO and disease paper review](RGD_GO_DISEASE_PAPER_REVIEW.md) |
 
-1. **[Getting Started](GETTING_STARTED.md)** - Learn how to access the system, navigate the interface, and run your first queries
-2. **[Best Practices](BEST_PRACTICES.md)** - Master the art of writing effective queries for optimal results
-3. **[Available Agents](AVAILABLE_AGENTS.md)** - See all databases, ontologies, and specialist agents
+## Make a custom extractor
 
-**Ready for advanced features?**
+Open **Agent Studio → Agent Workshop → Custom data extraction**. The wizard asks what kind of item you want to find in a paper, then which details to collect for each item. For example, you could define one record per fly stock, with a stock name and an optional source.
 
-4. **[Agent Studio](AGENT_STUDIO.md)** - Browse prompts, build flows, and chat with Claude Opus
-5. **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain multiple agents together
-6. **[RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md)** - Run the RGD paper-review flow and review blockers or follow-ups
-7. **[Batch Processing](BATCH_PROCESSING.md)** - Process multiple documents through flows automatically
+AI Chat can help throughout. Ask it to add details or parts, write instructions, attach compatible validators, or prepare a flow using the agent. Review its proposed changes before applying them. **Apply** updates the draft; **Save** saves it to your account.
 
-## What Can the AI Help With?
+## Use the right kind of output
 
-The AI Curation System provides intelligent assistance for biological curation tasks by connecting to various authoritative data sources. You can:
+**Custom Output Structure** gives your extractor a consistent set of fields. **Flexible extraction** lets the AI choose fields that may differ between runs. **Packaged domain format** uses an existing biological structure, with validation where supported and enabled. See [choosing an output mode](CUSTOM_OUTPUT_STRUCTURES.md#choose-an-output-mode) for the tradeoffs.
 
-### Ask Questions About Biological Data
+A flow also needs a way to present its results: **Chat Output**, CSV, TSV, or JSON. You can specify columns and formatting in the output step. Choosing CSV does not, by itself, define what the extractor collects or make the file ready for database submission.
 
-- **Gene Expression Curation** - Extract gene expression patterns from research papers with typed ontology term resolution
-- **Disease Ontology** - Disease classifications, hierarchies, and term relationships
-- **Chemical Entities** - Chemical compounds and their properties via ChEBI
-- **Gene Information** - Gene details across model organisms
-- **Gene Ontology** - GO terms, hierarchies, and biological processes
-- **GO Annotations** - Gene annotations with evidence codes
-- **Orthology Relationships** - Cross-species gene relationships
-- **Ontology Term Resolver Agent** - Resolve exact CURIEs and typed/scoped ontology labels or synonyms to official term IDs
-- **Research Papers** - Information extracted from uploaded PDF documents
+## Review extraction and validation separately
 
-### Build Automated Curation Workflows
+Extraction records what the paper supports. Validation can resolve a gene, allele, or other supported value against a database or ontology. A validator attached to a field has not yet validated any answers: it runs when the agent processes data.
 
-- **Visual Flow Builder** - Create multi-agent workflows using drag-and-drop
-- **Chain Specialists Together** - Connect extraction, validation, and output agents
-- **Automatic Validation** - Extraction agents can carry domain-pack validation rules that run automatically after extraction
-- **Export Results** - Generate CSV, TSV, or JSON files from your workflows
-- **Save and Reuse** - Store flows for repeated use across documents
-- **Batch Processing** - Run saved flows against multiple documents automatically with real-time progress tracking
+Review the evidence and any unresolved or ambiguous results. A valid identifier does not establish that an observation belongs in your curation. Final export or submission also depends on the selected data type's supported fields and readiness rules.
 
-### Understand and Improve AI Behavior
+## Reuse shared agents and flows
 
-- **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus
-- **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
-- **Agent Workshop** - Create custom agents with template/scratch/clone starts, model/tool selection, per-group overrides, version history, and icon customization
-- **Validation insight** - Ask Claude to inspect domain-pack validation plans,
-  active validator-agent prompts, and export/submission readiness details
-- **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
-- **Submit Suggestions** - Help improve the system with your domain expertise
+Open **Agent Studio → Shared Library** to find work shared with your project. Workshop's **Open** dialog also includes accessible shared agents. Preview a teammate's agent or flow read-only, then clone it to make a private editable copy. Only the owner can change, delete, or revert an original. Sharing does not remove group restrictions.
 
-## How It Works
+Workshop's Tools section shows your requests and project-visible teammate requests, including ownership and status. Teammate summaries exclude private conversations and developer notes.
 
-Behind the scenes, a **supervisor agent** analyzes your question and routes it to the appropriate specialist agent(s). Each specialist agent connects to specific databases or APIs to retrieve accurate, up-to-date information.
+## Keep your work
 
-For curation workflows, extraction agents now produce **domain envelopes**. A
-domain envelope is the durable record of what the AI extracted: curatable
-objects, their field paths, evidence links, validation findings, curator edits,
-and export/submission state. The review table shows a projection of those
-objects so you can scan and edit them, but the envelope remains the source of
-truth.
+Workshop and Flow Builder retain unsaved drafts on the current browser for your signed-in account. On returning, choose **Resume draft** or **Discard draft**. Use **Save** to keep work in your account; local recovery does not transfer between devices and can be lost if browser storage is cleared.
 
-### Simple Questions
+Saved flows keep their selected agent revisions. Updating an agent does not silently replace the version used by an existing flow.
 
-When you ask a question in the chat, the supervisor routes it to the right specialist:
+## Ask for help or report a problem
 
-```
-You: "What GO terms are annotated to human TP53?"
-     ↓
-Supervisor → GO Annotations Agent → Response
-```
+Use AI Chat in Agent Studio for help with agents, prompts, fields, validators, and flows. Choose **New chat** in its header when you want a fresh conversation.
 
-### Complex Workflows (Curation Flows)
-
-For multi-step tasks, you can build visual flows that chain agents together:
-
-```
-Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → CSV Formatter
-                                                      ↓
-                                              Downloadable CSV File
-```
-
-See **[Curation Flows](CURATION_FLOWS.md)** for complete documentation.
-
-## Key Features
-
-### Chat Interface
-The main interaction area for asking questions about uploaded documents or querying databases directly. The supervisor agent automatically routes your questions to the appropriate specialists.
-
-### Agent Studio
-Tools for understanding, building, and improving AI behavior:
-
-**Agents Tab**
-- Browse all agent prompts organized by category
-- See group-specific rules for each agent
-- Click tool names to view detailed tool documentation
-- Chat with Opus about how agents and prompts work
-
-**Flows Tab (Curation Flows)**
-- Build visual workflows with drag-and-drop
-- Chain 15 agents together (PDF extraction, validation, output)
-- See domain-envelope object and validation metadata for extraction agents
-- Keep active default validators enabled, or replace/supplement them with explicit validation when the flow needs a custom check
-- See under-development validators as metadata without scheduling them
-- Output to chat, CSV, TSV, or JSON files
-- Use "Verify with Claude" to check your flow before running
-- Save and reuse flows across documents
-
-**Agent Workshop Tab**
-- Clone any system agent's prompt to create a custom version
-- Edit instructions, choose an icon, and add per-group prompt overrides
-- File menu for managing agents (New, Open, Save, Manage, Delete). Open also shows agents shared with your project, subject to group access. Owned agents are marked Yours and Private or Project shared.
-- Preview a teammate’s shared agent read-only, then choose Clone to Workshop to create a private editable copy. Shared agents are also available in the Clone source selector. Only your own agents appear in Manage; teammates cannot edit, delete, change visibility, or revert your originals.
-- The Tools section includes your requests to developers and project-visible teammate requests, with descriptions, ownership, and status. Teammate summaries do not include private conversations or developer notes.
-- Version history with revert support and save notes
-- Custom agents appear in Flow Builder for use in workflows
-
-**Discuss Responses**
-- Use triple-dot menu on any chat response to open it in Agent Studio
-- Chat with Opus about why the AI gave that specific response
-
-### Audit Panel
-Real-time transparency into AI operations:
-- Tracks all AI actions and decisions
-- Shows which databases were queried
-- Displays what information was retrieved
-- Provides full traceability
-
-### Curation Review and Export
-Domain-pack review sessions show envelope object rows with projected summary
-fields, evidence anchors, and validation status. Export and submission previews
-check the current envelope revision before sending data anywhere. If an object is
-missing required fields, has unresolved validation findings, uses draft
-definitions, or needs missing context, the preview shows a readiness blocker.
-Curator overrides only unblock export when the domain-pack policy allows the
-override. A reason is saved only when that specific policy requires one.
-
-## Available Agents
-
-The system includes 15 specialist agents organized by function:
-
-| Category | Agents |
-|----------|--------|
-| **System** | Supervisor Agent (routes to specialists) |
-| **PDF Extraction** | PDF Extraction Agent, Gene Expression Extractor |
-| **Data Validation** | Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, Ontology Term Resolver |
-| **Output** | Chat Output, CSV Formatter, TSV Formatter, JSON Formatter |
-
-For detailed agent documentation, see **[Available Agents](AVAILABLE_AGENTS.md)**.
-
-## Flow Output Options
-
-Curation Flows can output results in multiple ways:
-
-| Output | Agent | Use Case |
-|--------|-------|----------|
-| **Chat** | Chat Output | Quick review and discussion in the chat interface |
-| **CSV** | CSV Formatter | Spreadsheet-compatible data (Excel, Google Sheets) |
-| **TSV** | TSV Formatter | Tab-separated for database import |
-| **JSON** | JSON Formatter | Structured data with nested information |
-
-A flow can use one or more output agents. Each output is attached directly to
-the structured extraction or validation steps it should include, and one output
-may combine several selected sources. For example, the same flow can produce a
-Chat Output for review and a File Formatter export in one run.
-
-File outputs appear in the chat as downloadable cards with metadata including file size and download count.
-
-For domain-pack curation, file output is only one form of export. Review-session
-export and submission previews also run readiness checks against the underlying
-domain envelope objects. Resolve validation and readiness blockers before using
-final export or direct submission actions.
-
-## Questions or Feedback?
-
-**The best way to provide feedback:** Use the **triple-dot menu (...)** button on any AI response in the chat interface. This automatically captures your prompts, the AI's responses, and all database traces, giving developers the full context they need to help you.
-
-**Want to understand or improve AI behavior?** Check out **[Agent Studio](AGENT_STUDIO.md)** - browse the exact prompts given to each AI agent, review interaction traces, discuss them with Claude Opus, and submit improvement suggestions based on your domain expertise.
-
-For general questions or suggestions, please reach out to the development team.
-
-## Documentation Index
-
-| Document | Description |
-|----------|-------------|
-| [Getting Started](GETTING_STARTED.md) | First-time setup and basic usage |
-| [Best Practices](BEST_PRACTICES.md) | Tips for writing effective queries |
-| [Available Agents](AVAILABLE_AGENTS.md) | All specialist agents and their capabilities |
-| [Agent Studio](AGENT_STUDIO.md) | Browse prompts, build flows, chat with Opus |
-| [Curation Flows](CURATION_FLOWS.md) | Visual workflow builder guide |
-| [RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md) | RGD paper-review flow task guide |
-| [Batch Processing](BATCH_PROCESSING.md) | Process multiple documents through flows |
+For a problem with an extraction result, use the response's **three-dot menu (⋮)** to send feedback or **Open in Agent Studio**. Include what you expected and the paper passage or result that needs attention. The linked conversation and available trace information help the development team investigate.

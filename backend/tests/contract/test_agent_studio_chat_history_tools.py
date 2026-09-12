@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+from agents import FunctionTool, ToolSearchTool
+
 from src.api import agent_studio as api_module
 from src.lib.chat_history_repository import AGENT_STUDIO_CHAT_KIND, ALL_CHAT_KINDS_SENTINEL
 
@@ -25,54 +27,6 @@ def _consume_sse_events(stream_response) -> list[dict]:
     return events
 
 
-class _FakeSuccessfulStream:
-    def __init__(self, events: list[object], final_message: object):
-        self._events = list(events)
-        self._final_message = final_message
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._events:
-            raise StopAsyncIteration
-        return self._events.pop(0)
-
-    async def get_final_message(self):
-        return self._final_message
-
-
-class _FakeMessagesApi:
-    def __init__(self, captured: dict[str, Any]):
-        self._captured = captured
-
-    def stream(self, **kwargs):
-        self._captured["tools"] = kwargs["tools"]
-        return _FakeSuccessfulStream(
-            events=[
-                SimpleNamespace(
-                    type="content_block_delta",
-                    delta=SimpleNamespace(text="History tools ready"),
-                )
-            ],
-            final_message=SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="History tools ready")],
-                stop_reason="end_turn",
-            ),
-        )
-
-
-class _FakeAnthropicClient:
-    def __init__(self, captured: dict[str, Any]):
-        self.beta = SimpleNamespace(messages=_FakeMessagesApi(captured))
-
-
 def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
     contract_client,
     chat_contract_auth_headers,
@@ -80,12 +34,7 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
 ):
     captured: dict[str, Any] = {}
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(
-        api_module,
-        "_resolve_prompt_explorer_model",
-        lambda: ("claude-sonnet-test", "Claude Sonnet Test"),
-    )
+    monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "set_workflow_user_context", lambda **_kwargs: None)
     monkeypatch.setattr(api_module, "clear_workflow_user_context", lambda: None)
@@ -128,11 +77,13 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
             created_at=datetime(2026, 4, 23, 4, 30, tzinfo=timezone.utc),
         ),
     )
-    monkeypatch.setattr(
-        api_module.anthropic,
-        "AsyncAnthropic",
-        lambda api_key: _FakeAnthropicClient(captured),
-    )
+    async def _fake_openai_runtime(**kwargs):
+        captured["tools"] = kwargs["tools"]
+        kwargs["state"].assistant_text_parts.append("History tools ready")
+        kwargs["state"].response_id = "resp-history-1"
+        yield {"type": "TEXT_DELTA", "delta": "History tools ready"}
+
+    monkeypatch.setattr(api_module, "stream_agent_studio_run", _fake_openai_runtime)
 
     with contract_client.stream(
         "POST",
@@ -153,31 +104,37 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
         event["type"] for event in events if event["type"] != "PROVIDER_CONTEXT_PREFLIGHT"
     ] == ["TEXT_DELTA", "DONE"]
 
-    tools_by_name = {tool["name"]: tool for tool in captured["tools"]}
+    assert sum(isinstance(tool, ToolSearchTool) for tool in captured["tools"]) == 1
+    tools_by_name = {
+        tool.name.rsplit(".", 1)[-1]: tool
+        for tool in captured["tools"]
+        if isinstance(tool, FunctionTool)
+    }
     assert {
         "list_recent_chats",
         "search_chat_history",
         "get_chat_conversation",
         "get_chat_turn",
     } <= set(tools_by_name)
-    assert tools_by_name["list_recent_chats"]["input_schema"]["required"] == ["chat_kind"]
-    assert tools_by_name["list_recent_chats"]["input_schema"]["properties"]["chat_kind"]["enum"] == [
+    assert tools_by_name["list_recent_chats"].defer_loading is True
+    assert tools_by_name["list_recent_chats"].params_json_schema["required"] == ["chat_kind"]
+    assert tools_by_name["list_recent_chats"].params_json_schema["properties"]["chat_kind"]["enum"] == [
         "assistant_chat",
         "agent_studio",
         ALL_CHAT_KINDS_SENTINEL,
     ]
-    assert tools_by_name["search_chat_history"]["input_schema"]["required"] == [
+    assert tools_by_name["search_chat_history"].params_json_schema["required"] == [
         "query",
         "chat_kind",
     ]
-    assert tools_by_name["get_chat_conversation"]["input_schema"]["required"] == ["session_id"]
-    assert tools_by_name["get_chat_turn"]["input_schema"]["required"] == ["session_id", "turn_id"]
-    assert set(tools_by_name["get_chat_conversation"]["input_schema"]["properties"]) == {
+    assert tools_by_name["get_chat_conversation"].params_json_schema["required"] == ["session_id"]
+    assert tools_by_name["get_chat_turn"].params_json_schema["required"] == ["session_id", "turn_id"]
+    assert set(tools_by_name["get_chat_conversation"].params_json_schema["properties"]) == {
         "session_id",
         "cursor",
         "limit",
     }
-    assert set(tools_by_name["get_chat_turn"]["input_schema"]["properties"]) == {
+    assert set(tools_by_name["get_chat_turn"].params_json_schema["properties"]) == {
         "session_id",
         "turn_id",
         "cursor",

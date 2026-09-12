@@ -140,6 +140,14 @@ a hard stop unless the run is explicitly labeled as a degraded diagnostic:
 6. The literature Elasticsearch/OpenSearch package smoke must pass because
    reference/literature validation uses the package-backed ES/OpenSearch path;
    a direct literature SQL tunnel is not a substitute.
+   From the checkout, run
+   `docker compose exec -T backend python - --identifier <known-reference-curie> --package-src /runtime/packages/alliance/python/src < scripts/testing/literature_reference_smoke.py`.
+   Streaming the script avoids relying on test scripts being baked into the
+   production image. This gate fails (rather than skips) if any of
+   `ELASTICSEARCH_HOST`, `ELASTICSEARCH_SCHEME`, `ELASTICSEARCH_PORT`, or
+   `ELASTICSEARCH_INDEX` is blank, or the real package tool cannot resolve the
+   reference. Preserve the private connection configuration across checkouts;
+   an earlier successful dev lookup does not validate a new production runtime.
 7. OpenAI Responses websocket transport is the default for production/default
    smoke stacks (`OPENAI_RESPONSES_WEBSOCKET_ENABLED=true`, also the runner
    default when unset) because it is intended to make streaming faster. A

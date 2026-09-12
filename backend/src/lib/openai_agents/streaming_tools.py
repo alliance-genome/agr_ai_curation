@@ -1075,6 +1075,9 @@ def _adapt_tools_with_provider_adapter(tools: List[Any], adapter_key: str) -> Li
             adapted.append(tool)
             continue
 
+        if hasattr(tool, "profile_bound_schema"):
+            raise ValueError("This provider adapter cannot preserve the profile-specific tool contract")
+
         adapted.append(adapter_factory())
     return adapted
 
@@ -1304,7 +1307,7 @@ def _agent_structured_finalization_config(
     direct_config = _normalize_structured_finalization_config(
         getattr(agent, "structured_finalization", None)
     )
-    if direct_config:
+    if direct_config or getattr(agent, "execution_snapshot_fingerprint", None):
         return direct_config
 
     if not tool_name:
@@ -2944,6 +2947,7 @@ def _persist_builder_finalization_for_supervisor(
 
     try:
         return persist_inline_validated_extraction_result(
+            execution_receipt=builder_workspace.execution_receipt,
             payload_json=builder_finalization.payload,
             document_id=document_id,
             agent_key=normalized_agent_key,
@@ -3317,6 +3321,9 @@ def _build_run_state_bound_tool(
             reset_active_extraction_builder_workspace(bw_token)
             reset_active_evidence_records(ev_token)
 
+    if hasattr(existing_tool, "profile_bound_schema"):
+        from src.lib.agent_studio.profile_tools import preserve_profile_tool_contract
+        return preserve_profile_tool_contract(_run_state_bound, existing_tool)
     return _run_state_bound
 
 
@@ -3339,7 +3346,7 @@ def _bind_run_state_into_tools(
         if impl_path is None:
             rebuilt.append(tool)
             continue
-        raw_func = _import_callable(impl_path)
+        raw_func = getattr(tool, "profile_bound_raw_func", None) or _import_callable(impl_path)
         rebuilt.append(
             _build_run_state_bound_tool(
                 raw_func,
@@ -3674,6 +3681,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     source_agent_key: Optional[str] = None,
     is_builder_envelope: bool = False,
     runtime_context: Optional[Any] = None,
+    execution_receipt: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
 
@@ -3740,6 +3748,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         agent_key=agent_key,
         conversation_summary=f"{specialist_name} chat extraction",
         adapter_key=adapter_key,
+        execution_receipt=execution_receipt,
     )
     dispatch_phase_timings_ms["candidate_build_ms"] = _elapsed_ms(
         candidate_started_at
@@ -3767,6 +3776,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
             payload_json=candidate.payload_json,
             created_at=datetime.now(timezone.utc),
             metadata=dict(candidate.metadata),
+            execution_receipt=candidate.execution_receipt,
         )
         envelope = domain_envelope_from_extraction_result(extraction_record)
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
@@ -4713,7 +4723,9 @@ async def run_specialist_with_events(
             if parent_builder_workspace is not None
             else None
         ),
-        agent_id=specialist_name,
+        agent_id=runtime_canonical_agent_key or specialist_name,
+        generic_profile=getattr(runtime_agent, "generic_profile", None),
+        execution_receipt=getattr(runtime_agent, "execution_receipt", None),
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
     resolver_call_ledger = ResolverCallLedger(trace_id=builder_workspace.run_id)
@@ -4745,6 +4757,13 @@ async def run_specialist_with_events(
         builder_workspace=builder_workspace,
         resolver_ledger=resolver_call_ledger,
     )
+
+    # Validate the actual post-adapter, post-rebinding schema sent to the SDK.
+    from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
+
+    for runtime_tool in runtime_agent.tools:
+        if hasattr(runtime_tool, "profile_bound_schema"):
+            assert_profile_tool_contract(runtime_tool)
 
     # Run with streaming to capture internal events
     runner_create_started_at = time.monotonic()
@@ -6108,6 +6127,7 @@ async def run_specialist_with_events(
                 tool_name=tool_name,
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
+                execution_receipt=builder_workspace.execution_receipt,
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
@@ -6169,6 +6189,7 @@ async def run_specialist_with_events(
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
                 is_builder_envelope=True,
+                execution_receipt=builder_workspace.execution_receipt,
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
@@ -6270,6 +6291,7 @@ async def run_specialist_with_events(
                     specialist_name=specialist_name,
                     finalization=builder_finalization,
                     extraction_result_id=inline_persistence.extraction_result_id,
+                    agent_key=runtime_canonical_agent_key,
                     result_ref=inline_persistence.result_ref,
                     persistence_status={
                         "phase": "inline_validated_extraction",
@@ -6292,6 +6314,7 @@ async def run_specialist_with_events(
                     specialist_name=specialist_name,
                     finalization=builder_finalization,
                     timestamp=datetime.now(timezone.utc).isoformat(),
+                    agent_key=runtime_canonical_agent_key,
                 )
             )
     elif (

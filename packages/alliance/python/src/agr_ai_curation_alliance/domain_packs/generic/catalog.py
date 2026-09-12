@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import Any, Mapping
 
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.capabilities import object_capabilities
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -62,6 +63,7 @@ class GenericClassCatalogEntry:
     under_development_validator_bindings: tuple[GenericValidatorBindingSummary, ...] = ()
     task_hints: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
+    capabilities: dict[str, Any] = field(default_factory=dict)
 
     @property
     def validator_state(self) -> str:
@@ -81,6 +83,7 @@ class GenericClassCatalogEntry:
             "display_name": self.display_name,
             "description": self.description,
             "definition_state": self.definition_state,
+            "capabilities": self.capabilities,
             "validator_state": self.validator_state,
             "validator_bindings": [
                 binding.binding_id for binding in self.active_validator_bindings
@@ -327,6 +330,10 @@ def _entry_from_object_definition(
         under_development_validator_bindings=under_dev,
         task_hints=tuple(str(item) for item in metadata.get("task_hints") or ()),
         notes=tuple(object_definition.definition_notes),
+        capabilities=object_capabilities(
+            source_pack.metadata, object_definition,
+            active_validators=len(active), development_validators=len(under_dev),
+        ),
     )
 
 

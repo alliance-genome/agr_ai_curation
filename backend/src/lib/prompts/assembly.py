@@ -245,6 +245,34 @@ def prompt_templates_for_bundle(bundle: PromptLayerBundle) -> tuple[PromptTempla
     return tuple(templates)
 
 
+def prompt_bundle_from_manifest(manifest: Mapping[str, Any]) -> PromptLayerBundle:
+    """Rehydrate verified saved prompt bytes without consulting live templates."""
+    agent_id = manifest.get("agent_id")
+    raw_layers = manifest.get("layers")
+    if not isinstance(agent_id, str) or not agent_id or not isinstance(raw_layers, list):
+        raise ValueError("Saved prompt manifest requires agent_id and ordered layers")
+    layers = []
+    for raw in raw_layers:
+        if not isinstance(raw, dict):
+            raise ValueError("Saved prompt layer must be an object")
+        try:
+            layer = PromptLayer(**raw)
+            rebuilt = _make_layer(
+                layer_id=layer.id, kind=layer.kind, title=layer.title,
+                content=layer.content, provenance=layer.provenance,
+                editable=layer.editable, locked=layer.locked, source_ref=layer.source_ref,
+            )
+        except (TypeError, AttributeError) as exc:
+            raise ValueError("Invalid saved prompt layer") from exc
+        if rebuilt.to_manifest() != raw:
+            raise ValueError("Saved prompt layer hash or normalized content mismatch")
+        layers.append(rebuilt)
+    bundle = _bundle(agent_id, layers)
+    if bundle.hash != manifest.get("hash"):
+        raise ValueError("Saved prompt bundle hash mismatch")
+    return bundle
+
+
 def append_runtime_context_to_manifest(
     layer_manifest: Mapping[str, Any],
     *,

@@ -312,7 +312,8 @@
   align-items: center;
   gap: 0.5rem;
   color: var(--chat-text-secondary);
-  font-style: italic;
+  font-size: 0.875rem;
+  line-height: 1.5;
   padding: 1rem 2rem;
   align-self: flex-start;
   flex-shrink: 0; /* Loading indicator doesn't shrink */

@@ -61,8 +61,27 @@ describe('PdfViewerChrome', () => {
     expect(screen.getByText('No document loaded')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'PDF drop zone' })).toBeInTheDocument()
     expect(screen.getByText('Drag and drop a PDF here to upload')).toBeInTheDocument()
+    expect(screen.getByText(/For one or multiple uploads/)).toHaveTextContent(
+      'For one or multiple uploads, open Documents in the top navigation bar, then select Add Literature and use Upload PDFs.',
+    )
     expect(screen.getByTitle('PDF Viewer')).toHaveAttribute('src', '/pdfjs/web/viewer.html')
+    expect(screen.getByTitle('PDF Viewer')).toHaveStyle({ pointerEvents: 'none' })
   })
+
+  it.each(['No document loaded', 'Drag and drop a PDF here to upload'])(
+    'routes a PDF dropped on %s to the uploader exactly once', (label) => {
+      const onDrop = vi.fn(event => event.preventDefault())
+      const onDragOver = vi.fn(event => event.preventDefault())
+      renderChrome({ onDrop, onDragOver })
+      const target = screen.getByText(label)
+      const file = new File(['%PDF-1.4'], 'paper.pdf', { type: 'application/pdf' })
+      expect(fireEvent.dragOver(target, { dataTransfer: { files: [file] } })).toBe(false)
+      expect(fireEvent.drop(target, { dataTransfer: { files: [file] } })).toBe(false)
+      expect(onDragOver).toHaveBeenCalledTimes(1)
+      expect(onDrop).toHaveBeenCalledTimes(1)
+      expect(onDrop.mock.calls[0][0].dataTransfer.files).toEqual([file])
+    },
+  )
 
   it('renders document and navigation chrome for an active document', () => {
     const navigationResult: PdfViewerNavigationResult = {
@@ -110,6 +129,7 @@ describe('PdfViewerChrome', () => {
     expect(screen.getByRole('button', { name: 'Automatic zoom' })).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Find in PDF' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'PDF drop zone' })).not.toBeInTheDocument()
+    expect(screen.getByTitle('PDF Viewer')).toHaveStyle({ pointerEvents: 'auto' })
   })
 
   it('wires curator PDF toolbar controls to callbacks', () => {

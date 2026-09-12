@@ -7,7 +7,7 @@ from datetime import datetime
 import json
 import math
 import re
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -27,6 +27,12 @@ from src.lib.openai_agents.config import (
 )
 from src.schemas.curation_workspace import CurationExtractionResultRecord
 from src.schemas.domain_validator import ValidatorOutputProjection
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
+from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
+from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
+from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
+
+ProfileResolver = Callable[[AgentExecutionReceipt], ResolvedGenericProfile | None]
 
 
 FlowOutputFormat = Literal["csv", "tsv", "json", "chat"]
@@ -269,6 +275,7 @@ class FlowOutputColumnSpec(BaseModel):
     header: str | None = None
     field_ref: str | None = None
     transform: FlowOutputTransformSpec | None = None
+    source_node_id: str | None = None
 
 
 class FlowOutputFilterSpec(BaseModel):
@@ -283,6 +290,11 @@ class FlowOutputSortSpec(BaseModel):
     direction: FlowOutputSortDirection = "asc"
 
 
+class FlowOutputSelectedSource(BaseModel):
+    node_id: str
+    schema_fingerprint: str
+
+
 class FlowOutputProjectionPlan(BaseModel):
     format: FlowOutputFormat
     row_source: FlowOutputRowSource
@@ -294,8 +306,21 @@ class FlowOutputProjectionPlan(BaseModel):
     row_strategy: FlowOutputRowStrategy = "object"
     source_extraction_result_ids: list[str] = Field(default_factory=list)
     source_keys: list[str] = Field(default_factory=list)
-    missing_value: str = ""
+    missing_value: str | None = ""
     max_rows: int | None = None
+    selection_mode: Literal["guided", "selected_fields"] = "guided"
+    selected_sources: list[FlowOutputSelectedSource] = Field(default_factory=list)
+
+
+class FlowOutputProfileBinding(BaseModel):
+    source_key: str
+    execution_receipt: AgentExecutionReceipt
+    profile_path: str
+    schema_kind: str
+    array_depth: int
+    required: bool
+    nullable: bool
+    enum_values: list[str] = Field(default_factory=list)
 
 
 class FlowOutputField(BaseModel):
@@ -305,9 +330,14 @@ class FlowOutputField(BaseModel):
     row_source: FlowOutputRowSource
     non_empty_count: int = 0
     examples: list[Any] = Field(default_factory=list)
+    profile_bindings: list[FlowOutputProfileBinding] = Field(default_factory=list)
 
 
 class FlowOutputArtifact(BaseModel):
+    node_id: str = ""
+    export_schema_fingerprint: str = ""
+    execution_receipt: AgentExecutionReceipt | None = None
+    declared_fields: list[FlowOutputField] = Field(default_factory=list)
     step: int | None = None
     agent_id: str = ""
     agent_name: str = ""
@@ -753,6 +783,7 @@ def _object_rows_from_items(
     items: Sequence[Mapping[str, Any]],
     identity_fields: Sequence[str] = (),
     label_fields: Sequence[str] = (),
+    profile_fields: Sequence[ProfileProjectionField] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(items, start=1):
@@ -782,8 +813,12 @@ def _object_rows_from_items(
         )
         for key, value in _scalar_payload_fields(payload).items():
             row[f"object.payload.{key}"] = value
-        for key, value in _scalar_attribute_fields(payload).items():
-            row[f"{_OBJECT_ATTRIBUTE_FIELD_PREFIX}{key}"] = value
+        if profile_fields is None:
+            for key, value in _scalar_attribute_fields(payload).items():
+                row[f"{_OBJECT_ATTRIBUTE_FIELD_PREFIX}{key}"] = value
+        else:
+            for field in profile_fields:
+                row[field.row_ref] = field.value_from(payload.get("attributes", {}))
         rows.append(row)
     return rows
 
@@ -957,13 +992,31 @@ def _matching_object_row_for_record(
     record: Mapping[str, Any],
     object_rows: Sequence[Mapping[str, Any]],
 ) -> Mapping[str, Any] | None:
+    field_ref = record.get("field_ref")
+    nested_ref = (
+        field_ref.get("object_ref") if isinstance(field_ref, Mapping) else None
+    )
+    explicit_ref = record.get("object_ref")
+    typed_ref = nested_ref if isinstance(nested_ref, Mapping) else explicit_ref
+    if isinstance(typed_ref, Mapping):
+        # Canonical references are typed identities, never display labels.
+        identities = {
+            key: value for key in ("object_id", "pending_ref_id")
+            if (value := _string_value(typed_ref.get(key)))
+        }
+        object_type = _string_value(typed_ref.get("object_type"))
+        matches = [
+            row for row in object_rows
+            if identities
+            and (not object_type or row.get("object.object_type") == object_type)
+            and all(row.get(f"object.{key}") == value for key, value in identities.items())
+        ]
+        return matches[0] if len(matches) == 1 else None
     refs = _object_ref_values_for_matching(record)
     if not refs:
         return None
-    for row in object_rows:
-        if refs & _object_row_ref_values(row):
-            return row
-    return None
+    matches = [row for row in object_rows if refs & _object_row_ref_values(row)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _evidence_rows_from_step_records(
@@ -1311,7 +1364,9 @@ def _artifact_source_key(
     return ":".join(part for part in fallback_parts if part)
 
 
-def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | None:
+def _build_artifact_from_step(
+    step: Mapping[str, Any], *, profile_resolver: ProfileResolver | None = None,
+) -> FlowOutputArtifact | None:
     candidate = _step_attr(step, "candidate")
     payload = _candidate_attr(candidate, "payload_json")
     payload_from_candidate = payload is not None
@@ -1320,6 +1375,18 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     if payload is None:
         return None
 
+    raw_receipt = _candidate_attr(candidate, "execution_receipt")
+    receipt = AgentExecutionReceipt.model_validate(raw_receipt) if raw_receipt is not None else None
+    profile_fields = None
+    if receipt is not None and receipt.output_contract.generic_profile_ref is not None:
+        if profile_resolver is None:
+            raise ProfileIdentityError("Projection requires the exact saved output structure resolver")
+        profile = profile_resolver(receipt)
+        if profile is None:
+            raise ProfileIdentityError("Projection's saved output structure is unavailable")
+        require_resolved_profile_conformance(profile, receipt, payload)
+        profile_fields = profile_projection_fields(profile.contract)
+
     step_number_raw = _step_attr(step, "step")
     try:
         step_number = int(step_number_raw) if step_number_raw is not None else None
@@ -1327,6 +1394,8 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
         step_number = None
 
     agent_id = _string_value(_step_attr(step, "agent_id") or _candidate_attr(candidate, "agent_key"))
+    if receipt is not None and receipt.agent_key != agent_id:
+        raise ProfileIdentityError("Projection producer does not match its saved execution receipt")
     agent_name = _string_value(_step_attr(step, "agent_name"))
     adapter_key = _string_value(_candidate_attr(candidate, "adapter_key") or agent_id)
     candidate_count = int(_candidate_attr(candidate, "candidate_count", 0) or 0)
@@ -1408,8 +1477,20 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
             validator_projection.identity_fields if validator_projection else ()
         ),
         label_fields=(validator_projection.label_fields if validator_projection else ()),
+        profile_fields=profile_fields,
     )
     rows_by_source["object"] = object_rows
+    # Derive review status from findings, including older persisted envelopes
+    # whose lifecycle status was promoted by one successful field lookup.
+    if isinstance(payload, Mapping):
+        for finding in _explicit_validation_findings(payload):
+            if finding.get("status") != "open":
+                continue
+            target_row = _matching_object_row_for_record(finding, object_rows)
+            if target_row is not None:
+                target_row["object.validation_status"] = "needs_review"
+                if target_row.get("object.status") == "validated":
+                    target_row["object.status"] = "needs_review"
     for object_item, object_row in zip(object_items, object_rows):
         rows_by_source["evidence"].extend(
             _evidence_rows_from_records(
@@ -1494,8 +1575,8 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
         )
         if unassociated_validation_count and object_rows:
             warnings.append(
-                f"{unassociated_validation_count} step-level validation finding(s) had "
-                "no explicit matching object ref and were emitted with empty object refs."
+                f"{unassociated_validation_count} step-level validation record(s) could not "
+                "be associated with a unique output object; explicit source references were retained."
             )
 
     artifact_row["artifact.evidence_count"] = _step_evidence_count(
@@ -1506,7 +1587,37 @@ def _build_artifact_from_step(step: Mapping[str, Any]) -> FlowOutputArtifact | N
     if shape == "non_structured":
         warnings.append("No canonical curation object rows are available for this artifact.")
 
+    from src.lib.flows.export_fields import packaged_export_fields, packaged_field_value, profile_export_fields, source_catalog
+    if profile_fields is not None:
+        export_fields = profile_export_fields(profile_fields)
+    else:
+        # A persisted envelope declares its pack independently of whether the
+        # producer was a custom agent with an execution receipt.
+        export_fields = packaged_export_fields(
+            agent_id,
+            {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None,
+        )
+        for row, item in zip(rows_by_source["object"], object_items):
+            for field in export_fields:
+                row[field["ref"]] = packaged_field_value(item, field)
+    catalog = source_catalog(export_fields, receipt.model_dump(mode="json") if receipt else None)
+    node_id = str(step.get("node_id") or "")
+    for rows in rows_by_source.values():
+        for row in rows:
+            row["artifact.node_id"] = node_id
+    extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object")
+                      for f in catalog["fields"] if not f["ref"].startswith("object.attribute.")]
     return FlowOutputArtifact(
+        node_id=node_id, export_schema_fingerprint=catalog["schema_fingerprint"],
+        execution_receipt=receipt,
+        declared_fields=[FlowOutputField(
+            ref=field.row_ref, label=field.label, value_type=field.value_type, row_source="object",
+            profile_bindings=[FlowOutputProfileBinding(
+                source_key=source_key, execution_receipt=receipt, profile_path=field.profile_path,
+                schema_kind=field.schema_kind, array_depth=field.array_depth,
+                required=field.required, nullable=field.nullable, enum_values=list(field.enum_values),
+            )],
+        ) for field in profile_fields or [] if receipt is not None] + extra_declared,
         step=step_number,
         agent_id=agent_id,
         agent_name=agent_name,
@@ -1598,6 +1709,21 @@ def _build_artifact_bundle(
         field_catalog.extend(
             _catalog_for_rows(row_source, rows_by_source[row_source])  # type: ignore[arg-type]
         )
+    catalog_by_ref = {(field.row_source, field.ref): field for field in field_catalog}
+    declared_types: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for artifact in artifacts:
+        for declared in artifact.declared_fields:
+            key = (declared.row_source, declared.ref)
+            declared_types[key].add(declared.value_type)
+            existing = catalog_by_ref.get(key)
+            if existing is None:
+                existing = declared.model_copy(deep=True)
+                catalog_by_ref[key] = existing
+                field_catalog.append(existing)
+            else:
+                existing.profile_bindings.extend(declared.profile_bindings)
+                existing.label = declared.label
+            existing.value_type = declared.value_type if len(declared_types[key]) == 1 else "mixed"
     warnings = [
         warning
         for artifact in artifacts
@@ -1625,13 +1751,14 @@ def build_flow_output_artifact_bundle(
     flow_run_id: str | None = None,
     document_id: str | None = None,
     output_format: FlowOutputFormat | None = None,
+    profile_resolver: ProfileResolver | None = None,
 ) -> FlowOutputArtifactBundle:
     """Build the canonical projection bundle from completed flow steps."""
 
     artifacts = [
         artifact
         for step in completed_steps
-        if (artifact := _build_artifact_from_step(step)) is not None
+        if (artifact := _build_artifact_from_step(step, profile_resolver=profile_resolver)) is not None
     ]
     return _build_artifact_bundle(
         flow_name=flow_name,
@@ -1671,6 +1798,7 @@ def _step_from_extraction_result(
         "agent_name": extraction_result.agent_key.replace("_", " ").title(),
         "output_preview": extraction_result.conversation_summary or "",
         "candidate": {
+            "execution_receipt": extraction_result.execution_receipt,
             "agent_key": extraction_result.agent_key,
             "adapter_key": extraction_result.adapter_key,
             "candidate_count": extraction_result.candidate_count,
@@ -1687,6 +1815,7 @@ def build_extraction_result_artifact_bundle(
     flow_run_id: str | None = None,
     document_id: str | None = None,
     output_format: FlowOutputFormat | None = None,
+    profile_resolver: ProfileResolver | None = None,
 ) -> FlowOutputArtifactBundle:
     """Build a projection bundle directly from persisted extraction results."""
 
@@ -1697,7 +1826,7 @@ def build_extraction_result_artifact_bundle(
     artifacts = [
         artifact
         for step in completed_steps
-        if (artifact := _build_artifact_from_step(step)) is not None
+        if (artifact := _build_artifact_from_step(step, profile_resolver=profile_resolver)) is not None
     ]
     return _build_artifact_bundle(
         artifacts=artifacts,
@@ -1861,6 +1990,26 @@ def _validate_ref(
         return
     if field_ref not in available_refs:
         errors.append(f"{context} uses unknown field_ref '{field_ref}'.")
+
+
+def projection_plan_field_refs(plan: FlowOutputProjectionPlan) -> list[str]:
+    """Return the same references consumed by runtime projection validation."""
+    refs = [*plan.group_by, *(item.field_ref for item in plan.filters), *(item.field_ref for item in plan.sort)]
+    for column in plan.columns:
+        if column.transform is not None:
+            refs.extend(_transform_refs(column.transform))
+        elif column.field_ref:
+            refs.append(column.field_ref)
+    return list(dict.fromkeys(refs))
+
+
+def projection_plan_predicates(plan: FlowOutputProjectionPlan) -> list[FlowOutputFilterSpec]:
+    """Expose row filters and conditional predicates using runtime semantics."""
+    predicates = list(plan.filters)
+    for column in plan.columns:
+        if column.transform is not None and column.transform.type == "conditional":
+            predicates.append(_conditional_filter(column.transform))
+    return predicates
 
 
 def _transform_refs(transform: FlowOutputTransformSpec) -> list[str]:
@@ -2073,6 +2222,9 @@ def _rows_for_plan(
     plan: FlowOutputProjectionPlan,
 ) -> list[dict[str, Any]]:
     rows = bundle.rows_for_source(plan.row_source)
+    if plan.selection_mode == "selected_fields":
+        node_ids = {source.node_id for source in plan.selected_sources}
+        return [row for row in rows if row.get("artifact.node_id") in node_ids]
     selected_source_ids = {
         source_id.strip()
         for source_id in plan.source_extraction_result_ids
@@ -2103,6 +2255,9 @@ def validate_projection_plan(
 
     errors: list[str] = []
     warnings: list[str] = list(bundle.warnings)
+    if plan.selection_mode == "selected_fields":
+        from src.lib.flows.selected_export import selected_export_errors
+        errors.extend(selected_export_errors(bundle, plan))
     all_rows = bundle.rows_for_source(plan.row_source)
     rows = _rows_for_plan(bundle, plan)
     if plan.format == "tsv" and plan.row_source == "artifact":
@@ -2114,17 +2269,17 @@ def validate_projection_plan(
         errors.append("row_strategy is only supported with row_source='object'.")
     if (plan.source_extraction_result_ids or plan.source_keys) and plan.row_source != "object":
         errors.append("source selection is only supported with row_source='object'.")
+    requested_source_ids = {
+        source_id.strip()
+        for source_id in plan.source_extraction_result_ids
+        if isinstance(source_id, str) and source_id.strip()
+    }
+    requested_source_keys = {
+        source_key.strip()
+        for source_key in plan.source_keys
+        if isinstance(source_key, str) and source_key.strip()
+    }
     if plan.row_source == "object":
-        requested_source_ids = {
-            source_id.strip()
-            for source_id in plan.source_extraction_result_ids
-            if isinstance(source_id, str) and source_id.strip()
-        }
-        requested_source_keys = {
-            source_key.strip()
-            for source_key in plan.source_keys
-            if isinstance(source_key, str) and source_key.strip()
-        }
         available_source_ids = _source_ids_for_rows(all_rows)
         available_source_keys = _source_keys_for_rows(all_rows)
         missing_source_ids = sorted(requested_source_ids - available_source_ids)
@@ -2165,7 +2320,7 @@ def validate_projection_plan(
             "Curation TSV exports require canonical backend extraction object rows; "
             "literal-only TSV projections are not allowed."
         )
-    if not rows and not synthetic_literal_row:
+    if not rows and not synthetic_literal_row and plan.selection_mode != "selected_fields":
         errors.append(f"Row source '{plan.row_source}' is not available for this flow output.")
     if synthetic_literal_row:
         warnings.append(
@@ -2176,6 +2331,30 @@ def validate_projection_plan(
         errors.append(f"max_rows must be between 1 and {MAX_PROJECTION_ROWS}.")
 
     available_refs = _field_refs_for_rows(rows) if rows else bundle.field_refs_for_source(plan.row_source)
+    if plan.selection_mode == "selected_fields":
+        available_refs |= bundle.field_refs_for_source(plan.row_source)
+        if len(rows) > MAX_PROJECTION_ROWS:
+            errors.append("The selected export exceeds the configured row limit; increase FLOW_PROJECTION_MAX_ROWS before exporting all items.")
+    if plan.row_source == "object":
+        # Source selection is evaluated by the existing row resolver (keys and
+        # result IDs have OR semantics). Only those artifacts own the declared
+        # types relevant to this projection, not the merged catalog's mixed type.
+        selected_fields: dict[str, list[FlowOutputField]] = defaultdict(list)
+        for artifact in bundle.artifacts:
+            if (not requested_source_ids and not requested_source_keys
+                    or artifact.extraction_result_id in requested_source_ids
+                    or artifact.source_key in requested_source_keys):
+                for field in artifact.declared_fields:
+                    selected_fields[field.ref].append(field)
+        for predicate in projection_plan_predicates(plan):
+            if predicate.op not in {"gt", "gte", "lt", "lte"}:
+                continue
+            if any(field.value_type not in {"integer", "number"}
+                   for field in selected_fields.get(predicate.field_ref, [])):
+                errors.append(
+                    f"Numeric predicate field '{predicate.field_ref}' is not a scalar number "
+                    "in the selected source's saved profile."
+                )
     columns = plan.columns or default_columns_for_row_source(
         bundle,
         plan.row_source,
@@ -2418,15 +2597,18 @@ def _project_row(
     row: Mapping[str, Any],
     columns: Sequence[FlowOutputColumnSpec],
     *,
-    missing_value: str,
+    missing_value: str | None,
+    preserve_empty: bool = False,
 ) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for column in columns:
-        if column.transform is not None:
+        if column.source_node_id and row.get("artifact.node_id") != column.source_node_id:
+            value = None
+        elif column.transform is not None:
             value = _transform_value(row, column.transform, missing_value=missing_value)
         else:
             value = row.get(column.field_ref or "")
-        if _is_empty(value):
+        if value is None or (not preserve_empty and _is_empty(value)):
             value = missing_value
         output[column.key] = _jsonable(value)
     return output
@@ -2455,6 +2637,7 @@ def _group_projected_rows(
 def apply_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
+    *, preview_limit: int | None = None,
 ) -> FlowOutputProjectionResult:
     errors, warnings, columns = validate_projection_plan(bundle, plan)
     if errors:
@@ -2469,10 +2652,12 @@ def apply_projection_plan(
 
     total_count = len(rows)
     max_rows = plan.max_rows or MAX_PROJECTION_ROWS
+    if preview_limit is not None:
+        max_rows = min(max_rows, max(1, preview_limit))
     limited_rows = rows[:max_rows]
     truncated = len(rows) > len(limited_rows)
     projected_rows = [
-        _project_row(row, columns, missing_value=plan.missing_value)
+        _project_row(row, columns, missing_value=plan.missing_value, preserve_empty=plan.selection_mode == "selected_fields")
         for row in limited_rows
     ]
 
@@ -2561,8 +2746,7 @@ def preview_output_projection(
             errors=errors,
             warnings=warnings,
         )
-    preview_plan = plan.model_copy(update={"max_rows": min(limit, plan.max_rows or limit)})
-    result = apply_projection_plan(bundle, preview_plan)
+    result = apply_projection_plan(bundle, plan, preview_limit=limit)
     return FlowOutputProjectionPreview(
         status="ok",
         warnings=_bounded_projection_warnings(result.warnings),

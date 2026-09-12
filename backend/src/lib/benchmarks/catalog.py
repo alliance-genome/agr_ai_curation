@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
 from .models import (
     BenchmarkExecutionTarget,
@@ -25,6 +26,7 @@ def build_route_catalog(
     flow_agents: Mapping[str, Iterable[str]],
     flow_model_validators: Mapping[str, Iterable[str]],
     agent_aliases: Mapping[str, str] | None = None,
+    source_execution_receipts: Mapping[str, AgentExecutionReceipt] | None = None,
 ) -> BenchmarkRouteCatalog:
     """Build slots from deployment catalogs without provider-specific assumptions.
 
@@ -67,6 +69,8 @@ def build_route_catalog(
         targets.append(BenchmarkTargetCatalogEntry(
             target=BenchmarkExecutionTarget(kind="agent", id=agent_id),
             route_slots=(f"agent:{agent_id}", *(f"validator:{key}" for key in validator_ids)),
+            source_execution_receipts={slot: receipt for slot, receipt in (source_execution_receipts or {}).items()
+                                       if slot in (f"agent:{agent_id}", *(f"validator:{key}" for key in validator_ids))},
         ))
     for flow_id in sorted(flow_agents):
         agent_ids = tuple(
@@ -91,6 +95,9 @@ def build_route_catalog(
                     *(f"agent:{agent_id}" for agent_id in agent_ids),
                     *(f"validator:{validator_id}" for validator_id in validator_ids),
                 ),
+                source_execution_receipts={slot: receipt for slot, receipt in (source_execution_receipts or {}).items()
+                                           if slot in ("supervisor", *(f"agent:{key}" for key in agent_ids),
+                                                       *(f"validator:{key}" for key in validator_ids))},
             )
         )
     return BenchmarkRouteCatalog(

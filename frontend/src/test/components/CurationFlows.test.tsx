@@ -7,6 +7,11 @@ import CurationFlows, { mapFlowFinishedEvent } from '../../components/RightPanel
 import type { SSEEvent } from '../../hooks/useChatStream'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 
+vi.mock('@/services/flowShortcutService', () => ({
+  getFlowShortcuts: vi.fn(async () => ({ flow_ids: null, revision: 0 })),
+  saveFlowShortcuts: vi.fn(async (flow_ids: string[], revision: number) => ({ flow_ids, revision: revision + 1 })),
+}))
+
 const openCurationWorkspaceMock = vi.fn()
 vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
   const actual = await vi.importActual<typeof import('@/features/curation/navigation/openCurationWorkspace')>(
@@ -141,7 +146,7 @@ describe('CurationFlows', () => {
     })
 
     expect(screen.getByText('Latest flow run')).toBeInTheDocument()
-    expect(screen.getByText('Evidence Flow')).toBeInTheDocument()
+    expect(screen.getAllByText('Evidence Flow').length).toBeGreaterThan(0)
     expect(screen.getByText(/4 evidence records ready/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Review & Curate/i })).toBeEnabled()
     expect(screen.getByRole('button', { name: /Export Evidence/i })).toBeEnabled()
@@ -490,7 +495,7 @@ describe('project-shared flows in Home Tools', () => {
   })
 })
 
-it('deletes an owned routed flow and keeps the remaining browse list available', async () => {
+it('hides an owned routed shortcut without deleting the saved flow', async () => {
   const user = userEvent.setup()
   mockFetch.mockReset()
   mockFetch.mockImplementation(async (input: string, options?: RequestInit) => {
@@ -503,8 +508,8 @@ it('deletes an owned routed flow and keeps the remaining browse list available',
     return flowListResponse([])
   })
   render(<MemoryRouter initialEntries={['/?flow=flow-1']}><CurationFlows sessionId="my-session" sseEvents={[]} onExecuteFlow={vi.fn()} /></MemoryRouter>)
-  await user.click(await screen.findByRole('button', { name: 'Delete this flow' }))
-  await user.click(screen.getByRole('button', { name: /^Delete$/ }))
-  expect(await screen.findByText('No flows yet')).toBeInTheDocument()
-  expect(mockFetch).toHaveBeenCalledWith('/api/flows/flow-1', { method: 'DELETE' })
+  await user.click(await screen.findByRole('button', { name: 'Hide Evidence Flow' }))
+  expect(await screen.findByText('Your flow list is empty')).toBeInTheDocument()
+  expect(mockFetch.mock.calls.some(([, options]) => options?.method === 'DELETE')).toBe(false)
+  expect(screen.getByRole('button', { name: 'Flows workspace' })).toBeEnabled()
 })

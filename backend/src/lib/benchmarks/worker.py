@@ -250,7 +250,7 @@ class BenchmarkWorker:
             session.commit()
             return cell.id if cell is not None else None
 
-    def _load_cell(self, cell_id: UUID) -> tuple[BenchmarkCell, str | None]:
+    def _load_cell(self, cell_id: UUID) -> tuple[BenchmarkCell, ResolvedBenchmarkCell]:
         with self.session_factory() as session:
             cell = session.get(BenchmarkCell, cell_id)
             if cell is None:
@@ -267,8 +267,20 @@ class BenchmarkWorker:
                 raise ValueError("benchmark cell is absent from its frozen plan")
             if cell.target_kind == "agent" and not (planned.user_query or "").strip():
                 raise ValueError("agent benchmark execution requires an explicit curator query")
+            if (planned.target.kind == "agent" and planned.target.id.startswith("ca_")
+                    and f"agent:{planned.target.id}" not in planned.source_execution_receipts):
+                raise ValueError("custom benchmark cell has no frozen source revision")
+            if (planned.target.kind != cell.target_kind or planned.target.id != cell.target_id
+                    or {slot: route.model_dump(mode="json") for slot, route in planned.routes.items()} != cell.routes
+                    or (planned.case_id, planned.configuration_id, planned.repetition) != (
+                        cell.case_id, cell.configuration_id, cell.repetition)
+                    or planned.input.model_dump(mode="json") != {
+                        "resolver": cell.input_resolver, "reference": cell.input_reference,
+                        "version": cell.input_version, "digest": cell.input_digest,
+                    }):
+                raise ValueError("benchmark cell differs from its frozen plan")
             session.expunge(cell)
-            return cell, planned.user_query
+            return cell, planned
 
     async def _run_authorized_cell(
         self, executor: Callable[..., Any], resolved: ResolvedBenchmarkCell,
@@ -323,24 +335,7 @@ class BenchmarkWorker:
     async def _execute_cell(self, cell_id: UUID) -> None:
         cell: BenchmarkCell | None = None
         try:
-            cell, user_query = await asyncio.to_thread(self._load_cell, cell_id)
-            resolved = ResolvedBenchmarkCell.model_validate(
-                {
-                    "cell_id": cell.cell_key,
-                    "case_id": cell.case_id,
-                    "configuration_id": cell.configuration_id,
-                    "repetition": cell.repetition,
-                    "target": {"kind": cell.target_kind, "id": cell.target_id},
-                    "input": {
-                        "resolver": cell.input_resolver,
-                        "reference": cell.input_reference,
-                        "version": cell.input_version,
-                        "digest": cell.input_digest,
-                    },
-                    "routes": cell.routes,
-                    "user_query": user_query,
-                }
-            )
+            cell, resolved = await asyncio.to_thread(self._load_cell, cell_id)
             executor = self.agent_executor if cell.target_kind == "agent" else self.flow_executor
             outcome = await self._run_with_heartbeat(executor, resolved, cell)
             if any(invocation.status == "failed" for invocation in outcome.invocations):

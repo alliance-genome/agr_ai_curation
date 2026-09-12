@@ -28,6 +28,30 @@ from src.schemas.batch import (
 _TEST_REQUEST = cast(Request, object())
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "validate"])
+async def test_batch_contract_preflight_stops_before_work(monkeypatch, operation):
+    _mock_auth(monkeypatch, user_id=42)
+    flow = SimpleNamespace(id=uuid4(), user_id=42, flow_definition={"nodes": []})
+    db = SimpleNamespace(query=lambda *_args: SimpleNamespace(
+        filter=lambda *_args: SimpleNamespace(first=lambda: flow)))
+    finding = {"code": "missing_execution_revision", "node_id": "custom_node", "severity": "error"}
+    monkeypatch.setattr(batch_api, "flow_execution_revision_findings", lambda *args, **kwargs: [finding])
+    monkeypatch.setattr(batch_api, "BatchService", lambda *_args: pytest.fail("Started batch before preflight"))
+    tasks = BackgroundTasks()
+    with pytest.raises(HTTPException) as error:
+        if operation == "create":
+            await batch_api.create_batch(
+                BatchCreateRequest(flow_id=flow.id, document_ids=[uuid4()]), tasks,
+                {"sub": "user"}, db,
+            )
+        else:
+            await batch_api.validate_flow_for_batch_endpoint(flow.id, {"sub": "user"}, db)
+    assert error.value.status_code == 422
+    assert error.value.detail == {"code": "flow_execution_contract_invalid", "findings": [finding]}
+    assert tasks.tasks == []
+
+
 def _mock_auth(monkeypatch, user_id=11):
     monkeypatch.setattr(batch_api, "principal_from_claims", lambda claims: SimpleNamespace(subject=claims["sub"]))
     monkeypatch.setattr(batch_api, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=user_id))

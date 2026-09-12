@@ -1,205 +1,58 @@
-# Batch Processing
+# Batch processing
 
-Process multiple documents through Curation Flows automatically with real-time progress tracking and downloadable results.
+Run a saved flow against a set of papers when you want the same extraction and output settings for each one. Test the flow on a representative paper first; a completed batch does not mean every extracted answer is correct or ready for submission.
 
-## Overview
+## Prepare a compatible flow
 
-Batch Processing lets you run a saved Curation Flow against multiple documents at once, instead of processing each one individually. This is ideal when you have a set of papers and want to extract the same type of information from all of them.
+Create and save the flow in [Agent Studio → Flows](CURATION_FLOWS.md). It needs a PDF extraction step and at least one supported file output or **Curation Handoff**. A flow with only Chat Output cannot be used for a batch.
 
-**Key Benefits:**
-- Process dozens of documents without manual intervention
-- Real-time progress updates via Server-Sent Events (SSE)
-- Download individual results or all results as a ZIP file
-- Automatic error handling with per-document status tracking
+A custom extractor can be used when it has the required PDF extraction capability. The batch setup validates the selected saved flow and reports compatibility problems. You do not need an extra General PDF Extraction step before an extractor that already reads papers.
 
-## Starting a Batch Job
+Configure output columns and instructions in the flow before starting. CSV, TSV, and JSON outputs format the flow's collected results. A Curation Handoff uses its supported review destination rather than promising a downloadable file.
 
-Batch processing is initiated from the **Documents** page, not from a separate batch page.
+## Start a batch
 
-### Step 1: Select Documents
+1. Open **Documents** and select the papers using their checkboxes. Wait for processing to finish for papers you have just uploaded.
+2. Choose **Start Batch** in the selection bar.
+3. Select your saved flow in batch setup and review the compatibility result.
+4. Use **Change** if you need to select different documents.
+5. Choose **Start Batch** to begin processing.
 
-1. Navigate to **Documents** from the top navigation
-2. Select the documents you want to process by clicking on them (checkboxes appear)
-3. A selection bar appears at the bottom showing how many documents are selected
-4. Click **"Start Batch"** to proceed to batch setup
+## Follow progress
 
-### Step 2: Select a Flow
+The progress view shows the number processed, each document's status, and an audit panel with activity. Updates arrive automatically while the connection is active.
 
-On the Batch page, you'll see your selected documents and a flow selector:
+| Status | Meaning |
+|--------|---------|
+| Pending | Waiting to run |
+| Processing | The flow is running for this paper |
+| Completed | Processing finished; review its results |
+| Failed | Processing encountered an error; read the message for that paper |
 
-1. Choose from your saved Curation Flows in the dropdown
-2. The system validates that your flow is compatible with batch processing:
-   - Flow must contain a PDF input agent (to read from the selected documents)
-   - Flow must end with a file output agent (CSV, TSV, or JSON formatter)
-   - The output file is generated from the flow's completed structured artifacts
-3. A green "Valid" message appears if the flow is compatible
+Choose **Cancel Batch** to stop the batch. Results already completed remain available. Cancellation can interrupt work in progress; review individual document statuses before deciding which papers to rerun.
 
-**Don't have a saved flow?** See [Curation Flows](CURATION_FLOWS.md) to learn how to build and save flows.
+## Review and download results
 
-**Need to change documents?** Click the **"Change"** button to return to the Documents page.
+The completion view summarizes successful and failed documents. For file-producing flows, use a completed document's download action or **Download ZIP** for the available results together.
 
-### Step 3: Start Processing
+Review missing values, evidence associations, and unresolved validation findings before using the files. The output format follows your flow's formatter settings. A spreadsheet export does not establish that the records meet a database's submission requirements.
 
-Click **"Start Batch"** to begin. The page switches to progress view where you can monitor in real-time.
+**Recent Batches** lets you reopen prior work and available results. Returning while a batch is running can resume its progress display. **Start New Batch** returns to setup for another batch.
 
-## Monitoring Progress
+## Report a problem
 
-### Real-Time Updates
-
-Once processing starts, you'll see:
-
-- **Progress Bar** - Shows documents processed vs total (e.g., "3 / 10" with percentage)
-- **Document List** - Each document shows its current status with an icon
-- **Audit Log** - Right panel shows detailed AI operations as they happen
-
-### Document Status Icons
-
-| Icon | Status | Meaning |
-|------|--------|---------|
-| Gray clock | Pending | Waiting to be processed |
-| Blue spinning | Processing | Currently being processed |
-| Green checkmark | Completed | Successfully processed, results available |
-| Red X | Failed | An error occurred during processing |
-
-### Live Streaming
-
-Progress updates stream to your browser automatically - no need to refresh. The system uses Server-Sent Events (SSE) to push updates as they happen.
-
-### Cancelling a Batch
-
-Click **"Cancel Batch"** at the bottom of the progress panel to stop processing. Documents already completed keep their results; only pending documents are cancelled.
-
-## Downloading Results
-
-### After Completion
-
-When the batch finishes, the page shows a completion summary:
-
-- Number of successful documents (green chip)
-- Number of failed documents (red chip, if any)
-
-### Individual Downloads
-
-Click the **download icon** next to any completed document to download its result file.
-
-### Bulk Download (ZIP)
-
-Click **"Download ZIP"** to get all completed results in a single ZIP file. The ZIP contains one result file per successfully processed document.
-
-### Result Formats
-
-Results are projected from each completed flow run and formatted according to
-your flow's output agent:
-- **CSV Formatter** - Comma-separated values (opens in Excel, Google Sheets)
-- **TSV Formatter** - Tab-separated values (for database import)
-- **JSON Formatter** - Structured JSON data (for programmatic use)
-
-## Recent Batches
-
-The setup panel shows your **Recent Batches** (up to 5 most recent):
-
-- Click any batch to view its details and results
-- Each entry shows:
-  - Flow name or batch ID
-  - Status chip (running, completed, cancelled)
-  - Document count (e.g., "8/10 docs")
-  - Creation date
-
-If you navigate to the Batch page while a batch is still running, it automatically resumes showing that batch's progress.
-
-## Providing Feedback
-
-For any document (processing, completed, or failed):
-
-1. Click the **three-dot menu** (⋮) next to the document
-2. Select **"Provide Feedback"** to report issues or suggestions
-3. Select **"Copy Trace ID"** to copy the debugging trace ID
-
-This automatically captures the AI's processing trace for developer review.
-
-## Best Practices
-
-### Preparing Documents
-
-- **Verify document quality** - Ensure PDFs are text-searchable (not scanned images without OCR)
-- **Test your flow first** - Run your Curation Flow on a single document in the regular chat before batch processing
-
-### Optimal Batch Sizes
-
-- **Small batches (1-10 documents)** - Good for testing and quick tasks
-- **Medium batches (10-50 documents)** - Standard workflow
-- **Large batches (50+ documents)** - Consider running during off-peak hours
-
-### Handling Failures
-
-If documents fail:
-1. Check the error message shown below the document title
-2. Common issues:
-   - PDF extraction failures (corrupted or image-only PDFs)
-   - Flow configuration issues (missing required agents)
-   - API timeouts (temporary, may work on retry)
-3. For persistent issues, use the feedback button to report to developers
-
-## Starting a New Batch
-
-After completing a batch, click **"Start New Batch"** to reset the page. Then navigate to Documents to select new documents.
-
-## Example Workflow
-
-Here's a complete example of batch processing gene expression data:
-
-1. **Build a Curation Flow** ([see guide](CURATION_FLOWS.md))
-   - PDF Extraction Agent → Gene Expression Extractor → CSV Formatter
-   - Save it with a name like "Gene Expression Extraction"
-
-2. **Upload Documents**
-   - Upload research papers through the Documents page
-
-3. **Select and Start Batch**
-   - Go to Documents page
-   - Select all papers you want to process (checkboxes)
-   - Click "Start Batch" in the selection bar
-   - Select your "Gene Expression Extraction" flow
-   - Click "Start Batch"
-
-4. **Monitor Progress**
-   - Watch the real-time progress bar
-   - Review the audit log for detailed AI operations
-   - Check for any failed documents
-
-5. **Download Results**
-   - Click "Download ZIP" for all CSVs
-   - Or download individual files as needed
-   - Import into Excel or your curation database
+Use a document's **three-dot menu (⋮)** for **Provide Feedback** or **Copy Trace ID**. Include the flow, affected document, error or unexpected result, and what you expected instead. This keeps the report connected to the run's available trace information.
 
 ## Troubleshooting
 
-### "No flows available"
+**No flows are available.** Create and save a compatible flow first. An unsaved Workshop agent or flow draft cannot be selected as a saved batch flow.
 
-You need to create and save a Curation Flow first. See [Curation Flows](CURATION_FLOWS.md).
+**The selected flow is incompatible.** Read the validation message. Check that it contains a PDF-capable extractor and a supported file output or curation handoff, with valid source connections.
 
-### Flow validation fails
+**A paper failed.** Read its error message. Check document processing status and the flow configuration. For a temporary service failure, retry the affected paper rather than repeating an entire successful batch. Report recurring failures with the trace ID.
 
-Your flow must:
-- Contain a PDF input agent (to read from the selected documents)
-- End with a file output agent (CSV, TSV, or JSON Formatter)
+**Progress appears stuck.** Check your connection and reopen the batch to see its current status before starting another run. If the server still reports it as processing without progress, send feedback to the development team.
 
-Flows that output to chat only cannot be used for batch processing.
+**A download fails.** Confirm the flow produced a file for that paper. Try the individual download if ZIP download fails, and check whether the browser blocked downloads.
 
-### Documents stuck in "Processing"
-
-- Check your network connection
-- Refresh the page if the SSE connection dropped
-- If persistent, the batch may have encountered a server issue - check with developers
-
-### Download not working
-
-- Ensure the batch has at least one completed document
-- Check that your browser allows downloads from the site
-- Try downloading individual files if ZIP download fails
-
-## Related Documentation
-
-- [Curation Flows](CURATION_FLOWS.md) - Build the flows used in batch processing
-- [Available Agents](AVAILABLE_AGENTS.md) - Agents you can use in your flows
-- [Getting Started](GETTING_STARTED.md) - Basic system usage
+See [curation flows](CURATION_FLOWS.md) for output settings and [best practices](BEST_PRACTICES.md) for reviewing a trial run.

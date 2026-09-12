@@ -240,6 +240,7 @@ class ResolvedChatRoute:
     target_id: str | None = None
     target_display_name: str | None = None
     flow_run_id: str | None = None
+    execution_receipt: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

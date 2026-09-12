@@ -2,7 +2,7 @@
 
 Provides endpoints for the Agent Studio feature:
 - GET /catalog - Get all agent prompts organized by category
-- POST /chat - Stream a conversation with the configured Anthropic chat model
+- POST /chat - Stream an OpenAI Agents SDK authoring conversation
 - GET /trace/{trace_id}/context - Get enriched trace context
 """
 
@@ -13,12 +13,12 @@ import os
 import re
 import asyncio
 import uuid
-from copy import deepcopy
 from datetime import datetime, timezone  # noqa: F401 - Agent Studio module API surface.
-from typing import Any, Callable, Dict, List, NoReturn, Optional, cast
+from typing import Any, Callable, Dict, List, NoReturn, Optional
 
-import anthropic
 import boto3
+import openai
+from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -32,6 +32,7 @@ from .agent_studio_schemas import (
     AgentTestRequest,
     CatalogResponse,
     ChatRequest,
+    StopAgentStudioRequest,
     CloneAgentRequest,
     CombinedPromptRequest,
     CombinedPromptResponse,
@@ -69,6 +70,19 @@ from src.lib.agent_studio import (
 )
 from src.lib.agent_studio import catalog_service
 from src.lib.agent_studio.catalog_service import get_prompt_catalog
+from src.lib.agent_studio.capability_catalog import (
+    CapabilityCatalogContext,
+    CapabilityCatalogRequestError,
+    CapabilityCatalogUnavailable,
+    get_capability_detail,
+    search_capabilities,
+)
+from src.lib.agent_studio.tool_search_authorization import (
+    AuthorizedToolUniverse,
+    ToolSearchAuthorizationError,
+    compile_authorized_tool_universe,
+    is_tool_authorized_at_invocation,
+)
 import src.lib.agent_studio.chat_session as agent_studio_chat_session
 import src.lib.agent_studio.domain_envelope_tools as agent_studio_domain_envelope_tools
 import src.lib.agent_studio.prompt_builder as prompt_builder
@@ -86,6 +100,7 @@ from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.config import list_groups
 from src.lib.agent_access import is_resource_access_allowed
 from src.lib.agent_studio.agent_service import get_agent_by_key
+from src.lib.agent_studio.authoring_context import workshop_authoring_metadata_json
 from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.flow_edge_roles import agent_can_source_output_attachment
 from src.lib.config.schema_discovery import resolve_output_schema
@@ -104,7 +119,6 @@ from src.lib.agent_studio.custom_agent_service import (
     normalize_custom_overlay_for_parent,
     normalize_editable_group_prompt_overrides,
     parse_custom_agent_id,
-    reject_locked_prompt_markers,
     set_custom_agent_visibility,
 )
 from src.lib.agent_studio.catalog_service import (
@@ -121,20 +135,33 @@ from src.lib.agent_studio.tool_idea_service import (
     tool_idea_request_to_dict,
 )
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
+from src.lib.agent_studio.openai_runtime import (
+    AGENT_STUDIO_OPENAI_MODEL,
+    AGENT_STUDIO_REASONING_EFFORT,
+    AgentStudioRunState,
+    ToolExecutionResult,
+    build_agent_studio_model_settings,
+    build_agent_studio_tools,
+    expected_agent_studio_terminal_outcome,
+    run_forced_agent_studio_tool,
+    stream_agent_studio_run,
+)
 from src.lib.openai_agents.config import get_domain_reference_max_values
 from src.lib.openai_agents.config import (
+    get_api_key,
     get_agent_studio_chat_history_page_size,
     get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
-    get_agent_studio_opus_context_editing_keep_tool_uses,
-    get_agent_studio_opus_context_editing_trigger_tokens,
+    get_agent_studio_openai_max_output_tokens,
+    get_agent_studio_openai_max_turns,
     get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_service_log_default_lines,
+    get_agent_studio_suggestion_max_output_tokens,
+    get_agent_studio_suggestion_max_turns,
     get_agent_studio_trace_review_aggregate_page_size,
     get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_workshop_prompt_chunk_max_chars,
-    get_agent_studio_workshop_prompt_max_chars,
 )
 from src.lib.executable_runs import (
     ExecutableRunAccessError,
@@ -153,6 +180,7 @@ from src.lib.packages import load_installed_agent_studio_prompt
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.runtime_payload_budget import provider_context_preflight
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents import run_agent_streamed
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
@@ -163,7 +191,6 @@ from src.services.user_service import set_global_user_from_cognito
 
 logger = logging.getLogger(__name__)
 
-PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
 AGENT_STUDIO_SEEDED_SESSION_PREFIX = agent_studio_chat_session.AGENT_STUDIO_SEEDED_SESSION_PREFIX
 def _raise_agent_studio_lookup_http_exception(
     *,
@@ -203,31 +230,6 @@ def _raise_agent_studio_validation_http_exception(
         log_message=log_message,
         exc=exc,
         level=logging.WARNING,
-    )
-
-
-def _list_anthropic_catalog_models() -> List[Any]:
-    """Return Anthropic models from catalog, sorted with defaults first."""
-    return prompt_builder.list_anthropic_catalog_models(
-        list_model_definitions=list_model_definitions,
-        logger=logger,
-    )
-
-
-def _resolve_prompt_explorer_model() -> tuple[str, str]:
-    """
-    Resolve the model id/name for Agent Studio chat and suggestion submission.
-
-    Resolution order:
-    1. PROMPT_EXPLORER_MODEL_ID env override
-    2. Anthropic model from config/models.yaml (default first)
-    """
-    # Removed ANTHROPIC_OPUS_MODEL fallback — PROMPT_EXPLORER_MODEL_ID is the
-    # sole Agent Studio environment override.
-    configured_model_id = (os.getenv(PROMPT_EXPLORER_MODEL_ENV_VAR) or "").strip()
-    return prompt_builder.resolve_prompt_explorer_model(
-        configured_model_id=configured_model_id,
-        catalog_models=_list_anthropic_catalog_models(),
     )
 
 
@@ -412,6 +414,7 @@ def _merge_custom_agents_into_catalog(
 
         prompt_info = PromptInfo(
             agent_id=custom_id,
+            agent_revision_id=(str(custom.execution_revision_id) if getattr(custom, "execution_revision_id", None) else None),
             agent_name=custom.name,
             description=custom.description or (
                 f"Custom agent from {template_name}" if template_name else "Custom scratch agent"
@@ -511,7 +514,6 @@ async def get_tool_library_endpoint(
     user: Any = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> ToolLibraryResponse:
-    _ = user
     try:
         entries = get_tool_policy_cache().list_curator_visible(db)
         return ToolLibraryResponse(
@@ -532,6 +534,12 @@ async def get_tool_library_endpoint(
                     ),
                 )
                 for entry in entries
+                if is_resource_access_allowed(
+                    visibility_allowed=True,
+                    allowed_group_ids=entry.config.get("allowed_group_ids", []),
+                    active_group_ids=_authenticated_group_ids(user),
+                    resource_kind="agent_studio_tool",
+                )
             ]
         )
     except Exception as e:
@@ -554,6 +562,8 @@ async def get_agent_templates_endpoint(
     user: Any = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> AgentTemplatesResponse:
+    from src.lib.agent_studio.domain_output_contract import initial_agent_output_contract
+
     try:
         rows = (
             db.query(UnifiedAgent)
@@ -577,6 +587,7 @@ async def get_agent_templates_endpoint(
                     tool_ids=list(agent.tool_ids or []),
                     allowed_group_ids=list(agent.allowed_group_ids),
                     output_schema_key=agent.output_schema_key,
+                    output_contract=initial_agent_output_contract(agent).model_dump(mode="json"),
                 )
                 for agent in rows
                 if _agent_record_is_group_accessible(agent, user)
@@ -771,9 +782,11 @@ async def get_registry_metadata(
     """
     from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
     from src.lib.agent_studio.domain_envelope_metadata import (
+        custom_agent_revision_metadata,
         domain_envelope_metadata_catalog_by_agent,
     )
     from src.lib.flows.validation_attachments import validation_attachment_catalog_by_agent
+    from src.lib.agent_studio.domain_output_contract import domain_extraction_ref_for_agent
 
     validation_attachments_by_agent = validation_attachment_catalog_by_agent(AGENT_REGISTRY)
     domain_envelope_metadata_by_agent = domain_envelope_metadata_catalog_by_agent(AGENT_REGISTRY)
@@ -808,6 +821,7 @@ async def get_registry_metadata(
             frontend = entry.get("frontend", {})
             icon = frontend.get("icon", "❓")
 
+        domain_ref = domain_extraction_ref_for_agent(agent_id, active_group_ids=_authenticated_group_ids(user))
         agents[agent_id] = AgentMetadata(
             name=entry.get("name", agent_id),
             icon=icon,
@@ -821,6 +835,7 @@ async def get_registry_metadata(
             produces_flow_artifacts=_produces_flow_artifacts(entry),
             validation_attachments=validation_attachments_by_agent.get(agent_id, []),
             domain_envelope=domain_envelope_metadata_by_agent.get(agent_id),
+            domain_extraction_ref=domain_ref.model_dump(mode="json") if domain_ref else None,
         )
 
     # Include current user's custom agents when authenticated.
@@ -835,11 +850,19 @@ async def get_registry_metadata(
         for custom in custom_agents:
             category = custom.category or "Custom"
             custom_id = make_custom_agent_id(custom.id)
-            template_source = _custom_agent_template_source(custom)
-            # A missing template source should miss these catalogs and use get() defaults.
-            template_metadata_key = cast(str, template_source)
+            receipt = None
+            envelope_metadata = None
+            execution_metadata_error = None
+            try:
+                receipt, envelope_metadata = custom_agent_revision_metadata(
+                    db, custom_id, db_user.id, active_group_ids=_authenticated_group_ids(user),
+                )
+            except ValueError:
+                execution_metadata_error = "Saved executable revision metadata is unavailable."
 
+            from src.lib.agent_studio.custom_agent_service import saved_export_metadata
             agents[custom_id] = AgentMetadata(
+                **saved_export_metadata(custom),
                 name=custom.name,
                 icon=custom.icon or "❓",
                 category=category,
@@ -847,26 +870,14 @@ async def get_registry_metadata(
                     "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
                 ),
                 supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
-                output_schema_key=getattr(custom, "output_schema_key", None),
-                is_active=bool(getattr(custom, "is_active", True)),
+                output_schema_key=receipt.output_contract.output_schema_key if receipt else None,
+                is_active=bool(getattr(custom, "is_active", True)) and receipt is not None,
                 visible=True,
                 allowed_group_ids=list(custom.allowed_group_ids),
-                produces_flow_artifacts=_produces_flow_artifacts(
-                    {
-                        "category": category,
-                        "output_schema_key": getattr(
-                            custom, "output_schema_key", None
-                        ),
-                        "is_active": bool(getattr(custom, "is_active", True)),
-                        "visible": True,
-                    }
-                ),
-                validation_attachments=deepcopy(
-                    validation_attachments_by_agent.get(template_metadata_key, [])
-                ),
-                domain_envelope=deepcopy(
-                    domain_envelope_metadata_by_agent.get(template_metadata_key)
-                ),
+                produces_flow_artifacts=bool(receipt and receipt.output_contract.output_state == "structured_extraction"),
+                validation_attachments=envelope_metadata["validation_attachments"] if envelope_metadata else [],
+                domain_envelope=envelope_metadata,
+                execution_metadata_error=execution_metadata_error,
             )
 
     return RegistryMetadataResponse(agents=agents)
@@ -1320,22 +1331,14 @@ async def test_agent_endpoint(
 
 
 # ============================================================================
-# Chat Endpoints (Configured Anthropic Model)
+# Agent Studio AI Chat tool surface
 # ============================================================================
-# Agent Studio coaching intentionally uses coordinated Claude-specific contracts:
-# chat owns streaming, effort, and context management, while suggestions use
-# synchronous tool calls and their own error handling. This does not limit models
-# used by the generic agent runtime; provider-neutral coaching should be
-# reconsidered only through a coordinated product/runtime redesign.
 
 # Public Agent Studio tool definitions exposed from the focused helper module.
-ANTHROPIC_SUGGESTION_TOOL = opus_tools.ANTHROPIC_SUGGESTION_TOOL
+SUGGESTION_TOOL = opus_tools.SUGGESTION_TOOL
 REFRESH_WORKSHOP_PROMPT_TOOL = opus_tools.REFRESH_WORKSHOP_PROMPT_TOOL
-ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL = opus_tools.ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL
-UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.UPDATE_WORKSHOP_PROMPT_TOOL
-ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL
+PROPOSE_WORKSHOP_TOOL = opus_tools.PROPOSE_WORKSHOP_TOOL
 REPORT_TOOL_FAILURE_TOOL = opus_tools.REPORT_TOOL_FAILURE_TOOL
-ANTHROPIC_REPORT_TOOL_FAILURE_TOOL = opus_tools.ANTHROPIC_REPORT_TOOL_FAILURE_TOOL
 CHAT_HISTORY_TOOL_CHAT_KINDS = opus_tools.CHAT_HISTORY_TOOL_CHAT_KINDS
 LIST_RECENT_CHATS_TOOL = opus_tools.LIST_RECENT_CHATS_TOOL
 SEARCH_CHAT_HISTORY_TOOL = opus_tools.SEARCH_CHAT_HISTORY_TOOL
@@ -1368,7 +1371,8 @@ _DOMAIN_ENVELOPE_TOOLS = opus_tools.DOMAIN_ENVELOPE_TOOLS
 _WORKSHOP_TOOLS = opus_tools.WORKSHOP_TOOLS
 _TRACE_TOOLS = opus_tools.TRACE_TOOLS
 _FLOW_TOOLS = opus_tools.FLOW_TOOLS
-_AGENTS_ONLY_DIAGNOSTIC_TOOLS = opus_tools.AGENTS_ONLY_DIAGNOSTIC_TOOLS
+_SOURCE_INSPECTION_TOOLS = opus_tools.SOURCE_INSPECTION_TOOLS
+_CAPABILITY_CATALOG_TOOLS = opus_tools.CAPABILITY_CATALOG_TOOLS
 
 
 def _get_active_tab(context: Optional[ChatContext]) -> str:
@@ -1392,7 +1396,7 @@ def _tool_scope_error(tool_name: str, context: Optional[ChatContext]) -> Dict[st
 
 
 def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
-    """Get all tools available to Opus in Anthropic format."""
+    """Get all tools available to the Agent Studio assistant."""
     return opus_tools.get_all_opus_tools(
         context,
         diagnostic_registry_factory=get_diagnostic_tools_registry,
@@ -1400,6 +1404,113 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
         logger=logger,
         is_allowed=_is_tool_allowed_for_context,
     )
+
+
+def _agent_studio_tool_namespace(tool_name: str) -> tuple[str, str]:
+    """Place authorized tools in small, purpose-specific search namespaces."""
+
+    if tool_name in _COMMON_TOOLS:
+        return "studio_history", "Conversation recall, feedback, and failure reporting"
+    if tool_name in _CAPABILITY_CATALOG_TOOLS:
+        return "studio_capabilities", "Live authenticated Agent Studio resource discovery"
+    if tool_name in opus_tools.SAVED_RESOURCE_TOOLS:
+        return "studio_saved_work", "Read-only inspection of authorized saved flows and agent revisions"
+    if tool_name in opus_tools.WORKSHOP_ACTION_TOOLS:
+        return "workshop_actions", "Curator-controlled Workshop navigation and Save dialogs"
+    if tool_name in _DOMAIN_ENVELOPE_TOOLS:
+        return "domain_review", "Domain envelope, validation, and export-readiness inspection"
+    if tool_name in _WORKSHOP_TOOLS:
+        return "workshop_authoring", "Workshop inspection and curator-reviewed complete agent proposals"
+    if tool_name in _FLOW_TOOLS:
+        if tool_name in {
+            "propose_flow_draft_update",
+            "validate_flow",
+            "get_flow_templates",
+        }:
+            return (
+                "flow_authoring",
+                "Curator-reviewed flow proposals, templates, and validation",
+            )
+        return "flow_inspection", "Focused inspection of the active flow draft"
+    if tool_name in _TRACE_TOOLS:
+        if tool_name in {
+            "search_traces",
+            "get_trace_summary",
+            "get_trace_conversation",
+            "get_trace_costs",
+        }:
+            return "trace_overview", "Trace discovery, summaries, conversation, and cost"
+        if tool_name.startswith("get_tool_call") or tool_name == "get_service_logs":
+            return "trace_tools", "Tool-call and service-log diagnostics"
+        if tool_name in {
+            "get_trace_payloads",
+            "get_trace_payload",
+            "get_trace_reconstruction",
+            "get_trace_model_live_context",
+        }:
+            return "trace_payload", "Exact trace payload and reconstruction inspection"
+        return "trace_evidence", "Detailed extraction trace, payload, and evidence reconstruction"
+    if tool_name in _SOURCE_INSPECTION_TOOLS:
+        return "source_diagnostics", "Bounded source-code diagnostics for Agent Studio"
+    if tool_name in opus_tools.TOOL_METADATA_TOOLS or tool_name == "get_prompt":
+        return "agent_catalog", "Agent prompt and callable-tool catalog inspection"
+    return "package_diagnostics", "Authenticated package-provided diagnostic capabilities"
+
+
+def _get_openai_authorized_tool_definitions(
+    context: Optional[ChatContext],
+    *,
+    user_id: int,
+    active_group_ids: List[str],
+) -> AuthorizedToolUniverse:
+    """Return the request-local, context-authorized hosted-search universe."""
+
+    definitions = _get_all_opus_tools(context)
+    db = SessionLocal()
+    try:
+        try:
+            return compile_authorized_tool_universe(
+                db=db,
+                definitions=definitions,
+                user_id=user_id,
+                active_group_ids=active_group_ids,
+            )
+        except ToolSearchAuthorizationError:
+            raise
+        except Exception as exc:
+            raise ToolSearchAuthorizationError(
+                "Agent Studio callable authorization source is unavailable",
+                candidate_count=len(definitions),
+                bound=len(definitions),
+            ) from exc
+    finally:
+        db.close()
+
+
+def _report_agent_studio_exception_once(
+    exc: Exception,
+    *,
+    operation: str,
+    phase: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Capture one sanitized Sentry event even when an SDK layer re-raises it."""
+
+    marker = "_agent_studio_sentry_reported"
+    if getattr(exc, marker, False):
+        return False
+    reported = report_runtime_exception(
+        exc,
+        component="agent_studio",
+        operation=operation,
+        tags={"phase": phase, "provider": "openai"},
+        context=context or {"model": AGENT_STUDIO_OPENAI_MODEL},
+    )
+    try:
+        setattr(exc, marker, True)
+    except Exception:
+        pass
+    return reported
 
 
 def _format_conversation_context(messages: Optional[List[dict]]) -> Optional[str]:
@@ -1742,7 +1853,7 @@ def _trace_capture_snapshot(trace_id: str | None) -> Dict[str, Any]:
     return {
         "status": "capture_unavailable",
         "trace_id": None,
-        "error": "Agent Studio Opus chat does not currently create a Langfuse trace.",
+        "error": "Agent Studio AI Chat does not currently create a Langfuse trace.",
     }
 
 
@@ -1817,27 +1928,6 @@ def _tool_call_audit_entry(
     }
 
 
-def _build_anthropic_context_management_config() -> Dict[str, Any]:
-    """Request native Anthropic tool-result clearing for long Opus tool loops."""
-
-    return {
-        "edits": [
-            {
-                "type": "clear_tool_uses_20250919",
-                "trigger": {
-                    "type": "input_tokens",
-                    "value": get_agent_studio_opus_context_editing_trigger_tokens(),
-                },
-                "keep": {
-                    "type": "tool_uses",
-                    "value": get_agent_studio_opus_context_editing_keep_tool_uses(),
-                },
-                "clear_tool_inputs": False,
-            }
-        ]
-    }
-
-
 def _summarize_provider_tool_result_value(
     value: Any,
     *,
@@ -1876,21 +1966,6 @@ def _collect_provider_payload_refs(
                 return
 
 
-def _workshop_proposal_retention_guidance(apply_mode: Any) -> str:
-    if apply_mode == "replace":
-        return (
-            "The full proposal was streamed to the curator approval UI. "
-            "The exact proposed text remains in this call's retained tool input; "
-            "do not repeat it in another tool call unless the curator requests changes."
-        )
-    if apply_mode == "targeted_edit":
-        return (
-            "The full resulting proposal was streamed to the curator approval UI. "
-            "Only the authored targeted edits remain in this call's retained tool input; "
-            "after approval, use refresh_workshop_prompt chunks to read the exact resulting "
-            "text when needed."
-        )
-    raise ValueError(f"Unsupported Workshop proposal apply mode: {apply_mode!r}")
 
 
 def _provider_content_identity(serialized: str) -> Dict[str, Any]:
@@ -1973,14 +2048,9 @@ def _fit_provider_compact_payload(
     if serialize_if_fits(payload) is None:
         return _provider_cap_error_content(inline_max_chars)
 
-    if tool_name == "update_workshop_prompt_draft":
+    if tool_name in {"propose_workshop_draft_update", "propose_flow_draft_update"}:
         payload["recall"]["retained_proposal_input"] = {
-            "apply_mode": (
-                tool_result.get("apply_mode")
-                if isinstance(tool_result, dict)
-                else None
-            ),
-            "next_tool": "refresh_workshop_prompt",
+            "next_tool": "refresh_workshop_prompt" if tool_name == "propose_workshop_draft_update" else "get_current_flow",
         }
         if serialize_if_fits(payload) is None:
             payload["recall"].pop("retained_proposal_input")
@@ -2114,34 +2184,36 @@ def _provider_tool_result_content(
     session_id: str,
     turn_id: str,
 ) -> str:
-    """Serialize a bounded tool result for Anthropic continuation only."""
+    """Serialize a bounded tool result for provider continuation only."""
 
     provider_tool_result = tool_result
     if (
-        tool_name == "update_workshop_prompt_draft"
+        tool_name in {"propose_flow_draft_update", "propose_workshop_draft_update"}
         and isinstance(tool_result, dict)
-        and tool_result.get("success") is True
-        and tool_result.get("pending_user_approval") is True
+        and tool_result.get("contract_version") in {"flow_authoring_proposal.v1", "workshop_authoring_proposal.v1"}
     ):
-        # Anthropic context editing retains the originating tool input. Replace
-        # calls retain updated_prompt; targeted edits retain only their edits.
-        # Do not replay derived prompt text; the full result remains authoritative
-        # for the UI.
-        instruction = _workshop_proposal_retention_guidance(tool_result.get("apply_mode"))
+        # The full candidate and exact diff are transient UI state. Keep them out
+        # of provider continuation and durable conversation records.
         provider_tool_result = {
-            "contract_version": "workshop_prompt_proposal_ack.v1",
-            "success": True,
+            "contract_version": tool_result["contract_version"].replace("proposal.v1", "proposal_ack.v1"),
+            "success": tool_result.get("success") is True,
+            "valid": tool_result.get("valid") is True,
+            "pending_user_approval": tool_result.get("pending_user_approval") is True,
             "approval_status": tool_result.get("approval_status"),
-            "pending_user_approval": True,
-            "proposal_id": tool_result.get("proposal_id"),
-            "target_prompt": tool_result.get("target_prompt"),
-            "target_group_id": tool_result.get("target_group_id"),
-            "apply_mode": tool_result.get("apply_mode"),
-            "prompt_length": tool_result.get("prompt_length"),
-            "prompt_hash": tool_result.get("prompt_hash"),
+            "base_draft_fingerprint": tool_result.get("base_draft_fingerprint"),
+            "candidate_draft_fingerprint": tool_result.get(
+                "candidate_draft_fingerprint"
+            ),
             "change_summary": tool_result.get("change_summary"),
+            "finding_count": len(tool_result.get("findings") or []),
+            "findings": tool_result.get("findings") or [],
+            "diff_count": len(tool_result.get("diff") or []),
             "message": tool_result.get("message"),
-            "instruction": instruction,
+            "instruction": (
+                "Tell the curator the proposal is ready for review; do not claim it was applied or saved."
+                if tool_result.get("valid") is True
+                else "Repair the listed findings with another semantic proposal call; the request-local candidate is retained."
+            ),
         }
 
     raw_content = _serialize_provider_tool_result(provider_tool_result)
@@ -2299,6 +2371,18 @@ def _build_agent_studio_user_debug_payload(
         },
         "trace_capture": _trace_capture_snapshot(trace_id),
     }
+    if request.application_event is not None:
+        payload["origin"] = "application"
+        payload["event"] = request.application_event.model_dump(mode="json")
+    if context and context.flow_definition:
+        payload["debug_context"]["flow_authoring"] = {
+            "flow_id": context.flow_id,
+            "baseline_updated_at": context.flow_updated_at,
+            "draft_is_dirty": context.flow_is_dirty,
+            "draft_fingerprint": context.flow_draft_fingerprint,
+            "node_count": len(context.flow_definition.nodes),
+            "edge_count": len(context.flow_definition.edges),
+        }
     if context and context.agent_workshop:
         prompt_summary, saved_debug = _build_workshop_prompt_context_summary(
             db=db,
@@ -2314,6 +2398,7 @@ def _build_agent_studio_user_debug_payload(
             "selected_group_id": workshop.selected_group_id,
             "include_group_rules": workshop.include_group_rules,
             "draft_is_dirty": workshop.draft_is_dirty,
+            "draft_fingerprint": workshop.draft_fingerprint,
             "group_prompt_override_count": workshop.group_prompt_override_count,
             "has_group_prompt_overrides": workshop.has_group_prompt_overrides,
             "draft_tool_count": (
@@ -2342,7 +2427,7 @@ def _persist_agent_studio_user_debug_payload(
         session_id=prepared_turn.session_id,
         user_auth_sub=user_id,
         turn_id=prepared_turn.turn_id,
-        role="user",
+        role=prepared_turn.input_role,
         payload_json=payload_json,
         trace_id=trace_id,
     )
@@ -2382,12 +2467,12 @@ def _build_refresh_workshop_prompt_result(
 
     workshop = context.agent_workshop
     target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
-    if target_prompt not in {"main", "group"}:
+    if target_prompt not in {"main", "group", "metadata"}:
         return {
             "success": False,
             "error": (
                 f"Invalid target_prompt: {target_prompt!r}. "
-                "Must be 'main' or 'group'."
+                "Must be 'main', 'group', or 'metadata'."
             ),
         }
     target_prompt, target_group_id = _resolve_refresh_target(
@@ -2396,32 +2481,41 @@ def _build_refresh_workshop_prompt_result(
         context,
     )
     if target_prompt == "group":
-        selected_group_id = (workshop.selected_group_id or "").strip().upper()
         if not target_group_id:
             return {
                 "success": False,
                 "error": "No Agent Workshop group is selected for a group prompt refresh.",
             }
-        if target_group_id != selected_group_id:
+        selected_group_id = (workshop.selected_group_id or "").strip().upper()
+        available_overrides = {
+            str(group_id).strip().upper(): prompt
+            for group_id, prompt in (workshop.group_prompt_overrides or {}).items()
+            if str(group_id).strip()
+        }
+        if target_group_id != selected_group_id and target_group_id not in available_overrides:
             return {
                 "success": False,
                 "error": (
-                    "To inspect a group prompt, select that group in Agent Workshop "
-                    "first and then retry the refresh."
+                    f"Agent Workshop has no editable group prompt for {target_group_id}."
                 ),
             }
-    context_prompt = (
-        workshop.selected_group_prompt_draft
-        if target_prompt == "group"
-        else workshop.prompt_draft
-    ) or ""
+    if target_prompt == "metadata":
+        context_prompt = workshop_authoring_metadata_json(workshop)
+    elif target_prompt == "group":
+        context_prompt = (
+            workshop.selected_group_prompt_draft
+            if target_group_id == (workshop.selected_group_id or "").strip().upper()
+            else available_overrides.get(target_group_id)
+        ) or ""
+    else:
+        context_prompt = workshop.prompt_draft or ""
 
     saved_prompt: str | None = None
     saved_custom_agent: UnifiedAgent | None = None
     saved_updated_at: datetime | None = None
     custom_agent_uuid = _parse_workshop_custom_agent_uuid(workshop.custom_agent_id)
 
-    if custom_agent_uuid and user_db_id is not None:
+    if target_prompt != "metadata" and custom_agent_uuid and user_db_id is not None:
         db = SessionLocal()
         try:
             saved_custom_agent = get_custom_agent_visible_to_user(
@@ -2472,11 +2566,22 @@ def _build_refresh_workshop_prompt_result(
                 "Expected an ISO 8601 timestamp."
             ),
         }
-    saved_is_newer = _is_newer_datetime(saved_updated_at, context_updated_at)
-    has_unsaved_context = bool(workshop.draft_is_dirty) and not saved_is_newer
+    saved_is_newer = (
+        False
+        if target_prompt == "metadata"
+        else _is_newer_datetime(saved_updated_at, context_updated_at)
+    )
+    has_unsaved_context = (
+        target_prompt == "metadata"
+        or (bool(workshop.draft_is_dirty) and not saved_is_newer)
+    )
 
     if has_unsaved_context and context_prompt:
-        source = "current_workshop_draft"
+        source = (
+            "current_workshop_metadata"
+            if target_prompt == "metadata"
+            else "current_workshop_draft"
+        )
         refreshed_prompt = context_prompt
         version = saved_custom_agent.version if saved_custom_agent else None
         updated_at = context_updated_at
@@ -2551,8 +2656,8 @@ def _build_refresh_workshop_prompt_result(
                 },
             },
             "instruction": (
-                "This summary contains no prompt text. Follow next_call until "
-                "complete is true before judging the current prompt."
+                "This summary contains no exact content. Follow next_call until "
+                "complete is true before judging the current Workshop context."
             ),
         }
 
@@ -2691,11 +2796,13 @@ async def _handle_tool_call(
     user_auth_sub: str,
     messages: Optional[List[dict]] = None,
     user_db_id: int | None = None,
+    active_group_ids: Optional[List[str]] = None,
+    workshop_proposal_state: Optional[dict] = None,
 ) -> dict:
     """
-    Handle a tool call from Opus.
+    Handle a tool call from Agent Studio AI Chat.
 
-    Returns a dict with the tool result to send back to Opus.
+    Returns a dict with the tool result to send back to the assistant.
     """
     # Import tool functions (lazy import to avoid circular dependencies)
     from src.lib.agent_studio.tools import (
@@ -2724,6 +2831,89 @@ async def _handle_tool_call(
         caller_sub=user_auth_sub,
         caller_email=user_email,
     )
+
+    if tool_name in _CAPABILITY_CATALOG_TOOLS:
+        if user_db_id is None:
+            return {
+                "success": False,
+                "error": "Authenticated catalog access is unavailable.",
+                "code": "catalog_identity_unavailable",
+            }
+        catalog_context = CapabilityCatalogContext(
+            user_id=user_db_id,
+            active_group_ids=tuple(active_group_ids or []),
+            active_tab=_get_active_tab(context),
+            artifact_kind="flow" if _get_active_tab(context) == "flows" else "agent",
+        )
+        db = SessionLocal()
+        try:
+            if tool_name == "search_studio_capabilities":
+                return search_capabilities(
+                    db=db,
+                    context=catalog_context,
+                    query=tool_input.get("query"),
+                    kinds=tool_input.get("kinds"),
+                    cursor=tool_input.get("cursor"),
+                    limit=tool_input.get("limit"),
+                    catalog_fingerprint=tool_input.get("catalog_fingerprint"),
+                )
+            return get_capability_detail(
+                db=db,
+                context=catalog_context,
+                kind=tool_input.get("kind", ""),
+                resource_id=tool_input.get("resource_id", ""),
+                catalog_fingerprint=tool_input.get("catalog_fingerprint", ""),
+                detail_hash=tool_input.get("detail_hash"),
+                start=tool_input.get("start"),
+                max_chars=tool_input.get("max_chars"),
+            )
+        except CapabilityCatalogRequestError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "code": "catalog_request_invalid",
+            }
+        except CapabilityCatalogUnavailable as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="capability_catalog_unavailable",
+                phase=exc.phase,
+                context=exc.sanitized_context(),
+            )
+            logger.error(
+                "Agent Studio capability catalog unavailable during %s",
+                exc.phase,
+                extra={"sentry_skip_event": True, **exc.sanitized_context()},
+            )
+            return {
+                "success": False,
+                "error": "The authenticated capability catalog is temporarily unavailable.",
+                "code": "catalog_unavailable",
+            }
+        except Exception as exc:
+            sanitized_context = {
+                "authorization_phase": "catalog_build",
+                "active_tab": catalog_context.active_tab,
+                "artifact_kind": catalog_context.artifact_kind,
+            }
+            _report_agent_studio_exception_once(
+                exc,
+                operation="capability_catalog_unavailable",
+                phase="catalog_build",
+                context=sanitized_context,
+            )
+            logger.error(
+                "Agent Studio capability catalog source failed",
+                exc_info=True,
+                extra={"sentry_skip_event": True, **sanitized_context},
+            )
+            return {
+                "success": False,
+                "error": "The authenticated capability catalog is temporarily unavailable.",
+                "code": "catalog_unavailable",
+            }
+        finally:
+            db.close()
 
     # ==========================================================================
     # Token-Aware Trace Analysis Tools (recommended)
@@ -3257,6 +3447,10 @@ async def _handle_tool_call(
     elif tool_name == "get_domain_pack_validation_plan":
         return agent_studio_domain_envelope_tools.get_domain_pack_validation_plan(
             agent_id=tool_input.get("agent_id"),
+            agent_revision_id=tool_input.get("agent_revision_id"),
+            session_factory=SessionLocal,
+            user_id=user_db_id,
+            active_group_ids=active_group_ids or [],
             domain_pack_id=tool_input.get("domain_pack_id"),
             section=tool_input.get("section"),
             object_type=tool_input.get("object_type"),
@@ -3275,6 +3469,7 @@ async def _handle_tool_call(
             return agent_studio_domain_envelope_tools.get_domain_envelope_review_rows(
                 session_factory=SessionLocal,
                 user_auth_sub=user_auth_sub,
+                active_group_ids=active_group_ids or [],
                 envelope_id=envelope_id,
                 revision=tool_input.get("revision"),
                 section=tool_input.get("section"),
@@ -3385,171 +3580,93 @@ async def _handle_tool_call(
         return {
             "success": True,
             "suggestion_id": result["suggestion_id"],
+            "notification_submitted": result.get("sns_status") == "published",
+            "delivery_status": result.get("sns_status", "unknown"),
+            "notification_id": result.get("sns_message_id"),
             "message": result["message"],
         }
 
-    elif tool_name == "update_workshop_prompt_draft":
-        if not context or context.active_tab != "agent_workshop" or not context.agent_workshop:
-            return {
-                "success": False,
-                "error": "This tool is only available while the curator is on the Agent Workshop tab.",
-            }
+    elif tool_name == "request_workshop_action":
+        from src.lib.agent_studio.workshop_actions import WorkshopActionRequest, prepare_workshop_action
 
-        if "target_mod_id" in tool_input:
-            return {
-                "success": False,
-                "error": "Unsupported field target_mod_id. Use target_group_id.",
-            }
-
-        target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
-        if target_prompt not in {"main", "group"}:
-            return {
-                "success": False,
-                "error": "Unsupported target_prompt. Must be 'main' or 'group'.",
-            }
-
-        target_group_id = ""
-        if target_prompt == "group":
-            selected_group_id = (context.agent_workshop.selected_group_id or "").strip().upper()
-            raw_target_group = tool_input.get("target_group_id")
-            if raw_target_group is not None and not isinstance(raw_target_group, str):
-                return {
-                    "success": False,
-                    "error": "target_group_id must be a string when provided.",
-                }
-            requested_group_id = raw_target_group.strip().upper() if isinstance(raw_target_group, str) else ""
-            target_group_id = requested_group_id or selected_group_id
-
-            if not target_group_id or selected_group_id != target_group_id:
-                return {
-                    "success": False,
-                    "error": (
-                        "To edit a group prompt, select that group in Agent Workshop first "
-                        "and then retry this update."
-                    ),
-                }
-
-        apply_mode = tool_input.get("apply_mode", "replace")
-        if apply_mode not in {"replace", "targeted_edit"}:
-            return {
-                "success": False,
-                "error": "Unsupported apply_mode. Must be 'replace' or 'targeted_edit'.",
-            }
-
-        change_summary = tool_input.get("change_summary")
-        if change_summary is not None and not isinstance(change_summary, str):
-            return {
-                "success": False,
-                "error": "change_summary must be a string when provided.",
-            }
-
-        updated_prompt = ""
-        applied_edits: List[str] = []
-
-        if apply_mode == "replace":
-            candidate_prompt = tool_input.get("updated_prompt")
-            if not isinstance(candidate_prompt, str) or not candidate_prompt.strip():
-                return {
-                    "success": False,
-                    "error": "updated_prompt must be a non-empty string when apply_mode='replace'.",
-                }
-            updated_prompt = candidate_prompt
-        else:
-            base_prompt = (
-                context.agent_workshop.selected_group_prompt_draft
-                if target_prompt == "group"
-                else context.agent_workshop.prompt_draft
-            ) or ""
-            if not base_prompt.strip():
-                missing_target = (
-                    "selected group prompt"
-                    if target_prompt == "group"
-                    else "workshop draft prompt"
-                )
-                return {
-                    "success": False,
-                    "error": (
-                        f"No {missing_target} is available to edit. "
-                        "Provide updated_prompt with apply_mode='replace' instead."
-                    ),
-                }
-            edits = tool_input.get("edits")
-            if not isinstance(edits, list) or len(edits) == 0:
-                return {
-                    "success": False,
-                    "error": "edits must be a non-empty array when apply_mode='targeted_edit'.",
-                }
-
-            edit_result = _apply_targeted_workshop_edits(base_prompt=base_prompt, edits=edits)
-            if not edit_result.get("success"):
-                return {
-                    "success": False,
-                    "error": str(edit_result.get("error", "Failed to apply targeted edits.")),
-                }
-            updated_prompt = str(edit_result.get("prompt", ""))
-            applied_edits = [str(item) for item in edit_result.get("applied_edits", [])]
-            if not change_summary and isinstance(edit_result.get("summary"), str):
-                change_summary = edit_result["summary"]
-
-        prompt_max_chars = get_agent_studio_workshop_prompt_max_chars()
-        if len(updated_prompt) > prompt_max_chars:
-            return {
-                "success": False,
-                "error": (
-                    "proposed prompt exceeds maximum size "
-                    f"({prompt_max_chars:,} characters)."
-                ),
-            }
+        if user_db_id is None:
+            return {"success": False, "error": "Authenticated Workshop access is unavailable."}
         try:
-            reject_locked_prompt_markers(
-                updated_prompt,
-                target="Prompt update",
-            )
-        except ValueError:
-            return {
-                "success": False,
-                "error": (
-                    "Prompt update targets editable main/base or group-specific instructions only. "
-                    "Locked core/generated prompt contracts cannot be edited or copied."
-                ),
-            }
+            request = WorkshopActionRequest.model_validate(tool_input)
+            with SessionLocal() as action_db:
+                return prepare_workshop_action(action_db, context=context, user_id=user_db_id,
+                                               active_group_ids=active_group_ids or [], request=request)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
 
-        prompt_hash = _prompt_hash(updated_prompt)
-        proposal_target = (
-            f"group:{target_group_id}" if target_prompt == "group" else "main"
-        )
-        return {
-            "success": True,
-            "approval_status": "pending_user_approval",
-            "pending_user_approval": True,
-            "proposal_id": f"{proposal_target}:{prompt_hash}",
-            "apply_mode": apply_mode,
-            "proposed_prompt": updated_prompt,
-            "prompt_length": len(updated_prompt),
-            "prompt_hash": prompt_hash,
-            "target_prompt": target_prompt,
-            "target_group_id": target_group_id if target_prompt == "group" else None,
-            "change_summary": change_summary.strip() if isinstance(change_summary, str) else "",
-            "applied_edits": applied_edits,
-            "message": "Prompt update proposal prepared. Awaiting curator approval in the UI.",
-        }
+    elif tool_name == "inspect_saved_studio_resource":
+        from sqlalchemy import text
+        from src.lib.agent_studio.saved_resource_inspection import SavedResourceInspection, inspect_saved_resource
+
+        if user_db_id is None:
+            return {"success": False, "error": "Authenticated saved-work access is unavailable."}
+        try:
+            request = SavedResourceInspection.model_validate(tool_input)
+            with SessionLocal() as inspection_db:
+                # Enforce the read-only contract in PostgreSQL as well as in the
+                # typed handler. Closing the session rolls back the transaction.
+                inspection_db.execute(text("SET TRANSACTION READ ONLY"))
+                return {"success": True, **inspect_saved_resource(
+                    inspection_db, user_id=user_db_id,
+                    active_group_ids=active_group_ids or [], request=request,
+                )}
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
+    elif tool_name == "inspect_workshop_profile":
+        from src.lib.agent_studio.profile_authoring import ProfileInspection, inspect_workshop_profile
+
+        if not context or context.active_tab != "agent_workshop" or not context.agent_workshop or user_db_id is None:
+            return {"success": False, "error": "Open an authenticated Workshop draft first."}
+        try:
+            request = ProfileInspection.model_validate(tool_input)
+            with SessionLocal() as profile_db:
+                return {"success": True, **inspect_workshop_profile(
+                    profile_db, workshop=context.agent_workshop, user_id=user_db_id,
+                    active_group_ids=active_group_ids or [], request=request,
+                )}
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
+    elif tool_name == "propose_workshop_draft_update":
+        from src.lib.agent_studio.workshop_authoring import propose_workshop_update
+
+        if not context or context.active_tab != "agent_workshop" or not context.agent_workshop or user_db_id is None:
+            return {"success": False, "error": "Open an authenticated Workshop draft first."}
+        with SessionLocal() as proposal_db:
+            return propose_workshop_update(
+                db=proposal_db, base=context.agent_workshop, tool_input=tool_input,
+                user_id=user_db_id, active_group_ids=active_group_ids or [],
+                state=workshop_proposal_state if workshop_proposal_state is not None else {},
+            )
 
     elif tool_name == "report_tool_failure":
-        _alert_task = asyncio.create_task(
-            notify_tool_failure(
-                error_type=tool_input.get("error_type", "unexpected_error"),
-                error_message=tool_input.get("error_message", "No error message provided"),
-                source="opus_report",
-                specialist_name=tool_input.get("tool_name"),
-                trace_id=context.trace_id if context else None,
-                session_id=None,
-                curator_id=user_email,
-                context=tool_input.get("context"),
-            )
+        delivered = await notify_tool_failure(
+            error_type=tool_input.get("error_type", "unexpected_error"),
+            error_message=tool_input.get("error_message", "No error message provided"),
+            source="opus_report",
+            specialist_name=tool_input.get("tool_name"),
+            trace_id=context.trace_id if context else None,
+            session_id=context.session_id if context else None,
+            curator_id=user_email,
+            context=tool_input.get("context"),
         )
         return {
-            "status": "success",
-            "message": "Failure report sent to dev team",
+            "status": "success" if delivered else "not_sent",
+            "success": delivered,
+            "error": None if delivered else "Developer notification was not sent; delivery is disabled or unavailable.",
+            "notification_submitted": delivered,
+            "message": (
+                "Failure report submitted to the developer notification service."
+                if delivered else
+                "The developer notification was not sent. Delivery is disabled or unavailable. "
+                "Do not say the developers were notified."
+            ),
         }
 
     # Check if this is a diagnostic tool from the registry
@@ -3567,7 +3684,19 @@ async def _handle_tool_call(
             result = tool_def.handler(**tool_input)
             return result
         except Exception as e:
-            logger.error('Diagnostic tool %s failed: %s', tool_name, e, exc_info=True)
+            _report_agent_studio_exception_once(
+                e,
+                operation="diagnostic_tool_execution_failed",
+                phase="tool_execution",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            logger.error(
+                'Diagnostic tool %s failed: %s',
+                tool_name,
+                e,
+                exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
             return {
                 "success": False,
                 "error": "Tool execution failed unexpectedly.",
@@ -3777,10 +3906,6 @@ def _assistant_tool_calls_from_payload(payload_json: Any) -> List[Dict[str, Any]
     return agent_studio_chat_session.assistant_tool_calls_from_payload(payload_json)
 
 
-def _extract_opus_text_content(content_blocks: List[Any]) -> str:
-    return agent_studio_chat_session.extract_opus_text_content(content_blocks)
-
-
 def _build_agent_studio_assistant_payload(
     *,
     tool_calls: List[Dict[str, Any]],
@@ -3852,36 +3977,20 @@ def _build_agent_studio_replay_events(
 
 @router.post(
     "/chat",
-    summary="Chat with configured model",
-    description="""
-    Stream a conversation with the configured Anthropic model about prompts.
-
-    The assistant can discuss prompts, suggest improvements, and submit suggestions
-    to the development team using the submit_prompt_suggestion tool.
-
-    Uses the effort parameter (beta) set to "medium" for optimal quality/cost balance.
-
-    The response is a Server-Sent Events stream with the following event types:
-    - TEXT_DELTA: Text content from Opus
-    - TOOL_USE: Opus is calling a tool (includes tool name and input)
-    - TOOL_RESULT: Result of a tool call
-    - DONE: Stream complete
-    - ERROR: An error occurred
-    """,
+    summary="Chat with the Agent Studio AI assistant",
+    description="""Stream an OpenAI Agents SDK authoring conversation over SSE.""",
 )
 async def chat_with_opus(
     request: ChatRequest,
-    user: Dict[str, Any] = get_auth_dependency()
+    user: Dict[str, Any] = get_auth_dependency(),
 ):
-    """Stream a conversation with the configured Anthropic model with tool support."""
-    import anthropic
+    """Run Agent Studio through the SDK-managed OpenAI Responses path."""
 
-    # Get user info for attribution and prompt personalization
     user_id = _require_user_sub(user)
     user_email = user.get("email", user.get("sub", "unknown"))
     user_name = user.get("name", user.get("given_name", None))
-
     db_user_id: int | None = None
+
     try:
         db = next(get_db())
         try:
@@ -3889,13 +3998,9 @@ async def chat_with_opus(
                 db_user = set_global_user_from_cognito(db, user)
                 db_user_id = db_user.id
             except Exception as exc:
-                logger.warning('Could not resolve workflow user context: %s', exc)
+                logger.warning("Could not resolve workflow user context: %s", exc)
 
-            selected_agent_id = (
-                request.context.selected_agent_id
-                if request.context is not None
-                else None
-            )
+            selected_agent_id = request.context.selected_agent_id if request.context else None
             if selected_agent_id:
                 if db_user_id is None:
                     raise HTTPException(status_code=403, detail="Agent not available")
@@ -3908,8 +4013,7 @@ async def chat_with_opus(
 
             workshop_custom_agent_id = (
                 request.context.agent_workshop.custom_agent_id
-                if request.context is not None
-                and request.context.agent_workshop is not None
+                if request.context and request.context.agent_workshop
                 else None
             )
             if workshop_custom_agent_id:
@@ -3935,7 +4039,7 @@ async def chat_with_opus(
                 request=request,
             )
             if prepared_turn.user_turn_created:
-                trace_id = request.context.trace_id if request.context else None
+                source_trace_id = request.context.trace_id if request.context else None
                 user_payload = _build_agent_studio_user_debug_payload(
                     db=db,
                     request=request,
@@ -3946,7 +4050,7 @@ async def chat_with_opus(
                     db=db,
                     user_id=user_id,
                     prepared_turn=prepared_turn,
-                    trace_id=trace_id,
+                    trace_id=source_trace_id,
                     payload_json=user_payload,
                 )
                 db.commit()
@@ -3989,33 +4093,25 @@ async def chat_with_opus(
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
-            }
+            },
         )
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        logger.error("ANTHROPIC_API_KEY environment variable not set")
-        raise HTTPException(
-            status_code=500,
-            detail="Chat service not properly configured"
-        )
-    try:
-        anthropic_model_id, anthropic_model_name = _resolve_prompt_explorer_model()
-    except ValueError as exc:
-        logger.error("%s", exc)
-        raise HTTPException(status_code=500, detail="Agent Studio chat model is not configured")
+    if not str(get_api_key("openai") or "").strip():
+        logger.error("OpenAI API key is not configured")
+        raise HTTPException(status_code=500, detail="Chat service not properly configured")
 
+    active_group_ids = _authenticated_group_ids(user)
     if db_user_id is not None:
         set_workflow_user_context(
             user_id=db_user_id,
             user_email=user_email,
-            active_group_ids=_authenticated_group_ids(user),
+            active_group_ids=active_group_ids,
         )
-        logger.debug('Set workflow context for user %s', db_user_id)
 
-    # Set flow context if user is on Flows tab (for get_current_flow tool)
-    if request.context and request.context.active_tab == 'flows' and request.context.flow_definition:
-        # Convert Pydantic models to dicts for the context variable
+    # Keep the most recently visited Flow Builder draft callable while the curator
+    # moves to Workshop and back. The active tab controls guidance, not whether
+    # the captured authoring artifact exists.
+    if request.context and request.context.flow_definition:
         task_input_node_id = next(
             (
                 node.id
@@ -4024,36 +4120,35 @@ async def chat_with_opus(
             ),
             None,
         )
-        flow_context = {
-            "flow_name": request.context.flow_name or "Untitled Flow",
-            "version": request.context.flow_definition.version,
-            "nodes": [
-                {
-                    **node.model_dump(exclude={"node_type"}),
-                    "type": node.node_type,
-                }
-                for node in request.context.flow_definition.nodes
-            ],
-            "edges": [edge.model_dump() for edge in request.context.flow_definition.edges],
-            "entry_node_id": (
-                request.context.flow_definition.entry_node_id
-                or task_input_node_id
-            ),
-        }
-        set_current_flow_context(flow_context)
-        logger.debug('Set flow context: %s', flow_context.get('flow_name'))
+        set_current_flow_context(
+            {
+                "flow_name": request.context.flow_name or "Untitled Flow",
+                "flow_id": request.context.flow_id,
+                "flow_description": request.context.flow_description or "",
+                "flow_updated_at": request.context.flow_updated_at,
+                "flow_is_dirty": request.context.flow_is_dirty,
+                "flow_draft_fingerprint": request.context.flow_draft_fingerprint,
+                "version": request.context.flow_definition.version,
+                "task_instructions_default_only": (
+                    request.context.flow_definition.task_instructions_default_only
+                ),
+                "nodes": [
+                    {**node.model_dump(mode="json", exclude={"node_type"}), "type": node.node_type}
+                    for node in request.context.flow_definition.nodes
+                ],
+                "edges": [edge.model_dump() for edge in request.context.flow_definition.edges],
+                "entry_node_id": request.context.flow_definition.entry_node_id
+                or task_input_node_id,
+            }
+        )
     else:
-        # Clear any previous flow context
         clear_current_flow_context()
 
-    # Build system prompt based on context and user identity
     system_prompt = _build_opus_system_prompt(
         context=request.context,
         user_name=user_name,
         user_email=user_email,
     )
-
-    # Convert messages to Anthropic format
     latest_user_index = max(
         (
             index
@@ -4062,413 +4157,443 @@ async def chat_with_opus(
         ),
         default=None,
     )
-    messages = []
-    for index, message in enumerate(request.messages):
-        message_content = (
-            prepared_turn.user_message
-            if latest_user_index is not None and index == latest_user_index
-            else message.content
+    input_items = [
+        {
+            "role": message.role,
+            "content": (
+                prepared_turn.user_message
+                if request.application_event is None and latest_user_index is not None and index == latest_user_index
+                else message.content
+            ),
+        }
+        for index, message in enumerate(request.messages)
+    ]
+    if request.application_event is not None:
+        input_items.append({"role": "developer", "content": prepared_turn.user_message})
+    try:
+        if db_user_id is None:
+            raise ToolSearchAuthorizationError(
+                "Authenticated database identity is required for tool declaration",
+                candidate_count=0,
+                bound=0,
+            )
+        authorized_tools = _get_openai_authorized_tool_definitions(
+            request.context,
+            user_id=db_user_id,
+            active_group_ids=active_group_ids,
         )
-        messages.append({"role": message.role, "content": message_content})
+        tool_definitions = list(authorized_tools.definitions)
+    except ToolSearchAuthorizationError as exc:
+        _report_agent_studio_exception_once(
+            exc,
+            operation="tool_search_catalog_rejected",
+            phase="tool_surface",
+            context={"model": AGENT_STUDIO_OPENAI_MODEL, **exc.sanitized_context()},
+        )
+        logger.error(
+            "Agent Studio tool-search catalog rejected: %s",
+            exc,
+            extra={"sentry_skip_event": True},
+        )
+        clear_workflow_user_context()
+        clear_current_flow_context()
+        raise HTTPException(status_code=503, detail="Agent Studio capability catalog is unavailable") from exc
+
+    cancel_event = asyncio.Event()
 
     async def generate_stream():
-        """Generate SSE events from Opus with true streaming and tool support."""
-        trace_id = request.context.trace_id if request.context else None
-        try:
-            # Use AsyncAnthropic for non-blocking streaming
-            client = anthropic.AsyncAnthropic(api_key=api_key)
-            current_messages = messages.copy()
-            collected_content: List[Any] = []
-            assistant_text_parts: List[str] = []
-            completed_tool_calls: List[Dict[str, Any]] = []
-            domain_reference_events: List[Dict[str, Any]] = []
-            provider_context_preflight_events: List[Dict[str, Any]] = []
+        source_trace_id = request.context.trace_id if request.context else None
+        run_state = AgentStudioRunState(trace_id=uuid.uuid4().hex)
+        completed_tool_calls: List[Dict[str, Any]] = []
+        domain_reference_events: List[Dict[str, Any]] = []
+        workshop_proposal_state: dict = {}
 
-            # Note: User context was set before entering generate_stream().
-            # We'll clean it up in the finally block at the end of this generator.
+        async def execute_tool(
+            tool_name: str,
+            tool_input: dict[str, Any],
+            call_id: str | None,
+        ) -> ToolExecutionResult:
+            invocation_db = SessionLocal()
+            try:
+                invocation_authorized = is_tool_authorized_at_invocation(
+                    db=invocation_db,
+                    tool_name=tool_name,
+                    declared_names=authorized_tools.authorized_names,
+                    active_group_ids=active_group_ids,
+                )
+            finally:
+                invocation_db.close()
+            if not invocation_authorized:
+                tool_result = {
+                    "success": False,
+                    "error": "This capability is no longer authorized for the current request.",
+                    "code": "capability_not_authorized",
+                }
+            elif not _is_tool_allowed_for_context(tool_name, request.context):
+                tool_result = _tool_scope_error(tool_name, request.context)
+            else:
+                try:
+                    tool_result = await _handle_tool_call(
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                        context=request.context,
+                        user_email=user_email,
+                        user_auth_sub=user_id,
+                        messages=input_items,
+                        user_db_id=db_user_id,
+                        active_group_ids=active_group_ids,
+                        workshop_proposal_state=workshop_proposal_state,
+                    )
+                except Exception as exc:
+                    _report_agent_studio_exception_once(
+                        exc,
+                        operation="authorized_tool_execution_failed",
+                        phase="tool_execution",
+                        context={"model": AGENT_STUDIO_OPENAI_MODEL},
+                    )
+                    raise
+            safe_result = _json_safe(tool_result)
+            completed_tool_calls.append(
+                _tool_call_audit_entry(
+                    tool_name=tool_name,
+                    tool_use_id=call_id,
+                    tool_input=_json_safe(tool_input),
+                    tool_result=safe_result,
+                    context=request.context,
+                )
+            )
+            domain_reference = _domain_references_from_tool_result(tool_name, safe_result)
+            if domain_reference:
+                domain_reference_events.append(domain_reference)
+            return ToolExecutionResult(
+                full_output=safe_result,
+                provider_output=_provider_tool_result_content(
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    tool_result=safe_result,
+                    session_id=prepared_turn.session_id,
+                    turn_id=prepared_turn.turn_id,
+                ),
+            )
 
-            # Build API call parameters for beta API with effort parameter
-            # Using effort="medium" for optimal quality/cost balance (76% fewer tokens)
-            api_params = {
-                "model": anthropic_model_id,
-                "betas": ["effort-2025-11-24", "context-management-2025-06-27"],
-                "max_tokens": 16384,
-                "system": system_prompt,
-                "messages": current_messages,
-                "tools": _get_all_opus_tools(request.context),
-                "output_config": {"effort": "medium"},
-                "context_management": _build_anthropic_context_management_config(),
-            }
+        forced_tool_name = (
+            "refresh_workshop_prompt"
             if _should_force_workshop_prompt_refresh(
                 context=request.context,
                 latest_user_message=prepared_turn.user_message,
-            ):
-                api_params["tool_choice"] = {
-                    "type": "tool",
-                    "name": "refresh_workshop_prompt",
-                }
-            logger.info(
-                "Agent Studio chat using model='%s' (%s) and effort='medium' for balanced quality/cost",
-                anthropic_model_id,
-                anthropic_model_name,
+            )
+            else None
+        )
+        try:
+            tools, tool_counts = build_agent_studio_tools(
+                tool_definitions,
+                executor=execute_tool,
+                state=run_state,
+                namespace_for_tool=_agent_studio_tool_namespace,
+                forced_tool_name=forced_tool_name,
+                eager_tool_names=frozenset({"search_studio_capabilities"}),
+            )
+        except Exception as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="tool_surface_build_failed",
+                phase="tool_surface",
+                context={"candidate_count": len(tool_definitions)},
+            )
+            logger.error(
+                "Agent Studio OpenAI tool surface could not be built",
+                exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
+                message="Agent Studio could not prepare its authorized capabilities. Please retry.",
+                error_source="tool_surface",
+            )
+            clear_workflow_user_context()
+            clear_current_flow_context()
+            return
+        logger.info(
+            "Agent Studio OpenAI tool surface",
+            extra={
+                **tool_counts,
+                "session_id": prepared_turn.session_id,
+                "turn_id": prepared_turn.turn_id,
+                "provider": "openai",
+                "model": AGENT_STUDIO_OPENAI_MODEL,
+                "authorization_fingerprint": authorized_tools.fingerprint,
+                "authorization_filtered_count": authorized_tools.filtered_count,
+            },
+        )
+
+        try:
+            preflight = provider_context_preflight(
+                surface="agent_studio",
+                operation="agents_sdk_run",
+                provider="openai",
+                model=AGENT_STUDIO_OPENAI_MODEL,
+                payload={
+                    "instructions": system_prompt,
+                    "input": input_items,
+                    "tools": tool_definitions,
+                    "tool_search": {
+                        "forced_tool_name": forced_tool_name,
+                        "authorization_fingerprint": authorized_tools.fingerprint,
+                        "authorization_filtered_count": authorized_tools.filtered_count,
+                        **tool_counts,
+                    },
+                },
+                metadata={
+                    "session_id": prepared_turn.session_id,
+                    "turn_id": prepared_turn.turn_id,
+                    "trace_id": run_state.trace_id,
+                },
+                emit_trace_event=True,
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="PROVIDER_CONTEXT_PREFLIGHT",
+                trace_id=run_state.trace_id,
+                operation=preflight["operation"],
+                provider="openai",
+                model=AGENT_STUDIO_OPENAI_MODEL,
+                model_live=True,
+                payload_summary={
+                    "json_chars": preflight["json_chars"],
+                    "estimated_tokens": preflight["estimated_tokens"],
+                    "threshold": preflight["threshold"],
+                    "largest_paths": preflight["largest_paths"],
+                },
             )
 
-            while True:
-                collected_content = []
-                preflight_summary = provider_context_preflight(
-                    surface="agent_studio",
-                    operation=(
-                        "initial_anthropic_call"
-                        if len(current_messages) == len(messages)
-                        else "tool_loop_continuation"
-                    ),
-                    provider="anthropic",
-                    model=anthropic_model_id,
-                    payload=api_params,
-                    metadata={
-                        "session_id": prepared_turn.session_id,
-                        "turn_id": prepared_turn.turn_id,
-                        "trace_id": trace_id,
-                        "message_count": len(current_messages),
-                    },
-                    emit_trace_event=bool(trace_id),
-                )
-                preflight_event = {
-                    "operation": preflight_summary["operation"],
-                    "provider": preflight_summary["provider"],
-                    "model": preflight_summary["model"],
-                    "model_live": True,
-                    "payload_summary": {
-                        "json_chars": preflight_summary["json_chars"],
-                        "estimated_tokens": preflight_summary["estimated_tokens"],
-                        "threshold": preflight_summary["threshold"],
-                        "largest_paths": preflight_summary["largest_paths"],
-                    },
-                    "metadata": {
-                        "session_id": prepared_turn.session_id,
-                        "turn_id": prepared_turn.turn_id,
-                        "trace_id": trace_id,
-                        "message_count": len(current_messages),
-                    },
-                }
-                provider_context_preflight_events.append(preflight_event)
+            model_settings = build_agent_studio_model_settings(
+                max_output_tokens=get_agent_studio_openai_max_output_tokens(),
+                tool_choice=forced_tool_name,
+            )
+            async for runtime_event in stream_agent_studio_run(
+                instructions=system_prompt,
+                input_items=input_items,
+                tools=tools,
+                state=run_state,
+                session_id=prepared_turn.session_id,
+                user_id=user_id,
+                max_turns=get_agent_studio_openai_max_turns(),
+                model_settings=model_settings,
+                cancel_event=cancel_event,
+            ):
+                event_type = str(runtime_event.pop("type"))
                 yield _opus_sse_event(
                     session_id=prepared_turn.session_id,
                     turn_id=prepared_turn.turn_id,
-                    event_type="PROVIDER_CONTEXT_PREFLIGHT",
-                    trace_id=trace_id,
-                    operation=preflight_event["operation"],
-                    provider=preflight_event["provider"],
-                    model=preflight_event["model"],
-                    model_live=True,
-                    payload_summary=preflight_event["payload_summary"],
+                    event_type=event_type,
+                    trace_id=run_state.trace_id,
+                    **runtime_event,
                 )
-
-                # Stream the response using beta API for effort parameter support
-                async with client.beta.messages.stream(**api_params) as stream:
-                    async for event in stream:
-                        if event.type == "content_block_delta":
-                            if hasattr(event.delta, "text"):
-                                delta_text = event.delta.text
-                                if delta_text:
-                                    assistant_text_parts.append(delta_text)
-                                    yield _opus_sse_event(
-                                        session_id=prepared_turn.session_id,
-                                        turn_id=prepared_turn.turn_id,
-                                        event_type="TEXT_DELTA",
-                                        delta=delta_text,
-                                        trace_id=trace_id,
-                                    )
-                            elif hasattr(event.delta, "partial_json"):
-                                # Tool input is being built - we'll handle complete tool use later
-                                pass
-
-                    # Get the final message to access complete tool inputs and stop reason
-                    final_message = await stream.get_final_message()
-                    collected_content = final_message.content
-                    stop_reason = final_message.stop_reason
-
-                # Process any tool uses after streaming completes
-                if stop_reason == "tool_use":
-                    tool_results_for_api = []
-
-                    for block in collected_content:
-                        if block.type == "tool_use":
-                            safe_tool_input = _json_safe(block.input)
-
-                            # Notify frontend about tool use
-                            yield _opus_sse_event(
-                                session_id=prepared_turn.session_id,
-                                turn_id=prepared_turn.turn_id,
-                                event_type="TOOL_USE",
-                                tool_name=block.name,
-                                tool_input=safe_tool_input,
-                                trace_id=trace_id,
-                            )
-
-                            # Execute the tool
-                            tool_result = await _handle_tool_call(
-                                tool_name=block.name,
-                                tool_input=block.input,
-                                context=request.context,
-                                user_email=user_email,
-                                user_auth_sub=user_id,
-                                messages=current_messages,
-                                user_db_id=db_user_id,
-                            )
-                            safe_tool_result = _json_safe(tool_result)
-                            domain_reference_event = _domain_references_from_tool_result(
-                                block.name,
-                                safe_tool_result,
-                            )
-                            if domain_reference_event:
-                                domain_reference_events.append(domain_reference_event)
-
-                            # Send tool result event to frontend
-                            yield _opus_sse_event(
-                                session_id=prepared_turn.session_id,
-                                turn_id=prepared_turn.turn_id,
-                                event_type="TOOL_RESULT",
-                                tool_name=block.name,
-                                result=safe_tool_result,
-                                trace_id=trace_id,
-                            )
-
-                            completed_tool_calls.append(
-                                _tool_call_audit_entry(
-                                    tool_name=block.name,
-                                    tool_use_id=getattr(block, "id", None),
-                                    tool_input=safe_tool_input,
-                                    tool_result=safe_tool_result,
-                                    context=request.context,
-                                )
-                            )
-
-                            # Collect for API continuation
-                            tool_results_for_api.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": _provider_tool_result_content(
-                                    tool_name=block.name,
-                                    tool_input=safe_tool_input,
-                                    tool_result=safe_tool_result,
-                                    session_id=prepared_turn.session_id,
-                                    turn_id=prepared_turn.turn_id,
-                                ),
-                            })
-
-                    # Add assistant message and tool results for next turn
-                    current_messages.append({
-                        "role": "assistant",
-                        "content": collected_content,
-                    })
-                    current_messages.append({
-                        "role": "user",
-                        "content": tool_results_for_api,
-                    })
-                    # Update api_params with new messages for next iteration
-                    api_params["messages"] = current_messages
-                    api_params.pop("tool_choice", None)
-                    # Continue the loop for next turn
-                else:
-                    # Done - either end_turn or max_tokens
-                    break
-
-            assistant_message = "".join(assistant_text_parts)
-            if not assistant_message:
-                assistant_message = _extract_opus_text_content(collected_content)
 
             assistant_payload = _build_agent_studio_assistant_payload(
                 tool_calls=completed_tool_calls,
                 requested_context_session_id=prepared_turn.requested_context_session_id,
                 session_id=prepared_turn.session_id,
-                trace_capture=_trace_capture_snapshot(trace_id),
+                trace_capture={
+                    "status": "captured",
+                    "trace_id": run_state.trace_id,
+                    "source_trace_id": source_trace_id,
+                    "error": None,
+                },
                 domain_references=_merge_domain_reference_events(domain_reference_events),
-            )
-            if provider_context_preflight_events:
-                assistant_payload = assistant_payload or {}
-                assistant_payload["provider_context_preflight_events"] = (
-                    provider_context_preflight_events
-                )
+            ) or {}
+            assistant_payload["provider_run"] = {
+                "provider": "openai",
+                "model": AGENT_STUDIO_OPENAI_MODEL,
+                "reasoning_effort": AGENT_STUDIO_REASONING_EFFORT,
+                "response_id": run_state.response_id,
+                "usage": {
+                    "input_tokens": run_state.input_tokens,
+                    "output_tokens": run_state.output_tokens,
+                    "cached_input_tokens": run_state.cached_input_tokens,
+                    "reasoning_tokens": run_state.reasoning_tokens,
+                },
+                "tool_search": {
+                    **tool_counts,
+                    "search_calls": run_state.tool_search_calls,
+                    "search_outputs": run_state.tool_search_outputs,
+                    "loaded_tool_count": run_state.tool_search_loaded_tools,
+                },
+            }
+            if cancel_event.is_set():
+                assistant_payload["interrupted"] = True
+                assistant_payload["stop_reason"] = "curator_requested"
             assistant_turn = _persist_completed_agent_studio_turn(
                 session_id=prepared_turn.session_id,
                 user_id=user_id,
                 turn_id=prepared_turn.turn_id,
-                assistant_message=assistant_message,
-                trace_id=trace_id,
+                assistant_message=run_state.assistant_text or ("Stopped at your request." if cancel_event.is_set() else ""),
+                trace_id=run_state.trace_id,
                 payload_json=assistant_payload,
             )
-
             yield _opus_sse_event(
                 session_id=prepared_turn.session_id,
                 turn_id=prepared_turn.turn_id,
-                event_type="DONE",
+                event_type="INCOMPLETE" if cancel_event.is_set() else "DONE",
                 trace_id=assistant_turn.trace_id,
+                **({"message": "Stopped at your request.", "error_source": "cancelled"} if cancel_event.is_set() else {}),
             )
-
-        except anthropic.BadRequestError as e:
-            # Check for context overflow specifically
-            error_str = str(e).lower()
-            is_context_overflow = any(phrase in error_str for phrase in [
-                "too many tokens",
-                "context length",
-                "maximum context",
-                "token limit",
-                "prompt is too long",
-            ])
-
-            if is_context_overflow:
-                logger.warning('Context overflow detected: %s', e)
-                error_event_type = "CONTEXT_OVERFLOW"
-                error_payload = {
-                    "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",
-                    "recovery_hint": "Try a lighter-weight tool call: use get_trace_summary instead of full views, get_tool_calls_summary instead of get_tool_calls_page, or use smaller page_size (e.g., 5) with get_tool_calls_page. You can also filter by tool_name to get only specific tool calls.",
-                    "suggested_tools": [
-                        "get_trace_summary - lightweight overview (~500 tokens)",
-                        "get_tool_calls_summary - summaries only, no full results",
-                        "get_tool_calls_page with page_size=5 - smaller batches",
-                        "get_tool_call_detail - single call at a time"
-                    ],
-                }
-            else:
-                asyncio.create_task(
-                    notify_tool_failure(
-                        error_type=type(e).__name__,
-                        error_message=str(e),
-                        source="infrastructure",
-                        specialist_name="agent_studio_opus",
-                        trace_id=trace_id,
-                        session_id=prepared_turn.session_id,
-                        curator_id=user_email,
-                    )
-                )
-                logger.error('Anthropic bad request error: %s', e, exc_info=True)
-                error_event_type = "ERROR"
-                error_payload = {
-                    "message": (
-                        "Agent Studio couldn't complete that request because it ran into a "
-                        "problem sending it to the model. Please review your last step and "
-                        "try again. If the problem continues, refresh Agent Studio and retry."
-                    ),
-                    "error_source": "anthropic",
-                }
+        except ModelRefusalError:
             yield _opus_sse_event(
                 session_id=prepared_turn.session_id,
                 turn_id=prepared_turn.turn_id,
-                event_type=error_event_type,
-                trace_id=trace_id,
-                **error_payload,
+                event_type="REFUSAL",
+                trace_id=run_state.trace_id,
+                message="The model declined this request. No incomplete response was saved.",
+                error_source="model_refusal",
             )
-
-        except anthropic.APIError as e:
+        except ModelBehaviorError as exc:
+            error_text = str(exc).lower()
+            is_incomplete = "response.incomplete" in error_text
+            if not is_incomplete:
+                _report_agent_studio_exception_once(
+                    exc,
+                    operation="openai_model_behavior_failure",
+                    phase="agents_sdk_run",
+                    context={"model": AGENT_STUDIO_OPENAI_MODEL},
+                )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="INCOMPLETE" if is_incomplete else "ERROR",
+                trace_id=run_state.trace_id,
+                message=(
+                    "The model stopped before completing this turn. No incomplete response was saved."
+                    if is_incomplete
+                    else "Agent Studio could not complete the model request. Please review the last step and retry."
+                ),
+                error_source="openai",
+            )
+        except openai.BadRequestError as exc:
+            error_text = str(exc).lower()
+            is_context_overflow = any(
+                phrase in error_text
+                for phrase in ("too many tokens", "context length", "maximum context", "token limit")
+            )
+            if not is_context_overflow:
+                _report_agent_studio_exception_once(
+                    exc,
+                    operation="openai_bad_request",
+                    phase="agents_sdk_run",
+                    context={"model": AGENT_STUDIO_OPENAI_MODEL},
+                )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="CONTEXT_OVERFLOW" if is_context_overflow else "ERROR",
+                trace_id=run_state.trace_id,
+                message=(
+                    "The conversation exceeded the model context. Use a bounded recall tool or start a new chat."
+                    if is_context_overflow
+                    else "Agent Studio could not complete the model request. Please review the last step and retry."
+                ),
+                error_source="openai",
+            )
+        except MaxTurnsExceeded as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="openai_turn_limit_exceeded",
+                phase="agents_sdk_run",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
+                message="I could not finish within this turn. Ask me to continue with the remaining work. Any verification is incomplete; review any proposed changes before applying them.",
+                error_source="turn_limit",
+            )
+        except openai.APIError as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="openai_provider_failure",
+                phase="agents_sdk_run",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
             asyncio.create_task(
                 notify_tool_failure(
-                    error_type=type(e).__name__,
-                    error_message=str(e),
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
                     source="infrastructure",
-                    specialist_name="agent_studio_opus",
-                    trace_id=trace_id,
+                    specialist_name="agent_studio_openai",
+                    trace_id=run_state.trace_id,
                     session_id=prepared_turn.session_id,
                     curator_id=user_email,
+                    capture_sentry=False,
                 )
             )
-            logger.error('Anthropic API error: %s', e, exc_info=True)
-            yield _opus_sse_event(
-                session_id=prepared_turn.session_id,
-                turn_id=prepared_turn.turn_id,
-                event_type="ERROR",
-                trace_id=trace_id,
-                message=(
-                    "The model service had a temporary problem while working on your request. "
-                    "Any tool actions started during this turn may already have completed, so "
-                    "please check the results before retrying. If needed, try again in a moment."
-                ),
-                error_source="anthropic",
-            )
-
-        except ChatHistorySessionNotFoundError:
-            logger.warning(
-                "Agent Studio durable session disappeared before assistant completion save",
-                extra={"session_id": prepared_turn.session_id, "user_id": user_id},
+            logger.error(
+                "OpenAI Agent Studio API error: %s",
+                exc,
+                exc_info=True,
+                extra={"sentry_skip_event": True},
             )
             yield _opus_sse_event(
                 session_id=prepared_turn.session_id,
                 turn_id=prepared_turn.turn_id,
                 event_type="ERROR",
-                trace_id=trace_id,
+                trace_id=run_state.trace_id,
+                message="The model service had a temporary problem. Check any completed tool actions before retrying.",
+                error_source="openai",
+            )
+        except ChatHistorySessionNotFoundError as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="completed_turn_persistence_failed",
+                phase="persistence",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
                 message="Agent Studio completed the response, but the durable session is no longer available.",
                 error_source="history",
             )
-
-        except Exception as e:
-            # Also check for context overflow in general exceptions
-            error_str = str(e).lower()
-            is_context_overflow = any(phrase in error_str for phrase in [
-                "too many tokens",
-                "context length",
-                "maximum context",
-                "token limit",
-            ])
-
-            if is_context_overflow:
-                logger.warning('Context overflow (general exception): %s', e)
-                error_event_type = "CONTEXT_OVERFLOW"
-                error_payload = {
-                    "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",
-                    "recovery_hint": "Try a lighter-weight tool call: use get_trace_summary, get_tool_calls_summary, or get_tool_calls_page with a smaller page_size (e.g., 5). You can also use get_tool_call_detail to fetch one specific call at a time.",
-                    "suggested_tools": [
-                        "get_trace_summary - lightweight overview (~500 tokens)",
-                        "get_tool_calls_summary - summaries only, no full results",
-                        "get_tool_calls_page with page_size=5 - smaller batches",
-                        "get_tool_call_detail - single call at a time"
-                    ],
-                }
-            else:
-                asyncio.create_task(
-                    notify_tool_failure(
-                        error_type=type(e).__name__,
-                        error_message=str(e),
-                        source="infrastructure",
-                        specialist_name="agent_studio_opus",
-                        trace_id=trace_id,
-                        session_id=prepared_turn.session_id,
-                        curator_id=user_email,
-                    )
-                )
-                logger.error('Chat stream error: %s', e, exc_info=True)
-                error_event_type = "ERROR"
-                error_payload = {
-                    "message": (
-                        "Agent Studio ran into an unexpected problem while completing your request. "
-                        "Any tool actions started during this turn may already have completed, so "
-                        "please check the results before retrying. If needed, refresh Agent Studio "
-                        "and try again."
-                    ),
-                }
+        except Exception as exc:
+            _report_agent_studio_exception_once(
+                exc,
+                operation="openai_stream_failure",
+                phase="agents_sdk_run",
+                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+            )
+            logger.error(
+                "Agent Studio OpenAI stream error: %s",
+                exc,
+                exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
             yield _opus_sse_event(
                 session_id=prepared_turn.session_id,
                 turn_id=prepared_turn.turn_id,
-                event_type=error_event_type,
-                trace_id=trace_id,
-                **error_payload,
+                event_type="ERROR",
+                trace_id=run_state.trace_id,
+                message="Agent Studio ran into an unexpected problem. Check completed actions before retrying.",
+                error_source=type(exc).__name__,
             )
-
         finally:
-            # Clear user and flow context after streaming completes (success or error)
             clear_workflow_user_context()
             clear_current_flow_context()
-            logger.debug("Cleared workflow and flow context after streaming")
 
     run_id = f"agent_studio_chat_turn:{prepared_turn.session_id}:{prepared_turn.turn_id}"
 
     def terminal_error_event(exc: Exception) -> str:
-        detail = getattr(exc, "detail", None)
-        message = str(detail or exc or "Agent Studio turn failed to start.")
         return _opus_sse_event(
             session_id=prepared_turn.session_id,
             turn_id=prepared_turn.turn_id,
             event_type="ERROR",
-            message=message,
+            message="Agent Studio turn could not be started. Please retry.",
             error_source=type(exc).__name__,
         )
 
@@ -4480,7 +4605,8 @@ async def chat_with_opus(
             session_id=prepared_turn.session_id,
             turn_id=prepared_turn.turn_id,
             stream_factory=generate_stream,
-            can_cancel=False,
+            can_cancel=True,
+            cancel_event=cancel_event,
             terminal_error_event_factory=terminal_error_event,
         )
     except ExecutableRunAccessError as exc:
@@ -4489,17 +4615,34 @@ async def chat_with_opus(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return StreamingResponse(
-        # Agent Studio does not expose stable turn identities or a same-turn
-        # observer-recovery request contract. Keep chat/flow keepalive/cursor
-        # transport scoped rather than changing this unrelated client lifecycle.
         executable_run_manager.observe(executable_run),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-        }
+        },
     )
+
+
+@router.post("/chat/stop")
+async def stop_agent_studio_chat(
+    request: StopAgentStudioRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Signal immediate SDK cancellation without treating navigation as Stop."""
+    owner = user.get("sub")
+    if not owner:
+        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    try:
+        run = await executable_run_manager.request_cancel_for_session(
+            session_id=request.session_id, owner_user_id=owner, turn_id=request.turn_id,
+        )
+    except ExecutableRunAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutableRunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "stopping" if run else "finished"}
 
 
 def _send_error_notification_sns(user_email: str, error_message: str, context: Optional[ChatContext] = None) -> None:
@@ -4568,122 +4711,103 @@ async def _process_suggestion_background(
     context: Optional[ChatContext],
     user_email: str,
     user_auth_sub: str,
-    api_key: str,
 ) -> None:
-    """
-    Background task that processes suggestion submission with configured chat model.
+    """Submit AI-assisted feedback through a forced Agents SDK tool call."""
 
-    This runs after the HTTP response has been sent to the user.
-    On success, sends the suggestion via SNS.
-    On failure, sends an error notification via SNS.
-    """
-    try:
-        logger.info('[Background] Starting suggestion processing for %s', user_email)
+    state = AgentStudioRunState(trace_id=uuid.uuid4().hex)
 
-        try:
-            anthropic_model_id, anthropic_model_name = _resolve_prompt_explorer_model()
-        except ValueError as exc:
-            error_msg = str(exc)
-            logger.error('[Background] %s', error_msg)
-            _send_error_notification_sns(user_email, error_msg, context)
-            return
-
-        # Call Anthropic synchronously to get the tool call
-        client = anthropic.Anthropic(api_key=api_key)
-
-        response = client.messages.create(
-            model=anthropic_model_id,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=messages,
-            tools=[ANTHROPIC_SUGGESTION_TOOL],
-            tool_choice={"type": "tool", "name": "submit_prompt_suggestion"},
-        )
-        logger.info(
-            "[Background] Suggestion submission model='%s' (%s)",
-            anthropic_model_id,
-            anthropic_model_name,
-        )
-
-        # Extract tool use from response
-        tool_use_block = None
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "submit_prompt_suggestion":
-                tool_use_block = block
-                break
-
-        if not tool_use_block:
-            error_msg = "Configured model did not call submit_prompt_suggestion despite forced tool choice"
-            logger.error('[Background] %s', error_msg)
-            report_background_task_exception(
-                RuntimeError("agent_studio_suggestion_missing_tool_use"),
-                task_name="agent_studio.process_suggestion",
-                tags={
-                    "component": "agent_studio",
-                    "failure_stage": "missing_tool_use",
-                },
-            )
-            _send_error_notification_sns(user_email, error_msg, context)
-            return
-
-        # Execute the tool
-        tool_result = await _handle_tool_call(
-            tool_name="submit_prompt_suggestion",
-            tool_input=tool_use_block.input,
-            context=context,
-            user_email=user_email,
-            user_auth_sub=user_auth_sub,
-            messages=messages,
-        )
-
-        if tool_result.get("success"):
-            logger.info('[Background] Suggestion submitted successfully for %s: %s', user_email, tool_result.get('suggestion_id'))
+    async def execute_tool(
+        tool_name: str,
+        tool_input: dict[str, Any],
+        call_id: str | None,
+    ) -> ToolExecutionResult:
+        if tool_name != "submit_prompt_suggestion":
+            result: dict[str, Any] = {
+                "success": False,
+                "error": "Only submit_prompt_suggestion is allowed in this run.",
+            }
         else:
-            error_msg = tool_result.get("error", "Unknown error during tool execution")
-            logger.error('[Background] Tool execution failed: %s', error_msg)
-            report_background_task_exception(
-                RuntimeError("agent_studio_suggestion_tool_failed"),
-                task_name="agent_studio.process_suggestion",
-                tags={
-                    "component": "agent_studio",
-                    "failure_stage": "tool_execution",
-                },
+            result = await _handle_tool_call(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                context=context,
+                user_email=user_email,
+                user_auth_sub=user_auth_sub,
+                messages=messages,
             )
-            _send_error_notification_sns(user_email, error_msg, context)
+        safe_result = _json_safe(result)
+        return ToolExecutionResult(
+            full_output=safe_result,
+            provider_output=_serialize_provider_tool_result(safe_result),
+        )
 
-    except anthropic.APIError as e:
-        error_msg = f"Anthropic API error: {str(e)}"
-        logger.error('[Background] %s', error_msg, exc_info=True)
+    try:
+        execution = await run_forced_agent_studio_tool(
+            instructions=system_prompt,
+            input_items=messages,
+            tool_definition=SUGGESTION_TOOL,
+            executor=execute_tool,
+            state=state,
+            session_id=f"agent-studio-suggestion:{uuid.uuid4()}",
+            user_id=user_auth_sub,
+            max_turns=get_agent_studio_suggestion_max_turns(),
+            max_output_tokens=get_agent_studio_suggestion_max_output_tokens(),
+        )
+        result = execution.output if execution is not None else None
+        if not isinstance(result, dict) or result.get("success") is not True:
+            error_message = (
+                str(result.get("error"))
+                if isinstance(result, dict) and result.get("error")
+                else "OpenAI did not submit the requested suggestion."
+            )
+            raise RuntimeError(error_message)
+        logger.info(
+            "[Background] Suggestion submitted through OpenAI Responses for %s: %s",
+            user_email,
+            result.get("suggestion_id"),
+            extra={"trace_id": state.trace_id, "response_id": state.response_id},
+        )
+    except Exception as exc:
+        expected_outcome = expected_agent_studio_terminal_outcome(exc)
+        if expected_outcome is not None:
+            logger.info(
+                "[Background] OpenAI suggestion ended with typed outcome: %s",
+                expected_outcome,
+                extra={"trace_id": state.trace_id},
+            )
+            _send_error_notification_sns(
+                user_email,
+                (
+                    "The AI-assisted suggestion did not complete "
+                    f"({expected_outcome.replace('_', ' ')}). Please retry."
+                ),
+                context,
+            )
+            return
+        logger.error(
+            "[Background] OpenAI suggestion submission failed: %s",
+            exc,
+            exc_info=True,
+            extra={"sentry_skip_event": True},
+        )
         report_background_task_exception(
-            e,
+            exc,
             task_name="agent_studio.process_suggestion",
             tags={
                 "component": "agent_studio",
-                "failure_stage": "anthropic_api",
+                "failure_stage": "openai_agents_sdk",
             },
         )
-        _send_error_notification_sns(user_email, error_msg, context)
-
-    except Exception as e:
-        error_msg = f"Unexpected error: {str(e)}"
-        logger.error('[Background] %s', error_msg, exc_info=True)
-        report_background_task_exception(
-            e,
-            task_name="agent_studio.process_suggestion",
-            tags={
-                "component": "agent_studio",
-                "failure_stage": "unexpected",
-            },
-        )
-        _send_error_notification_sns(user_email, error_msg, context)
+        _send_error_notification_sns(user_email, str(exc), context)
 
 
 @router.post(
     "/submit-suggestion-direct",
     summary="Direct AI-assisted suggestion submission",
     description="""
-    Directly trigger Opus to analyze the current context and submit a suggestion
-    to the development team. This bypasses the chat UI and forces Opus to call
+    Directly trigger the Agent Studio assistant to analyze the current context and
+    submit a suggestion to the development team. This bypasses the chat UI and
+    forces the assistant to call
     the submit_prompt_suggestion tool based on available context (trace, selected agent, etc.).
 
     Used by the "AI-Assisted" feedback button to streamline the submission process.
@@ -4697,19 +4821,17 @@ async def submit_suggestion_direct(
     user: dict = get_auth_dependency(),
 ):
     """
-    Directly trigger Opus to submit a suggestion based on available context.
+    Directly trigger the Agent Studio assistant to submit a suggestion.
 
     This endpoint validates the request and spawns a background task to process
-    the suggestion via Opus. Returns immediately so the curator can continue working.
+    the suggestion. Returns immediately so the curator can continue working.
     On success or failure, notifications are sent via SNS.
     """
     try:
         user_email = user.get("email", "unknown@localhost")
         user_auth_sub = _require_user_sub(user)
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-
-        if not api_key:
-            raise HTTPException(status_code=500, detail="Anthropic API key not configured")
+        if not str(get_api_key("openai") or "").strip():
+            raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
         db_user = set_global_user_from_cognito(db, user)
 
@@ -4757,7 +4879,7 @@ async def submit_suggestion_direct(
         # Build the system prompt
         system_prompt = _build_opus_system_prompt(request.context)
 
-        # Create a forced message that instructs Opus to submit
+        # Create a forced message that instructs the authoring assistant to submit.
         context_description = []
         if request.context:
             if request.context.trace_id:
@@ -4777,7 +4899,7 @@ Please analyze the conversation history above and the available context, then su
 
 If there's limited information available, that's okay - just explain what you know and suggest that the developers investigate further."""
         else:
-            # No context - Opus should still try
+            # No context - the assistant should still make a bounded submission attempt.
             forced_message = """The user has requested you submit feedback to the development team.
 
 Please review our conversation history above and submit a general suggestion using the submit_prompt_suggestion tool. Summarize what we discussed and provide context for the developers."""
@@ -4809,7 +4931,6 @@ Please review our conversation history above and submit a general suggestion usi
             context=request.context,
             user_email=user_email,
             user_auth_sub=user_auth_sub,
-            api_key=api_key,
             task_name="agent_studio.process_suggestion",
             tags={
                 "component": "agent_studio",
@@ -4833,17 +4954,12 @@ Please review our conversation history above and submit a general suggestion usi
         )
 
 
-def _fetch_trace_for_opus(trace_id: str) -> Optional[str]:
-    """Fetch trace data from Langfuse and format it for Opus's context."""
-    return prompt_builder.fetch_trace_for_opus(trace_id, logger=logger)
-
-
 def _build_opus_system_prompt(
     context: Optional[ChatContext],
     user_name: Optional[str] = None,
     user_email: Optional[str] = None,
 ) -> str:
-    """Build the system prompt for Opus based on UI context and user identity."""
+    """Build the AI Chat system prompt from UI context and user identity."""
     from src.lib.agent_studio.context import prepare_trace_context
 
     return prompt_builder.build_opus_system_prompt(
@@ -4935,7 +5051,7 @@ async def get_trace_context(
     Manually submit a prompt improvement suggestion.
 
     This endpoint allows curators to submit suggestions directly,
-    separate from the Opus chat conversation. Suggestions are sent
+    separate from the AI Chat conversation. Suggestions are sent
     via SNS to the development team.
     """,
 )

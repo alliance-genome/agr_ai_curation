@@ -1,3 +1,6 @@
+import { getAgentExecutionRevision } from '@/services/agentStudioService'
+import DirectExportSetting from '../../DirectExportSetting'
+import ExportOptionHelp from '../../ExportOptionHelp'
 /**
  * NodePanel
  *
@@ -13,7 +16,7 @@
  * guard the parent calls before it changes the selection.
  */
 
-import { useCallback, useImperativeHandle, useMemo, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { ReactNode, Ref } from 'react'
 import {
   Alert,
@@ -44,7 +47,10 @@ import {
   isValidationAgentFromMetadata,
 } from '../agentMetadataUtils'
 import type { AgentBrowserRequest, AgentNode, AgentNodeData, OutputBindingView } from '../types'
+import OutputFieldEditor from './OutputFieldEditor'
+import type { FlowDefinition } from '../types'
 import AutomaticChecks from './AutomaticChecks'
+import ExecutionRevisionPicker from './ExecutionRevisionPicker'
 import NodePanelHeader from './NodePanelHeader'
 import type { NodePanelStatus } from './NodePanelHeader'
 import UnsavedEditsDialog from './UnsavedEditsDialog'
@@ -60,6 +66,16 @@ import type { OutputFilenameMode } from './useNodeDraft'
 export interface NodePanelLeaveGuard {
   /** Resolves true when the parent may change the selection. */
   requestLeave: () => Promise<boolean>
+  captureAuthoringDraft: () => NodePanelAuthoringDraft
+  takeLastLeaveOutcome: () => NodePanelLeaveOutcome
+}
+
+export type NodePanelLeaveOutcome = 'clean' | 'applied' | 'discarded' | 'kept' | null
+
+export interface NodePanelAuthoringDraft {
+  nodeId: string
+  data: Partial<AgentNodeData>
+  dirty: boolean
 }
 
 /** How a custom validator step is attached, derived from the flow's edges. */
@@ -77,6 +93,7 @@ export interface NodePanelProps {
   stepCount: number
   /** Step numbers by node id, for sentences that name other steps. */
   stepNumbersById: Record<string, number>
+  flowDefinition?: FlowDefinition
   outputBinding?: OutputBindingView
   validatorAttachment?: ValidatorAttachmentView | null
   mode: NodePanelMode
@@ -85,7 +102,10 @@ export interface NodePanelProps {
   onHide: () => void
   onTaskInstructionsAuthored?: () => void
   onOpenAgent?: (request: AgentBrowserRequest) => void
+  onOutputHelp?: (agentId: string, agentName: string, prompt: string) => void
   leaveGuardRef?: Ref<NodePanelLeaveGuard>
+  onDraftDirtyChange?: (dirty: boolean) => void
+  onDraftChange?: (draft: NodePanelAuthoringDraft | null) => void
 }
 
 type StepKind = 'input' | 'extraction' | 'validation' | 'output' | 'agent'
@@ -126,6 +146,7 @@ function NodePanel({
   stepCount,
   stepNumbersById,
   outputBinding,
+  flowDefinition,
   validatorAttachment,
   mode,
   onApply,
@@ -133,7 +154,10 @@ function NodePanel({
   onHide,
   onTaskInstructionsAuthored,
   onOpenAgent,
+  onOutputHelp,
   leaveGuardRef,
+  onDraftDirtyChange,
+  onDraftChange,
 }: NodePanelProps) {
   const { agents: agentMetadata } = useAgentMetadata()
   const icon = useAgentIcon(node.data.agent_id)
@@ -143,16 +167,17 @@ function NodePanel({
     ? 'input'
     : isValidationAgentFromMetadata(agentId, agentMetadata)
       ? 'validation'
-      : isOutputFormatterAgentFromMetadata(agentId, agentMetadata)
+      : node.type === 'output' || isOutputFormatterAgentFromMetadata(agentId, agentMetadata)
         ? 'output'
         : isExtractionAgentFromMetadata(agentId, agentMetadata)
           ? 'extraction'
           : 'agent'
-  const supportsFileOutputNaming = isFileOutputFormatterAgentFromMetadata(agentId, agentMetadata)
+  const supportsFileOutputNaming = (node.type === 'output' && agentId.startsWith('ca_')) || isFileOutputFormatterAgentFromMetadata(agentId, agentMetadata)
   const envelopeMetadata = agentMetadata[agentId]?.domain_envelope ?? null
 
   const draft = useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOutputNaming })
   const [pendingLeave, setPendingLeave] = useState<PendingLeave | null>(null)
+  const lastLeaveOutcomeRef = useRef<NodePanelLeaveOutcome>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const checksView = useMemo(
@@ -170,7 +195,11 @@ function NodePanel({
   }, [readOnly, draft, isTaskInput, node.id, onApply, onTaskInstructionsAuthored])
 
   const requestLeave = useCallback((): Promise<boolean> => {
-    if (!draft.dirty) return Promise.resolve(true)
+    lastLeaveOutcomeRef.current = null
+    if (!draft.dirty) {
+      lastLeaveOutcomeRef.current = 'clean'
+      return Promise.resolve(true)
+    }
     return new Promise<boolean>((resolve) => {
       setPendingLeave({
         proceed: () => resolve(true),
@@ -179,7 +208,33 @@ function NodePanel({
     })
   }, [draft.dirty])
 
-  useImperativeHandle(leaveGuardRef, () => ({ requestLeave }), [requestLeave])
+  const captureAuthoringDraft = useCallback((): NodePanelAuthoringDraft => ({
+    nodeId: node.id,
+    data: draft.snapshotPayload(),
+    dirty: draft.dirty,
+  }), [draft, node.id])
+
+  const recoverySnapshot = JSON.stringify(captureAuthoringDraft())
+  useEffect(() => { onDraftChange?.(JSON.parse(recoverySnapshot)) }, [recoverySnapshot, onDraftChange])
+  useEffect(() => () => onDraftChange?.(null), [onDraftChange])
+
+  const takeLastLeaveOutcome = useCallback((): NodePanelLeaveOutcome => {
+    const outcome = lastLeaveOutcomeRef.current
+    lastLeaveOutcomeRef.current = null
+    return outcome
+  }, [])
+
+  useImperativeHandle(
+    leaveGuardRef,
+    () => ({ requestLeave, captureAuthoringDraft, takeLastLeaveOutcome }),
+    [captureAuthoringDraft, requestLeave, takeLastLeaveOutcome]
+  )
+
+  useEffect(() => {
+    onDraftDirtyChange?.(draft.dirty)
+  }, [draft.dirty, onDraftDirtyChange])
+
+  useEffect(() => () => onDraftDirtyChange?.(false), [onDraftDirtyChange])
 
   // Hiding the panel unmounts it, draft included, so it goes through the same guard.
   const guardedHide = useCallback(() => {
@@ -199,9 +254,27 @@ function NodePanel({
   const stepLabel = `Step ${stepNumber} of ${stepCount}`
   const stepDetail = isTaskInput
     ? 'task input'
-    : `${agentId}${node.data.prompt_version ? ` v${node.data.prompt_version}` : ''}`
+    : agentId.startsWith('ca_')
+      ? `${agentId} · ${draft.values.executionSelection.execution_receipt ? `revision ${draft.values.executionSelection.execution_receipt.revision}` : draft.values.executionSelection.agent_revision_id ? 'saved revision selected' : 'revision selection required'}`
+      : `${agentId}${node.data.prompt_version ? ` v${node.data.prompt_version}` : ''}`
 
-  const fileExtension = outputFileExtension(agentId)
+  const selectedRevisionId = draft.values.executionSelection.agent_revision_id
+  const [pinnedOutput, setPinnedOutput] = useState<{ revision: string; format: 'csv' | 'tsv' | 'json' | null; error?: string } | null>(null)
+  useEffect(() => {
+    if (!agentId.startsWith('ca_') || node.type !== 'output' || !selectedRevisionId) return
+    let current = true
+    void getAgentExecutionRevision(agentId.slice(3), selectedRevisionId).then((revision) => {
+      if (!current) return
+      if (revision.id !== selectedRevisionId || revision.agent_id !== agentId.slice(3)) throw new Error('Saved exporter identity changed.')
+      const formats: Record<string, 'csv' | 'tsv' | 'json'> = { csv_formatter: 'csv', tsv_formatter: 'tsv', json_formatter: 'json' }
+      const format = revision.snapshot.output_contract.output_state === 'none' && revision.snapshot.tool_ids.includes('finalize_and_save')
+        ? formats[revision.snapshot.template_source || ''] || null : null
+      setPinnedOutput({ revision: selectedRevisionId, format })
+    }).catch(() => { if (current) setPinnedOutput({ revision: selectedRevisionId, format: null, error: 'Could not load the selected exporter revision.' }) })
+    return () => { current = false }
+  }, [agentId, node.type, selectedRevisionId])
+  const outputReady = !agentId.startsWith('ca_') || (pinnedOutput?.revision === selectedRevisionId && Boolean(pinnedOutput?.format))
+  const fileExtension = outputFileExtension(agentId, pinnedOutput?.revision === selectedRevisionId ? pinnedOutput?.format : null)
   const filenamePreviewPrefix = draft.values.outputFilenameMode === 'source_pdf'
     ? '<PDF-name>'
     : draft.values.outputFilenameMode === 'custom'
@@ -240,6 +313,15 @@ function NodePanel({
       />
 
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 1.75, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {agentId.startsWith('ca_') && (
+          <ExecutionRevisionPicker
+            readOnly={readOnly}
+            key={`${node.id}:${agentId}`}
+            agentKey={agentId}
+            selection={draft.values.executionSelection}
+            onChange={(selection) => draft.set('executionSelection', selection)}
+          />
+        )}
         {kind === 'input' && (
           <Section
             heading="Task instructions"
@@ -368,23 +450,56 @@ function NodePanel({
           )
         )}
 
-        {kind === 'output' && (
+        {kind === 'output' && draft.values.projectionPlan?.selection_mode !== 'selected_fields' && (
           <Section heading="Output">
+            <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <FormControlLabel
-              sx={{ m: 0, gap: 0.75, '& .MuiFormControlLabel-label': { fontSize: 12.5 } }}
+              sx={{ m: 0, gap: 0.75, '& .MuiFormControlLabel-label': { typography: 'body2' } }}
               control={(
                 <Switch
-                  disabled={readOnly}
                   size="small"
+                  disabled={readOnly || draft.values.exportExecutionMode === 'direct'}
                   checked={draft.values.includeEvidence}
                   onChange={(event) => draft.set('includeEvidence', event.target.checked)}
-                  slotProps={{
-                    input: { role: 'switch' }
-                  }}
+                  slotProps={{ input: { role: 'switch' } }}
                 />
               )}
               label="Include the supporting evidence in the output"
             />
+              <ExportOptionHelp title="Supporting evidence in the output">
+                <p>Ask this output step to include supporting quotes or locations in the paper when they are available.</p>
+                <p>Turning this off asks the output agent to leave evidence out of this output. It does not remove the evidence saved by the extractor agents.</p>
+                <p>If you choose specific output fields, those fields determine what appears in the file. Select evidence fields if you want them included.</p>
+                <p>In direct export mode, this toggle is not used. The file contains the fields you selected.</p>
+              </ExportOptionHelp>
+            </Box>
+            {draft.values.exportExecutionMode === 'direct' && <Typography variant="body2" color="text.secondary">To include evidence in direct export, select evidence fields below.</Typography>}
+          </Section>
+        )}
+
+        {node.type === 'output' && agentId.startsWith('ca_') && !outputReady && <Alert severity={pinnedOutput?.error ? 'error' : 'info'}>{pinnedOutput?.error || 'Select a saved file exporter revision to configure its output.'}</Alert>}
+        {kind === 'output' && supportsFileOutputNaming && outputReady && <DirectExportSetting readOnly={readOnly} value={draft.values.exportExecutionMode} onChange={(mode) => draft.set('exportExecutionMode', mode)} />}
+
+        {kind === 'output' && supportsFileOutputNaming && outputReady && flowDefinition && <OutputFieldEditor
+          readOnly={readOnly}
+          direct={draft.values.exportExecutionMode === 'direct'} format={fileExtension} definition={flowDefinition} binding={outputBinding}
+          value={draft.values.projectionPlan} onChange={(plan) => draft.set('projectionPlan', plan)} />}
+
+        {kind === 'output' && (
+          <Section heading="What should this output contain?" action={<OptionalMark />}
+            help="Instructions for this output step only, in addition to your flow instructions. Use information collected by the earlier steps.">
+            <TextField fullWidth multiline minRows={4} size="small"
+              disabled={readOnly || draft.values.exportExecutionMode === 'direct'}
+              label="Output instructions"
+              placeholder="For example: One row per allele. Include allele name, confirmed identifier and supporting quote, in that order. Leave missing identifiers blank."
+              helperText={draft.values.exportExecutionMode === 'direct' ? 'Saved but inactive. Turn off direct export to use these instructions.' : 'For a file, describe the columns and what makes one row. For chat, describe the summary or table you want.'}
+              value={draft.values.customInstructions}
+              onChange={(event) => draft.set('customInstructions', event.target.value)} sx={textFieldSx} />
+            {draft.values.projectionPlan?.selection_mode === 'selected_fields' && <Typography variant="body2">Your selected fields control the file layout. Instructions cannot add columns or fill missing answers.</Typography>}
+            {!readOnly && onOutputHelp && <Button sx={{ mt: 1, textTransform: 'none' }} onClick={() => onOutputHelp(
+              agentId, node.data.agent_display_name,
+              `Help me design the output for the ${node.data.agent_display_name} step in this flow (internal step reference: ${node.id}; use its visible name in your reply). Ask what columns or summary I need and what should count as one row. Inspect the current flow and its source fields before suggesting changes. Keep my current draft instructions, and propose output-step instructions for my review. If there is a saved column layout, inspect it and update it to match the agreed columns. If a requested field is not collected, explain the extraction change needed first.`,
+            )}>Need help with your output? Chat with AI</Button>}
           </Section>
         )}
 
@@ -529,23 +644,26 @@ function NodePanel({
         onApply={() => {
           if (!pendingLeave) return
           if (!applyDraft()) return
+          lastLeaveOutcomeRef.current = 'applied'
           setPendingLeave(null)
           pendingLeave.proceed()
         }}
         onDiscard={() => {
           if (!pendingLeave) return
+          lastLeaveOutcomeRef.current = 'discarded'
           draft.reset()
           setPendingLeave(null)
           pendingLeave.proceed()
         }}
         onKeepEditing={() => {
           if (!pendingLeave) return
+          lastLeaveOutcomeRef.current = 'kept'
           setPendingLeave(null)
           pendingLeave.cancel()
         }}
       />
     </Box>
-  );
+  )
 }
 
 export default NodePanel

@@ -196,7 +196,7 @@ export default function ToolsSection({
               startIcon={<AutoFixHighIcon sx={{ fontSize: 13 }} />}
               sx={{ ...LinkButtonSx, verticalAlign: 'baseline' }}
             >
-              Ask Claude to draft a request
+              Ask AI Chat to draft a request
             </Button>
           </HelpText>
         )}

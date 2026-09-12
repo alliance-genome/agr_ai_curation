@@ -1,13 +1,20 @@
+import { MemoryRouter, useNavigate, useSearchParams } from 'react-router-dom'
+import { StudioNavigationContext } from '../studioNavigation'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, beforeEach, expect, it, vi } from 'vitest'
 import { createRef } from 'react'
+import { webcrypto } from 'node:crypto'
+import { fingerprintWorkshopDraft } from '../authoringContext'
 
-import PromptWorkshop, { type WorkshopLeaveGuard } from './PromptWorkshop'
+import PromptWorkshop, {
+  type WorkshopAuthoringContextHandle,
+  type WorkshopLeaveGuard,
+} from './PromptWorkshop'
 import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
+import { buildExecutionRevision as buildVersion } from '@/test/fixtures/agentExecutionRevision'
 import type {
   PromptCatalog,
   CustomAgent,
-  CustomAgentVersion,
   ModelOption,
   ToolLibraryItem,
   AgentTemplate,
@@ -16,15 +23,19 @@ import type {
 
 const serviceMocks = vi.hoisted(() => ({
   cloneAgentToWorkshop: vi.fn(),
+  validateWorkshopDraft: vi.fn(),
   createCustomAgent: vi.fn(),
+  getWorkshopSavedReference: vi.fn(),
+  getWorkshopCloneSource: vi.fn(),
+  getAgentExecutionRevision: vi.fn(),
   deleteCustomAgent: vi.fn(),
   fetchAgentTemplates: vi.fn(),
   fetchModelOptions: vi.fn(),
   fetchToolLibrary: vi.fn(),
   listToolIdeaRequests: vi.fn(),
-  listCustomAgentVersions: vi.fn(),
+  listAgentExecutionRevisions: vi.fn(),
   listCustomAgents: vi.fn(),
-  revertCustomAgentVersion: vi.fn(),
+  restoreAgentExecutionRevision: vi.fn(),
   setCustomAgentVisibility: vi.fn(),
   submitToolIdeaRequest: vi.fn(),
   updateCustomAgent: vi.fn(),
@@ -33,6 +44,16 @@ const serviceMocks = vi.hoisted(() => ({
 const metadataMocks = vi.hoisted(() => ({
   agents: {} as Record<string, unknown>,
   refresh: vi.fn(),
+}))
+
+const profileMocks = vi.hoisted(() => ({ validateGenericProfile: vi.fn(), getGenericProfile: vi.fn(), getGenericProfileRevision: vi.fn(), listGenericProfiles: vi.fn(), getProfileMappingOptions: vi.fn() }))
+vi.mock('@/services/genericProfileService', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/genericProfileService')>(),
+  validateGenericProfile: profileMocks.validateGenericProfile,
+  getGenericProfile: profileMocks.getGenericProfile,
+  getGenericProfileRevision: profileMocks.getGenericProfileRevision,
+  listGenericProfiles: profileMocks.listGenericProfiles,
+  getProfileMappingOptions: profileMocks.getProfileMappingOptions,
 }))
 
 const authMocks = vi.hoisted(() => ({
@@ -199,20 +220,8 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
     is_active: true,
     created_at: '2026-02-23T00:00:00Z',
     updated_at: '2026-02-23T00:00:00Z',
+    execution_revision_id: 'version-2',
     ...overrides,
-  }
-}
-
-function buildVersion(version: number, notes?: string): CustomAgentVersion {
-  return {
-    id: `version-${version}`,
-    custom_agent_id: '11111111-1111-1111-1111-111111111111',
-    version,
-    custom_prompt: 'Prompt',
-    group_prompt_overrides: {},
-    allowed_group_ids: [],
-    notes,
-    created_at: `2026-02-2${version}T00:00:00Z`,
   }
 }
 
@@ -255,7 +264,7 @@ async function saveFromHeader(note?: string): Promise<void> {
 }
 
 async function selectOption(comboboxName: string, optionName: string | RegExp): Promise<void> {
-  fireEvent.mouseDown(screen.getByRole('combobox', { name: comboboxName }))
+  fireEvent.mouseDown(await screen.findByRole('combobox', { name: comboboxName }))
   fireEvent.click(await screen.findByRole('option', { name: optionName }))
 }
 
@@ -388,6 +397,7 @@ describe('PromptWorkshop', () => {
   ]
 
   beforeEach(() => {
+  localStorage.clear()
     authMocks.user = {
       uid: 'doug-test-user',
       email: 'doughowe@uoregon.edu',
@@ -397,6 +407,8 @@ describe('PromptWorkshop', () => {
     }
     metadataMocks.agents = {}
     Object.values(serviceMocks).forEach((mock) => mock.mockReset())
+    Object.values(profileMocks).forEach((mock) => mock.mockReset())
+    profileMocks.validateGenericProfile.mockResolvedValue({ fingerprint: 'validated' })
     metadataMocks.refresh.mockReset()
 
     metadataMocks.refresh.mockResolvedValue(undefined)
@@ -404,9 +416,13 @@ describe('PromptWorkshop', () => {
     serviceMocks.fetchToolLibrary.mockResolvedValue(toolLibrary)
     serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates, group_options: groupOptions })
     serviceMocks.listToolIdeaRequests.mockResolvedValue({ tool_ideas: [], total: 0 })
-    serviceMocks.listCustomAgentVersions.mockResolvedValue([])
+    serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [], next_before_revision: null })
+    serviceMocks.getAgentExecutionRevision.mockImplementation(async (agentId: string, revisionId: string) => ({
+      ...buildVersion(2), id: revisionId, agent_id: agentId,
+    }))
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [], total: 0 })
     serviceMocks.createCustomAgent.mockResolvedValue(buildCustomAgent())
+    serviceMocks.getWorkshopSavedReference.mockResolvedValue({ agent_id: buildCustomAgent().agent_id })
     serviceMocks.setCustomAgentVisibility.mockResolvedValue(buildCustomAgent({ visibility: 'project' }))
     serviceMocks.submitToolIdeaRequest.mockResolvedValue({
       id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
@@ -425,6 +441,197 @@ describe('PromptWorkshop', () => {
 
   // ── Start screen and origin ──
 
+  it.each(['open_agent', 'clone', 'shared_clone'])('opens a Chat-requested %s draft without saving', async (mode) => {
+    const agent = buildCustomAgent()
+    const clone = mode !== 'open_agent'
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: mode === 'shared_clone' ? [] : [agent], total: mode === 'shared_clone' ? 0 : 1 })
+    const action: import('@/types/promptExplorer').WorkshopAction = {
+      success: true, contract_version: 'workshop_action.v1',
+      request: clone ? { action: 'new_agent', mode: 'clone', agent_id: agent.agent_id } : { action: 'open_agent', agent_id: agent.agent_id },
+      source: { agent_id: agent.agent_id, name: agent.name, updated_at: agent.updated_at, agent_revision_id: agent.execution_revision_id || null },
+      label: 'Open agent', origin: null, active_tab: 'agents', flow_draft_fingerprint: null, workshop_draft_fingerprint: null,
+      saved: false, message: 'Nothing saved.',
+    }
+    const complete = vi.fn()
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialChatAction={action} initialChatCloneSource={mode === 'shared_clone' ? agent : undefined} onInitialChatActionComplete={complete} authoringContextRef={ref} />)
+    await waitFor(() => expect(complete).toHaveBeenCalledTimes(1))
+    await waitFor(() => {
+      const draft = ref.current?.captureAuthoringContext()
+      if (clone) {
+        expect(draft?.getting_started_mode).toBe('clone')
+        expect(draft?.clone_source_agent_id).toBe(agent.agent_id)
+        expect(draft?.custom_agent_id).toBeFalsy()
+      } else expect(draft?.custom_agent_id).toBe(agent.agent_id)
+      expect(draft?.prompt_draft).toBe(agent.custom_prompt)
+    })
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Discard this name' } })
+    gotoSection('Prompt')
+    fireEvent.change(screen.getByLabelText('Your prompt'), { target: { value: 'Discard this prompt' } })
+    await act(async () => { expect(ref.current?.runChatAction(action, mode === 'shared_clone' ? agent : undefined)).toBe(true) })
+    await waitFor(() => {
+      expect(ref.current?.captureAuthoringContext().draft_name).not.toBe('Discard this name')
+      expect(ref.current?.captureAuthoringContext().prompt_draft).toBe(agent.custom_prompt)
+    })
+    if (!clone) return
+    const saveAction = { ...action, request: { action: 'save' as const } }
+    await act(async () => { expect(ref.current?.runChatAction(saveAction)).toBe(true) })
+    expect(await screen.findByRole('dialog', { name: /Save/ })).toBeInTheDocument()
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it('reauthorizes a shared clone before restoring its draft and blocks Chat until the choice', async () => {
+    const agent = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [], total: 0 })
+    serviceMocks.getWorkshopCloneSource.mockResolvedValue(agent)
+    const action: import('@/types/promptExplorer').WorkshopAction = {
+      success: true, contract_version: 'workshop_action.v1', request: { action: 'new_agent', mode: 'clone', agent_id: agent.agent_id },
+      source: { agent_id: agent.agent_id, name: agent.name, updated_at: agent.updated_at, agent_revision_id: agent.execution_revision_id || null },
+      label: 'Open agent', origin: null, active_tab: 'agents', flow_draft_fingerprint: null, workshop_draft_fingerprint: null,
+      saved: false, message: 'Nothing saved.',
+    }
+    const first = render(<PromptWorkshop catalog={buildCatalog()} initialChatAction={action} initialChatCloneSource={agent} />)
+    fireEvent.change(await screen.findByLabelText('Agent name'), { target: { value: 'My shared clone edits' } })
+    await screen.findByText(/Draft kept on this device/)
+    first.unmount()
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} authoringContextRef={ref} />)
+    await screen.findByRole('button', { name: 'Resume draft' })
+    await act(async () => { expect(ref.current!.runChatAction(action, agent)).toBe(false) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume draft' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Resume draft' }))
+    await waitFor(() => expect(screen.getByLabelText('Agent name')).toHaveValue('My shared clone edits'))
+    expect(serviceMocks.getWorkshopCloneSource).toHaveBeenCalledWith(agent.id)
+    expect(ref.current!.captureAuthoringContext().clone_source_agent_id).toBe(agent.agent_id)
+  })
+
+  it('browser Back returns from a detail to its table and Setup without losing field edits', async () => {
+    const navigationCatalog = buildCatalog()
+    function NavigationHarness() {
+      const [params, setParams] = useSearchParams()
+      const navigate = useNavigate()
+      return <><button onClick={() => navigate(-1)}>Browser Back</button>
+        <StudioNavigationContext.Provider value={{ params, navigate: changes => setParams(current => {
+          const next = new URLSearchParams(current)
+          for (const [key, value] of Object.entries(changes)) { if (value === null) next.delete(key); else next.set(key, value) }
+          return next
+        }) }}><PromptWorkshop catalog={navigationCatalog} /></StudioNavigationContext.Provider></>
+    }
+    render(<MemoryRouter initialEntries={['/agent-studio?workshop=setup']}><NavigationHarness /></MemoryRouter>)
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.click(screen.getByRole('button', { name: /^(Add|Edit) details to collect$/ }))
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Genetic regions' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose details to collect' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add a detail' }))
+    fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: 'Region name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
+    fireEvent.change(await screen.findByLabelText('Detail name'), { target: { value: 'Reported region' } })
+    fireEvent.click(screen.getByText('Browser Back'))
+    await screen.findByRole('heading', { name: 'What do you want to know about each item?' })
+    expect(screen.getByRole('table', { name: 'Details to collect' })).toHaveTextContent('Reported region')
+    fireEvent.click(screen.getByText('Browser Back'))
+    await screen.findByLabelText('Agent name')
+    expect(screen.getByRole('table', { name: 'Details to collect' })).toHaveTextContent('Reported region')
+    expect(screen.queryByRole('button', { name: 'Edit Reported region' })).not.toBeInTheDocument()
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it('recovers unsaved instructions and setup fields after leaving the page', async () => {
+    const first = render(<PromptWorkshop catalog={buildCatalog()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Recovered stock extractor' } })
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'My unsaved description' } })
+    gotoSection('Prompt')
+    fireEvent.change(screen.getByLabelText('Your prompt'), { target: { value: 'Preserve exact stock labels.' } })
+    await screen.findByText(/Draft kept on this device/)
+    first.unmount()
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+    const resume = await screen.findByRole('button', { name: 'Resume draft' })
+    await waitFor(() => expect(resume).toBeEnabled())
+    fireEvent.click(resume)
+    await waitFor(() => expect(screen.getByLabelText('Agent name')).toHaveValue('Recovered stock extractor'))
+    expect(screen.getByLabelText('Description')).toHaveValue('My unsaved description')
+    gotoSection('Prompt')
+    expect(screen.getByLabelText('Your prompt')).toHaveValue('Preserve exact stock labels.')
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it('starts custom extraction directly with the template tools and a fresh editable structure', async () => {
+    const catalog = buildCatalog()
+    catalog.categories[0].agents[0].agent_id = 'pdf_extraction'
+    catalog.categories[0].agents[0].agent_name = 'General PDF Extraction Agent'
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: [{ ...templates[0], agent_id: 'pdf_extraction', name: 'General PDF Extraction Agent', output_contract: { output_mode: 'unprofiled_generic' } }], group_options: [] })
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={catalog} authoringContextRef={ref} />)
+    const start = await screen.findByRole('button', { name: /^Custom data extraction/ })
+    await waitFor(() => expect(start).toBeEnabled())
+    fireEvent.click(start)
+    expect(await screen.findByText('What do you want to extract?')).toBeInTheDocument()
+    await waitFor(() => expect(ref.current?.captureAuthoringContext().draft_output?.mode).toBe('profile_bound_generic'))
+    expect(ref.current?.captureAuthoringContext().draft_tool_ids).toContain('search_document')
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it('continues a chat template start only after the custom output draft is ready', async () => {
+    const catalog = buildCatalog()
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    const onChatContinuation = vi.fn(() => {
+      expect(ref.current?.captureAuthoringContext().draft_name).toBe('Gene Specialist (Custom)')
+      expect(ref.current?.captureAuthoringContext().draft_output?.mode).toBe('profile_bound_generic')
+      expect(ref.current?.captureAuthoringContext().draft_tool_ids).toContain('search_document')
+    })
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: [{ ...templates[0], output_contract: { output_state: 'structured_extraction', output_mode: 'unprofiled_generic' } }], group_options: [] })
+    render(<PromptWorkshop catalog={catalog} authoringContextRef={ref} onChatContinuation={onChatContinuation} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    await act(async () => {
+      expect(ref.current?.runChatAction({ success: true, contract_version: 'workshop_action.v1',
+        request: { action: 'new_agent', mode: 'template', agent_id: 'gene' },
+        source: { agent_id: 'gene', name: 'Gene Specialist', updated_at: '', agent_revision_id: null },
+        label: 'Start agent draft', origin: null, active_tab: 'agent_workshop',
+        flow_draft_fingerprint: null, workshop_draft_fingerprint: null, saved: false, message: '',
+      })).toBe(true)
+    })
+    await waitFor(() => expect(onChatContinuation).toHaveBeenCalledTimes(1))
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+  })
+
+  it.each(['reset', 'saving'])('protects scratch lifecycle during %s', async (mode) => {
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} authoringContextRef={ref} />)
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Draft in progress' } })
+    gotoSection('Prompt')
+    fireEvent.change(screen.getByLabelText('Your prompt'), { target: { value: 'Draft instructions' } })
+    const action: import('@/types/promptExplorer').WorkshopAction = {
+      success: true, contract_version: 'workshop_action.v1', request: { action: 'new_agent', mode: 'scratch' },
+      label: 'Start agent draft', source: null, origin: null, active_tab: 'agent_workshop',
+      flow_draft_fingerprint: null, workshop_draft_fingerprint: null, saved: false, message: 'Nothing saved.',
+    }
+    if (mode === 'saving') {
+      const pending = createDeferred<CustomAgent>()
+      serviceMocks.createCustomAgent.mockReturnValue(pending.promise)
+      await saveFromHeader()
+      await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
+      expect(ref.current?.runChatAction(action)).toBe(false)
+      expect(ref.current?.captureAuthoringContext().draft_name).toBe('Draft in progress')
+      await act(async () => pending.resolve(buildCustomAgent()))
+    } else {
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled())
+      await act(async () => { expect(ref.current?.runChatAction(action)).toBe(true) })
+      await waitFor(() => {
+        expect(ref.current?.captureAuthoringContext().draft_name).toBe('')
+        expect(ref.current?.captureAuthoringContext().prompt_draft).toBe('')
+      })
+      expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    }
+  })
+
   it('opens on the start screen and lands on Setup with the chosen origin', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
 
@@ -438,6 +645,57 @@ describe('PromptWorkshop', () => {
     expect(screen.queryByRole('group', { name: 'Start a new agent' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Scratch' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByText('From scratch · Not saved yet')).toBeInTheDocument()
+  }, 15000)
+
+  it('captures the complete current draft immediately after an edit', async () => {
+    const authoringRef = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} authoringContextRef={authoringRef} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Immediate Agent' } })
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Exact description' } })
+    gotoSection('Prompt')
+    fireEvent.change(screen.getByLabelText('Your prompt'), {
+      target: { value: 'The latest prompt keystroke' },
+    })
+
+    const context = authoringRef.current!.captureAuthoringContext()
+    expect(context).toEqual(expect.objectContaining({
+      getting_started_mode: 'scratch',
+      draft_name: 'Immediate Agent',
+      draft_description: 'Exact description',
+      prompt_draft: 'The latest prompt keystroke',
+      draft_visibility: 'private',
+      draft_allowed_group_ids: [],
+      inherited_allowed_group_ids: [],
+      group_prompt_overrides: {},
+      draft_is_dirty: true,
+    }))
+    expect(context.draft_tool_ids).toEqual([])
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  }, 15000)
+
+  it('discusses an unnamed scratch draft without borrowing the default template identity', async () => {
+    const onVerifyRequest = vi.fn()
+    const authoringRef = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} authoringContextRef={authoringRef} />)
+    fireEvent.click(await screen.findByRole('button', { name: /From scratch/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat' }))
+    expect(onVerifyRequest).toHaveBeenLastCalledWith(expect.stringContaining('draft for "this agent draft"'))
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('Agent ID: unsaved_draft')
+    expect(onVerifyRequest.mock.calls[0][0]).not.toContain('Gene Specialist')
+    expect(authoringRef.current!.captureAuthoringContext()).toEqual(expect.objectContaining({
+      getting_started_mode: 'scratch',
+      template_source: undefined,
+      custom_agent_id: undefined,
+    }))
+
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'My new extractor' } })
+    gotoSection('Prompt')
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with AI Chat' }))
+    expect(onVerifyRequest).toHaveBeenLastCalledWith(expect.stringContaining('SYSTEM PROMPT for "My new extractor"'))
+    expect(onVerifyRequest.mock.calls[1][0]).toContain('Agent ID: unsaved_draft')
   }, 15000)
 
   it('lands on Setup with the template selector focused after From a template', async () => {
@@ -457,12 +715,34 @@ describe('PromptWorkshop', () => {
 
   // ── Saving ──
 
+  it('does not publish a Flow handoff or persist when Save is canceled', async () => {
+    const onChatContinuation = vi.fn()
+    const onSavedHandoff = vi.fn()
+    render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} onChatContinuation={onChatContinuation} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(onChatContinuation).not.toHaveBeenCalled()
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(onSavedHandoff).not.toHaveBeenCalled()
+    await waitForHeaderName('Gene Specialist (Custom)')
+  })
+
   it('saves new agents with template_source payload (no parent_agent_id)', async () => {
+    const ref = createRef<WorkshopAuthoringContextHandle>()
+    const onChatContinuation = vi.fn(() => {
+      expect(ref.current?.captureAuthoringContext().custom_agent_id).toBe(buildCustomAgent().agent_id)
+      expect(ref.current?.captureAuthoringContext().draft_name).toBe('My Agent')
+    })
+    const onSavedHandoff = vi.fn()
+    const origin = { flow_id: 'flow-1', flow_draft_fingerprint: 'sha256:original-flow' }
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [], total: 0 })
       .mockResolvedValue({ custom_agents: [buildCustomAgent()], total: 1 })
 
-    render(<PromptWorkshop catalog={buildCatalog()} />)
+    render(<PromptWorkshop catalog={buildCatalog()} continuationOrigin={origin} onSavedHandoff={onSavedHandoff} authoringContextRef={ref} onChatContinuation={onChatContinuation} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
 
@@ -484,12 +764,41 @@ describe('PromptWorkshop', () => {
     await waitForHeaderName('My Agent')
     expect(screen.getByRole('status')).toHaveTextContent('Saved just now')
     expect(screen.getByText('Template: Gene Specialist')).toBeInTheDocument()
+    await waitFor(() => expect(onChatContinuation).toHaveBeenCalledTimes(1))
+    expect(onSavedHandoff).toHaveBeenCalledWith({
+      status: 'ready', saved_agent_id: buildCustomAgent().agent_id,
+      saved_custom_agent_id: buildCustomAgent().id, origin,
+      saved_agent_revision_id: buildCustomAgent().execution_revision_id, saved_agent_name: buildCustomAgent().name,
+    })
   }, 15000)
+
+  it.each(['failure', 'unavailable'])('retains a saved identity when catalog refresh reports %s without emitting an actionable handoff', async (outcome) => {
+    const onChatContinuation = vi.fn()
+    const onSavedHandoff = vi.fn()
+    serviceMocks.listCustomAgents
+      .mockResolvedValue({ custom_agents: [], total: 0 })
+    render(<PromptWorkshop catalog={buildCatalog()} onSavedHandoff={onSavedHandoff} onChatContinuation={onChatContinuation} />)
+    await startFromTemplate()
+    await waitForHeaderName('Gene Specialist (Custom)')
+    if (outcome === 'failure') {
+      serviceMocks.listCustomAgents.mockRejectedValue(new Error('Private server payload'))
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSavedHandoff).toHaveBeenCalledWith({
+      status: 'catalog_unavailable', origin: undefined,
+    }))
+    await waitForHeaderName('My Agent')
+    expect(onChatContinuation).not.toHaveBeenCalled()
+    expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Private server payload')).not.toBeInTheDocument()
+  })
 
   it.each(['private', 'project'])('updates an owned %s agent with a note and changed sections', async (visibility) => {
     const existing = buildCustomAgent({ visibility, tool_ids: ['search_document'] })
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
-    serviceMocks.listCustomAgentVersions.mockResolvedValue([buildVersion(1, 'First'), buildVersion(2)])
+    serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [buildVersion(1), buildVersion(2)], next_before_revision: null })
     serviceMocks.updateCustomAgent.mockResolvedValue(existing)
 
     render(<PromptWorkshop catalog={buildCatalogWithGroupRule()} initialCustomAgentId={existing.id} />)
@@ -524,6 +833,7 @@ describe('PromptWorkshop', () => {
     await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledTimes(1))
     const [id, payload] = serviceMocks.updateCustomAgent.mock.calls[0]
     expect(id).toBe(existing.id)
+    expect(payload).not.toHaveProperty('output_schema_key')
     expect(payload.notes).toBe('Second pass')
     expect(payload.custom_prompt).toBe('Prompt with edits')
     expect(payload.group_prompt_overrides).toEqual({ WB: 'WB override' })
@@ -532,11 +842,13 @@ describe('PromptWorkshop', () => {
   }, 20000)
 
   it('shows the save-failed pill and keeps edits when the update rejects', async () => {
+    const onChatContinuation = vi.fn()
+    const onSavedHandoff = vi.fn()
     const existing = buildCustomAgent()
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
     serviceMocks.updateCustomAgent.mockRejectedValue(new Error('409: another curator saved version 3'))
 
-    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} onSavedHandoff={onSavedHandoff} onChatContinuation={onChatContinuation} />)
     await waitForHeaderName('My Agent')
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Changed description' } })
     await saveFromHeader()
@@ -545,6 +857,8 @@ describe('PromptWorkshop', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Could not save. 409: another curator saved version 3 Your edits are still here.')
     expect(screen.getByLabelText('Description')).toHaveValue('Changed description')
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+    expect(onChatContinuation).not.toHaveBeenCalled()
+    expect(onSavedHandoff).not.toHaveBeenCalled()
   }, 15000)
 
   it('uses canonical group options and warns before saving a restriction that excludes the owner', async () => {
@@ -651,8 +965,8 @@ describe('PromptWorkshop', () => {
     await saveFromHeader()
 
     await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(serviceMocks.setCustomAgentVisibility).toHaveBeenCalledTimes(1))
-    expect(serviceMocks.setCustomAgentVisibility).toHaveBeenCalledWith('ca_11111111-1111-1111-1111-111111111111', 'project')
+    expect(serviceMocks.createCustomAgent.mock.calls[0][0].visibility).toBe('project')
+    expect(serviceMocks.setCustomAgentVisibility).not.toHaveBeenCalled()
   }, 15000)
 
   it('saves selected reasoning for reasoning-capable models', async () => {
@@ -877,13 +1191,30 @@ describe('PromptWorkshop', () => {
     expect(dirtyEvent.defaultPrevented).toBe(true)
   }, 15000)
 
-  // ── Versions ──
-
-  it('lists versions with the current one marked and reverts after confirmation', async () => {
+  it('Save As clones the saved agent and does not clear an unchanged output contract', async () => {
     const existing = buildCustomAgent()
     serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
-    serviceMocks.listCustomAgentVersions.mockResolvedValue([buildVersion(1, 'First'), buildVersion(2, 'Second')])
-    serviceMocks.revertCustomAgentVersion.mockResolvedValue(existing)
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    await waitForHeaderName('My Agent')
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Save as/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Save as a new agent' })
+    fireEvent.change(within(dialog).getByLabelText('Agent name'), { target: { value: 'Saved copy' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save as' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledOnce())
+    const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
+    expect(payload).toMatchObject({ clone_source_agent_id: existing.agent_id,
+      clone_source_updated_at: existing.updated_at, name: 'Saved copy' })
+    expect(payload).not.toHaveProperty('output_schema_key')
+  }, 15000)
+
+  // ── Versions ──
+
+  it('lists complete configurations and restores the exact revision with an expected-head guard', async () => {
+    const existing = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [buildVersion(1), buildVersion(2)], next_before_revision: null })
+    serviceMocks.restoreAgentExecutionRevision.mockResolvedValue(existing)
 
     render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
     await waitForHeaderName('My Agent')
@@ -893,15 +1224,60 @@ describe('PromptWorkshop', () => {
     const rows = within(table).getAllByRole('row').slice(1)
     expect(rows[0]).toHaveTextContent('v2')
     expect(rows[0]).toHaveTextContent('Current')
-    fireEvent.click(within(rows[1]).getByRole('button', { name: 'Revert to version 1' }))
-    const confirm = await screen.findByRole('dialog', { name: 'Revert to version 1?' })
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Revert' }))
+    fireEvent.click(within(rows[1]).getByRole('button', { name: 'Restore configuration 1' }))
+    const confirm = await screen.findByRole('dialog', { name: 'Restore configuration 1?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Restore' }))
 
-    await waitFor(() => expect(serviceMocks.revertCustomAgentVersion).toHaveBeenCalledWith(existing.id, 1, undefined))
-    expect(await screen.findByText('Reverted to version 1')).toBeInTheDocument()
+    await waitFor(() => expect(serviceMocks.restoreAgentExecutionRevision).toHaveBeenCalledWith(existing.id, 'version-1', 'version-2'))
+    expect(await screen.findByText('Restored configuration 1 as a new version')).toBeInTheDocument()
   }, 15000)
 
   // ── Prompt layers and groups ──
+
+  it('loads older saved configurations and refreshes history after a restore', async () => {
+    const existing = buildCustomAgent()
+    const restored = buildCustomAgent({ execution_revision_id: 'version-3', updated_at: '2026-02-24T00:00:00Z' })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.listAgentExecutionRevisions.mockRejectedValueOnce(new Error('History temporarily unavailable'))
+      .mockResolvedValueOnce({ revisions: [buildVersion(2)], next_before_revision: 2 })
+      .mockRejectedValueOnce(new Error('Older history temporarily unavailable'))
+      .mockResolvedValueOnce({ revisions: [buildVersion(1)], next_before_revision: null })
+      .mockResolvedValue({ revisions: [buildVersion(3), buildVersion(2), buildVersion(1)], next_before_revision: null })
+    serviceMocks.restoreAgentExecutionRevision.mockResolvedValue(restored)
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    await waitForHeaderName('My Agent')
+    gotoSection('Versions')
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry loading configurations' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Load older configurations' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry loading configurations' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore configuration 1' }))
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [restored], total: 1 })
+    const confirm = await screen.findByRole('dialog', { name: 'Restore configuration 1?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Restore' }))
+    await waitFor(() => expect(serviceMocks.listAgentExecutionRevisions).toHaveBeenCalledWith(existing.id, 2))
+    await waitFor(() => {
+      const rows = within(screen.getByRole('table', { name: 'Version history' })).getAllByRole('row')
+      expect(rows[1]).toHaveTextContent('v3')
+      expect(rows[1]).toHaveTextContent('Current')
+    })
+  }, 15000)
+
+  it('keeps unsaved edits when a curator cancels restoration', async () => {
+    const existing = buildCustomAgent()
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.listAgentExecutionRevisions.mockResolvedValue({ revisions: [buildVersion(2), buildVersion(1)], next_before_revision: null })
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    await waitForHeaderName('My Agent')
+    fireEvent.change(screen.getByRole('textbox', { name: /Agent name/ }), { target: { value: 'Unsaved name' } })
+    gotoSection('Versions')
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore configuration 1' }))
+    const discard = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    fireEvent.click(within(discard).getByRole('button', { name: 'Keep editing' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument())
+    expect(serviceMocks.restoreAgentExecutionRevision).not.toHaveBeenCalled()
+    gotoSection('Setup')
+    expect(screen.getByRole('textbox', { name: /Agent name/ })).toHaveValue('Unsaved name')
+  }, 15000)
 
   it('shows locked inherited layers read-only inside the Prompt section', async () => {
     render(<PromptWorkshop catalog={buildCatalogWithPromptLayers()} />)
@@ -909,7 +1285,7 @@ describe('PromptWorkshop', () => {
     await waitForHeaderName('Gene Specialist (Custom)')
 
     gotoSection('Prompt')
-    expect(screen.getByLabelText('Your prompt')).toHaveValue('System base prompt')
+    expect(screen.getByLabelText('Your prompt')).toHaveValue('')
 
     fireEvent.click(screen.getByRole('button', { name: /^Built-in, read-only/ }))
     expect(screen.getByRole('region', { name: 'Built-in layer, read-only' })).toHaveTextContent('Locked core contract')
@@ -947,7 +1323,7 @@ describe('PromptWorkshop', () => {
     fireEvent.change(screen.getByLabelText('Your prompt'), { target: { value: 'Rewritten' } })
     expect(screen.getByRole('status')).toHaveTextContent('Unsaved changes')
     fireEvent.click(screen.getAllByRole('button', { name: 'Reset to template' })[0])
-    expect(screen.getByLabelText('Your prompt')).toHaveValue('System base prompt')
+    expect(screen.getByLabelText('Your prompt')).toHaveValue('')
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   }, 15000)
 
@@ -1064,11 +1440,13 @@ describe('PromptWorkshop', () => {
   // ── Setup: envelope, model guidance, missing template ──
 
   it('shows the envelope as one line with a working View envelope link', async () => {
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({ templates: templates.map((template) => ({ ...template, output_schema_key: 'gene', output_contract: { output_state: 'structured_extraction', output_mode: 'domain', output_schema_key: 'gene' } })), group_options: groupOptions })
     metadataMocks.agents = {
       gene: {
         name: 'Gene Specialist',
         icon: 'G',
         category: 'Validation',
+        output_schema_key: 'gene',
         domain_envelope: buildDomainEnvelopeMetadata(),
       },
     }
@@ -1085,9 +1463,11 @@ describe('PromptWorkshop', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'View envelope' }))
     expect(onViewEnvelope).toHaveBeenCalledWith('gene')
+    fireEvent.click(screen.getByRole('radio', { name: 'No structured output' }))
+    expect(screen.queryByRole('button', { name: 'View envelope' })).not.toBeInTheDocument()
   }, 15000)
 
-  it('opens a model-selection guidance request with Claude from the model helper line', async () => {
+  it('opens a model-selection guidance request with AI Chat from the model helper line', async () => {
     const onVerifyRequest = vi.fn()
     render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} />)
     await startFromTemplate()
@@ -1099,7 +1479,7 @@ describe('PromptWorkshop', () => {
     expect(screen.getByText('Use for validation, lookups, utilities, and iterative drafting.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Confused about models/ })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude which model fits' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat which model fits' }))
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     const request = onVerifyRequest.mock.calls[0][0]
     expect(request).toContain('Help me choose the best model settings')
@@ -1150,7 +1530,7 @@ describe('PromptWorkshop', () => {
     expect(within(nav).getByRole('button', { name: 'Tools, 2 attached, unsaved edits' })).toBeInTheDocument()
   }, 25000)
 
-  it('submits tool requests to developers with the Claude conversation attached', async () => {
+  it('submits tool requests to developers with the AI Chat conversation attached', async () => {
     const opusConversation = [
       { role: 'user' as const, content: 'I need a GO enrichment helper', timestamp: '2026-02-23T01:00:00Z' },
       { role: 'assistant' as const, content: 'What should the output look like?', timestamp: '2026-02-23T01:00:05Z' },
@@ -1193,7 +1573,20 @@ describe('PromptWorkshop', () => {
     expect(list).toHaveTextContent('New')
   }, 25000)
 
-  // ── Claude handoffs ──
+  // ── AI Chat handoffs ──
+
+  it('discusses unsaved name edits with the saved agent identity', async () => {
+    const existing = buildCustomAgent({ name: 'Original Agent' })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    const onVerifyRequest = vi.fn()
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} onVerifyRequest={onVerifyRequest} />)
+    await waitForHeaderName('Original Agent')
+    fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Renamed draft' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat' }))
+    expect(onVerifyRequest).toHaveBeenLastCalledWith(expect.stringContaining('draft for "Renamed draft"'))
+    expect(onVerifyRequest.mock.calls[0][0]).toContain(`Agent ID: ${existing.agent_id}`)
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  }, 15000)
 
   it('opens a draft discussion request from the navigation Help group', async () => {
     const onVerifyRequest = vi.fn()
@@ -1201,129 +1594,438 @@ describe('PromptWorkshop', () => {
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat' }))
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('inspect current prompt/tool schemas')
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('draft for "Gene Specialist (Custom)"')
+    expect(onVerifyRequest.mock.calls[0][0]).toContain('Agent ID: unsaved_draft')
     expect(onVerifyRequest.mock.calls[0][0]).toContain('read_chunk span IDs')
     expect(onVerifyRequest.mock.calls[0][0]).toContain('record_evidence(span_ids)')
   }, 15000)
 
-  it('opens a system-prompt discussion request with Claude', async () => {
+  it('opens a system-prompt discussion request with AI Chat', async () => {
     const onVerifyRequest = vi.fn()
     render(<PromptWorkshop catalog={buildCatalog()} onVerifyRequest={onVerifyRequest} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
 
     gotoSection('Prompt')
-    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss prompt changes with AI Chat' }))
     expect(onVerifyRequest).toHaveBeenCalledTimes(1)
     expect(onVerifyRequest.mock.calls[0][0]).toContain('Help me improve the SYSTEM PROMPT')
     expect(onVerifyRequest.mock.calls[0][0]).toContain('record_evidence(span_ids)')
   })
 
-  it('hides the Claude entry points when no handoff is available', async () => {
+  it('hides the AI Chat entry points when no handoff is available', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
     await startFromTemplate()
     await waitForHeaderName('Gene Specialist (Custom)')
-    expect(screen.queryByRole('button', { name: 'Ask Claude' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Ask Claude which model fits' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ask AI Chat' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ask AI Chat which model fits' })).not.toBeInTheDocument()
   })
 
-  // ── Incoming Claude prompt proposals ──
+  it.each([undefined, 'gene'])('applies a complete reviewed proposal without saving and supports Undo (template %s)', async (templateId) => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId={templateId} authoringContextRef={handle} />)
+    await waitFor(() => expect(handle.current?.captureAuthoringContext().draft_model_id).toBeTruthy())
+    if (templateId) await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    // The compiler fills the configured default when select_model omits reasoning.
+    const candidate = {
+      ...base, draft_name: 'Reviewed reader', draft_description: 'Reviewed description',
+      prompt_draft: 'Read evidence.', draft_model_id: 'gpt-5.6-sol', draft_model_reasoning: 'medium',
+    }
+    const result = await act(async () => handle.current!.applyAuthoringProposal({
+      contract_version: 'workshop_authoring_proposal.v1',
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base),
+      candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Rename the reader', diff: [], findings: [],
+    }))
+    expect(result.applied).toBe(true)
+    expect(handle.current!.captureAuthoringContext().draft_name).toBe('Reviewed reader')
+    expect(handle.current!.captureAuthoringContext().draft_model_reasoning).toBe('medium')
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.setCustomAgentVisibility).not.toHaveBeenCalled()
+    expect(serviceMocks.validateWorkshopDraft.mock.calls.map((call) => call[1])).toEqual(['pre_apply', 'post_apply'])
+    fireEvent.click(screen.getByRole('button', { name: 'Undo AI changes' }))
+    expect(handle.current!.captureAuthoringContext().draft_name).toBe(base.draft_name)
+  })
 
-  it('applies incoming prompt updates from Opus approval into the workshop draft', async () => {
-    const { rerender } = render(<PromptWorkshop catalog={buildCatalog()} incomingPromptUpdate={null} />)
-    await startFromTemplate()
+  it('applies a profile candidate through the shared adapter and undoes it without saving', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
     await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = structuredClone(base)
+    candidate.draft_output = { mode: 'profile_bound_generic', schemaKey: '', profilePin: null,
+      profileContract: { name: 'Collected details', semantic_class: 'item', fields: [
+        { key: 'paper_labels', required: true, nullable: false, source_labels: ['Paper names'], value_schema: { kind: 'array', items: { kind: 'string' } } },
+      ] } }
+    candidate.draft_output_schema_key = undefined
+    const proposal = { contract_version: 'workshop_authoring_proposal.v1' as const,
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base), candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Collect names', diff: [], findings: [] }
+    const applied = await act(async () => handle.current!.applyAuthoringProposal(proposal))
+    expect(applied.applied).toBe(true)
+    expect(handle.current!.captureAuthoringContext().draft_output).toEqual(candidate.draft_output)
+    expect(screen.getByRole('button', { name: /Output Structure, unsaved edits/ })).toBeInTheDocument()
+    const stale = await act(async () => handle.current!.applyAuthoringProposal(proposal))
+    expect(stale.applied).toBe(false)
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo AI changes' }))
+    expect(handle.current!.captureAuthoringContext().draft_output).toEqual(base.draft_output)
+    expect(candidate.draft_output.profileContract!.fields[0].source_labels).toEqual(['Paper names'])
+  })
 
-    rerender(
-      <PromptWorkshop
-        catalog={buildCatalog()}
-        incomingPromptUpdate={{
-          request_id: 1,
-          prompt: 'Updated prompt from Claude',
-          summary: 'Reworked structure and tightened extraction constraints.',
-          apply_mode: 'targeted_edit',
-        }}
-      />
-    )
+  it('shares live manual part edits with AI and applies the next parts proposal to the open editor', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = structuredClone(base)
+    candidate.draft_output = { mode: 'profile_bound_generic', schemaKey: '', profilePin: null,
+      profileContract: { name: 'Stocks', description: 'Only living stocks.', semantic_class: 'stock', fields: [
+        { key: 'stock_details', display_name: 'Stock details', value_schema: { kind: 'object', fields: [
+          { key: 'provider', display_name: 'Provider', value_schema: { kind: 'string' } },
+        ] } },
+      ] } }
+    candidate.draft_output_schema_key = undefined
+    const firstProposal = { contract_version: 'workshop_authoring_proposal.v1' as const,
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base), candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Collect stocks', diff: [], findings: [] }
+    await act(async () => handle.current!.applyAuthoringProposal(firstProposal))
+    fireEvent.click(screen.getByRole('button', { name: /Output Structure, unsaved edits/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Provider' }))
+    fireEvent.change(screen.getByLabelText('Detail name'), { target: { value: 'Supplier name' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Done — back to Stock details' })[0])
+    const live = handle.current!.captureAuthoringContext()
+    expect(live.draft_output?.profileContract?.fields[0].value_schema).toMatchObject({ fields: [
+      { key: 'provider', display_name: 'Supplier name' },
+    ] })
+    const next = structuredClone(live)
+    const stock = next.draft_output!.profileContract!.fields[0].value_schema
+    if (stock.kind !== 'object') throw new Error('Expected stock parts')
+    stock.fields.push({ key: 'detail_number', display_name: 'Stock number', required: true, nullable: false, value_schema: { kind: 'string' } })
+    const result = await act(async () => handle.current!.applyAuthoringProposal({
+      contract_version: 'workshop_authoring_proposal.v1', candidate: next,
+      base_draft_fingerprint: await fingerprintWorkshopDraft(live), candidate_draft_fingerprint: await fingerprintWorkshopDraft(next),
+      change_summary: 'Add stock number', diff: [], findings: [],
+    }))
+    expect(result.applied).toBe(true)
+    const table = screen.getByRole('table', { name: 'Parts of Stock details' })
+    expect(within(table).getByRole('rowheader', { name: 'Supplier name' })).toBeVisible()
+    expect(within(table).getByRole('checkbox', { name: 'Always include Stock number with this answer' })).toBeChecked()
+    expect(handle.current!.captureAuthoringContext().prompt_draft).toBe(base.prompt_draft)
+    expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+    expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
+  })
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Your prompt')).toHaveValue('Updated prompt from Claude')
+  it('saves an AI-selected exact profile pin without silently cloning its structure', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    serviceMocks.validateWorkshopDraft.mockResolvedValue({ valid: true, findings: [] })
+    const pin = { profile_id: 'shared-profile', profile_revision_id: 'shared-revision', revision: 3, fingerprint: 'sha256:exact' }
+    const contract = { name: 'Shared details', semantic_class: 'item', fields: [] }
+    const revision = { id: pin.profile_revision_id, profile_id: pin.profile_id, revision: pin.revision, fingerprint: pin.fingerprint, contract }
+    profileMocks.getGenericProfile.mockResolvedValue({ profile: { id: pin.profile_id }, revision, can_edit: false })
+    profileMocks.getGenericProfileRevision.mockResolvedValue(revision)
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = structuredClone(base)
+    candidate.draft_output = { mode: 'profile_bound_generic', schemaKey: '', profilePin: pin, profileContract: contract }
+    candidate.draft_output_schema_key = undefined
+    const result = await act(async () => handle.current!.applyAuthoringProposal({
+      contract_version: 'workshop_authoring_proposal.v1', candidate, change_summary: 'Reuse the shared structure', diff: [], findings: [],
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base), candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+    }))
+    expect(result.applied).toBe(true)
+    expect(profileMocks.getGenericProfileRevision).toHaveBeenCalledWith(pin.profile_id, 3)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalled())
+    const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
+    expect(payload.output_contract.generic_profile_ref).toEqual(pin)
+    expect(payload.new_generic_profile).toBeUndefined()
+    expect(payload.revise_generic_profile).toBeUndefined()
+  })
+
+  it('rejects stale proposals and rolls back post-apply validation failure', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = { ...base, draft_name: 'Rejected reader' }
+    const proposal = {
+      contract_version: 'workshop_authoring_proposal.v1' as const,
+      base_draft_fingerprint: 'sha256:stale',
+      candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Rename', diff: [], findings: [],
+    }
+    const stale = await act(async () => handle.current!.applyAuthoringProposal(proposal))
+    expect(stale.applied).toBe(false)
+    expect(serviceMocks.validateWorkshopDraft).not.toHaveBeenCalled()
+    serviceMocks.validateWorkshopDraft
+      .mockResolvedValueOnce({ valid: true, findings: [] })
+      .mockResolvedValueOnce({ valid: false, findings: [] })
+    proposal.base_draft_fingerprint = await fingerprintWorkshopDraft(base)
+    const invalid = await act(async () => handle.current!.applyAuthoringProposal(proposal))
+    expect(invalid.applied).toBe(false)
+    expect(handle.current!.captureAuthoringContext().draft_name).toBe(base.draft_name)
+    expect(screen.queryByRole('button', { name: 'Undo AI changes' })).not.toBeInTheDocument()
+  })
+
+  it('locks the draft while validation is pending and leaves it unchanged on rejection', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    const validation = createDeferred<{ valid: boolean; findings: [] }>()
+    serviceMocks.validateWorkshopDraft.mockReturnValueOnce(validation.promise)
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const base = handle.current!.captureAuthoringContext()
+    const candidate = { ...base, draft_name: 'Proposed name' }
+    const proposal = {
+      contract_version: 'workshop_authoring_proposal.v1' as const,
+      base_draft_fingerprint: await fingerprintWorkshopDraft(base),
+      candidate_draft_fingerprint: await fingerprintWorkshopDraft(candidate),
+      candidate, change_summary: 'Rename', diff: [], findings: [],
+    }
+    let applying!: ReturnType<WorkshopAuthoringContextHandle['applyAuthoringProposal']>
+    act(() => { applying = handle.current!.applyAuthoringProposal(proposal) })
+    await waitFor(() => expect(serviceMocks.validateWorkshopDraft).toHaveBeenCalled())
+    expect(screen.getByRole('group', { name: 'Workshop draft' })).toBeDisabled()
+    await act(async () => validation.resolve({ valid: false, findings: [] }))
+    expect((await applying).applied).toBe(false)
+    expect(handle.current!.captureAuthoringContext().draft_name).toBe(base.draft_name)
+  })
+
+  it('edits a custom Output Structure in the authoritative draft and saves without JSON', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const saving = createDeferred<never>()
+    serviceMocks.createCustomAgent.mockReturnValueOnce(saving.promise)
+    profileMocks.validateGenericProfile.mockResolvedValue({ fingerprint: 'validated' })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    const leave = createRef<WorkshopLeaveGuard>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} leaveGuardRef={leave} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    const before = handle.current!.captureAuthoringContext()
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.click(screen.getByRole('button', { name: /^(Add|Edit) details to collect$/ }))
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Collected details' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose details to collect' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add a detail' }))
+    fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: 'Name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
+    const after = handle.current!.captureAuthoringContext()
+    expect(after.draft_output?.profileContract?.name).toBe('Collected details')
+    expect(after.draft_output?.profileContract?.fields).toHaveLength(1)
+    expect(await fingerprintWorkshopDraft(after)).not.toBe(await fingerprintWorkshopDraft(before))
+    expect(screen.getByRole('button', { name: /Output Structure, unsaved edits/ })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /JSON/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledWith(expect.objectContaining({
+      new_generic_profile: expect.objectContaining({ name: 'Collected details', semantic_class: 'collected_details' }),
+    })))
+    expect(profileMocks.validateGenericProfile).toHaveBeenCalled()
+    const textAnswer = screen.getByRole('radio', { name: /^Text/, hidden: true })
+    expect(textAnswer).toBeDisabled()
+    expect(handle.current!.captureAuthoringContext().draft_output).toEqual(after.draft_output)
+    await act(async () => saving.reject(new Error('Save unavailable')))
+    await waitFor(() => expect(textAnswer).not.toBeDisabled())
+  })
+
+  it('carries a manually mapped validator through authoritative context, validation and Save without JSON', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const capabilityRef = { package_id: 'example', package_version: '1', domain_pack_id: 'record', domain_pack_version: '1', binding_id: 'lookup' }
+    profileMocks.getProfileMappingOptions.mockResolvedValue({
+      fields: [{ path: 'attributes.detail_new_field', display_name: 'New field', value_schema: { kind: 'string' }, required: false, nullable: false, array_domains: [] }],
+      capabilities: [{ capability_ref: capabilityRef, fingerprint: 'sha256:exact', state: 'active', selectable: true, diagnostics: [],
+        input_paths: { mention: ['attributes.detail_new_field'] }, output_paths: {},
+        metadata: { validator_binding_id: 'lookup', display_name: 'Identifier lookup',
+          custom_profile_reuse: { enabled: true,
+            inputs: { mention: { value_schema: { kind: 'string' }, required: true, nullable: false, allow_field: true, allow_constant: false, context_selector: null } },
+            outputs: {}, policy: { unresolved_default: 'requires_curator_review', unresolved_allowed: ['requires_curator_review'], readiness_default: false, readiness_allowed: [false] },
+            required_any_inputs: [], supports_whole_array: false, supports_element_fanout: false, requires_evidence: false, provider_input_slots: {},
+          },
+        },
+      }], next_cursor: null,
     })
-    expect(screen.getByText('Applied Claude update: Reworked structure and tightened extraction constraints.')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('Unsaved changes')
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.click(screen.getByRole('button', { name: /^(Add|Edit) details to collect$/ }))
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Mapped details' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose details to collect' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add a detail' }))
+    fireEvent.change(screen.getByLabelText('New detail name'), { target: { value: 'New field' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add detail' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to all details' }))
+    fireEvent.click(screen.getByRole('button', { name: 'All validator settings' }))
+    const before = handle.current!.captureAuthoringContext()
+    fireEvent.click(screen.getByRole('button', { name: 'Find compatible validators' }))
+    fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Find validators for canonical field' }))
+    fireEvent.click(screen.getByRole('option', { name: 'New field · attributes.detail_new_field' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Map field to mention · Identifier lookup' }))
+    const mapped = handle.current!.captureAuthoringContext()
+    expect(mapped.draft_output?.profileContract?.validator_mappings).toEqual([{
+      mapping_id: 'validator_1', capability_ref: capabilityRef, capability_fingerprint: 'sha256:exact',
+      inputs: { mention: { source: 'field', field_path: 'attributes.detail_new_field' } }, outputs: {}, mode: 'whole',
+      policy: { unresolved: 'requires_curator_review', blocks_readiness: false },
+    }])
+    expect(await fingerprintWorkshopDraft(mapped)).not.toBe(await fingerprintWorkshopDraft(before))
+    expect(screen.queryByRole('textbox', { name: /JSON/i })).not.toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'All validator settings' }), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'All validator settings' })).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledWith(expect.objectContaining({
+      new_generic_profile: mapped.draft_output!.profileContract,
+    })))
+    expect(profileMocks.validateGenericProfile).toHaveBeenCalledWith(mapped.draft_output!.profileContract)
   })
 
-  it('preserves incoming prompt updates when workshop bootstrap finishes after approval', async () => {
-    const modelOptionsDeferred = createDeferred<ModelOption[]>()
-    const toolLibraryDeferred = createDeferred<ToolLibraryItem[]>()
-    const templatesDeferred = createDeferred<{ templates: AgentTemplate[]; group_options: GroupOption[] }>()
-    const customAgentsDeferred = createDeferred<{ custom_agents: CustomAgent[]; total: number }>()
-
-    serviceMocks.fetchModelOptions.mockImplementation(() => modelOptionsDeferred.promise)
-    serviceMocks.fetchToolLibrary.mockImplementation(() => toolLibraryDeferred.promise)
-    serviceMocks.fetchAgentTemplates.mockImplementation(() => templatesDeferred.promise)
-    serviceMocks.listCustomAgents.mockImplementation(() => customAgentsDeferred.promise)
-
-    const { rerender } = render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" incomingPromptUpdate={null} />)
-
-    rerender(
-      <PromptWorkshop
-        catalog={buildCatalog()}
-        initialParentAgentId="gene"
-        incomingPromptUpdate={{
-          request_id: 3,
-          prompt: 'Late-arriving update from Claude',
-          summary: 'Applied after workshop bootstrap finished.',
-          apply_mode: 'targeted_edit',
-        }}
-      />
-    )
-
-    modelOptionsDeferred.resolve(modelOptions)
-    toolLibraryDeferred.resolve(toolLibrary)
-    templatesDeferred.resolve({ templates, group_options: groupOptions })
-    customAgentsDeferred.resolve({ custom_agents: [], total: 0 })
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Your prompt')).toHaveValue('Late-arriving update from Claude')
-    }, { timeout: 10000 })
-    expect(screen.getByText('Applied Claude update: Applied after workshop bootstrap finished.')).toBeInTheDocument()
-  }, 15000)
-
-  it('applies incoming group prompt updates from Opus approval into group overrides', async () => {
-    const onContextChange = vi.fn()
-    const { rerender } = render(
-      <PromptWorkshop catalog={buildCatalogWithGroupRule()} initialParentAgentId="gene" incomingPromptUpdate={null} onContextChange={onContextChange} />
-    )
+  it('saves a manually selected packaged builder through the authoritative Workshop draft', async () => {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true })
+    const saving = createDeferred<never>()
+    serviceMocks.createCustomAgent.mockReturnValueOnce(saving.promise)
+    const ref = { package_id: 'fixture.package', agent_id: 'builder', domain_pack_id: 'fixture.domain' }
+    metadataMocks.agents = { builder: { name: 'Packaged builder', icon: '', category: 'Extraction', output_schema_key: null, domain_extraction_ref: ref } }
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
     await waitForHeaderName('Gene Specialist (Custom)')
+    const before = handle.current!.captureAuthoringContext()
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Output format' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Packaged domain format' }))
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Domain format' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Packaged builder — support details unavailable' }))
+    const after = handle.current!.captureAuthoringContext()
+    expect(after.draft_output?.domainExtractionRef).toEqual(ref)
+    expect(after.draft_output_schema_key).toBeUndefined()
+    expect(after.draft_output?.schemaKey).toBe('')
+    expect(await fingerprintWorkshopDraft(after)).not.toBe(await fingerprintWorkshopDraft(before))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledWith(expect.objectContaining({
+      output_contract: { output_state: 'structured_extraction', output_mode: 'domain', output_schema_key: null, domain_extraction_ref: ref },
+    })))
+    expect(profileMocks.validateGenericProfile).not.toHaveBeenCalled()
+    for (const name of ['Output format', 'Domain format']) {
+      const select = screen.getByRole('combobox', { name, hidden: true })
+      expect(select).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.mouseDown(select)
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    }
+    expect(handle.current!.captureAuthoringContext().draft_output).toEqual(after.draft_output)
+    await act(async () => saving.reject(new Error('Save unavailable')))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Output format' })).not.toHaveAttribute('aria-disabled', 'true'))
+  })
 
-    rerender(
-      <PromptWorkshop
-        catalog={buildCatalogWithGroupRule()}
-        initialParentAgentId="gene"
-        onContextChange={onContextChange}
-        incomingPromptUpdate={{
-          request_id: 2,
-          prompt: 'WB override from Claude',
-          summary: 'Updated WB-specific extraction guidance.',
-          apply_mode: 'replace',
-          target_prompt: 'group',
-          target_group_id: 'WB',
-        }}
-      />
-    )
+  it('initializes a builder template from its explicit output contract, not its null schema', async () => {
+    const ref = { package_id: 'fixture.package', agent_id: 'gene_builder', domain_pack_id: 'fixture.domain' }
+    serviceMocks.fetchAgentTemplates.mockResolvedValue({
+      templates: templates.map((template) => ({ ...template, output_schema_key: null,
+        output_contract: { output_state: 'structured_extraction', output_mode: 'domain', domain_extraction_ref: ref } })),
+      group_options: groupOptions,
+    })
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    expect(handle.current!.captureAuthoringContext().draft_output?.domainExtractionRef).toEqual(ref)
+    expect(screen.getByRole('radio', { name: 'Structured extraction' })).toBeChecked()
+    expect(screen.getByRole('combobox', { name: 'Domain format' })).toHaveTextContent('fixture.domain')
+  })
 
-    await waitFor(() => {
-      const contextSnapshots = onContextChange.mock.calls.map((call) => call[0])
-      expect(contextSnapshots).toContainEqual(
-        expect.objectContaining({ selected_group_id: 'WB', selected_group_prompt_draft: 'WB override from Claude' })
-      )
-    }, { timeout: 10000 })
-    expect(screen.getByRole('button', { name: 'WB, edited' })).toBeInTheDocument()
-    expect(screen.getByLabelText('WB instructions')).toHaveValue('WB override from Claude')
-  }, 15000)
+  it.each([true, false])('saves a loaded profile as an exact revision edit only when editable (%s)', async (canEdit) => {
+    const existing = buildCustomAgent()
+    const pin = { profile_id: 'profile-id', profile_revision_id: 'profile-revision-2', revision: 2, fingerprint: 'sha256:profile' }
+    const contract = { name: 'Saved structure', semantic_class: 'record', fields: [] }
+    const revision = { id: pin.profile_revision_id, profile_id: pin.profile_id, revision: 2, fingerprint: pin.fingerprint, contract }
+    profileMocks.getGenericProfile.mockResolvedValue({ can_edit: canEdit, revision, profile: { id: pin.profile_id } })
+    profileMocks.getGenericProfileRevision.mockResolvedValue(revision)
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [existing], total: 1 })
+    serviceMocks.getAgentExecutionRevision.mockImplementation(async () => ({
+      ...buildVersion(2), id: existing.execution_revision_id, agent_id: existing.id,
+      snapshot: { ...buildVersion(2).snapshot, output_contract: { output_state: 'structured_extraction', output_mode: 'profile_bound_generic', generic_profile_ref: pin } },
+    }))
+    serviceMocks.updateCustomAgent.mockRejectedValue(new Error('Profile changed since it was opened; compare or reload before saving'))
+    render(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId={existing.id} />)
+    await waitForHeaderName('My Agent')
+    fireEvent.click(screen.getByRole('button', { name: /^(Add|Edit) details to collect$/ }))
+    expect(screen.getByText(canEdit ? /Your changes will be saved as a new version/ : /Saving creates your own copy/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit item description' }))
+    fireEvent.change(screen.getByLabelText('Type of item'), { target: { value: 'Edited structure' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Describe the items to extract' })).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save as version/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.updateCustomAgent).toHaveBeenCalledOnce())
+    const payload = serviceMocks.updateCustomAgent.mock.calls[0][1]
+    if (canEdit) {
+      expect(payload.revise_generic_profile).toEqual({ base: pin, contract: { ...contract, name: 'Edited structure' } })
+      expect(payload).not.toHaveProperty('new_generic_profile')
+    } else {
+      expect(payload.new_generic_profile).toEqual({ ...contract, name: 'Edited structure' })
+      expect(payload).not.toHaveProperty('revise_generic_profile')
+    }
+    expect(payload.expected_revision_id).toBe(existing.execution_revision_id)
+    await screen.findByText(/Profile changed since it was opened/)
+    expect(await screen.findByRole('heading', { name: 'Edited structure' })).toBeVisible()
+  })
+
+  it.each([false, true])('selects an existing profile only while the opening draft is current (stale=%s)', async (stale) => {
+    const handle = createRef<WorkshopAuthoringContextHandle>()
+    const profile = { id: 'reuse-profile', name: 'Reusable details', head_revision: 3, semantic_class: 'detail' }
+    const revision = { id: 'reuse-revision-3', profile_id: profile.id, revision: 3, fingerprint: 'sha256:reuse',
+      contract: { name: 'Reusable details', semantic_class: 'detail', fields: [] } }
+    profileMocks.listGenericProfiles.mockResolvedValue({ profiles: [profile], next_cursor: null })
+    profileMocks.getGenericProfile.mockResolvedValue({ profile, revision, can_edit: false })
+    profileMocks.getGenericProfileRevision.mockResolvedValue(revision)
+    render(<PromptWorkshop catalog={buildCatalog()} initialParentAgentId="gene" authoringContextRef={handle} />)
+    await waitForHeaderName('Gene Specialist (Custom)')
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Keep my purpose' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Structured extraction' }))
+    fireEvent.click(screen.getByText('Advanced: reuse a saved structure'))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose existing Output Structure' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Reusable details · revision 3/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Use this revision' })).toBeEnabled())
+    if (stale) fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Changed during selection' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Use this revision' }))
+    if (stale) {
+      await screen.findByText(/draft changed while selecting a structure/)
+      expect(handle.current!.captureAuthoringContext().draft_description).toBe('Changed during selection')
+      expect(handle.current!.captureAuthoringContext().draft_output?.profilePin).toBeNull()
+      expect(serviceMocks.createCustomAgent).not.toHaveBeenCalled()
+      return
+    }
+    await screen.findByRole('heading', { name: 'Reusable details' })
+    const pin = { profile_id: profile.id, profile_revision_id: revision.id, revision: 3, fingerprint: revision.fingerprint }
+    expect(handle.current!.captureAuthoringContext().draft_output?.profilePin).toEqual(pin)
+    expect(handle.current!.captureAuthoringContext().draft_description).toBe('Keep my purpose')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const dialog = await screen.findByRole('dialog', { name: /Save new agent/ })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(serviceMocks.createCustomAgent).toHaveBeenCalledOnce())
+    const payload = serviceMocks.createCustomAgent.mock.calls[0][0]
+    expect(payload.output_contract).toEqual({ output_state: 'structured_extraction', output_mode: 'profile_bound_generic', generic_profile_ref: pin })
+    expect(payload).not.toHaveProperty('new_generic_profile')
+  })
 
   it('does not expose an Output Schema Key field anywhere in the workshop', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)
@@ -1353,7 +2055,7 @@ describe('PromptWorkshop', () => {
     expect(within(dialog).getByLabelText('Shared agent prompt')).toHaveAttribute('readonly')
     expect(within(dialog).getByText('Team agent · Read-only')).toBeInTheDocument()
     expect(within(dialog).queryByRole('button', { name: /^(Delete|Save|Share|Revert)( |$)/ })).not.toBeInTheDocument()
-    expect(serviceMocks.listCustomAgentVersions).not.toHaveBeenCalled()
+    expect(serviceMocks.listAgentExecutionRevisions).not.toHaveBeenCalled()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     fireEvent.click(await screen.findByRole('button', { name: 'More actions' }))
     fireEvent.click(await screen.findByRole('menuitem', { name: /Manage agents/ }))
@@ -1378,8 +2080,8 @@ describe('PromptWorkshop', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Clone to Workshop' }))
     await waitForHeaderName('Team agent (Copy)')
     expect(serviceMocks.cloneAgentToWorkshop).toHaveBeenCalledWith('ca_teammate')
-    expect(serviceMocks.listCustomAgentVersions).toHaveBeenCalledWith(copy.id)
-    expect(serviceMocks.listCustomAgentVersions).not.toHaveBeenCalledWith(teammate.id)
+    expect(serviceMocks.listAgentExecutionRevisions).toHaveBeenCalledWith(copy.id, undefined)
+    expect(serviceMocks.listAgentExecutionRevisions).not.toHaveBeenCalledWith(teammate.id, undefined)
     expect(screen.getByRole('combobox', { name: 'Visibility' })).toHaveTextContent('Private')
     fireEvent.change(screen.getByLabelText('Agent name'), { target: { value: 'Edited private copy' } })
     serviceMocks.updateCustomAgent.mockResolvedValue({ ...copy, name: 'Edited private copy' })
@@ -1404,7 +2106,7 @@ describe('PromptWorkshop', () => {
     await waitFor(() => expect(serviceMocks.cloneAgentToWorkshop).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Clone to Workshop' })).toBeEnabled())
     expect(within(dialog).getByText('Team agent · Read-only')).toBeInTheDocument()
-    expect(serviceMocks.listCustomAgentVersions).not.toHaveBeenCalled()
+    expect(serviceMocks.listAgentExecutionRevisions).not.toHaveBeenCalled()
     expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Open agent' })).not.toBeInTheDocument())
@@ -1444,7 +2146,7 @@ describe('PromptWorkshop', () => {
     expect(screen.queryByRole('heading', { name: 'Shared original' })).not.toBeInTheDocument()
     rerender(<PromptWorkshop catalog={buildCatalog()} initialCustomAgentId="non-member-private-agent" />)
     await waitFor(() => expect(serviceMocks.listCustomAgents.mock.calls.length).toBeGreaterThanOrEqual(4))
-    expect(serviceMocks.listCustomAgentVersions).not.toHaveBeenCalled()
+    expect(serviceMocks.listAgentExecutionRevisions).not.toHaveBeenCalled()
     expect(serviceMocks.cloneAgentToWorkshop).not.toHaveBeenCalled()
     expect(serviceMocks.updateCustomAgent).not.toHaveBeenCalled()
   })

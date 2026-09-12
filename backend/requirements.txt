@@ -18,7 +18,6 @@ pyjwt[crypto]>=2.8.0  # JWT token handling and JWKS validation
 openai
 tiktoken  # Token preflight checks for embedding limits
 openai-agents==0.17.4  # Exact, upgrade-gated pin. Bumps require dev_release_smoke.py PASS evidence because extractor/flow finalization depends on SDK behavior.
-anthropic>=0.87.0  # Anthropic SDK for Opus chat in Prompt Explorer
 aiohttp>=3.13.4  # Async HTTP client for PDFX service
 langfuse>=4.0.0,<5.0.0  # Observability for LLM applications (v4 API: start_as_current_observation + propagate_attributes)
 openinference-instrumentation-openai-agents==1.6.1  # Export OpenAI Agents SDK spans to Langfuse via OpenTelemetry.

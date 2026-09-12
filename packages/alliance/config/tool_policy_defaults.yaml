@@ -1,4 +1,485 @@
 tool_policies:
+
+  agr_species_context_lookup:
+    display_name: Species Context Lookup
+    description: Inherited species context lookup helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  search_domain_field_terms:
+    display_name: Search Domain Field Terms
+    description: Inherited search domain field terms helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  inspect_ontology_term:
+    display_name: Inspect Ontology Term
+    description: Inherited inspect ontology term helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  resolve_domain_field_term:
+    display_name: Resolve Domain Field Term
+    description: Inherited resolve domain field term helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_generic_object_classes:
+    display_name: List Generic Object Classes
+    description: Inherited list generic object classes helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  agr_literature_reference_lookup:
+    display_name: Literature Reference Lookup
+    description: Inherited literature reference lookup helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  stage_gene_expression_observation:
+    display_name: Stage Gene Expression Observation
+    description: Inherited stage gene expression observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  patch_gene_expression_observation:
+    display_name: Patch Gene Expression Observation
+    description: Inherited patch gene expression observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  discard_gene_expression_observation:
+    display_name: Discard Gene Expression Observation
+    description: Inherited discard gene expression observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_staged_gene_expression_observations:
+    display_name: List Staged Gene Expression Observations
+    description: Inherited list staged gene expression observations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  find_staged_gene_expression_observations:
+    display_name: Find Staged Gene Expression Observations
+    description: Inherited find staged gene expression observations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  finalize_gene_expression_extraction:
+    display_name: Finalize Gene Expression Extraction
+    description: Inherited finalize gene expression extraction helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  stage_gene_mention_evidence:
+    display_name: Stage Gene Mention Evidence
+    description: Inherited stage gene mention evidence helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  patch_gene_mention_evidence:
+    display_name: Patch Gene Mention Evidence
+    description: Inherited patch gene mention evidence helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  discard_gene_mention_evidence:
+    display_name: Discard Gene Mention Evidence
+    description: Inherited discard gene mention evidence helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_staged_gene_mention_evidence:
+    display_name: List Staged Gene Mention Evidence
+    description: Inherited list staged gene mention evidence helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  find_staged_gene_mention_evidence:
+    display_name: Find Staged Gene Mention Evidence
+    description: Inherited find staged gene mention evidence helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  finalize_gene_extraction:
+    display_name: Finalize Gene Extraction
+    description: Inherited finalize gene extraction helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  stage_generic_object:
+    display_name: Stage Generic Object
+    description: Inherited stage generic object helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  patch_generic_object:
+    display_name: Patch Generic Object
+    description: Inherited patch generic object helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  discard_generic_object:
+    display_name: Discard Generic Object
+    description: Inherited discard generic object helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_staged_generic_objects:
+    display_name: List Staged Generic Objects
+    description: Inherited list staged generic objects helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  find_staged_generic_objects:
+    display_name: Find Staged Generic Objects
+    description: Inherited find staged generic objects helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  finalize_generic_extraction:
+    display_name: Finalize Generic Extraction
+    description: Inherited finalize generic extraction helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  stage_allele_observation:
+    display_name: Stage Allele Observation
+    description: Inherited stage allele observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  patch_allele_observation:
+    display_name: Patch Allele Observation
+    description: Inherited patch allele observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  discard_allele_observation:
+    display_name: Discard Allele Observation
+    description: Inherited discard allele observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_staged_allele_observations:
+    display_name: List Staged Allele Observations
+    description: Inherited list staged allele observations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  find_staged_allele_observations:
+    display_name: Find Staged Allele Observations
+    description: Inherited find staged allele observations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  finalize_allele_extraction:
+    display_name: Finalize Allele Extraction
+    description: Inherited finalize allele extraction helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  stage_phenotype_observation:
+    display_name: Stage Phenotype Observation
+    description: Inherited stage phenotype observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  patch_phenotype_observation:
+    display_name: Patch Phenotype Observation
+    description: Inherited patch phenotype observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  discard_phenotype_observation:
+    display_name: Discard Phenotype Observation
+    description: Inherited discard phenotype observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_staged_phenotype_observations:
+    display_name: List Staged Phenotype Observations
+    description: Inherited list staged phenotype observations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  find_staged_phenotype_observations:
+    display_name: Find Staged Phenotype Observations
+    description: Inherited find staged phenotype observations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  finalize_phenotype_extraction:
+    display_name: Finalize Phenotype Extraction
+    description: Inherited finalize phenotype extraction helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  stage_disease_observation:
+    display_name: Stage Disease Observation
+    description: Inherited stage disease observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  patch_disease_observation:
+    display_name: Patch Disease Observation
+    description: Inherited patch disease observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  discard_disease_observation:
+    display_name: Discard Disease Observation
+    description: Inherited discard disease observation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_staged_disease_observations:
+    display_name: List Staged Disease Observations
+    description: Inherited list staged disease observations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  find_staged_disease_observations:
+    display_name: Find Staged Disease Observations
+    description: Inherited find staged disease observations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  finalize_disease_extraction:
+    display_name: Finalize Disease Extraction
+    description: Inherited finalize disease extraction helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  stage_go_recommendation:
+    display_name: Stage Go Recommendation
+    description: Inherited stage go recommendation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  patch_go_recommendation:
+    display_name: Patch Go Recommendation
+    description: Inherited patch go recommendation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  discard_go_recommendation:
+    display_name: Discard Go Recommendation
+    description: Inherited discard go recommendation helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_staged_go_recommendations:
+    display_name: List Staged Go Recommendations
+    description: Inherited list staged go recommendations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  find_staged_go_recommendations:
+    display_name: Find Staged Go Recommendations
+    description: Inherited find staged go recommendations helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  finalize_go_extraction:
+    display_name: Finalize Go Extraction
+    description: Inherited finalize go extraction helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
   search_document:
     display_name: Search Document
     description: Discovery search over the active document with auto/hybrid, lexical, or hybrid_lexical_first modes; use read_chunk on returned chunk IDs for final evidence span selection.

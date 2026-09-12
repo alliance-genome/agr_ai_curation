@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import cast
 
+import json
+
 import pytest
 from src.lib.curation_workspace.extraction_results import InlineExtractionPersistenceResult
 from src.lib.openai_agents import streaming_tools
@@ -240,3 +242,63 @@ def test_supervisor_extraction_handoff_treats_metadata_only_manifest_as_empty():
     assert handoff is not None
     assert handoff.result_status == "empty_extraction"
     assert handoff.object_count == 0
+
+
+@pytest.mark.parametrize("object_type,curie", [("Allele", "FIXTURE:allele-1"), ("PhenotypeTerm", "FIXTURE:phenotype-1")])
+def test_completed_validation_reaches_supervisor_without_exposing_reference_objects(object_type, curie):
+    payload = _payload(1)
+    result = {
+        "status": "resolved", "request_id": "validation-request-1",
+        "validator_binding_id": "identity",
+        "target": {"object_type": object_type, "object_id": "hidden-reference", "field_path": "curie", "input_values": {"quote": "PRIVATE QUOTE"}},
+        "resolved_values": {"curie": curie}, "missing_expected_fields": [],
+    }
+    finding = {"severity": "info", "status": "resolved", "message": "Resolved", "details": {"validation_result": result}}
+    payload["validation_findings"] = [finding, finding.copy()]
+    page = build_extraction_manifest_page(payload)
+    assert page["object_count"] == 1
+    summary = page["validator_results"]
+    assert summary["total"] == 1
+    assert summary["status_counts"] == {"resolved": 1}
+    assert summary["results"][0]["resolved_values"]["curie"] == curie
+    rendered = streaming_tools._reduce_specialist_output_for_supervisor(
+        json.dumps(payload), expected_output_type=None, finalized_domain_envelope=True,
+    )
+    assert curie in rendered
+    assert object_type in rendered
+    assert "PRIVATE QUOTE" not in rendered
+    assert "not submission readiness" in rendered
+
+
+def test_validation_summary_distinguishes_absence_and_unresolved_and_bounds_details(monkeypatch):
+    payload = _payload(1)
+    assert build_extraction_manifest_page(payload)["validator_results"]["status_counts"] == {}
+    payload["validation_findings"] = [
+        {"severity": "warning", "status": "open", "message": "Not resolved", "details": {"validation_result": {
+            "status": "unresolved", "request_id": str(index), "resolved_values": {}, "missing_expected_fields": ["curie"],
+        }}} for index in range(3)
+    ]
+    monkeypatch.setenv("SUPERVISOR_MANIFEST_PAGE_SIZE", "1")
+    monkeypatch.setenv("SUPERVISOR_FIELD_TEXT_LIMIT", "20")
+    summary = build_extraction_manifest_page(payload)["validator_results"]
+    assert summary["total"] == 3
+    assert summary["status_counts"] == {"unresolved": 3}
+    assert summary["details_complete"] is False
+    assert summary["results"] == [{"status": "unresolved", "open_finding": True, "details_omitted": True}]
+
+
+def test_duplicate_validator_findings_keep_rejected_writeback():
+    payload = _payload(1)
+    result = {"status": "resolved", "request_id": "same-request", "resolved_values": {"curie": "FIXTURE:allele-1"}}
+    payload["validation_findings"] = [
+        {"severity": "info", "status": "resolved", "message": "Proposed identity", "details": {"validation_result": result}},
+        {"severity": "blocker", "status": "open", "message": "Rejected", "code": "domain_pack.validator_materialization_invalid",
+         "details": {"validation_result": result, "materialization": "rejected"}},
+    ]
+    page = build_extraction_manifest_page(payload)
+    assert page["validator_results"]["total"] == 1
+    decision = page["validator_results"]["results"][0]
+    assert decision["writeback_rejected"] is True
+    assert decision["open_finding"] is True
+    assert page["validation"]["error_count"] == 1
+    assert "must not be described as an accepted identity" in render_extraction_manifest_page(page)

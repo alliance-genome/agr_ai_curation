@@ -36,7 +36,9 @@ class RuntimeOverridesError(PackageContractError):
 def _load_yaml_mapping(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle)
+            # Tool exports contain large schemas; use LibYAML with the same
+            # safe constructors, without caching mutable package contracts.
+            data = yaml.load(handle, Loader=yaml.CSafeLoader)
     except FileNotFoundError as exc:
         raise PackageContractError(f"Contract file not found: {path}") from exc
     except yaml.YAMLError as exc:

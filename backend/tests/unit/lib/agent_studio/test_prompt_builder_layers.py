@@ -176,7 +176,13 @@ def test_flow_context_requires_complete_targeted_verification_evidence(monkeypat
     assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
     assert 'view="effective_prompt"' in prompt
     assert '`compacted_tool_result`' in prompt
-    assert "every present `custom_instructions`" in prompt
+    assert "every nonempty active `custom_instructions`" in prompt
+    assert 'get_current_flow_topology(section="all")' in prompt
+    assert 'view="complete_plan"' in prompt
+    assert "verification INCOMPLETE" in prompt
+    assert 'section="prompt_manifest"' in prompt
+    assert "never substitute the template prompt" in prompt
+    assert 'click "Choose output fields"' in prompt
     assert "returned `next_call` until `complete=true`" in prompt
     assert "`next_call` through ordinary pages and exact record chunks until" in prompt
     assert "`truncated=false` and no `next_cursor` remains" in prompt
@@ -184,3 +190,31 @@ def test_flow_context_requires_complete_targeted_verification_evidence(monkeypat
     assert "method/PDF-level `get_tool_details(tool_id, agent_id)`" in prompt
     assert "Output agents are attachment branches with ordered `source_steps`" in prompt
     assert "Duplicate `output_key` is HIGH unless authoritative validation" in prompt
+
+
+def test_flow_authoring_guidance_preserves_incremental_choices_and_explicit_override(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.agent_studio.prompt_builder.build_package_diagnostic_tools_prompt",
+        lambda: "DIAGNOSTIC TOOLS",
+    )
+    prompt = build_opus_system_prompt(
+        ChatContext.model_validate({"active_tab": "flows"}),
+        load_template=lambda: "{{USER_GREETING}}\n{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        list_model_definitions=lambda: [],
+        get_prompt_catalog=lambda: None,
+        prepare_trace_context=lambda _trace_id: None,
+    )
+    for instruction in (
+        "guide a conversation one decision at a time",
+        "just Initial Instructions",
+        "explicitly requests a complete",
+        "After Cancel or a failed Apply",
+        "explicit Save",
+        "pre-made agent",
+        "never interpret that as\n  no output step",
+        "what the output should contain, not just its file type",
+        "custom_instructions",
+        "compare the curator's requested information",
+        "changing its prompt alone does not extend its fixed",
+    ):
+        assert instruction in prompt

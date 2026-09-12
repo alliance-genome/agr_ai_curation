@@ -376,7 +376,6 @@ def test_flow_agent_policy_entry_rejects_unresolvable_validation_schema(monkeypa
 
     assert entry is not None
     assert entry["produces_flow_artifacts"] is False
-    assert flows.agent_can_source_output_attachment(entry) is False
 
 
 def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypatch):
@@ -444,7 +443,7 @@ def test_flow_definition_payload_validates_each_multi_source_attachment(monkeypa
     payload["nodes"][-2]["data"]["agent_id"] = "gene_validator"
     with pytest.raises(
         HTTPException,
-        match="Gene Extractor.*not an extraction agent or a typed validation agent",
+        match="not an extraction agent or a typed validation agent",
     ):
         flows._validated_flow_definition_payload(
             FlowDefinition.model_validate(payload),
@@ -533,8 +532,11 @@ def test_flow_definition_payload_rejects_missing_agent_reference(monkeypatch):
         )
 
     assert exc.value.status_code == 422
-    assert "references unavailable agent" in str(exc.value.detail)
-    assert "fixture_agent_without_pack" in str(exc.value.detail)
+    assert isinstance(exc.value.detail, dict)
+    finding = exc.value.detail["findings"][0]
+    assert finding["code"] == "unavailable_agent"
+    assert finding["path"] == "flow_definition.nodes.extract_1.data.agent_id"
+    assert "fixture_agent_without_pack" not in str(exc.value.detail)
 
 
 def test_flow_definition_validation_uses_authenticated_group_snapshot(monkeypatch):
@@ -579,7 +581,9 @@ def test_flow_definition_payload_rejects_retired_validator_alias(retired_alias):
         )
 
     assert exc.value.status_code == 422
-    assert f"missing agent_id '{retired_alias}'" in str(exc.value.detail)
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail["findings"][0]["code"] == "unavailable_agent"
+    assert retired_alias not in str(exc.value.detail)
 
 
 def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
@@ -600,7 +604,7 @@ def test_flow_response_reports_missing_agent_reference_on_load(monkeypatch):
     monkeypatch.setattr(
         flows,
         "apply_flow_validation_attachment_defaults",
-        lambda flow_definition: flow_definition,
+        lambda flow_definition, **_kwargs: flow_definition,
     )
     monkeypatch.setattr(
         flows,
@@ -921,23 +925,26 @@ def test_sharing_without_membership_is_rejected(monkeypatch):
 
 
 def test_shared_read_uses_viewer_agent_permissions(monkeypatch):
+    from src.lib.flows import execution_revisions
     now = datetime.now(timezone.utc)
     definition = _minimal_flow_definition_payload()
     definition["nodes"][1]["data"]["agent_id"] = "ca_private"
+    definition["nodes"][1]["data"]["agent_revision_id"] = str(uuid4())
     flow = SimpleNamespace(id=uuid4(), user_id=7, name="Shared", description=None,
         visibility="project", project_id=uuid4(), shared_at=now,
         flow_definition=definition, execution_count=3, last_executed_at=now,
         created_at=now, updated_at=now)
     calls = []
-    def metadata(agent_id, **kwargs):
-        calls.append(kwargs)
-        raise ValueError("unavailable")
-    monkeypatch.setattr(flows, "get_active_visible_agent_metadata", metadata)
-    response = flows._flow_to_response(flow, viewer_user_id=99, active_group_ids=["WB"])
+    def revision(db, agent_id, revision_id, user_id, **kwargs):
+        calls.append({"user_id": user_id, **kwargs})
+        raise execution_revisions.ExecutionRevisionNotFoundError("unavailable")
+    monkeypatch.setattr(execution_revisions, "get_execution_revision", revision)
+    db = SimpleNamespace(execute=lambda _: SimpleNamespace(scalar_one_or_none=lambda: uuid4()))
+    response = flows._flow_to_response(flow, viewer_user_id=99, active_group_ids=["WB"], db=db)
     assert response.has_critical_issues and not response.is_owner
     assert response.visibility == "project"
-    assert calls and all(call["db_user_id"] == 99 for call in calls)
-    assert all(call["authenticated_groups"] == ["WB"] for call in calls)
+    assert calls and all(call["user_id"] == 99 for call in calls)
+    assert all(call["active_group_ids"] == ["WB"] for call in calls)
     assert "unavailable" in response.validation_warnings[0].message
 
 

@@ -8,7 +8,7 @@
  * under the app bar or over the Claude pane.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { Box, IconButton, Tooltip, Typography } from '@mui/material'
 import { alpha } from '@mui/material/styles'
@@ -124,7 +124,7 @@ function NodePanelDock({ mode, collapsed, areaWidth, railLabel, onExpand, onClos
           boxShadow: 8,
         }}
       >
-        {children}
+        <Fragment key="step-editor">{children}</Fragment>
       </Box>
     )
   }
@@ -215,7 +215,7 @@ function NodePanelDock({ mode, collapsed, areaWidth, railLabel, onExpand, onClos
           },
         }}
       />
-      {children}
+      <Fragment key="step-editor">{children}</Fragment>
     </Box>
   )
 }

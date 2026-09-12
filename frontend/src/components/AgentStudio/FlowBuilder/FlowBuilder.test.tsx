@@ -1,10 +1,14 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
+import { webcrypto } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import FlowBuilder, { rebuildValidationGroupsFromEdges } from './FlowBuilder'
-import type { AgentNodeData, FlowResponse } from './types'
+import type { NodePanelAuthoringDraft } from './NodePanel'
+import type { AgentNodeData, FlowAuthoringContextHandle, FlowResponse } from './types'
+import type { ChatContext, FlowAuthoringProposal } from '@/types/promptExplorer'
+import { fingerprintFlowDraft } from '../authoringContext'
 
 const serviceMocks = vi.hoisted(() => ({
   createFlow: vi.fn(),
@@ -14,6 +18,7 @@ const serviceMocks = vi.hoisted(() => ({
   deleteFlow: vi.fn(),
   shareFlow: vi.fn(),
   cloneFlow: vi.fn(),
+  validateFlowDraft: vi.fn(),
 }))
 
 const invalidationMocks = vi.hoisted(() => ({
@@ -27,6 +32,12 @@ const agentMetadataMocks = vi.hoisted(() => ({
 const nodePanelMocks = vi.hoisted(() => ({
   requestLeave: vi.fn(),
   onApply: undefined as undefined | ((id: string, data: Partial<AgentNodeData>) => void),
+  captureAuthoringDraft: vi.fn(),
+  takeLastLeaveOutcome: vi.fn(),
+  dirty: false,
+  reportDraft: null as null | ((draft: NodePanelAuthoringDraft | null) => void),
+  reportDirty: null as null | ((dirty: boolean) => void),
+  apply: null as null | ((id: string, data: Partial<AgentNodeData>) => void),
 }))
 
 const reactFlowMocks = vi.hoisted(() => ({
@@ -47,6 +58,7 @@ vi.mock('@/services/agentStudioService', () => ({
   deleteFlow: serviceMocks.deleteFlow,
   shareFlow: serviceMocks.shareFlow,
   cloneFlow: serviceMocks.cloneFlow,
+  validateFlowDraft: serviceMocks.validateFlowDraft,
 }))
 
 vi.mock('@/features/flows/flowListInvalidation', () => ({
@@ -172,11 +184,7 @@ vi.mock('reactflow', async () => {
       const [nodes, setNodesState] = react.useState(normalizeNodes(initialNodes))
       const setNodes = (nextNodes: unknown[] | ((currentNodes: unknown[]) => unknown[])) => {
         setNodesState((currentNodes) =>
-          normalizeNodes(
-            typeof nextNodes === 'function'
-              ? nextNodes(currentNodes)
-              : nextNodes
-          )
+          typeof nextNodes === 'function' ? nextNodes(currentNodes) : nextNodes
         )
       }
 
@@ -206,16 +214,44 @@ vi.mock('./NodePanel', async (importOriginal) => {
   const react = await vi.importActual<typeof import('react')>('react')
   return {
     ...(await importOriginal<typeof import('./NodePanel')>()),
-    NodePanel: ({ leaveGuardRef, readOnly, onApply }: { leaveGuardRef?: { current: unknown }; readOnly?: boolean; onApply: (id: string, data: Partial<AgentNodeData>) => void }) => {
+    NodePanel: ({
+      leaveGuardRef,
+      readOnly,
+      node,
+      onDraftDirtyChange,
+      onDraftChange,
+      onApply,
+    }: {
+      readOnly?: boolean
+      leaveGuardRef?: { current: unknown }
+      node: { id: string; data: Record<string, unknown> }
+      onDraftDirtyChange?: (dirty: boolean) => void
+      onDraftChange?: (draft: NodePanelAuthoringDraft | null) => void
+      onApply: (id: string, data: Partial<AgentNodeData>) => void
+    }) => {
       nodePanelMocks.onApply = onApply
+      nodePanelMocks.apply = onApply
+      nodePanelMocks.reportDraft = onDraftChange ?? null
       react.useEffect(() => {
         if (!leaveGuardRef) return
-        const guard = { requestLeave: nodePanelMocks.requestLeave }
+        const guard = {
+          requestLeave: nodePanelMocks.requestLeave,
+          captureAuthoringDraft: () => nodePanelMocks.captureAuthoringDraft(node),
+          takeLastLeaveOutcome: nodePanelMocks.takeLastLeaveOutcome,
+        }
         leaveGuardRef.current = guard
         return () => {
           if (leaveGuardRef.current === guard) leaveGuardRef.current = null
         }
-      }, [leaveGuardRef])
+      }, [leaveGuardRef, node])
+      react.useEffect(() => {
+        nodePanelMocks.reportDirty = onDraftDirtyChange ?? null
+        onDraftDirtyChange?.(nodePanelMocks.dirty)
+        return () => {
+          nodePanelMocks.reportDirty = null
+          onDraftDirtyChange?.(false)
+        }
+      }, [onDraftDirtyChange])
       return <div data-testid="node-panel" data-readonly={readOnly} />
     },
   }
@@ -248,7 +284,7 @@ function buildFlowResponse(overrides: Partial<FlowResponse> = {}): FlowResponse 
           data: {
             agent_id: 'task_input',
             agent_display_name: 'Initial Instructions',
-            task_instructions: '',
+            task_instructions: 'Start the flow',
             custom_instructions: '',
             output_key: 'task_input',
           },
@@ -439,9 +475,10 @@ describe('FlowBuilder', () => {
       expect(within(screen.getByRole('dialog')).getByText('Renamed Flow')).toBeInTheDocument()
       await user.click(screen.getByRole('button', { name: 'Close' }))
     }
-    const discard = vi.spyOn(window, 'confirm').mockReturnValue(false)
     await user.click(await screen.findByRole('button', { name: 'New flow' }))
-    expect(discard).toHaveBeenCalledWith('Discard unsaved flow changes?')
+    const decision = await screen.findByRole('dialog', { name: 'Save this flow before continuing?' })
+    await user.click(within(decision).getByRole('button', { name: 'Keep editing' }))
+    await waitFor(() => expect(decision).not.toBeInTheDocument())
     expect(screen.getByText('Renamed Flow')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
     await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalledTimes(2))
@@ -457,10 +494,9 @@ describe('FlowBuilder', () => {
       }),
     }))
     await screen.findByText('Flow saved successfully')
-    discard.mockClear()
     await user.click(screen.getByRole('button', { name: 'New flow' }))
-    expect(discard).not.toHaveBeenCalled()
-    discard.mockRestore()
+    await screen.findByText('Untitled')
+    expect(screen.queryByRole('dialog', { name: 'Save this flow before continuing?' })).not.toBeInTheDocument()
     unmount()
     serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ name: 'Renamed Flow' }))
     render(<FlowBuilder flowId="flow-1" />)
@@ -765,7 +801,6 @@ describe('FlowBuilder', () => {
     expect(await screen.findByText('Referenced agent is unavailable to your group')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Save flow$/ })).toBeDisabled()
   })
-
   it('gives the canvas row an explicit flex basis so React Flow gets a width inside the Panel', async () => {
     render(<FlowBuilder />)
     const split = await screen.findByTestId('flow-canvas-split')
@@ -775,6 +810,11 @@ describe('FlowBuilder', () => {
   })
 
   beforeEach(() => {
+    localStorage.clear()
+    Object.defineProperty(globalThis, 'crypto', {
+      configurable: true,
+      value: webcrypto,
+    })
     serviceMocks.createFlow.mockReset()
     serviceMocks.updateFlow.mockReset()
     serviceMocks.listFlows.mockReset()
@@ -782,6 +822,13 @@ describe('FlowBuilder', () => {
     serviceMocks.deleteFlow.mockReset()
     serviceMocks.shareFlow.mockReset()
     serviceMocks.cloneFlow.mockReset()
+    serviceMocks.validateFlowDraft.mockReset()
+    serviceMocks.validateFlowDraft.mockImplementation((_, phase) => Promise.resolve({
+      artifact_kind: 'flow',
+      phase,
+      valid: true,
+      findings: [],
+    }))
     invalidationMocks.notifyFlowListInvalidated.mockReset()
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
@@ -793,9 +840,75 @@ describe('FlowBuilder', () => {
     nodePanelMocks.onApply = undefined
     nodePanelMocks.requestLeave.mockReset()
     nodePanelMocks.requestLeave.mockResolvedValue(true)
+    nodePanelMocks.captureAuthoringDraft.mockReset()
+    nodePanelMocks.captureAuthoringDraft.mockImplementation((node) => ({
+      nodeId: node.id,
+      data: node.data,
+      dirty: nodePanelMocks.dirty,
+    }))
+    nodePanelMocks.takeLastLeaveOutcome.mockReset()
+    nodePanelMocks.takeLastLeaveOutcome.mockReturnValue(null)
+    nodePanelMocks.dirty = false
+    nodePanelMocks.reportDirty = null
     agentMetadataMocks.agents = {}
   })
 
+  it('blocks Chat and hides the canvas until recovery is chosen, then restores unfinished step instructions', async () => {
+    const key = 'agr-studio-draft:v1:curator:flow'
+    const saved = buildFlowResponse()
+    saved.flow_definition.nodes[0].data.task_instructions = 'My unfinished task instructions'
+    localStorage.setItem(key, JSON.stringify({ version: 1, updated: 'today', value: {
+      currentFlowId: saved.id, draft: { name: saved.name, description: '', definition: saved.flow_definition },
+    } }))
+    const ref = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder recoveryOwnerId="curator" authoringContextRef={ref} />)
+    expect(await screen.findByRole('button', { name: 'Resume draft' })).toBeEnabled()
+    expect(screen.queryByRole('region', { name: 'Flow canvas' })).not.toBeInTheDocument()
+    await act(async () => {
+      expect((await ref.current!.applyAuthoringProposal({} as FlowAuthoringProposal)).applied).toBe(false)
+    })
+    expect(serviceMocks.validateFlowDraft).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Resume draft' }))
+    await screen.findByRole('region', { name: 'Flow canvas' })
+    const context = ref.current!.captureAuthoringContext()
+    expect(context.nodes[0].task_instructions).toBe('My unfinished task instructions')
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+  })
+
+  it('round-trips saved CRUD nulls and the latest unapplied panel edit through recovery storage', async () => {
+    const saved = buildFlowResponse()
+    Object.assign(saved.flow_definition.nodes[0].data, { agent_description: null, custom_instructions: null,
+      prompt_version: null, include_evidence: null, projection_plan: null, output_filename_template: null })
+    saved.flow_definition.edges = [{ id: 'edge', source: saved.flow_definition.nodes[0].id, target: saved.flow_definition.nodes[0].id }]
+    Object.assign(saved.flow_definition.edges[0], { condition: null })
+    serviceMocks.getFlow.mockResolvedValue(saved)
+    const firstRef = React.createRef<FlowAuthoringContextHandle>()
+    const first = render(<FlowBuilder recoveryOwnerId="curator" flowId={saved.id} authoringContextRef={firstRef} />)
+    await waitFor(() => expect(firstRef.current!.captureAuthoringContext().flowName).toBe(saved.name))
+    act(() => { (reactFlowMocks.onNodeClick as unknown as (event: object, node: unknown) => void)({}, reactFlowMocks.nodes[0]) })
+    await screen.findByTestId('node-panel-dock')
+    act(() => {
+      nodePanelMocks.reportDraft?.({ nodeId: saved.flow_definition.nodes[0].id, data: { task_instructions: 'Latest unfinished text' }, dirty: true })
+      nodePanelMocks.reportDirty?.(true)
+    })
+    await screen.findByText(/Draft kept on this device/)
+    first.unmount()
+    const ref = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder recoveryOwnerId="curator" authoringContextRef={ref} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume draft' }))
+    await screen.findByRole('region', { name: 'Flow canvas' })
+    expect(ref.current!.captureAuthoringContext().nodes[0].task_instructions).toBe('Latest unfinished text')
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+  })
+
+  it('offers provider-neutral AI Chat verification', async () => {
+    const onVerifyRequest = vi.fn()
+    render(<FlowBuilder onVerifyRequest={onVerifyRequest} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Verify with AI Chat' }))
+
+    expect(onVerifyRequest).toHaveBeenCalledOnce()
+  })
   it('asks the dirty node guard once before selecting another node in Strict Mode', async () => {
     render(
       <React.StrictMode>
@@ -839,6 +952,528 @@ describe('FlowBuilder', () => {
     })
 
     expect(nodePanelMocks.requestLeave).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps or discards unsaved flow edits before starting a new flow', async () => {
+    const user = userEvent.setup()
+    render(<FlowBuilder />)
+    await screen.findByText('1 step')
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320,
+      clientY: 220,
+      dataTransfer: {
+        getData: vi.fn((format: string) => (
+          format === 'application/reactflow'
+            ? JSON.stringify({
+                type: 'agent',
+                agentId: 'gene_extractor',
+                agentName: 'Gene Extractor',
+                agentDescription: 'Extracts genes',
+              })
+            : ''
+        )),
+      },
+    })
+    await screen.findByText('2 steps')
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('New Flow'))
+    const firstDecision = await screen.findByRole('dialog', {
+      name: 'Save this flow before continuing?',
+    })
+    await user.click(within(firstDecision).getByRole('button', { name: 'Keep editing' }))
+    expect(screen.getByText('2 steps')).toBeInTheDocument()
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('New Flow'))
+    const secondDecision = await screen.findByRole('dialog', {
+      name: 'Save this flow before continuing?',
+    })
+    await user.click(within(secondDecision).getByRole('button', { name: 'Discard' }))
+    await screen.findByText('1 step')
+  })
+
+  it('preserves the current draft when opening another flow fails', async () => {
+    const user = userEvent.setup()
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Unavailable Flow'))
+    serviceMocks.getFlow.mockRejectedValue(new Error('network unavailable'))
+    render(<FlowBuilder authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+    const before = authoringRef.current!.captureAuthoringContext()
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    await user.click(
+      within(await screen.findByRole('dialog', { name: 'Open Flow' }))
+        .getByText('Unavailable Flow')
+    )
+
+    expect(await screen.findByText('network unavailable')).toBeInTheDocument()
+    expect(authoringRef.current!.captureAuthoringContext()).toEqual(before)
+  })
+
+  it('warns on browser unload only after the flow becomes dirty', async () => {
+    render(<FlowBuilder />)
+    await screen.findByText('1 step')
+    const cleanEvent = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(cleanEvent)
+    expect(cleanEvent.defaultPrevented).toBe(false)
+
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320,
+      clientY: 220,
+      dataTransfer: {
+        getData: vi.fn((format: string) => (
+          format === 'application/reactflow'
+            ? JSON.stringify({
+                type: 'agent',
+                agentId: 'gene_extractor',
+                agentName: 'Gene Extractor',
+                agentDescription: 'Extracts genes',
+              })
+            : ''
+        )),
+      },
+    })
+    await screen.findByText('2 steps')
+    const dirtyEvent = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(dirtyEvent)
+    expect(dirtyEvent.defaultPrevented).toBe(true)
+  })
+
+  it('captures an exact unapplied NodePanel keystroke and treats it as dirty', async () => {
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+
+    type NodeClick = (event: React.MouseEvent, node: typeof reactFlowMocks.nodes[number]) => void
+    act(() => {
+      (reactFlowMocks.onNodeClick as unknown as NodeClick)(
+        {} as React.MouseEvent,
+        reactFlowMocks.nodes[0],
+      )
+    })
+    await screen.findByTestId('node-panel-dock')
+
+    nodePanelMocks.captureAuthoringDraft.mockReturnValue({
+      nodeId: 'node_0',
+      data: { task_instructions: 'Latest unapplied keystroke' },
+      dirty: true,
+    })
+    act(() => nodePanelMocks.reportDirty?.(true))
+
+    const captured = authoringRef.current!.captureAuthoringContext()
+    expect(captured.nodes[0].task_instructions).toBe('Latest unapplied keystroke')
+    expect(captured.isDirty).toBe(true)
+
+    const dirtyEvent = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(dirtyEvent)
+    expect(dirtyEvent.defaultPrevented).toBe(true)
+  })
+
+  it.each(['normal', 'instructions_only', 'automatic_validation', 'pre_apply', 'post_apply', 'post_failure'] as const)('preserves exact flow Apply/Undo across %s validation', async (editDuring) => {
+    const user = userEvent.setup()
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    render(<FlowBuilder authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+    const captured = authoringRef.current!.captureAuthoringContext()
+    const toContext = (definition: FlowAuthoringProposal['candidate']['flow_definition']): ChatContext => ({
+      flow_id: captured.flowId,
+      flow_name: 'Gene flow',
+      flow_description: 'Extract genes.',
+      flow_updated_at: captured.flowUpdatedAt,
+      flow_definition: {
+        version: definition.version,
+        task_instructions_default_only: definition.task_instructions_default_only,
+        entry_node_id: definition.entry_node_id,
+        nodes: definition.nodes.map((node) => ({
+          id: node.id,
+          node_type: node.type,
+          position: node.position,
+          ...node.data,
+          validation_attachments: node.data.validation_attachments?.map((item) => ({ ...item })),
+          validation_groups: node.data.validation_groups?.map((item) => ({ ...item })),
+        })),
+        edges: definition.edges,
+      },
+    })
+    const baseDefinition: FlowAuthoringProposal['candidate']['flow_definition'] = {
+      version: '1.1',
+      entry_node_id: 'node_0',
+      nodes: [{
+        id: 'node_0',
+        type: 'task_input',
+        position: captured.nodes[0].position,
+        data: {
+          agent_id: 'task_input',
+          agent_display_name: 'Initial Instructions',
+          agent_description: 'Define the task for this flow',
+          task_instructions: '',
+          custom_instructions: '',
+          output_key: 'task_input',
+        },
+      }],
+      edges: [],
+    }
+    const candidateDefinition: FlowAuthoringProposal['candidate']['flow_definition'] = {
+      version: '1.1',
+      entry_node_id: 'node_0',
+      nodes: [
+        {
+          ...baseDefinition.nodes[0],
+          data: { ...baseDefinition.nodes[0].data, task_instructions: 'Extract genes.' },
+        },
+        {
+          id: 'node_1',
+          type: 'agent',
+          position: { x: 250, y: 280 },
+          data: {
+            agent_id: 'gene_extractor',
+            agent_display_name: 'Gene Extractor',
+            output_key: 'gene_extractor_output',
+          },
+        },
+      ],
+      edges: [{ id: 'edge_1', source: 'node_0', target: 'node_1', role: 'control_flow' }],
+    }
+    if (editDuring === 'instructions_only') {
+      candidateDefinition.nodes = [candidateDefinition.nodes[0]]
+      candidateDefinition.edges = []
+    }
+    if (editDuring === 'automatic_validation') {
+      candidateDefinition.nodes[1].data.validation_attachments = [{
+        attachment_id: 'gene:identity', domain_pack_id: 'gene', validator_id: 'gene-validator',
+        validator_binding_id: 'identity', label: 'Gene identity validation', state: 'active',
+        curator_label: 'Validate gene identity', when_off: 'Keep the name from the paper.',
+        scope: 'field', required: true, blocking: false, default_enabled: true,
+        allow_opt_out: true, enabled: true,
+      }]
+      // Production proposals omit derived groups. Applying the edges hydrates them.
+      expect(candidateDefinition.nodes[1].data.validation_groups).toBeUndefined()
+    }
+    const proposal: FlowAuthoringProposal = {
+      contract_version: 'flow_authoring_proposal.v1',
+      base_draft_fingerprint: await fingerprintFlowDraft({
+        flow_id: captured.flowId,
+        flow_name: captured.flowName,
+        flow_description: captured.flowDescription,
+        flow_updated_at: captured.flowUpdatedAt,
+        flow_definition: {
+          version: captured.version,
+          task_instructions_default_only: captured.task_instructions_default_only,
+          entry_node_id: captured.entry_node_id,
+          nodes: captured.nodes.map((node) => ({
+            id: node.id,
+            node_type: node.type,
+            position: node.position,
+            agent_id: node.agent_id,
+            agent_display_name: node.agent_display_name,
+            agent_description: node.agent_description,
+            task_instructions: node.task_instructions,
+            step_goal: node.step_goal,
+            custom_instructions: node.custom_instructions,
+            prompt_version: node.prompt_version,
+            include_evidence: node.include_evidence,
+            output_filename_template: node.output_filename_template,
+            projection_plan: node.projection_plan,
+            output_key: node.output_key,
+            validation_attachments: node.validation_attachments?.map((item) => ({ ...item })),
+            validation_groups: node.validation_groups?.map((item) => ({ ...item })),
+          })),
+          edges: captured.edges,
+        },
+      }),
+      candidate_draft_fingerprint: await fingerprintFlowDraft(toContext(candidateDefinition)),
+      change_summary: 'Add gene extraction.',
+      diff: [{ kind: 'added', path: 'flow_definition.nodes.node_1' }],
+      findings: [],
+      candidate: { name: 'Gene flow', description: 'Extract genes.', flow_definition: candidateDefinition },
+    }
+
+    let result
+    await act(async () => {
+      result = await authoringRef.current!.applyAuthoringProposal({
+        ...proposal,
+        base_draft_fingerprint: `sha256:${'0'.repeat(64)}`,
+      })
+    })
+    expect(result).toEqual(expect.objectContaining({ applied: false, reason: 'stale' }))
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+    expect(serviceMocks.validateFlowDraft).not.toHaveBeenCalled()
+
+    if (!['normal', 'automatic_validation', 'instructions_only'].includes(editDuring)) {
+      let finishValidation!: () => void
+      serviceMocks.validateFlowDraft.mockImplementation((_, phase) => {
+        const result = { artifact_kind: 'flow', phase, valid: true, findings: [] }
+        if (phase !== (editDuring === 'post_failure' ? 'post_apply' : editDuring)) return Promise.resolve(result)
+        return new Promise((resolve, reject) => {
+          finishValidation = () => editDuring === 'post_failure'
+            ? reject(new Error('Validation unavailable')) : resolve(result)
+        })
+      })
+      let pending!: ReturnType<FlowAuthoringContextHandle['applyAuthoringProposal']>
+      act(() => { pending = authoringRef.current!.applyAuthoringProposal(proposal) })
+      await waitFor(() => expect(finishValidation).toBeDefined())
+      expect(await authoringRef.current!.applyAuthoringProposal(proposal)).toEqual(
+        expect.objectContaining({ applied: false, reason: 'unavailable' }),
+      )
+      expect(screen.getByRole('button', { name: 'Save flow' })).toBeDisabled()
+      fireEvent.drop(screen.getByTestId('react-flow'), {
+        clientX: 320, clientY: 220,
+        dataTransfer: { getData: (format: string) => format === 'application/reactflow'
+          ? JSON.stringify({ type: 'agent', agentId: 'gene_extractor', agentName: 'Manual step' }) : '' },
+      })
+      const edited = authoringRef.current!.captureAuthoringContext()
+      await act(async () => { finishValidation(); result = await pending })
+      expect(result).toEqual(expect.objectContaining({
+        applied: false, reason: editDuring === 'post_failure' ? 'unavailable' : 'stale',
+      }))
+      expect(authoringRef.current!.captureAuthoringContext()).toEqual(edited)
+      expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+      expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+      return
+    }
+
+    if (editDuring === 'automatic_validation') {
+      let finishValidation!: () => void
+      serviceMocks.validateFlowDraft.mockImplementation((_, phase) => {
+        const result = { artifact_kind: 'flow', phase, valid: true, findings: [] }
+        return phase === 'post_apply'
+          ? new Promise((resolve) => { finishValidation = () => resolve(result) })
+          : Promise.resolve(result)
+      })
+      let pending!: ReturnType<FlowAuthoringContextHandle['applyAuthoringProposal']>
+      act(() => { pending = authoringRef.current!.applyAuthoringProposal(proposal) })
+      await waitFor(() => expect(finishValidation).toBeDefined())
+      await waitFor(() => expect(authoringRef.current!.captureAuthoringContext().nodes[1].validation_groups).toHaveLength(1))
+      await act(async () => { finishValidation(); result = await pending })
+    } else {
+      await act(async () => {
+        result = await authoringRef.current!.applyAuthoringProposal(proposal)
+      })
+    }
+    expect(result).toEqual(expect.objectContaining({ applied: true }))
+    await screen.findByText(editDuring === 'instructions_only' ? '1 step' : '2 steps')
+    expect(authoringRef.current!.captureAuthoringContext().nodes[0].task_instructions).toBe('Extract genes.')
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.validateFlowDraft).toHaveBeenNthCalledWith(
+      1,
+      candidateDefinition,
+      'pre_apply',
+      proposal.base_draft_fingerprint,
+      proposal.base_draft_fingerprint,
+    )
+    expect(serviceMocks.validateFlowDraft).toHaveBeenNthCalledWith(
+      2,
+      candidateDefinition,
+      'post_apply',
+      proposal.candidate_draft_fingerprint,
+      proposal.candidate_draft_fingerprint,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Undo AI Chat flow proposal' }))
+    await screen.findByText('1 step')
+    if (editDuring === 'instructions_only') {
+      expect(authoringRef.current!.captureAuthoringContext().nodes[0].task_instructions).toBe(captured.nodes[0].task_instructions)
+      return
+    }
+
+    serviceMocks.validateFlowDraft
+      .mockResolvedValueOnce({
+        artifact_kind: 'flow',
+        phase: 'pre_apply',
+        valid: true,
+        findings: [],
+      })
+      .mockResolvedValueOnce({
+        artifact_kind: 'flow',
+        phase: 'post_apply',
+        valid: false,
+        findings: [{
+          code: 'invalid_after_apply',
+          severity: 'error',
+          path: 'flow_definition',
+          message: 'Candidate failed post-apply validation.',
+        }],
+      })
+    await act(async () => {
+      result = await authoringRef.current!.applyAuthoringProposal(proposal)
+    })
+    expect(result).toEqual(expect.objectContaining({ applied: false, reason: 'invalid' }))
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Undo AI Chat flow proposal' })).not.toBeInTheDocument()
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+
+    serviceMocks.validateFlowDraft.mockImplementation((_, phase) => Promise.resolve({
+      artifact_kind: 'flow',
+      phase,
+      valid: true,
+      findings: [],
+    }))
+    await act(async () => {
+      result = await authoringRef.current!.applyAuthoringProposal(proposal)
+    })
+    await screen.findByText('2 steps')
+    act(() => {
+      reactFlowMocks.onNodeClick?.(
+        {} as never,
+        reactFlowMocks.nodes.find((node) => node.id === 'node_1') as never,
+      )
+    })
+    await screen.findByTestId('node-panel-dock')
+    act(() => nodePanelMocks.reportDirty?.(true))
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Undo AI Chat flow proposal' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('keeps an applied NodePanel draft dirty while deciding flow replacement', async () => {
+    const user = userEvent.setup()
+    render(<FlowBuilder />)
+    await screen.findByText('1 step')
+
+    type NodeClick = (event: React.MouseEvent, node: typeof reactFlowMocks.nodes[number]) => void
+    act(() => {
+      (reactFlowMocks.onNodeClick as unknown as NodeClick)(
+        {} as React.MouseEvent,
+        reactFlowMocks.nodes[0],
+      )
+    })
+    await screen.findByTestId('node-panel-dock')
+    act(() => nodePanelMocks.reportDirty?.(true))
+    nodePanelMocks.requestLeave.mockImplementation(async () => {
+      act(() => nodePanelMocks.reportDirty?.(false))
+      return true
+    })
+    nodePanelMocks.takeLastLeaveOutcome.mockReturnValue('applied')
+
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'File actions' }))
+        .getByRole('button', { name: 'New flow' }),
+    )
+
+    expect(await screen.findByRole('dialog', {
+      name: 'Save this flow before continuing?',
+    })).toBeInTheDocument()
+    expect(screen.getByText('1 step')).toBeInTheDocument()
+  })
+
+  it('preserves a saved custom revision in state and the exact AI authoring snapshot', async () => {
+    const receipt = {
+      agent_id: '11111111-2222-4333-8444-555555555555', agent_key: 'ca_fixture',
+      agent_revision_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', revision: 4,
+      fingerprint: `sha256:${'a'.repeat(64)}`, output_contract: { output_state: 'none' as const },
+    }
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ flow_definition: {
+      version: '1.1', entry_node_id: 'task',
+      nodes: [
+        { id: 'task', type: 'task_input', position: { x: 0, y: 0 }, data: {
+          agent_id: 'task_input', agent_display_name: 'Task', task_instructions: 'Extract', output_key: 'task',
+        } },
+        { id: 'custom', type: 'agent', position: { x: 200, y: 0 }, data: {
+          agent_id: 'ca_fixture', agent_display_name: 'Custom', output_key: 'result',
+          agent_revision_id: receipt.agent_revision_id, execution_receipt: receipt,
+        } },
+      ], edges: [{ id: 'edge', source: 'task', target: 'custom' }],
+    } }))
+    const onFlowChange = vi.fn()
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    const { rerender } = render(<FlowBuilder onFlowChange={onFlowChange} authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+    rerender(<FlowBuilder flowId="flow-1" onFlowChange={onFlowChange} authoringContextRef={authoringRef} />)
+    await waitFor(() => expect(onFlowChange.mock.calls.at(-1)?.[0]?.nodes.find(
+      (node: { id: string }) => node.id === 'custom',
+    )).toEqual(expect.objectContaining({ agent_revision_id: receipt.agent_revision_id, execution_receipt: receipt })))
+    const captured = authoringRef.current!.captureAuthoringContext()
+    expect(captured.nodes.find((node) => node.id === 'custom')).toEqual(expect.objectContaining({
+      agent_revision_id: receipt.agent_revision_id, execution_receipt: receipt,
+    }))
+  })
+
+  it.each([false, true])('preserves edits during save acknowledgement (retarget=%s)', async (retarget) => {
+    const user = userEvent.setup()
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    const receipt = {
+      agent_id: 'agent-uuid', agent_key: 'ca_fixture', agent_revision_id: 'revision-old',
+      revision: 4, fingerprint: 'saved-fingerprint', output_contract: { output_state: 'none' as const },
+    }
+    const flow = buildFlowResponse()
+    flow.flow_definition.nodes.push({
+      id: 'custom', type: 'agent', position: { x: 200, y: 0 }, data: {
+        agent_id: 'ca_fixture', agent_display_name: 'Custom', output_key: 'result',
+        agent_revision_id: receipt.agent_revision_id,
+      },
+    })
+    flow.flow_definition.edges.push({ id: 'edge', source: 'node_0', target: 'custom' })
+    serviceMocks.getFlow.mockResolvedValue(flow)
+    let finishSave!: (response: FlowResponse) => void
+    serviceMocks.updateFlow.mockImplementation(() => new Promise<FlowResponse>((resolve) => { finishSave = resolve }))
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    const { rerender } = render(<FlowBuilder authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+    rerender(<FlowBuilder flowId="flow-1" authoringContextRef={authoringRef} />)
+    await waitFor(() => expect(authoringRef.current!.captureAuthoringContext().nodes.some((node) => node.id === 'custom')).toBe(true))
+    act(() => reactFlowMocks.onNodeClick?.({} as never, reactFlowMocks.nodes.find((node) => node.id === 'custom') as never))
+    await screen.findByTestId('node-panel-dock')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+    await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalledTimes(1))
+    act(() => nodePanelMocks.apply?.('custom', {
+      custom_instructions: 'Edited while saving',
+      ...(retarget ? { agent_revision_id: 'revision-new', execution_receipt: null } : {}),
+    }))
+    const submitted = serviceMocks.updateFlow.mock.calls[0][1].flow_definition
+    await act(async () => finishSave(buildFlowResponse({ flow_definition: {
+      ...submitted,
+      nodes: submitted.nodes.map((node: { id: string; data: AgentNodeData }) => node.id === 'custom'
+        ? { ...node, data: { ...node.data, execution_receipt: receipt } } : node),
+    } })))
+    await screen.findByText('Flow saved successfully')
+    const current = authoringRef.current!.captureAuthoringContext().nodes.find((node) => node.id === 'custom')!
+    expect(current.custom_instructions).toBe('Edited while saving')
+    expect(current.agent_revision_id).toBe(retarget ? 'revision-new' : 'revision-old')
+    expect(current.execution_receipt).toEqual(retarget ? null : receipt)
+  })
+  it('does not apply a late save receipt or timestamp to another open flow', async () => {
+    const user = userEvent.setup()
+    const receipt = {
+      agent_id: 'agent-uuid', agent_key: 'ca_fixture', agent_revision_id: 'revision-old',
+      revision: 4, fingerprint: 'saved-fingerprint', output_contract: { output_state: 'none' as const },
+    }
+    const original = buildFlowResponse()
+    original.flow_definition.nodes.push({
+      id: 'custom', type: 'agent', position: { x: 200, y: 0 }, data: {
+        agent_id: 'ca_fixture', agent_display_name: 'Custom', output_key: 'result',
+        agent_revision_id: receipt.agent_revision_id,
+      },
+    })
+    original.flow_definition.edges.push({ id: 'edge', source: 'node_0', target: 'custom' })
+    const other = buildFlowResponse({
+      id: 'other', name: 'Other flow', updated_at: '2026-09-12T09:00:00Z',
+      flow_definition: structuredClone(original.flow_definition),
+    })
+    serviceMocks.getFlow.mockImplementation((id) => Promise.resolve(id === 'other' ? other : original))
+    let finishSave!: (response: FlowResponse) => void
+    serviceMocks.updateFlow.mockImplementation(() => new Promise<FlowResponse>((resolve) => { finishSave = resolve }))
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    const { rerender } = render(<FlowBuilder flowId="flow-1" authoringContextRef={authoringRef} />)
+    await screen.findByText('Fresh Flow')
+    await user.click(screen.getByRole('button', { name: 'Save flow' }))
+    await waitFor(() => expect(finishSave).toBeDefined())
+    rerender(<FlowBuilder flowId="other" authoringContextRef={authoringRef} />)
+    await screen.findByText('Other flow')
+    const before = authoringRef.current!.captureAuthoringContext()
+    const submitted = serviceMocks.updateFlow.mock.calls[0][1].flow_definition
+    await act(async () => finishSave(buildFlowResponse({
+      updated_at: '2026-09-12T10:00:00Z',
+      flow_definition: { ...submitted, nodes: submitted.nodes.map((node: { id: string; data: AgentNodeData }) =>
+        node.id === 'custom' ? { ...node, data: { ...node.data, execution_receipt: receipt } } : node) },
+    })))
+    expect(authoringRef.current!.captureAuthoringContext()).toEqual(before)
+    expect(invalidationMocks.notifyFlowListInvalidated).toHaveBeenCalledWith({ flowId: 'flow-1', reason: 'updated' })
   })
 
   it('reports step_goal prompt_version and validation_groups in FlowState', async () => {
@@ -936,6 +1571,7 @@ describe('FlowBuilder', () => {
             target: 'custom-validator',
             role: 'validation_attachment',
             satisfies_binding_id: 'identity',
+            condition: { type: 'not_empty' },
           },
           {
             id: 'validation_2',
@@ -948,9 +1584,18 @@ describe('FlowBuilder', () => {
       },
     }))
 
-    const { rerender } = render(<FlowBuilder onFlowChange={onFlowChange} />)
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    const { rerender } = render(
+      <FlowBuilder onFlowChange={onFlowChange} authoringContextRef={authoringRef} />
+    )
     await screen.findByText('1 step')
-    rerender(<FlowBuilder flowId="flow-1" onFlowChange={onFlowChange} />)
+    rerender(
+      <FlowBuilder
+        flowId="flow-1"
+        onFlowChange={onFlowChange}
+        authoringContextRef={authoringRef}
+      />
+    )
 
     await waitFor(() => {
       const latest = onFlowChange.mock.calls.at(-1)?.[0]
@@ -964,6 +1609,15 @@ describe('FlowBuilder', () => {
         ]),
       }))
     })
+    const captured = authoringRef.current!.captureAuthoringContext()
+    expect(captured).toEqual(expect.objectContaining({
+      flowId: 'flow-1',
+      flowDescription: 'Saved from builder',
+      flowUpdatedAt: '2026-04-03T00:00:00Z',
+      isDirty: false,
+    }))
+    expect(captured.nodes.find((node) => node.id === 'node_1')?.position).toEqual({ x: 200, y: 0 })
+    expect(captured.edges.find((edge) => edge.id === 'validation_1')?.condition).toEqual({ type: 'not_empty' })
   })
 
   it('shows file action icon shortcuts wired to existing file actions', async () => {
@@ -1002,14 +1656,24 @@ describe('FlowBuilder', () => {
 
     await screen.findByText('2 steps')
 
-    const discard = vi.spyOn(window, 'confirm').mockReturnValueOnce(true)
     await user.click(within(fileActions).getByRole('button', { name: 'New flow' }))
-    expect(discard).toHaveBeenCalledWith('Discard unsaved flow changes?')
-    discard.mockRestore()
+    const decision = await screen.findByRole('dialog', {
+      name: 'Save this flow before continuing?',
+    })
+    expect(screen.getByText('2 steps')).toBeInTheDocument()
+    await user.click(within(decision).getByRole('button', { name: 'Discard' }))
     await screen.findByText('1 step')
     expect(screen.queryByText('2 steps')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', {
+        name: 'Save this flow before continuing?',
+      })).not.toBeInTheDocument()
+    })
 
-    await user.click(within(fileActions).getByRole('button', { name: 'Open flow' }))
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'File actions' }))
+        .getByRole('button', { name: 'Open flow' }),
+    )
     const openDialog = await screen.findByRole('dialog', { name: 'Open Flow' })
     expect(within(openDialog).getByText('Toolbar Flow')).toBeInTheDocument()
     await user.click(within(openDialog).getByRole('button', { name: 'Cancel' }))
@@ -1017,7 +1681,10 @@ describe('FlowBuilder', () => {
       expect(screen.queryByRole('dialog', { name: 'Open Flow' })).not.toBeInTheDocument()
     })
 
-    await user.click(within(fileActions).getByRole('button', { name: 'Manage flows' }))
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'File actions' }))
+        .getByRole('button', { name: 'Manage flows' }),
+    )
     const manageDialog = (await screen.findByText('Manage Flows')).closest('[role="dialog"]')
     expect(manageDialog).not.toBeNull()
     expect(within(manageDialog as HTMLElement).getByText('Toolbar Flow')).toBeInTheDocument()
@@ -1026,16 +1693,72 @@ describe('FlowBuilder', () => {
       expect(screen.queryByText('Manage Flows')).not.toBeInTheDocument()
     })
 
-    await user.click(within(fileActions).getByRole('button', { name: 'Save flow' }))
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'File actions' }))
+        .getByRole('button', { name: 'Save flow' }),
+    )
     const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
     await user.click(within(saveDialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Save Flow' })).not.toBeInTheDocument()
     })
 
-    await user.click(within(fileActions).getByRole('button', { name: 'Save flow as' }))
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'File actions' }))
+        .getByRole('button', { name: 'Save flow as' }),
+    )
     expect(await screen.findByRole('dialog', { name: 'Save Flow As' })).toBeInTheDocument()
   }, 15000)
+
+  it('keeps the current saved baseline clean after renaming it in Manage Flows', async () => {
+    const user = userEvent.setup()
+    const authoringRef = React.createRef<FlowAuthoringContextHandle>()
+    const loaded = buildFlowResponse({ name: 'Before rename' })
+    loaded.flow_definition.nodes[0].data.task_instructions = 'Start the flow'
+    const renamed = buildFlowResponse({
+      name: 'After rename',
+      updated_at: '2026-09-04T15:30:00Z',
+      flow_definition: loaded.flow_definition,
+    })
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Before rename'))
+    serviceMocks.getFlow.mockResolvedValue(loaded)
+    serviceMocks.updateFlow.mockResolvedValue(renamed)
+
+    render(<FlowBuilder authoringContextRef={authoringRef} />)
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    await user.click(
+      within(await screen.findByRole('dialog', { name: 'Open Flow' }))
+        .getByText('Before rename'),
+    )
+    await waitFor(() => expect(authoringRef.current!.captureAuthoringContext().flowId).toBe('flow-1'))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Open Flow' })).not.toBeInTheDocument()
+    })
+
+    await user.click(
+      within(screen.getByRole('toolbar', { name: 'File actions' }))
+        .getByRole('button', { name: 'Manage flows' }),
+    )
+    const manageDialog = await screen.findByRole('dialog')
+    await user.click(within(manageDialog).getByRole('button', { name: 'Rename' }))
+    const nameField = within(manageDialog).getByRole('textbox')
+    await user.clear(nameField)
+    await user.type(nameField, 'After rename{Enter}')
+
+    await waitFor(() => expect(serviceMocks.updateFlow).toHaveBeenCalledOnce())
+    await waitFor(() => {
+      expect(authoringRef.current!.captureAuthoringContext()).toEqual(
+        expect.objectContaining({
+          flowName: 'After rename',
+          flowDescription: 'Saved from builder',
+          flowUpdatedAt: '2026-09-04T15:30:00Z',
+          isDirty: false,
+        }),
+      )
+    })
+  })
 
   it('loads a flow with stale agent references and surfaces the repair warning', async () => {
     const user = userEvent.setup()

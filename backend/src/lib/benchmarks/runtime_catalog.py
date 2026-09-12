@@ -1,10 +1,16 @@
 """Curator-visible route catalogs grounded in the same sources as execution."""
 
+from uuid import UUID
+
 from sqlalchemy.orm import Session
 
 from src.lib.agent_access import is_resource_access_allowed
 from src.lib.agent_studio.agent_service import list_agents_visible_to_user
 from src.lib.agent_studio.catalog_service import get_agent_metadata
+from src.lib.agent_studio.execution_revision_service import (
+    current_execution_receipt, get_execution_revision, authorize_execution_receipt,
+)
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
 from src.lib.config.agent_loader import canonical_system_agent_key, get_agent_definition_for_package
 from src.lib.config.models_loader import list_models
@@ -52,13 +58,31 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
             if definition is None or definition.supports_reasoning else None,
         )
 
-    agent_defaults = {key: route(agent.model_id, agent.model_reasoning) for key, agent in visible.items()}
+    sources: dict[str, AgentExecutionReceipt] = {}
+    saved_metadata: dict[str, dict] = {}
+    agent_defaults = {}
+    for key, agent in visible.items():
+        if key.startswith("ca_"):
+            receipt = current_execution_receipt(session, key, curator.db_user_id,
+                                                active_group_ids=list(curator.active_groups))
+            _, saved = get_execution_revision(session, receipt.agent_id, receipt.agent_revision_id,
+                                              curator.db_user_id, active_group_ids=list(curator.active_groups))
+            sources[f"agent:{key}"] = receipt
+            agent_defaults[key] = route(saved.model_id, saved.model_reasoning)
+            saved_metadata[key] = {
+                "curation": saved.curation,
+                "execution_receipt": receipt.model_dump(mode="json"),
+                "authenticated_group_ids": list(curator.active_groups),
+                "authenticated_user_id": curator.db_user_id,
+            }
+        else:
+            agent_defaults[key] = route(agent.model_id, agent.model_reasoning)
     supervisor = get_agent_config("supervisor")
     flow_agents: dict[str, tuple[str, ...]] = {}
     flow_validators: dict[str, tuple[str, ...]] = {}
     validator_defaults: dict[str, BenchmarkSuiteRoute] = {}
 
-    def model_validators(schedule: list[dict]) -> dict[str, BenchmarkSuiteRoute] | None:
+    def model_validators(schedule: list[dict], custom_pins: dict | None = None) -> dict[str, BenchmarkSuiteRoute] | None:
         validators: dict[str, BenchmarkSuiteRoute] = {}
         for validator in schedule:
             validator_agent = validator.get("validator_agent_id")
@@ -69,6 +93,25 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
             binding = validator.get("validator_binding_id")
             if not package or not binding:
                 raise ValueError("Model validator lacks its package/binding identity")
+            custom_pin = (custom_pins or {}).get(binding)
+            if custom_pin is not None:
+                revision, saved = get_execution_revision(
+                    session, UUID(custom_pin["agent_id"]), UUID(custom_pin["revision_id"]), curator.db_user_id,
+                    active_group_ids=list(curator.active_groups),
+                )
+                receipt = AgentExecutionReceipt(
+                    agent_id=revision.agent_id, agent_key=custom_pin["agent_key"],
+                    agent_revision_id=revision.id, revision=revision.revision,
+                    fingerprint=custom_pin["fingerprint"], output_contract=saved.output_contract,
+                )
+                receipt = authorize_execution_receipt(session, receipt.model_dump(mode="json"), curator.db_user_id,
+                                                      active_group_ids=list(curator.active_groups))
+                slot = f"validator:{binding}"
+                if slot in sources and sources[slot] != receipt:
+                    raise ValueError("Validator slot has conflicting source revisions")
+                sources[slot] = receipt
+                validators[binding] = route(saved.model_id, saved.model_reasoning)
+                continue
             definition = get_agent_definition_for_package(package, validator_agent)
             if definition is None:
                 raise ValueError("Model validator agent is not configured")
@@ -95,13 +138,26 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
             continue
         # Direct curator runs dispatch active package bindings, without flow opt-outs.
         # Resolve the same inherited curation ownership as custom runtime agents.
-        metadata = get_agent_metadata(key, _resolved_db_agent=visible[key])
-        direct_bindings = model_validators([
-            option.to_dict() for option in validation_attachment_options_for_agent(
-                key, agent_registry={key: metadata},
+        metadata = saved_metadata[key] if key in saved_metadata else get_agent_metadata(key, _resolved_db_agent=visible[key])
+        custom_pins = {}
+        if key in saved_metadata and sources[f"agent:{key}"].output_contract.generic_profile_ref is not None:
+            from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+            from src.lib.domain_packs.profile_validation import resolve_profile_validation, profile_validation_attachment_options
+
+            context = resolve_profile_validation(
+                sources[f"agent:{key}"], resolve_curation_domain_pack_by_id("generic"),
+                db=session, user_id=curator.db_user_id, active_group_ids=curator.active_groups,
             )
+            assert context is not None
+            options = profile_validation_attachment_options(context)
+            custom_pins = {binding.binding_id: binding.raw["custom_validator"]
+                           for binding in context.registry.bindings if binding.raw.get("custom_validator")}
+        else:
+            options = validation_attachment_options_for_agent(key, agent_registry={key: metadata})
+        direct_bindings = model_validators([
+            option.to_dict() for option in options
             if option.state.value == "active"
-        ])
+        ], custom_pins)
         if direct_bindings is not None:
             register_validators(direct_bindings)
             direct_validators[key] = tuple(sorted(direct_bindings))
@@ -148,5 +204,6 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
         supervisor_default=route(supervisor.model, supervisor.reasoning),
         agent_defaults=agent_defaults, model_validator_defaults=validator_defaults,
         agent_targets=direct_validators, agent_model_validators=direct_validators,
+        source_execution_receipts=sources,
         flow_agents=flow_agents, flow_model_validators=flow_validators,
     )

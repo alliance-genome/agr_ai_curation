@@ -103,11 +103,6 @@ ALLOWED_VALIDATOR_DISPATCH_CLEANUP_CONTEXTS = (
         "export/submission readiness blockers are legitimate blocked states",
         re.compile(r"blockedCount|Blocked"),
     ),
-    (
-        "docs/curator/AGENT_STUDIO.md",
-        "lookup attempt statuses may be blocked without being validator buckets",
-        re.compile(r"ambiguous, not found, transient, blocked, or under development"),
-    ),
 )
 
 
@@ -282,7 +277,8 @@ def test_alliance_prompt_documents_catalog_and_tool_continuation_contracts():
         "get_flow_templates(template_query, query, category, section, "
         "template_cursor, cursor)"
     ) in prompt
-    assert "call `validate_flow` before\n`create_flow`" in prompt
+    assert "complete save-equivalent `flow_definition`" in prompt
+    assert "never substitute or reconstruct a simplified `steps` list" in prompt
     assert (
         "get_tool_inventory(agent_id, category, include_method_tools, query, "
         "limit, cursor)"

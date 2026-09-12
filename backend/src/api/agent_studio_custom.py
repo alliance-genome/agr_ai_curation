@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -28,21 +28,31 @@ from src.lib.agent_studio.custom_agent_service import (
     CustomAgentAccessError,
     CustomAgentNotFoundError,
     create_custom_agent,
+    clone_saved_custom_agent,
     custom_agent_to_dict,
     get_custom_agent_for_user,
     get_custom_agent_visible_to_user,
+    parse_custom_agent_id,
     get_custom_agent_runtime_info,
     list_custom_agents_for_user,
     list_custom_agents_visible_to_user,
     list_custom_agent_versions,
     make_custom_agent_id,
-    revert_custom_agent_to_version,
     soft_delete_custom_agent,
     update_custom_agent,
 )
+from src.lib.agent_studio.authoring_validation import AuthoringValidationError
+from src.lib.agent_studio.profile_mapping_service import ProfileMappingError
+from src.lib.agent_studio.models import AgentWorkshopContext
+from src.lib.agent_studio.models import ChatContext, ChatRequest
+from src.lib.agent_studio.workshop_actions import WorkshopActionRequest, prepare_workshop_action
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.agent_access import is_resource_access_allowed
+from src.schemas.agent_execution_revision import AgentExecutionSnapshot, AgentOutputContract, GenericProfileRevisionDraft
+from src.lib.agent_studio.generic_profile_service import ProfileConflictError
+from src.schemas.generic_extraction_profile import GenericProfileContract
+from src.lib.agent_studio.execution_revision_service import ExecutionRevisionConflictError
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +106,7 @@ def _raise_custom_agent_validation_http_exception(
     *,
     exc: Exception,
     status_code: int,
-    detail: str,
+    detail: Any,
     log_message: str,
     log_extra: Optional[Dict[str, Any]] = None,
 ) -> NoReturn:
@@ -123,17 +133,24 @@ def _custom_agent_log_context(
         "action": action,
         "user_id": getattr(db_user, "id", None),
         "custom_agent_id": str(custom_agent_id) if custom_agent_id else None,
-        "template_source": getattr(request, "template_source", None),
-        "model_id": getattr(request, "model_id", None),
-        "tool_ids": list(getattr(request, "tool_ids", None) or []),
-        "output_schema_key": getattr(request, "output_schema_key", None),
+        "has_template_source": bool(getattr(request, "template_source", None)),
+        "has_model_selection": bool(getattr(request, "model_id", None)),
+        "tool_count": len(getattr(request, "tool_ids", None) or []),
+        "has_output_selection": bool(getattr(request, "output_schema_key", None)),
         "include_group_rules": getattr(request, "include_group_rules", None),
         "has_custom_prompt": getattr(request, "custom_prompt", None) is not None,
-        "group_override_keys": sorted(
-            (getattr(request, "group_prompt_overrides", None) or {}).keys()
-        ),
-        "allowed_group_ids": getattr(request, "allowed_group_ids", None),
+        "group_override_count": len(getattr(request, "group_prompt_overrides", None) or {}),
+        "allowed_group_count": len(getattr(request, "allowed_group_ids", None) or []),
     }
+
+
+def _validate_output_transition_request(request):
+    explicit = request.model_fields_set & {"output_contract", "new_generic_profile", "revise_generic_profile"}
+    if len(explicit) > 1 or (explicit and "output_schema_key" in request.model_fields_set):
+        raise ValueError("Choose exactly one output transition")
+    if any(getattr(request, name) is None for name in explicit):
+        raise ValueError("Choose an explicit output state; null is not an output transition")
+    return request
 
 
 class CreateCustomAgentRequest(BaseModel):
@@ -142,6 +159,9 @@ class CreateCustomAgentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     template_source: Optional[str] = Field(None, min_length=1, max_length=100)
+    clone_source_agent_id: Optional[str] = Field(None, min_length=1, max_length=100)
+    clone_source_updated_at: Optional[datetime] = None
+    visibility: Literal["private", "project"] = "private"
     name: str = Field(..., min_length=1, max_length=100)
     custom_prompt: Optional[str] = None
     # Removed legacy MOD aliases — group-based prompt override fields are now
@@ -152,15 +172,25 @@ class CreateCustomAgentRequest(BaseModel):
     include_group_rules: bool = True
     model_id: Optional[str] = Field(None, min_length=1, max_length=100)
     model_temperature: Optional[float] = None
+    default_export_execution_mode: Literal["ai", "direct"] | None = None
     model_reasoning: Optional[str] = Field(None, max_length=20)
     tool_ids: Optional[List[str]] = None
     output_schema_key: Optional[str] = Field(None, max_length=100)
     category: Optional[str] = Field(None, max_length=100)
     allowed_group_ids: Optional[List[str]] = None
+    output_contract: AgentOutputContract | None = None
+    new_generic_profile: GenericProfileContract | None = None
+
+    @model_validator(mode="after")
+    def explicit_output_transition(self):
+        return _validate_output_transition_request(self)
 
 
 class UpdateCustomAgentRequest(BaseModel):
     """Update request for custom agent."""
+    expected_updated_at: Optional[datetime] = None
+    expected_revision_id: UUID | None = None
+    visibility: Optional[Literal["private", "project"]] = None
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -172,12 +202,20 @@ class UpdateCustomAgentRequest(BaseModel):
     include_group_rules: Optional[bool] = None
     model_id: Optional[str] = Field(None, min_length=1, max_length=100)
     model_temperature: Optional[float] = None
+    default_export_execution_mode: Literal["ai", "direct"] | None = None
     model_reasoning: Optional[str] = Field(None, max_length=20)
     tool_ids: Optional[List[str]] = None
     output_schema_key: Optional[str] = Field(None, max_length=100)
     allow_empty_tool_ids: bool = False
     notes: Optional[str] = None
     allowed_group_ids: Optional[List[str]] = None
+    output_contract: AgentOutputContract | None = None
+    new_generic_profile: GenericProfileContract | None = None
+    revise_generic_profile: GenericProfileRevisionDraft | None = None
+
+    @model_validator(mode="after")
+    def explicit_output_transition(self):
+        return _validate_output_transition_request(self)
 
 
 class TestCustomAgentRequest(BaseModel):
@@ -196,6 +234,8 @@ class CustomAgentResponse(BaseModel):
 
     id: str
     agent_id: str
+    output_formatter_format: Literal["csv", "tsv", "json"] | None = None
+    execution_revision_id: UUID | None = None
     user_id: int
     template_source: Optional[str] = None
     name: str
@@ -211,6 +251,7 @@ class CustomAgentResponse(BaseModel):
     include_group_rules: bool
     model_id: str
     model_temperature: float
+    default_export_execution_mode: Literal["ai", "direct"] | None = None
     model_reasoning: Optional[str] = None
     tool_ids: List[str] = Field(default_factory=list)
     output_schema_key: Optional[str] = None
@@ -221,6 +262,17 @@ class CustomAgentResponse(BaseModel):
     updated_at: datetime
 
 
+class WorkshopSavedReference(BaseModel):
+    agent_id: str
+    agent_revision_id: str
+    name: str
+
+
+class WorkshopActionValidationRequest(BaseModel):
+    context: ChatContext
+    action: WorkshopActionRequest
+
+
 class ListCustomAgentsResponse(BaseModel):
     """List response for custom agents."""
 
@@ -229,7 +281,9 @@ class ListCustomAgentsResponse(BaseModel):
 
 
 class CustomAgentVersionResponse(BaseModel):
-    """Version entry response."""
+    """Read-only historical prompt record, not an executable configuration."""
+
+    executable: Literal[False] = False
 
     id: str
     custom_agent_id: str
@@ -241,10 +295,113 @@ class CustomAgentVersionResponse(BaseModel):
     created_at: datetime
 
 
-class RevertCustomAgentRequest(BaseModel):
-    """Optional notes for revert action."""
+class ExecutionRevisionResponse(BaseModel):
+    id: UUID
+    agent_id: UUID
+    revision: int
+    fingerprint: str
+    snapshot: AgentExecutionSnapshot
+    notes: str | None = None
+    created_at: datetime
 
-    notes: Optional[str] = None
+
+class ExecutionRevisionListResponse(BaseModel):
+    revisions: list[ExecutionRevisionResponse]
+    next_before_revision: int | None
+
+
+class RestoreExecutionRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision_id: UUID
+
+
+def _execution_revision_payload(row, saved):
+    return ExecutionRevisionResponse(
+        id=row.id, agent_id=row.agent_id, revision=row.revision,
+        fingerprint=row.fingerprint, snapshot=saved, notes=row.notes, created_at=row.created_at,
+    )
+
+
+@router.get("/{custom_agent_id}/execution-revisions", response_model=ExecutionRevisionListResponse)
+async def list_execution_revisions_endpoint(
+    custom_agent_id: UUID,
+    before_revision: int | None = Query(None, ge=1),
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> ExecutionRevisionListResponse:
+    from src.lib.agent_studio.execution_revision_service import (
+        list_execution_revisions, ExecutionRevisionNotFoundError,
+    )
+    db_user = set_global_user_from_cognito(db, user)
+    try:
+        rows, cursor = list_execution_revisions(
+            db, custom_agent_id, db_user.id,
+            active_group_ids=_authenticated_group_ids(user), before_revision=before_revision,
+        )
+        return ExecutionRevisionListResponse(
+            revisions=[_execution_revision_payload(row, saved) for row, saved in rows],
+            next_before_revision=cursor,
+        )
+    except ExecutionRevisionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Executable revision not found") from exc
+
+
+@router.get("/{custom_agent_id}/execution-revisions/{revision_id}", response_model=ExecutionRevisionResponse)
+async def get_execution_revision_endpoint(
+    custom_agent_id: UUID, revision_id: UUID,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> ExecutionRevisionResponse:
+    from src.lib.agent_studio.execution_revision_service import (
+        get_execution_revision, ExecutionRevisionNotFoundError,
+    )
+    db_user = set_global_user_from_cognito(db, user)
+    try:
+        row, saved = get_execution_revision(
+            db, custom_agent_id, revision_id, db_user.id,
+            active_group_ids=_authenticated_group_ids(user),
+        )
+        return _execution_revision_payload(row, saved)
+    except ExecutionRevisionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Executable revision not found") from exc
+
+
+@router.post("/{custom_agent_id}/execution-revisions/{revision_id}/restore", response_model=CustomAgentResponse)
+async def restore_execution_revision_endpoint(
+    custom_agent_id: UUID, revision_id: UUID, request: RestoreExecutionRevisionRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CustomAgentResponse:
+    from src.lib.agent_studio.execution_revision_service import (
+        restore_execution_revision, ExecutionRevisionNotFoundError,
+    )
+    db_user = set_global_user_from_cognito(db, user)
+    try:
+        restore_execution_revision(
+            db, custom_agent_id, revision_id, user_id=db_user.id,
+            expected_revision_id=request.expected_revision_id,
+            active_group_ids=_authenticated_group_ids(user),
+        )
+        agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
+        db.commit()
+        db.refresh(agent)
+        return _as_response_payload(agent)
+    except ExecutionRevisionNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Executable revision not found") from exc
+    except ExecutionRevisionConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise_sanitized_http_exception(
+            logger, status_code=500, detail="Database error while restoring agent revision",
+            log_message="Database error while restoring agent revision",
+            exc=_sanitized_custom_agent_db_error(exc, operation="restore_revision"),
+        )
 
 
 def _as_response_payload(agent_obj) -> CustomAgentResponse:
@@ -264,6 +421,82 @@ def _as_version_payload(version_obj) -> CustomAgentVersionResponse:
     )
 
 
+class WorkshopDraftValidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workshop: AgentWorkshopContext
+    phase: Literal["pre_apply", "post_apply"]
+
+
+@router.post("/validate-draft")
+async def validate_workshop_draft_endpoint(
+    request: WorkshopDraftValidationRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> dict:
+    from src.models.sql.user import User
+    from src.lib.agent_studio.authoring_context import workshop_draft_fingerprint
+    from src.lib.agent_studio.workshop_authoring import validate_workshop_context
+
+    db_user = db.query(User).filter(User.auth_sub == str(user.get("sub") or "")).one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=403, detail="Authenticated curator not found")
+    if request.workshop.draft_fingerprint != workshop_draft_fingerprint(request.workshop):
+        raise HTTPException(status_code=422, detail="Workshop candidate fingerprint mismatch")
+    return validate_workshop_context(
+        db, workshop=request.workshop, user_id=db_user.id,
+        active_group_ids=_authenticated_group_ids(user), phase=request.phase,
+    ).to_dict()
+
+
+@router.post("/authoring-actions/validate")
+async def validate_workshop_action(
+    request: WorkshopActionValidationRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reauthorize a Chat action immediately before the curator opens its UI."""
+    from src.models.sql.user import User
+    db_user = db.query(User).filter(User.auth_sub == user.get("sub")).one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=403, detail="Authoring access is unavailable")
+    try:
+        ChatRequest(messages=[], context=request.context)
+        return prepare_workshop_action(
+            db, context=request.context, user_id=db_user.id,
+            active_group_ids=_authenticated_group_ids(user), request=request.action,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/{custom_agent_id}/authoring-reference", response_model=WorkshopSavedReference)
+async def get_workshop_saved_reference(
+    custom_agent_id: UUID,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> WorkshopSavedReference:
+    """Refresh the authorized capability catalog before exposing a flow reference."""
+    from src.lib.agent_studio.capability_catalog import CapabilityCatalogContext, build_authorized_capability_catalog
+    from src.models.sql.user import User
+    db_user = db.query(User).filter(User.auth_sub == user.get("sub")).one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=403, detail="Authoring access is unavailable")
+    agent_id = make_custom_agent_id(custom_agent_id)
+    records = build_authorized_capability_catalog(
+        db=db, context=CapabilityCatalogContext(
+            user_id=db_user.id, active_group_ids=tuple(_authenticated_group_ids(user)),
+            active_tab="flows", artifact_kind="flow",
+        ),
+    )
+    record = next((record for record in records
+                   if record.kind == "agent" and record.resource_id == agent_id and record.selectable
+                   and record.availability == "available" and record.compatibility.get("flow_selectable")), None)
+    revision_id = record.detail.get("identity_contract", {}).get("agent_revision_id") if record else None
+    if record is None or not revision_id:
+        raise HTTPException(status_code=409, detail="The saved agent is not available in the current flow catalog")
+    return WorkshopSavedReference(agent_id=agent_id, agent_revision_id=revision_id, name=record.name)
+
+
 @router.post("", response_model=CustomAgentResponse, status_code=201)
 async def create_custom_agent_endpoint(
     request: CreateCustomAgentRequest,
@@ -278,25 +511,54 @@ async def create_custom_agent_endpoint(
         request=request,
     )
     try:
-        custom_agent = create_custom_agent(
-            db=db,
-            user_id=db_user.id,
-            template_source=request.template_source,
-            name=request.name,
-            custom_prompt=request.custom_prompt,
-            group_prompt_overrides=request.group_prompt_overrides,
-            description=request.description,
-            icon=request.icon,
-            include_group_rules=request.include_group_rules,
-            model_id=request.model_id,
-            model_temperature=request.model_temperature,
-            model_reasoning=request.model_reasoning,
-            tool_ids=request.tool_ids,
-            output_schema_key=request.output_schema_key,
-            category=request.category,
-            allowed_group_ids=request.allowed_group_ids,
-            active_group_ids=_authenticated_group_ids(user),
-        )
+        source = None
+        if request.clone_source_agent_id:
+            source_id = parse_custom_agent_id(request.clone_source_agent_id)
+            if source_id is None:
+                raise ValueError("Invalid clone source")
+            source = get_custom_agent_visible_to_user(db, source_id, db_user.id)
+            db.refresh(source, with_for_update=True)
+            from src.lib.agent_studio.workshop_authoring import workshop_source_is_current
+            if not workshop_source_is_current(source, request.clone_source_updated_at):
+                raise ValueError("The clone source changed; reopen the source")
+            _require_custom_agent_group_access(source, user)
+        if source is not None:
+            edits = request.model_dump(exclude_unset=True, exclude={
+                "clone_source_agent_id", "clone_source_updated_at", "name",
+                "visibility", "allowed_group_ids",
+            })
+            custom_agent = clone_saved_custom_agent(
+                db, db_user.id, source, name=request.name,
+                allowed_group_ids=request.allowed_group_ids,
+                active_group_ids=_authenticated_group_ids(user),
+                visibility=request.visibility, edits=edits,
+            )
+        else:
+            custom_agent = create_custom_agent(
+                db=db,
+                user_id=db_user.id,
+                template_source=request.template_source,
+                name=request.name,
+                custom_prompt=request.custom_prompt,
+                group_prompt_overrides=request.group_prompt_overrides,
+                description=request.description,
+                icon=request.icon,
+                include_group_rules=request.include_group_rules,
+                model_id=request.model_id,
+                model_temperature=request.model_temperature,
+                model_reasoning=request.model_reasoning,
+                default_export_execution_mode=request.default_export_execution_mode,
+                model_reasoning_provided="model_reasoning" in request.model_fields_set,
+                tool_ids=request.tool_ids,
+                output_schema_key=request.output_schema_key,
+                output_schema_key_provided="output_schema_key" in request.model_fields_set,
+                output_contract=request.output_contract,
+                new_generic_profile=request.new_generic_profile,
+                category=request.category,
+                allowed_group_ids=request.allowed_group_ids,
+                active_group_ids=_authenticated_group_ids(user),
+                visibility=request.visibility,
+            )
         db.commit()
         db.refresh(custom_agent)
         logger.info(
@@ -322,7 +584,13 @@ async def create_custom_agent_endpoint(
         _raise_custom_agent_validation_http_exception(
             exc=exc,
             status_code=400,
-            detail=str(exc) or "Custom agent request is invalid",
+            detail=(
+                exc.result.to_dict()
+                if isinstance(exc, AuthoringValidationError)
+                else {"code": "profile_mapping_invalid", "issues": exc.issues}
+                if isinstance(exc, ProfileMappingError)
+                else str(exc) or "Custom agent request is invalid"
+            ),
             log_message="Failed to create custom agent",
             log_extra=log_context,
         )
@@ -386,6 +654,25 @@ async def list_custom_agents_endpoint(
         )
 
 
+@router.get("/{custom_agent_id}/clone-source", response_model=CustomAgentResponse)
+async def get_workshop_clone_source(
+    custom_agent_id: UUID,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CustomAgentResponse:
+    """Read a visible source for a new clone draft without creating an agent."""
+    from src.models.sql.user import User
+    db_user = db.query(User).filter(User.auth_sub == user.get("sub")).one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=403, detail="Authoring access is unavailable")
+    try:
+        source = get_custom_agent_visible_to_user(db, custom_agent_id, db_user.id)
+        _require_custom_agent_group_access(source, user)
+        return _as_response_payload(source)
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+        _raise_custom_agent_lookup_http_exception(exc=exc, log_message="Could not read Workshop clone source")
+
+
 @router.get("/{custom_agent_id}", response_model=CustomAgentResponse)
 async def get_custom_agent_endpoint(
     custom_agent_id: UUID,
@@ -426,6 +713,9 @@ async def update_custom_agent_endpoint(
         update_custom_agent(
             db=db,
             custom_agent=custom_agent,
+            expected_updated_at=request.expected_updated_at,
+            expected_revision_id=request.expected_revision_id,
+            visibility=request.visibility,
             name=request.name,
             custom_prompt=request.custom_prompt,
             group_prompt_overrides=request.group_prompt_overrides,
@@ -435,11 +725,18 @@ async def update_custom_agent_endpoint(
             model_id=request.model_id,
             model_temperature=request.model_temperature,
             model_reasoning=request.model_reasoning,
+                default_export_execution_mode=request.default_export_execution_mode,
+            model_reasoning_provided="model_reasoning" in request.model_fields_set,
             tool_ids=request.tool_ids,
             output_schema_key=request.output_schema_key,
+            output_schema_key_provided="output_schema_key" in request.model_fields_set,
+            output_contract=request.output_contract,
+            new_generic_profile=request.new_generic_profile,
             allow_empty_tool_ids=request.allow_empty_tool_ids,
+            revise_generic_profile=request.revise_generic_profile,
             notes=request.notes,
             allowed_group_ids=request.allowed_group_ids,
+            active_group_ids=_authenticated_group_ids(user),
         )
         db.commit()
         db.refresh(custom_agent)
@@ -451,6 +748,9 @@ async def update_custom_agent_endpoint(
             exc=exc,
             log_message=f"Failed to update custom agent '{custom_agent_id}'",
         )
+    except (ExecutionRevisionConflictError, ProfileConflictError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         db.rollback()
         if "already exists" in str(exc):
@@ -464,7 +764,13 @@ async def update_custom_agent_endpoint(
         _raise_custom_agent_validation_http_exception(
             exc=exc,
             status_code=400,
-            detail=str(exc) or "Custom agent update is invalid",
+            detail=(
+                exc.result.to_dict()
+                if isinstance(exc, AuthoringValidationError)
+                else {"code": "profile_mapping_invalid", "issues": exc.issues}
+                if isinstance(exc, ProfileMappingError)
+                else str(exc) or "Custom agent update is invalid"
+            ),
             log_message=f"Failed to update custom agent '{custom_agent_id}'",
             log_extra=log_context,
         )
@@ -528,51 +834,6 @@ async def list_custom_agent_versions_endpoint(
         )
 
 
-@router.post("/{custom_agent_id}/revert/{version}", response_model=CustomAgentResponse)
-async def revert_custom_agent_endpoint(
-    custom_agent_id: UUID,
-    version: int,
-    request: RevertCustomAgentRequest,
-    user: Dict[str, Any] = get_auth_dependency(),
-    db: Session = Depends(get_db),
-) -> CustomAgentResponse:
-    """Revert custom-agent prompt to a specific saved version."""
-    db_user = set_global_user_from_cognito(db, user)
-    log_context = _custom_agent_log_context(
-        action="revert",
-        db_user=db_user,
-        request=request,
-        custom_agent_id=custom_agent_id,
-    )
-    try:
-        custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
-        _require_custom_agent_group_access(custom_agent, user)
-        revert_custom_agent_to_version(
-            db=db,
-            custom_agent=custom_agent,
-            version=version,
-            notes=request.notes,
-        )
-        db.commit()
-        db.refresh(custom_agent)
-        return _as_response_payload(custom_agent)
-    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
-        db.rollback()
-        _raise_custom_agent_lookup_http_exception(
-            exc=exc,
-            log_message=f"Failed to revert custom agent '{custom_agent_id}' to version {version}",
-        )
-    except ValueError as exc:
-        db.rollback()
-        _raise_custom_agent_validation_http_exception(
-            exc=exc,
-            status_code=400,
-            detail="Custom agent revert is invalid",
-            log_message=f"Failed to revert custom agent '{custom_agent_id}' to version {version}",
-            log_extra=log_context,
-        )
-
-
 @router.post("/{custom_agent_id}/test")
 async def test_custom_agent_endpoint(
     custom_agent_id: UUID,
@@ -591,7 +852,10 @@ async def test_custom_agent_endpoint(
             log_message=f"Failed to initialize custom agent test for '{custom_agent_id}'",
         )
 
-    runtime_info = get_custom_agent_runtime_info(make_custom_agent_id(custom_agent.id), db=db)
+    runtime_info = get_custom_agent_runtime_info(
+        make_custom_agent_id(custom_agent.id), db=db, user_id=db_user.id,
+        active_group_ids=_authenticated_group_ids(user),
+    )
     if not runtime_info:
         raise HTTPException(status_code=404, detail="Custom agent is not available")
     if runtime_info.requires_document and not request.document_id:

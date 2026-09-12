@@ -14,7 +14,10 @@ export class LatestIntent {
 
   begin(): LatestIntentOperation {
     this.controller?.abort()
-    const generation = ++LatestIntent.nextGeneration
+    // Order user actions by when they happen, not when their browser tab opened.
+    // Retain a monotonic counter for same-millisecond actions and clock rollback.
+    const generation = Math.max(Date.now() * 1000, LatestIntent.nextGeneration + 1)
+    LatestIntent.nextGeneration = generation
     this.generation = generation
     const controller = new AbortController()
     this.controller = controller

@@ -75,13 +75,13 @@ output_schema: BasicResultEnvelope
 # Available reasoning levels: "disabled", "low", "medium", "high", "xhigh"
 model_config:
   # model: The LLM model to use. Can reference env var with default.
-  model: "${AGENT_BASIC_MODEL:-gpt-5.6-sol}"
+  model: "${AGENT_BASIC_MODEL:-gpt-6-astra}"
 
   # temperature: Controls randomness (0.0 = deterministic, 1.0 = creative)
   temperature: 0.1
 
   # reasoning: Extended thinking effort level
-  reasoning: "medium"
+  reasoning: "low"
 
 # -----------------------------------------------------------------------------
 # GROUP RULES

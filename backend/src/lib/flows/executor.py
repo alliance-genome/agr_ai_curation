@@ -27,8 +27,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, cast
+from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, TYPE_CHECKING, cast
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from src.lib.domain_packs.profile_validation import ProfileValidationContext
 
 from agents import Agent, RunContextWrapper, function_tool
 from sqlalchemy.orm import Session
@@ -105,13 +108,17 @@ from src.lib.flows.output_projection import (
 )
 from src.lib.executable_flow_graph import project_executable_flow_graph
 from src.lib.flow_edge_roles import (
-    SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
     agent_can_source_output_attachment,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
+from src.schemas.flows import FlowDefinition
+from src.lib.flows.execution_revisions import (
+    FlowExecutionRevisionError,
+    resolve_flow_execution_revisions,
+)
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
     get_active_visible_agent_metadata as get_agent_metadata,
@@ -667,7 +674,11 @@ def _build_flow_step_query(
     return "\n\n".join(sections)
 
 
-def _resolve_flow_terminal_output_format(agent_id: str) -> Optional[str]:
+def _resolve_flow_terminal_output_format(agent_id: str, entry: Mapping[str, Any] | None = None) -> Optional[str]:
+    from src.lib.flows.formatter_capability import resolved_formatter_format
+    saved_format = resolved_formatter_format(agent_id, entry)
+    if saved_format:
+        return saved_format
     normalized_agent_id = str(agent_id or "").strip()
     for output_format, agent_ids in _FLOW_OUTPUT_FORMATTER_AGENT_IDS_BY_FORMAT.items():
         if normalized_agent_id in agent_ids:
@@ -684,8 +695,8 @@ def _flow_terminal_projection_error(agent_id: str, reason: str) -> FlowTerminalO
     )
 
 
-def _flow_file_output_format(agent_id: str) -> str | None:
-    output_format = _resolve_flow_terminal_output_format(agent_id)
+def _flow_file_output_format(agent_id: str, entry: Mapping[str, Any] | None = None) -> str | None:
+    output_format = _resolve_flow_terminal_output_format(agent_id, entry)
     if output_format in {"csv", "tsv", "json"}:
         return output_format
     return None
@@ -737,12 +748,14 @@ def _build_terminal_flow_artifact_bundle(
                         )
                     ),
                 )
+        from src.lib.curation_workspace.execution_contracts import load_receipt_profile
         bundle = build_flow_output_artifact_bundle(
             completed_steps=scoped_steps,
             flow_name=flow_name,
             flow_run_id=flow_run_id,
             document_id=document_id,
             output_format=output_format,  # type: ignore[arg-type]
+            profile_resolver=load_receipt_profile,
         )
         if normalized_source_node_ids and len(bundle.artifacts) != len(
             normalized_source_node_ids
@@ -825,7 +838,7 @@ def _build_flow_formatter_runtime_context(
         "Your runtime tools are bound to the completed saved flow artifacts summarized below. "
         "Use the formatter tools to inspect, validate, preview, and call finalize_and_save exactly once. "
         "Do not ask for previous-step prose as input and do not compose file rows yourself. "
-        "If configured_projection_plan is present, treat it as the flow owner's requested starting plan: "
+        "If configured_projection_plan has selection_mode=selected_fields, it is mandatory: call build_default_projection_plan to inspect it, then preview and finalize without changing it. Otherwise treat a configured plan as a starting plan: "
         "validate/preview it with the runtime tools, adjust only through saved field refs if needed, then finalize. "
         "Filename metadata is runtime-owned: filename_hint has already been resolved from the flow template, "
         "and saved files retain a trace identifier suffix. A timestamp is included only when the configured template "
@@ -897,22 +910,11 @@ def _make_flow_runtime_formatter_tool(
                 "formatter_bundle": bundle,
                 "formatter_output_format": output_format,
                 "formatter_agent_id": agent_id,
+                "formatter_projection_plan": node_data.get("projection_plan"),
                 "additional_runtime_context": runtime_contexts,
             }
         )
         agent = get_agent_by_id(agent_id, **agent_kwargs)
-        streaming_tool = cast(
-            Any,
-            _create_streaming_tool(
-                agent=agent,
-                tool_name=tool_name,
-                tool_description=tool_description,
-                specialist_name=specialist_name,
-                inline_chat_persistence=False,
-                isolate_run_config=True,
-                propagate_errors=True,
-            ),
-        )
         tool_ctx = SimpleNamespace(
             tool_name=tool_name,
             run_config=getattr(ctx, "run_config", None),
@@ -937,6 +939,44 @@ def _make_flow_runtime_formatter_tool(
             }
         )
         try:
+            from src.lib.openai_agents.config import get_flow_selected_fields_direct_export
+
+            raw_plan = node_data.get("projection_plan")
+            if node_data.get("export_execution_mode", "ai") == "direct":
+                if not get_flow_selected_fields_direct_export():
+                    raise ValueError("Direct export is unavailable. Choose AI output or ask an administrator to enable it.")
+                if output_format not in {"csv", "tsv", "json"} or not isinstance(raw_plan, Mapping) or raw_plan.get("selection_mode") != "selected_fields":
+                    raise ValueError("Direct export requires a saved selection of structured fields for CSV, TSV or JSON.")
+                # Agent construction above retains access/configuration checks.
+                # Its bound finalizer already enforces the saved plan, validates
+                # source fingerprints and persists the artifact with file events.
+                finalizer = next(
+                    (tool for tool in agent.tools if tool.name == "finalize_and_save"), None,
+                )
+                if finalizer is None:
+                    raise ValueError("Selected-fields export requires the configured file finalizer")
+                from agents.tool_context import ToolContext
+
+                arguments = json.dumps({"filename_hint": output_filename_descriptor})
+                finalizer_context = ToolContext(
+                    context=getattr(ctx, "context", None), tool_name="finalize_and_save",
+                    tool_call_id=f"selected-fields-{flow_run_id or 'flow'}",
+                    tool_arguments=arguments, run_config=getattr(ctx, "run_config", None),
+                )
+                output = await finalizer.on_invoke_tool(finalizer_context, arguments)
+                outcome = json.loads(output)
+                if outcome.get("status") != "ok":
+                    raise ValueError("Selected-fields export failed: " + "; ".join(outcome.get("errors") or ["File was not saved"]))
+                return output
+
+            streaming_tool = cast(
+                Any,
+                _create_streaming_tool(
+                    agent=agent, tool_name=tool_name, tool_description=tool_description,
+                    specialist_name=specialist_name, inline_chat_persistence=False,
+                    isolate_run_config=True, propagate_errors=True,
+                ),
+            )
             return await streaming_tool.on_invoke_tool(
                 tool_ctx,
                 json.dumps({"query": query}),
@@ -993,7 +1033,8 @@ def _make_flow_chat_output_tool(
             },
             "artifacts": [
                 {"source_key": artifact.source_key, "envelope_id": artifact.envelope_id,
-                 "step": artifact.step, "warnings": artifact.warnings}
+                 "step": artifact.step, "node_id": artifact.node_id,
+                 "warnings": artifact.warnings}
                 for artifact in bundle.artifacts
             ],
             "warnings": bundle.warnings,
@@ -1264,6 +1305,10 @@ async def _run_custom_flow_validator_agent(
     )
     runtime_context = [instruction_prefix]
     agent_kwargs = dict(agent_context)
+    if validator_agent_id.startswith("ca_"):
+        # Flow-wide model overrides do not replace saved custom configurations.
+        agent_kwargs.pop("model_id_override", None)
+        agent_kwargs.pop("model_provider_override", None)
     agent_kwargs["additional_runtime_context"] = runtime_context
     agent = get_agent_by_id(validator_agent_id, **agent_kwargs)
 
@@ -1371,14 +1416,32 @@ async def _collect_flow_validator_materialization_inputs(
     agent_context: Mapping[str, Any],
     document_id: str | None = None,
     user_id: str | None = None,
+    profile_context: "ProfileValidationContext | None" = None,
 ) -> tuple[
     list[ValidatorResultMaterializationInput],
     list[ValidationFinding],
     list[dict[str, Any]],
 ]:
     authenticated_groups = _authenticated_groups_from_agent_context(agent_context)
-    eligible_matches, group_scope_findings, binding_audit = (
-        resolve_group_scoped_validator_matches(
+    if profile_context is not None:
+        from src.lib.domain_packs.profile_validation import profile_dispatch_matches, profile_mapping_binding_id
+        from src.lib.agent_studio.profile_conformance import ProfileIdentityError
+        if source_envelope.metadata.get("execution_receipt") != profile_context.receipt.model_dump(mode="json"):
+            raise ProfileIdentityError("Flow validation context conflicts with its source receipt")
+        allowed_binding_ids = {profile_mapping_binding_id(profile_context.profile, mapping)
+                               for mapping in profile_context.profile.contract.validator_mappings}
+        supplied_binding_ids = [_binding_id_from_group(group) for group in groups]
+        if len(supplied_binding_ids) != len(allowed_binding_ids) or set(supplied_binding_ids) != allowed_binding_ids:
+            raise ValueError("Flow validation groups must cover the exact profile's automatic validator mappings once each")
+        for group in groups:
+            if group.get("state") != "automatic" or _binding_id_from_group(group) not in allowed_binding_ids:
+                raise ValueError("Flow validation groups must use the exact profile's automatic validator mappings")
+        registry = profile_context.registry
+        eligible_matches, group_scope_findings, binding_audit = profile_dispatch_matches(
+            source_envelope, profile_context, authenticated_groups=authenticated_groups,
+        )
+    else:
+        eligible_matches, group_scope_findings, binding_audit = resolve_group_scoped_validator_matches(
             list(
                 registry.match_bindings(
                     source_envelope,
@@ -1387,7 +1450,6 @@ async def _collect_flow_validator_materialization_inputs(
             ),
             authenticated_groups=authenticated_groups,
         )
-    )
     matches_by_binding = _validation_matches_by_binding(
         tuple(eligible_matches)
     )
@@ -1476,14 +1538,24 @@ async def _collect_flow_validator_materialization_inputs(
                         "group_id": group.get("group_id"),
                         "state": state,
                         "validator_binding_id": binding_id,
-                        "status": "already_validated",
+                        "status": "already_checked",
                     }
                 )
                 continue
 
             selector_result = build_domain_validation_request(match)
             if selector_result.findings:
-                selector_findings.extend(selector_result.findings)
+                if profile_context is None:
+                    selector_findings.extend(selector_result.findings)
+                else:
+                    from src.lib.domain_packs.profile_validation import profile_policy_finding
+                    mapping_id = match.binding.raw["profile_validation"]["mapping"]["mapping_id"]
+                    mapping = next(item for item in profile_context.profile.contract.validator_mappings
+                                   if item.mapping_id == mapping_id)
+                    selector_findings.extend(profile_policy_finding(profile_context, mapping,
+                        code=finding.code, message=finding.message,
+                        object_ref=match.object_envelope.to_object_ref(), details=finding.details)
+                        for finding in selector_result.findings)
                 result_metadata.append(
                     {
                         "group_id": group.get("group_id"),
@@ -1770,7 +1842,12 @@ async def _execute_validation_groups_for_step(
         + grouped.get("replaced", [])
         + grouped.get("supplemental", [])
     )
-    if not groups:
+    profile_candidate = (
+        isinstance(candidate, ExtractionEnvelopeCandidate)
+        and candidate.execution_receipt is not None
+        and candidate.execution_receipt.output_contract.generic_profile_ref is not None
+    )
+    if not groups and not profile_candidate:
         return {}
 
     timing_started_at = time.monotonic()
@@ -1827,7 +1904,7 @@ async def _execute_validation_groups_for_step(
             raise RuntimeError(error)
         _emit_validation_group_timing(status="skipped", extra_details={"reason": "no_candidate"})
         return {"validation_group_results": {"groups": result_metadata}}
-    if not executable_groups and not grouped.get("skipped"):
+    if not executable_groups and not grouped.get("skipped") and not profile_candidate:
         _emit_validation_group_timing(
             status="skipped",
             extra_details={"reason": "no_executable_groups"},
@@ -1883,7 +1960,12 @@ async def _execute_validation_groups_for_step(
             )
             _emit_validation_group_timing(status="error", error=error)
             raise RuntimeError(error)
-        registry = DomainPackValidationRegistry.from_domain_pack(domain_pack)
+        from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+        profile_context = resolve_envelope_profile_validation(
+            source_envelope, domain_pack, db=session, user_id=agent_context.get("db_user_id") or agent_context.get("user_id"),
+            active_group_ids=_authenticated_groups_from_agent_context(agent_context) or (),
+        )
+        registry = profile_context.registry if profile_context is not None else DomainPackValidationRegistry.from_domain_pack(domain_pack)
         phase_timings_ms["load_source_envelope_ms"] = _elapsed_ms(
             source_load_started_at
         )
@@ -1899,6 +1981,7 @@ async def _execute_validation_groups_for_step(
                 agent_context=agent_context,
                 document_id=document_id,
                 user_id=user_id,
+                profile_context=profile_context,
             )
         )
         phase_timings_ms["collect_materialization_inputs_ms"] = _elapsed_ms(
@@ -1921,13 +2004,20 @@ async def _execute_validation_groups_for_step(
             )
         if materialization_inputs:
             result_materialization_started_at = time.monotonic()
-            materialization_result = materialize_validator_results_into_envelope(
-                working_envelope,
-                domain_pack.metadata,
-                materialization_inputs,
-                actor_id="flow_validator_group",
-                source_envelope_revision=source_envelope_revision,
-            )
+            if profile_context is not None:
+                from src.lib.domain_packs.profile_materialization import materialize_profile_validator_results
+                materialization_result = materialize_profile_validator_results(
+                    working_envelope, profile_context, materialization_inputs,
+                    actor_id="flow_validator_group", source_envelope_revision=source_envelope_revision,
+                )
+            else:
+                materialization_result = materialize_validator_results_into_envelope(
+                    working_envelope,
+                    domain_pack.metadata,
+                    materialization_inputs,
+                    actor_id="flow_validator_group",
+                    source_envelope_revision=source_envelope_revision,
+                )
             working_envelope = materialization_result.envelope
             appended_findings.extend(materialization_result.appended_findings)
             phase_timings_ms["materialize_validator_results_ms"] = _elapsed_ms(
@@ -2470,6 +2560,7 @@ def _runtime_output_sources_by_node_id(
     flow: CurationFlow,
     *,
     db_user_id: int | None,
+    entries_by_node: dict[str, dict[str, Any] | None] | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Validate runtime output roles and return formatter→extractors bindings."""
 
@@ -2491,13 +2582,11 @@ def _runtime_output_sources_by_node_id(
         output_agent_id = str(
             (output_data.get("agent_id") or "") if isinstance(output_data, Mapping) else ""
         )
-        output_entry = _resolve_flow_agent_entry(
-            output_agent_id,
-            db_user_id=db_user_id,
-        )
+        output_entry = (entries_by_node[output_node_id] if entries_by_node is not None and output_node_id in entries_by_node
+                        else _resolve_flow_agent_entry(output_agent_id, db_user_id=db_user_id))
         if (
             not _is_output_formatter_entry(output_entry)
-            or output_agent_id not in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+            or _resolve_flow_terminal_output_format(output_agent_id, output_entry) is None
         ):
             errors.append(
                 f"output node '{output_node_id}' agent '{output_agent_id}' is not an output formatter"
@@ -2510,9 +2599,10 @@ def _runtime_output_sources_by_node_id(
                 if isinstance(source_data, Mapping)
                 else ""
             )
-            source_entry = _resolve_flow_agent_entry(
-                source_agent_id,
-                db_user_id=db_user_id,
+            source_entry = (
+                entries_by_node[source_node_id]
+                if entries_by_node is not None and source_node_id in entries_by_node
+                else _resolve_flow_agent_entry(source_agent_id, db_user_id=db_user_id)
             )
             if not agent_can_source_output_attachment(source_entry):
                 errors.append(
@@ -2526,7 +2616,11 @@ def _runtime_output_sources_by_node_id(
         agent_id = str(
             (node_data.get("agent_id") or "") if isinstance(node_data, Mapping) else ""
         )
-        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        entry = (
+            entries_by_node[node_id]
+            if entries_by_node is not None and node_id in entries_by_node
+            else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        )
         if _is_output_formatter_entry(entry) and node_id not in bindings:
             errors.append(
                 f"formatter node '{node_id}' must be connected as an output attachment "
@@ -2562,10 +2656,29 @@ def _count_agent_ids(flow: CurationFlow) -> Dict[str, int]:
     return counts
 
 
+def _runtime_custom_entries(
+    flow: CurationFlow, *, db_user_id: int | None, active_groups: list[str] | None,
+) -> dict[str, dict[str, Any] | None]:
+    """Authorize every custom node before constructing any flow specialist."""
+    if not any(str(node.get("data", {}).get("agent_id", "")).startswith("ca_")
+               for node in flow.flow_definition.get("nodes", [])):
+        return {}
+    definition = FlowDefinition.model_validate(flow.flow_definition)
+    with SessionLocal() as db:
+        resolved = resolve_flow_execution_revisions(
+            db, definition, user_id=db_user_id, active_group_ids=list(active_groups or []),
+        )
+    blocking_findings = tuple(finding for finding in resolved.findings if finding.severity == "error")
+    if blocking_findings:
+        raise FlowExecutionRevisionError(blocking_findings)
+    return resolved.entries_by_node
+
+
 def flow_requires_document(
     flow: CurationFlow,
     *,
     db_user_id: Optional[int] = None,
+    active_groups: list[str] | None = None,
 ) -> bool:
     """Check if any agent in the flow requires a document.
 
@@ -2579,8 +2692,12 @@ def flow_requires_document(
     Returns:
         True if any agent in the flow requires a document, False otherwise
     """
-    for agent_id in get_flow_agent_ids(flow):
-        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+    custom_entries = _runtime_custom_entries(flow, db_user_id=db_user_id, active_groups=active_groups)
+    for node in _get_ordered_executable_nodes(flow):
+        node_id = str(node.get("id") or "")
+        agent_id = node.get("data", {}).get("agent_id")
+        entry = (custom_entries[node_id] if node_id in custom_entries
+                 else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id))
         if entry and entry.get("requires_document", False):
             return True
     return False
@@ -2635,11 +2752,28 @@ def get_all_agent_tools(
         (tools, created_tool_names, unavailable_steps, execution_state) where
         unavailable_steps contains skipped steps with reasons for UI warnings.
     """
+    custom_entries = _runtime_custom_entries(flow, db_user_id=db_user_id, active_groups=active_groups)
+    if any(
+        (entry or {}).get("execution_receipt", {}).get("output_contract", {}).get("generic_profile_ref")
+        for entry in custom_entries.values()
+    ):
+        from src.lib.flows.validation_attachments import apply_flow_validation_attachment_defaults
+
+        # Groups are derived metadata, not revision pins. Rehydrate against the
+        # authorized exact receipts so flows saved with collapsed same-label
+        # mappings gain all their required checks. Never persist this run copy.
+        hydrated = apply_flow_validation_attachment_defaults(
+            FlowDefinition.model_validate(flow.flow_definition), entries_by_node=custom_entries,
+        )
+        flow = cast(CurationFlow, SimpleNamespace(
+            id=flow.id, name=flow.name, flow_definition=hydrated.model_dump(mode="json"),
+        ))
     nodes = _get_ordered_executable_nodes(flow)
     nodes_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
     output_source_by_node_id = _runtime_output_sources_by_node_id(
         flow,
         db_user_id=db_user_id,
+        entries_by_node=custom_entries,
     )
     agent_id_counts = _count_agent_ids(flow)
     all_tools = []
@@ -2701,7 +2835,9 @@ def get_all_agent_tools(
         agent_name: str,
         step_number: int,
         curation_adapter_key: str | None,
+        formatter_format: str | None,
         candidate_expected_from: list[str],
+        execution_receipt: dict[str, Any] | None,
         node_data: dict[str, Any],
         node_id: str,
     ):
@@ -2802,7 +2938,7 @@ def get_all_agent_tools(
                         run_config=getattr(ctx, "run_config", None),
                     )
                     tool_input = {"query": resolved_query}
-                    if _flow_file_output_format(agent_id) is not None:
+                    if formatter_format is not None:
                         tool_input["output_filename_descriptor"] = (
                             output_filename_descriptor or ""
                         )
@@ -2841,7 +2977,7 @@ def get_all_agent_tools(
                     internal_event_cursor,
                     tool_name="formatter_cannot_complete",
                 )
-                if _flow_file_output_format(agent_id) is not None
+                if formatter_format is not None
                 else None
             )
             validation_schedule = validation_schedule_from_node_data(node_data)
@@ -2855,6 +2991,7 @@ def get_all_agent_tools(
                 build_extraction_envelope_candidate_with_evidence(
                     step_result,
                     agent_key=agent_id,
+                    execution_receipt=execution_receipt,
                     conversation_summary=flow_conversation_summary,
                     adapter_key=curation_adapter_key,
                     metadata={
@@ -3125,7 +3262,8 @@ def get_all_agent_tools(
             })
             continue
 
-        entry = _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+        entry = (custom_entries[node_id] if node_id in custom_entries
+                 else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id))
         if not entry:
             logger.warning("[Flow Executor] Agent '%s' in flow but not resolvable, skipping", agent_id)
             unavailable_steps.append({
@@ -3330,10 +3468,17 @@ def get_all_agent_tools(
                 include_evidence=include_evidence,
             )
             agent_kwargs = dict(context)
+            if node_id in custom_entries:
+                receipt = entry["execution_receipt"]
+                agent_kwargs["execution_revision_id"] = receipt["agent_revision_id"]
+                agent_kwargs["execution_receipt"] = receipt
+            if agent_id.startswith("ca_"):
+                agent_kwargs.pop("model_id_override", None)
+                agent_kwargs.pop("model_provider_override", None)
             if step_instruction_prefix:
                 agent_kwargs["additional_runtime_context"] = [step_instruction_prefix]
-            output_format = _resolve_flow_terminal_output_format(agent_id)
-            file_output_format = _flow_file_output_format(agent_id)
+            output_format = _resolve_flow_terminal_output_format(agent_id, entry)
+            file_output_format = _flow_file_output_format(agent_id, entry)
             if file_output_format is not None:
                 raw_streaming_tool = _make_flow_runtime_formatter_tool(
                     agent_id=agent_id,
@@ -3434,8 +3579,10 @@ def get_all_agent_tools(
             agent_name=entry.get("name", agent_id),
             step_number=step_num,
             node_data=data,
+            formatter_format=_flow_file_output_format(agent_id, entry),
             curation_adapter_key=curation_adapter_key,
             candidate_expected_from=candidate_expected_from,
+            execution_receipt=entry.get("execution_receipt"),
             node_id=node_id,
         )
 
@@ -3490,7 +3637,12 @@ def build_supervisor_instructions(
         agent_id = data.get("agent_id")
 
         step_num += 1
-        resolved_entry = _resolve_flow_agent_entry(agent_id) if agent_id else None
+        # Custom display labels are saved on the node; do not read mutable custom
+        # metadata while rendering instructions after exact runtime authorization.
+        resolved_entry = (
+            _resolve_flow_agent_entry(agent_id)
+            if agent_id and not agent_id.startswith("ca_") else None
+        )
         agent_name = data.get("agent_display_name")
         if not agent_name and agent_id:
             agent_name = resolved_entry.get("name") if resolved_entry else None
@@ -3747,7 +3899,7 @@ def create_flow_supervisor(
     # The configured flow must remain executable independently of optional
     # follow-up context. The inspection tool never substitutes for a missing
     # or inaccessible configured step.
-    if not tools:
+    if not tools and not unavailable_steps:
         step_count = sum(
             1 for n in flow.flow_definition.get("nodes", [])
             if n.get("type") != "task_input" and n.get("data", {}).get("agent_id") != "task_input"
@@ -3832,6 +3984,7 @@ def create_flow_supervisor(
     has_document = bool(document_id) and flow_requires_document(
         flow,
         db_user_id=db_user_id,
+        active_groups=active_groups,
     )
 
     # Build supervisor instructions with document awareness if applicable
@@ -3935,6 +4088,7 @@ def _persist_flow_extraction_candidates(
         requests.append(
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
+                execution_receipt=candidate.execution_receipt,
                 adapter_key=adapter_key,
                 agent_key=candidate.agent_key,
                 source_kind=CurationExtractionSourceKind.FLOW,
@@ -4418,26 +4572,50 @@ async def execute_flow(
         }
     }
 
-    # Surface any unavailable flow steps to UI/audit so skipped work is explicit.
-    unavailable_steps = getattr(supervisor, "_flow_unavailable_steps", []) or []
-    for step in unavailable_steps:
-        step_num = step.get("step")
-        agent_name = step.get("agent_name", "Unknown Agent")
-        reason = step.get("reason", "unknown reason")
+    # Configured executable steps are required. Never turn an invalid flow into
+    # a smaller one and let its formatter run without the missing source work.
+    unavailable_steps = list(getattr(supervisor, "_flow_unavailable_steps", []) or [])
+    if unavailable_steps:
+        step_labels = ", ".join(
+            f"{step.get('step')} ({step.get('agent_name') or 'Unknown Agent'})"
+            for step in unavailable_steps
+        )
+        message = (
+            f"Flow cannot start because these steps are unavailable: {step_labels}. "
+            "If a step needs a PDF, open Documents in the top navigation and load "
+            "a document into chat. In Flow Builder, check that each step uses an "
+            "available agent; add validators as validation attachments, not ordinary steps."
+        )
         yield {
-            "type": "DOMAIN_WARNING",
+            "type": "FLOW_ERROR",
             "timestamp": _now_iso(),
             "details": {
                 "reason": "flow_step_unavailable",
-                "message": (
-                    f"Flow step {step_num} ({agent_name}) is unavailable and will be skipped: {reason}"
-                ),
-                "step": step_num,
-                "agent_id": step.get("agent_id"),
-                "agent_name": agent_name,
-                "unavailable_reason": reason,
-            }
+                "message": message,
+                # Omit underlying creation exceptions: they can contain private
+                # configuration. The curator needs node identity and repair steps.
+                "unavailable_steps": [
+                    {key: step.get(key) for key in ("step", "agent_id", "agent_name")}
+                    for step in unavailable_steps
+                ],
+            },
         }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": _now_iso(),
+            "data": {
+                "flow_id": str(flow.id), "flow_name": flow.name,
+                "flow_run_id": flow_run_id, "document_id": document_id,
+                "origin_session_id": session_id, "status": "failed",
+                "output_status": "none", "output_count": 0, "outputs": [],
+                "output_branches": [], "failure_reason": message,
+                "total_evidence_records": 0, "step_evidence_counts": {},
+                "adapter_keys": [], "extraction_handoff_audits": [],
+                "extraction_result_refs": [], "extraction_result_ids": [],
+                "review_session_ids": [],
+            },
+        }
+        return
 
     # Delegate to run_agent_streamed with flow supervisor
     # This gives us: Langfuse tracing, prompt logging, document metadata,

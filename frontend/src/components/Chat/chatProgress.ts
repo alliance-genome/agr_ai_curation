@@ -44,10 +44,10 @@ export function getFriendlyProgressMessage(event: SSEEvent): string {
       return 'Interaction stopped by user'
 
     case 'CREW_START':
-      return event.details?.crewDisplayName || `Starting ${event.details?.crewName || 'crew'}...`
+      return event.details?.crewDisplayName || 'Working on your request…'
 
     case 'TOOL_START':
-      return event.details?.friendlyName || `Using ${event.details?.toolName || 'tool'}...`
+      return event.details?.friendlyName || 'Working on your request…'
 
     case 'TOOL_COMPLETE':
       if (event.details?.friendlyName) {
@@ -57,7 +57,7 @@ export function getFriendlyProgressMessage(event: SSEEvent): string {
       return 'Tool complete'
 
     case 'LLM_CALL':
-      return event.details?.message || 'Thinking...'
+      return 'Preparing a response…'
 
     case 'DOMAIN_WARNING':
       return event.details?.message || 'Warning received.'

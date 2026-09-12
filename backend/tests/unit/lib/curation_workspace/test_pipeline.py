@@ -19,6 +19,7 @@ from src.lib.curation_adapters.structured_payload import (
 )
 from src.lib.curation_workspace import pipeline as module
 from src.lib.curation_workspace.models import (
+    CurationSessionAgentRevision,
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
     CurationDraft as DraftModel,
@@ -74,6 +75,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 TEST_TABLES = [
     PDFDocument.__table__,
     ReviewSessionModel.__table__,
+    CurationSessionAgentRevision.__table__,
     ExtractionResultModel.__table__,
     DomainEnvelopeModel.__table__,
     DomainEnvelopeObject.__table__,
@@ -247,7 +249,8 @@ def _make_envelope_prep_output(*, review_row_count: int = 1) -> CurationPrepAgen
 
 @pytest.fixture(autouse=True)
 def _stub_domain_envelope_review_row_materializer(monkeypatch):
-    def _fake_materialize(_db, envelope_id, *, revision=None, materializer=None):
+    def _fake_materialize(_db, envelope_id, *, revision=None, materializer=None, active_group_ids=(), user_id=None):
+        assert user_id == "user-1"
         row_count = int(str(envelope_id).rsplit("-", 1)[-1])
         envelope_revision = revision or 1
         rows = []
@@ -717,7 +720,9 @@ metadata:
         registry=None,
         source_envelope_revision=None,
         runtime_context=None,
+        profile_context=None,
     ):
+        assert profile_context is None
         assert source_envelope_revision == 1
 
         def _runner(request, *, binding):
@@ -826,7 +831,8 @@ metadata:
         prep_output=prep_output,
     )
 
-    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None):
+    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None, active_group_ids=(), user_id=None):
+        assert user_id == "user-1"
         assert envelope_id == "env-validation-1"
         assert revision == 2
         envelope_row = db.get(DomainEnvelopeModel, envelope_id)
@@ -962,7 +968,8 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
         prep_output=prep_output,
     )
 
-    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None):
+    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None, active_group_ids=(), user_id=None):
+        assert user_id == "user-1"
         assert db is db_session
         assert envelope_id == "env-review-1"
         assert revision == 4

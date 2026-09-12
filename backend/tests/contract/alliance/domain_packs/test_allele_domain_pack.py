@@ -218,7 +218,7 @@ def test_allele_pack_declares_object_roles_and_validator_bindings(monkeypatch):
         "mention": {
             "source": "payload",
             "path": "mention.text",
-            "required": True,
+            "required": False,
         },
         "normalized_hint": {
             "source": "payload",
@@ -245,7 +245,7 @@ def test_allele_pack_declares_object_roles_and_validator_bindings(monkeypatch):
         "evidence_quote": {
             "source": "evidence_record",
             "path": "verified_quote",
-            "required": True,
+            "required": False,
             "context_only": True,
         },
     }
@@ -371,10 +371,8 @@ def test_allele_mention_binding_does_not_use_envelope_evidence_without_object_id
     assert len(matches) == 1
     selector_result = build_domain_validation_request(matches[0])
 
-    assert {finding.code for finding in selector_result.findings} == {
-        "selector_missing"
-    }
-    assert selector_result.request is None
+    assert not selector_result.findings
+    assert selector_result.request is not None
     assert selector_result.selected_inputs == {
         "mention": "Mst1 Flox/Flox",
         "associated_gene": "Stk4",
@@ -387,10 +385,7 @@ def test_allele_mention_binding_does_not_use_envelope_evidence_without_object_id
         ],
     }
     assert selector_result.evidence == []
-    assert (
-        selector_result.findings[0].details["selector_problem"]["input_name"]
-        == "evidence_quote"
-    )
+    assert "evidence_quote" not in selector_result.request.selected_inputs
 
 
 def test_allele_mention_binding_uses_only_explicit_object_evidence_ids():

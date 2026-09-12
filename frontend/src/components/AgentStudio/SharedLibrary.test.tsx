@@ -72,7 +72,7 @@ describe('SharedLibrary', () => {
     render(<SharedLibrary active {...props} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Open request context' }))
     expect(screen.queryByText(/secret/)).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Discuss request with Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss request with AI Chat' }))
     expect(props.onReuseToolIdea).toHaveBeenCalledWith(request)
   })
   it('shows an empty library for a non-member with no authorized artifacts', async () => {

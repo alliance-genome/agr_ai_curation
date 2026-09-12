@@ -244,6 +244,45 @@ def _build_owned_openai_resources() -> OwnedOpenAIResources:
     )
 
 
+def build_owned_openai_responses_resources() -> OwnedOpenAIResources:
+    """Build an explicitly OpenAI Responses-backed client/provider pair.
+
+    Agent Studio is intentionally pinned to the native OpenAI Responses path.
+    Keep this separate from the configurable default-runner provider so a future
+    deployment-level provider change cannot silently move authoring chat onto
+    Chat Completions or an OpenAI-compatible adapter.
+    """
+
+    api_key = get_api_key("openai")
+    if not str(api_key or "").strip():
+        raise ValueError("OPENAI_API_KEY environment variable not set")
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = get_base_url("openai")
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    client = SafeLangfuseAsyncOpenAI(**client_kwargs)
+
+    websocket_enabled = not _env_flag_disabled("OPENAI_RESPONSES_WEBSOCKET_ENABLED")
+    provider_kwargs: dict[str, Any] = {
+        "openai_client": client,
+        "use_responses": True,
+        "strict_feature_validation": True,
+    }
+    if websocket_enabled:
+        provider_kwargs.update(
+            use_responses_websocket=True,
+            responses_websocket_options=_request_ws_keepalive_options(),
+        )
+    else:
+        provider_kwargs["use_responses_websocket"] = False
+
+    return OwnedOpenAIResources(
+        client=client,
+        provider=OpenAIProvider(**provider_kwargs),
+    )
+
+
 async def close_owned_openai_resources(
     resources: OwnedOpenAIResources,
     *,
@@ -1169,7 +1208,9 @@ async def _run_agent_with_owned_resources(
     pending_tool_calls: deque[Dict[str, Any]] = deque()
     tool_calls_count = 0
     current_agent = agent.name
-    builder_materializer_agent = is_builder_materializer_agent(agent)
+    canonical_agent_key = _agent_runtime_canonical_agent_key(agent) or current_agent
+    generic_profile = getattr(agent, "generic_profile", None)
+    builder_materializer_agent = generic_profile is not None or is_builder_materializer_agent(agent)
     if builder_materializer_agent and getattr(agent, "output_type", None) is not None:
         raise ValueError("Builder agents must use backend finalization, not an output schema")
     direct_execution_context = None
@@ -1226,7 +1267,9 @@ async def _run_agent_with_owned_resources(
     builder_workspace = ExtractionBuilderWorkspace(
         run_id=trace_id,
         document_id=document_id,
-        agent_id=current_agent,
+        agent_id=canonical_agent_key,
+        generic_profile=generic_profile,
+        execution_receipt=getattr(agent, "execution_receipt", None),
     )
     builder_workspace_token = set_active_extraction_builder_workspace(builder_workspace)
     resolver_call_ledger = ResolverCallLedger(trace_id=trace_id)
@@ -1315,7 +1358,7 @@ async def _run_agent_with_owned_resources(
             model=str(getattr(agent, "model", "") or ""),
             conversation_id=sentry_conversation_id,
             workflow=effective_sentry_workflow,
-            agent_key=str(getattr(agent, "name", "") or current_agent),
+            agent_key=canonical_agent_key,
             agent_source="runtime",
             trace_id=trace_id or getattr(current_trace_run, "trace_id", None),
             document_id=document_id,
@@ -1342,7 +1385,7 @@ async def _run_agent_with_owned_resources(
                 model=str(getattr(agent, "model", "") or ""),
                 conversation_id=sentry_conversation_id,
                 workflow=f"{effective_sentry_workflow}_post_stream",
-                agent_key=str(getattr(agent, "name", "") or current_agent),
+                agent_key=canonical_agent_key,
                 agent_source="runtime",
                 trace_id=trace_id or getattr(current_trace_run, "trace_id", None),
                 document_id=document_id,
@@ -1386,6 +1429,12 @@ async def _run_agent_with_owned_resources(
                 builder_workspace=builder_workspace,
                 resolver_ledger=resolver_call_ledger,
             )
+        if generic_profile is not None:
+            from src.lib.agent_studio.profile_tools import assert_profile_tool_contract
+
+            for tool in agent.tools:
+                if hasattr(tool, "profile_bound_schema"):
+                    assert_profile_tool_contract(tool)
         result = Runner.run_streamed(
             agent,
             input=input_items,
@@ -1543,16 +1592,16 @@ async def _run_agent_with_owned_resources(
                 yield ("live", specialist_event)
 
         finally:
-            # Clean up background task
+            # Cancel the SDK run, not its event consumer: stream_events must
+            # finish draining so the SDK joins its run/tool tasks before the
+            # owning provider and client are closed.
             if not sdk_task.done():
-                sdk_task.cancel()
-                try:
-                    await sdk_task
-                except asyncio.CancelledError:
-                    pass
+                result.cancel()
+            await sdk_task
 
+    interleaved_stream = interleaved_events()
     try:
-        async for event_source, event in interleaved_events():
+        async for event_source, event in interleaved_stream:
             # Handle live events (specialist internal tools)
             if event_source == "live":
                 if event.get("type") == "evidence_summary":
@@ -1935,6 +1984,36 @@ async def _run_agent_with_owned_resources(
                         }
                     }
 
+        if builder_materializer_agent and builder_workspace.finalization is not None:
+            finalization = builder_workspace.finalization
+            if generic_profile is not None:
+                generic_profile.require_envelope(
+                    finalization.payload,
+                    execution_receipt=builder_workspace.execution_receipt,
+                    agent_key=canonical_agent_key,
+                )
+            # Use the same exact-profile validation boundary as supervisor
+            # specialists while run context and validator event delivery remain active.
+            validated_output = await _dispatch_domain_envelope_validators_for_chat(
+                json.dumps(finalization.payload),
+                expected_output_type=getattr(agent, "output_type", None),
+                specialist_name=current_agent,
+                tool_name=canonical_agent_key,
+                adapter_key=_agent_runtime_curation_adapter_key(agent),
+                source_agent_key=canonical_agent_key,
+                is_builder_envelope=True,
+                execution_receipt=builder_workspace.execution_receipt,
+                runtime_context=_validator_runtime_context_for_chat(
+                    document_id=document_id,
+                    user_id=user_id,
+                    authenticated_groups=getattr(agent, "authenticated_groups", None),
+                ),
+            )
+            validated_payload = json.loads(validated_output)
+            if not isinstance(validated_payload, dict):
+                raise ValueError("Builder validator dispatch must return a JSON object")
+            builder_workspace.finalization = replace(finalization, payload=validated_payload)
+
         # Yield any remaining live events after stream completes
         while live_events_yielded < len(live_events):
             yield live_events[live_events_yielded]
@@ -1951,7 +2030,8 @@ async def _run_agent_with_owned_resources(
                 "trace_id": trace_id,
             },
         )
-        builder_workspace.mark_cancelled(reason="runner stream cancelled")
+        if builder_workspace.finalization is None:
+            builder_workspace.mark_cancelled(reason="runner stream cancelled")
         raise
     except Exception as exc:
         sentry_stream_finalization_status = "error"
@@ -1964,56 +2044,62 @@ async def _run_agent_with_owned_resources(
                 "trace_id": trace_id,
             },
         )
-        builder_workspace.mark_aborted(reason=f"{type(exc).__name__}: {exc}")
+        if builder_workspace.finalization is None:
+            builder_workspace.mark_aborted(reason=f"{type(exc).__name__}: {exc}")
         raise
     finally:
-        # Clear the live event list reference
-        set_live_event_list(None)
-        if sentry_span is not None:
-            set_redacted_ai_span_data(sentry_span, "ai_curation.tool_call.count", tool_calls_count)
-            set_redacted_ai_span_data(
-                sentry_span,
-                "ai_curation.agent.events_collected",
-                len(live_events),
+        try:
+            # async-for does not close its iterator on early exit. Keep nested SDK
+            # teardown inside this run's lifetime rather than asyncgen finalization.
+            await interleaved_stream.aclose()
+        finally:
+            # Clear the live event list reference
+            set_live_event_list(None)
+            if sentry_span is not None:
+                set_redacted_ai_span_data(sentry_span, "ai_curation.tool_call.count", tool_calls_count)
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.agent.events_collected",
+                    len(live_events),
+                )
+                set_redacted_ai_span_data(
+                    sentry_span,
+                    "ai_curation.finalization.status",
+                    sentry_stream_finalization_status,
+                )
+            _safe_reset_run_context_token(
+                label="evidence_workspace",
+                reset_fn=reset_active_evidence_records,
+                token=evidence_workspace_token,
+                trace_id=trace_id,
+                user_id=user_id,
             )
-            set_redacted_ai_span_data(
-                sentry_span,
-                "ai_curation.finalization.status",
-                sentry_stream_finalization_status,
+            _safe_reset_run_context_token(
+                label="extraction_builder_workspace",
+                reset_fn=reset_active_extraction_builder_workspace,
+                token=builder_workspace_token,
+                trace_id=trace_id,
+                user_id=user_id,
             )
-        _safe_reset_run_context_token(
-            label="evidence_workspace",
-            reset_fn=reset_active_evidence_records,
-            token=evidence_workspace_token,
-            trace_id=trace_id,
-            user_id=user_id,
-        )
-        _safe_reset_run_context_token(
-            label="extraction_builder_workspace",
-            reset_fn=reset_active_extraction_builder_workspace,
-            token=builder_workspace_token,
-            trace_id=trace_id,
-            user_id=user_id,
-        )
-        _safe_reset_run_context_token(
-            label="resolver_call_ledger",
-            reset_fn=reset_active_resolver_call_ledger,
-            token=resolver_ledger_token,
-            trace_id=trace_id,
-            user_id=user_id,
-        )
-        _safe_reset_run_context_token(
-            label="run_config",
-            reset_fn=reset_current_run_config,
-            token=run_config_token,
-            trace_id=trace_id,
-            user_id=user_id,
-        )
-        if sentry_span_context_manager is not None:
-            sentry_span_context_manager.__exit__(None, None, None)
-        if conversation_context_manager is not None:
-            conversation_context_manager.__exit__(None, None, None)
-        reset_benchmark_invocation_route(benchmark_route_token)
+            _safe_reset_run_context_token(
+                label="resolver_call_ledger",
+                reset_fn=reset_active_resolver_call_ledger,
+                token=resolver_ledger_token,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
+            _safe_reset_run_context_token(
+                label="run_config",
+                reset_fn=reset_current_run_config,
+                token=run_config_token,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
+            if sentry_span_context_manager is not None:
+                sentry_span_context_manager.__exit__(None, None, None)
+            if conversation_context_manager is not None:
+                conversation_context_manager.__exit__(None, None, None)
+            reset_benchmark_invocation_route(benchmark_route_token)
 
     # Get final output if not captured from streaming
     if builder_materializer_agent:
@@ -2031,26 +2117,11 @@ async def _run_agent_with_owned_resources(
             write_stream_event(run_error_event, trace_id=trace_id)
             yield run_error_event
             return
-        # The package finalizer owns canonical extraction, not SDK completion
-        # text. Do not stage this payload again or finalize different membership.
-        validated_output = await _dispatch_domain_envelope_validators_for_chat(
-            json.dumps(finalization.payload),
-            expected_output_type=expected_output_type,
-            specialist_name=current_agent,
-            tool_name=None,
-            adapter_key=_agent_runtime_curation_adapter_key(agent),
-            source_agent_key=_agent_runtime_canonical_agent_key(agent),
-            is_builder_envelope=True,
-            runtime_context=_validator_runtime_context_for_chat(
-                document_id=document_id,
-                user_id=user_id,
-                authenticated_groups=getattr(agent, "authenticated_groups", None),
-            ),
-        )
-        structured_result = json.loads(validated_output)
-        if not isinstance(structured_result, dict):
-            raise ValueError("Builder validator dispatch must return a JSON object")
-        builder_workspace.finalization = replace(finalization, payload=structured_result)
+        # The original extraction was checked before dispatch; the shared
+        # validator returns a normalized DomainEnvelope with retained findings.
+        structured_result = finalization.payload
+        if not full_response:
+            full_response = str(getattr(result, "final_output", "") or "Extraction finalized.")
     elif hasattr(result, "final_output"):
         final_output = result.final_output
         if final_output:
@@ -2239,11 +2310,19 @@ async def _run_agent_with_owned_resources(
                 structured_evidence_records,
             )
 
-        if not builder_materializer_agent:
-            finalization = builder_workspace.finalize(
-                candidate_ids=["runner_structured_result"],
+        finalization = builder_workspace.finalization if builder_materializer_agent else builder_workspace.finalize(
+            candidate_ids=["runner_structured_result"],
+        )
+        assert finalization is not None  # Profile runs returned above if finalization was absent.
+        structured_result = finalization.payload
+        if generic_profile is not None and direct_execution_context is None:
+            yield build_internal_extraction_result_event(
+                tool_name=canonical_agent_key, specialist_name=current_agent,
+                finalization=finalization,
+                agent_key=canonical_agent_key,
+                adapter_key=_agent_runtime_curation_adapter_key(agent),
+                execution_receipt=builder_workspace.execution_receipt,
             )
-            structured_result = finalization.payload
 
         try:
             parsed_answer = Answer.model_validate(structured_result)
@@ -2283,6 +2362,7 @@ async def _run_agent_with_owned_resources(
                     source_kind=CurationExtractionSourceKind.CHAT,
                     origin_session_id=direct_chat_context.session_id,
                     trace_id=trace_id, user_id=user_id, builder_finalization=finalization,
+                    execution_receipt=builder_workspace.execution_receipt,
                     metadata={
                         "specialist_name": current_agent,
                         "domain_pack_id": builder_workspace.domain_pack_id,
@@ -2298,6 +2378,8 @@ async def _run_agent_with_owned_resources(
             internal_event = build_internal_extraction_result_event(
                 tool_name=direct_agent_key, specialist_name=current_agent,
                 finalization=finalization, extraction_result_id=persisted.extraction_result_id,
+                agent_key=direct_agent_key, adapter_key=direct_adapter_key,
+                execution_receipt=builder_workspace.execution_receipt,
                 result_ref=persisted.result_ref,
                 persistence_status={
                     "phase": "inline_validated_extraction", "created_new": persisted.created_new,
@@ -2698,6 +2780,7 @@ async def run_agent_streamed(
                     "data": {
                         "agent": agent.name,
                         "model": agent.model,
+                        "execution_receipt": getattr(agent, "execution_receipt", None),
                         "document_id": document_id,
                         "trace_id": trace_id
                     }
@@ -2987,6 +3070,7 @@ async def run_agent_streamed(
                 "data": {
                     "agent": agent.name,
                     "model": agent.model,
+                    "execution_receipt": getattr(agent, "execution_receipt", None),
                     "document_id": document_id,
                     "trace_id": fallback_trace_id
                 }
@@ -3049,6 +3133,7 @@ async def run_agent_streamed(
             "data": {
                 "agent": agent.name,
                 "model": agent.model,
+                "execution_receipt": getattr(agent, "execution_receipt", None),
                 "document_id": document_id,
                 "trace_id": fallback_trace_id
             }

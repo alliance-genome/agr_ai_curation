@@ -58,6 +58,18 @@ describe('FlowNode', () => {
     expect(screen.queryByText(/^v\d+$/)).not.toBeInTheDocument()
   })
 
+  it('shows the custom executable revision instead of the historical prompt version', () => {
+    render(<FlowNode data={buildNodeData({
+      agent_id: 'ca_fixture', prompt_version: 3, agent_revision_id: 'revision-id',
+      execution_receipt: {
+        agent_id: 'agent-id', agent_key: 'ca_fixture', agent_revision_id: 'revision-id',
+        revision: 7, fingerprint: 'fingerprint', output_contract: { output_state: 'none' },
+      },
+    })} selected={false} />)
+    expect(screen.getByText('Revision 7')).toBeInTheDocument()
+    expect(screen.queryByText('v3')).not.toBeInTheDocument()
+  })
+
   it('renders multiple formatter sources as one grouped output binding', () => {
     render(
       <FlowNode

@@ -172,17 +172,17 @@ def test_rgd_paper_review_curator_guide_is_linked_and_covers_release_tasks():
     assert guide_name in flows_guide
     for required_text in (
         "Documents → Upload Documents",
-        "normal high-accuracy PDF path",
+        "do not need to choose a processing profile",
         "target_entities:",
         "include_other_genes: true",
         "Introduction",
         "Discussion",
         "unresolved gene-product identity",
         "result references",
-        "default 15-minute deadline",
-        "pdf_processing_receipt",
-        "Production verification checklist",
-        "non-RGD account",
+        "processing receipt",
+        "reporting a timeout",
+        "custom extractor",
+        "does not automatically reproduce",
         "Automatic",
     ):
         assert required_text in guide

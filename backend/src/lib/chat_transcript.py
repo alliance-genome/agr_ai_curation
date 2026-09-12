@@ -176,6 +176,26 @@ def count_session_text_messages(
     ) * 2
 
 
+def latest_assistant_trace_for_session(*, session_id: str, user_id: str) -> str | None:
+    """Identify the preceding completed turn, never infer intent from its prose."""
+    with SessionLocal() as db:
+        try:
+            messages = _list_session_messages(
+                repository=ChatHistoryRepository(db), session_id=session_id, user_id=user_id,
+            )
+        except ChatHistorySessionNotFoundError:
+            return None
+    # At most the current user turn may follow the completed assistant turn.
+    if messages and messages[-1].role == "user":
+        messages = messages[:-1]
+    if not messages:
+        return None
+    previous = messages[-1]
+    if previous.role != "assistant" or previous.message_type != "text" or not previous.content.strip():
+        return None
+    return previous.trace_id
+
+
 __all__ = [
     "FLOW_SUMMARY_MESSAGE_TYPE",
     "FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY",
@@ -183,5 +203,6 @@ __all__ = [
     "count_session_text_messages",
     "extract_flow_assistant_message",
     "latest_assistant_message_for_session",
+    "latest_assistant_trace_for_session",
     "list_session_text_exchanges",
 ]

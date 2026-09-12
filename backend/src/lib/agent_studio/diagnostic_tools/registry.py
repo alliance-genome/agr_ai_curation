@@ -3,7 +3,7 @@ Tool Registry for managing diagnostic tools in Prompt Explorer.
 
 Provides centralized management of tools with:
 - Tool registration and discovery
-- Anthropic format conversion
+- Provider-neutral tool definition conversion
 - Handler dispatch
 - Tool categorization for organization at scale
 """
@@ -29,13 +29,13 @@ class ToolDefinition:
 
 class DiagnosticToolRegistry:
     """
-    Registry for managing diagnostic tools available to Opus.
+    Registry for managing diagnostic tools available to AI Chat.
 
     Designed to scale to 100+ tools with:
     - Categorization for organization
     - Tags for filtering
     - Efficient lookup by name
-    - Bulk retrieval in Anthropic format
+    - Bulk retrieval as provider-neutral JSON schemas
     """
 
     def __init__(self):
@@ -121,9 +121,9 @@ class DiagnosticToolRegistry:
         """Get all registered tools."""
         return list(self._tools.values())
 
-    def get_anthropic_tools(self) -> List[dict]:
+    def get_tool_definitions(self) -> List[dict]:
         """
-        Get all tools in Anthropic format.
+        Get all tools as provider-neutral JSON schema definitions.
 
         Returns:
             List of dicts with keys: name, description, input_schema

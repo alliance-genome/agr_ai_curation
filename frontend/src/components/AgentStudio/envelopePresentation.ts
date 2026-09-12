@@ -113,7 +113,7 @@ export function groupObjectFields(object: DomainEnvelopeObjectMetadata): Envelop
 export interface EnvelopeValidatorView {
   validatorId: string
   label: string
-  state: ValidationAttachmentOption['state']
+  state: ValidationAttachmentOption['state'] | 'unavailable'
   stateExplanation?: string
   description?: string
   policySentence: string
@@ -152,10 +152,14 @@ export function objectValidators(object: DomainEnvelopeObjectMetadata): Envelope
   return Array.from(byValidator.values()).map(({ attachment, fields, wholeObject }) => ({
     validatorId: attachment.validator_id,
     label: attachment.label,
-    state: attachment.state,
-    stateExplanation: attachment.state_explanation,
+    state: attachment.available === false ? 'unavailable' : attachment.state,
+    stateExplanation: attachment.available === false
+      ? attachment.unavailable_reasons?.join('; ') || attachment.reason || 'Selected check is currently unavailable.'
+      : attachment.state_explanation,
     description: attachment.description,
-    policySentence: validatorPolicySentence(attachment),
+    policySentence: attachment.available === false && attachment.required && !attachment.blocking
+      ? 'Required mapping; cannot run while unavailable.'
+      : validatorPolicySentence(attachment),
     fieldCount: fields.size,
     coversWholeObject: wholeObject,
   }))
@@ -209,7 +213,7 @@ export interface EnvelopeCounts {
 }
 
 function distinctValidatorIds(attachments: ValidationAttachmentOption[], state: ValidationAttachmentOption['state']): number {
-  return new Set(attachments.filter((attachment) => attachment.state === state).map((attachment) => attachment.validator_id)).size
+  return new Set(attachments.filter((attachment) => attachment.state === state && attachment.available !== false).map((attachment) => attachment.validator_id)).size
 }
 
 export function envelopeCounts(metadata: DomainEnvelopeMetadata): EnvelopeCounts {

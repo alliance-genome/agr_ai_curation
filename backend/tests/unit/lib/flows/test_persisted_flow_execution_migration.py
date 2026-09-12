@@ -86,7 +86,6 @@ async def test_execute_flow_requires_persisted_repair_without_mutating_definitio
         assert captured == {}
         assert stored_definition == original
         return
-
     first_event = await anext(event_stream)
     await event_stream.aclose()
 

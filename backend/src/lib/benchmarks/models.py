@@ -16,7 +16,10 @@ from pydantic import (
     field_serializer,
     field_validator,
     model_validator,
+    model_serializer,
 )
+
+from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
 
@@ -162,7 +165,36 @@ class BenchmarkRouteSlot(FrozenStrictModel):
         return self
 
 
-class BenchmarkTargetCatalogEntry(FrozenStrictModel):
+class BenchmarkSourceRevisions(FrozenStrictModel):
+    """Saved executable origins, separate from the experiment's model routes."""
+
+    source_execution_receipts: Mapping[str, AgentExecutionReceipt] = Field(default_factory=dict)
+
+    @field_validator("source_execution_receipts")
+    @classmethod
+    def freeze_sources(cls, value: Mapping[str, AgentExecutionReceipt]) -> Mapping[str, AgentExecutionReceipt]:
+        for slot, receipt in value.items():
+            if not receipt.agent_key.startswith("ca_") or not slot.startswith(("agent:", "validator:")):
+                raise ValueError("Benchmark source revisions require a custom agent and model slot")
+            if slot.startswith("agent:") and slot != f"agent:{receipt.agent_key}":
+                raise ValueError("Benchmark source revision does not match its agent slot")
+        return MappingProxyType(dict(value))
+
+    @field_serializer("source_execution_receipts")
+    def serialize_sources(self, value: Mapping[str, AgentExecutionReceipt]) -> dict:
+        return dict(value)
+
+    @model_serializer(mode="wrap")
+    def serialize_with_sources(self, handler):
+        result = handler(self)
+        # System plans never had custom origins: preserve their durable bytes
+        # and digests rather than inventing empty provenance for historical work.
+        if not self.source_execution_receipts:
+            result.pop("source_execution_receipts", None)
+        return result
+
+
+class BenchmarkTargetCatalogEntry(BenchmarkSourceRevisions):
     target: BenchmarkExecutionTarget
     route_slots: tuple[str, ...] = Field(min_length=1)
 
@@ -170,6 +202,8 @@ class BenchmarkTargetCatalogEntry(FrozenStrictModel):
     def require_unique_slots(self) -> "BenchmarkTargetCatalogEntry":
         if len(self.route_slots) != len(set(self.route_slots)):
             raise ValueError("target route slots must not contain duplicates")
+        if set(self.source_execution_receipts) - set(self.route_slots):
+            raise ValueError("Source revision references an unused target slot")
         return self
 
 
@@ -225,7 +259,7 @@ class ResolvedBenchmarkCase(FrozenStrictModel):
     user_query: str | None = Field(default=None, min_length=1)
 
 
-class ResolvedBenchmarkCell(FrozenStrictModel):
+class ResolvedBenchmarkCell(BenchmarkSourceRevisions):
     cell_id: str
     case_id: str
     configuration_id: str
@@ -234,6 +268,12 @@ class ResolvedBenchmarkCell(FrozenStrictModel):
     input: BenchmarkInputReference
     user_query: str | None = Field(default=None, min_length=1)
     routes: Mapping[str, BenchmarkSuiteRoute]
+
+    @model_validator(mode="after")
+    def require_source_slots(self) -> "ResolvedBenchmarkCell":
+        if set(self.source_execution_receipts) - set(self.routes):
+            raise ValueError("Source revision references an unused cell slot")
+        return self
 
     @field_validator("routes")
     @classmethod

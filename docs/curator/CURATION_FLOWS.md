@@ -1,45 +1,8 @@
-# Curation Flows Guide
+# Curation flows guide
 
-Curation Flows are guided supervisor conversations that run multiple AI agents in a saved order. You build them once, save them, and reuse them across documents.
+A flow saves a task and the agents used to carry it out. Use it to repeat an extraction across papers with the same instructions, validation choices, and output layout.
 
-> **Note:** Flows support **sequential (linear) runs** - each agent connects to the next in a chain. Each node can have only one outgoing connection.
-
-## Why Use Curation Flows?
-
-**Time Savings**
-- Build a workflow once, reuse it many times
-- Don't retype the same instructions for each document
-
-**More Control**
-- Define exactly which agents run and in what order
-- Add custom instructions to each step in your workflow
-- Fine-tune individual agents for your specific use case
-
-**Custom Instructions at Every Step**
-- In regular chat, you give one set of instructions to the whole system
-- In flows, you can customize instructions for each agent individually
-- Example: Tell the PDF agent to focus on methods sections, then tell the validation agent to only accept certain ontology types
-
-**Domain Envelopes and Automatic Validation**
-- Domain-pack extraction agents save their results as domain envelopes
-- Flow Builder shows which curatable objects and field paths the extractor produces
-- Active default validators attach automatically from domain-pack metadata
-- Active validators can be skipped only when flow configuration replaces or supplements them with explicit validation
-- Under-development validators are visible metadata and are not scheduled
-- Extractors preserve paper-backed proposals and selector hints; validators own
-  authoritative database/API/ontology resolution and materialized fields
-
-**Repeatable Results**
-- Same workflow = consistent extraction across documents
-- Great for processing batches of similar papers
-
-> **Tip:** Need to process multiple documents? See **[Batch Processing](BATCH_PROCESSING.md)** to run saved flows against multiple PDFs automatically.
-
-## Accessing the Flow Builder
-
-1. Click **"Agent Studio"** in the navigation bar
-2. Select the **"Flows"** tab
-3. The Flow Builder canvas appears on the right, with Opus chat on the left
+Open **Agent Studio → Flows**. The editor contains an agent palette, a canvas, and a settings panel for the selected step. **AI Chat** is on the right and can be hidden or resized.
 
 ## Reusing project-shared flows
 
@@ -59,398 +22,202 @@ document. Home also lists shared flows and links back to Flow Builder. Project
 sharing does not grant access to restricted agents: if an agent is unavailable to
 your group, resolve that access issue before running the flow.
 
-## Flow Builder Interface
+## Build with AI Chat
 
-**Opus Chat (Left Panel)**
-Chat with Claude Opus about your flow - ask for help building it, troubleshooting
-issues, understanding what each agent does, or checking which active validators
-the domain-pack validation plan will schedule. When validator-agent IDs are
-present, Claude can inspect those validator prompts and tools through Agent
-Studio's existing prompt-inspection tools.
+### Reading validation results
 
-**Agent Palette (Left Panel)**
-A searchable, collapsible list of available agents organized by category. Click or drag agents onto the canvas. Use the search box to filter agents by name, description, or tools.
+An `already_checked` entry means the check ran earlier; it does not mean it
+passed. Objects with open validation findings are reported as `needs_review`,
+even when other fields resolved successfully. Review missing fields, unresolved
+references, and skipped checks before submission. Exporting a CSV does not make
+the results submission-ready.
 
-**Canvas (Center/Right)**
-The main workspace where you build your flow by adding agents and connecting them.
+Choose **Help build a flow**, or describe your task:
 
-**Step Panel (Right)**
-When you select a node, a panel opens beside the canvas with the settings that step owns: instructions, the optional automatic checks, and output options. Drag its left edge to resize it, or hide it to a narrow strip. On a narrow window it opens as a drawer over the canvas.
+> Help me build a flow for Drosophila stocks. Let's agree on the extraction instructions first, then the details, validation, and CSV columns.
 
-## Available Agents
+AI Chat can work through the decisions one at a time. Start with the task, then decide whether a pre-made extractor has the fields you need. If it does not, create a custom agent in [Agent Workshop](AGENT_STUDIO.md#agent-workshop-create-or-edit-an-agent). AI Chat can help edit that agent while preserving the flow you are building.
 
-### Input
-| Agent | Description |
-|-------|-------------|
-| **Initial Instructions** | Starting point - define the task for your flow |
+Review each proposal before choosing **Apply changes**. Apply changes the draft; **Save** saves the flow. A progress indicator appears while a proposal is being validated. After a successful Apply, AI Chat can continue with the next decision. If a proposal conflicts with newer edits, ask for a refreshed proposal.
 
-### PDF Extraction
-| Agent | Description |
-|-------|-------------|
-| **PDF Extraction Agent** | Extracts text, tables, and data from PDF documents |
-| **Gene Expression Extractor** | Extracts gene expression patterns from PDFs |
+## Build or edit on the canvas
 
-### Data Validation
-| Agent | Description |
-|-------|-------------|
-| **Gene Validation Agent** | Validates gene identifiers against AGR database |
-| **Allele Validation Agent** | Validates allele identifiers against AGR database |
-| **Disease Ontology Agent** | Maps disease terms to DOID identifiers |
-| **Chemical Ontology Agent** | Maps chemical names to ChEBI identifiers |
-| **GO Term Lookup Agent** | Looks up Gene Ontology term definitions |
-| **Gene GO Annotations Agent** | Retrieves existing GO annotations for genes |
-| **Ortholog Lookup Agent** | Queries orthology relationships across species |
-| **Ontology Term Resolver Agent** | Resolves exact CURIEs and typed ontology labels or synonyms to ontology terms |
+### 1. Set Initial Instructions
 
-### Output
-| Agent | Description |
-|-------|-------------|
-| **Chat Output Agent** | Displays results in the chat for review |
-| **CSV File Formatter** | Generates downloadable CSV files |
-| **TSV File Formatter** | Generates downloadable TSV files |
-| **JSON File Formatter** | Generates downloadable JSON files |
+Use one **Initial Instructions** node and write the overall task. For example:
 
-### My Custom Agents
+> Extract each distinct fly stock used in this paper. Include stocks from any source and combine repeated mentions of the same stock. Exclude background-only mentions.
 
-If you've created custom agents in **Agent Workshop**, they appear here under "My Custom Agents". You can use them in flows just like system agents. See **[Agent Studio](AGENT_STUDIO.md)** for details on creating custom agents.
+### 2. Choose an extractor
 
-## Building a Flow
+Click or drag an agent from the palette onto the canvas. Search the palette by name, description, or tools. Accessible saved custom agents appear alongside package agents.
 
-### Step 1: Add Agents to the Canvas
+A packaged extractor has predefined fields. Changing its prompt does not add fields to that format. For a custom set of details, use an agent with **Custom Output Structure**. You usually do not need a separate General PDF Extraction step before a domain extractor: the extractor can read the paper itself.
 
-**Click to Add:** Find an agent in the Agent Palette and click it to add to the canvas.
+### 3. Connect the steps and outputs
 
-**Drag and Drop:** Click and hold on an agent, drag it onto the canvas, and release.
+Drag between the nodes' connection handles. Non-output steps run in a single ordered chain. Output connections select the saved results to format; they are separate from that chain.
 
-### Step 2: Connect Agents
+For a simple flow, connect Initial Instructions to your extractor, then connect the extractor to a CSV formatter or Chat Output. An output can have several selected source steps, and a source can feed more than one output. For example, the same extraction can produce a chat summary and a TSV file.
 
-1. Hover over an agent node to see connection points (handles)
-2. Click and drag from one handle to another agent's handle
-3. Release to create the connection
+Every output needs a source. Attach it directly to each extraction or validation result it should include. Each output runs once after its selected sources finish. Adding output connections does not enable parallel extraction branches.
 
-**You can connect agents in any direction** - top to bottom, left to right, whatever makes sense for your workflow.
+### 4. Configure each step
 
-### Step 3: Configure Each Step
+Select a node to open its settings panel. Drag the panel's edge to resize it. On narrow screens it opens as a drawer.
 
-Click any node to open the **step panel** beside the canvas. The header shows the agent, its step number, and whether the step has unsaved changes or a configuration error. **Apply** saves your edits to the step, **Cancel** puts them back, and the menu in the header holds **Delete step**. If you click another node while edits are unsaved, the panel asks whether to apply them, discard them, or keep editing.
+**Apply** in this panel keeps the step's edits in the flow draft. **Cancel** restores the panel's prior settings. Selecting another step with unapplied edits prompts you to apply, discard, or keep editing. Use the panel menu for **Delete step**.
 
-**Instructions for this step**
+#### Instructions for this step
 
-Add instructions for this step only. They are added to the agent's prompt with highest priority, so they override the agent's default behavior for this flow step. Example: "Focus only on gene expression data from the methods section."
+Add guidance specific to this flow's use of the agent. For example, restrict extraction to a particular organism or experimental question. These instructions do not change the agent's saved prompt for other uses or override its locked output and runtime rules.
 
-**Automatic checks**
+#### Automatic checks
 
-Extraction steps show what runs automatically on what the step extracts: a one-line summary such as "9 checks run on what this step extracts, 1 turned off for this flow", and how many of those checks always run. Checks that are blocking, or that the domain pack locks on, are counted but not listed, because you cannot turn them off.
+The current interface labels packaged automatic validation as **Automatic checks**. The summary shows how many run and how many always run. **Adjust optional checks** exposes those you can disable for this flow. The information button explains the affected fields and the consequence of disabling each one.
 
-Click **Adjust optional checks** to see one switch per check you may turn off for this flow. Each switch is one sentence in plain words, such as "Confirm the annotation type against the Annotation Type vocabulary". The info circle beside a switch opens a short explanation: what the check does, which fields it checks, what happens to those fields if you turn it off, and links to the validator's guide and the field in the Agents tab. All of that wording comes from the domain pack, so it matches what the Agents tab says.
+Required or locked validators cannot be turned off. Under-development validators do not run. If an explicit custom validation step replaces an automatic validator, the panel identifies that relationship.
 
-If a custom validator step replaces one of the automatic checks, the summary says so, and that check no longer appears as a switch.
+For a custom output structure, attach compatible validators to individual details or parts in Workshop. See [field validation](CUSTOM_OUTPUT_STRUCTURES.md#attach-a-validator-to-a-detail-or-part). A field without a semantic validator still has its configured structure rules enforced.
 
-Under-development checks do not run and are not shown here. Current findings, lookup notes, and export or submission readiness are shown from the saved domain envelope after a run.
+#### Custom validator steps
 
-**Custom validator steps**
+When supported, a custom validator node can replace or supplement validation for an extraction step. Review which source and validation it targets. Its steering prompt adds guidance for this use of the validator. Ask AI Chat to inspect the available options; naming a field in a prompt alone does not create a compatible validator attachment.
 
-A custom validation agent placed after an extraction step shows which step it attaches to and which automatic check it replaces or adds to. Its **steering prompt** is added to the validator's prompt for this step only. Use it to name the envelope object, field, or question you want checked.
+#### Output steps
 
-**Output steps**
+Choose **Chat Output**, CSV, TSV, or JSON. A flow needs an output even if you do not want a downloadable file.
 
-A formatter step shows which step's results it formats, a switch to include the supporting evidence in the output, and, for file formatters, the file name choice: the paper's file name, a custom prefix, or the formatter's own name. An example file name is shown beneath the choice.
+For CSV, TSV, and JSON, choose how to build the file:
 
-**Output variable**
+- **Use selected fields** fixes the columns across runs. Open **Choose output fields**, select details from the connected agents, rename or reorder the columns, then choose **Use these fields**. Apply the output-step changes and save the flow.
+- **Let AI arrange the output** uses your **Output instructions** to choose a layout from the available results. This is useful for exploratory work; columns can vary between runs.
 
-Every step names its saved result for later steps and exports. The default name is fine for most flows. To rename it, open **Output variable** at the bottom of the panel. Names can contain letters, numbers, and underscores. Example: `validated_genes`
+**Export structured data directly — faster** skips the extra AI call and copies your selected fields into the file. Turn it on only when you want the values unchanged. Agent prompts, group prompts and output instructions do not run in this mode; your instruction text is kept and becomes available again when you turn direct export off. Renaming and reordering columns are supported; combining or rewriting values is not.
 
-**About this agent**
+The field picker works with saved custom structures and packaged field declarations. It shows each connected source separately. For a stock extractor, you might select **Stock name**, then the **Supplier name** and **Catalog number** parts of Source. Select the whole Source answer instead if you want to keep its parts together.
 
-The row at the bottom of the panel links to the agent in the Agents tab: its **Guide**, what it produces and checks in **Envelope**, and its **Prompts**. The panel itself holds only what the step owns.
+JSON keeps selected groups as objects and lists as arrays. CSV and TSV put whole groups and lists in a cell as JSON; selecting individual parts gives them separate columns. Records from different source steps remain separate rows, with blanks in columns that belong to another source. They are not joined into a new biological record.
 
-**Step Context**
+Missing answers are blank in CSV/TSV and null in JSON. Selecting a column does **not** make the extractor require an answer. If a run finds no items, CSV/TSV still include the selected headers and JSON contains an empty list. If a source structure changes, review the field selection again before running.
 
-Each step receives the flow's Initial Instructions, the loaded document context,
-the selected agent, and that node's instructions for the step. The runtime preserves
-structured artifacts from earlier steps separately for review, export, and
-follow-up lookup. Later step prompts do not use hidden previous-output text or
-custom variable templates.
+For Chat Output, use **Output instructions** to describe the summary or table. File output steps also offer filename choices and a filename preview.
 
-### Step 4: Verify with Claude
+**Need help with your output? Chat with AI** opens help for that exact step while keeping unapplied edits. AI can help choose fields, rename or reorder columns, and propose the same settings for your review. Selected fields control the file layout; instructions cannot add columns or invent missing values.
 
-Before saving, click the **"Verify with Claude"** button. Claude will:
-- Check your flow structure for issues
-- Identify missing connections or problems
-- Suggest improvements
-- Confirm your flow is ready
+A formatter arranges collected information. If you need a new biological field, add it to a suitable custom extractor first; putting its name in the CSV instructions is not enough.
 
-This is especially valuable when building new flows.
+#### Output variable and agent information
 
-### Step 5: Save Your Flow
+**Output variable** names the step's saved result. The default is usually sufficient; custom names use letters, numbers, and underscores.
 
-1. Click the **"Save"** button
-2. Enter a descriptive name (e.g., "C. elegans Expression to WBbt TSV")
-3. Add an optional description
-4. Click **"Save"**
+**About this agent** links to the agent's **Guide**, **Envelope**, and **Prompts**. Use these to inspect what it collects and validates without changing the step.
 
-## Flow Builder Toolbar
+### 5. Review and save
 
-The Flow Builder toolbar provides quick access to common operations:
+Use **Verify with AI Chat** for help finding configuration issues. The editor also validates the flow and reports missing instructions, invalid connections, or other configuration errors. AI review does not execute the flow or validate its extracted answers.
 
-**File Menu**
-- **New Flow** (Ctrl+N) - Start a new empty flow
-- **Open Flow...** (Ctrl+O) - Open a previously saved flow
-- **Manage Flows...** - Rename or delete saved flows
-- **Save** (Ctrl+S) - Save the current flow
-- **Save As...** - Save a new copy of the current flow
-- **Rename Flow…** - Rename the currently open saved flow you own
-- **Delete Flow** - Remove the current flow
+Choose **Save**, give the flow a descriptive name, and add a description if useful. For example: “Drosophila stocks to CSV.”
 
-**Edit Menu**
-- **Select All** (Ctrl+A) - Select all nodes on the canvas
-- **Delete Selected** (Del) - Remove selected nodes
+## How prompts layer together
 
-**Verify with Claude** - Appears when your flow has nodes. Sends the flow to Claude for structural review before running.
+| Instructions | Purpose |
+|--------------|---------|
+| Initial Instructions | The overall task for the flow run |
+| Agent prompt | Reusable task guidance from the selected agent |
+| Group-specific instructions | Conventions for active curator groups |
+| Instructions for this step | Guidance specific to this use of the agent |
+| Custom item-type and detail instructions | Record boundaries and how to collect each custom answer |
+| Output instructions | Presentation of the selected saved results |
 
-## Flow Validation
+The runtime also supplies document context and locked output, tool, and evidence rules. Step instructions can narrow editable task guidance, but cannot override those locked rules, add undeclared fields, or make an unsupported submission format valid.
 
-The Flow Builder validates your flow and shows error indicators when there are issues:
+Avoid conflicting instructions. For example, “only extract C. elegans genes” narrows an agent's broader extraction task. Asking a fixed expression-pattern format for extra fold-change fields needs a structure change, not just a stronger prompt.
 
-- **Missing task instructions** - The Initial Instructions node requires non-empty instructions
-- **Parallel connections** - A node has more than one outgoing connection. Each node can connect to only one downstream step.
-- **Duplicate Initial Instructions** - Only one Initial Instructions node is allowed per flow
+Each step receives its task and document context. Structured results from earlier steps are saved for review and output; you do not need to paste those results into later prompts or invent variable templates to pass them along.
 
-Validation errors appear as a red banner under the step panel header when you select the affected node.
+## Run a saved flow
 
-## How Prompts Layer Together
+1. Return to the main chat and open the paper you want to process.
+2. Open **Tools** in the right panel.
+3. Find the saved flow and choose **Run**.
+4. Review the chat output, downloadable files, and any validation findings.
 
-Each agent has multiple prompt layers that combine when the agent runs. Understanding these layers helps you write effective custom instructions and avoid conflicts.
+You can also choose a saved flow as your **Tools → Chat default** when you want ordinary chat requests to use it. Return to **Automatic** for general routing. RGD curators should follow the [RGD paper-review guide](RGD_GO_DISEASE_PAPER_REVIEW.md) for its recipes and request fields.
 
-```
-Flow Custom Instructions   ← HIGHEST priority (prepended, overrides everything)
-Base Prompt                ← Core agent behavior (from config/YAML)
-Group-Specific Rules       ← Appended when your groups are active
-Document Context           ← Auto-injected (document hierarchy, sections, abstract)
-Output Schema              ← Auto-injected when structured output is configured
-```
+Test on one representative paper before using [batch processing](BATCH_PROCESSING.md). Batch processing requires PDF extraction and a supported file output or curation handoff; chat-only output is insufficient.
 
-**Layer 1 — Base Prompt:** The core instructions that define the agent's role, mission, and workflow. You can view these in the Agent Browser on the Agents tab.
+## Review results and export
 
-**Layer 2 — Group-Specific Rules:** Customizations for each curator group (WormBase, FlyBase, MGI, etc.). These are appended to the base prompt when your groups are active. You can view these on the Prompts tab in the Agent Browser; the step panel's **About this agent** row takes you there.
+| Output | Use |
+|--------|-----|
+| Chat | Read a summary or table and ask follow-up questions |
+| CSV | Open a table in spreadsheet software |
+| TSV | Use a tab-separated table in downstream tools |
+| JSON | Preserve structured or grouped information |
 
-**Layer 3 — Flow Custom Instructions (highest priority):** Instructions you add to a step in the flow step panel. These are prepended to the agent's prompt and explicitly marked as highest priority — they override both the base prompt and group rules for that flow step.
+Download files from their cards in the chat. Keep copies of results you need for later work.
 
-**What this means in practice:**
-- If the base prompt says "extract all genes" but your flow custom instructions say "only extract C. elegans genes," the flow instructions win.
-- Group rules and the base prompt still apply for anything your flow instructions don't address.
-- Each layer has its place: base prompts define core behavior, group rules add organism-specific conventions, and flow instructions give you fine-grained control for specific workflows.
+Packaged extraction may also provide a curation review session. Its tables display saved records with evidence and validation findings. Export or submission previews check the current records, required fields, findings, and the data type's readiness rules. Resolve the stated blockers before final actions. Overrides are available only where the relevant policy allows them.
 
-> **Tip:** When writing flow custom instructions, you don't need to repeat what's already in the base prompt or group rules. Just add what's different or more specific for this particular workflow step.
+Neither a downloaded spreadsheet nor a confirmed identifier establishes submission readiness. Custom output records are not automatically Alliance submission objects.
 
-## How Flows Execute
+## Example workflows
 
-Understanding how flows run helps you build effective workflows:
+### Gene expression to CSV
 
-1. **Initial Instructions** provide the starting task description and context
-2. A supervisor agent receives all steps and executes them **sequentially** in the order defined by your connections
-3. Each step runs with the flow task, document context, selected agent, and node custom instructions; prior step artifacts stay saved separately for review/export lookup
-4. Output agents are attached to one or more structured extraction or validation steps. Each output agent runs once after all of its selected sources complete
-5. Custom instructions for each step are applied with highest priority, overriding the agent's default behavior for that step (see [How Prompts Layer Together](#how-prompts-layer-together) above)
-6. Domain-pack extraction steps save envelope objects and schedule automatic validation according to the node's validation attachments
+Connect **Initial Instructions → Gene Expression Extractor**, then attach **CSV File Formatter** to the extractor.
 
-**Important:** Output agents are branches, not ordinary steps in the sequential chain. Connect each output directly to every structured source it should include. A flow may produce more than one result—for example, a chat summary and a TSV file—from the same completed sources.
+Task: “Extract expression patterns for C. elegans, including anatomical locations and developmental stages.” Inspect the extractor's automatic validation before adding separate validator steps; the relevant validation may already run.
 
-## Running a Flow
+### Custom stocks to TSV and chat
 
-RGD curators using the package-owned paper-review recipes should follow the
-task-specific **[RGD GO and Disease Paper Review](RGD_GO_DISEASE_PAPER_REVIEW.md)**
-guide for upload, starter fields, saved Chat default selection, blocker review,
-and result-reference follow-ups.
+Create and save a custom stock extractor with a required **Stock name** and optional **Source**. Connect **Initial Instructions → your stock extractor**. Attach both **TSV File Formatter** and **Chat Output** directly to that extractor.
 
-After building and saving your flow:
+Use **Choose output fields** in the TSV step to select the stock and source columns, plus supporting evidence IDs if needed. Ask Chat Output for a short summary of the stocks and any missing sources. If no compatible source validator is available, review source associations against the paper.
 
-1. **Navigate to the main chat screen** (click "Home" in the navigation bar)
-2. **Load a PDF document** if your flow uses PDF extraction agents
-3. **Click the "Tools" tab** on the right panel
-4. **Find your saved flow** in the list
-5. **Click the "Run" button** next to your flow
+## Manage flows and unsaved drafts
 
-The flow executes and results appear based on your output agent (chat message or downloadable file).
+Use **File → Open Flow...** to open saved work, **Save** to keep changes, and **Manage Flows...** to rename or delete flows. **New Flow** starts another flow. Read the unsaved-changes prompt before discarding the current draft.
 
-## Output Options
+Use **File → Rename Flow…** to rename the saved flow you own without saving pending canvas or instruction edits. Enter the name and choose **Rename** or press Enter. **Cancel** or Escape leaves it unchanged. Save a new flow before renaming it. **Save As...** creates a separate copy.
 
-Flows can output results in different ways. Choose one or more output agents
-that fit your needs. An output agent can combine several explicitly connected
-structured extraction or validation results and runs once per flow. Its custom
-instructions can shape presentation, such as column names, column order,
-filters, sorting, or whether to show object, evidence, or validation rows.
+Studio keeps the current flow while you switch tabs. It also retains a recovery draft in this browser for your account, including unfinished step-panel instructions. After a reload or return, choose **Resume draft** or **Discard draft**. Recovered flows open as unsaved copies so you can review them before saving.
 
-### Chat Output Agent
+Local recovery is not an account save. It does not transfer between devices and may be removed when browser storage is cleared. If recovery storage fails, keep the editor open and Save. See [draft recovery](AGENT_STUDIO.md#keep-and-recover-unsaved-work) for details.
 
-Sends results directly to the chat interface.
-
-**Use cases:**
-- Quick review before generating a file
-- Iterating on your flow to get the output right
-- Discussing results with Opus in Agent Studio
-
-### CSV File Formatter
-
-Creates comma-separated value files from completed flow artifacts for spreadsheet applications.
-
-**Use cases:**
-- Import into Excel or Google Sheets
-- Database import
-- Sharing with collaborators
-
-### TSV File Formatter
-
-Creates tab-separated value files from completed flow artifacts, preferred by many databases.
-
-**Use cases:**
-- Database import
-- AGR data submission
-- Bioinformatics tools
-
-### JSON File Formatter
-
-Creates structured JSON files from completed flow artifacts that preserve complex nested data.
-
-**Use cases:**
-- Data with hierarchical structure
-- Sharing with computational biologists
-
-### Downloading Files
-
-When a flow generates a file:
-1. A download card appears in the chat
-2. Click the download button to save the file
-3. Files are available until the session ends
-
-### Review, Export, and Submission Readiness
-
-Domain-pack extraction can also create review sessions with envelope object
-rows. The review table is a projection over the saved envelope. When you preview
-export or direct submission, the system checks the expected envelope revision,
-required fields, active validation findings, definition state, and adapter-owned
-readiness policy.
-
-If blockers appear, resolve the listed object/field issue before final export or
-submission. Curator overrides only work when the domain-pack policy allows them
-and a reason has been saved only when that specific policy requires one.
-
-## Example Workflows
-
-### Example 1: Gene Expression Extraction to CSV
-
-**Goal:** Extract gene expression data from a paper and export to CSV
-
-```
-Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → CSV File Formatter
-```
-
-**Instructions for Initial Instructions node:**
-"Extract all gene expression data from this paper, including anatomical locations and developmental stages."
-
-### Example 2: Ontology Term Resolution Pipeline
-
-**Goal:** Extract expression data and resolve terms to official IDs
-
-```
-Initial Instructions -> PDF Extraction Agent -> Gene Expression Extractor -> Ontology Term Resolver Agent -> TSV File Formatter
-```
-
-**Instructions for Ontology Term Resolver Agent node:**
-"Resolve all anatomy labels using WormBase provider-scoped anatomy lookup and all stage labels using WormBase provider-scoped life-stage lookup. Preserve unresolved or ambiguous candidates."
-
-### Example 3: Full Pipeline with File Export
-
-**Goal:** Extract expression data, validate terms, and export to TSV
-
-```
-Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → Gene Validation Agent → TSV File Formatter
-```
-
-**Instructions for Initial Instructions node:**
-"Extract gene expression data and validate all gene identifiers before export."
-
-For domain-pack extractors, check the Gene Expression Extractor node before
-running. Its automatic validation attachments may already include required
-validators, so add a separate validation agent only when you need extra custom
-checks or a curator-specific steering prompt.
-
-## Managing Flows
-
-### Loading Saved Flows
-
-1. In the Flow Builder, use **File → Open Flow...** (Ctrl+O)
-2. Browse your saved flows
-3. Click to load a flow onto the canvas
-
-### Editing Flows
-
-1. Open the flow
-2. Make your changes
-3. Save with **File → Save** (Ctrl+S)
-
-### Deleting Flows
-
-Use **File → Rename Flow…** to rename the currently open saved flow you own. Enter a new name and click **Rename** (or press Enter); **Cancel** or Escape leaves the name unchanged. Rename saves only the name on the same flow: pending canvas and instruction edits remain unsaved until you use **Save**. Save a new flow before renaming it.
-
-Use **File → Manage Flows...** to rename or delete other saved flows, or **File → Delete Flow** to remove the currently loaded flow.
-
-## Tips for Building Effective Flows
-
-### Start with Linear Flows
-Build simple flows first (A → B → C) to understand how agents work together.
-
-### Add Custom Instructions
-Take advantage of the ability to add specific instructions to each agent node.
-
-### Use Verify with Claude
-Always verify your flow before running it on important documents.
-
-### Test with Chat Output First
-Use Chat Output Agent at the end of your flow to review results before switching to a file formatter for final export.
-
-### Name Flows Descriptively
-Use names like "C. elegans Expression to WBbt CSV" rather than "Flow 1".
+Saved flow steps retain their selected agent revisions. Saving a new version in Workshop does not automatically upgrade existing flows. Explicitly select the changed agent revision and review the flow before rerunning it.
 
 ## Troubleshooting
 
-### Flow Won't Run
+**Flow cannot start because a step is unavailable:** The flow stops before running any agents; it does not skip required work and continue to the output. If a step needs a paper, open **Documents** in the top navigation and load the paper into chat. In Flow Builder, check that each step uses an available agent. Validators marked as attachment-only belong on an extraction step as validation attachments, not in the ordinary execution chain. Flows whose agents do not require a document can still run without one.
 
-- **Check connections:** Make sure all agents are connected
-- **Verify you saved:** The flow must be saved before running
-- **Check the Tools tab:** Make sure you're looking in the right place
+**The flow has no visible result.** Confirm it has a connected output, and that the output selects the intended source steps.
 
-### No Output Generated
+**A CSV column is missing or empty.** Check whether the extractor collected that field, then inspect the output instructions and any saved column layout. Ask AI Chat to compare them.
 
-- **Check output agent:** Make sure you have Chat Output or a File Formatter connected
-- **Verify connections:** The output agent must be connected to receive data
-- **Check upstream artifacts:** The output agent needs a completed structured extraction or validation artifact to project
+**Apply reports that the draft changed.** Your newer edits are preserved. Ask AI Chat to read the current draft and prepare a fresh proposal.
 
-### Wrong Data Extracted
+**A validator is attached but an answer is unresolved.** Inspect the finding. The input may be ambiguous, missing needed context, absent from the database, or affected by a lookup failure. An attachment is configuration, not a successful result.
 
-- **Refine your instructions:** Add more specific custom instructions to agents
-- **Review automatic validation:** Check the extractor node's validation attachments and any validation findings in the review workspace
-- **Add validation agents:** Include Ontology Term Resolver Agent or another validation agent when you need custom checks beyond the domain-pack defaults
+**An updated agent did not change my flow.** The flow still uses its saved revision. Review and update the selected revision explicitly.
 
-## Common Questions
+For an unexpected run result, use the response's **three-dot menu (⋮)** to send feedback or **Open in Agent Studio**. Include the expected result and a specific example from the paper.
 
-### Can I run the same flow on multiple documents?
 
-Yes! You can run a flow one document at a time, or use **[Batch Processing](BATCH_PROCESSING.md)** to run a saved flow against multiple documents automatically with real-time progress tracking.
+## Keep your usual flows beside chat
 
-### Are flow results saved?
+The **Curation Flows** panel beside chat is your personal list of shortcuts.
+Choose **Add flow** to search your saved flows and bring one into the list.
+Drag a card by its dotted handle to change the order, or use **Move up** and
+**Move down** in the card’s three-dot menu. With the handle focused, you can
+also use the up and down arrow keys. Your selection and order are saved to
+your account.
 
-Generated files are available during your session. Download files you want to keep before ending your session.
+**Hide** removes a shortcut from this panel. It keeps the saved flow, its agents
+and its history. Choose **Add flow** to bring it back. To edit or delete a flow,
+open **Flows workspace**. Hiding or reordering a shortcut does not change your
+chat routing choice or the flow itself.
 
-### What's the difference between Chat Output and File Formatters?
-
-- **Chat Output:** Shows results in the chat for review and discussion
-- **File Formatters:** Generate downloadable files (CSV, TSV, JSON) from completed flow artifacts
-
-Use Chat Output first to review results, then switch to a File Formatter when ready to export.
-
-## Next Steps
-
-- **[Available Agents](AVAILABLE_AGENTS.md)** - Learn more about each agent
-- **[Agent Studio](AGENT_STUDIO.md)** - Chat with Opus about your flows
-- **[Best Practices](BEST_PRACTICES.md)** - Tips for writing effective instructions
+Your current flows appear initially. Once you personalize the list, use
+**Add flow** when you want another saved flow to appear there.

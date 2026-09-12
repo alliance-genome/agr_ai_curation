@@ -1,90 +1,63 @@
-# Getting Started with AI Curation
+# Getting started with AI Curation
 
-Welcome! This guide will walk you through your first steps using the AI Curation System.
+Open [AI Curation](https://ai-curation.alliancegenome.org) and sign in with your account. If you are testing a development deployment, use the address provided by the development team. Available features and agents depend on the deployed version and your access.
 
-## Accessing the System
+## Open a paper and ask a question
 
-1. Navigate to **[ai-curation.alliancegenome.org](https://ai-curation.alliancegenome.org)**
-2. Log in with your **AWS Cognito credentials**
+1. Open **Documents** from the top navigation and upload your PDF.
+2. Wait for document processing to finish, then open the paper in the chat workspace.
+3. Ask a specific question, such as “Which Drosophila stocks were used in this study, and where did the authors obtain them?”
+4. Review the answer and supporting passages in the paper.
 
-## Understanding the Interface
+An uploaded file may still be processing. Check its status before starting an extraction; uploading the same paper again does not fix an unfinished processing job.
 
-The AI Curation System has three main panels:
+## Find your way around
 
-### Left Panel: PDF Viewer
-- Displays uploaded research papers
-- Allows you to view and navigate through documents
-- Shows highlighted sections relevant to your queries
+The main workspace has a PDF viewer, chat, and a right panel with **Audit** and **Tools**.
 
-### Middle Panel: Chat Interface
-- Your main interaction area with the AI assistant
-- Ask questions about uploaded documents or query databases directly
-- Receive detailed responses with citations and evidence
-- **Provide feedback** using the triple-dot menu (⋮) on any AI response - this automatically captures your prompts, responses, and all traces for developer review
+| Area | What you can do |
+|------|-----------------|
+| PDF viewer | Read the paper and inspect linked evidence |
+| Chat | Ask questions and review extraction or lookup results |
+| Audit | Follow agent and tool activity for the current work |
+| Tools | Run saved flows and choose the Chat default |
+| Agent Studio | Browse agents, create a custom agent, and build flows with AI Chat |
 
-### Right Panel: Audit Trail & Tools
-The right panel has two tabs:
+The main chat carries out curation tasks. **AI Chat in Agent Studio** helps you configure agents and flows or understand how a result was produced.
 
-**Audit Tab**
-- Tracks all AI actions and decisions
-- Shows which databases were queried
-- Displays API calls and data sources used
-- Provides transparency into how answers were generated
+## Look up biological information
 
-**Tools Tab**
-- Lists your saved curation flows
-- Click **"Run"** next to any flow to execute it against the current document
-- Quick access to run workflows without switching to Agent Studio
+You can ask database questions without uploading a paper. Include enough context to identify what you mean:
 
-## Uploading Documents
+- “Look up the C. elegans gene daf-16 in Alliance records.”
+- “Show existing GO annotations for human TP53 with experimental evidence.”
+- “Resolve ‘nucleus’ as a GO cellular component term.”
 
-To work with research papers:
+With **Automatic** selected under **Tools → Chat default**, the system routes requests to available specialists. If you select a saved flow there instead, ordinary chat requests use that flow. Return to Automatic when you want general routing again.
 
-1. Click **"Documents"** in the top navigation bar
-2. Click **"Upload Documents"**
-3. Select your PDF file(s)
-4. Wait for the upload to complete
-5. Once uploaded, you can start chatting about the document
+See [available agents](AVAILABLE_AGENTS.md) for the main extraction and lookup tasks.
 
-## Querying Databases
+## Extract your own set of details
 
-You don't need to upload documents to use the AI Curation System! You can:
+For a reusable custom extractor, open **Agent Studio → Agent Workshop → Custom data extraction**.
 
-- Ask questions about genes, diseases, ontologies, and more
-- Query authoritative databases directly
-- Get cross-referenced information from multiple sources
+1. Name the type of item, such as **Stock**.
+2. Describe what counts as one item and which details to collect, such as **Stock name** and **Source**.
+3. Review the structure and the agent's settings, then **Save**.
+4. Add the saved agent to a flow with a chat or file output, and save the flow.
 
-The system will automatically determine which databases to query based on your question.
+You can ask AI Chat to guide you and propose changes throughout. **Apply** changes a draft; **Save** keeps the agent or flow in your account. The [custom output guide](CUSTOM_OUTPUT_STRUCTURES.md) explains fields, parts, and validators.
 
-## Example Queries
+## Run and review a flow
 
-### With Uploaded Documents
-- "Extract all C. elegans gene expression data from this paper and map anatomical locations to WormBase anatomy terms (WBbt)."
-- "Identify anatomical structures mentioned in the methods section and map them to Zebrafish Anatomy Ontology (ZFA) terms."
-- "Map the developmental stages in Table 2 to WormBase life stage terms (WBls)."
+Open a paper in the main chat, find your saved flow under **Tools**, and choose **Run**. Review the extracted records, evidence, and validation findings. Download files from the output cards if your flow has a file formatter.
 
-### Database Queries (No Document Upload Needed)
-- "What is the function of the gene daf-16 in C. elegans?"
-- "Show me the GO annotations for human TP53 with experimental evidence codes."
-- "What are the child terms of DOID:162 (cancer) in the Disease Ontology?"
+Start with one paper before [running a batch](BATCH_PROCESSING.md). A successful run or a recognized identifier still needs curator review; custom records and ordinary CSV exports are not automatically ready for Alliance submission.
 
-## Next Steps
+## Keep drafts and get help
 
-### Learn the Basics
-- Review **[Best Practices](BEST_PRACTICES.md)** for tips on writing effective queries
-- Check **[Available Agents](AVAILABLE_AGENTS.md)** to see all available databases and ontologies
-- Start asking questions and exploring!
+Workshop and Flow Builder keep unsaved recovery drafts in this browser for your account. If you return to unfinished work, choose **Resume draft** or **Discard draft**. Use **Save** for account storage; browser recovery is not a substitute.
 
-### Explore Advanced Features
-- **[Agent Studio](AGENT_STUDIO.md)** - Chat with Claude Opus about prompts, browse agent configurations, and analyze traces
-- **[Curation Flows](CURATION_FLOWS.md)** - Build visual workflows that chain agents together and export results to CSV, TSV, or JSON files
-- **[Batch Processing](BATCH_PROCESSING.md)** - Run saved flows against multiple documents automatically with real-time progress tracking
-- **Agent Workshop** (in Agent Studio) - Create custom agents with template/scratch/clone starts, model/tool selection, and per-group overrides for your curation flows
+For an unexpected answer, use its **three-dot menu (⋮)** to send feedback or **Open in Agent Studio**. Describe the specific result and what you expected. For general configuration help, ask Studio AI Chat; **New chat** starts a fresh discussion without clearing your editor draft.
 
-## Need Help?
-
-If you encounter issues or have questions:
-
-1. **Use the feedback button** - Click the triple-dot menu (⋮) on any AI response to submit feedback directly through the system. This is the easiest way to report issues because it automatically captures all the context developers need.
-
-2. **Contact the development team** - For general questions or suggestions not related to a specific interaction.
+Continue with [Agent Studio](AGENT_STUDIO.md), [curation flows](CURATION_FLOWS.md), or [best practices](BEST_PRACTICES.md).

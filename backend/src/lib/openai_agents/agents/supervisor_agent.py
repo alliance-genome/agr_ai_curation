@@ -45,11 +45,7 @@ from src.lib.context import (
     get_current_user_id,
 )
 from src.lib.chat_state import document_state
-from src.lib.chat_transcript import latest_assistant_message_for_session
-from src.lib.curation_workspace import (
-    CurationPrepPersistenceContext,
-    run_curation_prep,
-)
+from src.lib.curation_workspace.chat_prep_confirmation import prepare_from_chat
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
@@ -61,7 +57,6 @@ from src.lib.openai_agents.supervisor_context_tools import (
 )
 from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
-from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 
 # Note: Answer model not used here - supervisor streams plain text for better UX
@@ -71,7 +66,6 @@ logger = logging.getLogger(__name__)
 # Type alias for reasoning effort levels
 ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 
-CURATION_PREP_CONFIRMATION_QUESTION = "Ready to prepare these for curation?"
 _CURATION_PREP_TOOL_NAME = "prepare_for_curation"
 _INSPECT_RESULTS_TOOL_NAME = "inspect_results"
 _INSPECT_CHAT_TRACES_TOOL_NAME = "inspect_chat_traces"
@@ -90,14 +84,6 @@ _FORMATTER_OUTPUT_FORMAT_BY_AGENT_KEY = {
     "tsv_formatter": "tsv",
     "json_formatter": "json",
 }
-_EXPLICIT_PREP_CONFIRMATION_RE = re.compile(
-    r"\b(?:yes|confirm(?:ed)?|i confirm|go ahead|proceed|ready|prepare (?:these|them|it)|please do|do it)\b",
-    re.IGNORECASE,
-)
-_NEGATED_PREP_CONFIRMATION_RE = re.compile(
-    r"\b(?:no|not yet|not ready|don't|do not|wait|stop|cancel|hold off)\b",
-    re.IGNORECASE,
-)
 
 
 def _tool_response(status: str, message: str, **extra: Any) -> str:
@@ -106,63 +92,6 @@ def _tool_response(status: str, message: str, **extra: Any) -> str:
     payload = {"status": status, "message": message}
     payload.update(extra)
     return json.dumps(payload, ensure_ascii=True)
-
-
-def _unique_scope_values(values: Sequence[Optional[str]]) -> list[str]:
-    """Return distinct non-empty scope keys in first-seen order."""
-
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for value in values:
-        cleaned = str(value or "").strip()
-        if not cleaned or cleaned in seen:
-            continue
-        seen.add(cleaned)
-        ordered.append(cleaned)
-    return ordered
-
-
-def _normalize_scope_values(values: Sequence[str] | None) -> list[str]:
-    """Normalize tool-provided scope values."""
-
-    return _unique_scope_values(list(values or []))
-
-
-def _assistant_prompted_for_curation_prep(latest_assistant: str | None) -> bool:
-    """Return whether the prior assistant turn asked the required prep question."""
-
-    if not latest_assistant:
-        return False
-    return CURATION_PREP_CONFIRMATION_QUESTION.lower() in latest_assistant.lower()
-
-
-def _is_explicit_curation_prep_confirmation(user_confirmation: str) -> bool:
-    """Require an affirmative confirmation and reject negated variants."""
-
-    confirmation_text = str(user_confirmation or "").strip()
-    if not confirmation_text:
-        return False
-    if _NEGATED_PREP_CONFIRMATION_RE.search(confirmation_text):
-        return False
-    return _EXPLICIT_PREP_CONFIRMATION_RE.search(confirmation_text) is not None
-
-
-def _available_scope_from_extraction_results(
-    extraction_results: Sequence[Any],
-) -> dict[str, list[str]]:
-    """Summarize the adapter scope currently available in persisted extraction results."""
-
-    return {
-        "adapter_keys": _unique_scope_values(
-            [getattr(record, "adapter_key", None) for record in extraction_results]
-        ),
-    }
-
-
-def _available_document_ids(extraction_results: Sequence[Any]) -> list[str]:
-    """Summarize distinct persisted document ids in first-seen order."""
-
-    return _unique_scope_values([getattr(record, "document_id", None) for record in extraction_results])
 
 
 def _current_chat_document_id(user_id: str) -> str | None:
@@ -174,54 +103,6 @@ def _current_chat_document_id(user_id: str) -> str | None:
 
     document_id = str(active_document.get("id") or "").strip()
     return document_id or None
-
-
-def _resolve_confirmed_scope(
-    extraction_results: Sequence[Any],
-    *,
-    adapter_keys: Sequence[str] | None,
-) -> tuple[dict[str, list[str]] | None, dict[str, list[str]]]:
-    """Resolve confirmed adapter scope without legacy profile/domain narrowing."""
-
-    available_scope = _available_scope_from_extraction_results(extraction_results)
-    confirmed_scope = {
-        "adapter_keys": _normalize_scope_values(adapter_keys),
-    }
-
-    if not confirmed_scope["adapter_keys"]:
-        return None, available_scope
-
-    if not any(confirmed_scope.values()):
-        return None, available_scope
-
-    return confirmed_scope, available_scope
-
-
-def _record_matches_scope(record: Any, confirmed_scope: dict[str, list[str]]) -> bool:
-    """Return whether one persisted extraction record falls within confirmed adapter scope."""
-
-    adapter_key = str(getattr(record, "adapter_key", None) or "").strip()
-
-    if confirmed_scope["adapter_keys"]:
-        if not adapter_key or adapter_key not in confirmed_scope["adapter_keys"]:
-            return False
-
-    return True
-
-
-def _filter_extraction_results_for_scope(
-    extraction_results: Sequence[Any],
-    confirmed_scope: dict[str, list[str]],
-) -> tuple[list[Any], list[str]]:
-    """Filter persisted extraction results to the explicitly confirmed scope."""
-
-    scoped_results = [
-        record for record in extraction_results if _record_matches_scope(record, confirmed_scope)
-    ]
-    if scoped_results:
-        return scoped_results, []
-
-    return [], []
 
 
 def _dedupe_extraction_results(records: Sequence[Any]) -> list[Any]:
@@ -395,10 +276,12 @@ def _build_chat_formatter_bundle(
 
     try:
         from src.lib.flows.output_projection import build_extraction_result_artifact_bundle
+        from src.lib.curation_workspace.execution_contracts import load_receipt_profile
 
         bundle = build_extraction_result_artifact_bundle(
             extraction_results=records,
             bundle_name="Chat Extraction Results",
+            profile_resolver=load_receipt_profile,
             document_id=resolved_document_id,
         )
         latest_record = _latest_extraction_result(records)
@@ -417,167 +300,6 @@ def _build_chat_formatter_bundle(
         bundle,
         _formatter_runtime_context_for_records(records),
         "",
-    )
-
-
-def _resolved_scope_values(
-    confirmed_values: Sequence[str],
-    extraction_results: Sequence[Any],
-    attr_name: str,
-) -> list[str]:
-    """Combine confirmed scope with persisted record scope in stable order."""
-
-    return _unique_scope_values(
-        [
-            *confirmed_values,
-            *(getattr(record, attr_name, None) for record in extraction_results),
-        ]
-    )
-
-async def _dispatch_curation_prep_from_chat_context(
-    *,
-    user_confirmation: str,
-    adapter_keys: Sequence[str] | None = None,
-    scope_summary: str | None = None,
-) -> str:
-    """Run curation prep from the current chat session when confirmation is valid."""
-
-    session_id = get_current_session_id()
-    user_id = get_current_user_id()
-    if not session_id or not user_id:
-        return _tool_response(
-            "unavailable",
-            "Curation prep is only available inside an active chat session.",
-        )
-
-    latest_assistant_message = latest_assistant_message_for_session(
-        session_id=session_id,
-        user_id=user_id,
-    )
-    if not _assistant_prompted_for_curation_prep(latest_assistant_message):
-        return _tool_response(
-            "confirmation_required",
-            (
-                f'Ask the curator "{CURATION_PREP_CONFIRMATION_QUESTION}" and wait for an explicit '
-                "confirmation in the next turn before calling this tool."
-            ),
-        )
-
-    if not _is_explicit_curation_prep_confirmation(user_confirmation):
-        return _tool_response(
-            "confirmation_required",
-            "The curator has not explicitly confirmed the prep scope yet.",
-        )
-
-    active_document_id = _current_chat_document_id(user_id)
-    extraction_results = list_extraction_results(
-        origin_session_id=session_id,
-        user_id=user_id,
-        source_kind=CurationExtractionSourceKind.CHAT,
-        document_id=active_document_id,
-        exclude_agent_keys=(CURATION_PREP_AGENT_ID,),
-    )
-    if not extraction_results:
-        return _tool_response(
-            "no_extraction_context",
-            (
-                "No persisted chat extraction results are available for the currently loaded "
-                "document yet."
-                if active_document_id
-                else "No persisted chat extraction results are available to prepare yet."
-            ),
-        )
-
-    available_document_ids = _available_document_ids(extraction_results)
-    if active_document_id is None and len(available_document_ids) > 1:
-        return _tool_response(
-            "scope_confirmation_required",
-            (
-                "This chat session includes findings from multiple documents. Load the document "
-                "you want to prepare, then confirm again so only that document's findings are "
-                "prepared."
-            ),
-            available_document_ids=available_document_ids,
-        )
-
-    confirmed_scope, available_scope = _resolve_confirmed_scope(
-        extraction_results,
-        adapter_keys=adapter_keys,
-    )
-    if confirmed_scope is None:
-        return _tool_response(
-            "scope_confirmation_required",
-            "The confirmed scope is still ambiguous. Ask the curator to confirm which findings to prepare instead of sweeping everything into curation.",
-            available_scope=available_scope,
-        )
-
-    scoped_extraction_results, scope_resolution_notes = _filter_extraction_results_for_scope(
-        extraction_results,
-        confirmed_scope,
-    )
-    if not scoped_extraction_results:
-        return _tool_response(
-            "scope_confirmation_required",
-            "The confirmed scope did not match any persisted extraction results in this chat session.",
-            available_scope=available_scope,
-        )
-
-    resolved_adapter_keys = _resolved_scope_values(
-        confirmed_scope["adapter_keys"],
-        scoped_extraction_results,
-        "adapter_key",
-    )
-    if not resolved_adapter_keys:
-        return _tool_response(
-            "scope_confirmation_required",
-            "The persisted extraction context is missing adapter ownership, so curation prep cannot safely run yet.",
-            available_scope=available_scope,
-        )
-
-    scope_confirmation = CurationPrepScopeConfirmation(
-        confirmed=True,
-        adapter_keys=resolved_adapter_keys,
-        notes=_unique_scope_values(
-            [
-                *scope_resolution_notes,
-                f"Confirmed from chat session {session_id}.",
-                f"Prep requested by user {user_id}.",
-                (f"Supervisor scope summary: {scope_summary}" if scope_summary else None),
-                (f"Curator confirmation: {user_confirmation}" if user_confirmation else None),
-            ]
-        ),
-    )
-
-    try:
-        prep_output = await run_curation_prep(
-            scoped_extraction_results,
-            scope_confirmation=scope_confirmation,
-            persistence_context=CurationPrepPersistenceContext(
-                document_id=(
-                    active_document_id
-                    or (scoped_extraction_results[0].document_id if scoped_extraction_results else None)
-                ),
-                source_kind=CurationExtractionSourceKind.CHAT,
-                origin_session_id=session_id,
-                trace_id=get_current_trace_id(),
-                user_id=user_id,
-            ),
-        )
-    except ValueError as exc:
-        return _tool_response("unable_to_prepare", str(exc))
-
-    candidate_count = prep_output.review_row_count
-    return _tool_response(
-        "prepared",
-        (
-            f"Prepared {candidate_count} candidate annotation"
-            f"{'s' if candidate_count != 1 else ''} for curation review."
-        ),
-        candidate_count=candidate_count,
-        document_id=scoped_extraction_results[0].document_id,
-        adapter_keys=resolved_adapter_keys,
-        warnings=list(prep_output.run_metadata.warnings),
-        processing_notes=list(prep_output.run_metadata.processing_notes),
     )
 
 
@@ -1508,9 +1230,21 @@ def _build_runtime_tool_availability_note(
         )
 
     notes.append(
-        "CURATION PREP HANDOFF: Use prepare_for_curation only after you ask exactly "
-        f'"{CURATION_PREP_CONFIRMATION_QUESTION}" and the next user turn explicitly '
-        "confirms the scope. Never auto-trigger curation prep."
+        "DATABASE LOOKUP IS NOT PDF EXTRACTION: When the curator supplies an "
+        "identifier or symbol and asks to look up or validate its database identity, "
+        "use an installed specialist whose live description explicitly supports "
+        "database lookup. A loaded PDF does not make this an extraction request. "
+        "If no such specialist is callable, explain that direct database lookup "
+        "is unavailable in this chat. Do not send the request to a PDF extractor, "
+        "invent database results, or treat absence from the paper as a database "
+        "no-match. Only extract from the paper when paper extraction is requested."
+    )
+
+    notes.append(
+        "CURATION PREP HANDOFF: First call prepare_for_curation(action='preview') "
+        "with exact saved result refs and the requested candidate count. Present "
+        "the complete returned scope and wait for the curator's next confirmation "
+        "before action='confirm'. Never substitute whole results for a candidate subset."
     )
 
     formatter_tool_names = sorted(
@@ -1865,25 +1599,31 @@ def create_supervisor_agent(
     @function_tool(
         name_override=_CURATION_PREP_TOOL_NAME,
         description_override=(
-            "Prepare persisted canonical extraction results from this chat for curation workspace follow-up. "
-            f'Use only after you already asked "{CURATION_PREP_CONFIRMATION_QUESTION}" and the curator '
-            "explicitly confirmed in a later turn. Pass the curator's confirmation text verbatim in "
-            "`user_confirmation`. Include confirmed adapter_keys when they are clear from the "
-            "conversation. This is separate from inspect_results browsing and formatter export output. "
-            "Do not call this tool to ask for confirmation."
+            "Prepare saved results only through a two-turn preview/confirm workflow. "
+            "First inspect_results to obtain exact extraction-result:<uuid> refs and counts. "
+            "Use candidate_scope='selected_candidates' if the user requests a subset within "
+            "a result: this is currently unsupported and will not prepare broader results. "
+            "For whole results use all_candidates_in_results and the expected count. "
+            "Call action='preview', show the complete returned scope/count, ask for confirmation, "
+            "then call action='confirm' with identical selections after the next user response. "
+            "Confirmation uses the actual authenticated user request, not tool-supplied text."
         ),
     )
     async def prepare_for_curation_tool(
-        user_confirmation: str,
-        adapter_keys: List[str] | None = None,
-        scope_summary: str = "",
+        action: Literal["preview", "confirm"],
+        candidate_scope: Literal["all_candidates_in_results", "selected_candidates"],
+        result_refs: List[str],
+        expected_candidate_count: int,
     ) -> str:
-        """Invoke the curation prep agent after explicit curator confirmation."""
-
-        return await _dispatch_curation_prep_from_chat_context(
-            user_confirmation=user_confirmation,
-            adapter_keys=adapter_keys,
-            scope_summary=scope_summary,
+        """Bind preparation to actual user confirmation and exact saved scope."""
+        active_user_id = get_current_user_id()
+        return await prepare_from_chat(
+            action=action, candidate_scope=candidate_scope, result_refs=result_refs,
+            expected_candidate_count=expected_candidate_count,
+            authoritative_user_request=current_user_request,
+            session_id=get_current_session_id(), user_id=active_user_id,
+            trace_id=get_current_trace_id(),
+            document_id=_current_chat_document_id(active_user_id) if active_user_id else None,
         )
 
     specialist_tools.append(prepare_for_curation_tool)
@@ -1897,7 +1637,9 @@ def create_supervisor_agent(
             "or manifest-field previews and select a stable result_ref; "
             "action=\"summary\" for one result; action=\"objects\" or \"object\" for "
             "YAML-declared manifest fields; action=\"field\" for one "
-            "YAML-declared scalar field; action=\"evidence\" for bounded "
+            "YAML-declared scalar field; action=\"details\" with object_ref for saved "
+            "generic/custom attributes (field_path selects a nested part; cursor continues a page). "
+            "Read these saved details instead of calling extraction again. action=\"evidence\" for bounded "
             "evidence text; and action=\"validation\" for validation findings. "
             "Requires result_ref values in extraction-result:<uuid> form when "
             "addressing a specific result. This tool browses existing results "
@@ -2025,11 +1767,11 @@ def create_supervisor_agent(
 
     runtime_prompt_parts = [
         "CURATION PREP RULES:\n"
-        f'- If the curator wants to move findings into curation prep, first ask exactly "{CURATION_PREP_CONFIRMATION_QUESTION}"\n'
-        "- Do not call prepare_for_curation in the same turn as the confirmation question.\n"
-        "- Only call prepare_for_curation after the next user turn explicitly confirms the scope.\n"
-        "- When you call prepare_for_curation, pass the user's confirmation text verbatim and include confirmed scope keys when you know them.\n"
-        "- If scope is still ambiguous, ask a follow-up clarification question instead of preparing everything."
+        "- Preview exact saved-result refs and counts before asking for confirmation.\n"
+        "- Explain that whole results include ALL eligible candidates; never label fourteen as a selected four.\n"
+        "- Candidate subsets within a result are unsupported: report the blocker, do not broaden scope.\n"
+        "- Confirm only after the next user turn agrees to the unchanged preview.\n"
+        "- Scope changes or expired previews require a new preview and confirmation."
     ]
     runtime_prompt_parts.append(
         _build_runtime_tool_availability_note(

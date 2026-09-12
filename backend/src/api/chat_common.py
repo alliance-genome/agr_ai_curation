@@ -14,7 +14,7 @@ import json
 import logging
 import asyncio
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Mapping, NoReturn, Optional, Sequence, cast
 from uuid import UUID
@@ -191,6 +191,8 @@ def _build_extraction_candidate_from_tool_event(
         if "canonical_payload" in internal_payload
         else internal_payload.get("tool_output"),
         agent_key=agent_key,
+        adapter_key=internal_payload.get("adapter_key"),
+        execution_receipt=internal_payload.get("execution_receipt"),
         conversation_summary=conversation_summary,
         metadata=candidate_metadata,
     )
@@ -410,6 +412,7 @@ def _persist_extraction_candidates(
                 document_id=document_id,
                 adapter_key=adapter_key,
                 agent_key=candidate.agent_key,
+                execution_receipt=candidate.execution_receipt,
                 source_kind=source_kind,
                 origin_session_id=session_id,
                 trace_id=trace_id,
@@ -1123,6 +1126,8 @@ def _chat_route_payload(route: ResolvedChatRoute) -> Dict[str, Any]:
         route_payload["target_display_name"] = route.target_display_name
     if route.flow_run_id is not None:
         route_payload["flow_run_id"] = route.flow_run_id
+    if route.execution_receipt is not None:
+        route_payload["execution_receipt"] = route.execution_receipt
     return {_CHAT_ROUTE_PAYLOAD_KEY: route_payload}
 
 
@@ -1153,11 +1158,22 @@ def _chat_route_from_payload(
         raise ValueError("Agent chat route requires exactly one agent identity")
     if mode == "flow" and (target_id is None or flow_run_id is None):
         raise ValueError("Flow chat route requires a flow and flow-run identity")
+    execution_receipt = route_payload.get("execution_receipt")
+    if mode == "agent" and (target_id or "").startswith("ca_"):
+        from src.schemas.agent_execution_revision import AgentExecutionReceipt
+
+        receipt = AgentExecutionReceipt.model_validate(execution_receipt)
+        if receipt.agent_key != target_id:
+            raise ValueError("Durable chat turn has a mismatched executable identity")
+        execution_receipt = receipt.model_dump(mode="json")
+    elif execution_receipt is not None:
+        raise ValueError("Only custom agent chat routes accept executable receipts")
     return ResolvedChatRoute(
         mode=cast(Literal["automatic", "agent", "flow"], mode),
         target_id=target_id,
         target_display_name=target_display_name,
         flow_run_id=flow_run_id,
+        execution_receipt=execution_receipt,
     )
 
 
@@ -1181,13 +1197,21 @@ def _new_chat_route(
     db_user_id: int,
     active_groups: Sequence[str],
 ) -> ResolvedChatRoute:
-    return _route_from_preference(
+    route = _route_from_preference(
         get_chat_route_preference(
             db,
             user_id=db_user_id,
             active_group_ids=active_groups,
         )
     )
+    if route.mode == "agent" and (route.target_id or "").startswith("ca_"):
+        from src.lib.agent_studio.execution_revision_service import current_execution_receipt
+
+        receipt = current_execution_receipt(
+            db, route.target_id or "", db_user_id, active_group_ids=list(active_groups),
+        )
+        route = replace(route, execution_receipt=receipt.model_dump(mode="json"))
+    return route
 
 
 def _authorize_chat_route(
@@ -1197,6 +1221,15 @@ def _authorize_chat_route(
     active_groups: Sequence[str],
     route: ResolvedChatRoute,
 ) -> ResolvedChatRoute:
+    if route.mode == "agent" and (route.target_id or "").startswith("ca_"):
+        from src.lib.agent_studio.execution_revision_service import authorize_execution_receipt
+
+        receipt = authorize_execution_receipt(
+            db, route.execution_receipt, db_user_id, active_group_ids=list(active_groups),
+        )
+        if receipt.agent_key != route.target_id:
+            raise ValueError("Durable chat turn has a mismatched executable identity")
+        return route
     flow_id: UUID | None = None
     if route.mode == "flow":
         try:
@@ -1362,6 +1395,15 @@ async def _run_resolved_chat_route(
 
     runtime_agent = None
     if route.mode == "agent":
+        if (route.target_id or "").startswith("ca_") and route.execution_receipt is None:
+            raise ValueError("Custom agent chat requires a durable executable receipt")
+        # Custom agents execute their saved model configuration. Chat-wide
+        # specialist overrides apply only to system agents, never saved heads.
+        model_overrides = {} if (route.target_id or "").startswith("ca_") else {
+            "model_id_override": specialist_model,
+            "model_temperature_override": specialist_temperature,
+            "model_reasoning_override": specialist_reasoning,
+        }
         runtime_agent = get_agent_by_id(
             route.target_id or "",
             db_user_id=db_user_id,
@@ -1370,9 +1412,10 @@ async def _run_resolved_chat_route(
             document_name=document_name,
             active_groups=active_groups,
             authenticated_groups=active_groups,
-            model_id_override=specialist_model,
-            model_temperature_override=specialist_temperature,
-            model_reasoning_override=specialist_reasoning,
+            **({"execution_receipt": route.execution_receipt,
+                "execution_revision_id": route.execution_receipt["agent_revision_id"]}
+               if route.execution_receipt is not None else {}),
+            **model_overrides,
         )
 
     agent_stream = run_agent_streamed(

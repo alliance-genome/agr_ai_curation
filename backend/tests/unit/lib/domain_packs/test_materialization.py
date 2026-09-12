@@ -303,6 +303,32 @@ def _validator_item(
     )
 
 
+@pytest.mark.parametrize("finding_status", [ValidationFindingStatus.OPEN, ValidationFindingStatus.RESOLVED, ValidationFindingStatus.WAIVED])
+def test_materialization_retains_open_review_status(finding_status):
+    metadata = _metadata()
+    envelope = DomainEnvelope(
+        envelope_id="mixed-checks", domain_pack_id=metadata.pack_id,
+        extracted_objects=[CuratableObjectEnvelope(
+            object_type="Gene", pending_ref_id="g1", status=CuratableObjectStatus.VALIDATED,
+            payload={"symbol": "example"},
+        )],
+        validation_findings=[ValidationFinding(
+            code="reference_lookup", message="Reference check", status=finding_status,
+            severity=ValidationFindingSeverity.WARNING,
+            field_ref=FieldRef(object_ref=ObjectRef(object_type="Gene", pending_ref_id="g1"), field_path="symbol"),
+        )],
+    )
+    result = materialize_validator_results_into_envelope(envelope, metadata, [])
+    expected = CuratableObjectStatus.NEEDS_REVIEW if finding_status is ValidationFindingStatus.OPEN else CuratableObjectStatus.VALIDATED
+    assert result.envelope.extracted_objects[0].status is expected
+    assert envelope.extracted_objects[0].status is CuratableObjectStatus.VALIDATED
+    assert result.envelope.validation_findings == envelope.validation_findings
+    from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
+    before_selector = envelope.model_copy(update={"validation_findings": []})
+    after_selector, _ = append_validation_findings_to_envelope(before_selector, envelope.validation_findings)
+    assert after_selector.extracted_objects[0].status is expected
+
+
 def test_metadata_materializer_regenerates_review_rows_from_envelope_objects():
     envelope = DomainEnvelope(
         envelope_id="env-1",

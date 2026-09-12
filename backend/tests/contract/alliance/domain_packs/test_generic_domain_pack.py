@@ -67,6 +67,17 @@ BINDINGS_PATH = REPO_ROOT / "packages" / "alliance" / "tools" / "bindings.yaml"
 PDF_AGENT_PATH = REPO_ROOT / "packages" / "alliance" / "agents" / "pdf" / "agent.yaml"
 
 
+def test_catalog_exposes_independent_reagent_capabilities():
+    catalog = load_generic_class_catalog()
+    entry = catalog.entries_by_class_key["generic:generic_reagent_candidate"]
+    payload = entry.compact_tool_dict()
+    assert payload["stageable"] is True
+    assert payload["definition_state"] == "stable"
+    assert payload["capabilities"]["pack_state"] == "in_development"
+    assert payload["capabilities"]["schema_ref"] is None
+    assert payload["capabilities"]["validate"]["state"] == "none"
+
+
 def _evidence_records() -> list[dict[str, Any]]:
     return [
         {

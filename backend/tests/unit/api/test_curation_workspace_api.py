@@ -298,6 +298,26 @@ def test_run_curation_mutation_rolls_back_helper_failure():
     assert db.rollback_calls == 1
 
 
+@pytest.mark.parametrize("identity", [False, True])
+def test_profile_failure_rolls_back_and_returns_structured_422(identity):
+    db = _TransactionSpy()
+    findings = [{"field_path": "attributes.count", "reason": "wrong_type"}]
+    error = (
+        module.ProfileIdentityError("Saved output structure does not match")
+        if identity else module.ProfileConformanceError(findings)
+    )
+    with pytest.raises(module.HTTPException) as caught:
+        module._run_curation_mutation(db, lambda: (_ for _ in ()).throw(error))
+    assert caught.value.status_code == 422
+    assert caught.value.detail["code"] == (
+        "output_structure_identity" if identity else "output_structure_conformance"
+    )
+    if not identity:
+        assert caught.value.detail["findings"] == findings
+    assert db.commit_calls == 0
+    assert db.rollback_calls == 1
+
+
 def _anchor() -> EvidenceAnchor:
     return EvidenceAnchor(
         anchor_kind=EvidenceAnchorKind.SNIPPET,
@@ -375,7 +395,7 @@ async def test_get_chat_prep_preview_maps_value_error_to_sanitized_http_400(monk
 
 @pytest.mark.asyncio
 async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: MagicMock(id=7))
     expected = DomainEnvelopeReviewRowsResponse(
         envelope_id="env-1",
         envelope_revision=2,
@@ -384,10 +404,12 @@ async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeyp
     )
     captured: dict[str, object] = {}
 
-    def _materialize(db, envelope_id, *, revision=None):
+    def _materialize(db, envelope_id, *, revision=None, active_group_ids=(), user_id=None):
+        captured["user_id"] = user_id
         captured["db"] = db
         captured["envelope_id"] = envelope_id
         captured["revision"] = revision
+        captured["active_group_ids"] = active_group_ids
         return expected
 
     monkeypatch.setattr(module, "materialize_persisted_envelope_review_rows", _materialize)
@@ -395,13 +417,15 @@ async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeyp
     response = await module.get_domain_envelope_review_rows(
         "env-1",
         revision=2,
-        user={"sub": "user-1"},
+        user={"sub": "user-1", "cognito:groups": ["zfin-curators", "rgd-curators"]},
         db=object(),
     )
 
+    assert captured["user_id"] == 7
     assert response is expected
     assert captured["envelope_id"] == "env-1"
     assert captured["revision"] == 2
+    assert captured["active_group_ids"] == ["ZFIN", "RGD"]
 
 
 @pytest.mark.asyncio

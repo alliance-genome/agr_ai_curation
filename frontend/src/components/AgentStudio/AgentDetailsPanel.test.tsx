@@ -155,7 +155,7 @@ describe('AgentDetailsPanel', () => {
     expect(screen.getByText('Confirms names against the ontology.')).toBeInTheDocument()
     expect(screen.queryByText('Fallback description')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Discuss with Claude' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discuss with AI Chat' }))
     expect(onDiscuss).toHaveBeenCalledWith('example_validator', 'Example validator')
     fireEvent.click(screen.getByRole('button', { name: 'Clone to Workshop' }))
     expect(onClone).toHaveBeenCalledWith('example_validator')
@@ -216,7 +216,7 @@ describe('AgentDetailsPanel', () => {
     )
 
     expect(screen.getByText('No curator guide yet')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Claude to draft a guide' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI Chat to draft a guide' }))
     expect(onDiscuss).toHaveBeenCalledTimes(1)
     const [agentId, agentName, prompt] = onDiscuss.mock.calls[0]
     expect(agentId).toBe('example_validator')

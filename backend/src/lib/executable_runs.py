@@ -80,6 +80,7 @@ class ExecutableRun:
     batch_id: str | None = None
     job_id: str | None = None
     can_cancel: bool = True
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     explicit_cancel_only: bool = True
     replay_supported: bool = True
     status: ExecutableRunStatus = "pending"
@@ -140,6 +141,7 @@ class ExecutableRunManager:
         batch_id: str | None = None,
         job_id: str | None = None,
         can_cancel: bool = True,
+        cancel_event: asyncio.Event | None = None,
         terminal_error_event_factory: Callable[[Exception], str | None] | None = None,
     ) -> tuple[ExecutableRun, bool]:
         await self._prune_expired_terminal_runs()
@@ -167,6 +169,7 @@ class ExecutableRunManager:
                 batch_id=batch_id,
                 job_id=job_id,
                 can_cancel=can_cancel,
+                cancel_event=cancel_event if cancel_event is not None else asyncio.Event(),
                 status="running",
                 terminal_error_event_factory=terminal_error_event_factory,
             )
@@ -192,6 +195,7 @@ class ExecutableRunManager:
         *,
         session_id: str,
         owner_user_id: str,
+        turn_id: str | None = None,
     ) -> ExecutableRun | None:
         await self._prune_expired_terminal_runs()
 
@@ -202,9 +206,12 @@ class ExecutableRunManager:
                 return None
             if active_run.owner_user_id != owner_user_id:
                 raise ExecutableRunAccessError("Executable run is owned by another user")
+            if turn_id is not None and active_run.turn_id != turn_id:
+                raise ExecutableRunConflictError("The requested turn is no longer active")
             if not active_run.can_cancel:
                 return None
             active_run.status = "cancel_requested"
+            active_run.cancel_event.set()
             active_run.updated_at = datetime.now(timezone.utc)
             return active_run
 

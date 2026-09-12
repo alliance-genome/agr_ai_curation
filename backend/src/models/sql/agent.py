@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -148,6 +149,7 @@ class Agent(Base):
         server_default=text("'[]'::jsonb"),
     )
     output_schema_key = Column(String(100), nullable=True)
+    execution_revision_id = Column(UUID(as_uuid=True), nullable=True)
 
     group_rules_enabled = Column(
         Boolean,
@@ -229,6 +231,12 @@ class Agent(Base):
     )
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["id", "execution_revision_id"],
+            ["agent_execution_revisions.agent_id", "agent_execution_revisions.id"],
+            name="fk_agent_execution_head", use_alter=True,
+            deferrable=True, initially="DEFERRED", ondelete="NO ACTION",
+        ),
         CheckConstraint(
             "visibility IN ('private', 'project', 'system')",
             name="ck_agents_visibility",

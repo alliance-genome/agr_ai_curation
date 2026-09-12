@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import subprocess
+import hashlib
+import os
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -70,6 +73,27 @@ class PackageToolRunner:
 
             timeout_seconds = get_package_runner_timeout_seconds()
         self._timeout_seconds = timeout_seconds
+        from src.lib.openai_agents.config import (
+            get_package_runner_reuse_workers,
+            get_package_runner_worker_count,
+            get_package_runner_response_max_bytes,
+        )
+        from .worker_pool import PackageWorkerPool
+
+        self._worker_pool = (
+            PackageWorkerPool(
+                capacity=get_package_runner_worker_count(),
+                response_max_bytes=get_package_runner_response_max_bytes(),
+            )
+            if get_package_runner_reuse_workers() else None
+        )
+        if self._worker_pool is not None:
+            weakref.finalize(self, self._worker_pool.close)
+
+    def close(self) -> None:
+        """Release persistent workers when the owning runtime shuts down."""
+        if self._worker_pool is not None:
+            self._worker_pool.close()
 
     def execute_tool(
         self,
@@ -131,14 +155,24 @@ class PackageToolRunner:
         )
 
         try:
-            completed = subprocess.run(
-                [str(environment.python_executable), str(self._entrypoint_path)],
-                check=False,
-                capture_output=True,
-                text=True,
-                input=encode_request(request),
-                timeout=self._timeout_seconds,
-            )
+            command = [str(environment.python_executable), str(self._entrypoint_path)]
+            if self._worker_pool is not None:
+                # Environment changes require a new process. Hash only; never
+                # expose inherited credentials in diagnostics or pool keys.
+                environment_hash = hashlib.sha256(
+                    repr(sorted(os.environ.items())).encode()
+                ).hexdigest()
+                completed = self._worker_pool.execute(
+                    key=(package.package_id, package.version, str(package.package_path),
+                         environment.fingerprint, environment_hash),
+                    command=[*command, "--worker"], payload=encode_request(request),
+                    timeout=self._timeout_seconds,
+                )
+            else:
+                completed = subprocess.run(
+                    command, check=False, capture_output=True, text=True,
+                    input=encode_request(request), timeout=self._timeout_seconds,
+                )
         except subprocess.TimeoutExpired:
             return PackageToolExecutionResult(
                 ok=False,
@@ -147,6 +181,13 @@ class PackageToolRunner:
                     message=f"Timed out while executing package tool '{tool_id}'",
                     details={"timeout_seconds": self._timeout_seconds},
                 ),
+                environment_reused=environment.reused,
+            )
+
+        except (OSError, RuntimeError, ValueError) as exc:
+            return PackageToolExecutionResult(
+                ok=False,
+                error=PackageRunnerError(code="execution_failure", message=str(exc)),
                 environment_reused=environment.reused,
             )
 
@@ -220,9 +261,10 @@ def execute_package_tool(
 ) -> PackageToolExecutionResult:
     """Convenience wrapper for one-off package tool execution."""
     active_runner = runner or PackageToolRunner()
-    return active_runner.execute_tool(
-        tool_id,
-        args=args,
-        kwargs=kwargs,
-        context=context,
-    )
+    try:
+        return active_runner.execute_tool(
+            tool_id, args=args, kwargs=kwargs, context=context,
+        )
+    finally:
+        if runner is None:
+            active_runner.close()
