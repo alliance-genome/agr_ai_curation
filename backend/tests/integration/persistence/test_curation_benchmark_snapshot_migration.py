@@ -4,6 +4,9 @@ from pathlib import Path
 
 from alembic import command  # pyright: ignore[reportAttributeAccessIssue]
 from alembic.config import Config  # pyright: ignore[reportMissingImports]
+from alembic.migration import MigrationContext  # pyright: ignore[reportMissingImports]
+from alembic.operations import Operations  # pyright: ignore[reportMissingImports]
+from alembic.script import ScriptDirectory  # pyright: ignore[reportMissingImports]
 from sqlalchemy import inspect, text
 
 from src.models.sql.database import engine
@@ -41,10 +44,29 @@ def test_curation_snapshot_migration_upgrade_indexes_trigger_and_downgrade():
         )
     assert trigger_exists is True
 
-    command.downgrade(ALEMBIC_CONFIG, "f3a4b5c6d7e8")
-    assert {
-        "curation_benchmark_snapshots",
-        "curation_benchmark_handoff_attempts",
-    }.isdisjoint(inspect(engine).get_table_names())
-
-    command.upgrade(ALEMBIC_CONFIG, "head")
+    migration = ScriptDirectory.from_config(ALEMBIC_CONFIG).get_revision("g4b5c6d7e8f9").module
+    # Keep the real merged stamp: historical f3 is intentionally ambiguous.
+    # Always roll back the temporary shape, including later sender columns.
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            head = connection.scalar(text("SELECT version_num FROM alembic_version"))
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.downgrade()
+                assert {
+                    "curation_benchmark_snapshots",
+                    "curation_benchmark_handoff_attempts",
+                }.isdisjoint(inspect(connection).get_table_names())
+                migration.upgrade()
+            assert {
+                "curation_benchmark_snapshots",
+                "curation_benchmark_handoff_attempts",
+            } <= set(inspect(connection).get_table_names())
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == head
+            assert connection.scalar(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_trigger "
+                "WHERE tgname = 'trg_curation_benchmark_snapshots_immutable' "
+                "AND NOT tgisinternal)"
+            )) is True
+        finally:
+            transaction.rollback()

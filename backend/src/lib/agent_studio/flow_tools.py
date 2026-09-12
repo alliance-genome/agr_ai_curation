@@ -751,12 +751,6 @@ def _accessible_flow_agents() -> Dict[str, Dict[str, Any]]:
     return dict(sorted(agents.items()))
 
 
-def _accessible_flow_agent_ids() -> set[str]:
-    """Compatibility wrapper for callers that only need stable IDs."""
-
-    return set(_accessible_flow_agents())
-
-
 def _validate_exact_flow_for_current_user(
     flow_definition: Dict[str, Any] | "FlowDefinition",
     *,

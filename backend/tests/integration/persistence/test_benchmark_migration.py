@@ -5,11 +5,14 @@ from uuid import uuid4
 
 from alembic import command  # pyright: ignore[reportAttributeAccessIssue]
 from alembic.config import Config  # pyright: ignore[reportMissingImports]
+from alembic.migration import MigrationContext  # pyright: ignore[reportMissingImports]
 from alembic.operations import Operations  # pyright: ignore[reportMissingImports]
+from alembic.script import ScriptDirectory  # pyright: ignore[reportMissingImports]
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
 
 from src.lib.benchmarks.persistence import BenchmarkRepository
 from src.lib.benchmarks.worker import BenchmarkWorker
@@ -122,12 +125,9 @@ def test_telemetry_upgrade_backfills_terminal_invocations_and_restores_guards(
 ):
     command.upgrade(ALEMBIC_CONFIG, "head")
     owner = f"migration-review-{uuid4()}"
-    with SessionLocal() as session:
-        job = _create_job(session, owner=owner, cells=2)
-        job_id = job.id
-        _run_to_terminal(session, job_id)
-        session.commit()
-
+    scripts = ScriptDirectory.from_config(ALEMBIC_CONFIG)
+    telemetry = scripts.get_revision("h5c6d7e8f9a0").module
+    artifacts = scripts.get_revision("n0o1p2q3r4s5").module
     historical = text("""
         SELECT inv.id, inv.cell_id, inv.status, inv.ordinal, inv.attempt,
                inv.route_slot, inv.request_digest, inv.response_digest,
@@ -135,41 +135,52 @@ def test_telemetry_upgrade_backfills_terminal_invocations_and_restores_guards(
         FROM benchmark_invocations AS inv JOIN benchmark_cells AS cell ON cell.id = inv.cell_id
         WHERE cell.job_id = :job_id ORDER BY inv.id
     """)
-    with engine.connect() as connection:
-        before = connection.execute(historical, {"job_id": job_id}).all()
-    assert len(before) == 2
-
-    command.downgrade(ALEMBIC_CONFIG, "g4b5c6d7e8f9")
     guard_query = text("""
         SELECT tgname, tgenabled FROM pg_trigger
         WHERE tgrelid = 'benchmark_invocations'::regclass AND NOT tgisinternal
         ORDER BY tgname
     """)
-    if interrupt_backfill:
-        with engine.connect() as connection:
-            guards_before = connection.execute(guard_query).all()
-        execute = Operations.execute
+    # Exercise the real DDL without committing an ambiguous historical stamp.
+    # Rolling back also restores later dependent schema and removes fixture rows.
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            head = connection.scalar(text("SELECT version_num FROM alembic_version"))
+            with Session(
+                bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False,
+            ) as session:
+                job = _create_job(session, owner=owner, cells=2)
+                job_id = job.id
+                _run_to_terminal(session, job_id)
+                session.commit()
+            before = connection.execute(historical, {"job_id": job_id}).all()
+            assert len(before) == 2
+            with Operations.context(MigrationContext.configure(connection)):
+                # The later artifact constraint references telemetry.result_digest.
+                artifacts.downgrade()
+                telemetry.downgrade()
+                if interrupt_backfill:
+                    guards_before = connection.execute(guard_query).all()
+                    execute = Operations.execute
 
-        def fail_after_backfill(operations, statement, *args, **kwargs):
-            result = execute(operations, statement, *args, **kwargs)
-            if str(statement) == "UPDATE benchmark_invocations SET sequence = ordinal + 1":
-                raise RuntimeError("synthetic interruption before trigger restoration")
-            return result
+                    def fail_after_backfill(operations, statement, *args, **kwargs):
+                        result = execute(operations, statement, *args, **kwargs)
+                        if str(statement) == "UPDATE benchmark_invocations SET sequence = ordinal + 1":
+                            raise RuntimeError("synthetic interruption before trigger restoration")
+                        return result
 
-        with monkeypatch.context() as patch:
-            patch.setattr(Operations, "execute", fail_after_backfill)
-            with pytest.raises(RuntimeError, match="synthetic interruption"):
-                command.upgrade(ALEMBIC_CONFIG, "head")
-        with engine.connect() as connection:
-            assert connection.execute(guard_query).all() == guards_before
-            assert connection.execute(historical, {"job_id": job_id}).all() == before
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "g4b5c6d7e8f9"
-        assert "sequence" not in {
-            column["name"] for column in inspect(engine).get_columns("benchmark_invocations")
-        }
-    command.upgrade(ALEMBIC_CONFIG, "head")
-    try:
-        with engine.connect() as connection:
+                    with monkeypatch.context() as patch:
+                        patch.setattr(Operations, "execute", fail_after_backfill)
+                        with pytest.raises(RuntimeError, match="synthetic interruption"):
+                            with connection.begin_nested():
+                                telemetry.upgrade()
+                    assert connection.execute(guard_query).all() == guards_before
+                    assert connection.execute(historical, {"job_id": job_id}).all() == before
+                    assert "sequence" not in {
+                        column["name"] for column in inspect(connection).get_columns("benchmark_invocations")
+                    }
+                telemetry.upgrade()
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == head
             assert connection.execute(historical, {"job_id": job_id}).all() == before
             sequences = connection.execute(text("""
                 SELECT inv.sequence, inv.ordinal FROM benchmark_invocations AS inv
@@ -184,14 +195,11 @@ def test_telemetry_upgrade_backfills_terminal_invocations_and_restores_guards(
                 "trg_benchmark_invocations_terminal_job_content",
             ):
                 assert guards[name] == "O"
-        with engine.begin() as connection:
             with pytest.raises(DBAPIError, match="immutable|running cell"):
                 with connection.begin_nested():
                     connection.execute(
                         text("UPDATE benchmark_invocations SET sequence = 99 WHERE id = :id"),
                         {"id": before[0].id},
                     )
-    finally:
-        with SessionLocal() as session:
-            BenchmarkRepository(session).delete_terminal_job(job_id=job_id, owner_subject=owner)
-            session.commit()
+        finally:
+            transaction.rollback()
