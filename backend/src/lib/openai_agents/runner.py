@@ -32,7 +32,9 @@ from agents import (
     set_default_openai_responses_transport,
 )
 from agents.models.openai_provider import OpenAIProvider
-from openai import AsyncOpenAI
+from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+from agents.models.openai_responses import OpenAIResponsesModel, OpenAIResponsesWSModel
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from openai.types.responses import (
     ResponseTextDeltaEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
@@ -588,6 +590,40 @@ async def owned_openai_run_config(
         await close_owned_openai_resources(resources)
 
 
+def _uses_openai_http_model(model: Any) -> bool:
+    """Identify SDK HTTP models without taking over stateful WebSocket models."""
+
+    return isinstance(model, (OpenAIChatCompletionsModel, OpenAIResponsesModel)) and not isinstance(
+        model, OpenAIResponsesWSModel
+    )
+
+
+@asynccontextmanager
+async def _owned_compatible_agent(agent: Agent) -> AsyncIterator[Agent]:
+    """Keep configured model behavior but never borrow its pooled connections."""
+
+    model = agent.model
+    assert isinstance(model, (OpenAIChatCompletionsModel, OpenAIResponsesModel))
+    source_client = model._get_client()
+    transport = DefaultAsyncHttpxClient(timeout=source_client.timeout)
+    try:
+        client = source_client.copy(http_client=transport)
+    except BaseException:
+        await transport.aclose()
+        raise
+    try:
+        # Shallow copies retain model subclasses, provider policy and dynamic
+        # benchmark route metadata. Agent.clone can recompute model settings and
+        # drops non-dataclass attributes. Only this operation's client is replaced.
+        owned_agent = copy(agent)
+        owned_model = copy(model)
+        owned_model._client = client
+        owned_agent.model = owned_model
+        yield owned_agent
+    finally:
+        await client.close()
+
+
 async def run_agent_with_owned_openai_resources(
     agent: Agent,
     input_value: Any,
@@ -605,11 +641,16 @@ async def run_agent_with_owned_openai_resources(
 
     benchmark_route_token = set_benchmark_invocation_route(agent)
     if agent_model is not None and not isinstance(agent_model, str):
-        # OpenAI-compatible providers expose concrete model objects backed by the
-        # shared HTTP client. They do not use the native Responses WebSocket and
-        # therefore must retain their provider-specific model instead of creating
-        # an unused native OpenAI lifecycle.
         try:
+            if _uses_openai_http_model(agent_model):
+                async with _owned_compatible_agent(agent) as owned_agent:
+                    return await Runner.run(
+                        owned_agent,
+                        input_value,
+                        max_turns=max_turns,
+                        **run_kwargs,
+                    )
+            # Other concrete model implementations retain their own lifecycle.
             return await Runner.run(
                 agent,
                 input_value,
@@ -640,13 +681,15 @@ def run_agent_sync_with_owned_openai_resources(
     max_turns: int,
     **run_kwargs: Any,
 ) -> Any:
-    """Run native owned resources safely while preserving compatible-provider loops."""
+    """Run owned native/compatible resources and close them before loop shutdown."""
 
     agent_model = getattr(agent, "model", None)
-    if agent_model is not None and not isinstance(agent_model, str):
-        # Compatible-provider models use the SDK's shared async HTTP client. Keep
-        # Runner.run_sync's persistent thread-loop behavior for those shared
-        # primitives; there are no native Responses WebSocket resources to close.
+    if (
+        agent_model is not None
+        and not isinstance(agent_model, str)
+        and not _uses_openai_http_model(agent_model)
+    ):
+        # Do not impose SDK HTTP ownership on opaque/custom model lifecycles.
         return Runner.run_sync(
             agent,
             input=input,

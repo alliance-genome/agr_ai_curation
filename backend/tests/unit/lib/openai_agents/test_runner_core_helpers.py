@@ -499,7 +499,7 @@ def test_sync_owned_runner_closes_resources_before_event_loop_shutdown(monkeypat
     assert len({loop_id for _name, loop_id in calls}) == 1
 
 
-def test_sync_owned_runner_preserves_compatible_provider_loop(monkeypatch):
+def test_sync_owned_runner_preserves_opaque_model_lifecycle(monkeypatch):
     model = object()
     agent = SimpleNamespace(model=model)
     expected_result = object()
