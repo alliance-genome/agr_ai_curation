@@ -1271,11 +1271,15 @@ async def _ensure_trace_analyzed(
     try:
         extractor = TraceExtractor(source=_effective_source(source))
         trace_data = extractor.extract_complete_trace(trace_id)
-    except Exception as e:
+    except TraceNotFoundError:
+        raise HTTPException(status_code=404, detail="Trace not found.") from None
+    except Exception as exc:
+        if not isinstance(exc, ScoreProviderError):
+            report_failure("extraction", source=source, trace_id=trace_id)
         raise HTTPException(
-            status_code=404,
-            detail=f"Trace {trace_id} not found: {str(e)}"
-        )
+            status_code=503,
+            detail="Trace provider is temporarily unavailable.",
+        ) from None
 
     # Run analyzers
     try:
@@ -1414,13 +1418,15 @@ def _extract_langfuse_trace(
     try:
         extractor = TraceExtractor(source=effective_source)
         return extractor.extract_complete_trace(trace_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except TraceNotFoundError:
+        raise HTTPException(status_code=404, detail="Trace not found.") from None
     except Exception as exc:
+        if not isinstance(exc, ScoreProviderError):
+            report_failure("extraction", source=source, trace_id=trace_id)
         raise HTTPException(
-            status_code=404,
-            detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
-        ) from exc
+            status_code=503,
+            detail="Trace provider is temporarily unavailable.",
+        ) from None
 
 
 def _offset_pagination(*, limit: int, offset: int, total_items: int) -> Dict[str, Any]:
