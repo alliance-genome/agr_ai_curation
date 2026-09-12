@@ -105,7 +105,9 @@ Common commands:
 
 Positions are 1-based by default. Add `--zero-based` only for raw editor/LSP
 coordinates. Diagnostics are navigation and review aids, not replacements for
-required Docker tests.
+required Docker tests. TypeScript queries automatically use the nearest nested
+`tsconfig.json`; `warm` prepares every discovered TypeScript project from its
+own `package-lock.json`.
 
 ## 5) Dangerous Areas
 

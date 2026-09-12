@@ -25,6 +25,7 @@ from typing import Any
 
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "agr-ai-curation" / "agent-lsp"
 SOURCE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
+TYPESCRIPT_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx"}
 # Agents may run this helper from lightweight workspaces that do not have the
 # backend virtualenv installed. Missing third-party imports are allowed
 # to remain dependency noise, but repo-local missing imports must still fail.
@@ -98,14 +99,20 @@ def workspace_fingerprint(root: Path) -> dict[str, Any]:
         ".gitignore",
         "backend/requirements.txt",
         "backend/requirements.lock.txt",
-        "frontend/package.json",
-        "frontend/package-lock.json",
-        "frontend/tsconfig.json",
-        "frontend/tsconfig.node.json",
         "pyrightconfig.json",
         "ruff.toml",
         "pyproject.toml",
     ]
+    for project in typescript_projects(root):
+        for name in ("package.json", "package-lock.json"):
+            path = project / name
+            if path.is_file():
+                config_paths.append(str(path.relative_to(root)))
+        config_paths.extend(
+            str(path.relative_to(root))
+            for path in sorted(project.glob("tsconfig*.json"))
+            if path.is_file()
+        )
     config_hashes = {
         rel: digest
         for rel in config_paths
@@ -198,18 +205,50 @@ def detect_languages(root: Path) -> list[str]:
     languages: list[str] = []
     if (root / "backend").is_dir() or any(root.glob("*.py")):
         languages.append("python")
-    if (root / "frontend" / "tsconfig.json").is_file() or (
-        root / "package.json"
-    ).is_file():
+    if typescript_projects(root):
         languages.append("typescript")
     return languages
 
 
-def typescript_dependency_state(root: Path) -> dict[str, Any]:
-    frontend = root / "frontend"
-    lockfile = frontend / "package-lock.json"
-    tsserver = frontend / "node_modules" / "typescript" / "lib" / "tsserver.js"
-    if not (frontend / "tsconfig.json").is_file():
+def typescript_projects(root: Path) -> list[Path]:
+    """Return configured TypeScript project roots, excluding dependency trees."""
+    root = root.resolve()
+    projects: list[Path] = []
+    for config in root.rglob("tsconfig.json"):
+        try:
+            relative = config.relative_to(root)
+        except ValueError:
+            continue
+        if any(part in {".git", "node_modules"} for part in relative.parts):
+            continue
+        projects.append(config.parent.resolve())
+    return sorted(set(projects), key=lambda path: str(path.relative_to(root)))
+
+
+def typescript_project_for_path(root: Path, path: Path) -> Path:
+    """Resolve the nearest configured TypeScript project containing ``path``."""
+    root = root.resolve()
+    path = path.resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(f"TypeScript path is outside workspace: {path}") from exc
+
+    current = path.parent if path.suffix else path
+    while True:
+        if (current / "tsconfig.json").is_file():
+            return current
+        if current == root:
+            break
+        current = current.parent
+    raise RuntimeError(f"No TypeScript project contains {path}")
+
+
+def typescript_dependency_state(project_root: Path) -> dict[str, Any]:
+    project_root = project_root.resolve()
+    lockfile = project_root / "package-lock.json"
+    tsserver = project_root / "node_modules" / "typescript" / "lib" / "tsserver.js"
+    if not (project_root / "tsconfig.json").is_file():
         return {"status": "not_applicable", "reason": "typescript_workspace_missing"}
     if not lockfile.is_file():
         return {"status": "unavailable", "reason": "package_lock_missing"}
@@ -237,12 +276,20 @@ def typescript_prep_timeout() -> float:
     return value
 
 
-def ensure_typescript_dependencies(root: Path) -> dict[str, Any]:
-    """Lazily install pinned frontend dependencies for TypeScript LSP queries."""
+def ensure_typescript_dependencies(
+    root: Path, project_root: Path
+) -> dict[str, Any]:
+    """Lazily install pinned dependencies for one in-repository TS project."""
     root = root.resolve()
-    frontend = root / "frontend"
-    lockfile = frontend / "package-lock.json"
-    dependency_state = typescript_dependency_state(root)
+    project_root = project_root.resolve()
+    try:
+        project_relative = str(project_root.relative_to(root)) or "."
+    except ValueError as exc:
+        raise RuntimeError(
+            f"TypeScript project is outside workspace: {project_root}"
+        ) from exc
+    lockfile = project_root / "package-lock.json"
+    dependency_state = typescript_dependency_state(project_root)
     if dependency_state["status"] not in {"ready", "dependencies_missing"}:
         raise RuntimeError(
             "TypeScript LSP unavailable: "
@@ -253,7 +300,8 @@ def ensure_typescript_dependencies(root: Path) -> dict[str, Any]:
     if lock_digest is None:
         raise RuntimeError("TypeScript LSP unavailable: package_lock_missing")
     cache_dir = cache_dir_for(root)
-    marker = cache_dir / "typescript-dependencies.json"
+    project_key = hashlib.sha256(project_relative.encode("utf-8")).hexdigest()[:16]
+    marker = cache_dir / f"typescript-dependencies-{project_key}.json"
 
     def marker_matches() -> bool:
         try:
@@ -266,13 +314,13 @@ def ensure_typescript_dependencies(root: Path) -> dict[str, Any]:
         return dependency_state
 
     with workspace_lock(cache_dir, timeout=typescript_prep_timeout()):
-        current_state = typescript_dependency_state(root)
+        current_state = typescript_dependency_state(project_root)
         if current_state["status"] == "ready" and marker_matches():
             return current_state
 
         completed = run_command(
             ["npm", "ci"],
-            cwd=frontend,
+            cwd=project_root,
             timeout=typescript_prep_timeout(),
         )
         if completed.returncode != 0:
@@ -280,7 +328,7 @@ def ensure_typescript_dependencies(root: Path) -> dict[str, Any]:
             tail = " | ".join(detail[-3:]) if detail else f"exit {completed.returncode}"
             raise RuntimeError(f"TypeScript dependency preparation failed: {tail}")
 
-        ready_state = typescript_dependency_state(root)
+        ready_state = typescript_dependency_state(project_root)
         if ready_state["status"] != "ready":
             raise RuntimeError(
                 "TypeScript dependency preparation completed but TypeScript is still unavailable: "
@@ -290,6 +338,7 @@ def ensure_typescript_dependencies(root: Path) -> dict[str, Any]:
             json.dumps(
                 {
                     "package_lock_sha256": lock_digest,
+                    "project_root": project_relative,
                     "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 },
                 indent=2,
@@ -297,7 +346,12 @@ def ensure_typescript_dependencies(root: Path) -> dict[str, Any]:
             )
             + "\n"
         )
-        return {**ready_state, "prepared": True, "marker": str(marker)}
+        return {
+            **ready_state,
+            "prepared": True,
+            "marker": str(marker),
+            "project_root": project_relative,
+        }
 
 
 def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
@@ -311,11 +365,20 @@ def warm_workspace(root: Path, timeout: float) -> dict[str, Any]:
     typescript_state: dict[str, Any] | None = None
 
     if "typescript" in languages:
-        # This also reconciles the lockfile marker when node_modules already exists,
-        # so the first semantic query never inherits deferred dependency work.
-        typescript_state = typescript_dependency_state(root)
-        if typescript_state["status"] in {"ready", "dependencies_missing"}:
-            typescript_state = ensure_typescript_dependencies(root)
+        project_states: list[dict[str, Any]] = []
+        for project in typescript_projects(root):
+            state = typescript_dependency_state(project)
+            if state["status"] in {"ready", "dependencies_missing"}:
+                state = ensure_typescript_dependencies(root, project)
+            project_states.append(
+                {**state, "project_root": str(project.relative_to(root)) or "."}
+            )
+        ready = all(state.get("status") == "ready" for state in project_states)
+        typescript_state = {
+            "status": "ready" if ready else "unavailable",
+            "reason": "projects_ready" if ready else "project_unavailable",
+            "projects": project_states,
+        }
 
     with workspace_lock(cache_dir, timeout=max(1.0, min(timeout, 30.0))):
         previous: dict[str, Any] = {}
@@ -479,12 +542,8 @@ def language_for(path: Path) -> str:
 
 
 def lsp_root_for(root: Path, path: Path) -> Path:
-    if path.suffix in {".ts", ".tsx", ".js", ".jsx"} and (root / "frontend").is_dir():
-        try:
-            path.resolve().relative_to((root / "frontend").resolve())
-            return root / "frontend"
-        except ValueError:
-            return root
+    if path.suffix in TYPESCRIPT_EXTENSIONS:
+        return typescript_project_for_path(root, path)
     return root
 
 
@@ -498,8 +557,11 @@ def lsp_command_for(path: Path) -> list[str]:
 
 def open_lsp_document(root: Path, path: Path, timeout: float) -> tuple[LspClient, Path]:
     lsp_root = lsp_root_for(root, path)
-    if path.suffix in {".ts", ".tsx", ".js", ".jsx"}:
-        ensure_typescript_dependencies(root)
+    initialization_options: dict[str, Any] = {}
+    if path.suffix in TYPESCRIPT_EXTENSIONS:
+        ensure_typescript_dependencies(root, lsp_root)
+        tsserver = lsp_root / "node_modules" / "typescript" / "lib" / "tsserver.js"
+        initialization_options = {"tsserver": {"path": str(tsserver)}}
     client = LspClient(lsp_command_for(path), lsp_root)
     client.request(
         "initialize",
@@ -515,6 +577,7 @@ def open_lsp_document(root: Path, path: Path, timeout: float) -> tuple[LspClient
                 "workspace": {"symbol": {}},
             },
             "clientInfo": {"name": "agr-agent-lsp", "version": "0"},
+            "initializationOptions": initialization_options,
         },
         timeout=timeout,
     )
@@ -843,18 +906,58 @@ def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, A
         )
     if py_files and shutil.which("pyright"):
         commands.append(run_pyright_diagnostics(root, py_files, timeout))
-    if ts_files and (root / "frontend" / "package.json").is_file():
-        completed = run_command(
-            ["npm", "run", "type-check:changed", "--", "--base", "origin/main"],
-            cwd=root / "frontend",
-            timeout=timeout,
-        )
+    ts_projects: dict[Path, list[str]] = {}
+    for name in ts_files:
+        try:
+            project = typescript_project_for_path(root, root / name)
+        except RuntimeError as exc:
+            commands.append(
+                {
+                    "name": "typescript project unresolved",
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "files": [name],
+                }
+            )
+            continue
+        ts_projects.setdefault(project, []).append(name)
+    for project in sorted(ts_projects, key=lambda path: str(path.relative_to(root))):
+        ensure_typescript_dependencies(root, project)
+        relative = str(project.relative_to(root)) or "."
+        package_path = project / "package.json"
+        package = json.loads(package_path.read_text())
+        scripts = package.get("scripts") if isinstance(package, dict) else {}
+        scripts = scripts if isinstance(scripts, dict) else {}
+        if relative == "frontend" and "type-check:changed" in scripts:
+            args = [
+                "npm",
+                "run",
+                "type-check:changed",
+                "--",
+                "--base",
+                "origin/main",
+            ]
+            name = "frontend type-check:changed"
+        elif "typecheck" in scripts:
+            args = ["npm", "run", "typecheck"]
+            name = f"{relative} typecheck"
+        else:
+            args = [
+                str(project / "node_modules" / ".bin" / "tsc"),
+                "--noEmit",
+                "--project",
+                "tsconfig.json",
+            ]
+            name = f"{relative} tsc"
+        completed = run_command(args, cwd=project, timeout=timeout)
         commands.append(
             {
-                "name": "frontend type-check:changed",
+                "name": name,
                 "returncode": completed.returncode,
                 "stdout": completed.stdout,
                 "stderr": completed.stderr,
+                "files": ts_projects[project],
             }
         )
     return {
@@ -901,7 +1004,7 @@ Commands:
                and other document symbols for one Python/TypeScript file.
   definition   Jump from a file position to the symbol definition location.
   references   Find known references for the symbol at a file position.
-  diagnostics  Run scoped Ruff/Pyright/frontend changed-file diagnostics.
+  diagnostics  Run scoped Ruff/Pyright/project TypeScript diagnostics.
   cleanup      Remove old per-workspace LSP cache state.
   warm         Prepare pinned TypeScript dependencies when needed, then refresh
                workspace LSP state for lane startup or stale-state recovery.
@@ -978,8 +1081,8 @@ only for local smoke testing or recovery after clearly stale or missing state.
         "diagnostics",
         help="Run scoped diagnostics for changed files or explicit files.",
         description=(
-            "Run scoped diagnostics with Ruff/Pyright for Python and the existing "
-            "frontend type-check:changed guard for TypeScript. This is a navigation "
+            "Run scoped diagnostics with Ruff/Pyright for Python and each owning "
+            "TypeScript project's checked-in typecheck contract. This is a navigation "
             "and review aid, not a replacement for required lane validation."
         ),
     )
