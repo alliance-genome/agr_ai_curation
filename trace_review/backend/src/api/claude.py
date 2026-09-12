@@ -20,7 +20,8 @@ from datetime import datetime
 from typing import Annotated, Callable, Dict, Any, Optional, List, Mapping, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Path
 
-from ..services.trace_extractor import TraceExtractor, TraceNotFoundError
+from ..observability import report_failure
+from ..services.trace_extractor import TraceExtractor, TraceNotFoundError, ScoreProviderError
 from ..services.feedback_artifacts import (
     feedback_artifacts_contain_trace,
     fetch_feedback_trace_artifacts,
@@ -119,6 +120,8 @@ async def _authorize_claude_trace_request(
         ).extract_complete_trace(trace_id)
     except Exception as exc:
         extraction_error = exc
+        if not isinstance(exc, (TraceNotFoundError, ScoreProviderError)):
+            report_failure("extraction", source=source, trace_id=trace_id)
     else:
         raw_trace = trace_data.get("raw_trace") or {}
         owner = str(raw_trace.get("userId") or raw_trace.get("user_id") or "").strip()

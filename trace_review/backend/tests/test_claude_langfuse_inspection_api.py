@@ -825,3 +825,32 @@ async def test_claude_model_live_context_uses_preflight_and_generation_inputs(ex
     }
     assert response.data["page"] is None
     assert model_live["observability_payloads"]["exact_payload_requires_explicit_lookup"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [False, True])
+@pytest.mark.parametrize("failure_kind", ["scores", "observations", "missing"])
+@patch("src.observability._client")
+async def test_authorization_reports_provider_failure_once(reporter, broken, failure_kind):
+    from src.services.trace_extractor import TraceExtractor
+
+    extractor = object.__new__(TraceExtractor)
+    extractor.source = "remote"
+    extractor.client = Mock()
+    extractor.get_observations = Mock(return_value=[{"id": "root", "type": "SPAN"}])
+    if failure_kind == "missing":
+        extractor.get_observations.return_value = []
+    elif failure_kind == "observations":
+        extractor.get_observations.side_effect = RuntimeError("private-response")
+    else:
+        extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+    if broken:
+        reporter.capture_event.side_effect = RuntimeError("reporter down")
+    with patch("src.api.claude.TraceExtractor", return_value=extractor):
+        with pytest.raises(HTTPException) as raised:
+            await claude._authorize_claude_trace_request(
+                _authorization_request(), user={"sub": "curator-1"},
+            )
+    assert raised.value.status_code == (404 if failure_kind == "missing" else 503)
+    assert reporter.capture_event.call_count == (0 if failure_kind == "missing" else 1)
+    assert "private-" not in str(reporter.capture_event.call_args)

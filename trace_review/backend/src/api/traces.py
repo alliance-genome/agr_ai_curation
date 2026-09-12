@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from ..observability import report_failure, session_failure_scope
 from ..models.requests import AnalyzeTraceRequest, TraceSource
 from ..models.responses import SessionTraceExportResponse
-from ..services.trace_extractor import TraceExtractor, TraceNotFoundError
+from ..services.trace_extractor import TraceExtractor, TraceNotFoundError, ScoreProviderError
 from ..services.langfuse_run_reconstruction import (
     build_cost_summary,
     build_duplicate_report,
@@ -195,16 +195,19 @@ def _get_or_analyze_trace_export(
 
     try:
         active_extractor = extractor or TraceExtractor(source=_effective_source(source))
-    except Exception:
+    except Exception as exc:
         report_failure("extraction", source=source, trace_id=trace_id)
-        raise
+        raise TraceExtractionError("Trace provider is temporarily unavailable.") from exc
 
     try:
         trace_data = active_extractor.extract_complete_trace(trace_id)
     except Exception as exc:
-        if not isinstance(exc, TraceNotFoundError):
+        if not isinstance(exc, (TraceNotFoundError, ScoreProviderError)):
             report_failure("extraction", source=source, trace_id=trace_id)
-        raise TraceExtractionError(str(exc)) from exc
+        raise TraceExtractionError(
+            "Trace not found." if isinstance(exc, TraceNotFoundError)
+            else "Trace provider is temporarily unavailable."
+        ) from exc
 
     try:
         cache_data = _build_trace_cache_data(trace_id, trace_data)
@@ -337,16 +340,14 @@ def _extract_langfuse_trace(trace_id: str, source: TraceSource) -> Dict[str, Any
     try:
         extractor = TraceExtractor(source=_effective_source(source))
         return extractor.extract_complete_trace(trace_id)
-    except ValueError as exc:
-        report_failure("extraction", source=source, trace_id=trace_id)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except TraceNotFoundError:
+        raise HTTPException(status_code=404, detail="Trace not found.") from None
     except Exception as exc:
-        if not isinstance(exc, TraceNotFoundError):
+        if not isinstance(exc, ScoreProviderError):
             report_failure("extraction", source=source, trace_id=trace_id)
         raise HTTPException(
-            status_code=404,
-            detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
-        ) from exc
+            status_code=503, detail="Trace provider is temporarily unavailable.",
+        ) from None
 
 
 def _ensure_search_scope(
@@ -400,8 +401,8 @@ async def analyze_trace(
         )
     except TraceExtractionError as e:
         raise HTTPException(
-            status_code=404,
-            detail=f"Trace {trace_id} not found in Langfuse ({request_data.source}): {str(e)}"
+            status_code=404 if isinstance(e.__cause__, TraceNotFoundError) else 503,
+            detail=str(e)
         )
     except TraceAnalysisError as e:
         logger.exception("Error analyzing trace: %s", e)
@@ -709,8 +710,8 @@ async def export_trace(
     except TraceExtractionError as e:
         logger.error("Error extracting trace %s: %s", trace_id, e)
         raise HTTPException(
-            status_code=404,
-            detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(e)}"
+            status_code=404 if isinstance(e.__cause__, TraceNotFoundError) else 503,
+            detail=str(e)
         )
     except TraceAnalysisError as e:
         logger.exception("Error analyzing trace %s: %s", trace_id, e)
@@ -884,8 +885,8 @@ async def get_trace_view(
                 load_sibling_cached_data=load_sibling_cached_data,
                 fallback_exceptions=(TraceExtractionError,),
                 unavailable_exception_factory=lambda exc: HTTPException(
-                    status_code=404,
-                    detail=f"Trace {trace_id} not found in Langfuse ({source}): {str(exc)}",
+                    status_code=404 if isinstance(exc.__cause__, TraceNotFoundError) else 503,
+                    detail=str(exc),
                 ),
                 caller_sub=str(user.get("sub") or "").strip() or None,
                 caller_email=str(user.get("email") or "").strip() or None,

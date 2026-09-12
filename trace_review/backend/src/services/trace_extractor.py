@@ -33,6 +33,10 @@ class TraceNotFoundError(RuntimeError):
     """Raised when Langfuse has no observations for an exact trace ID."""
 
 
+class ScoreProviderError(RuntimeError):
+    """Score retrieval failed and has already been reported by the extractor."""
+
+
 class TraceExtractor:
     """Service for extracting trace data from Langfuse"""
 
@@ -876,14 +880,10 @@ class TraceExtractor:
                     "timeout_in_seconds": get_langfuse_request_timeout_seconds(),
                 },
             )
-            if hasattr(response, 'data'):
-                return [self._normalize_item(score) for score in response.data]
-            if hasattr(response, 'items'):
-                return [self._normalize_item(score) for score in response.items]
-            return []
+            return [self._normalize_item(score) for score in response.data]
         except Exception:
             report_failure("scores", source=self.source, trace_id=trace_id)
-            return []
+            raise ScoreProviderError("Trace score provider is temporarily unavailable.") from None
 
     def extract_complete_trace(self, trace_id: str) -> Dict:
         """
