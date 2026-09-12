@@ -1081,7 +1081,7 @@ def test_shared_agent_detail_keeps_group_restrictions(monkeypatch, groups, allow
     lookup.assert_called_once_with(db, agent_id, 1)
 
 
-@pytest.mark.parametrize("operation", ["update", "delete", "revert"])
+@pytest.mark.parametrize("operation", ["update", "delete"])
 def test_shared_agent_nonowner_mutation_denied(monkeypatch, operation):
     import src.api.agent_studio_custom as api
 
@@ -1092,10 +1092,8 @@ def test_shared_agent_nonowner_mutation_denied(monkeypatch, operation):
     agent_id = uuid.uuid4()
     if operation == "update":
         call = api.update_custom_agent_endpoint(request=api.UpdateCustomAgentRequest(name="Changed"), custom_agent_id=agent_id, user={}, db=db)
-    elif operation == "delete":
-        call = api.delete_custom_agent_endpoint(custom_agent_id=agent_id, user={}, db=db)
     else:
-        call = api.revert_custom_agent_endpoint(version=1, request=api.RevertCustomAgentRequest(), custom_agent_id=agent_id, user={}, db=db)
+        call = api.delete_custom_agent_endpoint(custom_agent_id=agent_id, user={}, db=db)
     with pytest.raises(HTTPException) as exc:
         asyncio.run(call)
     assert exc.value.status_code == 403

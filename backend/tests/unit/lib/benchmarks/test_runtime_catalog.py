@@ -108,6 +108,7 @@ def test_profile_mapping_catalog_freezes_custom_validator_source(configured, mon
     from uuid import uuid4
     from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
     from src.schemas.agent_execution_revision import AgentOutputContract, GenericProfilePin
+    from src.lib.curation_workspace import adapter_registry
     from src.lib.domain_packs import profile_validation
 
     source = source_receipt("ca_extractor")
@@ -131,9 +132,21 @@ def test_profile_mapping_catalog_freezes_custom_validator_source(configured, mon
     monkeypatch.setattr(runtime, "get_execution_revision", saved)
     authorize = Mock(return_value=validator)
     monkeypatch.setattr(runtime, "authorize_execution_receipt", authorize)
-    monkeypatch.setattr(profile_validation, "resolve_profile_validation", lambda *a, **k: NS(registry=NS(bindings=[
-        NS(binding_id="mapped-custom", raw={"custom_validator": pin}),
-    ])))
+    # This synthetic catalog fixture owns its groups and profile mapping. Do not
+    # load installed Alliance packs against those groups or depend on warm caches.
+    generic_pack = object()
+
+    def resolve_pack(pack_id):
+        assert pack_id == "generic"
+        return generic_pack
+
+    def resolve_mapping(receipt, pack, **kwargs):
+        assert receipt == source and pack is generic_pack
+        assert kwargs["user_id"] == 42 and kwargs["active_group_ids"] == ("group-a",)
+        return NS(registry=NS(bindings=[NS(binding_id="mapped-custom", raw={"custom_validator": pin})]))
+
+    monkeypatch.setattr(adapter_registry, "resolve_curation_domain_pack_by_id", resolve_pack)
+    monkeypatch.setattr(profile_validation, "resolve_profile_validation", resolve_mapping)
     monkeypatch.setattr(profile_validation, "profile_validation_attachment_options", lambda _: [NS(
         state=NS(value="active"), to_dict=lambda: {"validator_agent_id": "semantic",
             "validator_package_id": "package", "validator_binding_id": "mapped-custom"},

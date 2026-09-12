@@ -592,7 +592,28 @@ def test_current_flow_manifest_and_bounded_details_stay_under_provider_cap(monke
         assert json.loads(content).get("status") != "compacted_tool_result"
 
 
-def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch):
+@pytest.fixture
+def authorized_compaction_tools(monkeypatch):
+    """Isolate provider compaction from the database-backed authorization catalog."""
+    def authorized_tools(context, **_kwargs):
+        definitions = tuple(api_module._get_all_opus_tools(context))
+        return api_module.AuthorizedToolUniverse(
+            definitions=definitions,
+            authorized_names=frozenset(item["name"] for item in definitions),
+            fingerprint="sha256:" + "a" * 64,
+            candidate_count=len(definitions),
+            filtered_count=0,
+        )
+
+    monkeypatch.setattr(api_module, "_get_openai_authorized_tool_definitions", authorized_tools)
+    monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(
+        api_module, "is_tool_authorized_at_invocation",
+        lambda *, tool_name, declared_names, **_kwargs: tool_name in declared_names,
+    )
+
+
+def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch, authorized_compaction_tools):
     captured: dict[str, Any] = {}
     large_value = "payload chunk " * 500
 
@@ -710,7 +731,7 @@ def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch)
 
 
 def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
-    monkeypatch,
+    monkeypatch, authorized_compaction_tools,
 ):
     captured: dict[str, Any] = {}
     inventory_value = "payload inventory entry " * 400
