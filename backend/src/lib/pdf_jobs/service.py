@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError
 
 from src.lib.openai_agents.config import (
     get_pdf_document_error_message_max_chars,
+    get_pdf_job_error_message_max_chars,
     get_pdf_no_job_orphan_batch_size,
     get_pdf_no_job_orphan_repair_apply,
     get_pdf_no_job_orphan_repair_retry_count,
@@ -786,7 +787,9 @@ def mark_failed(
         job.completed_at = now
         job.status = PdfJobStatus.FAILED.value
         job.current_stage = stage or job.current_stage or "failed"
-        job.error_message = (message or "Processing failed")[:2000]
+        job.error_message = (message or "Processing failed")[
+            :get_pdf_job_error_message_max_chars()
+        ]
         job.message = job.error_message
         _store_terminal_metadata(
             job,
