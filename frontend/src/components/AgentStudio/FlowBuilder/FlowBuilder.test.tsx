@@ -303,6 +303,63 @@ function expectedPrimaryShortcutLabel() {
 }
 
 describe('FlowBuilder', () => {
+  const unsavedReminder = 'Unsaved changes — Save this flow to your account'
+
+  it.each([undefined, true, false])('does not warn for an untouched new, saved or read-only flow (%s)', async (isOwner) => {
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ is_owner: isOwner }))
+    render(<FlowBuilder flowId={isOwner === undefined ? undefined : 'flow-1'} />)
+    if (isOwner !== undefined) await screen.findByText('Fresh Flow')
+    expect(screen.queryByText(unsavedReminder)).not.toBeInTheDocument()
+  })
+
+  it('announces applied changes above the canvas, preserves them on failure, and clears them after keyboard Save succeeds', async () => {
+    const user = userEvent.setup()
+    const flow = buildFlowResponse()
+    serviceMocks.getFlow.mockResolvedValue(flow)
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    serviceMocks.updateFlow.mockRejectedValueOnce(new Error('Save unavailable')).mockResolvedValueOnce(flow)
+    render(<FlowBuilder flowId="flow-1" />)
+    await screen.findByText('Fresh Flow')
+    act(() => reactFlowMocks.onNodeClick?.({} as never, flow.flow_definition.nodes[0] as never))
+    expect(screen.queryByText(unsavedReminder)).not.toBeInTheDocument()
+    act(() => nodePanelMocks.onApply?.('node_0', { task_instructions: 'Edited instructions' }))
+    const status = screen.getByRole('status')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    expect(status).toHaveAttribute('aria-atomic', 'true')
+    expect(status).toHaveTextContent(unsavedReminder)
+    expect(status).toHaveTextContent('Apply updates the flow draft. Use Save to save those changes to your account.')
+    expect(status.compareDocumentPosition(screen.getByRole('region', { name: 'Flow canvas' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await screen.findByText('Save unavailable')
+    expect(status).toHaveTextContent(unsavedReminder)
+    act(() => { dispatchKeyboardShortcut(screen.getByTestId('react-flow'), { key: 's', ctrlKey: true }) })
+    await screen.findByText('Flow saved successfully')
+    expect(status).toBeEmptyDOMElement()
+    expect(serviceMocks.updateFlow).toHaveBeenLastCalledWith('flow-1', expect.objectContaining({
+      flow_definition: expect.objectContaining({ nodes: [expect.objectContaining({ data: expect.objectContaining({ task_instructions: 'Edited instructions' }) })] }),
+    }))
+  })
+
+  it('keeps the reminder for edits applied during an earlier save until the current draft is saved', async () => {
+    const user = userEvent.setup()
+    const flow = buildFlowResponse()
+    let finishSave!: (flow: FlowResponse) => void
+    serviceMocks.getFlow.mockResolvedValue(flow)
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Fresh Flow'))
+    serviceMocks.updateFlow.mockReturnValueOnce(new Promise<FlowResponse>((resolve) => { finishSave = resolve })).mockResolvedValue(flow)
+    render(<FlowBuilder flowId="flow-1" />)
+    await screen.findByText('Fresh Flow')
+    act(() => reactFlowMocks.onNodeClick?.({} as never, flow.flow_definition.nodes[0] as never))
+    act(() => nodePanelMocks.onApply?.('node_0', { task_instructions: 'First edit' }))
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    expect(screen.getByText(unsavedReminder)).toBeInTheDocument()
+    act(() => nodePanelMocks.onApply?.('node_0', { task_instructions: 'Later edit' }))
+    await act(async () => finishSave(flow))
+    expect(screen.getByText(unsavedReminder)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^Save flow$/ }))
+    await waitFor(() => expect(screen.queryByText(unsavedReminder)).not.toBeInTheDocument())
+  })
+
   it.each([undefined, false])('disables File rename for a new or teammate flow (%s)', async (isOwner) => {
     const user = userEvent.setup()
     serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({ is_owner: false }))
