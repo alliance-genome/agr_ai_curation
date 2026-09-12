@@ -575,3 +575,10 @@ remains the source of full trace evidence.
 Focused tests use an in-memory SDK transport to verify event serialization and
 privacy without contacting Sentry. Deployment acceptance still requires verifying
 ingestion against the configured TraceReview project and deployed release.
+
+TraceReview score-provider errors propagate as unavailable extraction results;
+only a successful empty score response produces a zero score count. Exact-trace
+APIs return 404 for `TraceNotFoundError` and 503 for provider failures. Score
+errors are reported at the extractor and carry a typed marker so API handlers
+do not report them again. Session export retains per-trace failures in its
+partial bundle and counts each score failure once in its aggregated event.

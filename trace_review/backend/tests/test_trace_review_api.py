@@ -23,12 +23,17 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         reporter.capture_event.side_effect = RuntimeError("reporter down")
         for operation in ("export", "session"):
             reporter.reset_mock()
-            with self.assertRaises(OSError) as raised:
+            from fastapi import HTTPException
+            expected = HTTPException if operation == "export" else OSError
+            with self.assertRaises(expected) as raised:
                 if operation == "export":
                     await traces.export_trace("private-trace", self._make_request(), source="remote", refresh=False)
                 else:
                     await traces.export_session("private-session", self._make_request(), source="remote")
-            self.assertIs(raised.exception, failure)
+            if operation == "export":
+                self.assertEqual(getattr(raised.exception, "status_code"), 503)
+            else:
+                self.assertIs(raised.exception, failure)
             reporter.capture_event.assert_called_once()
 
     @patch("src.observability._client")
@@ -77,7 +82,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         extractor.extract_complete_trace.side_effect = RuntimeError("private-response")
         with self.assertRaises(HTTPException) as raised:
             await traces.export_trace("private-trace", self._make_request(), source="remote", refresh=False)
-        self.assertEqual(raised.exception.status_code, 404)
+        self.assertEqual(raised.exception.status_code, 503)
         self.assertEqual(reporter.capture_event.call_args.args[0]["tags"]["operation"], "extraction")
         reporter.reset_mock()
         extractor.extract_complete_trace.side_effect = None
@@ -98,8 +103,61 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
             extractor_cls.return_value.extract_complete_trace.side_effect = failure
             with self.assertRaises(HTTPException) as raised:
                 traces._extract_langfuse_trace("private-trace", "remote")
-            self.assertEqual(raised.exception.status_code, 404)
+            self.assertEqual(raised.exception.status_code, 503 if captures else 404)
             self.assertEqual(reporter.capture_event.call_count, captures)
+
+    @patch("src.observability._client")
+    async def test_score_outage_captured_once_through_api_and_session(self, reporter):
+        from fastapi import HTTPException
+        from src.services.trace_extractor import TraceExtractor
+        extractor = object.__new__(TraceExtractor)
+        extractor.source = "remote"
+        extractor.client = Mock()
+        extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+        extractor.get_observations = Mock(return_value=[{"id": "root", "type": "SPAN"}])
+        extractor.list_session_traces = Mock(return_value={
+            "traces": [{"id": "failed"}], "meta": {"complete": True},
+        })
+        for broken in (False, True):
+            reporter.capture_event.side_effect = RuntimeError("reporter down") if broken else None
+            for operation in ("direct", "export", "analyze", "session"):
+                reporter.reset_mock()
+                request = self._make_request()
+                with patch("src.api.traces.TraceExtractor", return_value=extractor):
+                    if operation == "session":
+                        result = await traces.export_session("session", request, source="remote")
+                        self.assertEqual(result["session"]["failed_trace_count"], 1)
+                        self.assertFalse(result["session"]["complete"])
+                        self.assertEqual(result["traces"][0]["status"], "error")
+                    else:
+                        with self.assertRaises(HTTPException) as raised:
+                            if operation == "direct":
+                                traces._extract_langfuse_trace("failed", "remote")
+                            elif operation == "export":
+                                await traces.export_trace("failed", request, source="remote", refresh=False)
+                            else:
+                                await traces.analyze_trace(AnalyzeTraceRequest(trace_id="failed"), request)
+                        self.assertEqual(raised.exception.status_code, 503)
+                        self.assertNotIn("private-", raised.exception.detail)
+                reporter.capture_event.assert_called_once()
+                event = reporter.capture_event.call_args.args[0]
+                self.assertNotIn("private-", str(event))
+                if operation == "session":
+                    self.assertEqual(event["contexts"]["trace_review"]["scores_failures"], 1)
+                    self.assertNotIn("extraction_failures", event["contexts"]["trace_review"])
+
+    @patch("src.api.traces.TraceExtractor")
+    async def test_missing_trace_is_404_for_analyze_and_export(self, extractor_cls):
+        from fastapi import HTTPException
+        from src.services.trace_extractor import TraceNotFoundError
+        extractor_cls.return_value.extract_complete_trace.side_effect = TraceNotFoundError("missing")
+        for operation in ("analyze", "export"):
+            with self.assertRaises(HTTPException) as raised:
+                if operation == "analyze":
+                    await traces.analyze_trace(AnalyzeTraceRequest(trace_id="missing"), self._make_request())
+                else:
+                    await traces.export_trace("missing", self._make_request(), source="remote", refresh=False)
+            self.assertEqual(raised.exception.status_code, 404)
 
     @patch("src.api.traces.TraceExtractor")
     async def test_export_session_distinguishes_empty_complete_and_stopped_scans(self, extractor_cls):
@@ -506,7 +564,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["traces"][0]["status"], "success")
         self.assertEqual(response["traces"][1]["status"], "error")
         self.assertEqual(response["traces"][1]["error"]["trace_id"], "trace-missing")
-        self.assertIn("trace not found", response["traces"][1]["error"]["message"])
+        self.assertEqual("Trace provider is temporarily unavailable.", response["traces"][1]["error"]["message"])
         self.assertEqual(response["errors"][0]["trace_id"], "trace-missing")
 
     @patch("src.api.traces.TraceExtractor")

@@ -825,3 +825,87 @@ async def test_claude_model_live_context_uses_preflight_and_generation_inputs(ex
     }
     assert response.data["page"] is None
     assert model_live["observability_payloads"]["exact_payload_requires_explicit_lookup"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [False, True])
+@pytest.mark.parametrize("handler", ["direct", "refresh"])
+@pytest.mark.parametrize("failure_kind", ["scores", "observations", "setup", "missing"])
+@patch("src.observability._client")
+async def test_cached_owner_extraction_preserves_provider_failure_status(
+    reporter, broken, handler, failure_kind,
+):
+    from src.services.trace_extractor import TraceExtractor
+
+    request = _authorization_request()
+    cache = request.app.state.cache_manager
+    cache.set("trace-1", {
+        "raw_trace": {"userId": "curator-1"},
+        "analyzer_schema_version": claude.EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
+    })
+    extractor = object.__new__(TraceExtractor)
+    extractor.source = "local"
+    extractor.client = Mock()
+    extractor.get_observations = Mock(return_value=[{"id": "root", "type": "SPAN"}])
+    if failure_kind == "missing":
+        extractor.get_observations.return_value = []
+    elif failure_kind == "observations":
+        extractor.get_observations.side_effect = RuntimeError("private-response")
+    else:
+        extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+    if broken:
+        reporter.capture_event.side_effect = RuntimeError("reporter down")
+
+    with patch("src.api.claude.TraceExtractor", return_value=extractor) as extractor_cls:
+        if failure_kind == "setup":
+            extractor_cls.side_effect = ValueError("private-configuration")
+        await claude._authorize_claude_trace_request(
+            request, user={"sub": "curator-1"},
+        )
+        extractor_cls.assert_not_called()
+        with pytest.raises(HTTPException) as raised:
+            if handler == "direct":
+                claude._extract_langfuse_trace(request, "trace-1", "local")
+            else:
+                await claude._ensure_trace_analyzed(
+                    "trace-1", request, "local", refresh=True,
+                )
+
+    missing = failure_kind == "missing"
+    assert raised.value.status_code == (404 if missing else 503)
+    assert raised.value.detail == (
+        "Trace not found." if missing else "Trace provider is temporarily unavailable."
+    )
+    assert reporter.capture_event.call_count == (0 if missing else 1)
+    assert "private-" not in str(reporter.capture_event.call_args)
+    if handler == "refresh":
+        assert cache.get("trace-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [False, True])
+@pytest.mark.parametrize("failure_kind", ["scores", "observations", "missing"])
+@patch("src.observability._client")
+async def test_authorization_reports_provider_failure_once(reporter, broken, failure_kind):
+    from src.services.trace_extractor import TraceExtractor
+
+    extractor = object.__new__(TraceExtractor)
+    extractor.source = "remote"
+    extractor.client = Mock()
+    extractor.get_observations = Mock(return_value=[{"id": "root", "type": "SPAN"}])
+    if failure_kind == "missing":
+        extractor.get_observations.return_value = []
+    elif failure_kind == "observations":
+        extractor.get_observations.side_effect = RuntimeError("private-response")
+    else:
+        extractor.client.api.scores.get_many.side_effect = RuntimeError("private-response")
+    if broken:
+        reporter.capture_event.side_effect = RuntimeError("reporter down")
+    with patch("src.api.claude.TraceExtractor", return_value=extractor):
+        with pytest.raises(HTTPException) as raised:
+            await claude._authorize_claude_trace_request(
+                _authorization_request(), user={"sub": "curator-1"},
+            )
+    assert raised.value.status_code == (404 if failure_kind == "missing" else 503)
+    assert reporter.capture_event.call_count == (0 if failure_kind == "missing" else 1)
+    assert "private-" not in str(reporter.capture_event.call_args)

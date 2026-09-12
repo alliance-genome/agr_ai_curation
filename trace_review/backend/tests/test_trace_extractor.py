@@ -9,6 +9,7 @@ from src.services.trace_extractor import (
     SESSION_OBSERVATION_FIELDS,
     TRACE_LIST_OBSERVATION_FIELDS,
     TraceExtractor,
+    ScoreProviderError,
 )
 
 
@@ -21,11 +22,30 @@ class TraceExtractorTests(unittest.TestCase):
             with patch.object(observability, "_client") as reporter:
                 if reporter_broken:
                     reporter.capture_event.side_effect = RuntimeError("sentry unavailable")
-                self.assertEqual(extractor.get_scores("private-trace"), [])
+                with self.assertRaises(ScoreProviderError):
+                    extractor.get_scores("private-trace")
                 reporter.capture_event.assert_called_once()
                 event = reporter.capture_event.call_args.args[0]
                 self.assertEqual(event["tags"]["operation"], "scores")
                 self.assertNotIn("private-", str(event))
+
+    def test_successful_empty_scores_remain_empty(self):
+        extractor = self._make_extractor()
+        extractor.client.api.scores.get_many.return_value = SimpleNamespace(data=[])
+        with patch("src.observability._client") as reporter:
+            extractor.get_observations = Mock(return_value=[{"id": "root", "type": "SPAN"}])
+            result = extractor.extract_complete_trace("trace")
+            self.assertEqual(result["scores"], [])
+            self.assertEqual(result["metadata"]["score_count"], 0)
+            reporter.capture_event.assert_not_called()
+
+    def test_malformed_score_response_is_not_successful_empty(self):
+        extractor = self._make_extractor()
+        extractor.client.api.scores.get_many.return_value = SimpleNamespace()
+        with patch("src.observability._client") as reporter:
+            with self.assertRaises(ScoreProviderError):
+                extractor.get_scores("trace")
+            reporter.capture_event.assert_called_once()
 
     def _make_extractor(self) -> TraceExtractor:
         extractor = object.__new__(TraceExtractor)
