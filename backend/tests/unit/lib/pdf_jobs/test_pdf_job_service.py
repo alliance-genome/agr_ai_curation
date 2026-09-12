@@ -331,6 +331,34 @@ def test_terminal_reconciliation_honors_configured_document_error_limit(monkeypa
     assert document.error_message == "extract"
 
 
+@pytest.mark.parametrize(
+    ("configured_limit", "expected_limit"),
+    [(None, 2000), ("37", 37), ("2500", 2500)],
+)
+def test_mark_failed_honors_job_error_retention_limit(
+    monkeypatch, configured_limit, expected_limit
+):
+    monkeypatch.delenv("PDF_JOB_ERROR_MESSAGE_MAX_CHARS", raising=False)
+    if configured_limit is not None:
+        monkeypatch.setenv("PDF_JOB_ERROR_MESSAGE_MAX_CHARS", configured_limit)
+    monkeypatch.setenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", "11")
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    document = _build_document(job)
+    session = _FakeSession([job, job, document])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    message = "Extractor failure detail. " * 200
+
+    response = service_module.mark_failed(job_id=job.id, message=message)
+
+    assert response is not None
+    assert job.error_message == message[:expected_limit]
+    assert job.message == message[:expected_limit]
+    assert response.error_message == message[:expected_limit]
+    assert response.message == message[:expected_limit]
+    assert document.error_message == message[:11]
+    assert session.commit_calls == 1
+
+
 @pytest.mark.parametrize("finalizer", ["failed", "cancelled"])
 def test_explicit_terminal_finalizers_leave_completed_document_unchanged(
     monkeypatch,
