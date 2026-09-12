@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from src.api import auth as browser_auth
 from src.api.benchmark_auth import require_benchmark_read, require_benchmark_run
+from src.auth.base import AuthPrincipal
 from src.lib.benchmarks.curator_authorization import authorize_benchmark_curator
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext, capture_curator_context
 from src.lib.benchmarks.observability import sanitized_benchmark_error
@@ -66,10 +67,34 @@ async def verify_benchmark_curator(
     orchestration: dict[str, Any],
     curator_authorization: str | None,
 ) -> BenchmarkCuratorContext:
-    """Return only a token-free receipt after provider and active-account checks.
+    principal = await verify_benchmark_human(request, orchestration, curator_authorization)
+
+    def capture() -> BenchmarkCuratorContext:
+        with SessionLocal() as session:
+            user = session.scalar(select(User).where(User.auth_sub == principal.subject))
+            if user is None:
+                raise PermissionError("Active curator account required")
+            return capture_curator_context(principal, user=user)
+
+    try:
+        context = await run_sync(capture)
+        return await authorize_benchmark_curator(context)
+    except PermissionError:
+        raise _failure(403, "curator_authorization_required") from None
+    except Exception as exc:
+        _unavailable(exc, "curator_current_authorization")
+
+
+async def verify_benchmark_human(
+    request: Request,
+    orchestration: dict[str, Any],
+    curator_authorization: str | None,
+) -> AuthPrincipal:
+    """Verify the human token and its relationship to the orchestration identity.
 
     A remote portal must obtain a target-appropriate human token; its own login
     audience is not implicitly trusted. No development/API-key bypass applies.
+    The caller owns the separate current-account check; this helper never writes.
     """
     cookie = request.cookies.get("auth_token") or request.cookies.get("cognito_token")
     if curator_authorization is not None:
@@ -103,17 +128,4 @@ async def verify_benchmark_curator(
     if not is_service and principal.subject != orchestration.get("sub"):
         raise _failure(403, "curator_identity_mismatch")
 
-    def capture() -> BenchmarkCuratorContext:
-        with SessionLocal() as session:
-            user = session.scalar(select(User).where(User.auth_sub == principal.subject))
-            if user is None:
-                raise PermissionError("Active curator account required")
-            return capture_curator_context(principal, user=user)
-
-    try:
-        context = await run_sync(capture)
-        return await authorize_benchmark_curator(context)
-    except PermissionError:
-        raise _failure(403, "curator_authorization_required") from None
-    except Exception as exc:
-        _unavailable(exc, "curator_current_authorization")
+    return principal

@@ -12,6 +12,27 @@ Current identity-provider authorization checks are permitted and fail closed;
 document materialization, source authorization, LLM calls and job writes are
 not performed. API-only deployments can preview with execution and workers off.
 
+## Explicit executor onboarding
+
+`POST /api/v1/benchmarks/curator/onboard` registers the initiating human in the
+executor's local account store. A portal Connect callback can call this after
+verifying the target human login, before using discovery. It requires the same
+API gate, read capability and verified human identity described above. It does
+not require run capability, accept a payload-supplied identity or submit work.
+
+The executor checks the current identity provider before provisioning: disabled
+accounts, identity mismatches and revoked mapped groups are denied. An inactive
+local account cannot be reactivated by onboarding. Successful calls use normal
+profile synchronization and best-effort tenant provisioning; concurrent first
+connections converge on one local account. The token-free response has exactly
+`schema_version: 1`, `subject`, `issuer` and `environment_id`, with
+`Cache-Control: no-store`. Provider outages fail closed with a sanitized 503.
+
+Discovery remains read-only: a missing local account returns 403, and a catalog
+GET never creates an account or tenant. A failed or lost onboarding response
+must not establish a portal connection; a later explicit Connect can safely
+repeat onboarding for the same verified human.
+
 ## Discovery
 
 - `GET /api/v1/benchmarks/catalog?section=targets` returns one canonical catalog
