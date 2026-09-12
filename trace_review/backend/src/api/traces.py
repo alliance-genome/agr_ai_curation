@@ -733,6 +733,11 @@ async def export_session(
     """
     Export discovered session traces with explicit discovery completeness.
 
+    Discovery stops at configured unique-trace, page, observation, or request
+    limits. Such exports return status="partial", session.complete=false, and
+    session.langfuse_meta.stop_reason with the reached limit and configured caps.
+    Only admitted traces are analyzed; partial discovery has no session totals.
+
     Individual trace fetch/analyzer failures are represented in the returned
     bundle so one broken trace does not prevent session reconstruction.
     """

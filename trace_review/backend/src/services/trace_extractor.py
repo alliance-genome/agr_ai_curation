@@ -13,6 +13,8 @@ from ..config import (
     get_langfuse_request_timeout_seconds,
     get_langfuse_search_observation_limit,
     get_langfuse_search_request_limit,
+    get_session_trace_page_size,
+    get_session_max_traces,
     get_trace_source_runtime_config,
 )
 from ..observability import report_failure
@@ -697,11 +699,12 @@ class TraceExtractor:
     def list_session_traces(
         self,
         session_id: str,
-        limit: int = SESSION_TRACE_LIST_LIMIT,
+        limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Discover session traces within search budgets; ``limit`` is page size.
 
         Partial discovery never establishes session totals or stable roots.
+        Unique-trace/page caps return explicit trace_limit/request_limit stop reasons.
         """
         observations_by_trace: Dict[str, List[Dict[str, Any]]] = {}
         cursor: Optional[str] = None
@@ -710,8 +713,12 @@ class TraceExtractor:
         observation_count = 0
         observation_limit = get_langfuse_search_observation_limit()
         request_limit = get_langfuse_search_request_limit()
+        trace_limit = get_session_max_traces()
         stop_reason = None
-        page_limit = min(get_langfuse_observation_page_limit(), max(1, limit))
+        page_limit = min(
+            get_langfuse_observation_page_limit(),
+            get_session_trace_page_size() if limit is None else max(1, limit),
+        )
         filter_json = json.dumps([{
             "type": "string",
             "column": "sessionId",
@@ -761,6 +768,9 @@ class TraceExtractor:
                     )
                 trace_id = observation.get("traceId") or observation.get("trace_id")
                 if trace_id:
+                    if str(trace_id) not in observations_by_trace and len(observations_by_trace) >= trace_limit:
+                        stop_reason = "trace_limit"
+                        break
                     observations_by_trace.setdefault(str(trace_id), []).append(observation)
 
             if stop_reason:
@@ -794,6 +804,7 @@ class TraceExtractor:
             "observations_inspected": observation_count,
             "returned_trace_count": len(traces),
             "request_limit": request_limit,
+            "trace_limit": trace_limit,
             "observation_limit": observation_limit,
         }
 

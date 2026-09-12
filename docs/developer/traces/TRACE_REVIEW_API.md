@@ -323,10 +323,21 @@ discovery, not the subsequent exact analysis of each discovered trace.
 `list_session_traces(limit=...)` still controls page size, capped by
 `TRACE_REVIEW_LANGFUSE_OBSERVATION_PAGE_LIMIT` and the remaining row budget.
 
+Session discovery admits at most `TRACE_REVIEW_SESSION_MAX_TRACES` unique
+traces (default 100) and fetches at most `TRACE_REVIEW_LANGFUSE_SEARCH_REQUEST_LIMIT`
+observation pages (default 200). `TRACE_REVIEW_SESSION_TRACE_PAGE_SIZE` controls
+the observation page size (default 100); the observation row budget also
+applies. Duplicate observations do not consume additional trace slots.
+An extra unique trace produces `stop_reason: "trace_limit"`; an unvisited page
+at the request cap produces `stop_reason: "request_limit"`. The configured caps are
+returned as `session.langfuse_meta.trace_limit` and `request_limit`. Only admitted
+traces are analyzed. Raise the relevant environment setting and retry when a
+larger export is needed; this endpoint does not provide a resumable cursor.
+
 Inspect `session.langfuse_meta.complete`, `truncated`, and `stop_reason` before
 using an export as session-history evidence. A budget stop returns HTTP 200
 with `status: "partial"`, `session.complete: false`, and the discovered traces.
-`stop_reason` is `request_limit` or `observation_limit`.
+`stop_reason` is `trace_limit`, `request_limit`, or `observation_limit`.
 `totalItems` and `totalPages` are null on partial scans; `returned_trace_count`,
 `requests_made`, and `observations_inspected` describe only the work performed.
 The metadata also reports the effective `request_limit` and `observation_limit`.
