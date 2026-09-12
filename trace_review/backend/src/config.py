@@ -194,11 +194,6 @@ def get_session_max_traces() -> int:
     return max(1, int(os.getenv("TRACE_REVIEW_SESSION_MAX_TRACES", "100")))
 
 
-def get_session_max_pages() -> int:
-    """Bound observation pages fetched during session discovery."""
-    return max(1, int(os.getenv("TRACE_REVIEW_SESSION_MAX_PAGES", "200")))
-
-
 def get_langfuse_request_timeout_seconds() -> float:
     """Return the timeout for each TraceReview-to-Langfuse API request."""
     return max(

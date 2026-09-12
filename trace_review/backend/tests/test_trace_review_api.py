@@ -162,7 +162,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.api.traces.TraceExtractor")
     async def test_export_session_distinguishes_empty_complete_and_stopped_scans(self, extractor_cls):
-        for reason in (None, "request_limit", "trace_limit", "page_limit"):
+        for reason in (None, "request_limit", "trace_limit"):
             complete = reason is None
             with self.subTest(reason=reason):
                 meta = {"complete": complete, "truncated": not complete,
@@ -180,7 +180,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
     @patch("src.api.traces.TraceExtractor")
     async def test_export_session_retains_discovered_traces_when_partial(self, extractor_cls, analyze):
         meta = {"complete": False, "truncated": True, "stop_reason": "trace_limit",
-                "trace_limit": 1, "page_limit": 200, "totalItems": None}
+                "trace_limit": 1, "request_limit": 200, "totalItems": None}
         extractor_cls.return_value.list_session_traces.return_value = {
             "traces": [{"id": "trace-1"}], "meta": meta,
         }
@@ -208,10 +208,10 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         from src.services.trace_extractor import TraceExtractor
         from src.models.responses import SessionTraceExportResponse
 
-        for reason in ("trace_limit", "page_limit"):
+        for reason in ("trace_limit", "request_limit"):
             with self.subTest(reason=reason), patch.dict(os.environ, {
                 "TRACE_REVIEW_SESSION_MAX_TRACES": "1",
-                "TRACE_REVIEW_SESSION_MAX_PAGES": "1",
+                "TRACE_REVIEW_LANGFUSE_SEARCH_REQUEST_LIMIT": "1",
             }):
                 extractor = object.__new__(TraceExtractor)
                 extractor.source = "remote"

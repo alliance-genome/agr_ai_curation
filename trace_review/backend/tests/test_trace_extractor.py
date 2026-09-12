@@ -763,10 +763,23 @@ class TraceExtractorTests(unittest.TestCase):
                 self.assertEqual(extractor.client.api.observations.get_many.call_count, 2)
                 self.assertEqual(extractor.client.api.observations.get_many.call_args.kwargs["limit"], 7)
 
-    def test_session_page_cap_stops_even_when_pages_contain_no_new_traces(self):
+    def test_session_request_budget_can_exceed_200_pages(self):
+        with patch.dict(os.environ, {"TRACE_REVIEW_LANGFUSE_SEARCH_REQUEST_LIMIT": "201"}):
+            extractor = self._make_extractor()
+            extractor.client.api.observations.get_many.side_effect = [
+                SimpleNamespace(data=[], meta=SimpleNamespace(cursor=f"cursor-{i}"))
+                for i in range(200)
+            ] + [SimpleNamespace(data=[], meta=SimpleNamespace(cursor=None))]
+            result = extractor.list_session_traces("session-1")
+            self.assertEqual(extractor.client.api.observations.get_many.call_count, 201)
+            self.assertTrue(result["meta"]["complete"])
+            self.assertIsNone(result["meta"]["stop_reason"])
+            self.assertEqual(result["meta"]["request_limit"], 201)
+
+    def test_session_request_cap_stops_even_when_pages_contain_no_new_traces(self):
         for continuation in (None, "next"):
             with self.subTest(continuation=continuation), patch.dict(os.environ, {
-                "TRACE_REVIEW_SESSION_MAX_PAGES": "1",
+                "TRACE_REVIEW_LANGFUSE_SEARCH_REQUEST_LIMIT": "1",
             }):
                 extractor = self._make_extractor()
                 extractor.client.api.observations.get_many.return_value = SimpleNamespace(
@@ -774,8 +787,8 @@ class TraceExtractorTests(unittest.TestCase):
                 )
                 result = extractor.list_session_traces("session-1")
                 self.assertEqual(result["meta"]["complete"], continuation is None)
-                self.assertEqual(result["meta"]["stop_reason"], "page_limit" if continuation else None)
-                self.assertEqual(result["meta"]["page_limit"], 1)
+                self.assertEqual(result["meta"]["stop_reason"], "request_limit" if continuation else None)
+                self.assertEqual(result["meta"]["request_limit"], 1)
                 self.assertEqual(result["meta"]["totalPages"], None if continuation else 1)
                 extractor.client.api.observations.get_many.assert_called_once()
 

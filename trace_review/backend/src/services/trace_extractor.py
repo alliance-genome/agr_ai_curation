@@ -15,7 +15,6 @@ from ..config import (
     get_langfuse_search_request_limit,
     get_session_trace_page_size,
     get_session_max_traces,
-    get_session_max_pages,
     get_trace_source_runtime_config,
 )
 from ..observability import report_failure
@@ -705,7 +704,7 @@ class TraceExtractor:
         """Discover session traces within search budgets; ``limit`` is page size.
 
         Partial discovery never establishes session totals or stable roots.
-        Unique-trace/page caps return explicit trace_limit/page_limit stop reasons.
+        Unique-trace/page caps return explicit trace_limit/request_limit stop reasons.
         """
         observations_by_trace: Dict[str, List[Dict[str, Any]]] = {}
         cursor: Optional[str] = None
@@ -715,7 +714,6 @@ class TraceExtractor:
         observation_limit = get_langfuse_search_observation_limit()
         request_limit = get_langfuse_search_request_limit()
         trace_limit = get_session_max_traces()
-        max_pages = get_session_max_pages()
         stop_reason = None
         page_limit = min(
             get_langfuse_observation_page_limit(),
@@ -732,9 +730,6 @@ class TraceExtractor:
         }
 
         while True:
-            if page_count >= max_pages:
-                stop_reason = "page_limit"
-                break
             if page_count >= request_limit:
                 stop_reason = "request_limit"
                 break
@@ -810,7 +805,6 @@ class TraceExtractor:
             "returned_trace_count": len(traces),
             "request_limit": request_limit,
             "trace_limit": trace_limit,
-            "page_limit": max_pages,
             "observation_limit": observation_limit,
         }
 
