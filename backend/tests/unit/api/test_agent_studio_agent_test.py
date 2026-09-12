@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -951,3 +952,125 @@ class TestAgentWorkshopSystemPrompt:
         names = {tool["name"] for tool in tools}
         assert "propose_workshop_draft_update" in names
         assert "update_workshop_prompt_draft" not in names
+
+    def test_handle_tool_call_blocks_flow_tools_outside_flows_tab(self, monkeypatch):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext
+
+        report = Mock()
+        monkeypatch.setattr(api_module, "report_runtime_exception", report)
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="get_current_flow",
+                tool_input={},
+                context=ChatContext(active_tab="agent_workshop"),
+                user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
+                messages=[],
+            )
+        )
+
+        assert result["success"] is False
+        assert "not available on the agent_workshop tab" in result["error"]
+        report.assert_not_called()
+
+    @pytest.mark.parametrize("tool_name", ["diagnostic_tool", "get_current_flow"])
+    @pytest.mark.parametrize("capture_succeeds", [True, False])
+    @pytest.mark.parametrize("error_type", [RuntimeError, TypeError])
+    def test_handle_tool_call_sanitizes_diagnostic_tool_failures(
+        self, monkeypatch, caplog, tool_name, capture_succeeds, error_type
+    ):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext
+
+        sensitive = "private prompt; credential=fake-secret; provider response"
+
+        def _raise_tool_failure(**_kwargs):
+            raise error_type(sensitive)
+
+        report = Mock(return_value=capture_succeeds)
+        monkeypatch.setattr(api_module, "report_runtime_exception", report)
+
+        monkeypatch.setattr(
+            api_module,
+            "get_diagnostic_tools_registry",
+            lambda: SimpleNamespace(
+                get_tool=lambda name: (
+                    SimpleNamespace(handler=_raise_tool_failure)
+                    if name == tool_name
+                    else None
+                )
+            ),
+        )
+        monkeypatch.setattr(api_module, "_ensure_flow_tools_registered", lambda _registry: None)
+        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name=tool_name,
+                tool_input={"prompt": sensitive},
+                context=ChatContext(active_tab="flows", flow_definition={
+                    "version": "1.1", "entry_node_id": "task", "edges": [],
+                    "nodes": [{
+                        "id": "task", "node_type": "task_input",
+                        "position": {"x": 0, "y": 0}, "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "Test", "output_key": "task_input",
+                        "validation_attachments": [], "validation_groups": [],
+                    }],
+                }),
+                user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
+                messages=[],
+            )
+        )
+
+        assert result == {"success": False, "error": "Tool execution failed unexpectedly."}
+        report.assert_called_once()
+        exc = report.call_args.args[0]
+        assert isinstance(exc, RuntimeError)
+        assert str(exc) == f"Agent Studio tool handler failed ({error_type.__name__})"
+        assert exc.__traceback__ is not None
+        assert exc.__context__ is None
+        assert exc.__cause__ is None
+        assert report.call_args.kwargs == {
+            "component": "agent_studio",
+            "operation": "tool_handler_failed",
+            "tags": {"tool_name": tool_name},
+        }
+        assert sensitive not in repr(report.call_args)
+        assert sensitive not in caplog.text
+        records = [record for record in caplog.records if record.name == api_module.logger.name]
+        assert len(records) == 1
+        assert records[0].getMessage() == (
+            f"Diagnostic tool {tool_name} failed unexpectedly ({error_type.__name__})"
+        )
+        assert records[0].sentry_skip_event is True
+        assert records[0].exc_info is None
+
+    def test_handle_tool_call_does_not_report_handler_validation_result(self, monkeypatch):
+        from src.api import agent_studio as api_module
+
+        validation_result = {"success": False, "error": "Missing required trace_id"}
+        monkeypatch.setattr(
+            api_module,
+            "get_diagnostic_tools_registry",
+            lambda: SimpleNamespace(
+                get_tool=lambda name: SimpleNamespace(handler=lambda **kwargs: validation_result)
+            ),
+        )
+        monkeypatch.setattr(api_module, "_ensure_flow_tools_registered", lambda registry: None)
+        report = Mock()
+        monkeypatch.setattr(api_module, "report_runtime_exception", report)
+
+        result = asyncio.run(api_module._handle_tool_call(
+            tool_name="diagnostic_tool",
+            tool_input={},
+            context=None,
+            user_email="dev@example.org",
+            user_auth_sub="auth-sub-1",
+            messages=[],
+        ))
+
+        assert result is validation_result
+        report.assert_not_called()

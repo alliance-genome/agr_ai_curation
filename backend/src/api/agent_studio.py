@@ -96,6 +96,7 @@ from src.lib.observability.background_tasks import (
     add_observed_background_task,
     report_background_task_exception,
 )
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.config import list_groups
 from src.lib.agent_access import is_resource_access_allowed
@@ -180,7 +181,6 @@ from src.lib.packages import load_installed_agent_studio_prompt
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.runtime_payload_budget import provider_context_preflight
-from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents import run_agent_streamed
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
@@ -3683,18 +3683,19 @@ async def _handle_tool_call(
         try:
             result = tool_def.handler(**tool_input)
             return result
-        except Exception as e:
-            _report_agent_studio_exception_once(
-                e,
-                operation="diagnostic_tool_execution_failed",
-                phase="tool_execution",
-                context={"model": AGENT_STUDIO_OPENAI_MODEL},
+        except Exception as exc:
+            report_runtime_exception(
+                sanitized_runtime_error(
+                    f"Agent Studio tool handler failed ({type(exc).__name__})"
+                ),
+                component="agent_studio",
+                operation="tool_handler_failed",
+                tags={"tool_name": tool_name},
             )
             logger.error(
-                'Diagnostic tool %s failed: %s',
+                'Diagnostic tool %s failed unexpectedly (%s)',
                 tool_name,
-                e,
-                exc_info=True,
+                type(exc).__name__,
                 extra={"sentry_skip_event": True},
             )
             return {
