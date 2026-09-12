@@ -161,6 +161,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/config/test_disease_chemical_validator_result_contract.py"),
     Path("backend/tests/unit/lib/config/test_experimental_condition_validation_agent.py"),
     Path("backend/tests/unit/lib/config/test_groups_loader_identity_provider.py"),
+    # Real deployed WormBase identity aliases must reach Alliance access policy.
+    Path("backend/tests/unit/lib/config/test_wormbase_access_mapping.py"),
     Path("backend/tests/unit/lib/config/test_ontology_term_validator_contract.py"),
     Path("backend/tests/unit/lib/config/test_prompt_loader_runtime.py"),
     Path("backend/tests/unit/lib/packages/test_identifier_prefix_provider_loader.py"),

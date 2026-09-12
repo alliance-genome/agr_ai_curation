@@ -1316,6 +1316,11 @@ def get_figure_locator_resolution_max_turns() -> int:
     )
 
 
+def get_figure_locator_resolution_contract_retries() -> int:
+    """Correction attempts after invalid figure-locator candidate ID coverage."""
+    return max(0, _get_env_int_with_fallback("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", 2))
+
+
 def get_figure_locator_resolution_batch_max_chars() -> int:
     """Maximum prompt chars in one figure-locator classifier batch.
 

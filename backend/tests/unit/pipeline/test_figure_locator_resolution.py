@@ -1,6 +1,7 @@
 """Unit tests for ingestion-time figure locator resolution."""
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -85,6 +86,96 @@ def figure_locator_env(monkeypatch):
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-5.6-terra")
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+
+@pytest.fixture
+def contract_runner(monkeypatch):
+    monkeypatch.setenv("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", "1")
+    monkeypatch.setattr("src.lib.openai_agents.config.get_model_for_agent", lambda _: "test-model")
+    monkeypatch.setattr("src.lib.openai_agents.config.build_model_settings", lambda *a, **k: None)
+    monkeypatch.setattr("agents.Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(locator, "gen_ai_invoke_agent_span", lambda **kwargs: nullcontext(None))
+    telemetry = MagicMock()
+    monkeypatch.setattr(locator, "set_redacted_ai_span_data", telemetry)
+    runner = AsyncMock()
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_with_owned_openai_resources", runner)
+    return runner, telemetry
+
+
+def _batch_result(ids):
+    return SimpleNamespace(final_output=locator.FigureLocatorBatchOutput(
+        candidates=[locator.FigureLocatorCandidateOutput(candidate_id=value) for value in ids]
+    ))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_ids", [[], ["chunk-0", "chunk-0"], ["unexpected-chunk"]])
+async def test_contract_correction_recovers_only_invalid_batch(contract_runner, invalid_ids, monkeypatch):
+    runner, telemetry = contract_runner
+    first = _chunk("chunk-0", "Figure 1 shows signal.")
+    second = _chunk("chunk-1", "Figure 2 shows signal.")
+    batches = [[(first, first.content)], [(second, second.content)]]
+    monkeypatch.setattr(locator, "_batch_candidates", lambda *a, **k: batches)
+    instructions = []
+
+    async def run(agent, prompt, **kwargs):
+        instructions.append(agent.instructions)
+        return [_batch_result(invalid_ids), _batch_result([first.id]), _batch_result([second.id])][len(instructions) - 1]
+
+    runner.side_effect = run
+    assert await locator.resolve_figure_locators([first, second]) == [first, second]
+    assert runner.await_count == 3
+    assert runner.await_args_list[0].args[1] == runner.await_args_list[1].args[1]
+    assert runner.await_args_list[2].args[1] != runner.await_args_list[1].args[1]
+    assert "Correction required" not in instructions[0]
+    assert "Correction required" in instructions[1]
+    assert "Correction required" not in instructions[2]
+    statuses = [call.args[2] for call in telemetry.call_args_list if call.args[1] == "ai_curation.validation.status"]
+    assert statuses == ["retrying", "accepted", "accepted"]
+
+
+@pytest.mark.asyncio
+async def test_default_contract_budget_recovers_on_third_attempt(contract_runner, monkeypatch):
+    runner, _ = contract_runner
+    monkeypatch.delenv("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", raising=False)
+    runner.side_effect = [_batch_result([]), _batch_result([]), _batch_result(["chunk-0"])]
+    chunk = _chunk("chunk-0", "Figure 1 shows signal.")
+    await locator.resolve_figure_locators([chunk])
+    assert runner.await_count == 3
+    assert _resolution_for(chunk).status == "resolved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retries", [0, 1, 2])
+async def test_contract_correction_exhaustion_fails_closed(contract_runner, monkeypatch, retries):
+    runner, telemetry = contract_runner
+    monkeypatch.setenv("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", str(retries))
+    runner.return_value = _batch_result([])
+    chunk = _chunk("chunk-0", "Figure 1 shows signal.")
+    with pytest.raises(ValueError, match="exact candidate_id batch contract"):
+        await locator.resolve_figure_locators([chunk])
+    assert runner.await_count == retries + 1
+    assert chunk.metadata.figure_locator_resolution is None
+    statuses = [call.args[2] for call in telemetry.call_args_list if call.args[1] == "ai_curation.validation.status"]
+    assert statuses == ["retrying"] * retries + ["error"]
+
+
+@pytest.mark.asyncio
+async def test_contract_retry_does_not_retry_provider_failure(contract_runner):
+    runner, _ = contract_runner
+    runner.side_effect = RuntimeError("provider unavailable")
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await locator.resolve_figure_locators([_chunk("chunk-0", "Figure 1 shows signal.")])
+    assert runner.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_input_ids_fail_before_model_call(contract_runner):
+    runner, _ = contract_runner
+    chunk = _chunk("chunk-0", "Figure 1 shows signal.")
+    with pytest.raises(ValueError, match="input contains duplicate"):
+        await locator.resolve_figure_locators([chunk, chunk])
+    runner.assert_not_awaited()
 
 
 def test_candidate_regex_only_selects_broad_locator_anchors() -> None:
