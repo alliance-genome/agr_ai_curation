@@ -72,7 +72,8 @@ def test_revoked_agent_cannot_be_opened(catalog):
 @pytest.mark.parametrize("mode,agent", [("scratch", None), ("template", "pdf_reader"), ("clone", "ca_reader")])
 def test_new_agent_opens_a_draft_without_replacing_a_flow_node(catalog, mode, agent):
     request = {"action": "new_agent", "mode": mode}
-    if agent: request["agent_id"] = agent
+    if agent:
+        request["agent_id"] = agent
     result = prepare(request)
     assert result["saved"] is False
     assert "node_id" not in result["origin"]

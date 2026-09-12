@@ -61,7 +61,6 @@ from ..schemas.flows import (
     CreateFlowRequest,
     CloneFlowRequest,
     ShareFlowRequest,
-    DEFAULT_FLOW_EDGE_ROLE,
     FlowDefinition,
     FlowListResponse,
     FlowResponse,

@@ -17,7 +17,7 @@ from .test_profile_projection import profile_step, _selected_plan  # noqa: F401
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize("save_failure", [False, True])
 @pytest.mark.parametrize("custom", [False, True])
-async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_step, format, empty, save_failure, custom):
+async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_step, format, empty, save_failure, custom):  # noqa: F811 - pytest injects the imported shared fixture
     monkeypatch.setenv("FLOW_SELECTED_FIELDS_DIRECT_EXPORT", "true")
     step, _, profile = profile_step
     step["node_id"] = "stocks"
