@@ -75,6 +75,31 @@ def test_saved_selection_requires_revision_and_rejects_embedded_executable_data(
     assert BenchmarkExecutionTarget(kind="flow", id="recipe").model_dump(mode="json") == {"kind": "flow", "id": "recipe"}
 
 
+@pytest.mark.parametrize("agent_key", ["csv_formatter", "tsv_formatter", "json_formatter"])
+def test_non_model_system_step_is_frozen_without_exposing_a_model_route(setup, monkeypatch, agent_key):
+    from src.lib.benchmarks.system_snapshot import FrozenSystemAgent
+    from src.lib.benchmarks.source_revisions import benchmark_source_revisions, active_system_source
+    from tests.unit.lib.benchmarks.test_system_snapshot import bundle
+
+    row = NS(agent_key=agent_key, visibility="system")
+    source = FrozenSystemAgent(
+        agent_key=agent_key, model_id="model-a", model_temperature=0.2,
+        model_reasoning=None, tool_ids=(), group_tool_policy={}, output_schema_key=None,
+        prompt_layer_manifest=bundle(agent_key).to_manifest(),
+    )
+    monkeypatch.setattr(service, "list_agents_visible_to_user", lambda *a, **kw: [row])
+    capture = Mock(return_value=source)
+    monkeypatch.setattr(service, "capture_system_agent", capture)
+    setup.contracts.stages += (NS(route_slot=None, agent_id=agent_key),)
+    catalog = service.prepare_selected_catalog(Mock(), setup.curator, _catalog(), setup.suite)
+    target = catalog.targets[0]
+    assert target.system_agent_snapshots == {agent_key: source}
+    assert f"agent:{agent_key}" not in target.route_slots
+    capture.assert_called_once_with(row, active_groups=setup.curator.active_groups)
+    with benchmark_source_revisions({}, target.system_agent_snapshots):
+        assert active_system_source(agent_key) == source
+
+
 def test_explicit_experiment_route_resolves_shared_default_conflict(setup):
     slot = setup.stage.route_slot
     setup.contracts.route_default_conflicts = (slot,)

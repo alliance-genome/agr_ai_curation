@@ -275,7 +275,8 @@ def test_real_package_catalog_and_hydrated_recipes(monkeypatch):
 
 
 @pytest.mark.parametrize("kind,key", [("agent", "extractor"), ("flow", "Configured Flow")])
-def test_preparation_freezes_only_selected_installed_targets(configured, monkeypatch, kind, key):
+@pytest.mark.parametrize("formatter", [None, "csv_formatter", "tsv_formatter", "json_formatter"])
+def test_preparation_freezes_only_selected_installed_targets(configured, monkeypatch, kind, key, formatter):
     monkeypatch.setattr("src.lib.benchmarks.dependencies.runtime_catalog_digest", lambda: "sha256:" + "f" * 64)
     monkeypatch.setattr("src.lib.benchmarks.dependencies.execution_settings", lambda: {"benchmark_environment_id": "fixture"})
     from src.lib.benchmarks import flow_capture, system_snapshot, supervisor_snapshot
@@ -295,6 +296,17 @@ def test_preparation_freezes_only_selected_installed_targets(configured, monkeyp
 
     monkeypatch.setattr(system_snapshot, "capture_system_agent", capture)
     frozen = snapshot().model_copy(update={"source_id": "Configured Flow"})
+    if formatter:
+        configured.rows.append(NS(agent_key=formatter, model_id="model-a", model_reasoning=None, visibility="system"))
+        data = frozen.model_dump(mode="json")
+        data["definition"]["nodes"].append({
+            "id": "formatter", "type": "output", "position": {"x": 200, "y": 100},
+            "data": {"agent_id": formatter, "agent_display_name": "File output", "output_key": "file"},
+        })
+        data["definition"]["edges"].append({
+            "id": "output", "source": "node_0", "target": "formatter", "role": "output_attachment",
+        })
+        frozen = type(frozen).model_validate(data)
     freeze = Mock(return_value=frozen)
     monkeypatch.setattr(flow_capture, "capture_recipe_flow", freeze)
     supervisor = supervisor_snapshot.FrozenFlowSupervisor(
@@ -323,6 +335,9 @@ def test_preparation_freezes_only_selected_installed_targets(configured, monkeyp
     assert target.target.id == key
     assert target.dependencies.execution_settings["benchmark_environment_id"] == "fixture"
     expected = {"extractor", "validator"}
+    if formatter and kind == "flow":
+        expected.add(formatter)
+        assert f"agent:{formatter}" not in target.route_slots
     assert set(captured) == set(target.system_agent_snapshots) == expected
     configured.rows[0].model_id = "model-b"
     assert target.system_agent_snapshots["extractor"].model_id == "model-a"

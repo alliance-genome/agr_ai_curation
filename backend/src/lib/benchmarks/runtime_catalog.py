@@ -46,11 +46,12 @@ def build_curator_route_catalog(
     }) | {
         CURATION_PREP_AGENT_ID, CURATION_HANDOFF_AGENT_ID, "task_input",
     }
-    visible = {
+    all_visible = {
         agent.agent_key: agent for agent in list_agents_visible_to_user(
             session, curator.db_user_id, active_group_ids=curator.active_groups,
-        ) if agent.agent_key not in runtime_only
+        )
     }
+    visible = {key: agent for key, agent in all_visible.items() if key not in runtime_only}
     models = list_models()
     models_by_id = {model.model_id: model for model in models}
 
@@ -240,6 +241,14 @@ def build_curator_route_catalog(
             agent_key = key if kind == "agent" else validator_agents[key]
             if agent_key not in systems:
                 systems[agent_key] = capture_system_agent(visible[agent_key], active_groups=curator.active_groups)
+        if target.target.kind == "flow":
+            for node in frozen_flows[target.target.id].definition["nodes"]:
+                if node["type"] not in ("agent", "output"):
+                    continue
+                agent_key = node["data"]["agent_id"]
+                row = all_visible.get(agent_key)
+                if agent_key in runtime_only and row is not None and row.visibility == "system":
+                    systems[agent_key] = capture_system_agent(row, active_groups=curator.active_groups)
         payload = target.model_dump(mode="json")
         payload["system_agent_snapshots"] = {
             key: source.model_dump(mode="json") for key, source in systems.items()

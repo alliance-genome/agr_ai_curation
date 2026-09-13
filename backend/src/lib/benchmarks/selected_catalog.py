@@ -58,6 +58,9 @@ def prepare_selected_catalog(session, curator, catalog: BenchmarkRouteCatalog, s
         for stage in contracts.stages:
             slot = stage.route_slot
             if slot is None:
+                row = agents.get(stage.agent_id)
+                if row is not None and row.visibility == "system":
+                    systems[stage.agent_id] = capture_system_agent(row, active_groups=curator.active_groups)
                 continue
             if stage.default_route is None:
                 raise ValueError("Selected flow stage has no authorized model default")
