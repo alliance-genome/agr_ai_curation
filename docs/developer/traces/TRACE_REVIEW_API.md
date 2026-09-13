@@ -290,10 +290,9 @@ curl "http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/export?s
       "tools_available": ["search_document", "read_section"]
     },
     "group_context": {
-      "active_groups": ["FB"],
+      "active_groups": ["group-alpha"],
       "injection_active": true,
-      "group_count": 1,
-      "group_details": [ { "group_id": "FB", "description": "FlyBase (Drosophila melanogaster)" } ]
+      "group_count": 1
     }
   }
 }
