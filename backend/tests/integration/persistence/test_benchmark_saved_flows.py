@@ -18,8 +18,8 @@ def curator(user_id):
     )
 
 
-def test_benchmark_saved_flow_visibility_and_revocation(sharing_db):
-    db, _ = sharing_db
+def test_benchmark_saved_flow_visibility_and_revocation(request):
+    db, _ = request.getfixturevalue("sharing_db")
     source = db.query(CurationFlow).one()
     assert [row.id for row in visible_saved_flows(db, curator(7)).all()] == [source.id]
     assert visible_saved_flows(db, curator(99)).count() == 0
