@@ -39,6 +39,7 @@ from .extraction_timeline_helpers import (
     load_extraction_timeline_context,
 )
 from ..utils.token_budget import create_lightweight_tool_call_summary
+from ..utils.group_context import group_context_from_metadata
 from ..utils.trace_output import is_trace_output_cacheable
 from .auth import get_auth_dependency
 from .domain_envelope_responses import domain_envelope_response_views
@@ -53,17 +54,6 @@ ALL_VIEWS = [
     "extraction_timeline", "evidence_revisions",
 ]
 
-# Group descriptions for display (Alliance MODs as default groups)
-GROUP_DESCRIPTIONS = {
-    "MGI": "Mouse Genome Informatics (Mus musculus)",
-    "FB": "FlyBase (Drosophila melanogaster)",
-    "WB": "WormBase (Caenorhabditis elegans)",
-    "ZFIN": "Zebrafish Information Network (Danio rerio)",
-    "RGD": "Rat Genome Database (Rattus norvegicus)",
-    "SGD": "Saccharomyces Genome Database (yeast)",
-    "HGNC": "HUGO Gene Nomenclature Committee (human)",
-}
-
 
 class TraceExtractionError(Exception):
     """Raised when a trace cannot be fetched from Langfuse."""
@@ -77,21 +67,6 @@ def _trace_id_short(trace_id: Optional[str]) -> Optional[str]:
     if not trace_id:
         return None
     return trace_id[:8] if len(trace_id) >= 8 else trace_id
-
-
-def _group_context_from_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
-    # Dual-read kept for existing TraceReview metadata shape; this ticket does not
-    # change trace-writing contracts.
-    active_groups = metadata.get("active_groups") or metadata.get("active_mods", [])
-    return {
-        "active_groups": active_groups,
-        "injection_active": len(active_groups) > 0,
-        "group_count": len(active_groups),
-        "group_details": [
-            {"group_id": grp, "description": GROUP_DESCRIPTIONS.get(grp, "Unknown group")}
-            for grp in active_groups
-        ]
-    }
 
 
 def _effective_source(source: TraceSource) -> str:
@@ -155,7 +130,7 @@ def _build_trace_cache_data(trace_id: str, trace_data: Dict[str, Any]) -> Dict[s
             "document_hierarchy": document_hierarchy,
             "agent_configs": agent_configs,
             "extraction_timeline": extraction_timeline,
-            "group_context": _group_context_from_metadata(metadata)
+            "group_context": group_context_from_metadata(metadata)
         }
     }
 

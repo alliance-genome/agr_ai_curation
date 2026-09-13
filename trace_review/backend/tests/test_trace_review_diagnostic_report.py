@@ -14,6 +14,51 @@ from src.services.cache_manager import CacheManager
 
 
 class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
+    @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events", return_value=[])
+    async def test_group_context_views_use_only_canonical_opaque_ids(self, _events):
+        for metadata, expected_groups in (
+            ({"active_groups": ["group-alpha", "WB"]}, ["group-alpha", "WB"]),
+            ({"active_groups": ["group-alpha"], "active_mods": ["MGI"]}, ["group-alpha"]),
+            ({"active_groups": [], "active_mods": ["MGI"]}, []),
+            ({"active_groups": None, "active_mods": ["MGI"]}, []),
+            ({"active_mods": ["MGI"]}, []),
+            ({}, []),
+        ):
+            for api in (traces, claude):
+                with self.subTest(metadata=metadata, api=api.__name__):
+                    request = self._make_request()
+                    trace_data = self._make_trace_data()
+                    trace_data["raw_trace"]["metadata"] = metadata
+                    kwargs: dict[str, Any] = {"source": "auto"}
+                    if api is claude:
+                        kwargs["section"] = "active_groups"
+                    else:
+                        kwargs["refresh"] = False
+
+                    with patch.object(api, "TraceExtractor") as extractor_cls:
+                        extractor_cls.return_value.extract_complete_trace.return_value = trace_data
+                        if api is traces:
+                            await traces.analyze_trace(
+                                AnalyzeTraceRequest(trace_id="trace-extraction-123", source="auto"),
+                                request,
+                            )
+                        response = await api.get_trace_view(
+                            "trace-extraction-123", "group_context", request, **kwargs,
+                        )
+
+                    expected_context = {
+                        "active_groups": expected_groups,
+                        "injection_active": bool(expected_groups),
+                        "group_count": len(expected_groups),
+                    }
+                    if api is claude:
+                        self.assertEqual(response.data["page"]["items"], expected_groups)
+                    else:
+                        self.assertEqual(response["data"], expected_context)
+                    cached = request.app.state.cache_manager.get("trace-extraction-123")
+                    self.assertEqual(cached["analysis"]["group_context"], expected_context)
+                    self.assertEqual(cached["analysis"]["trace_summary"]["group_context"], expected_context)
+
     @patch("src.api.claude._ensure_trace_analyzed", new_callable=AsyncMock)
     @patch("src.api.claude.TraceExtractor")
     @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events", return_value=[])

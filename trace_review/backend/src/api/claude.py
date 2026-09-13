@@ -75,6 +75,7 @@ from ..models.responses import (
     ConversationData,
 )
 from ..utils.trace_output import is_trace_output_cacheable
+from ..utils.group_context import group_context_from_metadata
 from .auth import get_auth_dependency
 from .domain_envelope_responses import domain_envelope_response_views
 
@@ -1327,15 +1328,6 @@ async def _ensure_trace_analyzed(
             "domain_envelope": compact_domain_envelope,
         }
 
-        # Group context
-        # Dual-read: support both active_groups (new) and active_mods (historical)
-        active_groups = metadata.get("active_groups") or metadata.get("active_mods", [])
-        group_context = {
-            "active_groups": active_groups,
-            "injection_active": len(active_groups) > 0,
-            "group_count": len(active_groups),
-        }
-
         # Cache the data
         cache_data = {
             "analyzer_schema_version": EXTRACTION_TIMELINE_ANALYZER_SCHEMA_VERSION,
@@ -1354,7 +1346,7 @@ async def _ensure_trace_analyzed(
                 "document_hierarchy": document_hierarchy,
                 "agent_configs": agent_configs,
                 "extraction_timeline": extraction_timeline,
-                "group_context": group_context
+                "group_context": group_context_from_metadata(metadata)
             }
         }
 

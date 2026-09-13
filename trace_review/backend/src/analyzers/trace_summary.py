@@ -11,6 +11,7 @@ from collections import defaultdict
 from .conversation import ConversationAnalyzer
 from .domain_envelopes import DomainEnvelopeTraceAnalyzer
 from .tool_calls import ToolCallAnalyzer
+from ..utils.group_context import group_context_from_metadata
 
 
 class TraceSummaryAnalyzer:
@@ -170,15 +171,6 @@ class TraceSummaryAnalyzer:
             "sdk_info": trace_metadata.get("resourceAttributes", {})
         }
 
-        # Group-specific context (which group rules were active)
-        # Dual-read: support both active_groups (new) and active_mods (historical)
-        active_groups = trace_metadata.get("active_groups") or trace_metadata.get("active_mods", [])
-        group_context = {
-            "active_groups": active_groups,
-            "injection_active": len(active_groups) > 0,
-            "group_count": len(active_groups)
-        }
-
         # Extract clean response using ConversationAnalyzer
         conversation = ConversationAnalyzer.extract_conversation(raw_trace, observations)
         response_text = conversation.get("assistant_response", "")
@@ -206,7 +198,7 @@ class TraceSummaryAnalyzer:
             "has_errors": len(errors) > 0,
             "context_overflow_detected": context_overflow,
             "agent_info": agent_info,
-            "group_context": group_context,
+            "group_context": group_context_from_metadata(trace_metadata),
             "links": links
         }
 
