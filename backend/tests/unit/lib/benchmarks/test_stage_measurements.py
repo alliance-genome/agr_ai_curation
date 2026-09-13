@@ -174,35 +174,3 @@ async def test_provider_calls_retain_dispatch_stage_after_context_changes(monkey
         parsed = ProviderUsage.model_validate(provider_usage_metadata(record))
         assert str(parsed.stage_execution_id) == record.stage_execution_id
         assert parsed.billed_cost is None
-
-
-def test_assistance_has_separate_capture_without_worker_or_stage_attribution(monkeypatch):
-    from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
-    from src.lib.openai_agents.provider_usage import (
-        begin_provider_invocation, capture_provider_usage, complete_generic_provider_invocation,
-        isolate_assistance_accounting, observe_provider_invocations,
-    )
-
-    monkeypatch.setattr("src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event", lambda record: None)
-    stage_observer, call_observer = Mock(), Mock()
-    with observe_stages(stage_observer), observe_provider_invocations(call_observer), capture_provider_usage(
-        max_records=1, max_failure_detail_chars=20,
-    ) as benchmark:
-        with measure_stage(StageIdentity("extraction", "extraction")) as stage:
-            assert stage is not None
-            with isolate_assistance_accounting(), capture_provider_usage(max_records=1, max_failure_detail_chars=20) as assistance:
-                with measure_stage(StageIdentity("design", "other")) as excluded:
-                    assert excluded is None and current_stage() is None
-                    record_handled_stage_failure(RuntimeError("Assistant-only failure"))
-                    pending = begin_provider_invocation(requested_provider="fixture", requested_model="assistant", started_at=1.0)
-                    complete_generic_provider_invocation(pending, {"usage": {"input_tokens": 10}}, latency_ms=3)
-            assert current_stage() is stage
-            pending = begin_provider_invocation(requested_provider="fixture", requested_model="extractor", started_at=1.0)
-            complete_generic_provider_invocation(pending, {"usage": {"input_tokens": 2}}, latency_ms=5)
-    assert len(benchmark) == len(assistance) == 1
-    assert stage_observer.completed.call_args.args[0].status == "succeeded"
-    assert assistance[0].stage_execution_id is None
-    assert benchmark[0].sequence == 1
-    assert benchmark[0].stage_execution_id == str(stage.execution_id)
-    assert call_observer.started.call_count == call_observer.completed.call_count == 1
-    assert stage_observer.started.call_count == stage_observer.completed.call_count == 1

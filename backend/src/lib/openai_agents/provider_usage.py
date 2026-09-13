@@ -116,25 +116,6 @@ def observe_provider_invocations(
 
 
 @contextmanager
-def isolate_assistance_accounting() -> Iterator[None]:
-    """Keep design-assistance calls out of an enclosing benchmark ledger.
-
-The assistance runtime may install its own capture inside this scope. Neither
-its calls nor its stages can reach the enclosing worker's durable observers.
-"""
-    from src.lib.benchmarks.stage_measurements import observe_stages
-
-    capture_token = _provider_usage_records.set(None)
-    observer_token = _provider_invocation_observer.set(None)
-    try:
-        with observe_stages(None):
-            yield
-    finally:
-        _provider_invocation_observer.reset(observer_token)
-        _provider_usage_records.reset(capture_token)
-
-
-@contextmanager
 def capture_provider_usage(
     *, max_records: int | None = None, max_failure_detail_chars: int | None = None
 ) -> Iterator[list[ProviderUsageRecord]]:
