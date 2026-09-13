@@ -272,3 +272,64 @@ def test_real_package_catalog_and_hydrated_recipes(monkeypatch):
         assert "chat_output" in model_agents
         assert "agent:chat_output" in target.route_slots
         assert {slot.removeprefix("agent:") for slot in target.route_slots if slot.startswith("agent:")} == model_agents
+
+
+@pytest.mark.parametrize("kind,key", [("agent", "extractor"), ("flow", "Configured Flow")])
+def test_preparation_freezes_only_selected_installed_targets(configured, monkeypatch, kind, key):
+    monkeypatch.setattr("src.lib.benchmarks.dependencies.runtime_catalog_digest", lambda: "sha256:" + "f" * 64)
+    monkeypatch.setattr("src.lib.benchmarks.dependencies.execution_settings", lambda: {"benchmark_environment_id": "fixture"})
+    from src.lib.benchmarks import flow_capture, system_snapshot, supervisor_snapshot
+    from src.lib.benchmarks.selected_catalog import prepare_selected_catalog
+    from src.lib.benchmarks.models import BenchmarkSuite
+    from tests.unit.lib.benchmarks.test_frozen_flow import snapshot
+    from tests.unit.lib.benchmarks.test_system_snapshot import bundle
+
+    captured = []
+    def capture(row, **kwargs):
+        captured.append(row.agent_key)
+        return system_snapshot.FrozenSystemAgent(
+            agent_key=row.agent_key, model_id=row.model_id, model_temperature=0.2,
+            model_reasoning=row.model_reasoning, tool_ids=(), group_tool_policy={}, output_schema_key=None,
+            prompt_layer_manifest=bundle(row.agent_key).to_manifest(),
+        )
+
+    monkeypatch.setattr(system_snapshot, "capture_system_agent", capture)
+    frozen = snapshot().model_copy(update={"source_id": "Configured Flow"})
+    freeze = Mock(return_value=frozen)
+    monkeypatch.setattr(flow_capture, "capture_recipe_flow", freeze)
+    supervisor = supervisor_snapshot.FrozenFlowSupervisor(
+        model="model-a", temperature=0.2, reasoning="high", parallel_tool_calls=False,
+        requires_document=True, available_tools=(), instructions="Original", instructions_with_document="Original doc",
+    )
+    monkeypatch.setattr(supervisor_snapshot, "capture_flow_supervisor", lambda *a: supervisor)
+    monkeypatch.setattr(runtime, "validation_attachment_options_for_agent", lambda agent, **kw: [NS(
+        state=NS(value="active"), to_dict=lambda: {
+            "validator_agent_id": "semantic", "validator_package_id": "package",
+            "validator_binding_id": "semantic-binding",
+        },
+    )] if agent == "extractor" else [])
+    discovered = runtime.build_curator_route_catalog(object(), configured.curator)
+    assert not captured and not freeze.called
+    suite = BenchmarkSuite.model_validate({
+        "schema_version": 2, "suite_id": "installed", "cases": [{
+            "case_id": "paper", "target": {"kind": kind, "id": key},
+            "input": {"resolver": "fixture", "reference": "paper", "version": "1",
+                      "digest": "sha256:" + "b" * 64},
+        }], "configurations": [{"configuration_id": "baseline"}],
+    })
+    catalog = prepare_selected_catalog(object(), configured.curator, discovered, suite)
+    assert len(catalog.targets) == 1
+    target = catalog.targets[0]
+    assert target.target.id == key
+    assert target.dependencies.execution_settings["benchmark_environment_id"] == "fixture"
+    expected = {"extractor", "validator"}
+    assert set(captured) == set(target.system_agent_snapshots) == expected
+    configured.rows[0].model_id = "model-b"
+    assert target.system_agent_snapshots["extractor"].model_id == "model-a"
+    if kind == "flow":
+        assert target.flow_snapshot == frozen
+        assert target.supervisor_snapshot == supervisor
+        freeze.assert_called_once()
+    else:
+        assert target.flow_snapshot is None and target.supervisor_snapshot is None
+        freeze.assert_not_called()

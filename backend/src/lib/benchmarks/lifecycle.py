@@ -9,6 +9,7 @@ from uuid import UUID
 
 from anyio.from_thread import run as run_on_event_loop
 from anyio.to_thread import run_sync
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -239,6 +240,23 @@ def _submit_job(
                     component="benchmark_lifecycle", operation="catalog_resolution",
                 )
                 raise BenchmarkLifecycleFailure("catalog_unavailable", "Benchmark route catalog is unavailable", 503) from None
+        from .selected_catalog import prepare_selected_catalog
+
+        try:
+            route_catalog = prepare_selected_catalog(
+                session, curator_context, route_catalog, validate_suite(suite_value),
+            )
+        except (ValueError, BenchmarkCatalogError) as exc:
+            raise BenchmarkLifecycleFailure("invalid_plan", "Selected benchmark sources cannot be prepared", 422) from exc
+        except HTTPException as exc:
+            status = 404 if exc.status_code in (403, 404) else 503
+            raise BenchmarkLifecycleFailure("source_unavailable", "Selected benchmark source is unavailable", status) from None
+        except Exception as exc:
+            report_runtime_exception(
+                sanitized_benchmark_error("source_preparation", type(exc).__name__),
+                component="benchmark_lifecycle", operation="source_preparation",
+            )
+            raise BenchmarkLifecycleFailure("catalog_unavailable", "Benchmark sources cannot be prepared", 503) from None
         suite, plan = authoritative_plan(
             suite_value=suite_value,
             submitted_plan=submitted_plan,

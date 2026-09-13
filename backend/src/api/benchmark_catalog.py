@@ -274,7 +274,8 @@ async def _preview_body(request: Request) -> BenchmarkPlanPreviewRequest:
         raise _error(422, "invalid_request", "Invalid benchmark preview request") from None
 
 
-def _preview(request: Request, payload: BenchmarkPlanPreviewRequest, catalog: BenchmarkRouteCatalog) -> JSONResponse:
+def _preview(request: Request, payload: BenchmarkPlanPreviewRequest, catalog: BenchmarkRouteCatalog,
+             curator: BenchmarkCuratorContext) -> JSONResponse:
     if payload.catalog_digest != _digest(catalog.model_dump(mode="json")):
         raise _error(409, "catalog_drift", "Benchmark catalog changed; refresh discovery")
     suite = payload.suite
@@ -287,8 +288,16 @@ def _preview(request: Request, payload: BenchmarkPlanPreviewRequest, catalog: Be
     if any(case.input.resolver not in registered for case in suite.cases):
         raise _error(422, "unknown_resolver", "Benchmark input resolver is not registered")
     try:
+        from src.lib.benchmarks.selected_catalog import prepare_selected_catalog
+
+        with SessionLocal() as session:
+            catalog = prepare_selected_catalog(session, curator, catalog, suite)
         plan = resolve_execution_plan(suite, catalog)
-    except BenchmarkCatalogError:
+    except HTTPException as exc:
+        if exc.status_code in (403, 404):
+            raise _error(404, "source_unavailable", "Selected benchmark source is unavailable") from None
+        raise
+    except (BenchmarkCatalogError, ValueError):
         raise _error(422, "invalid_plan", "Benchmark suite cannot be resolved") from None
     return _bounded_response(BenchmarkPlanPreviewResponse(plan=plan, cell_count=len(plan.cells)))
 
@@ -296,7 +305,8 @@ def _preview(request: Request, payload: BenchmarkPlanPreviewRequest, catalog: Be
 @router.post("/plans/validate", response_model=BenchmarkPlanPreviewResponse,
              responses=examples.response(examples.PREVIEW),
              openapi_extra=admission_body_schema(BenchmarkPlanPreviewRequest, example=examples.PREVIEW_REQUEST))
-async def validate_plan(request: Request, catalog: BenchmarkRouteCatalog = Depends(_catalog_dependency)):
+async def validate_plan(request: Request, catalog: BenchmarkRouteCatalog = Depends(_catalog_dependency),
+                        curator: BenchmarkCuratorContext = Depends(require_benchmark_read_curator)):
     """Preview only. Admission recomputes the plan and verifies/freeze inputs anew."""
     payload = await _preview_body(request)
-    return await run_sync(_preview, request, payload, catalog)
+    return await run_sync(_preview, request, payload, catalog, curator)

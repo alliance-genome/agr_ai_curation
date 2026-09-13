@@ -1,5 +1,6 @@
 """Curator-visible route catalogs grounded in the same sources as execution."""
 
+import json
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -29,7 +30,10 @@ from .flow_catalog import load_benchmark_flow_templates
 from .models import BenchmarkModelCatalogEntry, BenchmarkRouteCatalog, BenchmarkSuiteRoute
 
 
-def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorContext) -> BenchmarkRouteCatalog:
+def build_curator_route_catalog(
+    session: Session, curator: BenchmarkCuratorContext, *,
+    freeze_targets: set[tuple[str, str]] | None = None,
+) -> BenchmarkRouteCatalog:
     """Use current visible DB agents and hydrated package recipes, never client data.
 
     The caller owns the session. Admission constructs this only after determining
@@ -81,6 +85,8 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
     flow_agents: dict[str, tuple[str, ...]] = {}
     flow_validators: dict[str, tuple[str, ...]] = {}
     validator_defaults: dict[str, BenchmarkSuiteRoute] = {}
+    validator_agents: dict[str, str] = {}
+    frozen_flows = {}
 
     def model_validators(schedule: list[dict], custom_pins: dict | None = None) -> dict[str, BenchmarkSuiteRoute] | None:
         validators: dict[str, BenchmarkSuiteRoute] = {}
@@ -119,6 +125,9 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
             agent = visible.get(key)
             if agent is None or agent.visibility != "system":
                 return None
+            previous_agent = validator_agents.setdefault(binding, key)
+            if previous_agent != key:
+                raise ValueError("Model validator binding has conflicting agent identities")
             default = agent_defaults[key]
             if binding in validators and validators[binding] != default:
                 raise ValueError("Model validator binding has conflicting defaults")
@@ -144,8 +153,11 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
             from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
             from src.lib.domain_packs.profile_validation import resolve_profile_validation, profile_validation_attachment_options
 
+            generic_pack = resolve_curation_domain_pack_by_id("generic")
+            if generic_pack is None:
+                raise ValueError("Generic profile package is unavailable")
             context = resolve_profile_validation(
-                sources[f"agent:{key}"], resolve_curation_domain_pack_by_id("generic"),
+                sources[f"agent:{key}"], generic_pack,
                 db=session, user_id=curator.db_user_id, active_group_ids=curator.active_groups,
             )
             assert context is not None
@@ -196,7 +208,10 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
         register_validators(validators)
         flow_agents[recipe["name"]] = tuple(sorted(agents))
         flow_validators[recipe["name"]] = tuple(sorted(validators))
-    return build_route_catalog(
+        if freeze_targets is not None and ("flow", recipe["name"]) in freeze_targets:
+            from .flow_capture import capture_recipe_flow
+            frozen_flows[recipe["name"]] = capture_recipe_flow(session, curator, recipe, definition)
+    catalog = build_route_catalog(
         models=tuple(BenchmarkModelCatalogEntry.model_validate({
             "provider": model.provider, "model": model.model_id,
             "reasoning_efforts": tuple(model.reasoning_options) if model.supports_reasoning else (),
@@ -206,4 +221,38 @@ def build_curator_route_catalog(session: Session, curator: BenchmarkCuratorConte
         agent_targets=direct_validators, agent_model_validators=direct_validators,
         source_execution_receipts=sources,
         flow_agents=flow_agents, flow_model_validators=flow_validators,
+    )
+    if freeze_targets is None:
+        return catalog
+    from .models import BenchmarkTargetCatalogEntry
+    from .system_snapshot import capture_system_agent
+    from .supervisor_snapshot import capture_flow_supervisor
+
+    targets = []
+    for target in catalog.targets:
+        if (target.target.kind, target.target.id) not in freeze_targets:
+            continue
+        systems = {}
+        for slot in target.route_slots:
+            if slot == "supervisor" or slot in target.source_execution_receipts:
+                continue
+            kind, key = slot.split(":", 1)
+            agent_key = key if kind == "agent" else validator_agents[key]
+            if agent_key not in systems:
+                systems[agent_key] = capture_system_agent(visible[agent_key], active_groups=curator.active_groups)
+        payload = target.model_dump(mode="json")
+        payload["system_agent_snapshots"] = {
+            key: source.model_dump(mode="json") for key, source in systems.items()
+        }
+        if target.target.kind == "flow":
+            frozen = frozen_flows[target.target.id]
+            payload["flow_snapshot"] = frozen.model_dump(mode="json")
+            payload["supervisor_snapshot"] = capture_flow_supervisor(frozen, curator).model_dump(mode="json")
+        targets.append(BenchmarkTargetCatalogEntry.model_validate_json(json.dumps(payload)))
+    if {(item.target.kind, item.target.id) for item in targets} != freeze_targets:
+        raise ValueError("Selected installed target is unavailable")
+    used = {slot for target in targets for slot in target.route_slots}
+    return BenchmarkRouteCatalog(
+        models=catalog.models, route_slots=tuple(slot for slot in catalog.route_slots if slot.slot in used),
+        targets=tuple(targets),
     )

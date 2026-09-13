@@ -1762,6 +1762,21 @@ def validate_active_agent_output_schemas(db: Any) -> None:
 def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile=None,
                      _benchmark_slot: str | None = None, **kwargs: Any) -> Optional[Agent]:
     """Create an agent from a row in the unified agents table."""
+    system_snapshot = None
+    if execution_snapshot is None and getattr(db_agent, "visibility", None) == "system":
+        from src.lib.benchmarks.source_revisions import active_system_source
+        from src.lib.benchmarks.system_snapshot import authorized_system_snapshot_row
+
+        system_snapshot = active_system_source(db_agent.agent_key)
+        if system_snapshot is not None:
+            if any(key in kwargs for key in (
+                "model_temperature_override", "tool_ids", "tool_ids_override",
+                "output_schema_key", "output_schema_override", "output_contract",
+            )):
+                raise ValueError("Frozen system settings cannot be overridden outside model routes")
+            db_agent = authorized_system_snapshot_row(
+                db_agent, system_snapshot, active_groups=kwargs.get("authenticated_groups", []),
+            )
     if execution_snapshot is not None:
         from src.schemas.agent_execution_revision import AgentExecutionSnapshot
 
@@ -1871,6 +1886,12 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
             raise ValueError(
                 f"Unknown output schema '{output_schema_key}' for agent '{db_agent.agent_key}'"
             )
+    if system_snapshot is not None:
+        from src.lib.benchmarks.frozen_flow import thaw_json
+
+        current_schema = output_schema.model_json_schema() if output_schema is not None else None
+        if current_schema != thaw_json(system_snapshot.output_schema_definition):
+            raise ValueError("System output schema changed after benchmark preparation")
     # Resolve tools from explicit binding metadata (no runtime fallbacks).
     output_guardrails: List[Any] = []
     if requested_tool_ids:
@@ -1917,7 +1938,13 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
     else:
         tools = []
 
-    if execution_snapshot is not None:
+    if system_snapshot is not None:
+        from src.lib.benchmarks.system_snapshot import system_runtime_prompt
+
+        prompt_bundle = system_runtime_prompt(system_snapshot, _build_runtime_context(
+            runtime_kwargs=runtime_kwargs, canonical_tool_ids=canonical_tool_ids,
+        ))
+    elif execution_snapshot is not None:
         from src.lib.agent_studio.execution_snapshot import saved_runtime_prompt_bundle
 
         runtime_context = _build_runtime_context(
@@ -2010,13 +2037,19 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         runtime_agent.curation_metadata = deepcopy(execution_snapshot.curation)
         runtime_agent.curation = deepcopy(execution_snapshot.curation)
         runtime_agent.structured_finalization = deepcopy(execution_snapshot.structured_finalization)
+    elif system_snapshot is not None:
+        from src.lib.benchmarks.frozen_flow import thaw_json
+
+        runtime_agent.curation_metadata = thaw_json(system_snapshot.curation_metadata)
+        runtime_agent.curation = thaw_json(system_snapshot.curation_metadata)
+        runtime_agent.structured_finalization = thaw_json(system_snapshot.structured_finalization)
     else:
         _attach_live_curation_metadata(runtime_agent, db_agent, output_schema)
     prompt_run_id = set_pending_prompts(
         runtime_agent.name,
         # Saved manifests are the prompt evidence for a pin. Resolving active
         # PromptTemplate rows here would mislabel historical bytes as today's.
-        [] if execution_snapshot is not None else list(prompt_templates_for_bundle(prompt_bundle)),
+        [] if execution_snapshot is not None or system_snapshot is not None else list(prompt_templates_for_bundle(prompt_bundle)),
         effective_prompt_hash=prompt_bundle.hash,
         layer_manifest=prompt_bundle.to_manifest(),
     )

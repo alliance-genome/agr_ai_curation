@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from src.lib.agent_studio.catalog_service import get_agent_by_id
 from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
@@ -59,6 +59,8 @@ async def execute_resolved_agent_cell(
 
     if cell.target.kind != "agent":
         raise ValueError("resolved agent execution requires an agent target")
+    from .dependencies import require_current_dependencies
+    require_current_dependencies(cell.dependencies)
     slot = f"agent:{cell.target.id}"
     route = cell.routes.get(slot)
     if route is None:
@@ -75,7 +77,9 @@ async def execute_resolved_agent_cell(
         else None
     )
     active_groups = case_input.get("active_groups") or []
-    with benchmark_route_plan(cell.routes), benchmark_source_revisions(cell.source_execution_receipts), capture_provider_usage(
+    with benchmark_route_plan(cell.routes), benchmark_source_revisions(
+        cell.source_execution_receipts, cell.system_agent_snapshots or None, cell.supervisor_snapshot,
+    ), capture_provider_usage(
         max_records=get_benchmark_max_invocations_per_cell(),
         max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),
     ) as usage_records:
@@ -150,19 +154,55 @@ def _flow_from_recipe(target_id: str, active_groups: list[str] | None = None) ->
     )
 
 
+def _flow_from_frozen_cell(cell: ResolvedBenchmarkCell, case_input: dict[str, Any]) -> CurationFlow:
+    """Reauthorize the source identity, never substitute its current definition."""
+    from src.lib.benchmarks.frozen_flow import thaw_json
+    from src.lib.flows.access import get_visible_flow
+    from src.models.sql.database import SessionLocal
+
+    frozen = cell.flow_snapshot
+    if frozen is None or frozen.source_id != cell.target.id:
+        raise ValueError("Frozen flow source does not match the cell target")
+    user_id = case_input.get("db_user_id")
+    if not isinstance(user_id, int) or isinstance(user_id, bool):
+        raise ValueError("Frozen flow execution requires an authenticated curator")
+    if frozen.source_kind == "saved_flow":
+        flow_id = UUID(frozen.source_id)
+        with SessionLocal() as db:
+            get_visible_flow(db, flow_id, user_id)
+    else:
+        # Installed recipe visibility must still permit this curator. Content
+        # changes do not replace the flow definition captured at preparation.
+        available = load_benchmark_flow_templates(case_input.get("active_groups") or [])
+        if not any(recipe["name"] == frozen.source_id for recipe in available):
+            raise ValueError("Frozen recipe is no longer available")
+        flow_id = uuid5(NAMESPACE_URL, f"agr-benchmark-flow:{frozen.source_id}")
+    return CurationFlow(
+        id=flow_id, user_id=user_id, name=frozen.title, description=frozen.description,
+        flow_definition=thaw_json(frozen.definition), is_active=True,
+    )
+
+
 async def execute_resolved_flow_cell(
     cell: ResolvedBenchmarkCell,
     case_input: dict[str, Any],
     run_id: str,
 ) -> BenchmarkCellExecutionResult:
     """Execute a flow with independent supervisor, agent, and validator routes."""
+    from .dependencies import require_current_dependencies
+    require_current_dependencies(cell.dependencies)
 
     if cell.target.kind != "flow":
         raise ValueError("resolved flow execution requires a flow target")
     if "supervisor" not in cell.routes:
         raise ValueError("Frozen benchmark route plan has no slot 'supervisor'")
-    flow = _flow_from_recipe(cell.target.id, case_input.get("active_groups", []))
-    with benchmark_route_plan(cell.routes), benchmark_source_revisions(cell.source_execution_receipts), capture_provider_usage(
+    flow = (
+        _flow_from_frozen_cell(cell, case_input) if cell.flow_snapshot is not None
+        else _flow_from_recipe(cell.target.id, case_input.get("active_groups", []))
+    )
+    with benchmark_route_plan(cell.routes), benchmark_source_revisions(
+        cell.source_execution_receipts, cell.system_agent_snapshots or None, cell.supervisor_snapshot,
+    ), capture_provider_usage(
         max_records=get_benchmark_max_invocations_per_cell(),
         max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),
     ) as usage_records:
