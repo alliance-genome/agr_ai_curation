@@ -42,6 +42,7 @@ from src.models.sql.database import SessionLocal
 from src.schemas.benchmark_jobs import (
     BenchmarkInvocationPage, BenchmarkInvocationResponse, BenchmarkRerunRequest,
     BenchmarkSubmitRequest, admission_body_schema, lifecycle_error_responses,
+    BenchmarkStagePage, BenchmarkStageResponse,
 )
 from src.schemas import benchmark_job_examples as examples
 from src.lib.openai_agents.config import get_benchmark_admission_max_bytes
@@ -358,6 +359,27 @@ def list_invocations(
         return BenchmarkInvocationPage(
             items=items, next_after_ordinal=items[-1].ordinal if has_more else None,
         )
+
+
+@router.get("/{job_id}/cells/{cell_id}/stages", response_model=BenchmarkStagePage,
+            responses=examples.json_example({"schema_version": 1, "items": [], "next_after_ordinal": None}))
+def list_stages(
+    job_id: UUID, cell_id: UUID,
+    principal: dict[str, Any] = Depends(require_benchmark_read),
+    after_ordinal: int = Query(default=-1, ge=-1),
+    limit: int | None = Query(default=None, ge=1),
+):
+    """Page durable stage occurrences, including interrupted unknown intervals."""
+    with SessionLocal() as session:
+        repository = BenchmarkRepository(session)
+        rows = repository.list_stages(job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
+                                      after_ordinal=after_ordinal, limit=limit)
+        items = tuple(BenchmarkStageResponse.model_validate(row) for row in rows)
+        has_more = bool(items) and bool(repository.list_stages(
+            job_id=job_id, cell_id=cell_id, owner_subject=_owner(principal),
+            after_ordinal=items[-1].ordinal, limit=1,
+        ))
+        return BenchmarkStagePage(items=items, next_after_ordinal=items[-1].ordinal if has_more else None)
 
 
 @router.get("/{job_id}/events", response_class=Response, responses={

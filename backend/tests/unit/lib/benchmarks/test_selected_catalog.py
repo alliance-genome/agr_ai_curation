@@ -30,7 +30,8 @@ def setup(monkeypatch):
         }], "configurations": [{"configuration_id": "baseline"}],
     })
     stage = NS(route_slot=f"agent:{receipt.agent_key}", default_route=_route(), execution_receipt=receipt,
-               node_id="node_0", agent_id=receipt.agent_key)
+               node_id="node_0", agent_id=receipt.agent_key, stage_id="stage_0", role="extraction",
+               source_node_id=None, binding_id=None)
     contracts = NS(stages=(stage,), nodes=(), route_default_conflicts=())
     capture = Mock(return_value=frozen)
     monkeypatch.setattr(service, "capture_saved_flow", capture)
@@ -90,7 +91,8 @@ def test_non_model_system_step_is_frozen_without_exposing_a_model_route(setup, m
     monkeypatch.setattr(service, "list_agents_visible_to_user", lambda *a, **kw: [row])
     capture = Mock(return_value=source)
     monkeypatch.setattr(service, "capture_system_agent", capture)
-    setup.contracts.stages += (NS(route_slot=None, agent_id=agent_key),)
+    setup.contracts.stages += (NS(route_slot=None, agent_id=agent_key, stage_id="output", role="output",
+                                 node_id="output", source_node_id=None, binding_id=None),)
     catalog = service.prepare_selected_catalog(Mock(), setup.curator, _catalog(), setup.suite)
     target = catalog.targets[0]
     assert target.system_agent_snapshots == {agent_key: source}

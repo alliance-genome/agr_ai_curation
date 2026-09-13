@@ -13,6 +13,48 @@ from src.lib.benchmarks.persistence import BenchmarkLeaseLostError
 from src.lib.benchmarks.worker import BenchmarkWorker, _report_failure
 
 
+@pytest.mark.parametrize("failure_at", [None, "start", "finish", "commit"])
+def test_stage_observer_commits_boundaries_and_retains_swallowed_failure(monkeypatch, failure_at):
+    from src.lib.benchmarks import worker
+    from src.lib.benchmarks.stage_measurements import StageIdentity, measure_stage, observe_stages
+
+    session = MagicMock()
+    session.__enter__.return_value = session
+    repository = MagicMock()
+    monkeypatch.setattr(worker, "BenchmarkRepository", lambda db: repository)
+    error = BenchmarkLeaseLostError("lease lost")
+    if failure_at == "start":
+        repository.append_stage.side_effect = error
+    elif failure_at == "finish":
+        repository.finish_stage.side_effect = error
+    elif failure_at == "commit":
+        session.commit.side_effect = error
+    observer = worker._DurableStageObserver(
+        cell=SimpleNamespace(id=uuid4(), attempt_count=2), lease_owner=uuid4(),
+        session_factory=lambda: session,
+    )
+    executed = []
+    with observe_stages(observer):
+        try:
+            with measure_stage(StageIdentity("extractor", "extraction")):
+                executed.append(True)
+        except BenchmarkLeaseLostError:
+            pass  # Simulate a normal validator converting an error to output.
+    if failure_at:
+        with pytest.raises(BenchmarkLeaseLostError) as captured:
+            observer.raise_if_failed()
+        assert captured.value is error
+        assert bool(executed) == (failure_at == "finish")
+    else:
+        observer.raise_if_failed()
+        assert session.commit.call_count == 2
+        start = repository.append_stage.call_args.kwargs
+        finish = repository.finish_stage.call_args.kwargs
+        assert start["cell_id"] == finish["cell_id"] == observer.cell_id
+        assert start["attempt"] == finish["attempt"] == 2
+        assert start["stage"].execution_id == finish["stage"].start.execution_id
+
+
 @pytest.fixture
 def startup_runtime(monkeypatch):
     """Replace only startup I/O; the process entrypoint remains real."""
@@ -180,12 +222,18 @@ async def test_worker_uses_prepared_identity_and_explicit_query_then_rechecks_au
     prepare = AsyncMock(return_value=(prepared, context))
     monkeypatch.setattr("src.lib.benchmarks.worker.prepare_job_document", prepare)
     executor = AsyncMock(return_value="synthetic-result")
-    worker = BenchmarkWorker()
+    repository = MagicMock()
+    monkeypatch.setattr("src.lib.benchmarks.worker.BenchmarkRepository", lambda session: repository)
+    ticks = iter((10.0, 12.0, 20.0, 23.0))
+    monkeypatch.setattr("src.lib.benchmarks.worker.monotonic", lambda: next(ticks))
+    worker = BenchmarkWorker(session_factory=MagicMock())
     resolved = MagicMock()
     resolved.user_query = "Extract the requested evidence."
     cell = MagicMock()
     result = await worker._run_authorized_cell(executor, resolved, "run", cell)
     assert result == "synthetic-result"
+    assert repository.start_pipeline.call_count == 1
+    assert repository.finish_pipeline.call_args.kwargs["elapsed_ms"] == 2000
     check.assert_awaited_once_with(context, session_factory=worker.session_factory)
     assert executor.call_args.args[1] == {
         "user_id": "verified-curator", "db_user_id": 42, "active_groups": ["group-alpha"],
@@ -203,6 +251,7 @@ async def test_worker_uses_prepared_identity_and_explicit_query_then_rechecks_au
     with pytest.raises(PermissionError):
         await worker._run_authorized_cell(executor, resolved, "run", cell)
     executor.assert_not_called()
+    assert repository.finish_pipeline.call_args.kwargs["elapsed_ms"] == 3000
 
 
 @pytest.mark.parametrize(

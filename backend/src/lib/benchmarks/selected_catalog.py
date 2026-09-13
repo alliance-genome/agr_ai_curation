@@ -12,6 +12,7 @@ from .system_snapshot import capture_system_agent
 from .supervisor_snapshot import capture_flow_supervisor
 from .runtime_catalog import build_curator_route_catalog
 from .dependencies import capture_dependencies
+from .stage_definitions import definitions_from_flow_stages
 
 
 def _with_dependencies(session, curator, catalog):
@@ -93,6 +94,7 @@ def prepare_selected_catalog(session, curator, catalog: BenchmarkRouteCatalog, s
         frozen_data["output_contracts"] = {
             node.node_id: node.model_dump(mode="json") for node in contracts.nodes
         }
+        frozen_data["stage_definitions"] = definitions_from_flow_stages(contracts.stages)
         targets.append(BenchmarkTargetCatalogEntry(
             target=target, route_slots=tuple(sorted(target_slots)),
             source_execution_receipts=sources, system_agent_snapshots=systems,

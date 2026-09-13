@@ -363,13 +363,17 @@ def test_failed_delegated_submission_never_serializes_token(tmp_path):
 
 
 def test_failed_cell_does_not_stop_sibling_and_exposes_no_partial_envelope():
+    from src.lib.benchmarks.stage_measurements import StageIdentity, measure_stage
+    from src.models.sql.benchmark import BenchmarkStage
+
     owner = "worker-partial-owner"
     calls = 0
 
     async def fake_executor(cell, case_input, run_id):
         nonlocal calls
         calls += 1
-        return await _emit_fake_provider_call(fail=calls == 1)
+        with measure_stage(StageIdentity("synthetic-extractor", "extraction", node_id="node")):
+            return await _emit_fake_provider_call(fail=calls == 1)
 
     with SessionLocal() as session:
         job = _create_job(session, owner=owner, cells=2)
@@ -419,6 +423,15 @@ def test_failed_cell_does_not_stop_sibling_and_exposes_no_partial_envelope():
             assert outcome.invocations
             assert artifact.attempt_count == cells[1].attempt_count
             assert len(invocations) == 2
+            stages = tuple(session.scalars(select(BenchmarkStage)
+                .join(BenchmarkCell).where(BenchmarkCell.job_id == job_id)
+                .order_by(BenchmarkCell.position)))
+            assert [stage.status for stage in stages] == ["failed", "succeeded"]
+            assert [stage.failure_type for stage in stages] == ["RuntimeError", None]
+            assert all(stage.completed_at is not None and stage.elapsed_ms >= 0 for stage in stages)
+            assert [invocation.stage_execution_id for invocation in invocations] == [stage.id for stage in stages]
+            assert all(cell.pipeline_started_at is not None and cell.pipeline_completed_at is not None
+                       and cell.pipeline_elapsed_ms >= 0 for cell in cells)
             assert invocations[0].failure == {
                 "category": "provider_error",
                 "retryable": False,

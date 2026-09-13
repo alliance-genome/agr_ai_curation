@@ -10,7 +10,9 @@ from types import MappingProxyType
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator, model_serializer
+
+from .stage_definitions import StageDefinition, freeze_stage_definitions
 
 
 def freeze_json(value: Any) -> Any:
@@ -47,6 +49,23 @@ class FrozenBenchmarkFlow(BaseModel):
     description: str | None
     definition: Mapping[str, Any]
     output_contracts: Mapping[str, Any] = Field(default_factory=dict)
+    stage_definitions: Mapping[str, StageDefinition] = Field(default_factory=dict)
+
+    @field_validator("stage_definitions")
+    @classmethod
+    def freeze_stages(cls, value):
+        return freeze_stage_definitions(value)
+
+    @field_serializer("stage_definitions")
+    def serialize_stages(self, value):
+        return dict(value)
+
+    @model_serializer(mode="wrap")
+    def serialize_known_stages(self, handler):
+        value = handler(self)
+        if not self.stage_definitions:
+            value.pop("stage_definitions", None)
+        return value
 
     @field_validator("output_contracts")
     @classmethod

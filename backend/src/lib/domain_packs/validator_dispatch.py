@@ -1260,6 +1260,20 @@ def _run_validator_job_batch(
     batch_runner: DomainValidatorBatchAgentRunner,
     event_emitter: ValidatorDispatchEventEmitter | None,
 ) -> tuple[list[DomainValidatorResultBase], dict[str, Any]]:
+    from src.lib.benchmarks.stage_measurements import measure_bound_validator
+
+    with measure_bound_validator(jobs[0].match.binding.binding_id):
+        return _execute_validator_job_batch(
+            jobs, batch_runner=batch_runner, event_emitter=event_emitter,
+        )
+
+
+def _execute_validator_job_batch(
+    jobs: list[ValidatorDispatchJob],
+    *,
+    batch_runner: DomainValidatorBatchAgentRunner,
+    event_emitter: ValidatorDispatchEventEmitter | None,
+) -> tuple[list[DomainValidatorResultBase], dict[str, Any]]:
     representative = jobs[0]
     binding = representative.match.binding
     summary = _validator_batch_summary(jobs)
@@ -1304,6 +1318,9 @@ def _run_validator_job_batch(
         )
         return validator_results, summary
     except Exception as exc:
+        from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
+
+        record_handled_stage_failure(exc)
         if runner_duration_seconds == 0.0:
             runner_duration_seconds = time.monotonic() - runner_started_at
         LOGGER.warning(
@@ -1354,6 +1371,17 @@ def _run_single_validator_job(
     *,
     agent_runner: DomainValidatorAgentRunner,
 ) -> DomainValidatorResultBase:
+    from src.lib.benchmarks.stage_measurements import measure_bound_validator
+
+    with measure_bound_validator(job.match.binding.binding_id):
+        return _execute_single_validator_job(job, agent_runner=agent_runner)
+
+
+def _execute_single_validator_job(
+    job: ValidatorDispatchJob,
+    *,
+    agent_runner: DomainValidatorAgentRunner,
+) -> DomainValidatorResultBase:
     request = job.request
     try:
         runner_started_at = time.monotonic()
@@ -1377,6 +1405,9 @@ def _run_single_validator_job(
             output_validation_duration_seconds,
         )
     except Exception as exc:
+        from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
+
+        record_handled_stage_failure(exc)
         LOGGER.warning(
             "Package-scoped validator agent failed for binding %s request %s",
             request.validator_binding_id,
@@ -2675,18 +2706,21 @@ def run_package_scoped_validator_agent_in_worker_thread(
 ) -> Any:
     """Execute a package validator from sync code that is already in an event loop."""
 
+    dispatch_context = contextvars.copy_context()
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=1,
         thread_name_prefix="domain-validator-agent",
     ) as executor:
         if runtime_context is None:
             future = executor.submit(
+                dispatch_context.run,
                 run_package_scoped_validator_agent,
                 request,
                 binding=binding,
             )
             return future.result()
         future = executor.submit(
+            dispatch_context.run,
             run_package_scoped_validator_agent,
             request,
             binding=binding,
@@ -2703,18 +2737,21 @@ def run_package_scoped_validator_agent_batch_in_worker_thread(
 ) -> Any:
     """Execute a package validator batch from sync code inside an event loop."""
 
+    dispatch_context = contextvars.copy_context()
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=1,
         thread_name_prefix="domain-validator-agent-batch",
     ) as executor:
         if runtime_context is None:
             future = executor.submit(
+                dispatch_context.run,
                 run_package_scoped_validator_agent_batch,
                 jobs,
                 binding=binding,
             )
             return future.result()
         future = executor.submit(
+            dispatch_context.run,
             run_package_scoped_validator_agent_batch,
             jobs,
             binding=binding,

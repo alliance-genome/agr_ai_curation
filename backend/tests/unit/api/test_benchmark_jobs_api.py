@@ -30,6 +30,47 @@ def submission_body():
     return {"suite": suite, "plan": plan.model_dump(mode="json")}
 
 
+@pytest.mark.parametrize("allowed", [True, False])
+def test_stage_page_preserves_unknowns_and_requires_read_capability(monkeypatch, allowed):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
+    app = FastAPI()
+    def principal():
+        if not allowed:
+            raise HTTPException(403, "read capability required")
+        return {"sub": "service:portal", "client_id": "portal"}
+    app.dependency_overrides[require_benchmark_read] = principal
+    app.include_router(benchmark_jobs.router)
+    job, cell = uuid4(), uuid4()
+    row = SimpleNamespace(
+        id=uuid4(), cell_id=cell, ordinal=0, attempt=1, stage_id="extractor",
+        role="extraction", node_id=None, source_node_id=None, binding_id=None, agent_id="agent",
+        parent_execution_id=None, parent_invocation_sequence=None, status="interrupted",
+        started_at=datetime.now(timezone.utc), completed_at=None, elapsed_ms=None,
+        failure_type="WorkerLeaseExpired",
+    )
+    repository = MagicMock()
+    repository.list_stages.side_effect = [(row,), ()]
+    monkeypatch.setattr(benchmark_jobs, "SessionLocal", MagicMock())
+    constructor = Mock(return_value=repository)
+    monkeypatch.setattr(benchmark_jobs, "BenchmarkRepository", constructor)
+    with TestClient(app) as client:
+        response = client.get(f"/api/v1/benchmarks/jobs/{job}/cells/{cell}/stages?limit=1")
+    if not allowed:
+        assert response.status_code == 403
+        constructor.assert_not_called()
+    else:
+        assert response.status_code == 200
+        body = response.json()
+        assert body["schema_version"] == 1 and body["next_after_ordinal"] is None
+        assert body["items"][0]["elapsed_ms"] is None
+        assert body["items"][0]["completed_at"] is None
+        assert repository.list_stages.call_args_list[1].kwargs["after_ordinal"] == 0
+        assert repository.list_stages.call_args_list[0].kwargs["owner_subject"] == benchmark_jobs._owner(principal())
+
+
 def test_openapi_examples_match_canonical_request_and_response_models():
     app = FastAPI()
     app.include_router(benchmark_jobs.router)

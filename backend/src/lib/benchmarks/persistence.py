@@ -17,12 +17,14 @@ from sqlalchemy.orm import Session
 
 from src.lib.benchmarks.models import BenchmarkCellExecutionResult, BenchmarkSuite, ResolvedBenchmarkPlan
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+from src.lib.benchmarks.stage_measurements import StageStart, StageFinish
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
     get_benchmark_event_retention_count,
     get_benchmark_max_envelope_bytes,
     get_benchmark_max_result_artifact_bytes,
     get_benchmark_max_page_size,
+    get_benchmark_max_stages_per_cell,
 )
 from src.models.sql.benchmark import (
     BenchmarkCell,
@@ -31,6 +33,7 @@ from src.models.sql.benchmark import (
     BenchmarkInputSnapshot,
     BenchmarkInvocation,
     BenchmarkInvocationStatus,
+    BenchmarkStage,
     BenchmarkJob,
     BenchmarkJobIdempotency,
     BenchmarkJobInputSnapshot,
@@ -137,6 +140,7 @@ class BenchmarkCellDetail:
     envelope_digest: str | None
     result_digest: str | None
     failure: dict[str, Any] | None
+    timing: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -584,6 +588,16 @@ class BenchmarkRepository:
             envelope_digest=cell.envelope_digest,
             result_digest=cell.result_digest,
             failure=cell.failure,
+            timing=None if cell.pipeline_started_at is None else {
+                "schema_version": 1,
+                "boundary": "preparation_through_target",
+                "started_at": cell.pipeline_started_at,
+                "completed_at": cell.pipeline_completed_at,
+                "elapsed_ms": cell.pipeline_elapsed_ms,
+                "queue_delay_ms": None if cell.started_at is None else max(
+                    0, round((cell.started_at - cell.created_at).total_seconds() * 1000),
+                ),
+            },
         )
 
     def get_result_artifact(
@@ -755,6 +769,11 @@ class BenchmarkRepository:
         failure = {"category": "interrupted_uncertain", "retryable": False}
         for cell in cells:
             self.session.execute(
+                update(BenchmarkStage).where(
+                    BenchmarkStage.cell_id == cell.id, BenchmarkStage.status == "running",
+                ).values(status="interrupted", failure_type="WorkerLeaseExpired")
+            )
+            self.session.execute(
                 update(BenchmarkInvocation)
                 .where(
                     BenchmarkInvocation.cell_id == cell.id,
@@ -878,6 +897,15 @@ class BenchmarkRepository:
         )
         if running_invocation is not None:
             raise ValueError("benchmark cell has running invocations")
+        running_stage = self.session.scalar(select(BenchmarkStage.id).where(
+            BenchmarkStage.cell_id == cell_id, BenchmarkStage.status == "running",
+        ).limit(1))
+        if running_stage is not None:
+            if status == BenchmarkCellStatus.SUCCEEDED:
+                raise ValueError("benchmark cell has running stages")
+            self.session.execute(update(BenchmarkStage).where(
+                BenchmarkStage.cell_id == cell_id, BenchmarkStage.status == "running",
+            ).values(status="interrupted", failure_type="CellTerminated"))
         envelope_size = None
         if status == BenchmarkCellStatus.SUCCEEDED:
             if generated_envelope is None:
@@ -945,6 +973,88 @@ class BenchmarkRepository:
         self._refresh_job_counters(cell.job_id)
         return cell
 
+    def _lock_stage_cell(
+        self, cell_id: UUID, lease_owner: UUID, attempt: int, current: datetime, *, starting: bool,
+    ) -> BenchmarkCell:
+        job = self.session.scalar(
+            select(BenchmarkJob).join(BenchmarkCell, BenchmarkCell.job_id == BenchmarkJob.id)
+            .where(BenchmarkCell.id == cell_id, BenchmarkJob.lease_owner == lease_owner,
+                   BenchmarkJob.lease_expires_at > current,
+                   BenchmarkJob.status.in_((BenchmarkJobStatus.RUNNING, BenchmarkJobStatus.CANCEL_REQUESTED)))
+            .with_for_update(of=BenchmarkJob)
+        )
+        if job is None:
+            raise BenchmarkLeaseLostError("benchmark job lease is no longer owned")
+        if starting and job.status == BenchmarkJobStatus.CANCEL_REQUESTED:
+            raise BenchmarkCancellationRequestedError("benchmark cancellation requested before stage start")
+        cell = self.session.scalar(select(BenchmarkCell).where(
+            BenchmarkCell.id == cell_id, BenchmarkCell.status == BenchmarkCellStatus.RUNNING,
+            BenchmarkCell.attempt_count == attempt, BenchmarkCell.lease_owner == lease_owner,
+            BenchmarkCell.lease_expires_at > current,
+        ).with_for_update())
+        if cell is None:
+            raise BenchmarkLeaseLostError("benchmark cell lease or attempt is no longer owned")
+        return cell
+
+    def start_pipeline(self, *, cell_id: UUID, lease_owner: UUID, attempt: int,
+                       started_at: datetime) -> None:
+        cell = self._lock_stage_cell(cell_id, lease_owner, attempt, datetime.now(timezone.utc), starting=True)
+        if cell.pipeline_started_at is not None:
+            raise ValueError("benchmark pipeline already started")
+        cell.pipeline_started_at = started_at
+        self.session.flush()
+
+    def finish_pipeline(self, *, cell_id: UUID, lease_owner: UUID, attempt: int,
+                        completed_at: datetime, elapsed_ms: int) -> None:
+        cell = self._lock_stage_cell(cell_id, lease_owner, attempt, datetime.now(timezone.utc), starting=False)
+        if cell.pipeline_started_at is None or cell.pipeline_completed_at is not None:
+            raise ValueError("only a started benchmark pipeline may finish")
+        cell.pipeline_completed_at = completed_at
+        cell.pipeline_elapsed_ms = elapsed_ms
+        self.session.flush()
+
+    def append_stage(
+        self, *, cell_id: UUID, lease_owner: UUID, attempt: int, stage: StageStart,
+        now: datetime | None = None,
+    ) -> BenchmarkStage:
+        self._lock_stage_cell(cell_id, lease_owner, attempt, now or datetime.now(timezone.utc), starting=True)
+        ordinal = self.session.scalar(select(func.coalesce(func.max(BenchmarkStage.ordinal), -1)).where(
+            BenchmarkStage.cell_id == cell_id,
+        )) + 1
+        if ordinal >= get_benchmark_max_stages_per_cell():
+            raise ValueError("benchmark cell stage retention limit exceeded")
+        row = BenchmarkStage(
+            id=stage.execution_id, cell_id=cell_id, attempt=attempt,
+            ordinal=ordinal,
+            stage_id=stage.identity.stage_id, role=stage.identity.role,
+            node_id=stage.identity.node_id, source_node_id=stage.identity.source_node_id,
+            binding_id=stage.identity.binding_id, agent_id=stage.identity.agent_id,
+            parent_execution_id=stage.parent_execution_id,
+            parent_invocation_sequence=stage.parent_invocation_sequence,
+            started_at=stage.started_at, status="running",
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def finish_stage(
+        self, *, cell_id: UUID, lease_owner: UUID, attempt: int, stage: StageFinish,
+        now: datetime | None = None,
+    ) -> BenchmarkStage:
+        self._lock_stage_cell(cell_id, lease_owner, attempt, now or datetime.now(timezone.utc), starting=False)
+        row = self.session.scalar(select(BenchmarkStage).where(
+            BenchmarkStage.id == stage.start.execution_id, BenchmarkStage.cell_id == cell_id,
+            BenchmarkStage.attempt == attempt,
+        ).with_for_update())
+        if row is None or row.status != "running":
+            raise ValueError("only an owned running benchmark stage may finish")
+        row.status = stage.status
+        row.completed_at = stage.completed_at
+        row.elapsed_ms = stage.elapsed_ms
+        row.failure_type = stage.failure_type
+        self.session.flush()
+        return row
+
     def append_invocation(
         self,
         *,
@@ -959,6 +1069,8 @@ class BenchmarkRepository:
         reasoning_effort: str | None,
         sequence: int,
         started_at: datetime,
+        stage_execution_id: UUID | None = None,
+        parent_invocation_sequence: int | None = None,
         now: datetime | None = None,
     ) -> BenchmarkInvocation:
         current = now or datetime.now(timezone.utc)
@@ -1003,6 +1115,8 @@ class BenchmarkRepository:
             requested_model=requested_model,
             reasoning_effort=reasoning_effort,
             sequence=sequence,
+            stage_execution_id=stage_execution_id,
+            parent_invocation_sequence=parent_invocation_sequence,
             status=BenchmarkInvocationStatus.RUNNING,
             started_at=started_at,
         )
@@ -1101,6 +1215,19 @@ class BenchmarkRepository:
         invocation.billed_source = billed_source
         self.session.flush()
         return invocation
+
+    def list_stages(
+        self, *, job_id: UUID, cell_id: UUID, owner_subject: str,
+        after_ordinal: int = -1, limit: int | None = None,
+    ) -> tuple[BenchmarkStage, ...]:
+        self._owned_job(job_id, owner_subject)
+        if not self.session.scalar(select(BenchmarkCell.id).where(
+            BenchmarkCell.id == cell_id, BenchmarkCell.job_id == job_id,
+        )):
+            raise LookupError("benchmark cell not found in owned job")
+        return tuple(self.session.scalars(select(BenchmarkStage).where(
+            BenchmarkStage.cell_id == cell_id, BenchmarkStage.ordinal > after_ordinal,
+        ).order_by(BenchmarkStage.ordinal).limit(_page_size(limit))))
 
     def list_invocations(
         self,

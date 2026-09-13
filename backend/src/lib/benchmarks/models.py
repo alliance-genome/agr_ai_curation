@@ -25,6 +25,7 @@ from .frozen_flow import FrozenBenchmarkFlow
 from .system_snapshot import FrozenSystemAgent
 from .supervisor_snapshot import FrozenFlowSupervisor
 from .dependencies import BenchmarkDependencies
+from .stage_definitions import StageDefinition, freeze_stage_definitions
 
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
 
@@ -198,6 +199,16 @@ class BenchmarkSourceRevisions(FrozenStrictModel):
     supervisor_snapshot: FrozenFlowSupervisor | None = None
     system_agent_snapshots: Mapping[str, FrozenSystemAgent] = Field(default_factory=dict)
     dependencies: "BenchmarkDependencies | None" = None
+    direct_stage_definitions: Mapping[str, StageDefinition] = Field(default_factory=dict)
+
+    @field_validator("direct_stage_definitions")
+    @classmethod
+    def freeze_direct_stages(cls, value):
+        return freeze_stage_definitions(value)
+
+    @field_serializer("direct_stage_definitions")
+    def serialize_direct_stages(self, value):
+        return {key: stage.model_dump(mode="json") for key, stage in value.items()}
 
     @field_validator("system_agent_snapshots")
     @classmethod
@@ -239,6 +250,8 @@ class BenchmarkSourceRevisions(FrozenStrictModel):
             result.pop("system_agent_snapshots", None)
         if self.dependencies is None:
             result.pop("dependencies", None)
+        if not self.direct_stage_definitions:
+            result.pop("direct_stage_definitions", None)
         return result
 
 
@@ -375,6 +388,8 @@ class BilledCost(StrictModel):
 
 class ProviderUsage(StrictModel):
     route_slot: str | None = None
+    stage_execution_id: UUID | None = Field(default=None, strict=False)
+    parent_invocation_sequence: int | None = Field(default=None, ge=1)
     requested_provider: str
     requested_model: str
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
@@ -389,6 +404,15 @@ class ProviderUsage(StrictModel):
     sequence: int | None = Field(default=None, ge=1)
     status: Literal["completed", "failed"] = "completed"
     failure_detail: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_attribution(self, handler):
+        value = handler(self)
+        # Historical unknown attribution is not a fabricated measurement.
+        for key in ("stage_execution_id", "parent_invocation_sequence"):
+            if value.get(key) is None:
+                value.pop(key, None)
+        return value
 
 
 class BenchmarkCellExecutionResult(StrictModel):

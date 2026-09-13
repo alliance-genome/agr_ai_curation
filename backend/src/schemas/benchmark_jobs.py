@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -88,6 +88,8 @@ class BenchmarkInvocationResponse(BaseModel):
     cell_id: UUID
     ordinal: int
     attempt: int
+    stage_execution_id: UUID | None = None
+    parent_invocation_sequence: int | None = None
     route_slot: str
     request_digest: str
     response_digest: str | None
@@ -113,4 +115,32 @@ class BenchmarkInvocationResponse(BaseModel):
 
 class BenchmarkInvocationPage(BaseModel):
     items: tuple[BenchmarkInvocationResponse, ...]
+    next_after_ordinal: int | None
+
+
+class BenchmarkStageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    id: UUID
+    cell_id: UUID
+    attempt: int
+    ordinal: int
+    stage_id: str
+    role: Literal["extraction", "validation", "output", "supervisor", "other"]
+    node_id: str | None
+    source_node_id: str | None
+    binding_id: str | None
+    agent_id: str | None
+    parent_execution_id: UUID | None
+    parent_invocation_sequence: int | None
+    status: Literal["running", "succeeded", "failed", "interrupted"]
+    started_at: datetime
+    completed_at: datetime | None
+    elapsed_ms: int | None
+    failure_type: str | None
+
+
+class BenchmarkStagePage(BaseModel):
+    schema_version: Literal[1] = 1
+    items: tuple[BenchmarkStageResponse, ...]
     next_after_ordinal: int | None

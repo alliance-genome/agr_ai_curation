@@ -1620,35 +1620,43 @@ async def _collect_flow_validator_materialization_inputs(
                 )
                 continue
 
-            try:
-                if validator_node is None:
-                    raise ValueError(
-                        "custom validator node is missing from the flow definition"
+            from src.lib.benchmarks.stage_measurements import (
+                measure_bound_validator, record_handled_stage_failure,
+            )
+
+            with measure_bound_validator(
+                binding_id, node_id=str(validator_node["id"]) if validator_node is not None else None,
+            ):
+                try:
+                    if validator_node is None:
+                        raise ValueError(
+                            "custom validator node is missing from the flow definition"
+                        )
+                    raw_output = await _run_custom_flow_validator_agent(
+                        request,
+                        binding_match=match,
+                        validator_node=validator_node,
+                        agent_context=agent_context,
+                        source_envelope_id=source_envelope.envelope_id,
+                        source_envelope_revision=source_envelope_revision,
                     )
-                raw_output = await _run_custom_flow_validator_agent(
-                    request,
-                    binding_match=match,
-                    validator_node=validator_node,
-                    agent_context=agent_context,
-                    source_envelope_id=source_envelope.envelope_id,
-                    source_envelope_revision=source_envelope_revision,
-                )
-                validator_result = validator_result_from_agent_output(
-                    raw_output,
-                    request=request,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[Flow Executor] Validator group '%s' failed for binding %s",
-                    group.get("group_id"),
-                    binding_id,
-                    exc_info=exc,
-                )
-                validator_result = unresolved_validator_result_for_dispatch_problem(
-                    request,
-                    reason="validator_agent_error",
-                    explanation=f"Validator agent execution failed: {exc}",
-                )
+                    validator_result = validator_result_from_agent_output(
+                        raw_output,
+                        request=request,
+                    )
+                except Exception as exc:
+                    record_handled_stage_failure(exc)
+                    logger.warning(
+                        "[Flow Executor] Validator group '%s' failed for binding %s",
+                        group.get("group_id"),
+                        binding_id,
+                        exc_info=exc,
+                    )
+                    validator_result = unresolved_validator_result_for_dispatch_problem(
+                        request,
+                        reason="validator_agent_error",
+                        explanation=f"Validator agent execution failed: {exc}",
+                    )
 
             materialization_units.append(
                 ValidatorResultMaterializationInput(
@@ -3248,7 +3256,13 @@ def get_all_agent_tools(
                 }
 
             try:
-                return await _run_claimed_ordered_tool(ctx, query, next_idx)
+                from src.lib.benchmarks.stage_measurements import measure_flow_node
+                from src.lib.openai_agents.provider_usage import provider_parent_for_tool_call
+
+                with measure_flow_node(node_id, parent_invocation_sequence=provider_parent_for_tool_call(
+                    getattr(ctx, "tool_call_id", None),
+                )):
+                    return await _run_claimed_ordered_tool(ctx, query, next_idx)
             finally:
                 async with execution_state["step_claim_lock"]:
                     in_flight_step = execution_state["in_flight_step"]

@@ -16,6 +16,7 @@ from .provider_usage import (
     complete_provider_invocation,
     fail_provider_invocation,
     normalize_provider_usage,
+    register_provider_tool_calls,
     ProviderUsageRecord,
 )
 
@@ -72,6 +73,15 @@ class _ProviderTelemetryStream:
             raise
 
         payload = _payload_mapping(chunk)
+        try:
+            register_provider_tool_calls(self._pending_invocation, payload)
+        except Exception as exc:
+            fail_provider_invocation(
+                self._pending_invocation, exc,
+                latency_ms=round((monotonic() - self._started_at) * 1000),
+            )
+            self._emitted = True
+            raise
         usage = _payload_mapping(payload.get("usage"))
         metadata = _payload_mapping(payload.get("openrouter_metadata"))
         if usage:
@@ -215,6 +225,8 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
                     billed_cost=None,
                 ),
             )
+            if not isinstance(response, tuple):
+                register_provider_tool_calls(pending_invocation, response)
             return response
 
         if isinstance(response, tuple):
@@ -240,4 +252,5 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
                 latency_ms=latency_ms,
             ),
         )
+        register_provider_tool_calls(pending_invocation, response)
         return response

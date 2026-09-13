@@ -22,11 +22,9 @@ from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from .models import BenchmarkSuiteRoute, FrozenStrictModel
 from .execution_context import BenchmarkCuratorContext
 from .suites import _digest
+from .stage_definitions import role_from_category
 
 FlowStageRole = Literal["extraction", "validation", "output", "other", "supervisor"]
-_CATEGORY_ROLES: dict[str, FlowStageRole] = {
-    "Extraction": "extraction", "Validation": "validation", "Output": "output",
-}
 
 
 class BenchmarkFlowStage(FrozenStrictModel):
@@ -134,7 +132,7 @@ def flow_stages(
         entry = entries_by_node[node_id]
         agent_id = node.data.agent_id
         sidecar = sidecars.get(node_id)
-        role: FlowStageRole = "validation" if sidecar else _CATEGORY_ROLES.get(str(entry.get("category") or ""), "other")
+        role: FlowStageRole = "validation" if sidecar else role_from_category(entry.get("category"))
         # These branches mirror executor runtime tools, not biological names.
         non_model = agent_id in {CURATION_PREP_AGENT_ID, "curation_handoff"} or (
             resolved_formatter_format(agent_id, entry) is not None

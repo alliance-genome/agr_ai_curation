@@ -192,12 +192,14 @@ class _FakeStream:
 
 @pytest.mark.asyncio
 async def test_streaming_telemetry_is_captured_from_terminal_fields(monkeypatch):
+    from src.lib.openai_agents.provider_usage import provider_parent_for_tool_call
+
     async def fake_fetch(self, *args, **kwargs):
         return (
             object(),
             _FakeStream(
                 [
-                    {"choices": []},
+                    {"choices": [{"delta": {"tool_calls": [{"id": "stream-call"}]}}]},
                     {
                         "usage": {
                             "prompt_tokens": 2,
@@ -230,7 +232,7 @@ async def test_streaming_telemetry_is_captured_from_terminal_fields(monkeypatch)
             None, [], ModelSettings(), [], None, [], None, None, True
         )
         async for _ in stream:
-            pass
+            assert provider_parent_for_tool_call("stream-call") == 1
 
     assert len(records) == 1
     assert records[0].actual_provider == "DeepInfra"
@@ -240,8 +242,11 @@ async def test_streaming_telemetry_is_captured_from_terminal_fields(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_non_streaming_telemetry_is_captured(monkeypatch):
+    from src.lib.openai_agents.provider_usage import provider_parent_for_tool_call
+
     async def fake_fetch(self, *args, **kwargs):
         return {
+            "choices": [{"message": {"tool_calls": [{"id": "complete-call"}]}}],
             "usage": {
                 "prompt_tokens": 7,
                 "completion_tokens": 8,
@@ -269,11 +274,46 @@ async def test_non_streaming_telemetry_is_captured(monkeypatch):
         await model._fetch_response(
             None, [], ModelSettings(), [], None, [], None, None, False
         )
+        assert provider_parent_for_tool_call("complete-call") == 1
 
     assert len(records) == 1
     assert records[0].actual_provider == "Together"
     assert records[0].input_tokens == 7
     assert records[0].billed_cost is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_link_limit_never_leaves_provider_invocation_running(monkeypatch, streaming):
+    from unittest.mock import Mock
+    from src.lib.openai_agents.provider_usage import observe_provider_invocations
+
+    monkeypatch.setenv("BENCHMARK_MAX_TOOL_CALL_LINKS_PER_CELL", "1")
+    calls = [{"id": "one"}, {"id": "two"}]
+    payload = {
+        "choices": [{"delta" if streaming else "message": {"tool_calls": calls}}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 8, "total_tokens": 15, "cost": "0.006"},
+    }
+
+    async def fake_fetch(self, *args, **kwargs):
+        return (object(), _FakeStream([payload])) if streaming else payload
+
+    monkeypatch.setattr(OpenAIChatCompletionsModel, "_fetch_response", fake_fetch)
+    observer = Mock()
+    with capture_provider_usage() as records, observe_provider_invocations(observer):
+        with pytest.raises(RuntimeError, match="tool-call link limit"):
+            response = await _model(telemetry_adapter="openrouter")._fetch_response(
+                None, [], ModelSettings(), [], None, [], None, None, streaming,
+            )
+            if streaming:
+                async for _ in response[1]:
+                    pytest.fail("Over-limit chunk must not be passed to the SDK")
+    assert observer.started.call_count == observer.completed.call_count == 1
+    assert len(records) == 1
+    assert records[0].status == ("failed" if streaming else "completed")
+    if not streaming:
+        assert records[0].total_tokens == 15
+        assert records[0].billed_cost is not None
 
 
 @pytest.mark.asyncio

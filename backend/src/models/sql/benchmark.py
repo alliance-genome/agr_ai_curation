@@ -293,6 +293,9 @@ class BenchmarkCell(Base):
     envelope_digest: Mapped[str | None] = mapped_column(String(71))
     result_digest: Mapped[str | None] = mapped_column(String(71))
     result_artifact: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    pipeline_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pipeline_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pipeline_elapsed_ms: Mapped[int | None] = mapped_column(BigInteger)
     failure: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     job: Mapped[BenchmarkJob] = relationship(back_populates="cells")
@@ -302,6 +305,12 @@ class BenchmarkCell(Base):
 
     __table_args__ = (
         UniqueConstraint("id", "job_id", name="uq_benchmark_cells_id_job"),
+        CheckConstraint(
+            "(pipeline_completed_at IS NULL) = (pipeline_elapsed_ms IS NULL) "
+            "AND (pipeline_completed_at IS NULL OR pipeline_started_at IS NOT NULL) "
+            "AND (pipeline_elapsed_ms IS NULL OR pipeline_elapsed_ms >= 0)",
+            name="ck_benchmark_cells_pipeline_interval",
+        ),
         CheckConstraint(
             "result_artifact IS NULL OR (status = 'succeeded' AND result_digest IS NOT NULL)",
             name="ck_benchmark_cells_result_artifact",
@@ -370,6 +379,8 @@ class BenchmarkInvocation(Base):
     )
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    stage_execution_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
+    parent_invocation_sequence: Mapped[int | None] = mapped_column(Integer)
     route_slot: Mapped[str] = mapped_column(String(255), nullable=False)
     request_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     response_digest: Mapped[str | None] = mapped_column(String(71))
@@ -400,6 +411,13 @@ class BenchmarkInvocation(Base):
     cell: Mapped[BenchmarkCell] = relationship(back_populates="invocations")
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["stage_execution_id", "cell_id", "attempt"],
+            ["benchmark_stages.id", "benchmark_stages.cell_id", "benchmark_stages.attempt"],
+            name="fk_benchmark_invocations_stage", ondelete="CASCADE",
+        ),
+        CheckConstraint("parent_invocation_sequence IS NULL OR parent_invocation_sequence >= 1",
+                        name="ck_benchmark_invocations_parent_sequence"),
         UniqueConstraint("cell_id", "ordinal", name="uq_benchmark_invocations_cell_ordinal"),
         CheckConstraint("ordinal >= 0 AND attempt >= 1", name="ck_benchmark_invocations_order"),
         CheckConstraint(
@@ -422,6 +440,55 @@ class BenchmarkInvocation(Base):
             name="ck_benchmark_invocations_failure_object",
         ),
         Index("ix_benchmark_invocations_cell_order", "cell_id", "ordinal", "id"),
+    )
+
+
+class BenchmarkStage(Base):
+    """One durable stage occurrence; interrupted intervals retain unknown ends."""
+
+    __tablename__ = "benchmark_stages"
+
+    id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), primary_key=True)
+    cell_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True), ForeignKey("benchmark_cells.id", ondelete="CASCADE"), nullable=False,
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    stage_id: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    node_id: Mapped[str | None] = mapped_column(String)
+    source_node_id: Mapped[str | None] = mapped_column(String)
+    binding_id: Mapped[str | None] = mapped_column(String)
+    agent_id: Mapped[str | None] = mapped_column(String)
+    parent_execution_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
+    parent_invocation_sequence: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    elapsed_ms: Mapped[int | None] = mapped_column(BigInteger)
+    failure_type: Mapped[str | None] = mapped_column(String)
+
+    __table_args__ = (
+        UniqueConstraint("id", "cell_id", "attempt", name="uq_benchmark_stages_identity"),
+        UniqueConstraint("cell_id", "ordinal", name="uq_benchmark_stages_cell_ordinal"),
+        CheckConstraint("ordinal >= 0", name="ck_benchmark_stages_ordinal"),
+        ForeignKeyConstraint(
+            ["parent_execution_id", "cell_id", "attempt"],
+            ["benchmark_stages.id", "benchmark_stages.cell_id", "benchmark_stages.attempt"],
+            name="fk_benchmark_stages_parent", ondelete="CASCADE",
+        ),
+        CheckConstraint("attempt >= 1 AND char_length(stage_id) > 0", name="ck_benchmark_stages_identity"),
+        CheckConstraint("role IN ('extraction','validation','output','supervisor','other')", name="ck_benchmark_stages_role"),
+        CheckConstraint("status IN ('running','succeeded','failed','interrupted')", name="ck_benchmark_stages_status"),
+        CheckConstraint("parent_execution_id IS NULL OR parent_execution_id <> id", name="ck_benchmark_stages_not_self"),
+        CheckConstraint("parent_invocation_sequence IS NULL OR parent_invocation_sequence >= 1", name="ck_benchmark_stages_parent_sequence"),
+        CheckConstraint(
+            "(completed_at IS NULL) = (elapsed_ms IS NULL) AND (elapsed_ms IS NULL OR elapsed_ms >= 0) "
+            "AND (status <> 'running' OR completed_at IS NULL) "
+            "AND (status NOT IN ('succeeded','failed') OR completed_at IS NOT NULL)",
+            name="ck_benchmark_stages_interval",
+        ),
+        Index("ix_benchmark_stages_cell_attempt", "cell_id", "attempt", "started_at", "id"),
     )
 
 

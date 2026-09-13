@@ -9,6 +9,7 @@ from src.lib.agent_studio.catalog_service import get_agent_by_id
 from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
 from src.lib.agent_studio.catalog_service import get_benchmark_agent_by_id
 from .source_revisions import benchmark_source_revisions
+from .stage_measurements import measure_declared_stage, stage_definition_scope
 from src.lib.document_context import DocumentContext
 from src.lib.flows.executor import execute_flow
 from src.lib.openai_agents.config import (
@@ -77,12 +78,12 @@ async def execute_resolved_agent_cell(
         else None
     )
     active_groups = case_input.get("active_groups") or []
-    with benchmark_route_plan(cell.routes), benchmark_source_revisions(
+    with stage_definition_scope(cell.direct_stage_definitions or None), benchmark_route_plan(cell.routes), benchmark_source_revisions(
         cell.source_execution_receipts, cell.system_agent_snapshots or None, cell.supervisor_snapshot,
     ), capture_provider_usage(
         max_records=get_benchmark_max_invocations_per_cell(),
         max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),
-    ) as usage_records:
+    ) as usage_records, measure_declared_stage("direct"):
         construction = (get_benchmark_agent_by_id if cell.target.id.startswith("ca_") else get_agent_by_id)
         routing = ({"benchmark_slot": slot} if cell.target.id.startswith("ca_") else {
             "model_id_override": route.model, "model_provider_override": route.provider,
@@ -200,12 +201,14 @@ async def execute_resolved_flow_cell(
         _flow_from_frozen_cell(cell, case_input) if cell.flow_snapshot is not None
         else _flow_from_recipe(cell.target.id, case_input.get("active_groups", []))
     )
-    with benchmark_route_plan(cell.routes), benchmark_source_revisions(
+    with stage_definition_scope(
+        (cell.flow_snapshot.stage_definitions or None) if cell.flow_snapshot is not None else None,
+    ), benchmark_route_plan(cell.routes), benchmark_source_revisions(
         cell.source_execution_receipts, cell.system_agent_snapshots or None, cell.supervisor_snapshot,
     ), capture_provider_usage(
         max_records=get_benchmark_max_invocations_per_cell(),
         max_failure_detail_chars=get_benchmark_max_failure_detail_chars(),
-    ) as usage_records:
+    ) as usage_records, measure_declared_stage("supervisor"):
         output: Any = None
         terminal_seen = False
         async for event in execute_flow(

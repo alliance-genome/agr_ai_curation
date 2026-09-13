@@ -219,6 +219,10 @@ def resolve_suite(
                     }
                 if target.flow_snapshot is not None:
                     identity["flow_snapshot"] = target.flow_snapshot.model_dump(mode="json")
+                if target.direct_stage_definitions:
+                    identity["direct_stage_definitions"] = {
+                        key: stage.model_dump(mode="json") for key, stage in target.direct_stage_definitions.items()
+                    }
                 if target.dependencies is not None:
                     identity["dependencies"] = target.dependencies.model_dump(mode="json")
                 if target.supervisor_snapshot is not None:
@@ -240,6 +244,7 @@ def resolve_suite(
                         routes=cell_routes,
                         source_execution_receipts=target.source_execution_receipts,
                         flow_snapshot=target.flow_snapshot,
+                        direct_stage_definitions=target.direct_stage_definitions,
                         dependencies=target.dependencies,
                         supervisor_snapshot=target.supervisor_snapshot,
                         system_agent_snapshots=target.system_agent_snapshots,
