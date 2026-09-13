@@ -18,7 +18,7 @@ import sqlalchemy as sa
 BACKEND = Path(__file__).resolve().parents[2]
 CONTROL_URL = os.environ.get("MIGRATION_CONVERGENCE_TEST_DATABASE_URL")
 PARENT_HEADS = {"main": "7c9e2a4b6d80", "production": "p3e4f5a6b7c8"}
-MERGED_HEAD = "f54e2c6f6848"
+MERGED_HEAD = "7b3168a940de"
 pytestmark = pytest.mark.skipif(
     not CONTROL_URL, reason="isolated convergence database not configured"
 )

@@ -66,7 +66,7 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["f54e2c6f6848"]
+    assert heads == ["7b3168a940de"]
 
 
 def test_alembic_revision_graph_rejects_duplicate_revision_ids(
@@ -106,7 +106,7 @@ def test_supported_head_includes_both_retired_attachment_repairs():
                 "3cea536116c6", "fd396e8286ab", "314e1a470941",
                 "i6d7e8f9a0b1", "j7e8f9a0b1c2", "k8f9a0b1c2d3",
                 "l9a0b1c2d3e4", "m0b1c2d3e4f5", "n1c2d3e4f5a6",
-                "o2d3e4f5a6b7", "p3e4f5a6b7c8", "f54e2c6f6848",
+                "o2d3e4f5a6b7", "p3e4f5a6b7c8", "f54e2c6f6848", "7b3168a940de",
             },
         ),
         (
@@ -115,7 +115,7 @@ def test_supported_head_includes_both_retired_attachment_repairs():
                 "e2f3a4b5c6e8", "f3a4b5c6d7e8", "g4b5c6d7e8f9",
                 "h5c6d7e8f9a0", "i6j7k8l9m0n1", "j7k8l9m0n1o2",
                 "k8l9m0n1o2p3", "l9m0n1o2p3q4", "m0n1o2p3q4r5",
-                "n0o1p2q3r4s5", "7c9e2a4b6d80", "f54e2c6f6848",
+                "n0o1p2q3r4s5", "7c9e2a4b6d80", "f54e2c6f6848", "7b3168a940de",
             },
         ),
     ],
