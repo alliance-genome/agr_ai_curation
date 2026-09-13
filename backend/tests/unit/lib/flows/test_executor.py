@@ -5200,6 +5200,42 @@ class TestGetAllAgentToolsCreatedNames:
         assert "model_id_override" not in mock_get_agent.call_args.kwargs
         assert "model_provider_override" not in mock_get_agent.call_args.kwargs
 
+    @pytest.mark.parametrize("source_mode", ["matching", "changed", "missing"])
+    def test_custom_benchmark_node_requires_matching_frozen_source(self, monkeypatch, source_mode):
+        from src.lib.benchmarks.source_revisions import benchmark_source_revisions
+        from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
+
+        receipt = source_receipt()
+        executor = _executor_module()
+        monkeypatch.setattr(executor, "_runtime_custom_entries", lambda *a, **kw: {"n1": {
+            "agent_id": receipt.agent_key, "name": "Custom extractor",
+            "description": "Extract evidence", "requires_document": False, "required_params": [],
+            "execution_receipt": receipt.model_dump(mode="json"),
+        }})
+        normal = MagicMock(side_effect=AssertionError("must not use mutable construction"))
+        frozen = MagicMock(return_value=MagicMock(spec=Agent, instructions="Frozen"))
+        monkeypatch.setattr(executor, "get_agent_by_id", normal)
+        monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_benchmark_agent_by_id", frozen)
+        monkeypatch.setattr(executor, "_create_streaming_tool", MagicMock())
+        selected = receipt if source_mode == "matching" else receipt.model_copy(update={"revision": 2})
+        sources = {} if source_mode == "missing" else {f"agent:{receipt.agent_key}": selected}
+        with benchmark_source_revisions(sources):
+            tools, _, unavailable, _ = get_all_agent_tools(
+                _make_flow([_agent_node("n1", receipt.agent_key)]), db_user_id=7,
+                benchmark_routes={}, include_unavailable=True,
+            )
+        normal.assert_not_called()
+        if source_mode == "matching":
+            assert len(tools) == 1 and not unavailable
+            frozen.assert_called_once()
+            assert frozen.call_args.kwargs["benchmark_slot"] == f"agent:{receipt.agent_key}"
+            assert "execution_receipt" not in frozen.call_args.kwargs
+            assert "execution_revision_id" not in frozen.call_args.kwargs
+            assert "model_id_override" not in frozen.call_args.kwargs
+        else:
+            assert not tools and len(unavailable) == 1
+            frozen.assert_not_called()
+
     @patch("src.lib.flows.executor._runtime_custom_entries")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")

@@ -120,3 +120,67 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
         await runtime.execute_resolved_agent_cell(cell.model_copy(update={"source_execution_receipts": {}}),
                                                  runtime_input, "missing-source")
     assert len(built_agents) == 2
+
+
+def test_saved_flow_capture_preserves_real_revision_and_rechecks_access(request, monkeypatch):
+    from copy import deepcopy
+    from sqlalchemy import text
+    from fastapi import HTTPException
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision, current_execution_receipt
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.benchmarks import runtime
+    from src.lib.benchmarks.flow_capture import capture_saved_flow
+    from src.lib.benchmarks.saved_flows import flow_summary
+    from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
+    from src.models.sql import CurationFlow, database
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    from src.schemas.flows import FlowDefinition
+    from tests.unit.lib.flows.test_execution_revisions import flow
+    from tests.unit.lib.benchmarks.test_runtime import _resolved_cell
+
+    db, agent_id, _, _ = request.getfixturevalue("execution_db")
+    db.execute(text("CREATE TABLE project_members (project_id uuid, user_id integer)"))
+    CurationFlow.__table__.create(db.connection())
+    head = db.get(Agent, agent_id)
+    head.model_id = "gpt-5.6-sol"
+    saved = capture_execution_snapshot(db, head, AgentOutputContract(output_state="none"))
+    first = append_execution_revision(db, head, saved, user_id=1, expected_revision_id=None)
+    receipt = current_execution_receipt(db, head.agent_key, 1, active_group_ids=[])
+    definition = flow(None).model_dump(mode="json")
+    definition["nodes"][1]["data"].update(
+        agent_id=head.agent_key, agent_revision_id=str(receipt.agent_revision_id),
+        execution_receipt=receipt.model_dump(mode="json"),
+    )
+    source = CurationFlow(user_id=1, name="Original benchmark flow", description="Original task",
+                          flow_definition=FlowDefinition.model_validate(definition).model_dump(mode="json"))
+    db.add(source)
+    db.flush()
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(db))
+    curator = BenchmarkCuratorContext(subject="owner", auth_provider="oidc", db_user_id=1, active_groups=())
+    revision = flow_summary(source).revision
+    frozen = capture_saved_flow(db, curator, source.id, expected_revision=revision)
+    assert frozen.definition["nodes"][1]["data"]["execution_receipt"]["agent_revision_id"] == str(first.id)
+    original = frozen.model_dump(mode="json")
+    source.name = "Changed flow"
+    changed = deepcopy(source.flow_definition)
+    changed["nodes"][0]["data"]["task_instructions"] = "Changed task"
+    source.flow_definition = changed
+    head.instructions = "New prompt"
+    append_execution_revision(db, head, capture_execution_snapshot(db, head, saved.output_contract),
+                              user_id=1, expected_revision_id=first.id)
+    db.flush()
+    with pytest.raises(ValueError, match="changed"):
+        capture_saved_flow(db, curator, source.id, expected_revision=revision)
+    cell = _resolved_cell("flow", str(source.id), {}).model_copy(update={"flow_snapshot": frozen})
+    restored = runtime._flow_from_frozen_cell(cell, {"db_user_id": 1})
+    assert restored.name == "Original benchmark flow"
+    assert restored.flow_definition == original["definition"]
+    with pytest.raises(HTTPException) as denied:
+        runtime._flow_from_frozen_cell(cell, {"db_user_id": 3})
+    assert denied.value.status_code == 403
+    source.is_active = False
+    db.flush()
+    with pytest.raises(HTTPException) as archived:
+        runtime._flow_from_frozen_cell(cell, {"db_user_id": 1})
+    assert archived.value.status_code == 404
+    assert frozen.model_dump(mode="json") == original

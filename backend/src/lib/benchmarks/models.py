@@ -7,6 +7,7 @@ from decimal import Decimal
 import re
 from types import MappingProxyType
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from pydantic import (
     AfterValidator,
@@ -20,6 +21,10 @@ from pydantic import (
 )
 
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
+from .frozen_flow import FrozenBenchmarkFlow
+from .system_snapshot import FrozenSystemAgent
+from .supervisor_snapshot import FrozenFlowSupervisor
+from .dependencies import BenchmarkDependencies
 
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
 
@@ -58,6 +63,26 @@ class BenchmarkExecutionTarget(FrozenStrictModel):
 
     kind: Literal["agent", "flow"]
     id: str = Field(min_length=1, max_length=255)
+    source_kind: Literal["saved_flow"] | None = None
+    source_revision: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_saved_selection(self):
+        if self.source_kind == "saved_flow":
+            if self.kind != "flow" or self.source_revision is None:
+                raise ValueError("Saved flow selection requires a flow and its discovered revision")
+            UUID(self.id)
+        elif self.source_revision is not None:
+            raise ValueError("Source revision requires an explicit saved-flow selection")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_selection(self, handler):
+        result = handler(self)
+        if self.source_kind is None:
+            result.pop("source_kind", None)
+            result.pop("source_revision", None)
+        return result
 
 
 class BenchmarkSuiteCase(FrozenStrictModel):
@@ -169,6 +194,21 @@ class BenchmarkSourceRevisions(FrozenStrictModel):
     """Saved executable origins, separate from the experiment's model routes."""
 
     source_execution_receipts: Mapping[str, AgentExecutionReceipt] = Field(default_factory=dict)
+    flow_snapshot: FrozenBenchmarkFlow | None = None
+    supervisor_snapshot: FrozenFlowSupervisor | None = None
+    system_agent_snapshots: Mapping[str, FrozenSystemAgent] = Field(default_factory=dict)
+    dependencies: "BenchmarkDependencies | None" = None
+
+    @field_validator("system_agent_snapshots")
+    @classmethod
+    def freeze_system_sources(cls, value):
+        if any(key != snapshot.agent_key for key, snapshot in value.items()):
+            raise ValueError("System source key does not match its snapshot")
+        return MappingProxyType(dict(value))
+
+    @field_serializer("system_agent_snapshots")
+    def serialize_system_sources(self, value):
+        return {key: snapshot.model_dump(mode="json") for key, snapshot in value.items()}
 
     @field_validator("source_execution_receipts")
     @classmethod
@@ -191,7 +231,31 @@ class BenchmarkSourceRevisions(FrozenStrictModel):
         # and digests rather than inventing empty provenance for historical work.
         if not self.source_execution_receipts:
             result.pop("source_execution_receipts", None)
+        if self.flow_snapshot is None:
+            result.pop("flow_snapshot", None)
+        if self.supervisor_snapshot is None:
+            result.pop("supervisor_snapshot", None)
+        if not self.system_agent_snapshots:
+            result.pop("system_agent_snapshots", None)
+        if self.dependencies is None:
+            result.pop("dependencies", None)
         return result
+
+
+def _validate_flow_source(
+    target: BenchmarkExecutionTarget, snapshot: FrozenBenchmarkFlow | None,
+) -> None:
+    if snapshot is None:
+        if target.source_kind == "saved_flow":
+            raise ValueError("Selected saved flow requires its frozen source")
+        return
+    if target.kind != "flow" or target.id != snapshot.source_id:
+        raise ValueError("Frozen flow source does not match its target")
+    if snapshot.source_kind == "saved_flow":
+        if target.source_kind != "saved_flow" or target.source_revision != snapshot.source_revision:
+            raise ValueError("Frozen saved flow revision does not match its selection")
+    elif target.source_kind is not None:
+        raise ValueError("Recipe snapshot cannot satisfy a saved flow selection")
 
 
 class BenchmarkTargetCatalogEntry(BenchmarkSourceRevisions):
@@ -200,6 +264,7 @@ class BenchmarkTargetCatalogEntry(BenchmarkSourceRevisions):
 
     @model_validator(mode="after")
     def require_unique_slots(self) -> "BenchmarkTargetCatalogEntry":
+        _validate_flow_source(self.target, self.flow_snapshot)
         if len(self.route_slots) != len(set(self.route_slots)):
             raise ValueError("target route slots must not contain duplicates")
         if set(self.source_execution_receipts) - set(self.route_slots):
@@ -271,6 +336,7 @@ class ResolvedBenchmarkCell(BenchmarkSourceRevisions):
 
     @model_validator(mode="after")
     def require_source_slots(self) -> "ResolvedBenchmarkCell":
+        _validate_flow_source(self.target, self.flow_snapshot)
         if set(self.source_execution_receipts) - set(self.routes):
             raise ValueError("Source revision references an unused cell slot")
         return self

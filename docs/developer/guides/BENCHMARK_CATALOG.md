@@ -104,9 +104,11 @@ inferring a biological task from a title or field name.
 
 Discovery never runs the flow. A schema marked verified is not proof of
 biological suitability: an explicit semantic mapping is still required.
-Saved-flow execution admission and immutable executable capture are a separate
-integration; these preparation endpoints do not make a mutable saved flow a
-runnable recipe target or an approved experiment.
+Discovery itself grants no execution approval. Preview and admission capture
+the selected saved flow through the initiating curator's authorized source.
+Use a target such as
+`{"kind":"flow","id":"<flow UUID>","source_kind":"saved_flow","source_revision":"sha256:..."}`.
+Never substitute the flow title for its UUID or send executable definitions.
 
 ## Preview
 
@@ -123,6 +125,14 @@ catalog/suite schema versions, exact `cell_count`, and a structured warning
 that inputs have not been materialized. Digests live in the existing plan:
 `plan_digest`, `catalog_digest`, and `suite_digest`. Named configurations are
 resolved directly; no implicit model Cartesian product is introduced.
+
+Preview and admission share source preparation for selected saved flows,
+installed recipes and standalone agents. New plans include immutable source
+snapshots and dependency receipts; the discovery catalog remains lightweight.
+See [source revisions](BENCHMARK_CUSTOM_SOURCE_REVISIONS.md) for captured fields,
+access rechecks and reproducibility limits. A shared default conflict requires
+an explicit route in every configuration; an incompatible custom source
+revision is not resolved by changing only the model route.
 
 The same pure planning helper is used by admission: route/model/reasoning
 capabilities, configured case/configuration/repetition/cell limits and explicit

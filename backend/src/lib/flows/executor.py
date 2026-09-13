@@ -3528,16 +3528,29 @@ def get_all_agent_tools(
                     source_node_ids=output_source_by_node_id.get(node_id),
                 )
             else:
-                if benchmark_routes is not None:
-                    from src.lib.openai_agents.benchmark_routing import (
-                        benchmark_route_kwargs,
-                    )
-
-                    agent_kwargs.update(
-                        benchmark_route_kwargs(f"agent:{agent_id}")
-                    )
                 try:
-                    agent = get_agent_by_id(agent_id, **agent_kwargs)
+                    if benchmark_routes is not None and agent_id.startswith("ca_"):
+                        from src.lib.agent_studio.catalog_service import get_benchmark_agent_by_id
+                        from src.lib.benchmarks.source_revisions import require_benchmark_source
+                        from src.schemas.agent_execution_revision import AgentExecutionReceipt
+
+                        slot = f"agent:{agent_id}"
+                        source = require_benchmark_source(slot, agent_id)
+                        # The flow pin and the cell origin must agree before the
+                        # constructor takes its identity solely from the cell.
+                        flow_source = AgentExecutionReceipt.model_validate(
+                            agent_kwargs.pop("execution_receipt", None)
+                        )
+                        revision = agent_kwargs.pop("execution_revision_id", None)
+                        if source != flow_source or str(revision) != str(source.agent_revision_id):
+                            raise ValueError("Flow agent revision differs from the frozen benchmark source")
+                        agent = get_benchmark_agent_by_id(agent_id, benchmark_slot=slot, **agent_kwargs)
+                    else:
+                        if benchmark_routes is not None:
+                            from src.lib.openai_agents.benchmark_routing import benchmark_route_kwargs
+
+                            agent_kwargs.update(benchmark_route_kwargs(f"agent:{agent_id}"))
+                        agent = get_agent_by_id(agent_id, **agent_kwargs)
                 except Exception as e:
                     logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
                     unavailable_steps.append({
@@ -3857,7 +3870,10 @@ def create_flow_supervisor(
         Configured Agent instance for flow supervision
     """
     # Get supervisor config (model, temperature, reasoning)
-    config = get_agent_config("supervisor")
+    from src.lib.benchmarks.source_revisions import active_supervisor_source
+
+    frozen_supervisor = active_supervisor_source() if benchmark_routes is not None else None
+    config = frozen_supervisor if frozen_supervisor is not None else get_agent_config("supervisor")
     benchmark_reasoning_override = None
     if benchmark_routes is not None:
         from src.lib.openai_agents.benchmark_routing import benchmark_route_kwargs
@@ -3887,7 +3903,8 @@ def create_flow_supervisor(
             else config.reasoning
         ),
         provider_override=model_provider,
-        parallel_tool_calls=get_flow_supervisor_parallel_tool_calls_enabled(),
+        parallel_tool_calls=(frozen_supervisor.parallel_tool_calls if frozen_supervisor is not None
+                             else get_flow_supervisor_parallel_tool_calls_enabled()),
     )
 
     # Get all tools with flow-based is_enabled
@@ -3910,6 +3927,11 @@ def create_flow_supervisor(
         model_provider_override=model_provider_override,
         benchmark_routes=benchmark_routes,
     )
+    if frozen_supervisor is not None:
+        if unavailable_steps or created_tool_names != set(frozen_supervisor.available_tools):
+            raise ValueError("Frozen benchmark flow steps are no longer executable")
+        if inspection_context is not None:
+            raise ValueError("Frozen benchmark flows cannot add follow-up inspection tools")
 
     # The configured flow must remain executable independently of optional
     # follow-up context. The inspection tool never substitutes for a missing
@@ -3996,20 +4018,22 @@ def create_flow_supervisor(
     # Determine if document guidance should be included in system instructions
     # Only include when: 1) a document is provided AND 2) the flow has document-requiring agents
     # This prevents confusing the supervisor by mentioning documents when no PDF tools exist
-    has_document = bool(document_id) and flow_requires_document(
-        flow,
-        db_user_id=db_user_id,
-        active_groups=active_groups,
+    has_document = bool(document_id) and (
+        frozen_supervisor.requires_document if frozen_supervisor is not None else flow_requires_document(
+            flow, db_user_id=db_user_id, active_groups=active_groups,
+        )
     )
 
     # Build supervisor instructions with document awareness if applicable
     # Pass created_tool_names so instructions only reference tools that exist
-    instructions = build_supervisor_instructions(
-        flow,
-        has_document=has_document,
-        document_name=document_name,
-        available_tools=created_tool_names,
-    )
+    if frozen_supervisor is not None:
+        instructions = (frozen_supervisor.instructions_with_document if has_document
+                        else frozen_supervisor.instructions)
+    else:
+        instructions = build_supervisor_instructions(
+            flow, has_document=has_document, document_name=document_name,
+            available_tools=created_tool_names,
+        )
     if inspection_context is not None:
         refs = "\n".join(f"- {result_ref}" for result_ref in inspection_context.result_refs)
         instructions += f"""

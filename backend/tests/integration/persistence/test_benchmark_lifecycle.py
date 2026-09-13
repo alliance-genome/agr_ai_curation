@@ -61,6 +61,10 @@ def migrated_database():
 
 @pytest.mark.asyncio
 async def test_concurrent_duplicates_wait_then_replay_one_source_failure(monkeypatch):
+    # This transaction-lock test supplies its own synthetic catalog; it does
+    # not provision executable agents. Keep source capture at that boundary.
+    monkeypatch.setattr("src.lib.benchmarks.selected_catalog.prepare_selected_catalog",
+                        lambda session, curator, catalog, suite: catalog)
     owner = f"lifecycle-lock-{uuid4()}"
     key = str(uuid4())
     suite_value = _payload()
@@ -483,6 +487,18 @@ def test_rerun_limit_applies_to_new_resolved_work_but_not_accepted_replay(monkey
 
 @pytest.mark.parametrize("same_key,revoked", [(True, False), (True, True), (False, False)])
 def test_concurrent_api_submit_freezes_once_and_replay_needs_no_current_catalog(configured, monkeypatch, tmp_path, same_key, revoked):
+    from src.lib.benchmarks.selected_catalog import prepare_selected_catalog
+    from src.lib.benchmarks.system_snapshot import FrozenSystemAgent
+    from tests.unit.lib.benchmarks.test_system_snapshot import bundle
+
+    # Real preparation/admission/PG locking, with synthetic executable sources
+    # matching this fixture's synthetic model and visible-agent catalog.
+    monkeypatch.setattr("src.lib.benchmarks.system_snapshot.capture_system_agent", lambda row, **kw: FrozenSystemAgent(
+        agent_key=row.agent_key, model_id=row.model_id, model_temperature=0.2, model_reasoning=row.model_reasoning,
+        tool_ids=(), group_tool_policy={}, output_schema_key=None, prompt_layer_manifest=bundle(row.agent_key).to_manifest(),
+    ))
+    monkeypatch.setattr("src.lib.benchmarks.dependencies.runtime_catalog_digest", lambda: "sha256:" + "a" * 64)
+    monkeypatch.setattr("src.lib.benchmarks.dependencies.execution_settings", lambda: {"benchmark_environment_id": "fixture"})
     monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
     monkeypatch.setenv("BENCHMARK_EXECUTION_ENABLED", "true")
     owner = f"submit-owner-{uuid4()}"
@@ -531,6 +547,7 @@ def test_concurrent_api_submit_freezes_once_and_replay_needs_no_current_catalog(
     suite_value["repetitions"] = 1
     with SessionLocal() as session:
         routes = runtime_catalog.build_curator_route_catalog(session, configured.curator)
+        routes = prepare_selected_catalog(session, configured.curator, routes, validate_suite(suite_value))
     plan = resolve_suite(validate_suite(suite_value), routes, max_cases=100, max_configurations=100, max_repetitions=100, max_cells=10000)
     body = {"suite": suite_value, "plan": plan.model_dump(mode="json")}
     app = FastAPI()
@@ -570,6 +587,7 @@ def test_concurrent_api_submit_freezes_once_and_replay_needs_no_current_catalog(
         def unavailable(*args, **kwargs):
             pytest.fail("Accepted replay must not reconstruct catalogs or storage")
         monkeypatch.setattr(runtime_catalog, "build_curator_route_catalog", unavailable)
+        monkeypatch.setattr("src.lib.benchmarks.selected_catalog.prepare_selected_catalog", unavailable)
         monkeypatch.setattr(benchmark_jobs, "input_resolver_catalog", unavailable)
         monkeypatch.setattr(lifecycle, "configured_benchmark_snapshot_store", unavailable)
         replay = client.post(path, json=body, headers=headers)

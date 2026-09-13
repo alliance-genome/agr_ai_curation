@@ -21,6 +21,7 @@ from src.lib.benchmarks.suites import _digest
 from src.schemas.benchmark_catalog import BenchmarkPlanPreviewRequest, BenchmarkPlanPreviewResponse
 from src.schemas.benchmark_jobs import BenchmarkErrorResponse
 from tests.unit.lib.benchmarks.test_suites import _catalog, _payload
+from tests.unit.lib.benchmarks.test_selected_catalog import setup as selected_flow_setup  # noqa: F401
 
 
 def _app():
@@ -31,6 +32,7 @@ def _app():
 
 @pytest.fixture
 def configured(monkeypatch):
+    monkeypatch.setattr("src.lib.benchmarks.selected_catalog.capture_dependencies", lambda *a: None)
     monkeypatch.setenv("BENCHMARK_API_ENABLED", "true")
     monkeypatch.setenv("BENCHMARK_EXECUTION_ENABLED", "false")
     monkeypatch.setenv("BENCHMARK_WORKER_ENABLED", "false")
@@ -44,6 +46,8 @@ def configured(monkeypatch):
     monkeypatch.setattr(api, "SessionLocal", factory)
     build = Mock(return_value=catalog)
     monkeypatch.setattr(api, "build_curator_route_catalog", build)
+    monkeypatch.setattr("src.lib.benchmarks.selected_catalog.build_curator_route_catalog",
+                        Mock(return_value=catalog))
     app = _app()
     app.dependency_overrides[benchmark_curator.require_benchmark_read_curator] = lambda: BenchmarkCuratorContext(
         subject="curator", auth_provider="oidc", db_user_id=42, active_groups=("group-a",),
@@ -53,6 +57,31 @@ def configured(monkeypatch):
 
 def _request(catalog, suite):
     return {"catalog_digest": _digest(catalog.model_dump(mode="json")), "suite": suite.model_dump(mode="json")}
+
+
+@pytest.mark.parametrize("failure", [None, "revoked", "changed"])
+def test_saved_flow_preview_uses_selected_sources_and_sanitizes_failures(configured, request, failure):
+    selected = request.getfixturevalue("selected_flow_setup")
+    payload = selected.suite.model_dump(mode="json")
+    payload["cases"][0]["input"]["resolver"] = "checked_in_fixture"
+    suite = BenchmarkSuite.model_validate(payload)
+    if failure == "revoked":
+        selected.capture.side_effect = HTTPException(403, "private source name")
+    elif failure == "changed":
+        selected.capture.side_effect = ValueError("private source name")
+    response = configured[0].post("/api/v1/benchmarks/plans/validate", json=_request(configured[1], suite))
+    assert selected.capture.call_args.args[1].db_user_id == 42
+    assert selected.capture.call_args.kwargs["expected_revision"] == selected.frozen.source_revision
+    assert "private source name" not in response.text
+    if failure:
+        assert response.status_code == (404 if failure == "revoked" else 422)
+        assert response.json()["detail"]["code"] == ("source_unavailable" if failure == "revoked" else "invalid_plan")
+    else:
+        assert response.status_code == 200, response.text
+        preview = BenchmarkPlanPreviewResponse.model_validate_json(response.text)
+        assert preview.plan.cells[0].flow_snapshot == selected.frozen
+        assert preview.plan.cells[0].source_execution_receipts == {"agent:" + selected.receipt.agent_key: selected.receipt}
+    configured[3].return_value.__enter__.return_value.commit.assert_not_called()
 
 
 @pytest.mark.parametrize("status", [403, 404])

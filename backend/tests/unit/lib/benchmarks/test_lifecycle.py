@@ -13,6 +13,14 @@ from src.lib.benchmarks.suites import resolve_suite, validate_suite
 from tests.unit.lib.benchmarks.test_suites import _catalog, _payload
 
 
+@pytest.fixture(autouse=True)
+def synthetic_selected_sources(monkeypatch):
+    monkeypatch.setattr("src.lib.benchmarks.selected_catalog.capture_dependencies", lambda *a: None)
+    # Lifecycle tests own synthetic catalogs; source capture is tested separately.
+    monkeypatch.setattr("src.lib.benchmarks.selected_catalog.build_curator_route_catalog",
+                        lambda *a, **kw: _catalog())
+
+
 @pytest.mark.parametrize("query", [None, "   "])
 def test_agent_submission_without_curator_query_is_a_stable_validation_failure(query):
     value = _payload()
@@ -72,7 +80,8 @@ async def test_catalog_change_does_not_revalidate_accepted_replay(monkeypatch, c
 
 
 @pytest.mark.asyncio
-async def test_catalog_failure_reports_sanitized_error_and_keeps_durable_replay(monkeypatch):
+@pytest.mark.parametrize("boundary", ["discovery", "preparation", "revoked"])
+async def test_catalog_failure_reports_sanitized_error_and_keeps_durable_replay(monkeypatch, boundary):
     value = _payload()
     plan = resolve_suite(validate_suite(value), _catalog(), max_cases=100,
                          max_configurations=100, max_repetitions=100, max_cells=10000)
@@ -82,8 +91,15 @@ async def test_catalog_failure_reports_sanitized_error_and_keeps_durable_replay(
     repository = Mock()
     repository.reserve_idempotency.return_value = (reservation, True)
     monkeypatch.setattr(lifecycle, "BenchmarkRepository", Mock(return_value=repository))
-    catalog = Mock(side_effect=ValueError("private-paper-content sql-parameters bearer-value"))
-    monkeypatch.setattr("src.lib.benchmarks.runtime_catalog.build_curator_route_catalog", catalog)
+    catalog = Mock(side_effect=RuntimeError("private-paper-content sql-parameters bearer-value"))
+    if boundary == "revoked":
+        from fastapi import HTTPException
+        catalog.side_effect = HTTPException(403, "private-paper-content sql-parameters bearer-value")
+    if boundary == "discovery":
+        monkeypatch.setattr("src.lib.benchmarks.runtime_catalog.build_curator_route_catalog", catalog)
+    else:
+        monkeypatch.setattr("src.lib.benchmarks.runtime_catalog.build_curator_route_catalog", lambda *a: _catalog())
+        monkeypatch.setattr("src.lib.benchmarks.selected_catalog.prepare_selected_catalog", catalog)
     reporter = Mock()
     monkeypatch.setattr(lifecycle, "report_runtime_exception", reporter)
     materialize = AsyncMock()
@@ -98,13 +114,16 @@ async def test_catalog_failure_reports_sanitized_error_and_keeps_durable_replay(
     )
     with pytest.raises(lifecycle.BenchmarkLifecycleFailure) as error:
         await lifecycle.submit_job(**arguments)
-    assert error.value.code == "catalog_unavailable" and error.value.status_code == 503
+    expected_code = "source_unavailable" if boundary == "revoked" else "catalog_unavailable"
+    assert error.value.code == expected_code and error.value.status_code == (404 if boundary == "revoked" else 503)
     failure = repository.fail_idempotency.call_args.kwargs
-    assert failure["error_code"] == "catalog_unavailable"
+    assert failure["error_code"] == expected_code
     session.commit.assert_called_once()
-    captured = reporter.call_args.args[0]
-    assert captured.__traceback__ is not None
-    assert captured.__context__ is None and captured.__cause__ is None
+    captured = ""
+    if boundary != "revoked":
+        captured = reporter.call_args.args[0]
+        assert captured.__traceback__ is not None
+        assert captured.__context__ is None and captured.__cause__ is None
     for sensitive in ("private-paper-content", "sql-parameters", "bearer-value"):
         assert sensitive not in str(captured) + str(failure) + str(error.value)
     reservation.outcome = "failed"
@@ -114,9 +133,12 @@ async def test_catalog_failure_reports_sanitized_error_and_keeps_durable_replay(
     repository.reserve_idempotency.return_value = (reservation, False)
     with pytest.raises(lifecycle.BenchmarkLifecycleFailure) as replay:
         await lifecycle.submit_job(**arguments)
-    assert replay.value.code == "catalog_unavailable"
+    assert replay.value.code == expected_code
     catalog.assert_called_once()
-    reporter.assert_called_once()
+    if boundary == "revoked":
+        reporter.assert_not_called()
+    else:
+        reporter.assert_called_once()
     materialize.assert_not_awaited()
 
 

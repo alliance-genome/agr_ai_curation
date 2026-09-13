@@ -217,6 +217,17 @@ def resolve_suite(
                         slot: receipt.model_dump(mode="json")
                         for slot, receipt in target.source_execution_receipts.items()
                     }
+                if target.flow_snapshot is not None:
+                    identity["flow_snapshot"] = target.flow_snapshot.model_dump(mode="json")
+                if target.dependencies is not None:
+                    identity["dependencies"] = target.dependencies.model_dump(mode="json")
+                if target.supervisor_snapshot is not None:
+                    identity["supervisor_snapshot"] = target.supervisor_snapshot.model_dump(mode="json")
+                if target.system_agent_snapshots:
+                    identity["system_agent_snapshots"] = {
+                        key: snapshot.model_dump(mode="json")
+                        for key, snapshot in target.system_agent_snapshots.items()
+                    }
                 cells.append(
                     ResolvedBenchmarkCell(
                         cell_id=_digest(identity),
@@ -228,6 +239,10 @@ def resolve_suite(
                         user_query=case.user_query,
                         routes=cell_routes,
                         source_execution_receipts=target.source_execution_receipts,
+                        flow_snapshot=target.flow_snapshot,
+                        dependencies=target.dependencies,
+                        supervisor_snapshot=target.supervisor_snapshot,
+                        system_agent_snapshots=target.system_agent_snapshots,
                     )
                 )
 
