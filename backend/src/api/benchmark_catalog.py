@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Sequence, TypeVar
+from uuid import UUID
 
 from anyio.to_thread import run_sync
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -21,6 +22,10 @@ from src.lib.benchmarks.models import BenchmarkRouteCatalog, BenchmarkSuite
 from src.lib.benchmarks.observability import sanitized_benchmark_error
 from src.lib.benchmarks.planning import resolve_execution_plan
 from src.lib.benchmarks.runtime_catalog import build_curator_route_catalog
+from src.lib.benchmarks.saved_flows import (
+    BenchmarkSavedFlowContracts, BenchmarkSavedFlowPage,
+    flow_summary, saved_flow_contracts, visible_saved_flows,
+)
 from src.lib.benchmarks.suites import _digest, load_checked_in_suites
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents.config import (
@@ -176,6 +181,48 @@ def get_catalog(
         worker_enabled=get_benchmark_worker_enabled(), resolver_ids=input_resolver_catalog(request).resolver_ids,
         section=section, items=items, total_items=len(ordered), next_cursor=next_cursor,
     ))
+
+
+@router.get("/saved-flows", response_model=BenchmarkSavedFlowPage, responses=examples.response(examples.SAVED_FLOWS))
+def list_saved_flows(
+    offset: int = Query(default=0, ge=0),
+    limit: int | None = Query(default=None, ge=1),
+    curator: BenchmarkCuratorContext = Depends(require_benchmark_read_curator),
+):
+    """Discover owned/project-shared flows, separately from installed recipes.
+
+    This is read-only preparation, not an execution admission or snapshot.
+    Detail/selection checks the current flow revision and node access again.
+    """
+    size = min(limit if limit is not None else get_benchmark_default_page_size(), get_benchmark_max_page_size())
+    with SessionLocal() as session:
+        query = visible_saved_flows(session, curator)
+        total = query.count()
+        items = tuple(flow_summary(flow) for flow in query.offset(offset).limit(size).all())
+    next_offset = offset + len(items)
+    return _bounded_response(BenchmarkSavedFlowPage(
+        items=items, total_items=total,
+        next_offset=next_offset if items and next_offset < total else None,
+    ))
+
+
+@router.get("/saved-flows/{flow_id}/contracts", response_model=BenchmarkSavedFlowContracts, responses=examples.response(examples.SAVED_FLOW_CONTRACTS))
+def get_saved_flow_contracts(
+    flow_id: UUID,
+    revision: str | None = Query(default=None, pattern=r"^sha256:[0-9a-f]{64}$"),
+    curator: BenchmarkCuratorContext = Depends(require_benchmark_read_curator),
+):
+    """Recheck selection access and read declared fields without invoking a model."""
+    with SessionLocal() as session:
+        try:
+            result = saved_flow_contracts(session, curator, flow_id, expected_revision=revision)
+        except HTTPException as exc:
+            if exc.status_code in (403, 404):
+                raise _error(404, "flow_unavailable", "Saved flow is unavailable; refresh the flow list or request access") from None
+            raise
+        except ValueError:
+            raise _error(409, "flow_changed", "Saved flow changed; refresh its details before selecting it") from None
+    return _bounded_response(result)
 
 
 @router.get("/suites", response_model=BenchmarkSuitePage, responses=examples.response(examples.SUITES))

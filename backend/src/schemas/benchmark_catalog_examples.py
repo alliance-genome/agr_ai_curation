@@ -26,6 +26,16 @@ SUITES = {
                "schema_version": 2, "case_count": 1, "configuration_count": 1, "repetitions": 1}],
     "total_items": 1,
 }
+SAVED_FLOW = {
+    "source_kind": "saved_flow", "flow_id": "00000000-0000-4000-8000-000000000001",
+    "title": "Paper extraction", "description": "Synthetic discovery example",
+    "revision": "sha256:" + "d" * 64,
+}
+SAVED_FLOWS = {"items": [SAVED_FLOW], "total_items": 1, "next_offset": None}
+SAVED_FLOW_CONTRACTS = {
+    "flow": SAVED_FLOW, "nodes": [], "status": "not_verified",
+    "reason": "Define and verify an output structure in AI Curation before mapping fields.",
+}
 
 
 def response(value: dict[str, Any]) -> dict[int | str, dict[str, Any]]:

@@ -55,6 +55,56 @@ def _request(catalog, suite):
     return {"catalog_digest": _digest(catalog.model_dump(mode="json")), "suite": suite.model_dump(mode="json")}
 
 
+@pytest.mark.parametrize("status", [403, 404])
+def test_saved_flow_contract_access_is_sanitized(configured, monkeypatch, status):
+    from uuid import uuid4
+    discover = Mock(side_effect=HTTPException(status, "private flow information"))
+    monkeypatch.setattr(api, "saved_flow_contracts", discover)
+    response = configured[0].get(f"/api/v1/benchmarks/saved-flows/{uuid4()}/contracts")
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "flow_unavailable"
+    assert "private flow" not in response.text
+    assert discover.call_args.args[1].db_user_id == 42
+
+
+def test_saved_flow_selection_rejects_drift(configured, monkeypatch):
+    from uuid import uuid4
+    discover = Mock(side_effect=ValueError("changed"))
+    monkeypatch.setattr(api, "saved_flow_contracts", discover)
+    revision = "sha256:" + "0" * 64
+    response = configured[0].get(f"/api/v1/benchmarks/saved-flows/{uuid4()}/contracts", params={"revision": revision})
+    assert response.status_code == 409
+    assert discover.call_args.kwargs == {"expected_revision": revision}
+
+
+def test_saved_flow_list_pages_before_hydrating_and_does_not_write(configured, monkeypatch):
+    from uuid import uuid4
+    monkeypatch.setenv("BENCHMARK_DEFAULT_PAGE_SIZE", "1")
+    monkeypatch.setenv("BENCHMARK_MAX_PAGE_SIZE", "2")
+    query = MagicMock()
+    query.count.return_value = 4
+    query.offset.return_value.limit.return_value.all.return_value = [SimpleNamespace(
+        id=uuid4(), name="Saved test flow", description=None, flow_definition={},
+    )]
+    listing = Mock(return_value=query)
+    monkeypatch.setattr(api, "visible_saved_flows", listing)
+    response = configured[0].get("/api/v1/benchmarks/saved-flows", params={"offset": 1, "limit": 999})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["next_offset"] == 2
+    assert response.json()["items"][0]["source_kind"] == "saved_flow"
+    assert "flow_definition" not in response.text
+    query.offset.assert_called_once_with(1)
+    query.offset.return_value.limit.assert_called_once_with(2)
+    assert listing.call_args.args[1].db_user_id == 42
+    configured[3].return_value.__enter__.return_value.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("params", [{"offset": -1}, {"limit": 0}])
+def test_saved_flow_pagination_rejects_invalid_bounds(configured, params):
+    assert configured[0].get("/api/v1/benchmarks/saved-flows", params=params).status_code == 422
+
+
 def test_catalog_uses_curator_context_and_reconstructs_authoritative_catalog(configured):
     client, catalog, _, factory, build, resolvers = configured
     reconstructed = {"schema_version": 1}
