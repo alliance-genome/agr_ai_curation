@@ -11,6 +11,27 @@ from src.utils.trace_output import extract_trace_response_text, is_trace_output_
 
 
 class TraceReviewAnalyzerTests(unittest.TestCase):
+    def test_summary_group_context_uses_only_canonical_opaque_ids(self):
+        for metadata, expected_groups in (
+            ({"active_groups": ["group-alpha", "WB"]}, ["group-alpha", "WB"]),
+            ({"active_groups": ["group-alpha"], "active_mods": ["MGI"]}, ["group-alpha"]),
+            ({"active_groups": [], "active_mods": ["MGI"]}, []),
+            ({"active_groups": None, "active_mods": ["MGI"]}, []),
+            ({"active_mods": ["MGI"]}, []),
+            ({}, []),
+        ):
+            with self.subTest(metadata=metadata):
+                trace = self._make_trace({})
+                trace["metadata"] = metadata
+
+                result = TraceSummaryAnalyzer.analyze(trace, [])
+
+                self.assertEqual(result["group_context"], {
+                    "active_groups": expected_groups,
+                    "injection_active": bool(expected_groups),
+                    "group_count": len(expected_groups),
+                })
+
     def test_agent_context_surfaces_explicit_chat_route_metadata(self):
         trace = self._make_trace({})
         trace["metadata"] = {

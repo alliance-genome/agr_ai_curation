@@ -363,21 +363,11 @@ export interface AgentContextData {
 }
 
 // Group Context Types (Organization groups - MODs, institutions, teams, etc.)
-export interface GroupDetail {
-  group_id: string;
-  description: string;
-}
-
 export interface GroupContextData {
   active_groups: string[];
   injection_active: boolean;
   group_count: number;
-  group_details?: GroupDetail[];
 }
-
-// Legacy alias for backward compatibility with historical traces
-export type ModContextData = GroupContextData;
-export type ModDetail = GroupDetail;
 
 // Domain-envelope TraceReview diagnostics
 export interface DomainEnvelopeTraceSummaryCounts {

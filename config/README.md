@@ -336,6 +336,13 @@ Unknown groups, duplicate tool rules, empty group lists, and empty field paths
 fail package loading. Runtime exposure uses only authenticated `active_groups`,
 never extracted provider values.
 
+TraceReview reads only trace metadata `active_groups` for group context. IDs
+remain opaque and are displayed verbatim (for example, `group-alpha`); reusable
+TraceReview code does not supply organization-specific names or descriptions.
+Alliance display metadata remains in `config/groups.yaml`. Missing, null, or
+empty `active_groups` means no active group context. The obsolete `active_mods`
+field is ignored, including when `active_groups` is empty (ALL-1084).
+
 - `prompt.yaml` - The agent's system prompt
 - `schema.py` - Pydantic output schema
 - `group_rules/` - Optional group-specific behavior rules

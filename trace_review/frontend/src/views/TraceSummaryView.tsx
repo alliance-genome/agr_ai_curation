@@ -1,4 +1,4 @@
-import { Box, Typography, Paper, Chip, Card, CardContent, Grid, Alert, Link, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip } from '@mui/material';
+import { Box, Typography, Paper, Chip, Card, CardContent, Grid, Alert, Link, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import WarningIcon from '@mui/icons-material/Warning';
@@ -297,28 +297,15 @@ export function TraceSummaryView({ data }: TraceSummaryViewProps) {
             Group-specific rules applied to this session
           </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
-            {data.group_context.group_details ? (
-              data.group_context.group_details.map((grp) => (
-                <Tooltip key={grp.group_id} title={grp.description} arrow>
-                  <Chip
-                    label={grp.group_id}
-                    color="primary"
-                    variant="outlined"
-                    icon={<BiotechIcon />}
-                  />
-                </Tooltip>
-              ))
-            ) : (
-              data.group_context.active_groups.map((grp) => (
-                <Chip
-                  key={grp}
-                  label={grp}
-                  color="primary"
-                  variant="outlined"
-                  icon={<BiotechIcon />}
-                />
-              ))
-            )}
+            {data.group_context.active_groups.map((grp) => (
+              <Chip
+                key={grp}
+                label={grp}
+                color="primary"
+                variant="outlined"
+                icon={<BiotechIcon />}
+              />
+            ))}
           </Box>
         </Paper>
       )}
