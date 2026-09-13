@@ -141,7 +141,10 @@ def build_curator_route_catalog(
                 raise ValueError("Model validator binding has conflicting defaults")
             validator_defaults[binding] = default
 
+    from .stage_definitions import StageDefinition, role_from_category
+
     direct_validators: dict[str, tuple[str, ...]] = {}
+    direct_stages: dict[str, dict[str, StageDefinition]] = {}
     for key in visible:
         if key in SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS:
             # Formatters consume saved flow artifacts, not a standalone paper.
@@ -167,13 +170,27 @@ def build_curator_route_catalog(
                            for binding in context.registry.bindings if binding.raw.get("custom_validator")}
         else:
             options = validation_attachment_options_for_agent(key, agent_registry={key: metadata})
-        direct_bindings = model_validators([
+        active_options = [
             option.to_dict() for option in options
             if option.state.value == "active"
-        ], custom_pins)
+        ]
+        direct_bindings = model_validators(active_options, custom_pins)
         if direct_bindings is not None:
             register_validators(direct_bindings)
             direct_validators[key] = tuple(sorted(direct_bindings))
+            if freeze_targets is not None and ("agent", key) in freeze_targets:
+                category = get_agent_metadata(key, _resolved_db_agent=visible[key]).get("category")
+                stages = {"direct": StageDefinition(
+                    stage_id="direct", role=role_from_category(category), agent_id=key,
+                )}
+                for option in active_options:
+                    binding_id = option["validator_binding_id"]
+                    stage_id = f"binding:{binding_id}"
+                    stages[stage_id] = StageDefinition(
+                        stage_id=stage_id, role="validation", binding_id=binding_id,
+                        agent_id=validator_agents.get(binding_id),
+                    )
+                direct_stages[key] = stages
     for recipe in load_benchmark_flow_templates(curator.active_groups):
         if not is_resource_access_allowed(
             visibility_allowed=True, allowed_group_ids=recipe["allowed_group_ids"],
@@ -257,6 +274,10 @@ def build_curator_route_catalog(
             frozen = frozen_flows[target.target.id]
             payload["flow_snapshot"] = frozen.model_dump(mode="json")
             payload["supervisor_snapshot"] = capture_flow_supervisor(frozen, curator).model_dump(mode="json")
+        else:
+            payload["direct_stage_definitions"] = {
+                key: stage.model_dump(mode="json") for key, stage in direct_stages[target.target.id].items()
+            }
         targets.append(BenchmarkTargetCatalogEntry.model_validate_json(json.dumps(payload)))
     if {(item.target.kind, item.target.id) for item in targets} != freeze_targets:
         raise ValueError("Selected installed target is unavailable")

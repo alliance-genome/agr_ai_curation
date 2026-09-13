@@ -5353,6 +5353,54 @@ class TestFlowEvidenceAccumulation:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_repeated_agent_nodes_retain_exact_supervisor_call_parent(
+        self, mock_get_agent, mock_streaming,
+    ):
+        from src.lib.benchmarks.stage_definitions import StageDefinition
+        from src.lib.benchmarks.stage_measurements import (
+            current_stage, measure_declared_stage, observe_stages, stage_definition_scope,
+        )
+        from src.lib.openai_agents.provider_usage import (
+            begin_provider_invocation, capture_provider_usage, register_provider_tool_calls,
+        )
+
+        mock_get_agent.side_effect = lambda *_args, **_kwargs: MagicMock(spec=Agent, instructions="Base")
+        observed = []
+
+        def streaming(agent, tool_name, tool_description, specialist_name, **_kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def tool(query: str) -> str:
+                observed.append(current_stage())
+                return json.dumps(_structured_step_output("TP53"))
+            return tool
+
+        mock_streaming.side_effect = streaming
+        flow = _make_flow([_task_input_node(), _agent_node("n1", "gene"), _agent_node("n2", "gene")])
+        tools, _ = get_all_agent_tools(flow)
+        definitions = {
+            "supervisor": StageDefinition(stage_id="supervisor", role="supervisor"),
+            **{node: StageDefinition(stage_id=node, node_id=node, role="extraction", agent_id="gene")
+               for node in ("n1", "n2")},
+        }
+        observer = MagicMock()
+        with capture_provider_usage(max_records=2, max_failure_detail_chars=20), observe_stages(observer):
+            with stage_definition_scope(definitions), measure_declared_stage("supervisor") as parent:
+                pending = [begin_provider_invocation(requested_provider="openai", requested_model="test",
+                                                      started_at=1.0) for _ in range(2)]
+                for index in (1, 0):  # Response order is not ancestry.
+                    register_provider_tool_calls(pending[index], {"output": [
+                        {"type": "function_call", "call_id": f"call-{index}"},
+                    ]})
+                for index, tool in enumerate(tools):
+                    ctx = SimpleNamespace(tool_name=tool.name, tool_call_id=f"call-{index}", run_config=None)
+                    asyncio.run(tool.on_invoke_tool(ctx, json.dumps({"query": "extract"})))
+        assert [stage.identity.node_id for stage in observed] == ["n1", "n2"]
+        assert [stage.parent_invocation_sequence for stage in observed] == [1, 2]
+        assert all(stage.parent_execution_id == parent.execution_id for stage in observed)
+        assert observer.started.call_count == observer.completed.call_count == 3
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     def test_completed_steps_preserve_raw_per_step_evidence_counts(
         self, mock_get_agent, mock_streaming
     ):

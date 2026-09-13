@@ -83,6 +83,8 @@ def test_attach_route_rejects_unattachable_concrete_model():
 
 @pytest.mark.asyncio
 async def test_native_provider_proxy_reserves_sequence_at_each_call_boundary():
+    from src.lib.openai_agents.provider_usage import provider_parent_for_tool_call
+
     class FakeModel:
         async def get_response(self, *args, **kwargs):
             return {
@@ -95,6 +97,7 @@ async def test_native_provider_proxy_reserves_sequence_at_each_call_boundary():
                 response={
                     "model": "native-stream-actual",
                     "usage": {"input_tokens": 4, "output_tokens": 5},
+                    "output": [{"type": "function_call", "call_id": "native-stream-call"}],
                 }
             )
 
@@ -131,7 +134,7 @@ async def test_native_provider_proxy_reserves_sequence_at_each_call_boundary():
             await proxied_model.get_response()
             await proxied_model.get_response()
             async for _ in proxied_model.stream_response():
-                pass
+                assert provider_parent_for_tool_call("native-stream-call") == 3
         finally:
             reset_benchmark_invocation_route(token)
 

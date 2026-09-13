@@ -79,7 +79,10 @@ def test_saved_flow_preview_uses_selected_sources_and_sanitizes_failures(configu
     else:
         assert response.status_code == 200, response.text
         preview = BenchmarkPlanPreviewResponse.model_validate_json(response.text)
-        assert preview.plan.cells[0].flow_snapshot == selected.frozen
+        from src.lib.benchmarks.stage_definitions import definitions_from_flow_stages
+        assert preview.plan.cells[0].flow_snapshot == selected.frozen.model_copy(update={
+            "stage_definitions": definitions_from_flow_stages(selected.contracts.stages),
+        })
         assert preview.plan.cells[0].source_execution_receipts == {"agent:" + selected.receipt.agent_key: selected.receipt}
     configured[3].return_value.__enter__.return_value.commit.assert_not_called()
 

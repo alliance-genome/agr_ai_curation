@@ -347,4 +347,8 @@ def test_preparation_freezes_only_selected_installed_targets(configured, monkeyp
         freeze.assert_called_once()
     else:
         assert target.flow_snapshot is None and target.supervisor_snapshot is None
+        assert target.direct_stage_definitions["direct"].agent_id == "extractor"
+        assert target.direct_stage_definitions["direct"].role == "other"
+        assert target.direct_stage_definitions["binding:semantic-binding"].role == "validation"
+        assert target.direct_stage_definitions["binding:semantic-binding"].agent_id == "validator"
         freeze.assert_not_called()

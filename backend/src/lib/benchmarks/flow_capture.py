@@ -28,8 +28,11 @@ def capture_recipe_flow(session, curator, recipe: dict, definition: FlowDefiniti
     )
     from src.lib.agent_studio.catalog_service import get_active_visible_agent_metadata
     from .flow_contracts import discover_output_contract
+    from .flow_stages import flow_stages, authorize_scheduled_validator
+    from .stage_definitions import definitions_from_flow_stages
 
     contracts = {}
+    entries = {key: value for key, value in resolved.entries_by_node.items() if value is not None}
     for node in executable.nodes:
         if node.type == "task_input":
             continue
@@ -41,6 +44,7 @@ def capture_recipe_flow(session, curator, recipe: dict, definition: FlowDefiniti
             )
         if metadata is None:
             raise ValueError("Selected recipe agent is unavailable")
+        entries[node.id] = metadata
         contract = discover_output_contract(session, curator, agent_id=node.data.agent_id, metadata=metadata)
         contracts[node.id] = {
             "node_id": node.id, "title": node.data.agent_display_name, "output_key": node.data.output_key,
@@ -51,6 +55,12 @@ def capture_recipe_flow(session, curator, recipe: dict, definition: FlowDefiniti
         title=recipe["name"], description=recipe["description"],
         definition=executable.model_dump(mode="json"),
         output_contracts=contracts,
+        stage_definitions=definitions_from_flow_stages(flow_stages(
+            executable, entries,
+            authorize_validator=lambda node_id, binding: authorize_scheduled_validator(
+                session, curator, entries[node_id], binding,
+            ),
+        )),
     )
 
 

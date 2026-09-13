@@ -206,6 +206,11 @@ class BenchmarkTelemetryModel:
                 candidate = getattr(event, "response", None)
                 if candidate is not None:
                     terminal_response = candidate
+                    # Link IDs before yielding the terminal response to the SDK,
+                    # which may immediately schedule its tool calls.
+                    from src.lib.openai_agents.provider_usage import register_provider_tool_calls
+
+                    register_provider_tool_calls(pending, candidate)
                 yield event
         except BaseException as exc:
             fail_provider_invocation(

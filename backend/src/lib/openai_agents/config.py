@@ -1312,6 +1312,16 @@ def get_benchmark_max_invocations_per_cell() -> int:
     )
 
 
+def get_benchmark_max_stages_per_cell() -> int:
+    """Maximum durable stage occurrences, including non-model stages, per cell."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_STAGES_PER_CELL", 1000))
+
+
+def get_benchmark_max_tool_call_links_per_cell() -> int:
+    """Bound content-free provider-to-tool attribution retained for one cell."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_MAX_TOOL_CALL_LINKS_PER_CELL", 10000))
+
+
 def get_benchmark_max_failure_detail_chars() -> int:
     """Maximum sanitized failure-detail characters retained per invocation."""
 

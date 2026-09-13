@@ -7,6 +7,7 @@ from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+from time import monotonic
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
@@ -24,6 +25,7 @@ from src.lib.benchmarks.runtime import (
     execute_resolved_flow_cell,
 )
 from src.lib.benchmarks.preparation_service import prepare_job_document
+from src.lib.benchmarks.stage_measurements import StageStart, StageFinish, observe_stages
 from src.lib.openai_agents.config import (
     get_benchmark_cell_timeout_seconds,
     get_benchmark_execution_enabled,
@@ -97,6 +99,45 @@ def _bounded_failure(category: str, exc: BaseException) -> dict[str, Any]:
     }
 
 
+class _DurableStageObserver:
+    def __init__(self, *, cell: BenchmarkCell, lease_owner: UUID, session_factory: Callable[..., Any]) -> None:
+        self.cell_id = cell.id
+        self.attempt = cell.attempt_count
+        self.lease_owner = lease_owner
+        self.session_factory = session_factory
+        self.failure: Exception | None = None
+
+    def raise_if_failed(self) -> None:
+        if self.failure is not None:
+            raise self.failure
+
+    def _write(self, stage: StageStart | StageFinish, *, starting: bool) -> None:
+        self.raise_if_failed()
+        try:
+            with self.session_factory() as session:
+                repository = BenchmarkRepository(session)
+                if starting:
+                    assert isinstance(stage, StageStart)
+                    repository.append_stage(cell_id=self.cell_id, lease_owner=self.lease_owner,
+                                            attempt=self.attempt, stage=stage)
+                else:
+                    assert isinstance(stage, StageFinish)
+                    repository.finish_stage(cell_id=self.cell_id, lease_owner=self.lease_owner,
+                                            attempt=self.attempt, stage=stage)
+                session.commit()
+        except Exception as exc:
+            # Normal validators may convert runtime errors into unresolved output.
+            # A failed durable checkpoint must still invalidate the whole trial.
+            self.failure = exc
+            raise
+
+    def started(self, stage: StageStart) -> None:
+        self._write(stage, starting=True)
+
+    def completed(self, stage: StageFinish) -> None:
+        self._write(stage, starting=False)
+
+
 class _DurableInvocationObserver:
     def __init__(
         self,
@@ -152,6 +193,8 @@ class _DurableInvocationObserver:
                 reasoning_effort=pending.reasoning_effort,
                 sequence=pending.sequence,
                 started_at=started_at,
+                stage_execution_id=UUID(pending.stage_execution_id) if pending.stage_execution_id is not None else None,
+                parent_invocation_sequence=pending.parent_invocation_sequence,
             )
             session.commit()
             self.invocation_ids[pending.sequence] = invocation.id
@@ -286,6 +329,30 @@ class BenchmarkWorker:
         self, executor: Callable[..., Any], resolved: ResolvedBenchmarkCell,
         run_id: str, cell: BenchmarkCell,
     ) -> Any:
+        started_at = _utcnow()
+        clock_start = monotonic()
+        with self.session_factory() as session:
+            BenchmarkRepository(session).start_pipeline(
+                cell_id=cell.id, lease_owner=self.worker_id, attempt=cell.attempt_count,
+                started_at=started_at,
+            )
+            session.commit()
+        try:
+            return await self._execute_authorized_target(executor, resolved, run_id, cell)
+        finally:
+            completed_at = _utcnow()
+            elapsed_ms = max(0, round((monotonic() - clock_start) * 1000))
+            with self.session_factory() as session:
+                BenchmarkRepository(session).finish_pipeline(
+                    cell_id=cell.id, lease_owner=self.worker_id, attempt=cell.attempt_count,
+                    completed_at=completed_at, elapsed_ms=elapsed_ms,
+                )
+                session.commit()
+
+    async def _execute_authorized_target(
+        self, executor: Callable[..., Any], resolved: ResolvedBenchmarkCell,
+        run_id: str, cell: BenchmarkCell,
+    ) -> Any:
         prepared, curator = await prepare_job_document(
             job_id=cell.job_id, snapshot_id=cell.input_snapshot_id,
             lease_owner=self.worker_id, session_factory=self.session_factory,
@@ -307,8 +374,13 @@ class BenchmarkWorker:
         observer = _DurableInvocationObserver(
             cell=cell, lease_owner=self.worker_id, session_factory=self.session_factory,
         )
-        with observe_provider_invocations(observer):
-            return await executor(resolved, runtime_input, run_id)
+        stages = _DurableStageObserver(
+            cell=cell, lease_owner=self.worker_id, session_factory=self.session_factory,
+        )
+        with observe_provider_invocations(observer), observe_stages(stages):
+            outcome = await executor(resolved, runtime_input, run_id)
+            stages.raise_if_failed()
+            return outcome
 
     async def _heartbeat(self, job_id: UUID, cell_id: UUID, stopped: asyncio.Event) -> None:
         while not stopped.is_set():

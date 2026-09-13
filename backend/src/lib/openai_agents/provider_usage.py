@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, field as dataclass_field, fields, is_dataclass, replace
 from decimal import Decimal, InvalidOperation
 import logging
+from threading import Lock
 from typing import Any, Iterator, Mapping, Optional, Protocol
 
 
@@ -56,6 +57,8 @@ class ProviderUsageRecord:
     sequence: Optional[int] = None
     status: str = "completed"
     failure_detail: Optional[str] = None
+    stage_execution_id: Optional[str] = None
+    parent_invocation_sequence: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,8 @@ class PendingProviderInvocation:
     reasoning_effort: Optional[str]
     sequence: int
     started_at: float
+    stage_execution_id: Optional[str] = None
+    parent_invocation_sequence: Optional[int] = None
 
 
 class ProviderInvocationObserver(Protocol):
@@ -84,6 +89,8 @@ class _ProviderUsageCapture:
     max_records: int
     max_failure_detail_chars: int
     reserved: int = 0
+    lock: Any = dataclass_field(default_factory=Lock, repr=False)
+    tool_parents: dict[tuple[str | None, str], int | None] = dataclass_field(default_factory=dict)
 
 
 _provider_usage_records: ContextVar[Optional[_ProviderUsageCapture]] = ContextVar(
@@ -142,11 +149,12 @@ def emit_provider_usage(record: ProviderUsageRecord) -> None:
 
     capture = _provider_usage_records.get()
     if capture is not None:
-        if len(capture.records) >= capture.max_records:
-            raise RuntimeError(
-                f"Benchmark cell exceeded {capture.max_records} provider invocations"
-            )
-        capture.records.append(record)
+        with capture.lock:
+            if len(capture.records) >= capture.max_records:
+                raise RuntimeError(
+                    f"Benchmark cell exceeded {capture.max_records} provider invocations"
+                )
+            capture.records.append(record)
     _emit_provider_usage_trace_event(record)
 
 
@@ -163,18 +171,27 @@ def begin_provider_invocation(
     capture = _provider_usage_records.get()
     if capture is None:
         return None
-    if capture.reserved >= capture.max_records:
-        raise RuntimeError(
-            f"Benchmark cell exceeded {capture.max_records} provider invocations"
-        )
-    capture.reserved += 1
+    # Copied contexts share this capture across parallel validator threads.
+    # Reserve and snapshot the sequence together, before any observer I/O.
+    with capture.lock:
+        if capture.reserved >= capture.max_records:
+            raise RuntimeError(
+                f"Benchmark cell exceeded {capture.max_records} provider invocations"
+            )
+        capture.reserved += 1
+        sequence = capture.reserved
+    from src.lib.benchmarks.stage_measurements import current_stage
+
+    stage = current_stage()
     pending = PendingProviderInvocation(
         route_slot=route_slot,
         requested_provider=requested_provider,
         requested_model=requested_model,
         reasoning_effort=reasoning_effort,
-        sequence=capture.reserved,
+        sequence=sequence,
         started_at=started_at,
+        stage_execution_id=str(stage.execution_id) if stage is not None else None,
+        parent_invocation_sequence=stage.parent_invocation_sequence if stage is not None else None,
     )
     observer = _provider_invocation_observer.get()
     if observer is not None:
@@ -198,6 +215,8 @@ def complete_provider_invocation(
         sequence=pending.sequence,
         status="completed",
         failure_detail=None,
+        stage_execution_id=pending.stage_execution_id,
+        parent_invocation_sequence=pending.parent_invocation_sequence,
     )
     emit_provider_usage(completed)
     observer = _provider_invocation_observer.get()
@@ -239,6 +258,8 @@ def fail_provider_invocation(
         sequence=pending.sequence,
         status="failed",
         failure_detail=detail,
+        stage_execution_id=pending.stage_execution_id,
+        parent_invocation_sequence=pending.parent_invocation_sequence,
     )
     emit_provider_usage(failed)
     observer = _provider_invocation_observer.get()
@@ -290,13 +311,74 @@ def complete_generic_provider_invocation(
             billed_cost=None,
         ),
     )
+    register_provider_tool_calls(pending, response)
+
+
+def register_provider_tool_calls(
+    pending: PendingProviderInvocation | None, response: Any,
+) -> None:
+    """Retain only tool IDs, scoped to their emitting stage, never arguments.
+
+    The SDK response output carries call_id, unlike the response item's own id.
+    Reused IDs from different invocations are ambiguous and remain unknown.
+    """
+    capture = _provider_usage_records.get()
+    if capture is None or pending is None:
+        return
+    from .config import get_benchmark_max_tool_call_links_per_cell
+
+    payload = _as_mapping(response)
+    output = payload.get("output") or getattr(response, "output", None)
+    if output is None and isinstance(payload.get("choices"), (list, tuple)):
+        # Chat Completions uses tool_calls[].id, which the SDK maps to call_id.
+        # Streaming deltas need only the initial ID-bearing chunk, not arguments.
+        output = []
+        for choice in payload["choices"]:
+            choice_payload = _as_mapping(choice)
+            message = _as_mapping(choice_payload.get("message") or choice_payload.get("delta"))
+            calls = message.get("tool_calls")
+            if isinstance(calls, (list, tuple)):
+                for call in calls:
+                    call_payload = _as_mapping(call)
+                    output.append({"type": "function_call", "call_id": call_payload.get("id")})
+    if not isinstance(output, (list, tuple)):
+        return
+    for item in output:
+        value = _as_mapping(item)
+        if value.get("type") != "function_call":
+            continue
+        call_id = value.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            continue
+        key = (pending.stage_execution_id, call_id)
+        with capture.lock:
+            if key in capture.tool_parents:
+                if capture.tool_parents[key] != pending.sequence:
+                    capture.tool_parents[key] = None
+            else:
+                if len(capture.tool_parents) >= get_benchmark_max_tool_call_links_per_cell():
+                    raise RuntimeError("Benchmark cell exceeded provider tool-call link limit")
+                capture.tool_parents[key] = pending.sequence
+
+
+def provider_parent_for_tool_call(call_id: str | None) -> int | None:
+    """Resolve an exact SDK tool-call identity in the current parent stage."""
+    capture = _provider_usage_records.get()
+    if capture is None or not isinstance(call_id, str) or not call_id:
+        return None
+    from src.lib.benchmarks.stage_measurements import current_stage
+
+    stage = current_stage()
+    key = (str(stage.execution_id) if stage is not None else None, call_id)
+    with capture.lock:
+        return capture.tool_parents.get(key)
 
 
 def provider_usage_metadata(record: ProviderUsageRecord) -> dict[str, Any]:
     """Serialize only the normalized, content-free provider usage contract."""
 
     billed_cost = record.billed_cost
-    return {
+    metadata = {
         "route_slot": record.route_slot,
         "requested_provider": record.requested_provider,
         "requested_model": record.requested_model,
@@ -321,6 +403,11 @@ def provider_usage_metadata(record: ProviderUsageRecord) -> dict[str, Any]:
         "status": record.status,
         "failure_detail": record.failure_detail,
     }
+    if record.stage_execution_id is not None:
+        metadata["stage_execution_id"] = record.stage_execution_id
+    if record.parent_invocation_sequence is not None:
+        metadata["parent_invocation_sequence"] = record.parent_invocation_sequence
+    return metadata
 
 
 def _emit_provider_usage_trace_event(record: ProviderUsageRecord) -> None:

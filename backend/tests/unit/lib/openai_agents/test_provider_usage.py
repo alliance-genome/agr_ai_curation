@@ -48,6 +48,132 @@ def test_generic_usage_retains_native_sdk_dataclass_tokens(
     assert records[0].billed_cost is None
 
 
+def test_parallel_validator_threads_share_atomic_invocation_budget(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+    from threading import Barrier
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event",
+        lambda _record: None,
+    )
+    barrier = Barrier(8)
+
+    def invoke():
+        barrier.wait(timeout=10)
+        try:
+            pending = begin_provider_invocation(
+                requested_provider="openai", requested_model="validator-model",
+                started_at=1.0,
+            )
+        except RuntimeError as exc:
+            assert "exceeded 4 provider invocations" in str(exc)
+            return None
+        assert pending is not None
+        response = ModelResponse(
+            output=[], response_id="test-response",
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2),
+        )
+        complete_generic_provider_invocation(pending, response, latency_ms=1)
+        return pending.sequence
+
+    with capture_provider_usage(max_records=4, max_failure_detail_chars=20) as records:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(copy_context().run, invoke) for _ in range(8)]
+            sequences = [future.result() for future in futures]
+    assert sorted(sequence for sequence in sequences if sequence is not None) == [1, 2, 3, 4]
+    assert sequences.count(None) == 4
+    assert sorted(record.sequence for record in records) == [1, 2, 3, 4]
+
+
+def test_tool_parent_links_use_call_id_and_stage_not_last_provider_response():
+    from unittest.mock import Mock
+    from src.lib.benchmarks.stage_measurements import StageIdentity, measure_stage, observe_stages
+    from src.lib.openai_agents.provider_usage import (
+        provider_parent_for_tool_call, register_provider_tool_calls,
+    )
+
+    def reserve():
+        return begin_provider_invocation(
+            requested_provider="openai", requested_model="test", started_at=1.0,
+        )
+
+    def output(call_id):
+        return {"output": [{"type": "function_call", "call_id": call_id,
+                            "id": "different-item-id", "arguments": "never retained"}]}
+
+    with capture_provider_usage(max_records=5, max_failure_detail_chars=20), observe_stages(Mock()):
+        with measure_stage(StageIdentity("supervisor", "supervisor")):
+            first, second = reserve(), reserve()
+            register_provider_tool_calls(second, output("second"))
+            register_provider_tool_calls(first, output("first"))
+            assert provider_parent_for_tool_call("first") == first.sequence
+            assert provider_parent_for_tool_call("second") == second.sequence
+            assert provider_parent_for_tool_call("different-item-id") is None
+            with measure_stage(StageIdentity("child", "extraction")):
+                assert provider_parent_for_tool_call("first") is None
+                child = reserve()
+                register_provider_tool_calls(child, output("first"))
+                assert provider_parent_for_tool_call("first") == child.sequence
+            register_provider_tool_calls(second, output("first"))
+            assert provider_parent_for_tool_call("first") is None  # Ambiguous, never guessed.
+            assert provider_parent_for_tool_call("missing") is None
+    assert provider_parent_for_tool_call("second") is None
+
+
+def test_tool_parent_link_limit_is_configurable(monkeypatch):
+    from src.lib.openai_agents.provider_usage import register_provider_tool_calls
+
+    monkeypatch.setenv("BENCHMARK_MAX_TOOL_CALL_LINKS_PER_CELL", "1")
+    with capture_provider_usage(max_records=2, max_failure_detail_chars=20):
+        pending = begin_provider_invocation(
+            requested_provider="openai", requested_model="test", started_at=1.0,
+        )
+        response = {"output": [{"type": "function_call", "call_id": "first"}]}
+        register_provider_tool_calls(pending, response)
+        register_provider_tool_calls(pending, response)  # Streaming terminal re-read is idempotent.
+        with pytest.raises(RuntimeError, match="tool-call link limit"):
+            register_provider_tool_calls(pending, {
+                "output": [{"type": "function_call", "call_id": "second"}],
+            })
+
+
+def test_native_completed_usage_survives_link_limit_failure(monkeypatch):
+    from unittest.mock import Mock
+
+    monkeypatch.setenv("BENCHMARK_MAX_TOOL_CALL_LINKS_PER_CELL", "1")
+    observer = Mock()
+    with capture_provider_usage() as records, observe_provider_invocations(observer):
+        pending = begin_provider_invocation(
+            requested_provider="openai", requested_model="test", started_at=1.0,
+        )
+        with pytest.raises(RuntimeError, match="tool-call link limit"):
+            complete_generic_provider_invocation(pending, {
+                "usage": {"input_tokens": 4, "output_tokens": 5},
+                "output": [{"type": "function_call", "call_id": call} for call in ("one", "two")],
+            }, latency_ms=10)
+    assert observer.started.call_count == observer.completed.call_count == 1
+    assert len(records) == 1 and records[0].status == "completed"
+    assert records[0].total_tokens == 9
+
+
+@pytest.mark.parametrize("field", ["message", "delta"])
+def test_chat_completion_links_use_sdk_tool_call_id(field):
+    from src.lib.openai_agents.provider_usage import (
+        provider_parent_for_tool_call, register_provider_tool_calls,
+    )
+    with capture_provider_usage(max_records=1, max_failure_detail_chars=20):
+        pending = begin_provider_invocation(
+            requested_provider="openrouter", requested_model="test", started_at=1.0,
+        )
+        register_provider_tool_calls(pending, {"choices": [{field: {"tool_calls": [
+            {"id": "call-id", "function": {"arguments": "do not retain"}},
+            {"index": 0, "function": {"arguments": "argument-only delta"}},
+        ]}}]})
+        assert provider_parent_for_tool_call("call-id") == pending.sequence
+        assert provider_parent_for_tool_call("argument-only delta") is None
+
+
 def test_normalize_openrouter_usage_uses_selected_route_and_exact_billed_cost():
     record = normalize_openrouter_usage(
         {

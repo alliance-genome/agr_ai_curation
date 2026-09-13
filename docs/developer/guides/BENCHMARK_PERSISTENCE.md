@@ -48,6 +48,52 @@ Unavailable fields stay null, including cost; measured zero stays zero. Decimal
 billing amounts serialize as strings to preserve precision. Preparation accounting
 remains distinct in durable preparation events, not invented target invocations.
 
+`GET /{job_id}/cells/{cell_id}/stages` returns stage-page schema version 1.
+It uses the same `after_ordinal`/`next_after_ordinal` pagination and ownership
+rules. Ordinals are assigned under the cell's worker lock. Each occurrence has
+its own UUID, frozen semantic stage ID, role, node/binding identifiers, attempt,
+optional parent occurrence, status, and start/end/elapsed measurements. An agent
+used at several flow nodes therefore remains distinguishable. Invocation
+`stage_execution_id` points to an occurrence, not a model route slot.
+
+Stage durations cover their runtime intervals, including nested work. Do not
+sum parent and child intervals or overlapping validators to estimate wall time.
+Single, batch and graph-attached validator intervals include result finalization
+and handled-error conversion. A handled validator exception records a failed
+stage with only its exception type; the normal unresolved result can still allow
+the enclosing flow to complete. This does not turn unresolved biological matches
+into execution failures. Preflight/selection work that does not dispatch a
+validator remains part of the source-stage interval, not an invented model run.
+
+Parent provider-call attribution uses the SDK tool-call ID scoped to its emitting
+stage, not response arrival order or the most recent provider invocation. Native
+Responses and OpenRouter Chat Completions register these IDs before handing tool
+results to the SDK. The retained link contains no tool arguments. Reused IDs from
+different calls in the same stage are ambiguous and remain unknown. Automatic
+runtime work without an initiating model tool call also keeps a null parent
+invocation; its parent stage still identifies where the work belongs.
+`BENCHMARK_MAX_TOOL_CALL_LINKS_PER_CELL` defaults to 10000 and bounds this
+request-local attribution index. Parallel validator threads share atomic provider
+sequence reservations and invocation limits.
+Cell detail separately exposes versioned `timing` with boundary
+`preparation_through_target`: worker document preparation, authorization, and
+target execution, measured using a monotonic clock. `queue_delay_ms` covers
+cell creation to worker claim, not that execution interval. Pipeline end and
+elapsed values remain null if the process never records its exit. Historical
+cells without a pipeline start return null timing rather than reconstructed
+provider-call sums. The portal omits that unknown field from historical retained
+metadata to preserve its original hash.
+Interrupted work may retain a start with null end and elapsed time; recovery
+does not substitute the discovery time or zero. Historical invocations have
+unknown attribution. `BENCHMARK_MAX_STAGES_PER_CELL` bounds retained occurrences
+and fails before additional stage work starts when exhausted.
+
+The portal imports all bounded stage pages before publishing a terminal cell,
+validates parent and invocation links within the same cell/attempt, and retains
+stage-aware metadata as `execution-import/v2`. Existing imports without stages
+retain their v1 shape. Raw successful result artifact bytes and digests are
+never rewritten by this projection.
+
 `POST /{job_id}/cancel` requires `benchmark:cancel` and returns the resulting
 job detail. Repeating cancellation of terminal or cancellation-requested work
 is idempotent. `DELETE /{job_id}` requires `benchmark:delete`; unknown,
