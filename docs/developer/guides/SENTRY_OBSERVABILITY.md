@@ -433,6 +433,15 @@ companion log skips event promotion, and the generic tool failure result is
 unchanged when capture is unavailable. Routine validation results and tool-scope
 rejections do not report.
 
+Agent Studio flow proposals do not persist flows. The final create operation in
+`src/api/flows.py` reports unexpected add, commit, and refresh failures through
+`raise_sanitized_http_exception()`, which delegates to `report_runtime_exception()`.
+Only PostgreSQL unique violations of `uq_user_flow_name_active` are expected name
+conflicts and return 409 without capture. Other persistence failures roll back and
+return the stable 500 detail even when Sentry capture fails. Reports and companion
+logs use a chain-free flow database wrapper containing only the operation and
+exception class; raw SQL, flow names, descriptions, and definitions are omitted.
+
 Use `add_observed_background_task()` or `report_background_task_exception()` for
 FastAPI background tasks. Background-task identifier tags are hashed before
 capture.

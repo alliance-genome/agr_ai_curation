@@ -5,11 +5,12 @@ import inspect
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from src.lib import http_errors
 from src.schemas.flows import (
     CreateFlowRequest,
@@ -303,6 +304,9 @@ def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warn
 
 @pytest.mark.asyncio
 async def test_create_flow_success(monkeypatch):
+    report = Mock()
+    monkeypatch.setattr(http_errors, "report_runtime_exception", report)
+
     class _DB:
         def __init__(self):
             self.added = None
@@ -333,6 +337,7 @@ async def test_create_flow_success(monkeypatch):
     assert db.refreshed is True
     assert response.name == "Created"
     assert response.user_id == 17
+    report.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -545,6 +550,10 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
 
 @pytest.mark.asyncio
 async def test_create_flow_maps_unique_integrity_error_to_409(monkeypatch):
+    class _DuplicateName(Exception):
+        pgcode = "23505"
+        diag = SimpleNamespace(constraint_name="uq_user_flow_name_active")
+
     class _DB:
         def add(self, _obj):
             return None
@@ -553,7 +562,7 @@ async def test_create_flow_maps_unique_integrity_error_to_409(monkeypatch):
             raise IntegrityError(
                 statement="insert into curation_flows",
                 params={},
-                orig=Exception("duplicate key value violates constraint uq_user_flow_name_active"),
+                orig=_DuplicateName("private database detail"),
             )
 
         def rollback(self):
@@ -563,6 +572,8 @@ async def test_create_flow_maps_unique_integrity_error_to_409(monkeypatch):
             return None
 
     db = _DB()
+    report = Mock()
+    monkeypatch.setattr(http_errors, "report_runtime_exception", report)
     monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
 
     with pytest.raises(HTTPException) as exc:
@@ -572,61 +583,118 @@ async def test_create_flow_maps_unique_integrity_error_to_409(monkeypatch):
             db=db,
         )
     assert exc.value.status_code == 409
+    assert exc.value.detail == "A flow with this name already exists"
+    assert db.rolled_back is True
+    report.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_create_flow_maps_other_integrity_error_to_500(monkeypatch, caplog):
-    report_calls = []
+@pytest.mark.parametrize("capture_mode", ["success", "sdk_failure", "facade_failure"])
+@pytest.mark.parametrize(
+    "error_type, pgcode, constraint, failure_stage",
+    [
+        (IntegrityError, None, None, "commit"),
+        (IntegrityError, "23505", "another_unique_constraint", "commit"),
+        (IntegrityError, "23514", "uq_user_flow_name_active", "commit"),
+        (OperationalError, None, None, "add"),
+        (OperationalError, None, None, "commit"),
+        (OperationalError, None, None, "refresh"),
+        (RuntimeError, None, None, "commit"),
+    ],
+)
+async def test_create_flow_reports_unexpected_persistence_failure(
+    monkeypatch, caplog, capture_mode, error_type, pgcode, constraint, failure_stage,
+):
+    import sentry_sdk
+
+    class _PostgresError(Exception):
+        pgcode: str | None
+        diag: SimpleNamespace
+
     secret_text = "SECRET_FLOW_DEFINITION_SHOULD_NOT_APPEAR"
+    original = _PostgresError(f"uq_user_flow_name_active {secret_text}")
+    original.pgcode = pgcode
+    original.diag = SimpleNamespace(constraint_name=constraint)
+    if error_type is RuntimeError:
+        failure = RuntimeError(secret_text)
+    else:
+        failure = error_type(
+            statement="PRIVATE_SQL_INSERT into curation_flows",
+            params={"flow_definition": secret_text},
+            orig=original,
+        )
 
     class _DB:
         def add(self, _obj):
-            return None
+            if failure_stage == "add":
+                raise failure
 
         def commit(self):
-            raise IntegrityError(
-                statement="insert into curation_flows",
-                params={"flow_definition": secret_text},
-                orig=Exception(f"some other integrity error {secret_text}"),
-            )
+            if failure_stage == "commit":
+                raise failure
 
         def rollback(self):
             self.rolled_back = True
 
         def refresh(self, _obj):
-            return None
+            if failure_stage == "refresh":
+                raise failure
 
     db = _DB()
     monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
 
-    def _fake_report_runtime_exception(exc, **kwargs):
-        report_calls.append((exc, kwargs))
-        return True
-
-    monkeypatch.setattr(http_errors, "report_runtime_exception", _fake_report_runtime_exception)
+    capture = Mock()
+    if capture_mode == "sdk_failure":
+        capture.side_effect = RuntimeError("Sentry capture unavailable")
+    monkeypatch.setattr(sentry_sdk, "capture_exception", capture)
+    report = Mock(wraps=http_errors.report_runtime_exception)
+    if capture_mode == "facade_failure":
+        report.side_effect = RuntimeError("Sentry reporting unavailable")
+    monkeypatch.setattr(http_errors, "report_runtime_exception", report)
     caplog.set_level(logging.ERROR, logger=flows.logger.name)
 
+    definition = _flow_definition()
+    definition["nodes"][0]["data"]["task_instructions"] = secret_text
     with pytest.raises(HTTPException) as exc:
         await flows.create_flow(
-            request=CreateFlowRequest(name="Err", description=None, flow_definition=_flow_definition()),
+            request=CreateFlowRequest(
+                name=secret_text, description=secret_text, flow_definition=definition,
+            ),
             user={"sub": "u1"},
             db=db,
         )
     assert exc.value.status_code == 500
     assert exc.value.detail == "Database error while creating flow"
     assert db.rolled_back is True
-    assert len(report_calls) == 1
-    assert isinstance(report_calls[0][0], flows._FlowDatabaseError)
-    assert "Exception" in str(report_calls[0][0])
-    assert secret_text not in str(report_calls[0][0])
-    assert report_calls[0][0].__traceback__ is not None
-    assert report_calls[0][0].__context__ is None
-    assert report_calls[0][0].__cause__ is None
-    assert report_calls[0][1]["component"] == "api"
-    assert report_calls[0][1]["operation"] == "sanitized_http_exception"
-    assert report_calls[0][1]["context"]["logger_name"] == flows.logger.name
-    assert report_calls[0][1]["context"]["status_code"] == 500
+    report.assert_called_once()
+    sanitized = report.call_args.args[0]
+    assert isinstance(sanitized, flows._FlowDatabaseError)
+    assert str(sanitized).startswith("Flow create failed (")
+    assert sanitized.__traceback__ is not None
+    assert sanitized.__context__ is None
+    assert sanitized.__cause__ is None
+    assert report.call_args.kwargs == {
+        "component": "api",
+        "operation": "sanitized_http_exception",
+        "context": {
+            "logger_name": flows.logger.name,
+            "status_code": 500,
+            "log_level": logging.ERROR,
+            "level_name": "ERROR",
+        },
+    }
+    if capture_mode == "facade_failure":
+        capture.assert_not_called()
+    else:
+        capture.assert_called_once_with(sanitized)
+    assert secret_text not in str(sanitized)
+    assert secret_text not in repr(report.call_args)
     assert secret_text not in caplog.text
+    assert "PRIVATE_SQL_INSERT" not in caplog.text
+    assert "PRIVATE_SQL_INSERT" not in repr(report.call_args)
+    error_logs = [record for record in caplog.records if record.name == flows.logger.name]
+    assert len(error_logs) == 1
+    assert error_logs[0].sentry_skip_event is True
 
 
 @pytest.mark.asyncio

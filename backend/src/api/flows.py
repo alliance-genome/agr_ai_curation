@@ -838,21 +838,27 @@ async def create_flow(
         db.add(flow)
         db.commit()
         db.refresh(flow)
-    except IntegrityError as e:
+    except Exception as e:
         db.rollback()
-        # Check if it's a unique constraint violation on name
-        if "uq_user_flow_name_active" in str(e.orig).lower():
+        original = e.orig if isinstance(e, IntegrityError) else e
+        diagnostic = getattr(original, "diag", None)
+        if (
+            isinstance(e, IntegrityError)
+            and getattr(original, "pgcode", None) == "23505"
+            and getattr(diagnostic, "constraint_name", None) == "uq_user_flow_name_active"
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="A flow with this name already exists"
-            )
-        # Wrap other integrity errors to avoid exposing database internals
+            ) from None
+        # The API owns persistence after Agent Studio's side-effect-free proposal.
+        # Report once through the HTTP facade without retaining SQL or flow content.
         raise_sanitized_http_exception(
             logger,
             status_code=500,
             detail="Database error while creating flow",
-            log_message="Unexpected database integrity error creating flow",
-            exc=_sanitized_flow_db_error(type(e.orig).__name__, operation="create"),
+            log_message="Unexpected database error creating flow",
+            exc=_sanitized_flow_db_error(type(original).__name__, operation="create"),
         )
 
     logger.info("Created flow %s '%s' for user %s", flow.id, flow.name, db_user.id)
