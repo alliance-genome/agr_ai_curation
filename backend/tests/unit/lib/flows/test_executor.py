@@ -3960,7 +3960,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             for item in metadata
         )
 
-    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch):
+    @pytest.mark.parametrize("benchmark", [False, True])
+    @pytest.mark.parametrize("custom", [False, True])
+    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, benchmark, custom):
         executor = _executor_module()
         from src.schemas.domain_validator import (
             DomainValidationRequest,
@@ -3995,6 +3997,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
             expected_result_fields={"identifier": "gene.identifier"},
         )
         captured = {}
+        agent_key = "ca_custom_validator" if custom else "custom_validator"
+
+        from contextlib import nullcontext
+        from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
+        from src.lib.benchmarks.models import BenchmarkSuiteRoute
+
+        def build_agent(agent_id, **kwargs):
+            captured["agent_kwargs"] = kwargs
+            return SimpleNamespace(agent_id=agent_id)
 
         class _FakeTool:
             async def on_invoke_tool(self, tool_ctx, args_json):
@@ -4005,8 +4016,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
         monkeypatch.setattr(
             executor,
             "get_agent_by_id",
-            lambda agent_id, **_kwargs: SimpleNamespace(agent_id=agent_id),
+            build_agent,
         )
+        monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_benchmark_agent_by_id", build_agent)
         monkeypatch.setattr(
             executor,
             "_create_streaming_tool",
@@ -4017,20 +4029,30 @@ class TestGetAllAgentToolsStepOrderRuntime:
         )
         binding_match = SimpleNamespace(binding=binding)
 
-        asyncio.run(
-            executor._run_custom_flow_validator_agent(
+        routes = {f"agent:{agent_key}": BenchmarkSuiteRoute(provider="openai", model="fixture-model", reasoning_effort="low")}
+        with benchmark_route_plan(routes) if benchmark else nullcontext():
+            asyncio.run(executor._run_custom_flow_validator_agent(
                 request,
                 binding_match=binding_match,
-                validator_node={"data": {"agent_id": "custom_validator"}},
+                validator_node={"data": {"agent_id": agent_key}},
                 agent_context={"user_id": "curator-1"},
                 source_envelope_id="env-1",
                 source_envelope_revision=3,
-            )
-        )
+            ))
+
+        if benchmark and custom:
+            assert captured["agent_kwargs"]["benchmark_slot"] == f"agent:{agent_key}"
+            assert "model_id_override" not in captured["agent_kwargs"]
+        elif benchmark:
+            assert captured["agent_kwargs"]["benchmark_route_slot"] == "agent:custom_validator"
+            assert captured["agent_kwargs"]["model_id_override"] == "fixture-model"
+            assert captured["agent_kwargs"]["model_reasoning_override"] == "low"
+        else:
+            assert "benchmark_route_slot" not in captured["agent_kwargs"]
 
         payload = json.loads(captured["args"]["query"])
         validation_request = payload["validation_request"]
-        assert captured["tool_name"] == "validate_custom_validator_custom_supplemental"
+        assert captured["tool_name"] == f"validate_{agent_key}_custom_supplemental"
         assert validation_request["selected_inputs"] == request.selected_inputs
         assert "input_selectors" not in validation_request
         assert "evidence" not in validation_request

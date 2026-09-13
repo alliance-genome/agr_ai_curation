@@ -1309,8 +1309,23 @@ async def _run_custom_flow_validator_agent(
         # Flow-wide model overrides do not replace saved custom configurations.
         agent_kwargs.pop("model_id_override", None)
         agent_kwargs.pop("model_provider_override", None)
+    # Explicit benchmark settings use the same canonical agent slot as other
+    # graph nodes. Ordinary flow overrides above still do not replace custom
+    # saved configurations; only an active benchmark route supplies these.
+    from src.lib.openai_agents.benchmark_routing import benchmark_route_kwargs
+
     agent_kwargs["additional_runtime_context"] = runtime_context
-    agent = get_agent_by_id(validator_agent_id, **agent_kwargs)
+    benchmark_slot = f"agent:{validator_agent_id}"
+    route_kwargs = benchmark_route_kwargs(benchmark_slot)
+    if validator_agent_id.startswith("ca_") and route_kwargs:
+        from src.lib.agent_studio.catalog_service import get_benchmark_agent_by_id
+
+        agent = get_benchmark_agent_by_id(
+            validator_agent_id, benchmark_slot=benchmark_slot, **agent_kwargs,
+        )
+    else:
+        agent_kwargs.update(route_kwargs)
+        agent = get_agent_by_id(validator_agent_id, **agent_kwargs)
 
     tool_name = (
         "validate_"
