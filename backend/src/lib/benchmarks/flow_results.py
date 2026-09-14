@@ -12,6 +12,7 @@ from src.lib.curation_workspace.domain_envelope_normalization import (
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.domain_envelope import DomainEnvelope
+from src.schemas.execution_provenance import ExtractionExecutionContext
 
 from .models import StrictModel
 
@@ -76,7 +77,33 @@ def load_flow_extractions(
             for key in ("curatable_objects", "extracted_objects")
         ):
             raise ValueError("Benchmark flow result is not an extraction envelope")
-        envelopes.append(domain_envelope_from_extraction_result(record))
+        envelope = domain_envelope_from_extraction_result(record)
+        # Node identity comes only from the executor's persisted context, never
+        # model-authored payload metadata. Historical records remain explicitly
+        # unbound and cannot satisfy a node-specific mapping.
+        source = None
+        context_data = record.metadata.get("execution_context")
+        if context_data is not None:
+            context = ExtractionExecutionContext.model_validate(context_data)
+            if (
+                context.source_kind != "flow"
+                or context.agent_key != record.agent_key
+                or (
+                    context.document is not None
+                    and str(context.document.document_id) != document_id
+                )
+            ):
+                raise ValueError("Benchmark flow node context does not match persisted result")
+            source = {
+                "schema_version": "benchmark-flow-source/v1",
+                "flow_id": context.flow_id,
+                "node_id": context.step_id,
+                "run_id": run_id,
+                "document_id": document_id,
+            }
+        envelopes.append(envelope.model_copy(update={
+            "metadata": {**envelope.metadata, "benchmark_flow_source": source},
+        }))
     return BenchmarkFlowExtractions(
         envelopes=envelopes
     ).model_dump(mode="json")
