@@ -185,6 +185,14 @@ const sharedOpusChatStates = new Map<string, SharedOpusChatState>()
 const sharedOpusChatAliases = new Map<string, string>()
 const sharedOpusChatListeners = new Set<() => void>()
 
+function resolveSharedOpusChatKey(key: string): string {
+  let resolved = key
+  while (sharedOpusChatAliases.has(resolved)) {
+    resolved = sharedOpusChatAliases.get(resolved)!
+  }
+  return resolved
+}
+
 function resolveOpusConversationKey(
   context: ChatContext,
   durableSessionId?: string | null,
@@ -198,7 +206,7 @@ function getSharedOpusChatState(
   initialConversation?: ToolIdeaConversationEntry[] | null,
   initialDurableSessionId?: string | null,
 ): SharedOpusChatState {
-  const resolvedKey = sharedOpusChatAliases.get(key) ?? key
+  const resolvedKey = resolveSharedOpusChatKey(key)
   const existing = sharedOpusChatStates.get(resolvedKey)
   if (existing) {
     return existing
@@ -222,31 +230,36 @@ function emitSharedOpusChatState(
   key: string,
   updater: (current: SharedOpusChatState) => SharedOpusChatState,
 ) {
-  const resolvedKey = sharedOpusChatAliases.get(key) ?? key
+  const resolvedKey = resolveSharedOpusChatKey(key)
   const current = getSharedOpusChatState(resolvedKey)
   sharedOpusChatStates.set(resolvedKey, updater(current))
   sharedOpusChatListeners.forEach((listener) => listener())
 }
 
 function migrateSharedOpusChatState(fromKey: string, toKey: string) {
-  if (fromKey === toKey) {
+  const sourceKey = resolveSharedOpusChatKey(fromKey)
+  const targetKey = resolveSharedOpusChatKey(toKey)
+  if (sourceKey === targetKey) {
     return
   }
 
-  const fromState = sharedOpusChatStates.get(fromKey)
+  const fromState = sharedOpusChatStates.get(sourceKey)
   if (!fromState) {
     return
   }
 
-  const existingToState = sharedOpusChatStates.get(toKey)
+  const existingToState = sharedOpusChatStates.get(targetKey)
   if (!existingToState || existingToState.messages.length === 0 || fromState.isStreaming) {
-    sharedOpusChatStates.set(toKey, {
+    sharedOpusChatStates.set(targetKey, {
       ...fromState,
-      durableSessionId: toKey,
+      durableSessionId: targetKey,
     })
-    sharedOpusChatListeners.forEach((listener) => listener())
   }
-  sharedOpusChatAliases.set(fromKey, toKey)
+  // Move the live state, not a retained draft snapshot. Existing stream
+  // callbacks still address their original key and must follow this handoff.
+  sharedOpusChatStates.delete(sourceKey)
+  sharedOpusChatAliases.set(sourceKey, targetKey)
+  sharedOpusChatListeners.forEach((listener) => listener())
 }
 
 export function resetSharedOpusChatStateForTests() {
@@ -663,7 +676,10 @@ function OpusChat({
     // Only mirror actual durable-session prop changes. Parent URL updates can
     // recreate callbacks before the prop catches up, and we must not clear a
     // freshly minted session during that handoff window.
-    setDurableSessionId(durableSessionIdProp ?? null)
+    // A missing prop during URL classification/remount is not a request to
+    // discard the session already minted for this conversation. New chat uses
+    // its own key and empty state instead.
+    if (durableSessionIdProp) setDurableSessionId(durableSessionIdProp)
   }, [durableSessionIdProp])
 
   useEffect(() => {
@@ -730,8 +746,9 @@ function OpusChat({
   }
 
   const ensureDurableSessionId = useCallback(async (): Promise<string> => {
-    if (durableSessionId) {
-      return durableSessionId
+    const currentSessionId = getSharedOpusChatState(conversationKey).durableSessionId
+    if (currentSessionId) {
+      return currentSessionId
     }
 
     if (!sessionCreatePromiseRef.current) {
