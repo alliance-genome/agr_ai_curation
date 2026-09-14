@@ -70,13 +70,16 @@ def test_real_turn_replay_owner_and_changed_request_preserve_first_completion(mo
                     yield db
 
                 monkeypatch.setattr(assistant_turns, "SessionLocal", existing_session)
-                for status in ("cancelled", "failed", "completed"):
-                    empty_args = args | {"turn_id": status}
+                for status, content in (("cancelled", ""), ("failed", ""),
+                                        ("completed", ""), ("cancelled", " \n\t")):
+                    turn_id = status + str(len(content))
+                    empty_args = args | {"turn_id": turn_id}
                     prepare_assistant_turn(repo, **empty_args)
                     db.commit()
                     assistant_turns._persist(
-                        owner="curator", session_id=session.session_id, turn_id=status,
-                        state=AgentStudioRunState(trace_id="empty-turn"), status=status, elapsed=1,
+                        owner="curator", session_id=session.session_id, turn_id=turn_id,
+                        state=AgentStudioRunState(trace_id="empty-turn", assistant_text_parts=[content]),
+                        status=status, elapsed=1,
                     )
                     stored = prepare_assistant_turn(repo, **empty_args).replay
                     assert stored is not None and stored.content.strip()

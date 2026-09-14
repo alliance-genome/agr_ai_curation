@@ -46,7 +46,7 @@ def _persist(*, owner: str, session_id: str, turn_id: str, state: AgentStudioRun
     with SessionLocal() as db:
         complete_assistant_turn(
             ChatHistoryRepository(db), subject=owner, session_id=session_id, turn_id=turn_id,
-            message=state.assistant_text or {
+            message=state.assistant_text if state.assistant_text.strip() else {
                 "cancelled": "Stopped at your request.",
                 "failed": "This turn could not be completed.",
                 "completed": "No response was produced.",
