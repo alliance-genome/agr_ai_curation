@@ -509,7 +509,7 @@ separately support oldest-queued claims and expired running leases. Replay
 events have a job-local monotonically increasing sequence allocated while the
 job row is locked.
 
-## Benchmark assistance history (runtime integration pending)
+## Benchmark assistance history and runtime
 
 Benchmark assistance uses the existing `chat_sessions` and `chat_messages`
 repository with an explicit `benchmark_assistant` kind. Migration
@@ -519,10 +519,10 @@ The ordinary curation/Workshop history list's `all` selection deliberately keeps
 its existing two kinds; direct curation history and Workshop history expansion
 also reject benchmark-assistance sessions.
 
-The dedicated assistant endpoints must verify the initiating curator and select
-this kind explicitly. The schema addition does not itself implement streaming,
-cancel/replay handling, proposal acceptance, or separate assistant accounting;
-those remain required runtime work. No provider key belongs in the portal.
+The dedicated assistant endpoints verify the initiating curator and select
+this kind explicitly. Streaming, cancel/replay handling and assistant accounting
+use the existing runtime; explicit human proposal acceptance belongs to the
+portal. No provider key belongs in the portal.
 
 `benchmarks/assistant_history.py` creates server-identified sessions and persists
 turns through the shared repository. A request fingerprint binds each turn ID to
@@ -534,13 +534,16 @@ executable-run manager; this helper alone does not start or resume provider work
 
 `benchmarks/assistant_runtime.py` reuses Workshop's protected provider, model,
 reasoning and existing environment-configurable turn/output limits. Its current
-server-owned tool catalog permits only `read_paper_reference_draft`; no Workshop
-tools or benchmark execution/publication controls are inherited. The shared
+server-owned tool catalog permits `read_paper_reference_draft` and
+`propose_paper_reference_draft`. Proposals require human review and are never
+applied or published by model tools. No Workshop tools or benchmark
+execution/publication controls are inherited. The shared
 stream uses a distinct benchmark assistant trace/workflow identity, preserving
 Workshop defaults and SDK resource cleanup. Caller cancellation is passed through.
-This streaming adapter is not yet exposed by an authenticated endpoint.
-Cross-application tool transport, durable streaming coordination,
-reviewed proposals and separate accounting still need integration. A read token
+Authenticated `/sessions/{session_id}/turns`, turn `/tool-results` and `/stop`
+endpoints expose streaming and the server-side tool relay under `benchmark:assist`.
+History retains completion, proposal IDs and separate assistant accounting.
+Live activation and broader workspace adapters remain delivery work. A read token
 alone must not implicitly authorize paid assistance. The new `benchmark:assist`
 capability is independently configured by `BENCHMARK_OIDC_ASSIST_SCOPES` and
 `BENCHMARK_OPERATOR_ASSIST_GROUPS` (both deny by default). Its curator dependency

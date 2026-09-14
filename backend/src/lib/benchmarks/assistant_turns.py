@@ -15,9 +15,11 @@ from src.lib.agent_studio.openai_runtime import (
 )
 from src.lib.benchmarks.assistant_history import complete_assistant_turn
 from src.lib.benchmarks.assistant_runtime import stream_benchmark_assistant
+from src.lib.benchmarks.observability import sanitized_benchmark_error
 from src.lib.benchmarks.assistant_tool_bridge import AssistantToolBridge, PAPER_DRAFT_TOOL, PAPER_PROPOSAL_TOOL
 from src.lib.chat_history_repository import ChatHistoryRepository
 from src.lib.openai_agents.config import get_executable_run_event_replay_limit
+from src.lib.observability.runtime import report_runtime_exception
 from src.lib.executable_runs import executable_run_manager
 from src.models.sql.database import SessionLocal
 
@@ -44,7 +46,11 @@ def _persist(*, owner: str, session_id: str, turn_id: str, state: AgentStudioRun
     with SessionLocal() as db:
         complete_assistant_turn(
             ChatHistoryRepository(db), subject=owner, session_id=session_id, turn_id=turn_id,
-            message=state.assistant_text, trace_id=state.trace_id,
+            message=state.assistant_text or {
+                "cancelled": "Stopped at your request.",
+                "failed": "This turn could not be completed.",
+                "completed": "No response was produced.",
+            }[status], trace_id=state.trace_id,
             payload={
                 "status": status, "assistant_usage": {
                     **usage, "cost_usd": None, "cost_status": "unknown",
@@ -90,10 +96,15 @@ async def produce_turn(*, owner: str, session_id: str, turn_id: str,
                 status = "cancelled"
         except asyncio.CancelledError:
             status = "cancelled"
-        except Exception:
+        except Exception as exc:
             # Raw provider/tool exceptions may contain paper text or credentials.
             # The persisted status and trace identity retain a safe investigation handle.
             status = "failed"
+            report_runtime_exception(
+                sanitized_benchmark_error("assistant_turn", type(exc).__name__),
+                component="benchmark_assistant", operation="assistant_turn_failed",
+                context={"usage_observed": state.usage_observed},
+            )
             await queue.put({"type": "ERROR", "code": "assistant_turn_failed",
                              "message": "Chat could not finish this turn. Your draft was not changed."})
         finally:

@@ -1,6 +1,7 @@
 """Exercise durable Chat turns with real indexes on temporary PostgreSQL tables."""
 
 import os
+from contextlib import contextmanager
 
 import pytest
 import sqlalchemy as sa
@@ -14,6 +15,8 @@ from src.lib.benchmarks.assistant_history import (
     prepare_assistant_turn,
 )
 from src.lib.chat_history_repository import ChatHistoryRepository, ChatHistorySessionNotFoundError
+from src.lib.benchmarks import assistant_turns
+from src.lib.agent_studio.openai_runtime import AgentStudioRunState
 from src.models.sql.chat_message import ChatMessage
 from src.models.sql.chat_session import ChatSession
 
@@ -22,7 +25,7 @@ from src.models.sql.chat_session import ChatSession
     not os.getenv("BENCHMARK_ASSISTANT_TEST_DATABASE_URL"),
     reason="requires explicitly selected isolated PostgreSQL",
 )
-def test_real_turn_replay_owner_and_changed_request_preserve_first_completion():
+def test_real_turn_replay_owner_and_changed_request_preserve_first_completion(monkeypatch):
     engine = sa.create_engine(os.environ["BENCHMARK_ASSISTANT_TEST_DATABASE_URL"])
     try:
         with engine.connect() as connection, connection.begin():
@@ -62,5 +65,22 @@ def test_real_turn_replay_owner_and_changed_request_preserve_first_completion():
                 assert repeated.message_id == completed.message_id
                 assert repeated.payload_json == usage
                 assert db.scalar(sa.select(sa.func.count()).select_from(ChatMessage)) == 2
+                @contextmanager
+                def existing_session():
+                    yield db
+
+                monkeypatch.setattr(assistant_turns, "SessionLocal", existing_session)
+                for status in ("cancelled", "failed", "completed"):
+                    empty_args = args | {"turn_id": status}
+                    prepare_assistant_turn(repo, **empty_args)
+                    db.commit()
+                    assistant_turns._persist(
+                        owner="curator", session_id=session.session_id, turn_id=status,
+                        state=AgentStudioRunState(trace_id="empty-turn"), status=status, elapsed=1,
+                    )
+                    stored = prepare_assistant_turn(repo, **empty_args).replay
+                    assert stored is not None and stored.content.strip()
+                    assert stored.payload_json["status"] == status
+                    assert stored.payload_json["assistant_usage"]["input_tokens"] is None
     finally:
         engine.dispose()

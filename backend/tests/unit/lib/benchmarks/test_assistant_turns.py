@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,6 +13,8 @@ from src.lib.benchmarks import assistant_turns as turns
 @pytest.mark.parametrize("outcome", ["success", "cancel", "failure"])
 async def test_model_tool_roundtrip_persists_then_finishes_and_cleans_up(monkeypatch, outcome):
     saved = []
+    report = MagicMock()
+    monkeypatch.setattr(turns, "report_runtime_exception", report)
     monkeypatch.setattr(turns, "_persist", lambda **values: saved.append(values))
     manager = SimpleNamespace(set_outcome_status=AsyncMock())
     monkeypatch.setattr(turns, "executable_run_manager", manager)
@@ -54,6 +56,13 @@ async def test_model_tool_roundtrip_persists_then_finishes_and_cleans_up(monkeyp
     assert events[-1]["type"] == ("CANCELLED" if outcome == "cancel" else "DONE")
     if outcome == "failure":
         manager.set_outcome_status.assert_awaited_once_with(turns.run_id(session, turn), "failed")
+        report.assert_called_once()
+        error = report.call_args.args[0]
+        assert error.__context__ is None and error.__cause__ is None
+        assert "private-provider-credential" not in str(report.call_args)
+        assert "RuntimeError" in str(error)
+    else:
+        report.assert_not_called()
 
 
 @pytest.mark.asyncio
