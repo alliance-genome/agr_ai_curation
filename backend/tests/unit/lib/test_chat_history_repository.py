@@ -9,12 +9,25 @@ from unittest.mock import MagicMock
 from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
     ASSISTANT_CHAT_KIND,
+    BENCHMARK_ASSISTANT_CHAT_KIND,
     ChatHistoryRepository,
     ChatMessagePage,
+    _normalize_chat_kind,
+    _normalize_list_chat_kinds,
 )
 from src.lib.persistence_sanitization import sanitize_persisted_json_value
 from src.models.sql.chat_message import ChatMessage
 from src.models.sql.chat_session import ChatSession
+
+
+def test_benchmark_assistance_requires_explicit_kind_not_existing_browser_all():
+    assert _normalize_chat_kind(BENCHMARK_ASSISTANT_CHAT_KIND) == "benchmark_assistant"
+    assert _normalize_list_chat_kinds(BENCHMARK_ASSISTANT_CHAT_KIND) == ("benchmark_assistant",)
+    assert _normalize_list_chat_kinds("all") == (ASSISTANT_CHAT_KIND, AGENT_STUDIO_CHAT_KIND)
+    for model in (ChatSession, ChatMessage):
+        kind_check = next(constraint for constraint in model.__table__.constraints
+                          if constraint.name == f"ck_{model.__tablename__}_chat_kind")
+        assert "benchmark_assistant" in str(kind_check.sqltext)
 
 
 def _session_model() -> ChatSession:

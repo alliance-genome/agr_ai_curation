@@ -56,7 +56,7 @@ class ChatSession(Base):
         CheckConstraint("btrim(session_id) <> ''", name="ck_chat_sessions_session_id_not_empty"),
         CheckConstraint("btrim(user_auth_sub) <> ''", name="ck_chat_sessions_user_auth_sub_not_empty"),
         CheckConstraint(
-            "chat_kind IN ('assistant_chat', 'agent_studio')",
+            "chat_kind IN ('assistant_chat', 'agent_studio', 'benchmark_assistant')",
             name="ck_chat_sessions_chat_kind",
         ),
         CheckConstraint(

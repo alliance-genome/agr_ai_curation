@@ -33,6 +33,7 @@ from src.lib.openai_agents.config import (
 )
 
 BENCHMARK_READ: Final = "benchmark:read"
+BENCHMARK_ASSIST: Final = "benchmark:assist"
 BENCHMARK_RUN: Final = "benchmark:run"
 BENCHMARK_CANCEL: Final = "benchmark:cancel"
 BENCHMARK_DELETE: Final = "benchmark:delete"
@@ -42,6 +43,7 @@ BENCHMARK_BROWSER_SESSION_CLIENT_ID: Final = "benchmark_browser_session"
 BENCHMARK_CAPABILITIES: Final = frozenset(
     {
         BENCHMARK_READ,
+        BENCHMARK_ASSIST,
         BENCHMARK_RUN,
         BENCHMARK_CANCEL,
         BENCHMARK_DELETE,
@@ -299,6 +301,11 @@ async def require_benchmark_read(request: Request) -> dict[str, Any]:
     return await _authorize(BENCHMARK_READ, request)
 
 
+async def require_benchmark_assist(request: Request) -> dict[str, Any]:
+    """Paid assistance is neither a read permission nor benchmark execution."""
+    return await _authorize(BENCHMARK_ASSIST, request)
+
+
 async def require_benchmark_run(request: Request) -> dict[str, Any]:
     return await _authorize(BENCHMARK_RUN, request)
 
@@ -325,12 +332,14 @@ def reset_benchmark_auth_cache() -> None:
 
 __all__ = [
     "BENCHMARK_CAPABILITIES",
+    "BENCHMARK_ASSIST",
     "BENCHMARK_CANCEL",
     "BENCHMARK_DELETE",
     "BENCHMARK_READ",
     "BENCHMARK_RUN",
     "BENCHMARK_SOURCE_READ",
     "require_benchmark_cancel",
+    "require_benchmark_assist",
     "require_benchmark_delete",
     "require_benchmark_read",
     "require_benchmark_run",

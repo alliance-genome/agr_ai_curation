@@ -2308,6 +2308,21 @@ async def test_get_all_sessions_stats_uses_generated_titles_and_schedules_lazy_b
 
 
 @pytest.mark.asyncio
+async def test_curation_history_does_not_expose_benchmark_assistance(monkeypatch):
+    repository = FakeChatHistoryRepository(sessions=[_session_record(
+        session_id="benchmark-session", chat_kind="benchmark_assistant",
+        title="Benchmark assistance", created_at=_ts(9, 0),
+    )])
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    with pytest.raises(HTTPException) as error:
+        await chat.get_session_history(
+            "benchmark-session", message_limit=50, message_cursor=None,
+            db=object(), user={"sub": "user-1"},
+        )
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_get_session_history_returns_durable_detail_with_active_document(monkeypatch):
     active_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
     message_id = uuid4()

@@ -12,7 +12,7 @@ import json
 import logging
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
-from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Mapping, Sequence
 
 from agents import (
     Agent,
@@ -48,6 +48,15 @@ from src.lib.openai_agents.runner import (
 )
 
 logger = logging.getLogger(__name__)
+
+ChatSurface = Literal["agent_studio", "benchmark_assistant"]
+
+
+def _surface_identity(surface: ChatSurface) -> tuple[str, str, str]:
+    return {
+        "agent_studio": ("Agent Studio AI Chat", "Agent Studio Authoring Assistant", "agent_studio_authoring"),
+        "benchmark_assistant": ("Benchmark AI Chat", "Benchmark Assistant", "benchmark_assistant"),
+    }[surface]
 
 def resolve_agent_studio_model() -> tuple[str, ReasoningEffort]:
     """Resolve the dedicated Chat model using canonical capability metadata."""
@@ -96,6 +105,7 @@ class AgentStudioRunState:
     executed_tools: list[ExecutedTool] = field(default_factory=list)
     review_message: str | None = None
     response_id: str | None = None
+    usage_observed: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
     cached_input_tokens: int = 0
@@ -200,6 +210,7 @@ def _build_function_tool(
         expected = {
             "propose_workshop_draft_update": "workshop_authoring_proposal.v1",
             "propose_flow_draft_update": "flow_authoring_proposal.v1",
+            "propose_paper_reference_draft": "paper_reference_proposal.v1",
         }.get(name)
         output = result.full_output
         if (expected and isinstance(output, Mapping)
@@ -298,7 +309,8 @@ def build_agent_studio_model_settings(
 
 
 @contextmanager
-def _studio_trace_scope(*, state: AgentStudioRunState, session_id: str, user_id: str):
+def _studio_trace_scope(*, state: AgentStudioRunState, session_id: str, user_id: str,
+                        surface: ChatSurface = "agent_studio"):
     """Parent SDK observations with the same identity exposed to the curator."""
     client = get_langfuse()
     if client is None or not is_openai_agents_tracing_enabled():
@@ -306,15 +318,15 @@ def _studio_trace_scope(*, state: AgentStudioRunState, session_id: str, user_id:
         return
     with client.start_as_current_observation(
         trace_context={"trace_id": state.trace_id},
-        name="agent-studio-chat",
+        name="agent-studio-chat" if surface == "agent_studio" else "benchmark-assistant-chat",
         as_type="span",
         metadata={"provider": "openai", "model": AGENT_STUDIO_OPENAI_MODEL},
     ):
         with propagate_attributes(
             session_id=session_id,
             user_id=user_id,
-            trace_name="Agent Studio AI Chat",
-            tags=["agent-studio", "openai-agents"],
+            trace_name=_surface_identity(surface)[0],
+            tags=[surface.replace("_", "-"), "openai-agents"],
         ):
             yield
 
@@ -325,12 +337,13 @@ def _run_config(
     session_id: str,
     user_id: str,
     model_provider: Any,
+    surface: ChatSurface = "agent_studio",
 ) -> RunConfig:
     return RunConfig(
         model_provider=model_provider,
         tracing_disabled=not is_openai_agents_tracing_enabled(),
         trace_include_sensitive_data=True,
-        workflow_name="Agent Studio AI Chat",
+        workflow_name=_surface_identity(surface)[0],
         group_id=session_id,
         trace_metadata={
             "langfuse_trace_id": state.trace_id,
@@ -348,6 +361,7 @@ def _capture_terminal_metadata(result: Any, state: AgentStudioRunState) -> None:
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     if usage is None:
         return
+    state.usage_observed = True
     state.input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     state.output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
     input_details = getattr(usage, "input_tokens_details", None)
@@ -436,11 +450,13 @@ async def stream_agent_studio_run(
     max_turns: int,
     model_settings: ModelSettings,
     cancel_event: asyncio.Event | None = None,
+    surface: ChatSurface = "agent_studio",
 ) -> AsyncIterator[dict[str, Any]]:
     """Run the SDK-owned authoring loop and emit provider-neutral Studio events."""
 
     if cancel_event is not None and cancel_event.is_set():
         return
+    _, agent_name, workflow = _surface_identity(surface)
     cancellation_task: asyncio.Task | None = None
     resources = build_owned_openai_responses_resources()
     try:
@@ -449,9 +465,10 @@ async def stream_agent_studio_run(
             session_id=session_id,
             user_id=user_id,
             model_provider=resources.provider,
+            surface=surface,
         )
         agent = Agent(
-            name="Agent Studio Authoring Assistant",
+            name=agent_name,
             instructions=(instructions + f"\nThis request allows at most {max_turns} model turns, including "
                           "the final response. Use consolidated inspections, reserve a turn to answer, "
                           "and report outstanding work as incomplete instead of starting unrelated lookups."),
@@ -461,20 +478,20 @@ async def stream_agent_studio_run(
             tool_use_behavior=_proposal_review_behavior(state),
         )
         pending_calls: dict[str, tuple[str, dict[str, Any]]] = {}
-        with _studio_trace_scope(state=state, session_id=session_id, user_id=user_id), gen_ai_conversation_scope(session_id):
+        with _studio_trace_scope(state=state, session_id=session_id, user_id=user_id, surface=surface), gen_ai_conversation_scope(session_id):
             with _tracked_agent_span(
-                agent_name="Agent Studio Authoring Assistant",
+                agent_name=agent_name,
                 model=AGENT_STUDIO_OPENAI_MODEL,
                 conversation_id=session_id,
                 provider_name="openai",
                 response_streaming=True,
-                workflow="agent_studio_authoring",
-                agent_key="agent_studio_authoring",
+                workflow=workflow,
+                agent_key=workflow,
                 agent_source="runtime",
                 trace_id=state.trace_id,
                 span_data={
-                    "ai_curation.agent_studio.input_item_count": len(input_items),
-                    "ai_curation.agent_studio.tool_count": len(tools),
+                    f"ai_curation.{surface}.input_item_count": len(input_items),
+                    f"ai_curation.{surface}.tool_count": len(tools),
                 },
             ):
                 result = Runner.run_streamed(

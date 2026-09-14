@@ -217,7 +217,8 @@ def test_function_tool_preserves_full_output_but_returns_bounded_provider_output
     }
 
 
-def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch):
+@pytest.mark.parametrize("surface", ["agent_studio", "benchmark_assistant"])
+def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch, surface):
     captured = {}
     closed = []
     provider = object()
@@ -314,6 +315,7 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch):
                 user_id="user-1",
                 max_turns=5,
                 model_settings=runtime.build_agent_studio_model_settings(max_output_tokens=1024),
+                surface=surface,
             )
         ]
 
@@ -331,10 +333,16 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch):
     assert captured["agent"].model == "gpt-6-astra"
     assert captured["max_turns"] == 5
     assert captured["run_config"].model_provider is provider
+    assert captured["run_config"].workflow_name == (
+        "Agent Studio AI Chat" if surface == "agent_studio" else "Benchmark AI Chat"
+    )
+    assert captured["sentry"]["workflow"] == (
+        "agent_studio_authoring" if surface == "agent_studio" else "benchmark_assistant"
+    )
     assert "input_preview" not in captured["sentry"]
     assert captured["sentry"]["span_data"] == {
-        "ai_curation.agent_studio.input_item_count": 1,
-        "ai_curation.agent_studio.tool_count": 0,
+        f"ai_curation.{surface}.input_item_count": 1,
+        f"ai_curation.{surface}.tool_count": 0,
     }
     assert state.assistant_text == "Done"
     assert state.response_id == "resp-1"
@@ -497,6 +505,7 @@ def test_forced_tool_run_closes_owned_resources_when_runtime_construction_fails(
 @pytest.mark.parametrize("tool_name,contract", [
     ("propose_workshop_draft_update", "workshop_authoring_proposal.v1"),
     ("propose_flow_draft_update", "flow_authoring_proposal.v1"),
+    ("propose_paper_reference_draft", "paper_reference_proposal.v1"),
 ])
 def test_proposal_review_stops_only_after_valid_repair(tool_name, contract):
     state = runtime.AgentStudioRunState(trace_id="review-test")

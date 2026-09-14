@@ -34,6 +34,7 @@ def _reset_provider(monkeypatch):
 @pytest.mark.parametrize(
     ("capability", "dependency", "scope"),
     [
+        (benchmark_auth.BENCHMARK_ASSIST, benchmark_auth.require_benchmark_assist, "portal.assist"),
         (benchmark_auth.BENCHMARK_READ, benchmark_auth.require_benchmark_read, "portal.read"),
         (benchmark_auth.BENCHMARK_RUN, benchmark_auth.require_benchmark_run, "portal.run"),
         (benchmark_auth.BENCHMARK_CANCEL, benchmark_auth.require_benchmark_cancel, "portal.cancel"),
@@ -103,6 +104,45 @@ async def test_cookie_operator_group_grants_only_explicit_capability(monkeypatch
     with pytest.raises(HTTPException) as exc_info:
         await benchmark_auth.require_benchmark_run(_request())
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("granted,requested,allowed", [
+    ("portal.read", "benchmark:assist", False),
+    ("portal.run", "benchmark:assist", False),
+    ("portal.assist", "benchmark:assist", True),
+    ("portal.assist", "benchmark:run", False),
+    ("portal.assist", "benchmark:cancel", False),
+    ("portal.assist", "benchmark:delete", False),
+])
+async def test_assistance_and_execution_permissions_are_independent(monkeypatch, granted, requested, allowed):
+    async def claims(_token):
+        return {"sub": "human", "client_id": "portal", "scope": granted}, False
+
+    monkeypatch.setattr(benchmark_auth, "_validated_bearer_claims", claims)
+    monkeypatch.setenv("BENCHMARK_OIDC_ALLOWED_CLIENT_IDS", "portal")
+    for suffix in ("READ", "RUN", "CANCEL", "DELETE", "ASSIST"):
+        monkeypatch.setenv(f"BENCHMARK_OIDC_{suffix}_SCOPES", f"portal.{suffix.lower()}")
+    if allowed:
+        result = await benchmark_auth._authenticate_bearer("signed-token", requested)
+        assert result["benchmark_capabilities"] == [requested]
+    else:
+        with pytest.raises(HTTPException) as error:
+            await benchmark_auth._authenticate_bearer("signed-token", requested)
+        assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_assistance_is_disabled_without_explicit_configuration(monkeypatch):
+    async def claims(_token):
+        return {"sub": "human", "client_id": "portal", "scope": "portal.assist"}, False
+
+    monkeypatch.setattr(benchmark_auth, "_validated_bearer_claims", claims)
+    monkeypatch.setenv("BENCHMARK_OIDC_ALLOWED_CLIENT_IDS", "portal")
+    monkeypatch.delenv("BENCHMARK_OIDC_ASSIST_SCOPES", raising=False)
+    with pytest.raises(HTTPException) as error:
+        await benchmark_auth.require_benchmark_assist(_request(authorization="Bearer signed-token"))
+    assert error.value.status_code == 403
 
 
 @pytest.mark.asyncio

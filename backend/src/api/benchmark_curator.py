@@ -9,7 +9,7 @@ from jwt.exceptions import InvalidTokenError
 from sqlalchemy import select
 
 from src.api import auth as browser_auth
-from src.api.benchmark_auth import require_benchmark_read, require_benchmark_run
+from src.api.benchmark_auth import require_benchmark_assist, require_benchmark_read, require_benchmark_run
 from src.auth.base import AuthPrincipal
 from src.lib.benchmarks.curator_authorization import authorize_benchmark_curator
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext, capture_curator_context
@@ -59,6 +59,18 @@ async def require_benchmark_read_curator(
     ),
 ) -> BenchmarkCuratorContext:
     """Read-only discovery uses precisely the same trusted human boundary."""
+    return await verify_benchmark_curator(request, orchestration, curator_authorization)
+
+
+async def require_benchmark_assistant_curator(
+    request: Request,
+    orchestration: dict[str, Any] = Depends(require_benchmark_assist),
+    curator_authorization: str | None = Header(
+        default=None, alias="X-Benchmark-Curator-Authorization",
+        description="Ephemeral target-audience human Bearer token for benchmark assistance.",
+    ),
+) -> BenchmarkCuratorContext:
+    """Independent assistance capability plus the current human-account check."""
     return await verify_benchmark_curator(request, orchestration, curator_authorization)
 
 

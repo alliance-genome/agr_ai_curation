@@ -28,6 +28,7 @@ ExecutableRunKind = Literal[
     "assistant_chat_turn",
     "curation_flow_run",
     "agent_studio_chat_turn",
+    "benchmark_assistant_turn",
     "agent_test_stream",
     "batch",
     "pdf_processing_job",
