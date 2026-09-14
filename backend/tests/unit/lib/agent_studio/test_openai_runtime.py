@@ -506,6 +506,7 @@ def test_forced_tool_run_closes_owned_resources_when_runtime_construction_fails(
     ("propose_workshop_draft_update", "workshop_authoring_proposal.v1"),
     ("propose_flow_draft_update", "flow_authoring_proposal.v1"),
     ("propose_paper_reference_draft", "paper_reference_proposal.v1"),
+    ("propose_experiment_draft", "experiment_draft_proposal.v1"),
 ])
 def test_proposal_review_stops_only_after_valid_repair(tool_name, contract):
     state = runtime.AgentStudioRunState(trace_id="review-test")

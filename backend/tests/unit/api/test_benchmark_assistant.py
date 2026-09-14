@@ -71,12 +71,21 @@ def test_read_uses_owner_and_omits_internal_payload(setup):
 def test_history_returns_only_valid_proposal_references_not_internal_tool_payload(setup):
     client, _, store, _, record, _ = setup
     proposal_id = str(uuid4())
+    experiment_id, draft_id = str(uuid4()), str(uuid4())
     store.list_messages.return_value.items[0].payload_json = {"tool_calls": [
         {"name": "propose_paper_reference_draft", "output": {
             "contract_version": "paper_reference_proposal.v1", "proposal_id": proposal_id,
             "candidate": {"secret_field": "not-a-browser-history-field"},
         }},
         {"name": "other", "output": {"proposal_id": str(uuid4())}},
+        {"name": "propose_experiment_draft", "output": {
+            "contract_version": "experiment_draft_proposal.v1", "proposal_id": experiment_id,
+            "artifact_identity": draft_id, "candidate": {"private": "not-a-browser-history-field"},
+        }},
+        {"name": "propose_experiment_draft", "output": {
+            "contract_version": "experiment_draft_proposal.v1", "proposal_id": experiment_id,
+            "artifact_identity": "not-a-uuid",
+        }},
         {"name": "propose_paper_reference_draft", "output": {
             "contract_version": "paper_reference_proposal.v1", "proposal_id": "invalid",
         }},
@@ -84,6 +93,9 @@ def test_history_returns_only_valid_proposal_references_not_internal_tool_payloa
     response = client.get(f"/api/v1/benchmarks/assistant/sessions/{record.session_id}")
     assert response.status_code == 200
     assert response.json()["messages"][0]["proposal_ids"] == [proposal_id]
+    assert response.json()["messages"][0]["experiment_proposals"] == [
+        {"proposal_id": experiment_id, "draft_id": draft_id},
+    ]
     assert "not-a-browser-history-field" not in response.text
 
 
@@ -165,9 +177,18 @@ def test_stream_start_and_completed_replay_do_not_repeat_provider_work(setup, mo
     assert observe.call_args.kwargs["keepalive_interval_seconds"] == 7.0
     assert calls == ["human"] and len(saved) == 1
     prepared.created = False
-    prepared.replay = SimpleNamespace(content="Saved answer", payload_json={"status": "completed"})
+    proposal_id, draft_id = str(uuid4()), str(uuid4())
+    prepared.replay = SimpleNamespace(content="Saved answer", payload_json={
+        "status": "completed", "tool_calls": [{"name": "propose_experiment_draft", "output": {
+            "contract_version": "experiment_draft_proposal.v1", "proposal_id": proposal_id,
+            "artifact_identity": draft_id, "candidate": {"private": "do-not-replay"},
+        }}],
+    })
     response = client.post(path, json=payload)
     assert response.status_code == 200 and '"replayed":true' in response.text
+    assert proposal_id in response.text and draft_id in response.text
+    assert '"tool_name":"propose_experiment_draft"' in response.text
+    assert "do-not-replay" not in response.text
     assert calls == ["human"]
     prepared.replay = None
     # An accepted request without its live producer cannot start another paid run.
