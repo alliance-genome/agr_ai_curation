@@ -28,13 +28,31 @@ class PaperDraftSelection(BaseModel):
     draft_id: UUID
 
 
-class PaperDraftProposal(BaseModel):
+class DraftProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
     draft_id: UUID
     expected_revision: StrictInt = Field(ge=1)
     base_draft_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     candidate: dict[str, Any]
     change_summary: str = Field(min_length=1)
+
+
+class ExperimentDraftSearch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    search: str = ""
+    offset: StrictInt = Field(default=0, ge=0)
+
+
+EXPERIMENT_READ_TOOL = {
+    "name": "read_experiment_draft",
+    "description": "Read an administrator's own saved experiment choices. Does not check readiness, edit, prepare or run. Access is enforced by the portal.",
+    "input_schema": PaperDraftSelection.model_json_schema(),
+}
+EXPERIMENT_LIST_TOOL = {
+    "name": "list_experiment_drafts",
+    "description": "Find an administrator's own saved experiment drafts by name. Follow next_offset for more. Does not create drafts or run anything. Access is enforced by the portal.",
+    "input_schema": ExperimentDraftSearch.model_json_schema(),
+}
 
 
 PAPER_DRAFT_TOOL = {
@@ -50,7 +68,19 @@ PAPER_PROPOSAL_TOOL = {
         "(entities and correction_evidence). Preserve unrelated fields and explain every removal. "
         "The portal validates the scientific entity schema. Stop after a valid pending proposal."
     ),
-    "input_schema": PaperDraftProposal.model_json_schema(),
+    "input_schema": DraftProposal.model_json_schema(),
+}
+
+EXPERIMENT_PROPOSAL_TOOL = {
+    "name": "propose_experiment_draft",
+    "description": (
+        "Suggest changes to an administrator's own experiment draft for explicit human review. "
+        "Read the current experiment first; use its revision and content_sha256 as "
+        "base_draft_fingerprint. Candidate is {name, design}, preserving the complete design "
+        "shape and unrelated selections. The portal validates its schema and pinned references. "
+        "This does not apply, freeze, prepare, publish or run anything. Stop at a valid proposal."
+    ),
+    "input_schema": DraftProposal.model_json_schema(),
 }
 
 
@@ -76,10 +106,12 @@ class AssistantToolBridge:
     async def execute(self, name: str, arguments: dict[str, Any], call_id: str | None) -> ToolExecutionResult:
         if self._closed or self.cancel_event.is_set():
             raise asyncio.CancelledError()
-        if name == PAPER_DRAFT_TOOL["name"]:
+        if name in {PAPER_DRAFT_TOOL["name"], EXPERIMENT_READ_TOOL["name"]}:
             selected = PaperDraftSelection.model_validate(arguments)
-        elif name == PAPER_PROPOSAL_TOOL["name"]:
-            selected = PaperDraftProposal.model_validate(arguments)
+        elif name == EXPERIMENT_LIST_TOOL["name"]:
+            selected = ExperimentDraftSearch.model_validate(arguments)
+        elif name in {PAPER_PROPOSAL_TOOL["name"], EXPERIMENT_PROPOSAL_TOOL["name"]}:
+            selected = DraftProposal.model_validate(arguments)
         else:
             raise PermissionError("Assistant tool is unavailable")
         if self._calls >= self.max_calls:

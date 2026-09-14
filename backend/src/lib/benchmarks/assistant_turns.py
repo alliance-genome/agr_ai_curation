@@ -16,7 +16,10 @@ from src.lib.agent_studio.openai_runtime import (
 from src.lib.benchmarks.assistant_history import complete_assistant_turn
 from src.lib.benchmarks.assistant_runtime import stream_benchmark_assistant
 from src.lib.benchmarks.observability import sanitized_benchmark_error
-from src.lib.benchmarks.assistant_tool_bridge import AssistantToolBridge, PAPER_DRAFT_TOOL, PAPER_PROPOSAL_TOOL
+from src.lib.benchmarks.assistant_tool_bridge import (
+    AssistantToolBridge, PAPER_DRAFT_TOOL, PAPER_PROPOSAL_TOOL,
+    EXPERIMENT_READ_TOOL, EXPERIMENT_LIST_TOOL, EXPERIMENT_PROPOSAL_TOOL,
+)
 from src.lib.chat_history_repository import ChatHistoryRepository
 from src.lib.openai_agents.config import get_executable_run_event_replay_limit
 from src.lib.observability.runtime import report_runtime_exception
@@ -88,7 +91,10 @@ async def produce_turn(*, owner: str, session_id: str, turn_id: str,
         nonlocal status
         try:
             async for item in stream_benchmark_assistant(
-                input_items=input_items, definitions=[PAPER_DRAFT_TOOL, PAPER_PROPOSAL_TOOL], executor=bridge.execute,
+                input_items=input_items,
+                definitions=[PAPER_DRAFT_TOOL, PAPER_PROPOSAL_TOOL, EXPERIMENT_READ_TOOL,
+                             EXPERIMENT_LIST_TOOL, EXPERIMENT_PROPOSAL_TOOL],
+                executor=bridge.execute,
                 state=state, session_id=session_id, user_id=owner, cancel_event=cancel_event,
             ):
                 await queue.put(item)

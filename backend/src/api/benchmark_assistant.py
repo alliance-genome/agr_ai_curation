@@ -105,6 +105,11 @@ class AssistantSessions(BaseModel):
     next_cursor: str | None
 
 
+class ExperimentProposalReference(BaseModel):
+    proposal_id: UUID
+    draft_id: UUID
+
+
 class AssistantMessage(BaseModel):
     message_id: UUID
     turn_id: str | None
@@ -113,6 +118,7 @@ class AssistantMessage(BaseModel):
     content: str
     created_at: datetime
     proposal_ids: list[UUID] = Field(default_factory=list)
+    experiment_proposals: list[ExperimentProposalReference] = Field(default_factory=list)
 
 
 def _proposal_ids(payload: Any) -> list[UUID]:
@@ -133,6 +139,29 @@ def _proposal_ids(payload: Any) -> list[UUID]:
         if identity not in ids:
             ids.append(identity)
     return ids
+
+
+def _experiment_proposals(payload: Any) -> list[ExperimentProposalReference]:
+    """Return routing identities only, never retained candidate or internal context."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("tool_calls"), list):
+        return []
+    refs = []
+    for call in payload["tool_calls"]:
+        if not isinstance(call, dict) or call.get("name") != "propose_experiment_draft":
+            continue
+        result = call.get("output")
+        if not isinstance(result, dict) or result.get("contract_version") != "experiment_draft_proposal.v1":
+            continue
+        try:
+            ref = ExperimentProposalReference(
+                proposal_id=UUID(str(result.get("proposal_id"))),
+                draft_id=UUID(str(result.get("artifact_identity"))),
+            )
+        except ValueError:
+            continue
+        if ref not in refs:
+            refs.append(ref)
+    return refs
 
 
 class AssistantConversation(BaseModel):
@@ -215,6 +244,7 @@ def get_conversation(
                 message_id=item.message_id, turn_id=item.turn_id, role=item.role,
                 message_type=item.message_type, content=item.content, created_at=item.created_at,
                 proposal_ids=_proposal_ids(item.payload_json),
+                experiment_proposals=_experiment_proposals(item.payload_json),
             ) for item in page.items], next_cursor=encode_chat_message_cursor(page.next_cursor),
         ))
 
@@ -290,6 +320,11 @@ async def start_turn(
                 for proposal_id in _proposal_ids(saved):
                     yield assistant_turns.event(session_key, turn_key, "TOOL_RESULT",
                         tool_name="propose_paper_reference_draft", result={"proposal_id": str(proposal_id)})
+                for ref in _experiment_proposals(saved):
+                    yield assistant_turns.event(session_key, turn_key, "TOOL_RESULT",
+                        tool_name="propose_experiment_draft", result={
+                            "proposal_id": str(ref.proposal_id), "artifact_identity": str(ref.draft_id),
+                        })
                 status = saved.get("status", "completed") if isinstance(saved, dict) else "completed"
                 yield assistant_turns.event(session_key, turn_key, "DONE", status=status, replayed=True)
             return StreamingResponse(replay(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})

@@ -211,6 +211,7 @@ def _build_function_tool(
             "propose_workshop_draft_update": "workshop_authoring_proposal.v1",
             "propose_flow_draft_update": "flow_authoring_proposal.v1",
             "propose_paper_reference_draft": "paper_reference_proposal.v1",
+            "propose_experiment_draft": "experiment_draft_proposal.v1",
         }.get(name)
         output = result.full_output
         if (expected and isinstance(output, Mapping)

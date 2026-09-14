@@ -534,8 +534,17 @@ executable-run manager; this helper alone does not start or resume provider work
 
 `benchmarks/assistant_runtime.py` reuses Workshop's protected provider, model,
 reasoning and existing environment-configurable turn/output limits. Its current
-server-owned tool catalog permits `read_paper_reference_draft` and
-`propose_paper_reference_draft`. Proposals require human review and are never
+server-owned tool catalog permits `read_paper_reference_draft`,
+`propose_paper_reference_draft`, `list_experiment_drafts`,
+`read_experiment_draft` and `propose_experiment_draft`. The portal independently
+enforces administrator role and issuer/subject ownership for experiment tools;
+context never grants access. Experiment reads inspect saved choices, not readiness.
+The proposal tool creates a candidate with the current revision/content hash and
+complete name/design for human review. It cannot apply, freeze, prepare, recover
+or run an experiment. The shared Workshop runtime stops on valid pending
+experiment proposals. History and completed-turn replay project only experiment
+proposal/draft UUIDs; the portal reauthorizes and loads review cards independently.
+Paper proposal references remain separate. Proposals require human review and are never
 applied or published by model tools. No Workshop tools or benchmark
 execution/publication controls are inherited. The shared
 stream uses a distinct benchmark assistant trace/workflow identity, preserving
