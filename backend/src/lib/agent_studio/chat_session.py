@@ -17,6 +17,7 @@ from src.lib.agent_studio.application_events import (
 )
 from src.lib.chat_history_repository import (
     AGENT_STUDIO_CHAT_KIND,
+    BENCHMARK_ASSISTANT_CHAT_KIND,
     AppendMessageResult,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
@@ -347,7 +348,7 @@ def get_chat_conversation_payload(
         message_cursor=message_cursor,
         excluded_message_types=set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES),
     )
-    if detail is None:
+    if detail is None or detail.session.chat_kind == BENCHMARK_ASSISTANT_CHAT_KIND:
         return {
             "success": False,
             "error": "Chat session not found.",
@@ -440,7 +441,7 @@ def get_chat_turn_payload(
         session_id=session_id,
         user_auth_sub=user_auth_sub,
     )
-    if session is None:
+    if session is None or session.chat_kind == BENCHMARK_ASSISTANT_CHAT_KIND:
         return {
             "success": False,
             "error": "Chat session not found.",

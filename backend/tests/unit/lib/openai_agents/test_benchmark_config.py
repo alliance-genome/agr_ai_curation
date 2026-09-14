@@ -244,6 +244,7 @@ def test_benchmark_oidc_defaults_and_overrides(monkeypatch):
 
 def test_every_benchmark_capability_has_independent_scope_and_group_config(monkeypatch):
     mappings = {
+        "benchmark:assist": "ASSIST",
         "benchmark:read": "READ",
         "benchmark:run": "RUN",
         "benchmark:cancel": "CANCEL",

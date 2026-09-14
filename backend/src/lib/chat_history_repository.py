@@ -33,6 +33,7 @@ from src.lib.persistence_sanitization import (
 
 ASSISTANT_CHAT_KIND = "assistant_chat"
 AGENT_STUDIO_CHAT_KIND = "agent_studio"
+BENCHMARK_ASSISTANT_CHAT_KIND = "benchmark_assistant"
 ALL_CHAT_KINDS_SENTINEL = "all"
 # Env-configurable (defaults unchanged); see config.py getters and .env.example:
 #   CHAT_SESSION_PAGE_SIZE_MAX, CHAT_MESSAGE_PAGE_SIZE_MAX,
@@ -49,6 +50,7 @@ VALID_CHAT_ROLES = {"user", "assistant", "flow"}
 VALID_CHAT_KINDS = {
     ASSISTANT_CHAT_KIND,
     AGENT_STUDIO_CHAT_KIND,
+    BENCHMARK_ASSISTANT_CHAT_KIND,
 }
 _UNSET = object()
 logger = logging.getLogger(__name__)
@@ -276,6 +278,8 @@ def _normalize_chat_kind(value: str) -> str:
 def _normalize_list_chat_kinds(value: str) -> tuple[str, ...]:
     normalized = _normalize_required_text(value, field_name="chat_kind")
     if normalized == ALL_CHAT_KINDS_SENTINEL:
+        # The existing curation/Workshop browser must not absorb benchmark
+        # assistance sessions. That surface selects its explicit kind.
         return (
             ASSISTANT_CHAT_KIND,
             AGENT_STUDIO_CHAT_KIND,

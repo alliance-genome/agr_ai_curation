@@ -977,6 +977,7 @@ def get_sentry_log_event_level() -> int | None:
 # --- Developer benchmark harness ---
 
 _BENCHMARK_CAPABILITY_ENV_SUFFIXES = {
+    "benchmark:assist": "ASSIST",
     "benchmark:read": "READ",
     "benchmark:run": "RUN",
     "benchmark:cancel": "CANCEL",
@@ -1142,6 +1143,21 @@ def get_benchmark_oidc_capability_scopes(capability: str) -> tuple[str, ...]:
     suffix = _benchmark_capability_suffix(capability)
     raw = os.getenv(f"BENCHMARK_OIDC_{suffix}_SCOPES", "")
     return tuple(value.strip() for value in raw.split(",") if value.strip())
+
+
+def get_benchmark_assistant_tool_timeout_seconds() -> float:
+    """Seconds allowed for a portal assistant-tool reply (default 60)."""
+    return max(0.1, _get_env_float_with_fallback("BENCHMARK_ASSISTANT_TOOL_TIMEOUT_SECONDS", 60.0))
+
+
+def get_benchmark_assistant_max_tool_calls() -> int:
+    """Maximum portal tool requests per assistance turn (default 24)."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_ASSISTANT_MAX_TOOL_CALLS", 24))
+
+
+def get_benchmark_assistant_tool_result_max_bytes() -> int:
+    """Maximum JSON bytes in a portal tool reply (default 1 MiB)."""
+    return max(1, _get_env_int_with_fallback("BENCHMARK_ASSISTANT_TOOL_RESULT_MAX_BYTES", 1_048_576))
 
 
 def get_benchmark_operator_capability_groups(capability: str) -> tuple[str, ...]:

@@ -177,7 +177,9 @@ async def test_authorization_denial_does_not_report_server_failure(boundary, mon
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure,expected", [(None, 200), ("audience", 401), ("subject", 403), ("revoked", 403)])
-async def test_read_wrapper_preserves_current_human_verification(boundary, failure, expected):
+@pytest.mark.parametrize("dependency", [admission.require_benchmark_read_curator,
+                                       admission.require_benchmark_assistant_curator])
+async def test_read_wrapper_preserves_current_human_verification(boundary, failure, expected, dependency):
     owner = {"sub": "service:portal", "client_id": "portal", "token_use": "access"}
     if failure == "audience":
         boundary[0].validate_token.side_effect = InvalidAudienceError("private-token")
@@ -186,11 +188,11 @@ async def test_read_wrapper_preserves_current_human_verification(boundary, failu
     elif failure == "revoked":
         boundary[2].side_effect = PermissionError("private-provider-detail")
     if expected == 200:
-        receipt = await admission.require_benchmark_read_curator(request(), owner, "Bearer human-token")
+        receipt = await dependency(request(), owner, "Bearer human-token")
         assert receipt.subject == "curator" and receipt.db_user_id == 42
     else:
         with pytest.raises(HTTPException) as error:
-            await admission.require_benchmark_read_curator(request(), owner, "Bearer human-token")
+            await dependency(request(), owner, "Bearer human-token")
         assert error.value.status_code == expected
         assert "private" not in str(error.value.detail)
 

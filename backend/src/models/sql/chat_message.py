@@ -60,7 +60,7 @@ class ChatMessage(Base):
             name="ck_chat_messages_session_id_not_empty",
         ),
         CheckConstraint(
-            "chat_kind IN ('assistant_chat', 'agent_studio')",
+            "chat_kind IN ('assistant_chat', 'agent_studio', 'benchmark_assistant')",
             name="ck_chat_messages_chat_kind",
         ),
         CheckConstraint(

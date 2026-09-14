@@ -66,7 +66,7 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["7b3168a940de"]
+    assert heads == ["8c4279ba51ef"]
 
 
 def test_alembic_revision_graph_rejects_duplicate_revision_ids(
@@ -128,4 +128,4 @@ def test_convergence_runs_only_the_missing_parent_branch(start, expected):
         # Match Alembic command.upgrade, including the other merge branch.
         item.revision for item in scripts.iterate_revisions("heads", start, implicit_base=True)
     }
-    assert upgrade == expected
+    assert upgrade == expected | {"8c4279ba51ef"}

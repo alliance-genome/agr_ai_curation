@@ -5,6 +5,7 @@ from .chat_common import *
 from ..lib.chat_context_report import build_chat_context_report
 from ..lib.openai_agents.chat_compaction_session import CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE
 from ..lib.agent_studio.application_events import APPLICATION_EVENT_MESSAGE_TYPE
+from ..lib.chat_history_repository import BENCHMARK_ASSISTANT_CHAT_KIND
 
 
 @router.post("/chat/session", response_model=SessionResponse)
@@ -182,7 +183,7 @@ async def get_session_history(
             exc=exc,
             level=logging.WARNING,
         )
-    if detail is None:
+    if detail is None or detail.session.chat_kind == BENCHMARK_ASSISTANT_CHAT_KIND:
         raise HTTPException(status_code=404, detail="Chat session not found")
 
     active_document = await _load_session_active_document(
