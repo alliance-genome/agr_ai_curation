@@ -12,6 +12,7 @@ import json
 import logging
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
+from uuid import uuid4
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 
 from agents import (
@@ -42,6 +43,9 @@ from src.lib.openai_agents.config import (
     get_agent_studio_reasoning_effort, require_model_reasoning_effort,
 )
 from src.lib.openai_agents.langfuse_client import get_langfuse, is_openai_agents_tracing_enabled
+from src.lib.observability.cost_context import (
+    agent_identity, attach_agent_cost_identity, cost_scope, execution_context,
+)
 from src.lib.openai_agents.runner import (
     build_owned_openai_responses_resources,
     close_owned_openai_resources,
@@ -92,6 +96,7 @@ class AgentStudioRunState:
     """Mutable result populated while the SDK-owned run is streamed."""
 
     trace_id: str
+    cost_run_id: str = field(default_factory=lambda: str(uuid4()))
     assistant_text_parts: list[str] = field(default_factory=list)
     executed_tools: list[ExecutedTool] = field(default_factory=list)
     review_message: str | None = None
@@ -300,6 +305,13 @@ def build_agent_studio_model_settings(
 @contextmanager
 def _studio_trace_scope(*, state: AgentStudioRunState, session_id: str, user_id: str):
     """Parent SDK observations with the same identity exposed to the curator."""
+    with cost_scope(execution_context(activity="authoring", run_id=state.cost_run_id)):
+        with _studio_langfuse_scope(state=state, session_id=session_id, user_id=user_id):
+            yield
+
+
+@contextmanager
+def _studio_langfuse_scope(*, state: AgentStudioRunState, session_id: str, user_id: str):
     client = get_langfuse()
     if client is None or not is_openai_agents_tracing_enabled():
         yield
@@ -460,6 +472,10 @@ async def stream_agent_studio_run(
             tools=tools,
             tool_use_behavior=_proposal_review_behavior(state),
         )
+        attach_agent_cost_identity(agent, {
+            **agent_identity("agent_studio_authoring", agent.name, "other"),
+            "provider": "openai",
+        })
         pending_calls: dict[str, tuple[str, dict[str, Any]]] = {}
         with _studio_trace_scope(state=state, session_id=session_id, user_id=user_id), gen_ai_conversation_scope(session_id):
             with _tracked_agent_span(
@@ -604,6 +620,10 @@ async def run_forced_agent_studio_tool(
             tools=tools,
             tool_use_behavior="stop_on_first_tool",
         )
+        attach_agent_cost_identity(agent, {
+            **agent_identity("agent_studio_suggestion", agent.name, "other"),
+            "provider": "openai",
+        })
         with _studio_trace_scope(state=state, session_id=session_id, user_id=user_id), gen_ai_conversation_scope(session_id):
             with _tracked_agent_span(
                 agent_name="Agent Studio Suggestion Assistant",

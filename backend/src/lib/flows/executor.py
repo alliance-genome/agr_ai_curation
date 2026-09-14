@@ -3449,6 +3449,7 @@ def get_all_agent_tools(
                 include_evidence=include_evidence,
             )
             agent_kwargs = dict(context)
+            agent_kwargs["cost_node_id"] = node_id
             if node_id in custom_entries:
                 receipt = entry["execution_receipt"]
                 agent_kwargs["execution_revision_id"] = receipt["agent_revision_id"]
@@ -3982,6 +3983,11 @@ Preferred-flow follow-up inspection context:
         model_settings=model_settings,
     )
     setattr(supervisor, "_flow_unavailable_steps", unavailable_steps)
+    from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
+    attach_agent_cost_identity(supervisor, {
+        **agent_identity("supervisor", supervisor.name, "supervisor"),
+        "provider": model_provider,
+    })
     setattr(supervisor, "_flow_execution_state", execution_state)
 
     logger.info(
@@ -4420,6 +4426,7 @@ async def execute_flow(
     active_groups: Optional[List[str]] = None,
     flow_run_id: Optional[str] = None,
     trace_context: Optional[Dict[str, str]] = None,
+    cost_run_id: Optional[str] = None,
     chat_route_mode: Literal["automatic", "agent", "flow"] | None = None,
     chat_route_target_id: str | None = None,
     inspection_context: PreferredFlowInspectionContext | None = None,
@@ -4592,6 +4599,12 @@ async def execute_flow(
     # rich events (SUPERVISOR_START, AGENT_GENERATING, CREW_START, etc.)
     # Pass pre-fetched doc_context to avoid redundant Weaviate queries
     from src.lib.openai_agents.runner import run_agent_streamed
+
+    from src.lib.observability.cost_context import execution_context
+    supervisor.cost_execution_context = execution_context(
+        activity="extraction_flow", document_id=document_id, user_id=user_id,
+        workflow_id=str(flow.id), job_id=flow_run_id, run_id=cost_run_id,
+    )
 
     flow_status = "completed"
     failure_reason: Optional[str] = None

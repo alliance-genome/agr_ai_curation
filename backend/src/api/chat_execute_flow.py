@@ -999,6 +999,7 @@ async def execute_flow_endpoint(
                 user_query=request.user_query,
                 active_groups=active_groups,
                 flow_run_id=prepared_turn.flow_run_id,
+                cost_run_id=current_turn_id,
                 trace_context=(
                     {"trace_id": prepared_turn.resume_trace_id}
                     if prepared_turn.resume_trace_id

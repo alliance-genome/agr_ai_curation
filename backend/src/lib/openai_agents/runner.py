@@ -139,6 +139,7 @@ from src.models.sql.database import SessionLocal
 # Request-scoped context for tools (trace_id captured via closure)
 from src.lib.context import set_current_trace_id, set_current_run_config, reset_current_run_config
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
+from src.lib.observability.cost_context import costed_call, costed_stream
 from src.lib.observability.sentry import (
     application_owned_terminal_failure_capture,
     gen_ai_conversation_scope,
@@ -563,6 +564,7 @@ async def owned_openai_run_config(
         await close_owned_openai_resources(resources)
 
 
+@costed_call
 async def run_agent_with_owned_openai_resources(
     agent: Agent,
     input_value: Any,
@@ -596,6 +598,7 @@ async def run_agent_with_owned_openai_resources(
         )
 
 
+@costed_call
 def run_agent_sync_with_owned_openai_resources(
     agent: Agent,
     *,
@@ -2295,6 +2298,7 @@ async def _run_agent_with_owned_resources(
     yield run_finished_event
 
 
+@costed_stream
 async def run_agent_streamed(
     context_messages: List[Dict[str, Any]],
     user_id: str,

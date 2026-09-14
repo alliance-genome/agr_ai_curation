@@ -398,6 +398,11 @@ Common abstract locations when not explicitly labeled:
             output_type=HierarchyOutput,  # Use structured output
         )
 
+        from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
+        attach_agent_cost_identity(hierarchy_agent, agent_identity(
+            "hierarchy_classifier", hierarchy_agent.name, "classifier",
+        ))
+
         # Run the agent
         with gen_ai_invoke_agent_span(
             agent_name=hierarchy_agent.name,

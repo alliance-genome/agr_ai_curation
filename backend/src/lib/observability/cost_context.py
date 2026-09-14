@@ -1,0 +1,193 @@
+"""Immutable, content-free execution identity for model cost attribution."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import inspect
+from functools import wraps
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Mapping
+from uuid import uuid4
+
+logger = logging.getLogger(__name__)
+_context: ContextVar[str] = ContextVar("model_cost_context", default="{}")
+FIELDS = frozenset({
+    "paper", "paper_category", "related_papers", "document_id", "artifact_revision",
+    "run_id", "workflow_id", "node_id", "job_id", "activity", "environment", "deployment",
+})
+
+
+def current_cost_context() -> dict[str, Any]:
+    return json.loads(_context.get())
+
+
+def set_cost_context(context: Mapping[str, Any]):
+    """Serialize a snapshot so mutable request objects cannot leak across tasks."""
+    return _context.set(json.dumps({k: v for k, v in context.items() if k in FIELDS}))
+
+
+@contextmanager
+def cost_scope(context: Mapping[str, Any]):
+    token = set_cost_context(context)
+    try:
+        yield
+    finally:
+        _context.reset(token)
+
+
+def execution_context(*, activity: str, document_id: str | None = None,
+                      user_id: str | None = None, run_id: str | None = None,
+                      workflow_id: str | None = None, job_id: str | None = None) -> dict[str, Any]:
+    """Resolve only an already verified, owned source-provider reference.
+
+    Uploaded filenames, prompts, titles and prior conversation papers are never
+    identity sources. Failure to resolve telemetry does not fail application work.
+    """
+    context = {
+        "activity": activity, "run_id": run_id or str(uuid4()),
+        "document_id": str(document_id) if document_id else None,
+        "paper_category": "artifact_only" if document_id else "not_associated",
+        "environment": os.getenv("SENTRY_ENVIRONMENT") or os.getenv("LANGFUSE_TRACING_ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "unknown",
+        "deployment": os.getenv("SENTRY_RELEASE") or os.getenv("GIT_SHA") or os.getenv("VITE_GIT_SHA") or None,
+        "workflow_id": workflow_id, "job_id": job_id,
+    }
+    if not document_id or not user_id:
+        return context
+    try:
+        from src.models.sql.database import SessionLocal
+        from src.models.sql.pdf_document import PDFDocument
+        from src.models.sql.user import User
+        with SessionLocal() as db:
+            document = db.query(PDFDocument).join(User, PDFDocument.user_id == User.id).filter(
+                PDFDocument.id == document_id, User.auth_sub == user_id,
+            ).one_or_none()
+            if document is not None:
+                reference = document.source_provider_reference_curie or document.source_provider_reference_id
+                if document.source_provider and reference:
+                    context["paper"] = {"namespace": document.source_provider, "id": reference}
+                    context["paper_category"] = "paper"
+                context["artifact_revision"] = document.file_hash or document.source_md5
+    except Exception as exc:
+        logger.warning("Paper cost attribution unavailable (%s)", type(exc).__name__)
+    return context
+
+
+def agent_identity(agent_id: str, name: str, category: str | None = None,
+                   revision: str | None = None) -> dict[str, Any]:
+    role = str(category or "unknown").strip().lower()
+    if role == "output":
+        role = "formatter"
+    if role not in {"extraction", "validation", "chat", "supervisor", "formatter", "classifier", "other"}:
+        role = "unknown"
+    return {"agent_id": agent_id, "agent_name": name, "agent_role": role,
+            "agent_revision": str(revision) if revision else None}
+
+
+def costed_stream(function):
+    """Scope one request execution, including async SDK child tasks and errors."""
+    signature = inspect.signature(function)
+    @wraps(function)
+    async def wrapped(*args, **kwargs):
+        arguments = signature.bind(*args, **kwargs)
+        arguments.apply_defaults()
+        values = arguments.arguments
+        agent = values.get("agent")
+        context = getattr(agent, "cost_execution_context", None)
+        if context is None:
+            context = execution_context(
+                activity="interactive_chat", document_id=values.get("document_id"),
+                user_id=values.get("user_id"), run_id=values.get("turn_id"),
+            )
+        stream = function(*args, **kwargs)
+        try:
+            while True:
+                # Do not leave request context installed while the caller
+                # processes a yielded event or advances another stream.
+                with cost_scope(context):
+                    try:
+                        event = await anext(stream)
+                    except StopAsyncIteration:
+                        return
+                yield event
+        finally:
+            with cost_scope(context):
+                await stream.aclose()
+    return wrapped
+
+
+def attach_agent_cost_identity(agent, identity: Mapping[str, Any]):
+    """Attach registry identity to the SDK agent span without name classification."""
+    from agents import AgentHooks
+    from opentelemetry import trace
+
+    identity = dict(identity)
+    agent.cost_identity = identity
+    previous = getattr(agent, "hooks", None)
+
+    class CostHooks(AgentHooks):
+        async def on_start(self, context, running_agent):
+            span = trace.get_current_span()
+            if span.is_recording():
+                metadata = {**current_cost_context(), **identity}
+                span.set_attribute("metadata", json.dumps({"cost_context": metadata}))
+            if previous is not None:
+                await previous.on_start(context, running_agent)
+
+        def __getattribute__(self, name):
+            if name.startswith("on_") and name != "on_start" and previous is not None:
+                return getattr(previous, name)
+            return super().__getattribute__(name)
+
+    agent.hooks = CostHooks()
+    return agent
+
+
+def costed_call(function):
+    """Standalone/background calls inherit a parent run or create one boundary."""
+    def context_for(agent):
+        inherited = current_cost_context()
+        if inherited.get("run_id"):
+            return inherited
+        identity = getattr(agent, "cost_identity", {})
+        boundary = getattr(agent, "cost_boundary", {})
+        return execution_context(
+            activity="standalone_validation" if identity.get("agent_role") == "validation" else "background",
+            document_id=boundary.get("document_id"), user_id=boundary.get("user_id"),
+        )
+
+    if inspect.iscoroutinefunction(function):
+        @wraps(function)
+        async def asynchronous(agent, *args, **kwargs):
+            with cost_scope(context_for(agent)):
+                return await function(agent, *args, **kwargs)
+        return asynchronous
+
+    @wraps(function)
+    def synchronous(agent, *args, **kwargs):
+        with cost_scope(context_for(agent)):
+            return function(agent, *args, **kwargs)
+    return synchronous
+
+
+def costed_document_processing(function):
+    """One background run for a known document pipeline, including classifiers."""
+    signature = inspect.signature(function)
+    @wraps(function)
+    async def wrapped(*args, **kwargs):
+        arguments = signature.bind(*args, **kwargs).arguments
+        request = arguments.get("request")
+        context = current_cost_context()
+        job_id = getattr(request, "job_id", None)
+        if job_id or not context.get("run_id"):
+            context = execution_context(
+                activity="background",
+                document_id=arguments.get("document_id") or getattr(request, "document_id", None),
+                user_id=arguments.get("user_id") or getattr(request, "user_id", None),
+                run_id=str(job_id) if job_id else None,
+                job_id=str(job_id) if job_id else None,
+            )
+        with cost_scope(context):
+            return await function(*args, **kwargs)
+    return wrapped

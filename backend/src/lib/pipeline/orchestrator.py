@@ -79,6 +79,9 @@ class ProcessingResult:
     observability_receipt: dict[str, Any] = field(default_factory=dict)
 
 
+from src.lib.observability.cost_context import costed_document_processing
+
+
 class DocumentPipelineOrchestrator:
     """Orchestrates the document processing pipeline."""
 
@@ -95,6 +98,7 @@ class DocumentPipelineOrchestrator:
         self.weaviate_client = weaviate_client
         self.tracker = tracker or PipelineTracker()
 
+    @costed_document_processing
     async def process_pdf_document(
         self,
         file_path: Path,

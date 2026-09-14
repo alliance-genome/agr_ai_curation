@@ -290,13 +290,14 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertEqual(result["source"], "remote")
         self.assertEqual([trace["id"] for trace in result["traces"]], ["trace-2", "trace-1"])
         self.assertEqual(result["traces"][0]["latency"], 2.0)
-        self.assertEqual(result["traces"][0]["totalCost"], 0.04)
+        self.assertIsNone(result["traces"][0]["totalCost"])
+        self.assertEqual(result["traces"][0]["inclusiveRootCost"], 0.04)
         self.assertEqual(
             result["traces"][0]["htmlPath"],
             "/project/project-1/traces/trace-2",
         )
         self.assertEqual(result["traces"][1]["latency"], 5.0)
-        self.assertAlmostEqual(result["traces"][1]["totalCost"], 0.03)
+        self.assertIsNone(result["traces"][1]["totalCost"])
         self.assertEqual(result["meta"]["observationsRejected"], 1)
         self.assertTrue(result["source_exhausted"])
         self.assertFalse(result["scan_truncated"])

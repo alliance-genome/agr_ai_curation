@@ -1,7 +1,7 @@
 from src.analyzers.token_analysis import TokenAnalysisAnalyzer
 
 
-def test_token_analysis_reports_v2_cache_buckets_and_skips_zero_wrapper():
+def test_token_analysis_reports_cache_buckets_and_missing_usage_generations():
     observations = [
         {
             "id": "wrapper-1",
@@ -34,18 +34,20 @@ def test_token_analysis_reports_v2_cache_buckets_and_skips_zero_wrapper():
     )
 
     assert analysis["found"] is True
-    assert analysis["total_generations"] == 1
+    assert analysis["total_generations"] == 2
     assert analysis["total_prompt_tokens"] == 420
     assert analysis["total_completion_tokens"] == 110
-    assert analysis["total_cost"] == 0.00216
-    generation = analysis["generations"][0]
+    assert analysis["total_cost"] is None
+    assert analysis["priced_subtotal"] == 0.00216
+    assert analysis["unpriced_calls"] == 1
+    generation = analysis["generations"][1]
     assert generation["uncached_input_tokens"] == 300
     assert generation["cache_read_tokens"] == 100
     assert generation["cache_write_tokens"] == 20
     assert generation["reasoning_tokens"] == 30
     assert generation["cost_source"] == "langfuse_calculated"
     assert generation["estimated_total_cost"] is None
-    assert analysis["model_breakdown"]["gpt-5.6-terra"]["count"] == 1
+    assert analysis["model_breakdown"]["gpt-5.6-terra"]["count"] == 2
 
 
 def test_token_analysis_decodes_bounded_provider_usage_without_generation():

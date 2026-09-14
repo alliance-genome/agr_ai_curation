@@ -1786,6 +1786,7 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
             name=db_agent.name,
             agent_key=db_agent.agent_key,
             visibility=db_agent.visibility,
+            category=getattr(db_agent, "category", None),
             **execution_snapshot.model_dump(),
             output_schema_key=execution_snapshot.output_contract.output_schema_key,
         )
@@ -1976,6 +1977,20 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         output_guardrails=output_guardrails,
     )
     runtime_agent.agent_key = str(db_agent.agent_key)
+    from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
+    cost_identity = agent_identity(
+        str(db_agent.agent_key), str(db_agent.name), getattr(db_agent, "category", None),
+        execution_snapshot.fingerprint() if execution_snapshot is not None else
+        prompt_bundle.hash,
+    )
+    cost_identity["provider"] = model_provider
+    if runtime_kwargs.get("cost_node_id"):
+        cost_identity["node_id"] = str(runtime_kwargs["cost_node_id"])
+    attach_agent_cost_identity(runtime_agent, cost_identity)
+    runtime_agent.cost_boundary = {
+        "document_id": runtime_kwargs.get("document_id"),
+        "user_id": runtime_kwargs.get("user_id"),
+    }
     runtime_agent.generic_profile = resolved_profile
     runtime_agent.group_tool_exposure = group_tool_audit
     runtime_agent.authenticated_groups = tuple(

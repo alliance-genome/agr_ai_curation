@@ -167,6 +167,9 @@ def _apply_backend_request_context(context: dict[str, Any]) -> None:
     if callable(clear_context):
         clear_context()
 
+    from src.lib.observability.cost_context import set_cost_context
+    set_cost_context(context.get("cost_context") or {})
+
     trace_id = _normalize_context_value(context.get("trace_id"))
     if trace_id is not None:
         context_module.set_current_trace_id(trace_id)

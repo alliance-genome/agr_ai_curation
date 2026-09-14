@@ -138,6 +138,9 @@ class PackageToolRunner:
                 ),
             )
 
+        from src.lib.observability.cost_context import current_cost_context
+        request_context = dict(context or {})
+        request_context["cost_context"] = current_cost_context()
         request = RunnerRequest(
             protocol_version=PROTOCOL_VERSION,
             package_id=package.package_id,
@@ -149,7 +152,7 @@ class PackageToolRunner:
             import_attribute_kind=binding.import_attribute_kind,
             binding_kind=binding.binding_kind.value,
             required_context=list(binding.required_context),
-            context=dict(context or {}),
+            context=request_context,
             args=list(args or []),
             kwargs=dict(kwargs or {}),
         )

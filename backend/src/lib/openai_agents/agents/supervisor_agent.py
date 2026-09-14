@@ -1818,6 +1818,11 @@ def create_supervisor_agent(
         tools=specialist_tools,
     )
 
+    from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
+    attach_agent_cost_identity(supervisor, {**agent_identity(
+        "supervisor", supervisor.name, "supervisor", prompt_bundle.hash,
+    ), "provider": model_provider})
+
     # Register prompts for execution logging (committed when agent actually runs)
     prompt_run_id = set_pending_prompts(
         supervisor.name,

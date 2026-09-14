@@ -1099,6 +1099,8 @@ def test_dispatch_default_runner_uses_worker_thread_from_running_event_loop(
     captured = {}
 
     def _fake_package_validator(request, *, binding):
+        from src.lib.observability.cost_context import current_cost_context
+        captured["cost_context"] = current_cost_context()
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
         captured["thread_id"] = threading.get_ident()
@@ -1117,7 +1119,12 @@ def test_dispatch_default_runner_uses_worker_thread_from_running_event_loop(
             source_envelope_revision=3,
         )
 
-    result = asyncio.run(_dispatch_inside_event_loop())
+    from src.lib.observability.cost_context import cost_scope, current_cost_context
+    with cost_scope({"run_id": "parent-run", "paper": {"namespace": "fixture", "id": "A"}}):
+        result = asyncio.run(_dispatch_inside_event_loop())
+    assert captured["cost_context"]["run_id"] == "parent-run"
+    assert captured["cost_context"]["paper"]["id"] == "A"
+    assert current_cost_context() == {}
 
     assert captured["thread_id"] != event_loop_thread_id
     assert captured["binding"].binding_id == "fixture.identifier_lookup"
@@ -2544,6 +2551,8 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     def _fake_run_sync(agent, **kwargs):
         captured["agent"] = agent
         captured["kwargs"] = kwargs
+        from src.lib.observability.cost_context import current_cost_context
+        captured["cost_context"] = current_cost_context()
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_result"
         )
@@ -2553,11 +2562,16 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     binding = cast(Any, SimpleNamespace(raw={}, max_tool_calls=16))
-    run_package_scoped_validator_agent(
-        request,
-        binding=binding,
-        runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
-    )
+    from src.lib.observability.cost_context import cost_scope, current_cost_context
+    with cost_scope({"run_id": "continued-run", "paper": {"namespace": "fixture", "id": "paper-A"}}):
+        run_package_scoped_validator_agent(
+            request,
+            binding=binding,
+            runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
+        )
+    assert captured["cost_context"]["run_id"] == "continued-run"
+    assert captured["cost_context"]["paper"]["id"] == "paper-A"
+    assert current_cost_context() == {}
 
     runtime_agent = captured["agent"]
     assert runtime_agent is not source_agent

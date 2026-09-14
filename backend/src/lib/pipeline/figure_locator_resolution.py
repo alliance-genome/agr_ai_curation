@@ -210,6 +210,10 @@ async def _call_figure_locator_classifier(
         output_type=FigureLocatorBatchOutput,
     )
     prompt = _classifier_prompt(candidates)
+    from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
+    attach_agent_cost_identity(agent, agent_identity(
+        "figure_locator_classifier", agent.name, "classifier",
+    ))
 
     with gen_ai_invoke_agent_span(
         agent_name=agent.name,

@@ -1452,6 +1452,11 @@ def run_package_scoped_validator_agent(
         )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
+    if runtime_context is not None:
+        agent.cost_boundary = {
+            "document_id": runtime_context.document_id,
+            "user_id": runtime_context.user_id,
+        }
     _configure_accepted_finalization_stop(agent, finalization_state, batch=False)
     output_type = getattr(agent, "output_type", None)
     if is_domain_validator_result_schema(output_type):
@@ -1643,6 +1648,11 @@ def run_package_scoped_validator_agent_batch(
     )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
+    if runtime_context is not None:
+        agent.cost_boundary = {
+            "document_id": runtime_context.document_id,
+            "user_id": runtime_context.user_id,
+        }
     output_type = getattr(agent, "output_type", None)
     batch_output_type = _batch_output_schema_for_agent_output(output_type)
     if batch_output_type is not None:
@@ -2613,12 +2623,14 @@ def run_package_scoped_validator_agent_in_worker_thread(
     ) as executor:
         if runtime_context is None:
             future = executor.submit(
+                contextvars.copy_context().run,
                 run_package_scoped_validator_agent,
                 request,
                 binding=binding,
             )
             return future.result()
         future = executor.submit(
+            contextvars.copy_context().run,
             run_package_scoped_validator_agent,
             request,
             binding=binding,
@@ -2641,12 +2653,14 @@ def run_package_scoped_validator_agent_batch_in_worker_thread(
     ) as executor:
         if runtime_context is None:
             future = executor.submit(
+                contextvars.copy_context().run,
                 run_package_scoped_validator_agent_batch,
                 jobs,
                 binding=binding,
             )
             return future.result()
         future = executor.submit(
+            contextvars.copy_context().run,
             run_package_scoped_validator_agent_batch,
             jobs,
             binding=binding,
