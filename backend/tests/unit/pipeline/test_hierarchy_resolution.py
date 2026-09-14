@@ -176,6 +176,10 @@ async def test_call_llm_for_hierarchy_returns_empty_when_api_key_missing(monkeyp
 
 
 def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
+    from agents import AgentHooks
+    # Resolve the real wrapper before substituting the deliberately small SDK
+    # module, so this fixture also works when run without prior runner tests.
+    from src.lib.openai_agents import runner as _runner  # noqa: F401
     captured = {}
     agents_module = types.ModuleType("agents")
 
@@ -201,6 +205,7 @@ def _install_fake_agent_modules(monkeypatch, final_output, raise_error=False):
             return SimpleNamespace(final_output=final_output)
 
     agents_module.Agent = FakeAgent
+    agents_module.AgentHooks = AgentHooks
     agents_module.Runner = FakeRunner
     agents_module.ModelSettings = FakeModelSettings
 

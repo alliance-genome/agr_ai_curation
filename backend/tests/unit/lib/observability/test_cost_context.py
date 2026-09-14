@@ -115,7 +115,8 @@ async def test_background_job_context_survives_children_but_new_job_is_separate(
 
 
 @pytest.mark.asyncio
-async def test_pinned_sdk_processor_attaches_nearest_agent_and_exclusive_usage():
+@pytest.mark.parametrize("status,outcome", [("completed", "success"), ("incomplete", "incomplete"), ("failed", "error"), (None, "unknown")])
+async def test_pinned_sdk_processor_attaches_nearest_agent_and_exclusive_usage(status, outcome):
     from agents import Agent, agent_span, response_span, trace, set_trace_processors
     from openai.types.responses import Response
     from opentelemetry.sdk.trace import TracerProvider
@@ -129,6 +130,7 @@ async def test_pinned_sdk_processor_attaches_nearest_agent_and_exclusive_usage()
     set_trace_processors([processor])
     response = Response.model_validate({
         "id": "resp_fixture", "created_at": 1, "object": "response", "model": "fixture-model",
+        "status": status,
         "output": [], "parallel_tool_calls": False, "tool_choice": "auto", "tools": [],
         "usage": {"input_tokens": 1000, "output_tokens": 200, "total_tokens": 1200,
                   "input_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 300},
@@ -150,6 +152,7 @@ async def test_pinned_sdk_processor_attaches_nearest_agent_and_exclusive_usage()
         assert metadata["agent_id"] == "validator"
         assert metadata["paper"]["id"] == "A"
         assert metadata["provider_response_id"] == "resp_fixture"
+        assert metadata["attempt_outcome"] == outcome
         usage = json.loads(generations[0].attributes["langfuse.observation.usage_details"])
         assert usage == {"input": 100, "input_cached_tokens": 600, "input_cache_creation": 300,
                          "output": 50, "output_reasoning_tokens": 150}

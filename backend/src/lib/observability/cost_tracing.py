@@ -53,7 +53,11 @@ class CostTracingProcessor(OpenInferenceTracingProcessor):
         metadata = _metadata(current)
         response = getattr(span.span_data, "response", None)
         metadata["attempt_id"] = span.span_id
-        metadata["attempt_outcome"] = "error" if span.error else "success" if response is not None else "unknown"
+        response_status = getattr(response, "status", None)
+        metadata["attempt_outcome"] = "error" if span.error else {
+            "completed": "success", "failed": "error", "cancelled": "cancelled",
+            "incomplete": "incomplete", "in_progress": "ongoing", "queued": "ongoing",
+        }.get(response_status, "unknown")
         metadata["usage_status"] = "missing"
         if response is not None:
             metadata.setdefault("provider", "openai")
