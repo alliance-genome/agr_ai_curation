@@ -79,6 +79,17 @@ synthetic suites demonstrate explicit named arms without correctness data.
 
 ## Execution routing and invocation telemetry
 
+Completed flow results retain normalized extraction envelopes in
+`benchmark-flow-extractions/v1`. Each envelope's
+`metadata.benchmark_flow_source` contains a `benchmark-flow-source/v1` identity
+with `flow_id`, `node_id`, `run_id` and `document_id`, derived from the persisted
+executor context rather than model-authored output. Private step queries are
+not copied into this identity. Invalid or contradictory persisted context is
+rejected; records without captured context retain a null source identity and
+cannot satisfy node-specific output mappings. Multiple nodes using the same
+agent remain distinct. This identity is not a biological score or a replacement
+for checking the selected mapping against the frozen output contract.
+
 Execution activates one frozen cell route map for the complete nested runtime.
 The flow supervisor resolves `supervisor`, each model-bearing flow step resolves
 its own `agent:<agent-id>` slot, and agent-backed validators resolve their

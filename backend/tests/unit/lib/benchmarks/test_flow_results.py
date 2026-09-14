@@ -122,3 +122,46 @@ def test_normalizes_extractor_shape_using_existing_domain_pack_contract(monkeypa
     assert envelope["extracted_objects"] == []
     assert "curatable_objects" not in envelope
     assert envelope["metadata"]["source_adapter_key"] == "gene"
+
+
+def execution_context(**updates):
+    return {
+        "captured_at": "2026-09-14T00:00:00Z",
+        "source_kind": "flow", "flow_id": "flow-1", "step_id": "node-1",
+        "agent_key": "extractor", "executed_query": "private step query",
+        "document": None,
+    } | updates
+
+
+def test_node_identity_comes_from_persisted_context_not_model_metadata(monkeypatch):
+    records = [
+        extraction("result-1", metadata={"execution_context": execution_context()}),
+        extraction("result-2", metadata={"execution_context": execution_context(step_id="node-2")}),
+        extraction("historical"),
+    ]
+    for record in records:
+        record.payload_json["metadata"] = {"benchmark_flow_source": {"node_id": "forged"}}
+    monkeypatch.setattr(flow_results, "list_extraction_results", lambda **kwargs: records)
+    output = load(receipt("result-2", "result-1", "historical"))
+    sources = [item["metadata"]["benchmark_flow_source"] for item in output["envelopes"]]
+    assert sources == [
+        {"schema_version": "benchmark-flow-source/v1", "flow_id": "flow-1",
+         "node_id": node, "run_id": "run-1", "document_id": "document-1"}
+        for node in ("node-2", "node-1")
+    ] + [None]
+    assert "private step query" not in str(output)
+    assert all(r.payload_json["metadata"]["benchmark_flow_source"]["node_id"] == "forged" for r in records)
+
+
+@pytest.mark.parametrize("context", [
+    execution_context(agent_key="another-agent"),
+    execution_context(step_id=None),
+    execution_context(source_kind="chat", flow_id=None),
+    execution_context(document={"document_id": "11111111-1111-4111-8111-111111111111"}),
+])
+def test_rejects_inconsistent_or_invalid_persisted_node_context(monkeypatch, context):
+    monkeypatch.setattr(flow_results, "list_extraction_results", lambda **kwargs: [
+        extraction(metadata={"execution_context": context}),
+    ])
+    with pytest.raises(ValueError):
+        load(receipt("result-1"))

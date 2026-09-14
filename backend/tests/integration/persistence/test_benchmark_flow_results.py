@@ -67,6 +67,13 @@ async def test_result_resolution_enforces_all_execution_scope_filters(monkeypatc
                 "origin_session_id": run_id,
                 "flow_run_id": run_id,
                 "user_id": owner,
+                "extraction_metadata": {"execution_context": {
+                    "captured_at": "2026-09-14T00:00:00Z",
+                    "source_kind": "flow", "flow_id": "synthetic-flow",
+                    "step_id": "extractor-node", "agent_key": "test-extractor",
+                    "executed_query": "Synthetic paper extraction",
+                    "document": {"document_id": str(documents[0].id)},
+                }},
                 "payload_json": {
                     "envelope_id": f"envelope:{result_id}",
                     "domain_pack_id": "test-pack",
@@ -116,6 +123,11 @@ async def test_result_resolution_enforces_all_execution_scope_filters(monkeypatc
         output = result.output
         assert len(output["envelopes"]) == 1
         assert output["envelopes"][0]["metadata"]["source_extraction_result_id"] == str(records[0].id)
+        assert output["envelopes"][0]["metadata"]["benchmark_flow_source"] == {
+            "schema_version": "benchmark-flow-source/v1",
+            "flow_id": "synthetic-flow", "node_id": "extractor-node",
+            "run_id": run_id, "document_id": scope["document_id"],
+        }
         for foreign_record in records[1:]:
             with pytest.raises(ValueError, match="does not match persisted"):
                 flow_results.load_flow_extractions(
