@@ -1127,6 +1127,19 @@ async def chat_stream_endpoint(
                     if not durable_flow_event.get("trace_id"):
                         durable_flow_event["trace_id"] = assistant_turn.trace_id or trace_id
                     yield _stream_event_sse(durable_flow_event)
+                if resolved_route.mode == "flow" and not any(
+                    event.get("type") == "CHAT_OUTPUT_READY"
+                    for event in flow_terminal_events
+                ):
+                    yield _stream_event_sse(
+                        _stream_event_payload(
+                            "TEXT_MESSAGE_CONTENT",
+                            session_id=current_session_id,
+                            turn_id=current_turn_id,
+                            trace_id=assistant_turn.trace_id or trace_id,
+                            content=assistant_turn.content,
+                        )
+                    )
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
                         "turn_completed",

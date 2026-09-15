@@ -347,6 +347,13 @@ def _build_execute_flow_summary_content(
     return "No final user-visible output was emitted."
 
 
+def _execute_flow_visible_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Project a durable supervisor completion into the chat's text contract."""
+    if event.get("type") != "RUN_FINISHED":
+        return event
+    return {**event, "type": "TEXT_MESSAGE_CONTENT", "content": str(event.get("response") or "").strip()}
+
+
 def _build_execute_flow_transcript_row_from_event(
     event_payload: Dict[str, Any],
 ) -> "ExecuteFlowTranscriptRow | None":
@@ -952,7 +959,7 @@ async def execute_flow_endpoint(
 
         async def replay_stream():
             for event_payload in prepared_turn.replay_events:
-                yield _stream_event_sse(event_payload)
+                yield _stream_event_sse(_execute_flow_visible_event(event_payload))
 
         return StreamingResponse(
             replay_stream(),
@@ -1144,6 +1151,9 @@ async def execute_flow_endpoint(
                     outcome.observe(flat_event)
 
                     if event_type in {
+                        "TEXT_MESSAGE_START",
+                        "TEXT_MESSAGE_CONTENT",
+                        "TEXT_MESSAGE_END",
                         "RUN_FINISHED",
                         "CHAT_OUTPUT_READY",
                         "FILE_READY",
@@ -1263,7 +1273,7 @@ async def execute_flow_endpoint(
                 )
 
                 for terminal_event in outcome.publishable_terminal_events():
-                    yield _stream_event_sse(terminal_event)
+                    yield _stream_event_sse(_execute_flow_visible_event(terminal_event))
 
         except asyncio.CancelledError:
             logger.warning(

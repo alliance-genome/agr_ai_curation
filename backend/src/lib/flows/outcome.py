@@ -58,8 +58,9 @@ class FlowRunOutcome:
 
     Typed success outputs are retained as candidates until the authoritative
     ``FLOW_FINISHED`` event is observed and transcript persistence succeeds.
-    A raw ``RUN_FINISHED`` response is only a fallback when no typed output was
-    produced. A failed terminal status always discards all success candidates.
+    ``CHAT_OUTPUT_READY`` owns textual output when present; otherwise retain
+    ``RUN_FINISHED`` text alongside any files. A failed terminal status always
+    discards all success candidates.
     """
 
     status: FlowRunStatus = "running"
@@ -85,8 +86,7 @@ class FlowRunOutcome:
         event_type = str(event.get("type") or "")
         if event_type == "RUN_FINISHED":
             self._run_finished_event = dict(event)
-            if not self._success_output_events:
-                self.final_user_visible_text = self._extract_visible_text(event)
+            self.final_user_visible_text = self._selected_visible_text()
             return
 
         if event_type in _TYPED_SUCCESS_OUTPUT_EVENTS:
@@ -97,9 +97,7 @@ class FlowRunOutcome:
                 for existing in self._success_output_events
             ):
                 self._success_output_events.append(candidate)
-            self.final_user_visible_text = self._combined_visible_text(
-                self._success_output_events
-            )
+            self.final_user_visible_text = self._selected_visible_text()
             return
 
         if event_type == "CURATION_HANDOFF_READY":
@@ -195,10 +193,10 @@ class FlowRunOutcome:
             return [dict(event) for event in self._replacement_failure_events]
 
         events: list[dict[str, Any]] = []
-        if self.status == "completed" and self._success_output_events:
+        if self.status == "completed":
             events.extend(dict(event) for event in self._success_output_events)
-        elif self.status == "completed" and self._run_finished_event is not None:
-            events.append(dict(self._run_finished_event))
+            if not self._has_chat_output and self._run_finished_event is not None:
+                events.append(dict(self._run_finished_event))
         elif self.status == "failed" and self._run_error_event is not None:
             events.append(dict(self._run_error_event))
         if (
@@ -256,6 +254,15 @@ class FlowRunOutcome:
             error_type=self.failure_type or "FlowTerminalFailure",
             phase=self.failure_phase or "flow_finalization",
         )
+
+    @property
+    def _has_chat_output(self) -> bool:
+        return any(event.get("type") == "CHAT_OUTPUT_READY" for event in self._success_output_events)
+
+    def _selected_visible_text(self) -> str | None:
+        if self._has_chat_output:
+            return self._combined_visible_text(self._success_output_events)
+        return self._extract_visible_text(self._run_finished_event or {})
 
     @staticmethod
     def _failure_value(event: dict[str, Any], *keys: str) -> str | None:

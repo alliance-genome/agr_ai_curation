@@ -762,11 +762,11 @@ def test_preferred_flow_file_output_is_persisted_for_durable_replay(monkeypatch)
         user_id="auth-sub",
         turn_id="turn-1",
         user_message="create a review file",
-        assistant_message="Flow completed. Review the generated results above.",
+        assistant_message="Here is the extractor handoff, not its full assembled model input.",
         trace_id="trace-1",
         extraction_candidates=[],
         document_id=None,
-        flow_terminal_events=[file_event, flow_finished],
+        flow_terminal_events=[file_event, {"type": "RUN_FINISHED", "response": "Here is the extractor handoff, not its full assembled model input."}, flow_finished],
     )
 
     assert [(row["role"], row.get("message_type", "text")) for row in appended] == [
@@ -774,8 +774,10 @@ def test_preferred_flow_file_output_is_persisted_for_durable_replay(monkeypatch)
         ("assistant", "text"),
     ]
     assert appended[0]["payload_json"] == file_event
+    assert assistant.content == "Here is the extractor handoff, not its full assembled model input."
     assert chat_common._preferred_flow_replay_events(assistant) == [
         file_event,
+        {"type": "RUN_FINISHED", "response": assistant.content},
         flow_finished,
     ]
 

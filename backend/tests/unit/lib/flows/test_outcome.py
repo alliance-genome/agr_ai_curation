@@ -1,6 +1,62 @@
 """Unit coverage for canonical flow terminal outcome reduction."""
 
+import pytest
+
 from src.lib.flows.outcome import FlowRunOutcome, FlowTerminalOutcomeError
+
+
+@pytest.mark.parametrize("file_first", [False, True])
+@pytest.mark.parametrize("canonical", [None, "Canonical answer.", " "])
+def test_files_do_not_own_answer_precedence(file_first, canonical):
+    outcome = FlowRunOutcome()
+    file = {"type": "FILE_READY", "details": {"file_id": "one", "filename": "one.tsv"}}
+    answer = {"type": "RUN_FINISHED", "response": "Supervisor answer."}
+    for event in ([file, answer] if file_first else [answer, file]):
+        outcome.observe(event)
+    outcome.observe(file)  # Duplicate card must not duplicate output.
+    outcome.observe({"type": "FILE_READY", "details": {"file_id": "two", "filename": "two.csv"}})
+    if canonical is not None:
+        outcome.observe({"type": "CHAT_OUTPUT_READY", "details": {"output": canonical}})
+        outcome.observe(answer)  # A later supervisor completion cannot override it.
+    outcome.observe({"type": "FLOW_FINISHED", "status": "completed"})
+    assert outcome.final_user_visible_text == (
+        (canonical.strip() or None) if canonical is not None else "Supervisor answer."
+    )
+    assert [event["type"] for event in outcome.events_for_persistence()] == [
+        "FILE_READY", "FILE_READY",
+        "CHAT_OUTPUT_READY" if canonical is not None else "RUN_FINISHED", "FLOW_FINISHED",
+    ]
+    assert outcome.publishable_terminal_events() == []
+    outcome.mark_persisted(transcript=True)
+    assert outcome.publishable_terminal_events() == outcome.events_for_persistence()
+
+
+@pytest.mark.parametrize("response", [None, "", " \n "])
+def test_file_without_substantive_answer_keeps_no_visible_text(response):
+    outcome = FlowRunOutcome()
+    outcome.observe({"type": "FILE_READY", "details": {"file_id": "one"}})
+    if response is not None:
+        outcome.observe({"type": "RUN_FINISHED", "response": response})
+    outcome.observe({"type": "FLOW_FINISHED", "status": "completed"})
+    assert outcome.final_user_visible_text is None
+
+
+@pytest.mark.parametrize("persistence_failure", [False, True])
+def test_failed_file_and_answer_candidates_never_publish(persistence_failure):
+    outcome = FlowRunOutcome()
+    outcome.observe({"type": "FILE_READY", "details": {"file_id": "one"}})
+    outcome.observe({"type": "RUN_FINISHED", "response": "Do not publish."})
+    if persistence_failure:
+        outcome.observe({"type": "FLOW_FINISHED", "status": "completed"})
+        outcome.replace_with_failure("Could not save", terminal_events=[{"type": "RUN_ERROR"}],
+                                     failure_type="PersistenceError", phase="persistence")
+    else:
+        outcome.observe({"type": "FLOW_FINISHED", "status": "failed"})
+    assert outcome.final_user_visible_text is None
+    assert outcome.publishable_terminal_events() == []
+    outcome.mark_persisted(transcript=True)
+    assert all(event["type"] not in {"FILE_READY", "RUN_FINISHED"}
+               for event in outcome.publishable_terminal_events())
 
 
 def test_failed_outcome_discards_earlier_success_candidate():
