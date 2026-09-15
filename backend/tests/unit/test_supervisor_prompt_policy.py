@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -56,3 +57,28 @@ def test_config_supervisor_prompt_keeps_alliance_specific_handoffs():
     assert "evidence and normalization" not in content
     assert "normalize Alliance identifiers when possible" not in content
     assert "normalize the retained genes to Alliance identifiers" not in content
+
+
+@pytest.mark.parametrize("source", ["packages/core", "config"])
+def test_correction_guidance_is_once_in_effective_prompt(monkeypatch, source):
+    """Assemble real source text and runtime policy without a DB or model call."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from src.lib.prompts import assembly
+    from src.models.sql.prompts import PromptTemplate
+    from src.lib.openai_agents.agents.supervisor_agent import _build_runtime_tool_availability_note
+
+    content = _load_prompt(_repo_root() / source / "agents/supervisor/prompt.yaml")
+    template = PromptTemplate(
+        id=uuid4(), agent_name="supervisor", prompt_type="system", group_id=None,
+        content=content, version=1, is_active=True,
+        created_at=datetime.now(timezone.utc), created_by="test@example.org",
+    )
+    monkeypatch.setattr(assembly, "get_all_active_prompts", lambda: {"supervisor:system:base": template})
+    rendered = assembly.build_agent_prompt_layers(
+        "supervisor", runtime_context=_build_runtime_tool_availability_note([], [], False),
+    ).render()
+    assert rendered.count("When a curator requests a correction you cannot apply") == 1
+    assert "what remains unchanged, including saved results and files" in rendered
+    assert "otherwise say the capability is not currently available and stop" in rendered
+    assert "Offer a next step only when a supported one exists" in rendered

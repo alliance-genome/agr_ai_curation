@@ -1247,6 +1247,14 @@ def _build_runtime_tool_availability_note(
     )
 
     notes.append(
+        "When a curator requests a correction you cannot apply, clearly state "
+        "the limitation and what remains unchanged, including saved results and "
+        "files. Offer a next step only when a supported one exists; otherwise "
+        "say the capability is not currently available and stop. Do not invent "
+        "workarounds or require a follow-up question, rerun, or tool call."
+    )
+
+    notes.append(
         "CURATION PREP HANDOFF: First call prepare_for_curation(action='preview') "
         "with exact saved result refs and the requested candidate count. Present "
         "the complete returned scope and wait for the curator's next confirmation "
