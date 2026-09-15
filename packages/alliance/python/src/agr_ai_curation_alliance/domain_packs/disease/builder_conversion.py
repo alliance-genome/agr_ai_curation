@@ -732,6 +732,7 @@ def materialize_disease_builder_state(
                 object_type=DISEASE_SUBJECT_OBJECT_TYPE,
                 object_role="validated_reference",
                 pending_ref_id=subject_ref_id,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 schema_ref=_subject_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 definition_notes=[
@@ -752,6 +753,7 @@ def materialize_disease_builder_state(
                 object_type=DISEASE_TERM_OBJECT_TYPE,
                 object_role="validated_reference",
                 pending_ref_id=term_ref_id,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 schema_ref=_term_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 payload=copy.deepcopy(term_payload),
@@ -877,6 +879,7 @@ def materialize_disease_builder_state(
                 object_type=object_type,
                 object_role=DISEASE_ANNOTATION_OBJECT_ROLE,
                 pending_ref_id=annotation_ref,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 model_ref=DISEASE_MODEL_ID,
                 schema_ref=_annotation_schema_ref(schema_id, class_name),
                 definition_state=DefinitionState.IN_DEVELOPMENT,

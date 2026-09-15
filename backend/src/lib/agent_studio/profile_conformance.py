@@ -92,6 +92,11 @@ class ResolvedGenericProfile:
                 add(path_pattern + r"\[(?:0|[1-9][0-9]*)\]", schema.items)
 
         add("attributes", ObjectValueSchema(kind="object", fields=self.contract.fields))
+        variants.append({"type": "object", "additionalProperties": False,
+                         "required": ["field_path", "value"], "properties": {
+                             "field_path": {"type": "string", "const": "validation_guidance"},
+                             "value": {"type": ["string", "null"]},
+                         }})
         return {"type": "array", "minItems": 1, "items": {"anyOf": variants}}
 
     def validate_attributes(self, attributes: Any, *, candidate_id: str | None = None) -> list[dict[str, Any]]:
@@ -176,7 +181,7 @@ class ResolvedGenericProfile:
     def validate_candidate(self, candidate: dict[str, Any], *, candidate_id: str | None = None) -> list[dict[str, Any]]:
         allowed = {"domain_pack_id", "object_type", "class_key", "label", "classification_notes",
                    "payload", "pending_ref_id", "source_label", "description", "confidence",
-                   "semantic_class", "attributes", "evidence_record_ids"}
+                   "semantic_class", "attributes", "evidence_record_ids", "validation_guidance"}
         unknown = set(candidate) - allowed
         if unknown:
             return [{"candidate_id": candidate_id, "field_path": key,
@@ -184,6 +189,11 @@ class ResolvedGenericProfile:
                      "actual_kind": _kind(candidate[key]),
                      "message": "No auxiliary field bag is allowed; use only the declared attributes."}
                     for key in sorted(unknown)[:get_generic_profile_max_issues()]]
+        if candidate.get("validation_guidance") is not None and not isinstance(candidate["validation_guidance"], str):
+            return [{"candidate_id": candidate_id, "field_path": "validation_guidance",
+                     "reason": "invalid_type", "expected": "string or null",
+                     "actual_kind": _kind(candidate["validation_guidance"]),
+                     "message": "Validation guidance must be a short advisory sentence."}]
         if candidate.get("payload"):
             return [{"candidate_id": candidate_id, "field_path": "payload",
                      "reason": "profile_payload_forbidden", "expected": "canonical attributes",

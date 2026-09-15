@@ -560,7 +560,7 @@ def test_disease_builder_materializes_staged_condition_relations():
     )
     workspace.upsert_candidate(
         candidate_id="disease-candidate-1",
-        staged_fields=_staged_fields_with_conditions(),
+        staged_fields=_staged_fields_with_conditions(validation_guidance="Check the explicitly described experimental conditions."),
         pending_ref_ids=["disease-annotation-1"],
         evidence_record_ids=["evidence-ad-1"],
         resolver_selection_refs=[],
@@ -580,6 +580,20 @@ def test_disease_builder_materializes_staged_condition_relations():
         if obj["object_type"] == DISEASE_GENE_OBJECT_TYPE
     )
     relations = annotation["payload"]["condition_relations"]
+    from src.schemas.domain_envelope import DomainEnvelope
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry, ValidationBindingState
+    envelope = DomainEnvelope(envelope_id="disease-guidance", domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        extracted_objects=result.payload["curatable_objects"], metadata=result.payload["metadata"])
+    pack = load_alliance_domain_pack_registry().get_pack(DISEASE_DOMAIN_PACK_ID)
+    matches = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+    requests = [build_domain_validation_request(match).request for match in matches
+                if match.object_envelope.object_type == DISEASE_GENE_OBJECT_TYPE]
+    requests = [request for request in requests if request is not None]
+    assert requests
+    assert all(request.validation_guidance == "Check the explicitly described experimental conditions." for request in requests)
+    assert all(obj.get("validation_guidance") is None for obj in result.payload["curatable_objects"]
+               if obj["object_type"].endswith(("Reference", "EvidenceQuote")))
     assert len(relations) == 1
     relation = relations[0]
     # Materialized in the exact target shape the bindings read.

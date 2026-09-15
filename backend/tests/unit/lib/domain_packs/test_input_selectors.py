@@ -196,6 +196,29 @@ def test_input_selector_parser_rejects_malformed_payload_keyed_literal(selector:
         DomainPackInputSelector.model_validate(selector)
 
 
+def test_guidance_is_object_scoped_and_changes_request_identity(tmp_path: Path):
+    pack = _loaded_pack(tmp_path, """
+          selected:
+            source: payload
+            path: value
+""")
+    envelope = _assertion_envelope(payload={"value": "same"}, extra_objects=[
+        CuratableObjectEnvelope(object_type="Assertion", pending_ref_id="assertion-2", payload={"value": "same"}),
+    ])
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    def requests():
+        return [build_domain_validation_request(m).request for m in registry.match_bindings(
+            envelope, states=[ValidationBindingState.ACTIVE])]
+    before = requests()
+    envelope.extracted_objects[0].validation_guidance = "Prioritize checking source attribution; do not infer identity."
+    after = requests()
+    assert after[0].validation_guidance == envelope.extracted_objects[0].validation_guidance
+    assert after[0].request_id != before[0].request_id
+    assert after[1].validation_guidance is None
+    assert after[1].request_id == before[1].request_id
+    assert after[0].selected_inputs == before[0].selected_inputs
+
+
 def test_payload_keyed_literal_maps_sibling_value_to_subset(tmp_path: Path):
     result = _run_selector(
         tmp_path,

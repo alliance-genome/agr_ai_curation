@@ -438,7 +438,8 @@ async def test_final_profile_tool_schema_and_callable_survive_run_state_rebindin
     assert final.params_json_schema["properties"]["attributes"]["additionalProperties"] is False
     assert "class_key" not in final.params_json_schema["properties"]
     args = {"label": "hMETTL1", "attributes": record, "evidence_record_ids": ["evidence-1"],
-            "classification_notes": ["Evidence-backed reagent"]}
+            "classification_notes": ["Evidence-backed reagent"],
+            "validation_guidance": "Use the paper organism context when checking this reagent."}
     context = SimpleNamespace(tool_name=final.name)
     output = await final.on_invoke_tool(context, json.dumps(args))
     assert output.status == "ok", output
@@ -449,6 +450,15 @@ async def test_final_profile_tool_schema_and_callable_survive_run_state_rebindin
     denied = await final.on_invoke_tool(context, json.dumps({**args, "class_key": "wrong"}))
     assert json.loads(denied)["status"] == "error"
     assert len(workspace.candidates) == 1
+    assert next(iter(workspace.candidates.values())).staged_fields["validation_guidance"] == args["validation_guidance"]
+    candidate_id = next(iter(workspace.candidates))
+    patched = await agent.tools[1].on_invoke_tool(context, json.dumps({
+        "candidate_id": candidate_id,
+        "updates": [{"field_path": "validation_guidance", "value": "Check source attribution as well."}],
+    }))
+    assert patched.status == "ok", patched
+    assert workspace.candidates[candidate_id].staged_fields["validation_guidance"] == "Check source attribution as well."
+    assert workspace.candidates[candidate_id].staged_fields["attributes"] == record
     assert json.loads(await final.on_invoke_tool(context, "not json"))["status"] == "error"
     assert_profile_tool_contract(agent.tools[1])
 

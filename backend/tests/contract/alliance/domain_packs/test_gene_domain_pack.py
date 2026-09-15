@@ -101,7 +101,7 @@ def _evidence_records() -> list[dict[str, Any]]:
     ]
 
 
-def _materialize_one_candidate() -> Any:
+def _materialize_one_candidate(validation_guidance=None) -> Any:
     workspace = ExtractionBuilderWorkspace(
         run_id="gene-builder-test-run",
         domain_pack_id=GENE_DOMAIN_PACK_ID,
@@ -109,7 +109,7 @@ def _materialize_one_candidate() -> Any:
     )
     workspace.upsert_candidate(
         candidate_id="gene-candidate-1",
-        staged_fields=_staged_fields(),
+        staged_fields={**_staged_fields(), "validation_guidance": validation_guidance},
         pending_ref_ids=["gene-mention-evidence-1"],
         evidence_record_ids=["evidence-daf16-1"],
         resolver_selection_refs=[],
@@ -134,6 +134,19 @@ def test_gene_pack_loads_with_builder_fixture():
     assert fixture_ref is not None
     assert fixture_ref.path == "fixtures/daf16_builder_pending.yaml"
     assert fixture_ref.object_types == [GENE_MENTION_EVIDENCE_OBJECT_TYPE]
+
+
+def test_gene_guidance_survives_materialization_and_shared_binding():
+    guidance = "Use the paper's C. elegans context to disambiguate the gene mention."
+    result = _materialize_one_candidate(guidance)
+    assert result.ok, result.summary()
+    envelope = DomainEnvelope(envelope_id="gene-guidance", domain_pack_id=GENE_DOMAIN_PACK_ID,
+        extracted_objects=result.payload["curatable_objects"], metadata=result.payload["metadata"])
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    matches = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+    request = build_domain_validation_request(next(match for match in matches if match.binding.binding_id == GENE_REFERENCE_VALIDATOR_BINDING_ID)).request
+    assert request is not None
+    assert request.validation_guidance == guidance
 
 
 def test_gene_builder_materializer_produces_clean_extraction_output():

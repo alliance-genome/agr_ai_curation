@@ -611,12 +611,35 @@ def _single_result_finding(result):
     )
 
 
+def test_guidance_survives_compaction_and_changes_dedupe_identity():
+    from src.lib.domain_packs.materialization import _validation_request_finding_payload
+    request = _verbose_validation_request()
+    changed = request.model_copy(update={"validation_guidance": "Check conditional allele compatibility with the Cyagen source."})
+    assert _validator_request_dedupe_key(request) != _validator_request_dedupe_key(changed)
+    assert validator_request_payload_for_agent(changed)["validation_guidance"] == changed.validation_guidance
+    assert _validation_request_finding_payload(changed)["validation_guidance"] == changed.validation_guidance
+    assert request.validation_guidance is None
+
+
+def test_validator_guidance_is_advisory_in_single_and_batch_prompts():
+    from types import SimpleNamespace
+    from src.lib.domain_packs.validator_dispatch import _append_validator_source_context_instructions
+    for batch in (False, True):
+        agent = SimpleNamespace(instructions="Existing validator policy")
+        _append_validator_source_context_instructions(agent, batch=batch, runtime_context=None)
+        assert "Existing validator policy" in agent.instructions
+        assert "Never resolve an identity solely from guidance" in agent.instructions
+        assert "higher-priority policy" in agent.instructions
+        assert "Do not apply one request's guidance to another" in agent.instructions
+
+
 def test_validator_request_payload_for_agent_omits_semantic_duplicates():
     request = _verbose_validation_request()
 
     payload = validator_request_payload_for_agent(request)
 
     assert payload["selected_inputs"] == request.selected_inputs
+    assert "validation_guidance" not in payload
     assert "input_selectors" not in payload
     assert "evidence" not in payload
     assert "input_values" not in payload["target"]
@@ -1295,7 +1318,8 @@ def test_dispatch_runs_unique_validator_requests_in_parallel(tmp_path: Path):
     assert {item.status for item in result.validator_results} == {"resolved"}
 
 
-def test_dispatch_batches_opted_in_validator_requests(tmp_path: Path):
+@pytest.mark.parametrize("guidance", [None, "Check the organism context against the database."])
+def test_dispatch_batches_opted_in_validator_requests(tmp_path: Path, guidance):
     pack = _loaded_pack(tmp_path, batch_enabled=True)
     batch_calls: list[list[str]] = []
 
@@ -1304,6 +1328,8 @@ def test_dispatch_batches_opted_in_validator_requests(tmp_path: Path):
 
     def _batch_runner(jobs, *, binding):
         batch_calls.append([job.request.selected_inputs["identifier"] for job in jobs])
+        assert [job.request.validation_guidance for job in jobs] == [guidance, None]
+        assert validator_request_payload_for_agent(jobs[0].request).get("validation_guidance") == guidance
         return [
             _result_payload(
                 job.request,
@@ -1315,8 +1341,10 @@ def test_dispatch_batches_opted_in_validator_requests(tmp_path: Path):
             for index, job in enumerate(jobs, start=1)
         ]
 
+    envelope = _multi_object_envelope(["BAD:0001", "BAD:0002"])
+    envelope.extracted_objects[0].validation_guidance = guidance
     result = dispatch_active_validator_bindings(
-        _multi_object_envelope(["BAD:0001", "BAD:0002"]),
+        envelope,
         pack,
         runner=_single_runner,
         batch_runner=_batch_runner,

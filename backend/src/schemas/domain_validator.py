@@ -96,6 +96,10 @@ class ValidationTarget(DomainValidatorBaseModel):
 class DomainValidationRequest(DomainValidatorBaseModel):
     """Dispatcher request built from one domain-pack validator binding match."""
 
+    validation_guidance: Optional[StrictStr] = Field(
+        default=None,
+        description="Short extractor-authored advisory context for this target, not evidence or a validation decision",
+    )
     request_id: StrictStr = Field(description="Stable request identity")
     validator_binding_id: StrictStr = Field(
         description="Domain-pack validator binding ID"

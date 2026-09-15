@@ -709,6 +709,7 @@ def materialize_allele_builder_state(
                 object_type=ALLELE_MENTION_OBJECT_TYPE,
                 object_role="metadata_only",
                 pending_ref_id=mention_ref_id,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 payload=mention_payload,
                 evidence_record_ids=evidence_ids,

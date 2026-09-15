@@ -53,6 +53,7 @@ from .builder_finalization import finalize_builder_extraction
 
 _GO_PATCH_FIELD_PATHS = frozenset(
     {
+        "validation_guidance",
         "gene_product",
         "go_term",
         "evidence_code",
@@ -91,6 +92,10 @@ class _StrictToolModel(BaseModel):
 
 
 class GOStageInput(_StrictToolModel):
+    validation_guidance: Optional[StrictStr] = Field(
+        default=None,
+        description="One short advisory sentence conveying relevant configured validation rules and evidence-backed context for this finding; not source evidence or a resolved identity",
+    )
     pending_ref_id: StrictStr
     gene_product_mention: StrictStr
     gene_product_label: StrictStr
@@ -328,6 +333,7 @@ def _stage_payload(stage_input: GOStageInput) -> dict[str, Any]:
         "domain_pack_id": GO_DOMAIN_PACK_ID,
         "object_type": GO_OBJECT_TYPE,
         "pending_ref_id": stage_input.pending_ref_id,
+        "validation_guidance": stage_input.validation_guidance,
         "payload": {
             "gene_product": gene_product,
             "go_term": {
@@ -531,8 +537,16 @@ def _stage_go_recommendation_impl(
     identity_resolution: Optional[Dict[str, Any]] = None,
     hierarchy_limitations: Optional[List[str]] = None,
     section_limitations: Optional[List[str]] = None,
+    validation_guidance: Optional[str] = None,
 ) -> AgrQueryResult:
-    """Stage one evidence-backed GO recommendation for canonical finalization."""
+    """Stage one evidence-backed GO recommendation for canonical finalization.
+
+    Args:
+        validation_guidance: Optional short sentence forwarding relevant rules from your
+            configured prompt and case-specific paper context to this finding's validators.
+            Distinguish domain rules from paper facts. Do not copy whole prompts, quote
+            document instructions, guess an identity, or replace verified evidence.
+    """
 
     attempted_query = _attempt_query(
         "stage_go_recommendation",
@@ -546,6 +560,7 @@ def _stage_go_recommendation_impl(
     )
     try:
         stage_input = GOStageInput(
+            validation_guidance=validation_guidance,
             pending_ref_id=pending_ref_id,
             gene_product_mention=gene_product_mention,
             gene_product_label=gene_product_label,
@@ -687,6 +702,15 @@ def _patch_go_recommendation_impl(
                     method="patch_go_recommendation",
                     attempted_query=attempted_query,
                 )
+        elif update.field_path == "validation_guidance":
+            if update.value is not None and not isinstance(update.value, str):
+                return _go_validation_result(
+                    message="validation_guidance must be a string or null.",
+                    issues=[{"field_path": "validation_guidance", "reason": "invalid_type"}],
+                    method="patch_go_recommendation",
+                    attempted_query=attempted_query,
+                )
+            staged_fields["validation_guidance"] = update.value
         elif update.value in (None, ""):
             payload.pop(update.field_path, None)
         else:

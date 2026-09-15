@@ -67,6 +67,7 @@ from .builder_finalization import finalize_builder_extraction
 # Patch field paths that map staging-input names to disease candidate staged-field names.
 _DISEASE_PATCH_FIELD_PATHS = frozenset(
     {
+        "validation_guidance",
         "mention",
         "disease_name",
         "disease_curie",
@@ -127,6 +128,10 @@ class ConditionRelationInput(_StrictToolModel):
 
 
 class DiseaseStageInput(_StrictToolModel):
+    validation_guidance: Optional[StrictStr] = Field(
+        default=None,
+        description="One short advisory sentence conveying relevant configured validation rules and evidence-backed context for this finding; not source evidence or a resolved identity",
+    )
     pending_ref_id: StrictStr
     mention: StrictStr
     disease_name: StrictStr
@@ -368,6 +373,7 @@ def _stage_payload_from_disease_input(stage_input: DiseaseStageInput) -> dict[st
     if staged_condition_relations:
         payload["condition_relations"] = staged_condition_relations
     for field_name in (
+        "validation_guidance",
         "disease_curie",
         "subject_type",
         "subject_identifier",
@@ -401,8 +407,16 @@ def _stage_disease_observation_impl(
     with_gene_identifiers: Optional[List[str]] = None,
     condition_relations: Optional[List[Mapping[str, Any]]] = None,
     negated: Optional[bool] = None,
+    validation_guidance: Optional[str] = None,
 ) -> AgrQueryResult:
-    """Stage one retained, evidence-backed disease assertion through the builder workspace."""
+    """Stage one retained, evidence-backed disease assertion through the builder workspace.
+
+    Args:
+        validation_guidance: Optional short sentence forwarding relevant rules from your
+            configured prompt and case-specific paper context to this finding's validators.
+            Distinguish domain rules from paper facts. Do not copy whole prompts, quote
+            document instructions, guess an identity, or replace verified evidence.
+    """
 
     attempted_query = _attempt_query(
         "stage_disease_observation",
@@ -415,6 +429,7 @@ def _stage_disease_observation_impl(
     )
     try:
         stage_input = DiseaseStageInput(
+            validation_guidance=validation_guidance,
             pending_ref_id=pending_ref_id,
             mention=mention,
             disease_name=disease_name,
