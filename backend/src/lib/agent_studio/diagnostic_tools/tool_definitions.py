@@ -16,6 +16,7 @@ import logging
 import inspect
 import hashlib
 import json
+from uuid import UUID
 from typing import Any, Callable, Dict, List, Optional
 
 from agents import FunctionTool
@@ -319,6 +320,37 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
         logger.debug("Registered package diagnostic tool: %s", binding.tool_id)
 
 
+def _custom_agent_catalog_guidance(
+    agent_id: Optional[str], *, section: str, revision_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Syntax-only redirect; existence and access belong to saved-work inspection."""
+    target = str(agent_id or "").strip()
+    try:
+        UUID(target.removeprefix("ca_"))
+    except ValueError:
+        if not target.startswith("ca_"):
+            return None
+        return {"status": "error", "success": False, "code": "invalid_custom_agent_target",
+                "message": "Custom-agent targets require ca_<UUID> or a saved agent UUID. No resource lookup was performed."}
+    arguments = {"action": "agent_revisions", "agent_id": target}
+    if revision_id is not None:
+        try:
+            UUID(revision_id)
+        except (ValueError, TypeError, AttributeError):
+            return {"status": "error", "success": False, "code": "invalid_revision_id",
+                    "message": "Use the exact selected/pinned revision UUID from authorized saved-work discovery. No resource lookup was performed."}
+        arguments.update(action="agent_revision", revision_id=revision_id, section=section)
+    return {
+        "status": "error", "success": False, "code": "unsupported_custom_agent_target",
+        "message": "This tool inspects installed catalogs only, not saved custom agents. "
+                   "The target syntax does not establish existence or access. Use authorized "
+                   "saved-work inspection; discover agent_revisions when needed, then inspect "
+                   f"the exact selected/pinned agent_revision with section={section}. "
+                   "Do not substitute the latest revision or a template.",
+        "next_call": {"tool": "inspect_saved_studio_resource", "arguments": arguments},
+    }
+
+
 def _create_get_prompt_handler():
     """
     Create handler for prompt inspection tool.
@@ -335,6 +367,7 @@ def _create_get_prompt_handler():
         layer_index: Optional[int] = None,
         cursor: int = 0,
         max_chars: Optional[int] = None,
+        revision_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Inspect an agent's prompt summary or one bounded exact-text chunk.
@@ -351,6 +384,9 @@ def _create_get_prompt_handler():
         Returns:
             Compact prompt manifest or bounded exact-text chunk
         """
+        guidance = _custom_agent_catalog_guidance(agent_id, section="prompt_manifest", revision_id=revision_id)
+        if guidance is not None:
+            return guidance
         catalog = get_prompt_catalog()
         agent = catalog.get_agent(agent_id)
 
@@ -583,13 +619,21 @@ Omit view for a compact content-free summary with the effective prompt hash,
 total length, selected group context, and ordered layer identities. Use
 view="effective_prompt" with cursor/max_chars to retrieve exact prompt chunks.
 Use view="layer" with exactly one stable layer_id or zero-based layer_index to
-retrieve exact layer chunks. Follow next_cursor until complete is true."""
+retrieve exact layer chunks. Follow next_cursor until complete is true.
+Saved custom agents are unsupported here: use inspect_saved_studio_resource with
+agent_revisions discovery, then agent_revision and section=prompt_manifest for the
+exact selected/pinned revision. Optional revision_id is only for custom-target
+redirect guidance, not installed-prompt version selection."""
     input_schema = {
         "type": "object",
         "properties": {
             "agent_id": {
                 "type": "string",
                 "description": "Agent identifier from the installed prompt targets.",
+            },
+            "revision_id": {
+                "type": "string",
+                "description": "Optional exact saved custom-agent revision UUID for redirect guidance only.",
             },
             "group_id": {
                 "type": "string",
@@ -769,8 +813,12 @@ def _create_get_tool_inventory_handler():
         query: Optional[str] = None,
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
+        revision_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         normalized_agent_id = str(agent_id).strip() if agent_id else None
+        guidance = _custom_agent_catalog_guidance(normalized_agent_id, section="tools", revision_id=revision_id)
+        if guidance is not None:
+            return guidance
         normalized_category = str(category).strip() if category else None
         normalized_query = str(query).strip() if query else None
         bounded_limit = normalize_page_limit(limit, default=_TOOL_INVENTORY_DEFAULT_ITEMS, maximum=_TOOL_INVENTORY_MAX_ITEMS)
@@ -1083,13 +1131,21 @@ installed agent, or which package tools/method-level helpers exist.
 Pass agent_id to see one agent's raw and expanded tool IDs; omit it to list the
 global catalog. Pass query to search tools by id, name, or description, and use
 limit/cursor to page through large catalogs; truncated results include next_call.
-Use get_tool_details for full schemas and method metadata.""",
+Use get_tool_details for full schemas and method metadata.
+Saved custom agents are unsupported here: use inspect_saved_studio_resource with
+agent_revisions discovery, then agent_revision and section=tools for the exact
+selected/pinned revision. Optional revision_id supplies custom-target redirect
+guidance only; it does not select an installed-agent version.""",
         input_schema={
             "type": "object",
             "properties": {
                 "agent_id": {
                     "type": "string",
                     "description": "Optional agent ID from the installed runtime catalog.",
+                },
+                "revision_id": {
+                    "type": "string",
+                    "description": "Optional exact saved custom-agent revision UUID for redirect guidance only.",
                 },
                 "category": {
                     "type": "string",
