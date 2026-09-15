@@ -39,7 +39,7 @@ async def sentry_synthetic_caught_alert() -> dict[str, object]:
     """Report a sanitized dev-only caught alert through the runtime facade."""
 
     _require_synthetic_endpoints_enabled()
-    sns_sent = await notify_tool_failure(
+    queued = await notify_tool_failure(
         error_type="SyntheticSentryCaughtAlert",
         error_message="sanitized synthetic caught alert",
         source="infrastructure",
@@ -50,6 +50,6 @@ async def sentry_synthetic_caught_alert() -> dict[str, object]:
         context="sanitized synthetic context",
     )
     return {
-        "status": "reported",
-        "sns_sent": sns_sent,
+        "status": "queued" if queued else "unavailable",
+        "sentry_capture_queued": queued,
     }

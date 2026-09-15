@@ -379,18 +379,7 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
         }
     ]
     assert "req_test_456" not in output_events[0]["message"]
-    assert alerts == [
-        {
-            "error_type": "APIError",
-            "error_message": raw_message,
-            "source": "infrastructure",
-            "specialist_name": "agent_studio_openai",
-            "trace_id": "12345678123456781234567812345678",
-            "session_id": "agent-studio-session-1",
-            "curator_id": "curator@example.org",
-            "capture_sentry": False,
-        }
-    ]
+    assert alerts == []  # Canonical runtime capture owns this failure; no SNS task.
     assert logger_errors[0][0][0] == "OpenAI Agent Studio API error: %s"
     assert logger_errors[0][1]["exc_info"] is True
     assert logger_errors[0][1]["extra"] == {"sentry_skip_event": True}

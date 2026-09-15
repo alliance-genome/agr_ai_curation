@@ -75,7 +75,6 @@ from src.lib.openai_agents.config import (
     get_model_for_agent,
     get_sentry_log_event_level,
     get_supervisor_specialist_deadline_seconds,
-    get_tool_failure_alert_summary_max_chars,
     get_weaviate_search_hybrid_alpha,
     get_weaviate_search_initial_limit,
     get_weaviate_search_mmr_enabled,
@@ -198,11 +197,6 @@ def test_weaviate_search_defaults_are_bounded_and_configurable(monkeypatch):
             "BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS",
             get_background_task_observability_value_max_chars,
             200,
-        ),
-        (
-            "TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS",
-            get_tool_failure_alert_summary_max_chars,
-            500,
         ),
         (
             "AGENT_STUDIO_TRACE_REVIEW_PAGE_SIZE",

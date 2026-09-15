@@ -38,7 +38,6 @@ SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50
 RUNTIME_OBSERVABILITY_TAG_VALUE_MAX_CHARS=200
 RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS=500
 BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS=200
-TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS=500
 ```
 
 Use `SENTRY_RELEASE` for every deployed candidate so events can be tied back to
@@ -121,9 +120,19 @@ path is being finished.
 `RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS` apply to
 `report_runtime_exception()`. `BACKGROUND_TASK_OBSERVABILITY_VALUE_MAX_CHARS`
 bounds string tag and context values sent by background-task failure reporting.
-`TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS` bounds the raw error and context previews
-in optional SNS tool-failure alert bodies; those raw strings are not sent to
-Sentry.
+Tool/runtime failures and Workshop developer reports use Sentry only. The former
+`TOOL_FAILURE_ALERTS_ENABLED` and `TOOL_FAILURE_ALERT_SUMMARY_MAX_CHARS` settings
+are retired and ignored; no SNS fallback is used. Prompt suggestions and other
+non-error SNS workflows are unchanged. Raw tool error/context text and curator
+identity are not forwarded by the tool-failure facade.
+
+`report_tool_failure` reports `sentry_capture_queued`, not notification delivery.
+A returned SDK event ID proves only local capture acceptance, not ingestion,
+alert-rule execution, or inbox receipt. Before release, verify those stages
+separately in the intended project/environment with the operator's approved
+controlled test. A high-priority-only rule is not proof that all actionable
+tool failures trigger email. Expected user Stop and routine validation outcomes
+must not become error alerts.
 
 ## AI Agents Monitoring Trial
 
