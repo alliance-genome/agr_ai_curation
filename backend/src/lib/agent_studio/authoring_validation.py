@@ -404,6 +404,45 @@ def validate_flow_authoring_draft(
 
     nodes_by_id = {node.id: node for node in flow_definition.nodes}
     if enforce_agent_step_policy:
+        from src.lib.config.schema_discovery import resolve_output_schema
+        from src.schemas.domain_validator import is_domain_validator_result_schema
+        from src.lib.flows.validation_attachments import domain_pack_validation_registries
+
+        for edge in flow_definition.edges:
+            if edge.role != VALIDATION_ATTACHMENT_EDGE_ROLE:
+                continue
+            target = nodes_by_id.get(edge.target)
+            if target is None or not target.data.agent_id.startswith("ca_"):
+                continue
+            target_entry = entries.get(edge.target)
+            if target_entry is None:
+                continue  # Existing authorization/revision findings own this case.
+            schema_key = target_entry.get("output_schema_key") or target_entry.get("output_schema")
+            if not schema_key or not is_domain_validator_result_schema(resolve_output_schema(str(schema_key))):
+                findings.append(AuthoringValidationFinding(
+                    code="incompatible_validator_result_contract", severity="error",
+                    path=f"flow_definition.nodes.{target.id}.data.agent_revision_id", node_id=target.id,
+                    message="The pinned validation agent must return a DomainValidatorResultBase-derived result.",
+                    fix_hint="Select a validator revision with a compatible structured result contract.",
+                ))
+            source = nodes_by_id.get(edge.source)
+            source_entry = entries.get(edge.source) or {}
+            pack_id = (source_entry.get("curation") or {}).get("domain_pack_id")
+            registry = domain_pack_validation_registries().get(str(pack_id or ""))
+            binding_id = edge.satisfies_binding_id
+            if edge.replaces_attachment_id and source is not None:
+                binding_id = next((item.validator_binding_id for item in source.data.validation_attachments
+                                   if item.attachment_id == edge.replaces_attachment_id), None)
+            if registry is None or not any(
+                binding.binding_id == binding_id and binding.state.value == "active"
+                for binding in registry.bindings
+            ):
+                findings.append(AuthoringValidationFinding(
+                    code="incompatible_validation_binding", severity="error",
+                    path=f"flow_definition.edges.{edge.id}", edge_id=edge.id,
+                    message="The selected binding is not an active request contract in the source domain pack.",
+                    fix_hint="Choose an active binding from this extraction step's domain-pack contract.",
+                ))
         for edge in flow_definition.edges:
             if edge.role != OUTPUT_ATTACHMENT_EDGE_ROLE:
                 continue

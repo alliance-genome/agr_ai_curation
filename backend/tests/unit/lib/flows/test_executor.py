@@ -4066,7 +4066,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             for item in metadata
         )
 
-    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch):
+    @pytest.mark.parametrize("agent_id", ["custom_validator", "ca_pinned_validator"])
+    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, agent_id):
         executor = _executor_module()
         from src.schemas.domain_validator import (
             DomainValidationRequest,
@@ -4111,7 +4112,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         monkeypatch.setattr(
             executor,
             "get_agent_by_id",
-            lambda agent_id, **_kwargs: SimpleNamespace(agent_id=agent_id),
+            lambda agent_id, **kwargs: captured.update(agent_kwargs=kwargs) or SimpleNamespace(agent_id=agent_id),
         )
         monkeypatch.setattr(
             executor,
@@ -4127,8 +4128,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             executor._run_custom_flow_validator_agent(
                 request,
                 binding_match=binding_match,
-                validator_node={"data": {"agent_id": "custom_validator"}},
-                agent_context={"user_id": "curator-1"},
+                validator_node={"data": {"agent_id": agent_id, "agent_revision_id": "pinned-revision", "execution_receipt": {"agent_revision_id": "pinned-revision"}}},
+                agent_context={"user_id": "curator-1", "execution_revision_id": "extractor-revision", "execution_receipt": {"agent_revision_id": "extractor-revision"}},
                 source_envelope_id="env-1",
                 source_envelope_revision=3,
             )
@@ -4136,7 +4137,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         payload = json.loads(captured["args"]["query"])
         validation_request = payload["validation_request"]
-        assert captured["tool_name"] == "validate_custom_validator_custom_supplemental"
+        assert captured["tool_name"] == f"validate_{agent_id}_custom_supplemental"
+        if agent_id.startswith("ca_"):
+            assert captured["agent_kwargs"]["execution_revision_id"] == "pinned-revision"
+            assert captured["agent_kwargs"]["execution_receipt"] == {"agent_revision_id": "pinned-revision"}
         assert validation_request["selected_inputs"] == request.selected_inputs
         assert "input_selectors" not in validation_request
         assert "evidence" not in validation_request

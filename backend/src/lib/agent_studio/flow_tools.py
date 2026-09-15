@@ -719,7 +719,7 @@ def build_flow_definition_from_recipe(
     )
 
 
-def _accessible_flow_agents() -> Dict[str, Dict[str, Any]]:
+def _accessible_flow_agents(*, include_attachment_only: bool = False) -> Dict[str, Dict[str, Any]]:
     """Return request-visible, flow-selectable agents keyed by stable ID."""
 
     from src.lib.agent_studio.catalog_service import list_available_agents
@@ -734,7 +734,7 @@ def _accessible_flow_agents() -> Dict[str, Dict[str, Any]]:
     ):
         agent_id = str(agent.get("agent_id") or "").strip()
         merged = {**AGENT_REGISTRY.get(agent_id, {}), **agent}
-        if not agent_id or not flow_palette_show_in_palette(agent_id, merged):
+        if not agent_id or (not include_attachment_only and not flow_palette_show_in_palette(agent_id, merged)):
             continue
         agents[agent_id] = {
             **merged,
@@ -1190,6 +1190,10 @@ def _validate_flow_handler():
 class _FlowProposalCompileError(ValueError):
     """Curator-safe semantic compiler error."""
 
+    def __init__(self, message: str, code: str = "invalid_flow_operation"):
+        super().__init__(message)
+        self.code = code
+
 
 def _flow_context_definition(flow_context: Mapping[str, Any]) -> Dict[str, Any]:
     """Convert the exact flat chat snapshot to the persisted nested shape."""
@@ -1449,10 +1453,17 @@ def _compile_flow_operations(
 
         if op == "add_agent_step":
             agent_id = str(operation.get("agent_id") or "").strip()
+            is_validation = operation.get("role") == "validation_attachment"
             agent = accessible_agents.get(agent_id)
             if agent is None:
                 raise _FlowProposalCompileError(
-                    f"Agent '{agent_id}' is not available to the current curator."
+                    f"Agent '{agent_id}' is not available to the current curator.",
+                    code="unavailable_agent",
+                )
+            if not is_validation and not flow_palette_show_in_palette(agent_id, agent):
+                raise _FlowProposalCompileError(
+                    "This agent cannot be an ordinary flow step; validators must be validation attachments.",
+                    code="attachment_only_agent_in_control_flow",
                 )
             used_node_ids = {str(node.get("id")) for node in nodes}
             used_output_keys = {
@@ -1468,7 +1479,7 @@ def _compile_flow_operations(
                         f"Proposal-local step reference '{step_ref}' is already in use."
                     )
                 semantic_refs[step_ref] = node_id
-            is_output = _is_output_agent_id(agent_id, agent)
+            is_output = not is_validation and _is_output_agent_id(agent_id, agent)
             if is_output:
                 metadata.setdefault("new_output_node_ids", []).append(node_id)
             max_y = max(
@@ -1486,7 +1497,7 @@ def _compile_flow_operations(
                 "validation_groups": [],
             }
             if agent_id.startswith("ca_"):
-                revision_id = agent.get("agent_revision_id")
+                revision_id = operation.get("agent_revision_id") or agent.get("agent_revision_id")
                 if not revision_id:
                     raise _FlowProposalCompileError("Custom agent has no selectable executable revision.")
                 data["agent_revision_id"] = str(revision_id)
@@ -1506,7 +1517,28 @@ def _compile_flow_operations(
                 }
             )
             sources = operation.get("source_refs", operation.get("source_node_ids"))
-            if is_output:
+            if is_validation:
+                source_id = resolve_node_ref(operation.get("source_ref", operation.get("source_node_id")))
+                source = node_by_id(source_id)
+                binding_id = str(operation.get("satisfies_binding_id") or "").strip()
+                replacement_id = str(operation.get("replaces_attachment_id") or "").strip()
+                if replacement_id and binding_id:
+                    # Semantic operations may name both as a consistency check;
+                    # the persisted edge has one canonical replacement identity.
+                    selection = next((item for item in source["data"].get("validation_attachments", [])
+                                      if item.get("attachment_id") == replacement_id), None)
+                    if selection is None or selection.get("validator_binding_id") != binding_id:
+                        raise _FlowProposalCompileError(
+                            "Replacement attachment and validator binding do not match the source step.",
+                            code="incompatible_validation_binding",
+                        )
+                edges.append({
+                    "id": _next_mechanical_id("edge", {str(edge.get("id")) for edge in edges}),
+                    "source": source_id, "target": node_id, "role": "validation_attachment",
+                    **({"replaces_attachment_id": replacement_id} if replacement_id else
+                       {"satisfies_binding_id": binding_id}),
+                })
+            elif is_output:
                 if not isinstance(sources, list) or not sources:
                     raise _FlowProposalCompileError(
                         "An output step requires source_refs naming its input steps."
@@ -1874,7 +1906,11 @@ def _propose_flow_draft_update_handler():
         candidate = deepcopy(proposal_state["candidate"])
         metadata = deepcopy(proposal_state["metadata"])
         semantic_refs = deepcopy(proposal_state.get("semantic_refs", {}))
-        accessible_agents = _accessible_flow_agents()
+        accessible_agents = (
+            _accessible_flow_agents(include_attachment_only=True)
+            if any(op.get("role") == "validation_attachment" for op in operations if isinstance(op, Mapping))
+            else _accessible_flow_agents()
+        )
         try:
             retargeted_node_ids = _compile_flow_operations(
                 candidate=candidate,
@@ -1887,7 +1923,18 @@ def _propose_flow_draft_update_handler():
             return {
                 "success": False,
                 "error": str(exc),
+                "code": getattr(exc, "code", "invalid_flow_operation"),
                 "help": "Inspect the current flow and live catalog, then repair the semantic operations.",
+            }
+        except Exception:
+            # Stable operational signal for the shared returned-failure reporter
+            # (ALL-1223); expected incompatibilities above are not program alerts.
+            return {
+                "success": False,
+                "code": "flow_authoring_compile_failed",
+                "failure_kind": "operational",
+                "error": "Flow proposal compilation failed unexpectedly.",
+                "help": "Retry after refreshing the draft; contact support if this persists.",
             }
 
         metadata_errors = _simplified_flow_metadata_errors(
@@ -1913,6 +1960,8 @@ def _propose_flow_draft_update_handler():
             return {
                 "success": False,
                 "error": "Flow validation is temporarily unavailable.",
+                "code": "authoring_validation_engine_failure",
+                "failure_kind": "operational",
                 "help": "Try the proposal again. If the problem persists, contact support.",
             }
         if validation.candidate is not None:
@@ -3592,7 +3641,7 @@ application-generated node IDs.""",
                             },
                             "task_instructions": {"type": "string"},
                             "agent_id": {"type": "string"},
-                            "agent_revision_id": {"type": "string", "description": "Exact immutable custom-agent revision UUID for explicit retargeting."},
+                            "agent_revision_id": {"type": "string", "description": "Exact immutable custom-agent revision UUID for add_agent_step or explicit retargeting. Validation attachments retain this exact pin."},
                             "step_ref": {
                                 "type": "string",
                                 "description": "Proposal-local semantic name for a newly added step.",
@@ -3623,6 +3672,7 @@ application-generated node IDs.""",
                                 "description": "Complete control-step order using existing IDs or proposal-local step refs.",
                             },
                             "role": {
+                                "description": "For add_agent_step, validation_attachment connects source_ref/source_node_id directly to the new validator, never into control flow. Name replaces_attachment_id for a replacement, or satisfies_binding_id for a supplemental binding. If both are supplied they must identify the same source attachment.",
                                 "type": "string",
                                 "enum": [
                                     "control_flow",

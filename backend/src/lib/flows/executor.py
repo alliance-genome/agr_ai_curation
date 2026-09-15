@@ -1306,6 +1306,11 @@ async def _run_custom_flow_validator_agent(
         # Flow-wide model overrides do not replace saved custom configurations.
         agent_kwargs.pop("model_id_override", None)
         agent_kwargs.pop("model_provider_override", None)
+        revision_id = node_data.get("agent_revision_id")
+        if not revision_id:
+            raise ValueError("Custom validation attachment requires an exact execution revision")
+        agent_kwargs["execution_revision_id"] = str(revision_id)
+        agent_kwargs["execution_receipt"] = node_data.get("execution_receipt")
     agent_kwargs["additional_runtime_context"] = runtime_context
     agent = get_agent_by_id(validator_agent_id, **agent_kwargs)
 
