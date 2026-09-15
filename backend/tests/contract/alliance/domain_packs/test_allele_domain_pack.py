@@ -242,9 +242,10 @@ def test_allele_pack_declares_object_roles_and_validator_bindings(monkeypatch):
             "allow_multiple": True,
             "context_only": True,
         },
-        "evidence_quote": {
+        "evidence_quotes": {
             "source": "evidence_record",
-            "path": "verified_quote",
+            "output": "quote_bundle",
+            "allow_multiple": True,
             "required": False,
             "context_only": True,
         },
@@ -310,7 +311,8 @@ def test_allele_mention_binding_selects_crb_examples_for_validation():
             "associated_gene": "crb",
             "taxon": "NCBITaxon:7227",
             "source_mentions": [mention],
-            "evidence_quote": f"{mention} embryos showed altered polarity.",
+            "evidence_quotes": [{"evidence_record_id": f"evidence-{index}",
+                                 "verified_quote": f"{mention} embryos showed altered polarity."}],
         }
         assert selector_result.request.target.input_values == (
             selector_result.selected_inputs
@@ -385,7 +387,7 @@ def test_allele_mention_binding_does_not_use_envelope_evidence_without_object_id
         ],
     }
     assert selector_result.evidence == []
-    assert "evidence_quote" not in selector_result.request.selected_inputs
+    assert "evidence_quotes" not in selector_result.request.selected_inputs
 
 
 def test_allele_mention_binding_uses_only_explicit_object_evidence_ids():
@@ -450,7 +452,8 @@ def test_allele_mention_binding_uses_only_explicit_object_evidence_ids():
             "Mst1 flox/flox",
             "Mst1 Flox/Flox",
         ],
-        "evidence_quote": "Mst1 Flox/Flox mice were crossed as described.",
+        "evidence_quotes": [{"evidence_record_id": "evidence-mst1",
+                             "verified_quote": "Mst1 Flox/Flox mice were crossed as described."}],
     }
     assert selector_result.evidence == [
         {

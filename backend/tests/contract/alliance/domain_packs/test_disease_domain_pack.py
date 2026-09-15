@@ -466,9 +466,10 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields(monkeypa
     assert composite_binding["input_fields"]["condition_relation_type"]["path"] == (
         "condition_relations.condition_relation_type.name"
     )
-    assert composite_binding["input_fields"]["evidence_quote"] == {
+    assert composite_binding["input_fields"]["evidence_quotes"] == {
         "source": "evidence_record",
-        "path": "verified_quote",
+        "output": "quote_bundle",
+        "allow_multiple": True,
         "required": False,
         "context_only": True,
     }

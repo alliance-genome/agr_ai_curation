@@ -867,6 +867,10 @@ def test_gene_expression_field_scoped_evidence_quote_bundle_selected_from_nested
         {
             "evidence_record_id": "evidence-tmem67-metanephros-1",
             "field_path": "expression_pattern.where_expressed.anatomical_structure",
+            "page": 4,
+            "section": "Results",
+            "subsection": "Gene expression analysis",
+            "chunk_id": "chunk-tmem67-metanephros",
             "verified_quote": (
                 "Tmem67 expression was detected in the metanephros at TS26 "
                 "by reverse transcription polymerase chain reaction assay."

@@ -423,6 +423,13 @@ def _quote_bundle_for_evidence_record(
     field_path = selected_field_path or _first_evidence_record_field_path(record)
     if field_path:
         bundle["field_path"] = field_path
+    # Keep each quote's locator on that record, never in parallel value lists.
+    for key in (
+        "chunk_id", "section", "subsection", "page", "document_id",
+        "source_document_id", "figure_reference",
+    ):
+        if record.get(key) is not None:
+            bundle[key] = record[key]
     return bundle
 
 
@@ -823,7 +830,7 @@ def _candidate_evidence_records(
     }
     return tuple(
         by_id[record_id]
-        for record_id in domain_object.evidence_record_ids
+        for record_id in dict.fromkeys(domain_object.evidence_record_ids)
         if record_id in by_id
     )
 

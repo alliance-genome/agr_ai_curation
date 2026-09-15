@@ -59,6 +59,8 @@ fixtures:
             subsection: Stress response assay
             chunk_id: chunk-daf16-1
             figure_reference: Figure 2A
+          evidence_record_ids:
+            - ev-daf16-1
           metadata:
             object_role: validated_reference
             evidence_role: gene_mention_evidence
@@ -127,6 +129,15 @@ fixtures:
         source_document_id: WB-paper-0001
         source_agent: gene_extractor
         conversion: tool_verified_gene_output_to_pending_envelope
+        evidence_records:
+          - evidence_record_id: ev-daf16-1
+            entity: daf-16
+            verified_quote: DAF-16 translocated to nuclei after heat shock.
+            page: 4
+            section: Results
+            subsection: Stress response assay
+            chunk_id: chunk-daf16-1
+            figure_reference: Figure 2A
         non_blocking_validation: true
         normalization_notes:
           - Resolved daf-16 through agr_curation_query get_gene_by_id.

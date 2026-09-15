@@ -172,9 +172,10 @@ object_definitions:
                 source: payload
                 path: species
                 required: false
-              evidence_quote:
-                source: payload
-                path: verified_quote
+              evidence_quotes:
+                source: evidence_record
+                output: quote_bundle
+                allow_multiple: true
                 required: false
                 context_only: true
               identity_resolution_notes:

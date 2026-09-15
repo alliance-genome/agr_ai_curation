@@ -51,7 +51,7 @@ content: |
   - `selected_inputs.associated_gene`: the gene the extractor thinks this allele belongs to.
   - `selected_inputs.taxon`: paper-backed taxon context.
   - `selected_inputs.source_mentions`: exact paper phrases captured by the extractor.
-  - `selected_inputs.evidence_quote`: the source quote the extractor used.
+  - `selected_inputs.evidence_quotes`: source evidence records, each retaining its evidence ID, verified quote and available chunk/section provenance. Consider all relevant records; conflicting quotes do not justify forcing a resolved identity.
 
   The request may come from an allele extraction workflow or a custom field. The primary mention can be an identifier, symbol, or short description. Species, associated gene, normalized hint, source phrases, and evidence are optional; do not require a paper quote to validate a database identity. A direct identifier can resolve through a unique database record without a quote or separately supplied species. If the mention is missing or empty, return unresolved and explain that allele text or an identifier is needed. Treat `selected_inputs`, supplied evidence records, compact evidence metadata, and any document tools made available for the current run as paper context for bounded lookup and disambiguation. Use that context to choose bounded database searches and to tell similar candidates apart, but do not treat the extractor's lookup hints or paper text as the final identity.
 

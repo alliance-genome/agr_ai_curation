@@ -285,9 +285,10 @@ def test_gene_pack_declares_reference_validator_binding():
             "path": "species",
             "required": False,
         },
-        "evidence_quote": {
-            "source": "payload",
-            "path": "verified_quote",
+        "evidence_quotes": {
+            "source": "evidence_record",
+            "output": "quote_bundle",
+            "allow_multiple": True,
             "required": False,
             "context_only": True,
         },

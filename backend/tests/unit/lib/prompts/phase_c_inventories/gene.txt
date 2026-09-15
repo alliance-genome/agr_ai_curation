@@ -61,7 +61,8 @@ the request's `selected_inputs` are an extractor's proposals and context, not al
 `proposed_gene_id`: an extractor-proposed Alliance Gene CURIE.
 `taxon_hint`: paper-backed taxon context.
 `data_provider_hint`: paper-backed Alliance provider context.
-`evidence_quote`: the source quote the extractor used.
+`evidence_quotes`: source evidence records with evidence IDs, verified quotes and available locators.
+Consider all relevant records; conflicting quotes do not justify forcing a resolved identity.
 
 # GV-15 verify mode vs resolve mode
 Work in verify mode when `proposed_gene_id`, `proposed_symbol`, or `proposed_taxon` is present

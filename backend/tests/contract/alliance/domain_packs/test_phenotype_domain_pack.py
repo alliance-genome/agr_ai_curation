@@ -217,21 +217,10 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
             "allow_multiple": True,
             "context_only": True,
         },
-        "evidence_quote": {
+        "evidence_quotes": {
             "source": "evidence_record",
-            "path": "verified_quote",
-            "required": False,
-            "context_only": True,
-        },
-        "source_chunk_id": {
-            "source": "evidence_record",
-            "path": "chunk_id",
-            "required": False,
-            "context_only": True,
-        },
-        "source_section": {
-            "source": "evidence_record",
-            "path": "section",
+            "output": "quote_bundle",
+            "allow_multiple": True,
             "required": False,
             "context_only": True,
         },
@@ -602,10 +591,10 @@ def test_pending_phenotype_term_without_curie_dispatches_with_context():
     assert selector_result.selected_inputs["taxon_id"] == "NCBITaxon:10090"
     assert selector_result.selected_inputs["evidence_record_id"] == "verified_exact"
     assert selector_result.selected_inputs["source_mentions"] == ["reduced brood size"]
-    assert selector_result.selected_inputs["evidence_quote"] == (
+    assert selector_result.selected_inputs["evidence_quotes"][0]["verified_quote"] == (
         "daf-2(e1370) adults produced 40% fewer progeny than wild type."
     )
-    assert selector_result.selected_inputs["source_chunk_id"] == (
+    assert selector_result.selected_inputs["evidence_quotes"][0]["chunk_id"] == (
         "chunk-phenotype-count"
     )
     assert selector_result.evidence[0]["evidence_record_id"] == "verified_exact"

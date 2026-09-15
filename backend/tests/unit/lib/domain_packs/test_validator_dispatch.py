@@ -459,6 +459,10 @@ def _gene_mentions_envelope(mentions: list[str]) -> DomainEnvelope:
                         f"Paper-backed context for {mention}."
                     ],
                     "verified_quote": f"{mention} was discussed in the paper.",
+                    "evidence_records": [{
+                        "evidence_record_id": f"gene-evidence-{index}",
+                        "verified_quote": f"{mention} was discussed in the paper.",
+                    }],
                 },
             )
             for index, mention in enumerate(mentions, start=1)
@@ -1477,7 +1481,7 @@ def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context(
         mention = str(request.selected_inputs["mention"])
         captured_mentions.append(mention)
         captured_notes.append(list(request.selected_inputs["identity_resolution_notes"]))
-        assert request.selected_inputs["evidence_quote"] == (
+        assert request.selected_inputs["evidence_quotes"][0]["verified_quote"] == (
             f"{mention} was discussed in the paper."
         )
 
