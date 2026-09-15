@@ -478,7 +478,7 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
     assert fetched["execution_count"] == 1
 
 
-def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_db, monkeypatch):
+def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_db, monkeypatch, request):
     """Exercise real result persistence, envelope checkpoint, and durable chat replay."""
     from src.lib.curation_workspace.extraction_results import build_extraction_envelope_candidate
     from src.lib.curation_workspace.models import (
@@ -500,6 +500,20 @@ def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_
     }
     _create_test_tables(test_db, tables)
     document_id = uuid4()
+    envelope_id = f"empty-{uuid4()}"
+
+    def cleanup_persisted_fixture():
+        # This test deliberately commits real extraction/checkpoint rows. Remove
+        # those FK dependants before the shared fixture cleans up test users.
+        test_db.rollback()
+        for model in (DomainValidationFinding, DomainEnvelopeProjectionIndex,
+                      DomainEnvelopeObject, DomainEnvelopeHistory, DomainEnvelopeModel):
+            test_db.query(model).filter_by(envelope_id=envelope_id).delete(synchronize_session=False)
+        test_db.query(CurationExtractionResultRecord).filter_by(document_id=document_id).delete(synchronize_session=False)
+        test_db.query(PDFDocument).filter_by(id=document_id).delete(synchronize_session=False)
+        test_db.commit()
+
+    request.addfinalizer(cleanup_persisted_fixture)
     owner = User(auth_sub=f"test_empty_extraction_owner_{uuid4()}", is_active=True)
     test_db.add(owner)
     test_db.flush()
@@ -521,7 +535,6 @@ def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_
     })
     assert response.status_code == 201, response.text
     session_id, turn_id = f"session-{uuid4()}", f"turn-{uuid4()}"
-    envelope_id = f"empty-{uuid4()}"
 
     async def runner(**kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-empty-replay"}}
