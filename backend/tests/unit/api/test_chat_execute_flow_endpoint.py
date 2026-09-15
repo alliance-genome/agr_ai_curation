@@ -1201,6 +1201,65 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
     assert calls["clear"] == ["session-flow-title"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("save_fails", [False, True])
+async def test_interrupted_producer_persists_without_observer(monkeypatch, save_fails):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="interrupted", turn_id="interrupted-turn")
+    flow = SimpleNamespace(id=flow_id, user_id=7, name="Interrupted Flow", execution_count=0,
+                           last_executed_at=None, flow_definition={})
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    ready = asyncio.Event()
+    closed = []
+    reports = []
+    monkeypatch.setattr(chat, "report_runtime_exception", lambda exc, **kw: reports.append(kw) or True)
+
+    async def execute(**kwargs):
+        try:
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-interrupted"}}
+            yield {"type": "FILE_READY", "details": {"file_id": "discarded-file"}}
+            ready.set()
+            await asyncio.Event().wait()
+        finally:
+            closed.append(True)
+
+    _patch_chat_impl(monkeypatch, "execute_flow", execute)
+    if save_fails:
+        def fail_save(**kwargs):
+            raise RuntimeError("interrupted outcome write failed")
+        _patch_chat_impl(monkeypatch, "_persist_completed_execute_flow_turn", fail_save)
+    await chat.execute_flow_endpoint(request=request, db=_DummyDB(flow=flow),
+                                    user={"sub": "auth-sub", "cognito:groups": []})
+    await ready.wait()
+    run = next(iter(chat.executable_run_manager._runs.values()))
+    run.task.cancel()
+    if save_fails:
+        await run.task
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await run.task
+    assert closed == [True]
+    assert run.outcome_status == "failed"
+    summaries = [m for m in calls["repository"].messages[("auth-sub", request.session_id)]
+                 if m.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE]
+    if save_fails:
+        assert summaries == []
+        assert run.status == "failed"
+        assert any(r["operation"] == "failure_outcome_persistence_failed" for r in reports)
+    else:
+        assert len(summaries) == 1
+        summary = summaries[0].payload_json
+        assert summary["status"] == "failed"
+        assert summary["trace_id"] == "trace-interrupted"
+        assert "interrupted unexpectedly" in summary["failure_reason"]
+        assert summary["flow_run_id"] == run.flow_run_id
+        replay = await chat.execute_flow_endpoint(request=request, db=_DummyDB(flow=flow),
+                                                 user={"sub": "auth-sub", "cognito:groups": []})
+        events = await _consume_stream(replay)
+        assert sum(e["type"] == "RUN_ERROR" for e in events) == 1
+        assert not any(e["type"] in {"FILE_READY", "RUN_FINISHED"} for e in events)
+
+
 def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-cancel")
@@ -1239,6 +1298,10 @@ def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     assert calls["register"] == [("session-flow-cancel", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-flow-cancel", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-cancel"]
+    summaries = [m for m in calls["repository"].messages[("auth-sub", request.session_id)]
+                 if m.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE]
+    assert len(summaries) == 1
+    assert "cancelled by user" in summaries[0].payload_json["failure_reason"]
 
 
 @pytest.mark.asyncio
