@@ -1631,6 +1631,59 @@ def _spy_inline_persistence(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_explicit_empty_disease_finalizer_reaches_chat_handoff(monkeypatch):
+    from agr_ai_curation_alliance.tools import disease_builder_tools
+    from agr_ai_curation_alliance.domain_packs.disease.conversion import disease_extraction_output_to_pending_envelope
+
+    class EmptyDiseaseRun(_FakeRunResult):
+        async def stream_events(self):
+            workspace = builder.get_active_extraction_builder_workspace()
+            monkeypatch.setattr(disease_builder_tools, "get_active_extraction_builder_workspace", lambda: workspace)
+            monkeypatch.setattr(disease_builder_tools, "get_active_evidence_records_snapshot", lambda: [])
+            result = disease_builder_tools._finalize_disease_extraction_impl([])
+            assert result.status == "ok"
+            if False:
+                yield
+
+    async def materialize(serialized_payload, *_args, **_kwargs):
+        envelope = disease_extraction_output_to_pending_envelope(
+            json.loads(serialized_payload), envelope_id="empty-disease-chat",
+        )
+        return envelope.model_dump_json()
+
+    events, handoffs = [], []
+    _disable_package_tool_rebinding(monkeypatch)
+    calls = _spy_inline_persistence(monkeypatch)
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *args, **kwargs: EmptyDiseaseRun(final_output="Finalized."))
+    monkeypatch.setattr(streaming_tools, "_dispatch_domain_envelope_validators_for_chat", materialize)
+    expected = streaming_tools.SupervisorExtractionHandoff(
+        tool_name="ask_disease_extractor_specialist", specialist_name="Disease Extractor",
+        result_ref="extraction-result:00000000-0000-4000-8000-000000000001",
+        extraction_result_id="00000000-0000-4000-8000-000000000001",
+        result_status="empty_extraction", object_count=0, adapter_key="disease",
+        agent_key="disease_extractor", created_new=True,
+    )
+    monkeypatch.setattr(streaming_tools, "_build_supervisor_extraction_handoff", lambda **kwargs: expected)
+    await streaming_tools.run_specialist_with_events(
+        agent=SimpleNamespace(name="Disease Extractor", tools=[_builder_finalizer_tool("finalize_disease_extraction")],
+                              output_type=None, instructions="", model="gpt-4o"),
+        input_text="Extract diseases", specialist_name="Disease Extractor", max_turns=3,
+        tool_name="ask_disease_extractor_specialist", inline_chat_persistence=True,
+        validated_handoff_callback=handoffs.append,
+    )
+    assert handoffs == [expected]
+    assert len(calls) == 1
+    finalization = calls[0]["builder_finalization"]
+    assert finalization.source_candidate_ids == ()
+    assert finalization.payload["extracted_objects"] == []
+    event = next(event for event in events if event.get("type") == "INTERNAL_EXTRACTION_RESULT")
+    assert event["internal"]["extraction_result_id"] == expected.extraction_result_id
+
+
+@pytest.mark.asyncio
 async def test_chat_path_inline_persistence_persists_chat_row_and_carries_ids(
     monkeypatch,
 ):

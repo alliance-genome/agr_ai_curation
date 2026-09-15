@@ -271,6 +271,26 @@ def test_disease_builder_output_validates_against_object_contract():
     assert validate_disease_builder_objects(output) == ()
 
 
+def test_empty_disease_materialization_is_explicit_but_orphan_objects_are_invalid():
+    empty = materialize_disease_builder_state(
+        workspace=ExtractionBuilderWorkspace(run_id="empty-disease"),
+        candidate_ids=[], evidence_records=[], resolver_entry_lookup=None,
+    )
+    assert empty.ok, empty.summary()
+    assert empty.payload["curatable_objects"] == []
+    assert empty.payload["metadata"]["evidence_records"] == []
+    assert empty.payload["metadata"]["provenance"]["source_candidate_ids"] == []
+    assert empty.payload["run_summary"]["candidate_count"] == 0
+    assert validate_disease_builder_objects(DiseaseBuilderExtractionOutput.model_validate(empty.payload)) == ()
+
+    populated = DiseaseBuilderExtractionOutput.model_validate(_materialize_one_candidate().payload)
+    orphaned = populated.model_copy(update={"curatable_objects": [
+        obj for obj in populated.curatable_objects if obj.object_type == DISEASE_TERM_OBJECT_TYPE
+    ]})
+    assert orphaned.curatable_objects
+    assert "curatable_objects must contain at least one disease annotation" in validate_disease_builder_objects(orphaned)
+
+
 def test_disease_builder_rejects_evidence_record_not_in_metadata():
     workspace = ExtractionBuilderWorkspace(
         run_id="disease-builder-bad-evidence",

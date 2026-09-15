@@ -159,9 +159,14 @@ def finalize_builder_extraction(
     # Idempotent re-finalization: the workspace already produced a finalization.
     existing_finalization = getattr(workspace, "finalization", None)
     if existing_finalization is not None:
-        existing_source_candidate_ids = tuple(
-            getattr(existing_finalization, "source_candidate_ids", ()) or ()
-        ) or tuple(getattr(existing_finalization, "candidate_ids", ()) or ())
+        # An explicitly empty source list is meaningful, not a missing value.
+        existing_source_candidate_ids = getattr(
+            existing_finalization, "source_candidate_ids", None
+        )
+        if existing_source_candidate_ids is None:
+            existing_source_candidate_ids = tuple(
+                getattr(existing_finalization, "candidate_ids", ()) or ()
+            )
         if set(existing_source_candidate_ids) != set(normalized_candidate_ids):
             return BuilderFinalizationOutcome(
                 ok=False,

@@ -233,7 +233,7 @@ class DiseaseFindInput(_StrictToolModel):
 
 
 class DiseaseFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(min_length=1, max_length=50)
+    candidate_ids: List[StrictStr] = Field(max_length=50)
 
 
 def _emit_disease_builder_event(
@@ -819,6 +819,9 @@ def _materialize_disease_with_events(
 
 def _finalize_disease_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
     """Finalize staged disease candidates through the builder handoff contract.
+
+    Pass candidate_ids=[] to explicitly finalize with no retained disease annotations.
+    Omitting the call or returning only prose does not finalize an empty result.
 
     Thin domain adapter: input validation + result shape live here; all structural staging/finalize
     control flow is delegated to ``finalize_builder_extraction``. Disease has no resolver-backed

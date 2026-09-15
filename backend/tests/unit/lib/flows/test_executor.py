@@ -749,7 +749,7 @@ def _make_flow_execution_state(*completed_steps, ordered_tool_names=None):
     }
 
 
-def _finalized_empty_step():
+def _finalized_empty_step(monkeypatch=None):
     from src.lib.openai_agents.extraction_builder_workspace import (
         ExtractionBuilderWorkspace, build_internal_extraction_result_event,
     )
@@ -758,6 +758,18 @@ def _finalized_empty_step():
     payload = {"envelope_id": "empty-envelope", "domain_pack_id": "gene", "extracted_objects": []}
     workspace.upsert_candidate(candidate_id="materialized-empty", staged_fields=payload, status="valid")
     finalization = workspace.finalize(candidate_ids=["materialized-empty"], source_candidate_ids=[])
+    if monkeypatch is not None:
+        from dataclasses import replace
+        from agr_ai_curation_alliance.tools import disease_builder_tools
+        from agr_ai_curation_alliance.domain_packs.disease.conversion import disease_extraction_output_to_pending_envelope
+
+        workspace = ExtractionBuilderWorkspace(run_id="empty-disease", agent_id="disease_extractor")
+        monkeypatch.setattr(disease_builder_tools, "get_active_extraction_builder_workspace", lambda: workspace)
+        monkeypatch.setattr(disease_builder_tools, "get_active_evidence_records_snapshot", lambda: [])
+        assert disease_builder_tools._finalize_disease_extraction_impl([]).status == "ok"
+        finalization = workspace.finalization
+        envelope = disease_extraction_output_to_pending_envelope(finalization.payload, envelope_id="empty-envelope")
+        finalization = replace(finalization, payload=envelope.model_dump(mode="json"))
     event = build_internal_extraction_result_event(
         tool_name="ask_gene_specialist", specialist_name="Gene", finalization=finalization,
     )
@@ -812,9 +824,10 @@ def test_finalized_empty_contract_is_explicit_and_fail_closed(corruption):
 @pytest.mark.parametrize("mixed", [False, True])
 @pytest.mark.parametrize("attached", [False, True])
 @pytest.mark.parametrize("raw_summary", [False, True])
-async def test_flow_preserves_finalized_empty_and_sibling_output(monkeypatch, mixed, attached, raw_summary):
+@pytest.mark.parametrize("disease_finalizer", [False, True])
+async def test_flow_preserves_finalized_empty_and_sibling_output(monkeypatch, mixed, attached, raw_summary, disease_finalizer):
     executor = _executor_module()
-    empty, _ = _finalized_empty_step()
+    empty, _ = _finalized_empty_step(monkeypatch if disease_finalizer else None)
     steps = [empty]
     nodes = [_task_input_node(), _agent_node("n1", "gene", step_goal="Extract genes")]
     if mixed:
@@ -3090,6 +3103,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "provider": "fixture",
                 "method": "identifier_lookup",
                 "query": {"identifier": "AGR:0001"},
+                "coverage": None,
                 "result_count": 1,
                 "outcome": "success",
                 "message": None,
@@ -4043,6 +4057,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     "provider": "flow_validator",
                     "method": "non_lookup_validation",
                     "query": {"source_envelope_revision": 7},
+                    "coverage": None,
                     "result_count": 1,
                     "outcome": "success",
                     "message": None,

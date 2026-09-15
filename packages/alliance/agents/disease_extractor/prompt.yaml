@@ -153,7 +153,7 @@ content: |
 
   <stop_rules>
   - Stop searching when you have checked the sections where disease evidence normally appears and additional searches return duplicate or background-only candidates. Once each retained disease has its verified evidence, proceed to finalization instead of searching for more support.
-  - If no disease finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation.
+  - If no disease finding has direct experimental support in this paper, stage nothing and explicitly call `finalize_disease_extraction(candidate_ids=[])`, then return the same small finalization acknowledgment. Prose alone is not a finalized empty result; never force an annotation.
   - When disease identity or subject attribution is unresolved after using the available paper context, do not guess: stage the supported, evidence-backed disease with its paper-backed hints, leave `disease_curie`/subject unset for the validators, and do not describe under-development ontology/subject/relation fields as database-validated.
   - If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence. If span-backed evidence cannot be verified with `record_evidence`, do not stage that source text as supporting evidence. Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
   - Never invent disease names, ontology identifiers, subject identities, relations, evidence codes, or evidence text. Leave unresolved validator-bound values to the validators' result fields and envelope validation findings.
