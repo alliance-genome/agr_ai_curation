@@ -2314,7 +2314,7 @@ def test_retained_candidate_inspection_and_semantic_repair(monkeypatch, removed_
             ), valid=valid and not removed_field,
             findings=[] if valid and not removed_field else [SimpleNamespace(to_dict=lambda: {
                 "code": "missing_field" if removed_field else "invalid_selected_export"})],
-            projection_fields_by_node={"extract": {
+            projection_fields_by_node={"next": {"schema_fingerprint": "other-source", "fields": [{"ref": "object.other"}]}, "extract": {
                 "execution_receipt": receipt, "schema_fingerprint": fingerprint,
                 "fields": [] if removed_field and new else [{"ref": "object.name"}],
             }},
@@ -2353,6 +2353,21 @@ def test_retained_candidate_inspection_and_semantic_repair(monkeypatch, removed_
     assert repair["candidate"]["flow_definition"]["nodes"][1]["data"]["agent_revision_id"] == revision
     assert flow == original
     assert continuation and not inspect(**continuation)["success"]
+    reattached = propose(base_draft_fingerprint=flow["flow_draft_fingerprint"],
+                         operations=[
+                             {"operation": "disconnect_steps", "source_node_id": "extract", "target_node_id": "csv", "role": "output_attachment"},
+                             {"operation": "connect_steps", "source_node_id": "next", "target_node_id": "csv", "role": "output_attachment"},
+                         ], change_summary="Explicit source change")
+    changed = inspect(node_id="csv", draft="candidate", view="source_fields")
+    assert json.loads(changed["content"])["sources"] == {
+        "next": {"schema_fingerprint": "other-source", "fields": [{"ref": "object.other"}]},
+    }
+    reset = propose(base_draft_fingerprint=flow["flow_draft_fingerprint"], reset_candidate=True,
+                    operations=[{"operation": "update_flow", "name": "Reset proposal"}], change_summary="Restart")
+    assert reset["candidate_draft_fingerprint"] != reattached["candidate_draft_fingerprint"]
+    reset_catalog = inspect(node_id="csv", draft="candidate", view="source_fields")
+    assert json.loads(reset_catalog["content"])["sources"]["extract"]["schema_fingerprint"] == "base-schema"
+    assert flow == original
     flow_tools.set_workflow_user_context(99)
     assert not inspect(node_id="csv", draft="candidate", view="source_fields")["success"]
     flow_tools.set_workflow_user_context(28)
