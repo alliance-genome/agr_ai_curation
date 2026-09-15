@@ -559,6 +559,8 @@ class SpecialistOutputError(Exception):
         details: list[dict[str, Any]] | None = None,
     ):
         self.specialist_name = specialist_name
+        # Populated by the trusted invocation wrapper, never from message text.
+        self.tool_name: str | None = None
         self.output_type_name = output_type_name
         self.details = details or []
         super().__init__(

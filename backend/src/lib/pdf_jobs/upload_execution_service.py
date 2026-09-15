@@ -333,7 +333,8 @@ class UploadExecutionService:
                 observability_receipt=result.observability_receipt,
             )
         except Exception as exc:
-            logger.exception("Error processing document %s", request.document_id)
+            logger.exception("Error processing document %s", request.document_id,
+                             extra={"sentry_skip_event": True})
             if not isinstance(exc, PDFCancellationError):
                 self._report_execution_failure(
                     exc,
@@ -384,6 +385,7 @@ class UploadExecutionService:
                 "Provider Markdown import timed out for document %s after %s seconds",
                 request.document_id,
                 timeout_seconds,
+                extra={"sentry_skip_event": True},
             )
             self._report_execution_failure(
                 timeout_error,
@@ -433,6 +435,7 @@ class UploadExecutionService:
                 "Provider conversion timed out for document %s after %s seconds",
                 request.document_id,
                 timeout_seconds,
+                extra={"sentry_skip_event": True},
             )
             self._report_execution_failure(
                 timeout_error,
@@ -566,6 +569,7 @@ class UploadExecutionService:
             logger.exception(
                 "Error waiting for provider conversion document %s",
                 request.document_id,
+                extra={"sentry_skip_event": True},
             )
             if not isinstance(exc, PDFCancellationError):
                 self._report_execution_failure(
@@ -762,6 +766,7 @@ class UploadExecutionService:
             logger.exception(
                 "Error ingesting provider Markdown document %s",
                 request.document_id,
+                extra={"sentry_skip_event": True},
             )
             if not isinstance(exc, PDFCancellationError):
                 self._report_execution_failure(
@@ -820,6 +825,7 @@ class UploadExecutionService:
             logger.error(
                 "Provider text access denied for document %s, but no local PDF is available",
                 request.document_id,
+                extra={"sentry_skip_event": True},
             )
             self._report_execution_failure(
                 exc,
@@ -860,6 +866,7 @@ class UploadExecutionService:
             logger.exception(
                 "Cannot continue with local PDF after provider access denial because source-import state could not be persisted document=%s",
                 request.document_id,
+                extra={"sentry_skip_event": True},
             )
             self._report_execution_failure(
                 sync_err,

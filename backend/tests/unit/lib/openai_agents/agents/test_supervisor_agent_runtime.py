@@ -45,6 +45,22 @@ def _patch_supervisor_prompt_bundle(monkeypatch, *, version: int = 1):
     monkeypatch.setattr(supervisor_agent, "prompt_templates_for_bundle", lambda _bundle: [prompt])
 
 
+@pytest.mark.asyncio
+async def test_specialist_failure_retains_invoked_tool_identity(monkeypatch):
+    from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+    error = SpecialistOutputError("Private display name", "Envelope")
+    async def fail(**_kwargs):
+        raise error
+    monkeypatch.setattr(supervisor_agent, "run_specialist_with_events", fail)
+    with pytest.raises(SpecialistOutputError) as caught:
+        await supervisor_agent._run_streaming_specialist_tool(
+            agent=SimpleNamespace(), tool_name="ask_gene_extraction_specialist",
+            specialist_name="Private display name", ctx=SimpleNamespace(), query="extract",
+        )
+    assert caught.value is error
+    assert error.tool_name == "ask_gene_extraction_specialist"
+
+
 class _Field:
     def __eq__(self, _other):
         return True

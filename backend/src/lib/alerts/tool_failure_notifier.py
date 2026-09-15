@@ -3,6 +3,7 @@
 import importlib
 import logging
 from typing import Any, Optional
+from src.lib.observability.sentry import hash_sentry_identifier
 
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,8 @@ def _sentry_extra(
         "error_type": error_type or "UnknownError",
         "source": source or "unknown",
         "tool_name": specialist_name or "N/A",
-        "trace_id": trace_id or None,
-        "session_id": session_id or None,
+        "trace_id": hash_sentry_identifier(trace_id),
+        "session_id": hash_sentry_identifier(session_id),
     }
 
 
@@ -61,9 +62,9 @@ def _capture_tool_failure_to_sentry(
             scope.set_tag("source", source or "unknown")
             scope.set_tag("tool_name", tool_name)
             if trace_id:
-                scope.set_tag("trace_id", trace_id)
+                scope.set_tag("ai_curation.trace.id_hash", hash_sentry_identifier(trace_id))
             if session_id:
-                scope.set_tag("session_id", session_id)
+                scope.set_tag("ai_curation.chat.session_id_hash", hash_sentry_identifier(session_id))
             scope.set_context("runtime_alert", extra)
             event_id = sentry_sdk.capture_message(
                 f"Tool failure: {error_type or 'UnknownError'} ({tool_name})",

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 _ALLOWED_TAG_KEYS = {
     "ai_curation.flow.id_hash",
     "flow_failure_type",
+    "failure_category",
     "phase",
     "provider",
     "run_kind",

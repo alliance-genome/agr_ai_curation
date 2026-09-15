@@ -33,6 +33,7 @@ from typing import Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequ
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
 
 from ..streaming_tools import (
+    SpecialistOutputError,
     SupervisorExtractionHandoff,
     pop_last_supervisor_extraction_handoff,
     run_specialist_with_events,
@@ -717,6 +718,9 @@ async def _run_streaming_specialist_tool(
             if ledger is not None and handoff is not None and validated_handoff is None:
                 ledger.record_extraction_handoff(tool_name, query, handoff)
             return result
+        except SpecialistOutputError as exc:
+            exc.tool_name = tool_name
+            raise
         finally:
             if isolated_resources is not None and close_isolated_resources is not None:
                 await close_isolated_resources(

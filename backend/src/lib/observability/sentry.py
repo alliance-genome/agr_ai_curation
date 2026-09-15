@@ -1515,6 +1515,16 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw_tags, Mapping):
         scrubbed_tags = scrubbed.setdefault("tags", {})
         if isinstance(scrubbed_tags, dict):
+            # Application identifiers are distinct from native Sentry trace IDs.
+            for identifier_key, canonical_key in _SENTRY_CORRELATION_TAG_KEYS.items():
+                scrubbed_tags.pop(identifier_key, None)
+                value = raw_tags.get(identifier_key)
+                if (
+                    canonical_key not in raw_tags
+                    and isinstance(value, str)
+                    and _HASHED_IDENTIFIER_PATTERN.fullmatch(value)
+                ):
+                    scrubbed_tags[canonical_key] = value
             for tag_key in _SENTRY_CORRELATION_TAG_KEYS.values():
                 tag_value = raw_tags.get(tag_key)
                 if tag_value is None:
