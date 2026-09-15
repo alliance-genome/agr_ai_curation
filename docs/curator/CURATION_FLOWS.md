@@ -89,6 +89,8 @@ For Chat Output, use **Output instructions** to describe the summary or table. F
 
 A formatter arranges collected information. If you need a new biological field, add it to a suitable custom extractor first; putting its name in the CSV instructions is not enough.
 
+For an allele mention summary, use **Let AI arrange the output** and ask for one row per allele mention, including unresolved mentions. The formatter can select the original mention, saved validated ID/symbol, lookup status, and supporting evidence from the same extraction. Lookup resolution does not mean curator acceptance or writeback, and it is not a numeric confidence score. Paper-stated identifiers remain separate from validated identifiers. Conflicting or missing links leave validation values blank with notes; separate extractions are not merged by matching names. **Use selected fields** also exposes these summary columns but retains all source objects, including evidence and association rows; it does not filter to mentions. Existing saved allele field layouts must be reviewed and saved again when their source schema fingerprint changes.
+
 #### Output variable and agent information
 
 **Output variable** names the step's saved result. The default is usually sufficient; custom names use letters, numbers, and underscores.

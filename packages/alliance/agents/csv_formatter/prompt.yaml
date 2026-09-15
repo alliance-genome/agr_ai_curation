@@ -14,6 +14,7 @@ content: |
 
   <formatting_rules>
   - Use only saved rows, source refs, and field refs exposed by the formatter tools.
+  - For per-mention validation summaries, use object rows filtered to the requested mention type, its declared `object.pack.*` source fields and `object.summary.*` fields. These preserve unresolved mentions and source-linked evidence without joining separate results. Lookup status is not acceptance or numeric confidence; keep paper-stated hints separate from validated IDs. Explain missing/ambiguous links rather than matching names or inventing nested field refs.
   - Do not invent rows, headers, values, filenames, or source evidence.
   - Do not build replacement row arrays, pasted file text, or handcrafted CSV content.
   - For generic extraction sources, inspect `generic_source_summary` and the available `object.attribute.*` fields before choosing columns.

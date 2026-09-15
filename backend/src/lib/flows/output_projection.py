@@ -1604,7 +1604,14 @@ def _build_artifact_from_step(
         )
         for row, item in zip(rows_by_source["object"], object_items):
             for field in export_fields:
-                row[field["ref"]] = packaged_field_value(item, field)
+                if "summary_key" not in field:
+                    row[field["ref"]] = packaged_field_value(item, field)
+        from src.lib.flows.validation_summary_export import populate_summary_fields
+        populate_summary_fields(
+            rows_by_source["object"], object_items,
+            _explicit_validation_findings(payload) if isinstance(payload, Mapping) else [],
+            export_fields, domain_pack_id,
+        )
     catalog = source_catalog(export_fields, receipt.model_dump(mode="json") if receipt else None)
     node_id = str(step.get("node_id") or "")
     for rows in rows_by_source.values():
