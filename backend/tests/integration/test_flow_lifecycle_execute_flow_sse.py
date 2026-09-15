@@ -252,6 +252,19 @@ def _patched_flow_runner(run_agent_streamed):
         yield
 
 
+def _create_test_tables(db, tables):
+    """Include FK dependencies so these tests also run on a fresh database."""
+    from src.models.sql.database import Base
+
+    tables = set(tables)
+    while True:
+        dependencies = {fk.column.table for table in tables for fk in table.foreign_keys}
+        if dependencies <= tables:
+            break
+        tables.update(dependencies)
+    Base.metadata.create_all(bind=db.get_bind(), tables=list(tables))
+
+
 @pytest.fixture
 def client(test_db, get_auth_mock, monkeypatch):
     """Create isolated app client with explicit auth + DB dependency overrides."""
@@ -272,17 +285,18 @@ def client(test_db, get_auth_mock, monkeypatch):
     from src.models.sql.chat_message import ChatMessage
     from src.models.sql.chat_session import ChatSession
     from src.models.sql.curation_flow import CurationFlow
-    from src.models.sql.database import Base
     from src.models.sql.database import get_db
+    from src.models.sql.pdf_document import PDFDocument
     from src.models.sql.prompts import PromptExecutionLog, PromptTemplate
     from src.models.sql.user import User
 
     # Flow execution now resolves every step through the unified agents table
     # before the runner is invoked. Seed system agents in this isolated DB.
-    Base.metadata.create_all(
-        bind=test_db.get_bind(),
+    _create_test_tables(
+        test_db,
         tables=[
             User.__table__,
+            PDFDocument.__table__,
             Project.__table__,
             ProjectMember.__table__,
             UnifiedAgent.__table__,
@@ -462,6 +476,103 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
 
     fetched = client.get(f"/api/flows/{flow_id}").json()
     assert fetched["execution_count"] == 1
+
+
+def test_execute_flow_saves_and_replays_finalized_empty_extraction(client, test_db, monkeypatch):
+    """Exercise real result persistence, envelope checkpoint, and durable chat replay."""
+    from src.lib.curation_workspace.extraction_results import build_extraction_envelope_candidate
+    from src.lib.curation_workspace.models import (
+        CurationExtractionResultRecord, DomainEnvelopeModel, DomainEnvelopeHistory,
+        DomainEnvelopeObject, DomainEnvelopeProjectionIndex, DomainValidationFinding,
+    )
+    from src.lib.flows import executor
+    from src.lib.openai_agents.extraction_builder_workspace import (
+        ExtractionBuilderWorkspace, build_internal_extraction_result_event,
+    )
+    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.user import User
+
+    tables = {
+        model.__table__ for model in (
+            CurationExtractionResultRecord, DomainEnvelopeModel, DomainEnvelopeHistory,
+            DomainEnvelopeObject, DomainEnvelopeProjectionIndex, DomainValidationFinding,
+        )
+    }
+    _create_test_tables(test_db, tables)
+    document_id = uuid4()
+    owner = User(auth_sub=f"test_empty_extraction_owner_{uuid4()}", is_active=True)
+    test_db.add(owner)
+    test_db.flush()
+    test_db.add(PDFDocument(id=document_id, user_id=owner.id, filename="empty-fixture.pdf",
+                           file_path=f"/fixture/{document_id}.pdf", file_hash=document_id.hex * 2, file_size=1, page_count=1))
+    test_db.commit()
+    monkeypatch.setattr(executor.DocumentContext, "fetch", lambda *args, **kwargs: SimpleNamespace(
+        section_count=lambda: 0, hierarchy=None, abstract=None,
+        to_agent_kwargs=lambda: {"document_id": str(document_id)},
+    ))
+    # Domain semantics are not under test; retain the real checkpoint and SQL paths.
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.curation_prep_service._review_row_materializer_for_extraction_result",
+        lambda *args, **kwargs: SimpleNamespace(materialize=lambda *args, **kwargs: []),
+    )
+    response = client.post("/api/flows", json={
+        "name": f"it-empty-{uuid4().hex[:10]}",
+        "flow_definition": _flow_definition(agent_id="orthologs", agent_display_name="Empty fixture"),
+    })
+    assert response.status_code == 201, response.text
+    session_id, turn_id = f"session-{uuid4()}", f"turn-{uuid4()}"
+    envelope_id = f"empty-{uuid4()}"
+
+    async def runner(**kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-empty-replay"}}
+        agent = kwargs["agent"]
+        _mark_fake_streaming_tool_complete(agent)
+        step = agent._flow_execution_state["completed_steps"][-1]
+        workspace = ExtractionBuilderWorkspace(run_id="empty-replay")
+        workspace.upsert_candidate(candidate_id="materialized-empty", status="valid", staged_fields={
+            "envelope_id": envelope_id, "domain_pack_id": "fixture.empty", "extracted_objects": [],
+        })
+        finalization = workspace.finalize(candidate_ids=["materialized-empty"], source_candidate_ids=[])
+        event = build_internal_extraction_result_event(
+            tool_name=step["tool_name"], specialist_name="Empty fixture", finalization=finalization,
+        )
+        payload, audit = executor._internal_extraction_tool_output_with_audit_since(
+            {"collected_events": [event], "collected_index": 0}, tool_name=step["tool_name"],
+        )
+        candidate = build_extraction_envelope_candidate(payload, agent_key="orthologs", adapter_key="fixture.empty")
+        assert candidate is not None
+        step.update(node_id="agent_1", candidate=candidate, agent_name="Empty fixture",
+                    output=payload, output_preview=payload,
+                    extraction_handoff_audit={**audit, "candidateExpected": True, "candidateBuilt": True,
+                                              "adapterKeyResolved": True, "evidenceCount": 0, "step": 1})
+
+    request = {"flow_id": response.json()["id"], "session_id": session_id, "turn_id": turn_id,
+               "document_id": str(document_id), "user_query": "Run this flow"}
+    with _patched_flow_runner(runner):
+        with client.stream("POST", "/api/chat/execute-flow", json=request) as response:
+            events = _sse_events(response)
+    assert any(event["type"] == "FLOW_FINISHED" for event in events), events
+    finished = next(event for event in events if event["type"] == "FLOW_FINISHED")
+    assert finished["status"] == "completed", events
+    result = test_db.query(CurationExtractionResultRecord).filter_by(origin_session_id=session_id).one()
+    assert result.candidate_count == 0
+    assert result.payload_json["extracted_objects"] == []
+    checkpoint = test_db.get(DomainEnvelopeModel, envelope_id)
+    assert checkpoint.envelope_json["extracted_objects"] == []
+    assert finished["review_session_ids"] == []
+    history = client.get(f"/api/chat/history/{session_id}").json()
+    assert "zero objects" in history["messages"][-1]["content"]
+    assert "no annotation was accepted" in history["messages"][-1]["content"]
+
+    async def unexpected_runner(**kwargs):
+        pytest.fail("A completed no-results turn must replay without another model run")
+        yield
+
+    with _patched_flow_runner(unexpected_runner):
+        with client.stream("POST", "/api/chat/execute-flow", json=request) as response:
+            replay = _sse_events(response)
+    assert any(event["type"] == "CHAT_OUTPUT_READY" and "zero objects" in event["details"]["output"] for event in replay)
+    assert test_db.query(CurationExtractionResultRecord).filter_by(origin_session_id=session_id).count() == 1
 
 
 def test_execute_flow_persists_and_replays_terminal_specialist_text_with_file(

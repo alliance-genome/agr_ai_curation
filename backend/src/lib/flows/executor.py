@@ -361,6 +361,9 @@ def _internal_extraction_tool_output_with_audit_since(
                 )
                 if "tool_output" in internal and internal.get("tool_output") is not None:
                     audit["internalPayloadFound"] = True
+                    audit["finalizedEmptyExtraction"] = _is_finalized_empty_extraction(
+                        internal.get("tool_output"), internal.get("builder_finalization")
+                    )
                     audit["internalPayloadSource"] = source_name
                     audit["internalEventSources"] = _unique_non_empty_values(
                         internal_event_sources
@@ -2128,6 +2131,27 @@ def _flow_step_candidate_expected_sources(
     return ["catalog_curation_metadata"]
 
 
+def _is_finalized_empty_extraction(payload: Any, finalization: Any) -> bool:
+    """Recognize builder-owned, schema-valid emptiness, never assistant prose."""
+
+    if not isinstance(finalization, Mapping) or not (
+        finalization.get("status") == "finalized"
+        and finalization.get("validation_errors") == []
+        # candidate_ids counts materialized envelope wrappers, not objects.
+        and finalization.get("source_candidate_ids") == []
+        and finalization.get("evidence_record_ids") == []
+    ):
+        return False
+    try:
+        decoded = json.loads(payload) if isinstance(payload, str) else payload
+        if not isinstance(decoded, Mapping) or decoded.get("extracted_objects") != []:
+            return False
+        envelope = DomainEnvelope.model_validate(decoded)
+    except (ValueError, TypeError):
+        return False
+    return not envelope.extracted_objects
+
+
 def _flow_candidate_reject_reason(
     *,
     candidate: ExtractionEnvelopeCandidate | None,
@@ -2135,13 +2159,14 @@ def _flow_candidate_reject_reason(
     used_internal_extraction_payload: bool,
     adapter_key_resolved: bool,
     evidence_count: int,
+    finalized_empty_extraction: bool = False,
 ) -> str | None:
     """Explain the coarse handoff outcome without inspecting full payload values."""
 
     if candidate is not None:
         if candidate_expected and not adapter_key_resolved:
             return "missing_adapter_key"
-        if candidate_expected and evidence_count <= 0:
+        if candidate_expected and evidence_count <= 0 and not finalized_empty_extraction:
             return "evidence_records_empty"
         return None
     if not candidate_expected:
@@ -2222,7 +2247,7 @@ def _flow_expected_extraction_handoff_failures(
             reason = str(audit.get("candidateRejectReason") or "no_extraction_candidate")
         elif audit.get("adapterKeyResolved") is not True:
             reason = "missing_adapter_key"
-        elif evidence_count <= 0:
+        elif evidence_count <= 0 and audit.get("finalizedEmptyExtraction") is not True:
             reason = "evidence_records_empty"
 
         if reason is None:
@@ -3008,7 +3033,15 @@ def get_all_agent_tools(
                 used_internal_extraction_payload=used_internal_extraction_payload,
                 adapter_key_resolved=adapter_key_resolved,
                 evidence_count=evidence_count,
+                finalized_empty_extraction=(
+                    internal_lookup_audit.get("finalizedEmptyExtraction") is True
+                ),
             )
+            if (
+                candidate is not None
+                and internal_lookup_audit.get("finalizedEmptyExtraction") is True
+            ):
+                candidate.metadata["extraction_outcome"] = "no_results"
             extraction_handoff_audit: dict[str, Any] | None = None
             if candidate_expected:
                 extraction_handoff_audit = {
@@ -5144,6 +5177,73 @@ async def execute_flow(
         if str(step.get("node_id") or "")
     }
     independent_terminal_text_events: list[dict[str, Any]] = []
+    empty_steps = {
+        str(step.get("node_id") or ""): step
+        for step in completed_steps
+        if (step.get("extraction_handoff_audit") or {}).get("finalizedEmptyExtraction")
+        is True
+    }
+    if flow_status == "completed" and output_prerequisites_valid:
+        if empty_steps and not expected_output_attachments and not pending_output_events:
+            # Preserve the normal supervisor summary alongside the explicit
+            # empty outcome; typed output would otherwise suppress this fallback.
+            response = str(
+                ((pending_run_finished_event or {}).get("data") or {}).get("response")
+                or (pending_run_finished_event or {}).get("response")
+                or ""
+            ).strip()
+            if response:
+                independent_terminal_text_events.append({
+                    "type": "CHAT_OUTPUT_READY",
+                    "timestamp": _now_iso(),
+                    "details": {"output": response},
+                })
+        for step in empty_steps.values():
+            output = (
+                f"{step.get('agent_name') or 'Extraction'}: extraction finalized with no results "
+                "(zero objects). The empty outcome was saved; no annotation was accepted "
+                "or written back. This does not establish that the source contains no relevant findings."
+            )
+            independent_terminal_text_events.append(
+                {
+                    "type": "CHAT_OUTPUT_READY",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "output": output,
+                        "extraction_outcome": "no_results",
+                        "step": step.get("step"),
+                    },
+                }
+            )
+        # An empty-only formatter branch has no rows to format. Represent its
+        # successful outcome as text, never as an invented file or CSV row.
+        for attachment in expected_output_attachments:
+            node_id = attachment["output_node_id"]
+            sources = attachment["source_node_ids"]
+            if (
+                sources
+                and all(source_id in empty_steps for source_id in sources)
+                and node_id in completed_steps_by_node_id
+                and not any(
+                    (event.get("details") or {}).get("formatter_node_id") == node_id
+                    for event in pending_output_events
+                )
+            ):
+                pending_output_events.append(
+                    {
+                        "type": "CHAT_OUTPUT_READY",
+                        "timestamp": _now_iso(),
+                        "details": {
+                            "output": (
+                                "No results to format: all source extractions finalized "
+                                "with zero objects. No file was created."
+                            ),
+                            "formatter_node_id": node_id,
+                            "source_node_ids": sources,
+                            "extraction_outcome": "no_results",
+                        },
+                    }
+                )
     if (
         flow_status == "completed"
         and output_prerequisites_valid
