@@ -414,6 +414,32 @@ async def test_section_listing_and_hierarchy_helpers(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [None, "absent"])
+async def test_hierarchy_preserves_chunks_with_missing_metadata(monkeypatch, missing):
+    _sync_to_thread(monkeypatch)
+    collection = MagicMock()
+    unknown = {"parentSection": "Methods", "subsection": "Unknown pages"}
+    if missing is None:
+        unknown.update(pageNumber=None, chunkIndex=None)
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[
+        SimpleNamespace(properties=unknown),
+        SimpleNamespace(properties={"parentSection": "Methods", "subsection": "Known", "pageNumber": 3, "chunkIndex": 4}),
+        SimpleNamespace(properties={"parentSection": "Methods", "subsection": "Known", "pageNumber": None, "chunkIndex": None}),
+    ])
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), patch(
+        "src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())
+    ):
+        result = await chunks.get_document_sections_hierarchical("doc-1", "user-1")
+    section = result["sections"][0]
+    assert section["chunk_count"] == 3
+    assert section["page_numbers"] == [3]
+    assert section["subsections"] == [
+        {"name": "Known", "page_numbers": [3], "chunk_count": 2},
+        {"name": "Unknown pages", "page_numbers": [], "chunk_count": 1},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_parent_and_subsection_chunk_helpers(monkeypatch):
     _sync_to_thread(monkeypatch)
 

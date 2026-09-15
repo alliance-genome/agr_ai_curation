@@ -993,7 +993,8 @@ def test_fetch_document_sections_sync_returns_empty_on_exception(monkeypatch):
     assert supervisor_agent._fetch_document_sections_sync("doc-1", "user-1") == []
 
 
-def test_fetch_document_hierarchy_sync_returns_none_on_exception(monkeypatch):
+@pytest.mark.parametrize("reporter_raises", [False, True])
+def test_fetch_document_hierarchy_sync_returns_none_on_exception(monkeypatch, reporter_raises):
     import asyncio
 
     async def _fake_get_hierarchy(_document_id, _user_id):
@@ -1010,7 +1011,35 @@ def test_fetch_document_hierarchy_sync_returns_none_on_exception(monkeypatch):
     monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(asyncio, "run", _failing_run)
 
+    captured = []
+
+    def report(exc, **kwargs):
+        captured.append((exc, kwargs))
+        if reporter_raises:
+            raise RuntimeError("reporter unavailable")
+
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
     assert supervisor_agent.fetch_document_hierarchy_sync("doc-1", "user-1") is None
+    assert len(captured) == 1
+    assert captured[0][1]["operation"] == "fetch_document_hierarchy_failed"
+    from src.lib.observability.sentry import _redact_runtime_exception_context
+    context = _redact_runtime_exception_context(captured[0][1]["context"])
+    assert context["document_id"].startswith("sha256:")
+    assert "doc-1" not in json.dumps(context)
+    assert "user-1" not in json.dumps(context)
+
+
+@pytest.mark.parametrize("result", [None, {"sections": [], "top_level_sections": []}])
+def test_fetch_document_hierarchy_empty_is_not_an_incident(monkeypatch, result):
+    async def fetch(*_args):
+        return result
+
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_document_sections_hierarchical", fetch)
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("Empty hierarchy must not trigger reporting")
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", unexpected)
+    assert supervisor_agent.fetch_document_hierarchy_sync("doc-1", "user-1") == result
 
 
 def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypatch):

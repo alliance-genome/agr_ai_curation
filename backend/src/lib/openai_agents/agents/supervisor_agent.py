@@ -354,6 +354,19 @@ def fetch_document_hierarchy_sync(document_id: str, user_id: str) -> Optional[Di
             return asyncio.run(get_document_sections_hierarchical(document_id, user_id))
     except Exception as e:
         logger.warning("Failed to fetch document hierarchy: %s", e)
+        try:
+            from src.lib.observability.runtime import report_runtime_exception
+
+            report_runtime_exception(
+                e,
+                component="document_context",
+                operation="fetch_document_hierarchy_failed",
+                tags={"phase": "context_preparation"},
+                context={"document_id": document_id, "hierarchy_available": False},
+            )
+        except Exception:
+            # Observability must not turn optional context into a chat failure.
+            logger.warning("Could not report document hierarchy retrieval failure")
         return None
 
 
