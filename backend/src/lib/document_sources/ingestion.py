@@ -22,6 +22,7 @@ from src.lib.document_sources.figure_metadata import (
 from src.lib.document_sources.provenance import sanitize_document_source_provenance
 from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
 from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.cost_context import costed_document_processing
 from src.lib.pipeline.orchestrator import ProcessingResult
 from src.lib.storage_permissions import ensure_writable_directory
 from src.models.pipeline import ProcessingStage
@@ -106,6 +107,7 @@ class ProviderMarkdownIngestionResult:
     validation_warnings: list[str] = field(default_factory=list)
 
 
+@costed_document_processing
 async def ingest_provider_markdown_document(
     request: ProviderMarkdownIngestionRequest,
     *,

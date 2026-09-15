@@ -528,6 +528,7 @@ def tool_verified_gene_output_to_pending_envelope(
                         evidence,
                         normalization_notes=source.normalization_notes,
                     ),
+                    evidence_record_ids=[evidence_id],
                     metadata=_object_metadata(),
                 )
             )
@@ -560,6 +561,10 @@ def tool_verified_gene_output_to_pending_envelope(
             "source_document_id": source.document_id,
             "source_agent": source.produced_by,
             "conversion": "tool_verified_gene_output_to_pending_envelope",
+            "evidence_records": [
+                evidence.model_dump(mode="json", exclude_none=True)
+                for evidence in source.evidence_records
+            ],
             "non_blocking_validation": True,
             "normalization_notes": source.normalization_notes,
         },

@@ -304,13 +304,16 @@ document/evidence tool instructions.
 
 REPORT_TOOL_FAILURE_TOOL = {
     "name": "report_tool_failure",
-    "description": """Report a tool failure to the development team.
+    "description": """Queue a sanitized tool-failure report in Sentry.
 
 Use this tool immediately when any tool call returns an infrastructure or service
 failure (error status, timeout, connection failure, service unavailable, or
 unexpected empty response that indicates a system issue).
 
-Do NOT use this for user input errors (e.g., invalid gene names, malformed IDs).""",
+Do NOT use this for user input errors (e.g., invalid gene names, malformed IDs)
+or repeat a failure already reported by this tool in this turn. A queued capture
+does not prove ingestion or that developers were notified; describe only the
+returned capture status.""",
     "input_schema": {
         "type": "object",
         "properties": {

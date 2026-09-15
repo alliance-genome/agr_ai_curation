@@ -266,6 +266,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/document_sources/test_ingestion.py"),
     Path("backend/tests/unit/lib/document_sources/test_provenance.py"),
     Path("backend/tests/unit/lib/domain_packs/test_allele_domain_pack_fixtures.py"),
+    # These regressions intentionally exercise the installed Alliance domain pack.
+    Path("backend/tests/unit/lib/domain_packs/test_supporting_evidence_contract.py"),
     Path("backend/tests/unit/lib/domain_packs/test_materialization.py"),
     Path("backend/tests/unit/lib/domain_packs/test_pack_workspace_display.py"),
     Path("backend/tests/unit/lib/domain_packs/test_validator_dispatch.py"),
@@ -273,6 +275,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/feedback/test_service.py"),
     Path("backend/tests/unit/lib/flows/test_executor.py"),
     Path("backend/tests/unit/lib/flows/test_output_projection.py"),
+    Path("backend/tests/unit/lib/flows/test_validation_summary_export.py"),
     Path("backend/tests/unit/lib/packages/alliance/test_abc_literature_client.py"),
     Path("backend/tests/unit/lib/packages/alliance/test_gene_product_resolution.py"),
     Path("backend/tests/unit/lib/openai_agents/test_streaming_tools_retry_paths.py"),

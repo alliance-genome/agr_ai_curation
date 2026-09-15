@@ -351,6 +351,8 @@ def test_source_mentions_prompt_and_tool_language_is_consistent():
     for path in validator_prompt_paths:
         prompt_text = path.read_text()
         expected_context = SOURCE_MENTIONS_VALIDATOR_CONTEXT
+        if path.parent.name in {"experimental_condition", "ontology_term", "gene"}:
+            expected_context = expected_context.replace("`evidence_quote`", "`evidence_quotes`")
         if path.parent.name == "allele":
             expected_context = expected_context.replace(
                 "database lookup or `evidence_quote`; never resolve a target from `source_mentions` alone.",
@@ -601,7 +603,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "taxon_hint",
         "data_provider_hint",
         "species",
-        "evidence_quote",
+        "evidence_quotes",
         "identity_resolution_notes",
     }
     assert (
@@ -1133,9 +1135,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                     "data_provider",
                     "taxon_id",
                     "evidence_record_id",
-                    "evidence_quote",
-                    "source_chunk_id",
-                    "source_section",
+                    "evidence_quotes",
                 ],
                 "expected_result_fields": {
                     "curie": "curie",

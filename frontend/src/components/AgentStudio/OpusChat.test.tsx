@@ -549,6 +549,41 @@ describe('OpusChat', () => {
     expect(serviceMocks.streamOpusChat.mock.calls[1][2]).toBe('agent-studio-session-12345678')
   })
 
+  it('preserves the live transcript and minted session across a remount before URL handoff', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    const seed = [{ role: 'user' as const, content: 'Old version question' }]
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'Answer to the current question' }
+      yield { type: 'DONE' }
+    })
+    const props = { context: { active_tab: 'agents' as const }, sourceSessionId: 'source-chat', initialConversation: seed }
+    const send = (message: string) => {
+      const input = screen.getByPlaceholderText('Ask about prompts...')
+      fireEvent.change(input, { target: { value: message } })
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+    }
+    const first = render(<OpusChat {...props} />)
+    send('Current restriction question')
+    await screen.findByText('Answer to the current question')
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask about prompts...')).toBeEnabled())
+    first.unmount()
+    const returned = render(<OpusChat {...props} />)
+    expect(screen.getByText('Current restriction question')).toBeInTheDocument()
+    send('Verify the latest revision')
+    await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2))
+    expect(serviceMocks.createAgentStudioSession).toHaveBeenCalledTimes(1)
+    expect(serviceMocks.streamOpusChat.mock.calls[1][2]).toBe('agent-studio-session-12345678')
+    expect(serviceMocks.streamOpusChat.mock.calls[1][0]).toEqual([
+      { role: 'user', content: 'Old version question' },
+      { role: 'user', content: 'Current restriction question' },
+      { role: 'assistant', content: 'Answer to the current question' },
+      { role: 'user', content: 'Verify the latest revision' },
+    ])
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask about prompts...')).toBeEnabled())
+    returned.rerender(<OpusChat {...props} durableSessionId="agent-studio-session-12345678" />)
+    expect(screen.getByText('Current restriction question')).toBeInTheDocument()
+  })
+
   it('reattaches to an active AI Chat turn after unmount without starting a duplicate stream', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,

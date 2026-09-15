@@ -1235,9 +1235,23 @@ def _build_runtime_tool_availability_note(
         "use an installed specialist whose live description explicitly supports "
         "database lookup. A loaded PDF does not make this an extraction request. "
         "If no such specialist is callable, explain that direct database lookup "
-        "is unavailable in this chat. Do not send the request to a PDF extractor, "
+        "is unavailable in this chat yet; broader standalone lookup support is "
+        "planned, but there is no delivery date. Rephrasing does not change this "
+        "limit. Offer a next step only when relevant and supported: requested "
+        "paper extraction, saved-result inspection, or a known authoritative "
+        "external source. Uploading a PDF does not enable arbitrary lookup. "
+        "Do not blanket-refuse supported PDF-free tools, including literature "
+        "search. Do not send the lookup request to a PDF extractor, "
         "invent database results, or treat absence from the paper as a database "
         "no-match. Only extract from the paper when paper extraction is requested."
+    )
+
+    notes.append(
+        "When a curator requests a correction you cannot apply, clearly state "
+        "the limitation and what remains unchanged, including saved results and "
+        "files. Offer a next step only when a supported one exists; otherwise "
+        "say the capability is not currently available and stop. Do not invent "
+        "workarounds or require a follow-up question, rerun, or tool call."
     )
 
     notes.append(
@@ -1817,6 +1831,11 @@ def create_supervisor_agent(
         input_guardrails=input_guardrails,
         tools=specialist_tools,
     )
+
+    from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
+    attach_agent_cost_identity(supervisor, {**agent_identity(
+        "supervisor", supervisor.name, "supervisor", prompt_bundle.hash,
+    ), "provider": model_provider})
 
     # Register prompts for execution logging (committed when agent actually runs)
     prompt_run_id = set_pending_prompts(

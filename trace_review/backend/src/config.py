@@ -42,8 +42,8 @@ TRACE_SOURCES = ("remote", "local")
 
 # Warn if .env not found in required location
 if not _env_loaded_from:
-    print("[trace_review] WARNING: No .env file found at ~/.agr_ai_curation/trace_review/.env")
-    print("[trace_review] Copy .env.example to ~/.agr_ai_curation/trace_review/.env")
+    logger.warning("No .env file found at ~/.agr_ai_curation/trace_review/.env")
+    logger.warning("Copy .env.example to ~/.agr_ai_curation/trace_review/.env")
 
 
 # ===========================

@@ -159,6 +159,8 @@ def _instrument_openai_agents_tracing() -> bool:
         from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
         OpenAIAgentsInstrumentor().instrument(exclusive_processor=True)
+        from src.lib.observability.cost_tracing import install_cost_tracing
+        install_cost_tracing()
         _openai_agents_instrumented = True
         logger.info("OpenAI Agents SDK tracing instrumented via OpenInference")
         return True

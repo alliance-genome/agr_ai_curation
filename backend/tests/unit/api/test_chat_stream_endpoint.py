@@ -2182,6 +2182,102 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     assert events[1]["trace_id"] == "trace-replay"
 
 
+@pytest.mark.parametrize("file_first", [False, True])
+@pytest.mark.parametrize("outcome_kind", ["answer", "canonical", "blank", "flow_failed", "save_failed"])
+def test_preferred_flow_answer_and_file_live_persisted_and_replayed(monkeypatch, file_first, outcome_kind):
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="File and answer")
+    saved = []
+    executions = []
+    answer = "Here is the handoff prompt, not the full assembled model input."
+    file_event = {"type": "FILE_READY", "details": {
+        "file_id": "file-answer", "filename": "reagents.tsv", "format": "tsv",
+        "download_url": "/api/files/file-answer/download",
+    }}
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda *_: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda *_: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _: [])
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _: SimpleNamespace(
+        list_recent_messages=lambda **_: [], get_message_by_turn_id=lambda **_: saved[0] if saved else None))
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    async def register(*_args, **_kwargs):
+        return True
+
+    async def not_cancelled(*_args, **_kwargs):
+        return False
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", register)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", noop)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", noop)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", not_cancelled)
+    _patch_chat_impl(monkeypatch, "_prepare_chat_stream_turn", lambda **_: chat.PreparedChatStreamTurn(
+        turn_id="turn-file-answer", effective_user_message="Show the model input and TSV",
+        route=chat.ResolvedChatRoute(mode="flow", target_id=str(flow_id), flow_run_id="run-file-answer"),
+        user_turn_created=not saved, replay_assistant_turn=saved[0] if saved else None))
+
+    async def execute(**_kwargs):
+        executions.append(True)
+        # Provisional prose must neither duplicate the final answer nor leak on failure.
+        yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"content": "Provisional text"}}
+        response = " \n " if outcome_kind == "blank" else answer
+        run = {"type": "RUN_FINISHED", "data": {"response": response}}
+        for event in ([file_event, run] if file_first else [run, file_event]):
+            yield event
+        yield file_event
+        if outcome_kind == "canonical":
+            yield {"type": "CHAT_OUTPUT_READY", "details": {"output": "Canonical answer."}}
+        yield {"type": "FLOW_FINISHED", "data": {
+            "status": "failed" if outcome_kind == "flow_failed" else "completed",
+            "failure_reason": "Controlled test failure" if outcome_kind == "flow_failed" else None,
+        }}
+
+    def persist(**kwargs):
+        if outcome_kind == "save_failed":
+            raise RuntimeError("Controlled save failure")
+        record = _assistant_record(session_id=kwargs["session_id"], turn_id=kwargs["turn_id"],
+                                   content=kwargs["assistant_message"], payload_json={
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: kwargs["flow_terminal_events"]})
+        saved.append(record)
+        return record
+
+    _patch_chat_impl(monkeypatch, "execute_flow", execute)
+    _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", persist)
+    request = chat.ChatMessage(message="Show the model input and TSV", session_id="session-file-answer", turn_id="turn-file-answer")
+
+    def consume():
+        response = asyncio.run(chat.chat_stream_endpoint(
+            chat_message=request, user={"sub": "auth-sub", "cognito:groups": []},
+            db=SimpleNamespace(get=lambda *_: flow, rollback=lambda: None)))
+        return asyncio.run(_consume_stream(response))
+
+    live = consume()
+    if outcome_kind in {"flow_failed", "save_failed"}:
+        assert not saved
+        assert live[-1]["type"] == "turn_failed"
+        assert not any(event["type"] in {"FILE_READY", "CHAT_OUTPUT_READY", "TEXT_MESSAGE_CONTENT", "turn_completed"} for event in live)
+        return
+    expected = ("Canonical answer." if outcome_kind == "canonical" else
+                "Flow 'File and answer' completed. Review the generated results above." if outcome_kind == "blank" else answer)
+    assert saved[0].content == expected
+    replay = consume()
+    assert len(executions) == 1
+    for events in (live, replay):
+        assert sum(event["type"] == "FILE_READY" for event in events) == 1
+        assert next(event["details"] for event in events if event["type"] == "FILE_READY") == file_event["details"]
+        assert events[-1]["type"] == "turn_completed"
+        assert sum(event["type"] == "turn_completed" for event in events) == 1
+        text = [event["content"] for event in events if event["type"] == "TEXT_MESSAGE_CONTENT"]
+        if outcome_kind == "canonical":
+            assert text == []
+            assert [event["details"]["output"] for event in events if event["type"] == "CHAT_OUTPUT_READY"] == [expected]
+        else:
+            assert text == [expected]
+
+
 def test_chat_stream_endpoint_replays_preferred_flow_file_output(monkeypatch):
     file_event = {
         "type": "FILE_READY",

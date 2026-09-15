@@ -2022,7 +2022,7 @@ async def test_specialist_emits_file_ready_for_fileinfo_output(monkeypatch):
     fake_events = [
         _tool_call_stream_event("finalize_and_save"),
         _tool_output_stream_event(
-            '{"file_id":"f1","download_url":"/api/files/f1/download","filename":"out.csv",'
+            '{"status":"ok","size_bytes":42,"file_id":"f1","download_url":"/api/files/f1/download","filename":"out.csv",'
             '"format":"csv","formatter_label":"Allele CSV","source_label":"Allele Extractor",'
             '"source_extraction_result_ids":["extract-1"],"source_keys":["allele"],'
             '"source_envelope_ids":["envelope-1"]}'
@@ -2053,7 +2053,9 @@ async def test_specialist_emits_file_ready_for_fileinfo_output(monkeypatch):
         max_turns=3,
         tool_name=None,
     )
-    assert result == "done"
+    handoff = json.loads(result)
+    assert handoff["status"] == "ok" and handoff["saved_file"] is True
+    assert handoff["file"]["file_id"] == "f1"
 
     file_ready = [e for e in captured_events if e.get("type") == "FILE_READY"]
     assert len(file_ready) == 1

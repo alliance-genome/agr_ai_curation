@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import BackgroundTasks
+from src.lib.observability.cost_context import costed_document_processing
 from src.lib.document_sources.ingestion import (
     DocumentSourceIngestionError,
     ProviderMarkdownIngestionRequest,
@@ -263,6 +264,7 @@ class UploadExecutionService:
             },
         )
 
+    @costed_document_processing
     async def execute_upload(self, request: UploadExecutionRequest) -> None:
         """Run upload orchestration and persist durable job transitions."""
         await self._execute_upload_unbounded(request)
@@ -360,6 +362,7 @@ class UploadExecutionService:
                     stage=ProcessingStage.FAILED.value,
                 )
 
+    @costed_document_processing
     async def execute_provider_markdown(self, request: ProviderMarkdownExecutionRequest) -> None:
         """Run provider Markdown ingestion with the configured wall-clock bound."""
         timeout_seconds = get_document_source_import_timeout_seconds()
@@ -408,6 +411,7 @@ class UploadExecutionService:
                 stage=ProcessingStage.FAILED.value,
             )
 
+    @costed_document_processing
     async def execute_provider_conversion(self, request: ProviderConversionExecutionRequest) -> None:
         """Poll provider conversion until main Markdown can be ingested."""
         timeout_seconds = get_document_source_import_timeout_seconds()

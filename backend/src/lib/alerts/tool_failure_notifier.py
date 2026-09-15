@@ -1,33 +1,13 @@
 """Runtime alert facade for infrastructure and tool-call failures."""
 
-from src.lib.observability.runtime import report_runtime_exception
-
-import asyncio
 import importlib
 import logging
-import os
-from datetime import datetime, timezone
 from typing import Optional
 
-import boto3
-
 from src.lib.observability.sentry import hash_sentry_identifier
-from src.lib.openai_agents.config import get_tool_failure_alert_summary_max_chars
+
 
 logger = logging.getLogger(__name__)
-
-
-def _alert_summary(value: Optional[str]) -> str:
-    """Return a bounded, non-sensitive summary for logs/SNS."""
-
-    text = str(value or "").strip()
-    if not text:
-        return "N/A"
-    text = " ".join(text.split())
-    max_chars = get_tool_failure_alert_summary_max_chars()
-    if len(text) > max_chars:
-        return f"{text[:max_chars]}..."
-    return text
 
 
 def _capture_tool_failure_to_sentry(
@@ -47,7 +27,10 @@ def _capture_tool_failure_to_sentry(
         return False
 
     tool_name = specialist_name or "N/A"
+
     try:
+        if not sentry_sdk.is_initialized():
+            return False
         with sentry_sdk.new_scope() as scope:
             scope.set_level("error")
             scope.set_tag("alert_type", "tool_failure")
@@ -61,11 +44,11 @@ def _capture_tool_failure_to_sentry(
                 hashed = hash_sentry_identifier(identifier)
                 if hashed is not None:
                     scope.set_tag(key, hashed)
-            sentry_sdk.capture_message(
+            event_id = sentry_sdk.capture_message(
                 f"Tool failure: {error_type or 'UnknownError'} ({tool_name})",
                 level="error",
             )
-        return True
+        return bool(event_id)
     except Exception as exc:
         logger.warning("Failed to capture tool failure in Sentry: %s", exc)
         return False
@@ -82,124 +65,18 @@ async def notify_tool_failure(
     context: Optional[str] = None,
     capture_sentry: bool = True,
 ) -> bool:
+    """Queue sanitized metadata in Sentry, never publish to SNS.
+
+    True means the SDK returned a capture ID, not verified ingestion or operator
+    delivery. Raw error/context and curator identity are intentionally excluded.
+    An owning runtime boundary can disable capture to avoid duplicate reporting.
     """
-    Report a tool failure through the runtime alert facade.
-
-    Sentry capture is attempted whenever the SDK is initialized unless an
-    owning boundary explicitly disables it. SNS alerts are separately gated by
-    TOOL_FAILURE_ALERTS_ENABLED. All paths are best-effort: failures are logged
-    but never raised to callers.
-    """
-    if capture_sentry:
-        _capture_tool_failure_to_sentry(
-            error_type=error_type,
-            source=source,
-            specialist_name=specialist_name,
-            trace_id=trace_id,
-            session_id=session_id,
-        )
-
-    alerts_enabled = os.getenv("TOOL_FAILURE_ALERTS_ENABLED", "false").lower() == "true"
-    sns_topic_arn = os.getenv("PROMPT_SUGGESTIONS_SNS_TOPIC_ARN")
-
-    if not alerts_enabled:
+    if not capture_sentry:
         return False
-
-    if not sns_topic_arn:
-        report_runtime_exception(
-            RuntimeError("Enabled tool failure notification delivery is not configured"),
-            component="notification_delivery", operation="tool_failure_sns_not_configured",
-        )
-        logger.warning(
-            "TOOL_FAILURE_ALERTS_ENABLED is true but PROMPT_SUGGESTIONS_SNS_TOPIC_ARN is not set"
-        )
-        return False
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    tool_name = specialist_name or "N/A"
-    source_description = (
-        "infrastructure (backend exception handler)"
-        if source == "infrastructure"
-        else "opus_report (AI Chat detected and reported)"
+    return _capture_tool_failure_to_sentry(
+        error_type=error_type,
+        source=source,
+        specialist_name=specialist_name,
+        trace_id=trace_id,
+        session_id=session_id,
     )
-
-    lines = [
-        f"[Tool Failure] {error_type}: {tool_name}",
-        "=" * 58,
-        f"Source:         {source_description}",
-        f"Error Type:     {error_type or 'N/A'}",
-        f"Error Message:  {_alert_summary(error_message)}",
-        f"Tool:           {tool_name}",
-        f"Trace ID:       {trace_id or 'N/A'}",
-        f"Session ID:     {session_id or 'N/A'}",
-        f"Curator:        {curator_id or 'N/A'}",
-        f"Timestamp:      {timestamp}",
-    ]
-
-    if context:
-        lines.append(f"Context:        {_alert_summary(context)}")
-
-    langfuse_url = os.getenv("LANGFUSE_PUBLIC_URL")
-    if trace_id and langfuse_url:
-        lines.extend(["", f"View trace: {langfuse_url.rstrip('/')}/trace/{trace_id}"])
-
-    lines.append("=" * 58)
-
-    subject = f"[Tool Failure] {error_type}: {tool_name}"[:100]
-    message = "\n".join(lines)
-
-    try:
-        sns_region = os.getenv("SNS_REGION", "us-east-1")
-        aws_profile = os.getenv("AWS_PROFILE")
-
-        def _publish() -> dict:
-            if aws_profile:
-                session = boto3.Session(profile_name=aws_profile)
-                sns_client = session.client("sns", region_name=sns_region)
-            else:
-                sns_client = boto3.client("sns", region_name=sns_region)
-
-            return sns_client.publish(
-                TopicArn=sns_topic_arn,
-                Subject=subject,
-                Message=message,
-                MessageAttributes={
-                    "type": {"DataType": "String", "StringValue": "tool_failure"},
-                },
-            )
-
-        response = await asyncio.to_thread(_publish)
-        logger.info(
-            "Tool failure alert sent via SNS: %s",
-            response.get("MessageId", "unknown"),
-            extra={
-                "error_type": error_type,
-                "source": source,
-                "tool_name": tool_name,
-                "trace_id": trace_id,
-                "session_id": session_id,
-                "curator_id": curator_id,
-            },
-        )
-        return True
-    except Exception as exc:
-        report_runtime_exception(
-            RuntimeError("Tool failure notification delivery failed"),
-            component="notification_delivery", operation="tool_failure_sns_publish_failed",
-            context={"error_type": type(exc).__name__},
-        )
-        logger.error(
-            "Failed to send tool failure notification via SNS: %s",
-            exc,
-            exc_info=True,
-            extra={
-                "sentry_skip_event": True,
-                "error_type": error_type,
-                "source": source,
-                "tool_name": tool_name,
-                "trace_id": trace_id,
-                "session_id": session_id,
-                "curator_id": curator_id,
-            },
-        )
-        return False

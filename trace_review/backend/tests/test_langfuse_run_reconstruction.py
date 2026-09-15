@@ -225,10 +225,11 @@ def test_detail_only_input_uses_mutually_exclusive_cache_buckets():
     assert accounting["input_tokens"] == 50
     assert accounting["uncached_input_tokens"] == 0
     assert accounting["total_tokens"] == 55
-    assert accounting["cost_source"] == "langfuse_calculated"
+    assert accounting["cost_source"] == "unavailable"
+    assert accounting["total_cost"] is None
 
 
-def test_zero_usage_generation_wrapper_is_not_a_provider_call():
+def test_missing_usage_generation_remains_visible_without_proof_it_is_a_wrapper():
     trace_data = _trace_data()
     trace_data["observations"].append({
         "id": "wrapper-1",
@@ -241,11 +242,13 @@ def test_zero_usage_generation_wrapper_is_not_a_provider_call():
 
     summary = build_cost_summary(trace_data)
 
-    assert summary["totals"]["provider_call_count"] == 1
-    assert summary["totals"]["observation_count"] == 4
-    assert summary["by_model"]["gpt-5-mini"]["provider_call_count"] == 1
+    assert summary["totals"]["provider_call_count"] == 2
+    assert summary["totals"]["observation_count"] == 2
+    assert summary["totals"]["missing_usage_calls"] == 1
+    assert summary["by_model"]["gpt-5-mini"]["provider_call_count"] == 2
     assert summary["totals"]["total_tokens"] == 15
-    assert summary["totals"]["total_cost"] == 0.03
+    assert summary["totals"]["total_cost"] is None
+    assert summary["totals"]["priced_subtotal"] == 0.03
 
 
 def test_chronological_payload_inventory_handles_sdk_datetime_and_string_timestamps():

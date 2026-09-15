@@ -18,7 +18,7 @@ from ..config import (
     get_trace_source_runtime_config,
 )
 from ..observability import report_failure
-from .langfuse_run_reconstruction import usage_cost_summary
+from .langfuse_run_reconstruction import usage_cost_summary, build_cost_summary
 
 logger = logging.getLogger(__name__)
 OBSERVATION_FIELDS = (
@@ -150,6 +150,8 @@ class TraceExtractor:
     def _normalize_v2_observation(cls, item: Any) -> Dict[str, Any]:
         """Preserve v2 fields and add the compatibility aliases used by analyzers."""
         observation = cls._normalize_item(item)
+        observation = dict(observation)
+        observation["usage_semantics"] = "langfuse_exclusive"
         usage_details = observation.get("usage_details") or observation.get("usageDetails") or {}
         cost_details = observation.get("cost_details") or observation.get("costDetails") or {}
         input_tokens = cls._first_present(
@@ -274,10 +276,11 @@ class TraceExtractor:
         )
 
         project_id = cls._first_present(root, "projectId", "project_id")
-        total_cost = sum(
-            usage_cost_summary(observation)["total_cost"]
-            for observation in observations
-        )
+        accounting = build_cost_summary({"trace_id": trace_id, "observations": observations})
+        total_cost = accounting["totals"]["total_cost"]
+        if not any(str(o.get("type", "")).upper() == "GENERATION" for o in observations):
+            # Trace-list queries may contain only roots, not their paid children.
+            total_cost = None
 
         return {
             "id": trace_id,
@@ -293,6 +296,7 @@ class TraceExtractor:
             "output": root.get("output"),
             "latency": cls._trace_latency(observations),
             "totalCost": total_cost,
+            "inclusiveRootCost": usage_cost_summary(root)["total_cost"],
             "calculatedTotalCost": total_cost,
             "htmlPath": (
                 f"/project/{project_id}/traces/{trace_id}"
@@ -920,13 +924,9 @@ class TraceExtractor:
         trace_fragment = trace_id[:8] if len(trace_id) >= 8 else trace_id
 
         # Aggregate tokens and costs from observations
-        total_tokens = 0
-        total_cost = 0
-        for obs in observations:
-            # Sum tokens from observation usage
-            accounting = usage_cost_summary(obs)
-            total_tokens += accounting["total_tokens"]
-            total_cost += accounting["total_cost"]
+        accounting = build_cost_summary({"trace_id": trace_id, "observations": observations})
+        total_tokens = accounting["totals"]["total_tokens"]
+        total_cost = accounting["totals"]["total_cost"]
 
         trace["usage"] = {"total": total_tokens}
         trace["totalCost"] = total_cost

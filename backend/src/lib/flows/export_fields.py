@@ -40,6 +40,10 @@ def packaged_export_fields(agent_id: str, entry: dict | None = None) -> list[dic
         return []
     result = []
     for obj in registry.domain_pack.metadata.object_definitions:
+        summary = obj.metadata.get("export_validation_summary")
+        if summary:
+            from src.lib.flows.validation_summary_export import summary_fields
+            result.extend(summary_fields(obj.object_type, summary))
         for field in obj.fields:
             result.append({
                 "ref": f"object.pack.{obj.object_type}.{field.field_path}",

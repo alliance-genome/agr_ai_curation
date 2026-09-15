@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_fixture_pack
+from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -95,8 +97,51 @@ def test_tool_verified_allele_fixture_builds_active_mention_validation_request()
         "associated_gene": "daf-2",
         "taxon": "NCBITaxon:6239",
         "source_mentions": ["daf-2(m41)"],
-        "evidence_quote": "daf-2(m41) animals formed dauer larvae at 25 C.",
+        "evidence_quotes": [{
+            "evidence_record_id": "daf-2-m41-evidence-1",
+            "verified_quote": "daf-2(m41) animals formed dauer larvae at 25 C.",
+            "page": 3,
+            "section": "Results",
+            "subsection": "Dauer phenotype",
+            "chunk_id": "chunk-allele-phenotype",
+            "figure_reference": "Figure 3B",
+        }],
     }
+
+
+def test_multiple_allele_quotes_reach_validator_without_resolving_conflicting_identity():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(ALLELE_DOMAIN_PACK_ID)
+    fixture_ref = registry.get_fixture_pack_ref(ALLELE_DOMAIN_PACK_ID, "tool_verified")
+    envelope = load_domain_fixture_pack(pack.pack_path / fixture_ref.path).fixtures[0].envelope
+    first = envelope.metadata["evidence_records"][0]
+    second = {**deepcopy(first), "evidence_record_id": "conflicting-evidence",
+              "verified_quote": "The allele identity was not established.",
+              "chunk_id": "chunk-conflicting", "section": "Discussion"}
+    envelope.metadata["evidence_records"].append(second)
+    mention = next(obj for obj in envelope.extracted_objects if obj.object_type == "AlleleMention")
+    mention.evidence_record_ids.append(second["evidence_record_id"])
+    seen = []
+
+    def runner(request, *, binding):
+        seen.append(request)
+        assert [quote["evidence_record_id"] for quote in request.selected_inputs["evidence_quotes"]] == mention.evidence_record_ids
+        return {
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "status": "unresolved", "resolved_values": {}, "resolved_objects": [],
+            "missing_expected_fields": list(request.expected_result_fields),
+            "candidates": [], "lookup_attempts": [],
+            "explanation": "Conflicting source context; no confirmed database identity.",
+        }
+
+    result = dispatch_active_validator_bindings(envelope, pack, runner=runner,
+                                               max_parallel_validators=1)
+    assert len(seen) == 1
+    assert [item.status for item in result.validator_results] == ["unresolved"]
+    assert result.validator_results[0].resolved_values == {}
 
 
 def test_allele_domain_pack_validator_rejects_legacy_semantic_keys():

@@ -1076,6 +1076,10 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     assert "Only these specialist tools are currently installed" in created.instructions
     assert "DATABASE LOOKUP IS NOT PDF EXTRACTION" in created.instructions
     assert "direct database lookup" in created.instructions
+    assert "planned, but there is no delivery date" in created.instructions
+    assert "Uploading a PDF does not enable arbitrary lookup" in created.instructions
+    assert created.instructions.count("When a curator requests a correction you cannot apply") == 1
+    assert "what remains unchanged, including saved results and files" in created.instructions
     assert "ask_gene_specialist" in created.instructions
     assert "No PDF document is currently loaded" in created.instructions
     assert "ask_pdf_extraction_specialist" in created.instructions
@@ -1085,6 +1089,62 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     assert not any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
     assert captured_pending["name"] == "Query Supervisor"
     assert captured_langfuse["metadata"]["specialist_count"] == len(created.tools)
+
+
+@pytest.mark.parametrize("document_loaded,available", [
+    (False, []),  # Symbol-only lookup: no capability installed.
+    (False, []),  # Rephrased follow-up: unchanged inventory means unchanged limit.
+    (False, ["ask_entity_lookup_specialist"]),  # Future enabled capability.
+    (False, ["inspect_results"]),  # Existing saved results require no PDF.
+    (False, ["ask_literature_specialist"]),
+    (True, ["ask_pdf_extraction_specialist"]),  # Normal paper-backed extraction.
+])
+def test_lookup_limit_instructions_preserve_runtime_capabilities(document_loaded, available):
+    """Assembled instruction contract, not an LLM behavioral routing evaluation."""
+    specs = [
+        {"tool_name": "ask_entity_lookup_specialist", "requires_document": False},
+        {"tool_name": "ask_literature_specialist", "requires_document": False},
+        {"tool_name": "ask_pdf_extraction_specialist", "requires_document": True},
+    ]
+    note = supervisor_agent._build_runtime_tool_availability_note(
+        specs, [SimpleNamespace(name=name) for name in available], document_loaded)
+    assert "use an installed specialist whose live description explicitly supports database lookup" in note
+    assert "If no such specialist is callable" in note
+    assert "planned, but there is no delivery date" in note
+    assert "Rephrasing does not change this limit" in note
+    assert "Offer a next step only when relevant and supported" in note
+    assert "saved-result inspection" in note
+    assert "known authoritative external source" in note
+    assert "Do not blanket-refuse supported PDF-free tools, including literature search" in note
+    assert "Only extract from the paper when paper extraction is requested" in note
+    assert "invent database results" in note
+    if "ask_entity_lookup_specialist" in available:
+        assert "installed and callable in this environment: ask_entity_lookup_specialist" in note
+    if document_loaded:
+        assert "use these document-aware specialist tools: ask_pdf_extraction_specialist" in note
+
+
+@pytest.mark.parametrize("available", [
+    [],
+    ["inspect_results"],  # Read-only inspection is not a correction capability.
+    ["ask_csv_formatter_specialist"],  # Export does not imply mutation.
+    ["apply_reviewed_correction"],  # A future supported path must stay usable.
+])
+def test_unavailable_correction_guidance_is_conditional_and_allows_stopping(available):
+    """Check prompt policy, not a claim about live model behavior."""
+    note = supervisor_agent._build_runtime_tool_availability_note(
+        tool_specs=[],
+        available_specialist_tools=[SimpleNamespace(name=name) for name in available],
+        document_loaded=True,
+    )
+    assert note.count("When a curator requests a correction you cannot apply") == 1
+    assert "clearly state the limitation and what remains unchanged, including saved results and files" in note
+    assert "Offer a next step only when a supported one exists" in note
+    assert "otherwise say the capability is not currently available and stop" in note
+    assert "Do not invent workarounds or require a follow-up question, rerun, or tool call" in note
+    if "apply_reviewed_correction" in available:
+        assert "installed and callable in this environment: apply_reviewed_correction" in note
+        assert "follow the live tool names and tool descriptions" in note
 
 
 @pytest.mark.asyncio

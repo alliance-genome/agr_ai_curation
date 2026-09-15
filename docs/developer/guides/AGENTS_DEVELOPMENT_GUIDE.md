@@ -259,6 +259,17 @@ Removed raw file writers such as `save_csv_file(data_json=...)` are hidden from
 curator attachment and rejected by catalog resolution; formatter agents must not
 receive model-authored row arrays or file bytes.
 
+On successful `finalize_and_save`, specialist streaming returns a deterministic
+`{status: "ok", saved_file: true, file: {...}}` handoff to the supervisor using
+the same safe FileInfo fields as `FILE_READY`. The formatter's final prose is
+not responsible for conveying the URL; even missing final prose does not cause
+another model call after a save. Metadata is invocation-local. Duplicate saves
+retain the original file and do not emit another download card. Failed saves or
+`formatter_cannot_complete` do not establish this success contract. A save that
+reports success but omits required file metadata returns `handoff_error` with
+`saved_file: true` and missing field names, without inventing a link or claiming
+the save failed. Existing file authorization and storage contracts are unchanged.
+
 ### Tool Bindings
 
 Each package binding declaration in `tools/bindings.yaml` declares:

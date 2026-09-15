@@ -749,6 +749,128 @@ def _make_flow_execution_state(*completed_steps, ordered_tool_names=None):
     }
 
 
+def _finalized_empty_step():
+    from src.lib.openai_agents.extraction_builder_workspace import (
+        ExtractionBuilderWorkspace, build_internal_extraction_result_event,
+    )
+    executor = _executor_module()
+    workspace = ExtractionBuilderWorkspace(run_id="empty-run")
+    payload = {"envelope_id": "empty-envelope", "domain_pack_id": "gene", "extracted_objects": []}
+    workspace.upsert_candidate(candidate_id="materialized-empty", staged_fields=payload, status="valid")
+    finalization = workspace.finalize(candidate_ids=["materialized-empty"], source_candidate_ids=[])
+    event = build_internal_extraction_result_event(
+        tool_name="ask_gene_specialist", specialist_name="Gene", finalization=finalization,
+    )
+    raw, audit = executor._internal_extraction_tool_output_with_audit_since(
+        {"collected_events": [event], "collected_index": 0}, tool_name="ask_gene_specialist",
+    )
+    step = _make_completed_step(
+        agent_id="gene", agent_name="Gene", tool_name="ask_gene_specialist", step=1,
+        adapter_key="gene", payload=json.loads(raw),
+    )
+    step["node_id"] = "n1"
+    step["extraction_handoff_audit"] = {
+        **_make_extraction_handoff_audit(step=1, tool_name="ask_gene_specialist", agent_id="gene",
+                                       agent_name="Gene", adapter_key="gene", evidence_count=0),
+        **audit,
+    }
+    return step, event
+
+
+@pytest.mark.parametrize("corruption", [None, "unfinalized", "errors", "missing_payload", "malformed", "nonempty_source"])
+def test_finalized_empty_contract_is_explicit_and_fail_closed(corruption):
+    executor = _executor_module()
+    step, event = _finalized_empty_step()
+    internal = event["internal"]
+    if corruption == "unfinalized":
+        internal["builder_finalization"]["status"] = "active"
+    elif corruption == "errors":
+        internal["builder_finalization"]["validation_errors"] = [{"message": "invalid"}]
+    elif corruption == "missing_payload":
+        internal["tool_output"] = None
+    elif corruption == "malformed":
+        internal["tool_output"] = '{"extracted_objects": []}'
+    elif corruption == "nonempty_source":
+        internal["builder_finalization"]["source_candidate_ids"] = ["unfinished-object"]
+    _, audit = executor._internal_extraction_tool_output_with_audit_since(
+        {"collected_events": [event], "collected_index": 0}, tool_name="ask_gene_specialist",
+    )
+    assert bool(audit.get("finalizedEmptyExtraction")) is (corruption is None)
+    reason = executor._flow_candidate_reject_reason(
+        candidate=step["candidate"], candidate_expected=True, used_internal_extraction_payload=True,
+        adapter_key_resolved=True, evidence_count=0,
+        finalized_empty_extraction=audit.get("finalizedEmptyExtraction") is True,
+    )
+    assert reason == (None if corruption is None else "evidence_records_empty")
+    assert executor._flow_candidate_reject_reason(
+        candidate=step["candidate"], candidate_expected=True, used_internal_extraction_payload=True,
+        adapter_key_resolved=False, evidence_count=0, finalized_empty_extraction=True,
+    ) == "missing_adapter_key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mixed", [False, True])
+@pytest.mark.parametrize("attached", [False, True])
+@pytest.mark.parametrize("raw_summary", [False, True])
+async def test_flow_preserves_finalized_empty_and_sibling_output(monkeypatch, mixed, attached, raw_summary):
+    executor = _executor_module()
+    empty, _ = _finalized_empty_step()
+    steps = [empty]
+    nodes = [_task_input_node(), _agent_node("n1", "gene", step_goal="Extract genes")]
+    if mixed:
+        evidence = [_make_evidence_record("allele", verified_quote="An allele was reported.")]
+        sibling = _make_completed_step(
+            agent_id="allele", agent_name="Allele", tool_name="ask_allele_specialist", step=2,
+            adapter_key="allele", payload=_structured_step_output("allele", evidence_records=evidence),
+            evidence_records=evidence,
+        )
+        sibling["extraction_handoff_audit"] = _make_extraction_handoff_audit(
+            step=2, tool_name="ask_allele_specialist", agent_id="allele", agent_name="Allele", adapter_key="allele",
+        )
+        sibling["node_id"] = "n2"
+        steps.append(sibling)
+        nodes.append(_agent_node("n2", "allele", step_goal="Extract alleles"))
+    flow = _make_flow(nodes)
+    if attached:
+        nodes.append(_agent_node("formatter", "csv_formatter"))
+        steps.append({"step": len(steps) + 1, "node_id": "formatter", "agent_id": "csv_formatter",
+                      "tool_name": "ask_csv_formatter_specialist", "output": "No rows to format.", "candidate": None})
+        flow = _make_output_attachment_flow(nodes, source_node_id="n1", output_node_id="formatter")
+    supervisor = MagicMock()
+    supervisor._flow_unavailable_steps = []
+    supervisor._flow_execution_state = _make_flow_execution_state(*steps)
+    monkeypatch.setattr(executor, "create_flow_supervisor", lambda **kwargs: supervisor)
+    monkeypatch.setattr(executor, "build_flow_prompt", lambda *args, **kwargs: "run")
+    requests = []
+    monkeypatch.setattr(executor, "persist_idempotent_extraction_results", _recording_persist_idempotent_extraction_results(requests))
+    monkeypatch.setattr(executor, "_materialize_flow_domain_envelope_records", lambda *args, **kwargs: None)
+
+    async def runner(**kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-empty"}}
+        if mixed:
+            if raw_summary and not attached:
+                yield {"type": "RUN_FINISHED", "data": {"response": "Sibling priority result"}}
+            else:
+                yield {"type": "CHAT_OUTPUT_READY", "details": {"output": "Sibling priority result"}}
+
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_streamed", runner)
+    events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1", document_id="doc1")]
+    finished = next(event["data"] for event in events if event["type"] == "FLOW_FINISHED")
+    assert finished["status"] == "completed"
+    assert len(requests) == (2 if mixed else 1)
+    assert requests[0].candidate_count == 0
+    assert finished["extraction_handoff_audits"][0]["persistenceStatus"] == "success"
+    outputs = [event["details"]["output"] for event in events if event["type"] == "CHAT_OUTPUT_READY"]
+    assert any("zero objects" in output and "no annotation was accepted" in output for output in outputs)
+    if mixed:
+        assert "Sibling priority result" in outputs
+    if attached:
+        assert finished["output_status"] == "complete"
+        assert finished["output_branches"][0]["output"]["type"] == "CHAT_OUTPUT_READY"
+        assert not any(event["type"] == "FILE_READY" for event in events)
+    assert not any(event["type"] == "FLOW_ERROR" for event in events)
+
+
 def test_internal_extraction_audit_treats_none_tool_output_as_missing_payload():
     """Audit flags should match whether the flow can actually use the payload."""
 

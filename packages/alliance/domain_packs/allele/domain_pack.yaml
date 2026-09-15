@@ -1,6 +1,6 @@
 pack_id: agr.alliance.allele
 display_name: Alliance Allele Paper Evidence Domain Pack
-version: 0.1.0
+version: 0.1.1
 metadata_api_version: 1.0.0
 description: Pending allele paper/evidence association envelopes grounded to pinned Alliance LinkML and read-only curation DB targets.
 status: in_development
@@ -353,6 +353,15 @@ object_definitions:
     definition_state: in_development
     metadata:
       object_role: metadata_only
+      export_validation_summary:
+        binding_id: allele_mention_reference_validation
+        resolved_fields:
+          curie: Validated allele ID (not paper-stated or accepted)
+          symbol: Validated allele symbol
+          taxon: Validated taxon
+        evidence:
+          object_type: EvidenceQuote
+          id_field: evidence_record_id
     fields:
       - field_path: mention.text
         field_type: string
@@ -470,11 +479,25 @@ metadata:
             associated_gene: {value_schema: {kind: string}, nullable: true, allow_constant: true}
             taxon: {value_schema: {kind: string}, nullable: true, allow_constant: true}
             source_mentions: {value_schema: {kind: array, items: {kind: string}}, nullable: true}
-            evidence_quote:
-              value_schema: {kind: string}
+            evidence_quotes:
+              value_schema:
+                kind: array
+                items:
+                  kind: object
+                  fields:
+                    - {key: evidence_record_id, required: true, value_schema: {kind: string}}
+                    - {key: verified_quote, required: true, value_schema: {kind: string}}
+                    - {key: field_path, value_schema: {kind: string}}
+                    - {key: chunk_id, value_schema: {kind: string}}
+                    - {key: section, value_schema: {kind: string}}
+                    - {key: subsection, value_schema: {kind: string}}
+                    - {key: page, value_schema: {kind: integer}}
+                    - {key: document_id, value_schema: {kind: string}}
+                    - {key: source_document_id, value_schema: {kind: string}}
+                    - {key: figure_reference, value_schema: {kind: string}}
               nullable: true
               allow_field: false
-              context_selector: {source: evidence_record, path: verified_quote, required: false, context_only: true}
+              context_selector: {source: evidence_record, output: quote_bundle, allow_multiple: true, required: false, context_only: true}
           required_any_inputs: [[mention]]
           outputs:
             curie: {value_schema: {kind: string}, result_path: curie}
@@ -525,9 +548,10 @@ metadata:
             required: false
             allow_multiple: true
             context_only: true
-          evidence_quote:
+          evidence_quotes:
             source: evidence_record
-            path: verified_quote
+            output: quote_bundle
+            allow_multiple: true
             required: false
             context_only: true
         expected_result_fields:

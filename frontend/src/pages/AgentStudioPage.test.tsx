@@ -18,7 +18,12 @@ const serviceMocks = vi.hoisted(() => ({
   getWorkshopSavedReference: vi.fn(),
   validateWorkshopAction: vi.fn(),
   getWorkshopCloneSource: vi.fn(),
+  createAgentStudioSession: vi.fn(),
+  streamOpusChat: vi.fn(),
+  stopAgentStudioChat: vi.fn(),
 }))
+
+const realChat = vi.hoisted(() => ({ enabled: false }))
 
 const historyMocks = vi.hoisted(() => ({
   useChatHistoryDetailQuery: vi.fn(),
@@ -30,10 +35,11 @@ const workshopMockState = vi.hoisted(() => ({ dirty: false, deferActionValidatio
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/features/history/useChatHistoryQuery', () => historyMocks)
 
-vi.mock('@/components/AgentStudio/OpusChat', async () => {
+vi.mock('@/components/AgentStudio/OpusChat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/AgentStudio/OpusChat')>()
   const React = await import('react')
 
-  type SnapshotMessage = { role: 'user' | 'assistant'; content: string }
+  type SnapshotMessage = { role: 'user' | 'assistant' | 'system'; content: string }
 
   function OpusChatMock({
     context,
@@ -53,8 +59,8 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     inputRef,
     onStreamingChange,
   }: {
-    context?: Record<string, unknown>
-    initialConversation?: SnapshotMessage[]
+    context?: import('@/types/promptExplorer').ChatContext
+    initialConversation?: import('@/types/promptExplorer').ToolIdeaConversationEntry[] | null
     durableSessionId?: string | null
     sourceSessionId?: string
     onWorkshopAction?: (action: import('@/types/promptExplorer').WorkshopAction) => Promise<void>
@@ -62,7 +68,7 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     onApplyWorkshopProposal?: (proposal: import('@/types/promptExplorer').WorkshopAuthoringProposal) => Promise<unknown>
     onDurableSessionIdChange?: (sessionId: string) => void
     onConversationSnapshotChange?: (
-      messages: Array<{ role: 'user' | 'assistant'; content: string }>
+      messages: SnapshotMessage[]
     ) => void
     verifyMessage?: string | null
     discussMessage?: string | null
@@ -177,7 +183,9 @@ vi.mock('@/components/AgentStudio/OpusChat', async () => {
     )
   }
 
-  return { default: OpusChatMock }
+  return { ...actual, default: (props: React.ComponentProps<typeof actual.default>) => (
+    realChat.enabled ? <actual.default {...props} /> : <OpusChatMock {...props} />
+  ) }
 })
 
 const flowBuilderInstances = vi.hoisted(() => ({ direct: false, count: 0, draft: undefined as Record<string, any> | undefined }))
@@ -448,6 +456,7 @@ function buildEmptyHistoryQueryResult() {
 
 describe('AgentStudioPage', () => {
   beforeEach(() => {
+    realChat.enabled = false
     vi.clearAllMocks()
     localStorage.clear()
     workshopMockState.dirty = false
@@ -1025,6 +1034,50 @@ describe('AgentStudioPage', () => {
         '?trace_id=trace-789&tab=agents&session_id=agent-studio-session-999'
       )
     })
+  })
+
+  it('keeps real chat messages and outgoing history through URL classification and remount', async () => {
+    const { resetSharedOpusChatStateForTests } = await import('@/components/AgentStudio/OpusChat')
+    resetSharedOpusChatStateForTests()
+    realChat.enabled = true
+    Element.prototype.scrollIntoView = vi.fn()
+    serviceMocks.createAgentStudioSession.mockResolvedValue({ session_id: 'minted-live' })
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'Current answer', session_id: 'minted-live', turn_id: 'turn-1' }
+      yield { type: 'DONE', session_id: 'minted-live', turn_id: 'turn-1' }
+    })
+    let classified = false
+    historyMocks.useChatHistoryDetailQuery.mockImplementation(({ sessionId }) =>
+      buildSessionDetail(classified ? sessionId : 'seed-history', classified ? 'agent_studio' : 'assistant_chat'))
+    historyMocks.useChatHistoryTranscriptQuery.mockImplementation(() => buildTranscript('seed-history', 'assistant_chat', [{
+      message_id: 'old-question', role: 'user', message_type: 'text', content: 'Old question', created_at: '2026-09-14T12:00:00Z',
+    }]))
+    const first = render(<MemoryRouter initialEntries={['/agent-studio?session_id=seed-history']}>
+      <AgentStudioPage /><LocationProbe />
+    </MemoryRouter>)
+    const send = (message: string) => {
+      const input = screen.getByPlaceholderText('Ask about prompts...')
+      fireEvent.change(input, { target: { value: message } })
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+    }
+    await screen.findByText('Old question')
+    send('Current question')
+    await screen.findByText('Current answer')
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask about prompts...')).toBeEnabled())
+    expect(screen.getByTestId('location-search')).toHaveTextContent('session_id=minted-live')
+    first.unmount()
+    classified = true
+    render(<MemoryRouter initialEntries={['/agent-studio?session_id=minted-live']}><AgentStudioPage /></MemoryRouter>)
+    await screen.findByText('Current question')
+    send('Follow-up question')
+    await waitFor(() => expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2))
+    expect(serviceMocks.createAgentStudioSession).toHaveBeenCalledTimes(1)
+    expect(serviceMocks.streamOpusChat.mock.calls[1][2]).toBe('minted-live')
+    expect(serviceMocks.streamOpusChat.mock.calls[1][0]).toEqual([
+      { role: 'user', content: 'Old question' }, { role: 'user', content: 'Current question' },
+      { role: 'assistant', content: 'Current answer' }, { role: 'user', content: 'Follow-up question' },
+    ])
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask about prompts...')).toBeEnabled())
   })
 
   it('does not reuse stale chat_kind detail data when a minted Agent Studio session replaces a seed URL session', async () => {

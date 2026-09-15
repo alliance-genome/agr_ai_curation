@@ -36,7 +36,8 @@ Read these from `selected_inputs` and `target.input_values` when present:
 `condition_chemical_curie`, `condition_chemical_name`, or `chemical_name`: ChEBI chemical inputs, validated as ontology terms (ontologytermtype `CHEBITerm`) via grouped `agr_curation_query` `get_ontology_terms`, with `get_ontology_term` only for a residual targeted lookup.
 `condition_taxon_curie`, `taxon`, or `taxon_id`: NCBITaxon inputs.
 `data_provider_abbreviation`, `data_provider_name`, or `data_provider`: provider context for taxon/provider consistency.
-`condition_quantity`, `condition_unit`, `condition_free_text`, and `evidence_quote`: supplemental context that can explain the condition but must not override lookup evidence.
+`condition_quantity`, `condition_unit`, `condition_free_text`, and `evidence_quotes`: supplemental context that can explain the condition but must not override lookup evidence.
+keep each quote paired with its provenance, consider all relevant records and leave conflicting identity evidence unresolved when it cannot be disambiguated.
 
 # ECV-05 scope: composite-condition-only, no cross-agent transfer
 You only perform composite experimental-condition validation.

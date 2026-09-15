@@ -1,10 +1,17 @@
 """Unit tests for dev-only observability smoke endpoints."""
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from main import create_app
 from src import config
 from src.api import observability
+
+
+def create_app():
+    """Isolate router contracts from unrelated embedding/network initialization."""
+    app = FastAPI()
+    app.include_router(observability.router)
+    return app
 
 
 def test_synthetic_observability_endpoint_hidden_by_default(monkeypatch):
@@ -68,7 +75,7 @@ def test_synthetic_caught_alert_endpoint_reports_facade(monkeypatch):
     response = client.post("/api/observability/sentry/synthetic-caught-alert")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "reported", "sns_sent": False}
+    assert response.json() == {"status": "unavailable", "sentry_capture_queued": False}
     assert calls == [
         {
             "error_type": "SyntheticSentryCaughtAlert",

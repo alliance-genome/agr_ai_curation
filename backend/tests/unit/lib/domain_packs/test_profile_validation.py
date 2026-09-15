@@ -361,13 +361,15 @@ def test_custom_revision_survives_compilation_and_uses_normal_dispatch_finalizat
 
 @pytest.mark.parametrize("nested", [False, True])
 @pytest.mark.parametrize("with_context", [False, True])
-def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nested, with_context):
+@pytest.mark.parametrize("quote_count", [0, 1, 2])
+def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nested, with_context, quote_count):
     from src.lib.agent_studio.profile_mapping_service import capability_catalog, capability_issues
     raw, _, pack = example
     cap = next(cap for cap in capability_catalog(active_group_ids=["MGI"])
                if cap.ref.domain_pack_id == "agr.alliance.allele"
                and cap.ref.binding_id == "allele_mention_reference_validation")
     assert not capability_issues(cap, ["MGI"])
+    assert cap.ref.domain_pack_version == "0.1.1"
     # Optional custom details and parts can supply the lookup input.
     raw["fields"][0]["required"] = False
     raw["fields"][0]["nullable"] = True
@@ -377,7 +379,7 @@ def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nest
     inputs = {"mention": {"field_path": prefix + ".paper_name"}}
     if with_context:
         inputs.update(taxon={"source": "constant", "value": "NCBITaxon:10090"},
-                      evidence_quote={"source": "context"})
+                      evidence_quotes={"source": "context"})
     raw["validator_mappings"][0].update(
         capability_ref=cap.ref.model_dump(), capability_fingerprint=cap.fingerprint(),
         inputs=inputs, outputs={"curie": prefix + ".resolved_id"},
@@ -388,12 +390,63 @@ def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nest
     attributes = {"paper_name": "MGI:2175911"}
     if nested:
         attributes = {"stock": attributes}
-    match, = context.registry.match_bindings(envelope(attributes))
+    source = envelope(attributes)
+    records = [{"evidence_record_id": f"quote-{i}", "verified_quote": f"Paper quote {i}",
+                "chunk_id": f"chunk-{i}", "section": f"Section {i}"}
+               for i in range(quote_count)]
+    source.metadata["evidence_records"] = records + [
+        {"evidence_record_id": "unrelated", "verified_quote": "Another object's quote"}]
+    source.extracted_objects[0].evidence_record_ids = [record["evidence_record_id"] for record in records]
+    match, = context.registry.match_bindings(source)
     built = build_domain_validation_request(match)
     assert built.request is not None
     assert built.request.selected_inputs["mention"] == "MGI:2175911"
     assert built.request.validator_agent.agent_id == "allele_validation"
     assert built.request.expected_result_fields == {"curie": prefix + ".resolved_id"}
-    assert not built.request.selected_inputs.get("evidence_quote")
+    assert built.request.selected_inputs.get("evidence_quotes", []) == (records if with_context else [])
     if with_context:
         assert built.request.selected_inputs["taxon"] == "NCBITaxon:10090"
+
+
+def test_previous_allele_capability_version_is_not_silently_reused(example):
+    from src.lib.agent_studio.profile_mapping_service import capability_catalog
+
+    raw, _, pack = example
+    cap = next(cap for cap in capability_catalog(active_group_ids=["MGI"])
+               if cap.ref.domain_pack_id == "agr.alliance.allele")
+    old_ref = cap.ref.model_copy(update={"domain_pack_version": "0.1.0"})
+    raw["validator_mappings"][0].update(
+        capability_ref=old_ref.model_dump(), capability_fingerprint=cap.fingerprint(),
+        inputs={"mention": {"field_path": "attributes.paper_name"}},
+        outputs={"curie": "attributes.resolved_id"},
+        policy={"unresolved": "requires_curator_review", "blocks_readiness": True})
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap], active_group_ids=["MGI"])
+    assert context.unavailable
+    assert not context.registry.bindings
+
+
+def test_allele_capability_persistence_uses_new_version_identity(example):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from sqlalchemy.dialects import postgresql
+    from src.lib.agent_studio.profile_mapping_service import (
+        capability_catalog, persist_capability_references,
+    )
+
+    raw, _, _ = example
+    cap = next(cap for cap in capability_catalog(active_group_ids=["MGI"])
+               if cap.ref.domain_pack_id == "agr.alliance.allele")
+    raw["validator_mappings"][0].update(
+        capability_ref=cap.ref.model_dump(), capability_fingerprint=cap.fingerprint())
+    db = Mock()
+    db.execute.return_value.scalar_one.return_value = SimpleNamespace(
+        fingerprint=cap.fingerprint(), snapshot=cap.snapshot())
+    persist_capability_references(db, SimpleNamespace(id=uuid4(), contract=raw), [cap])
+    insert, select = [call.args[0] for call in db.execute.call_args_list]
+    assert insert.compile(dialect=postgresql.dialect()).params["domain_pack_version"] == "0.1.1"
+    # The select must look up the new immutable row, not a previously persisted
+    # 0.1.0 snapshot with different bytes.
+    assert "0.1.1" in select.compile(dialect=postgresql.dialect()).params.values()
+    assert "0.1.0" not in select.compile(dialect=postgresql.dialect()).params.values()
+    assert db.add.call_args.args[0].capability_fingerprint == cap.fingerprint()

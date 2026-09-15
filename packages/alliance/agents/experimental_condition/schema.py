@@ -28,7 +28,7 @@ class ExperimentalConditionNormalizedComponent(DomainValidatorBaseModel):
         description=(
             "Component category, such as condition_class, condition_id, "
             "condition_chemical, condition_taxon, relation, data_provider, "
-            "quantity, unit, free_text, or evidence_quote"
+            "quantity, unit, free_text, or evidence_quotes"
         )
     )
     field_path: Optional[StrictStr] = Field(

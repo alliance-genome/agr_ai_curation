@@ -481,8 +481,8 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     async def _fake_execute_flow(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
         yield {
-            "type": "TEXT_MESSAGE_CONTENT",
-            "data": {"delta": "hello"},
+            "type": "TOOL_START",
+            "data": {"tool_name": "lookup"},
             "timestamp": "2026-02-26T00:00:00+00:00",
             "details": {"note": "ok"},
         }
@@ -505,8 +505,8 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert events[0]["type"] == "RUN_STARTED"
     assert events[0]["trace_id"] == "trace-123"
     assert events[0]["session_id"] == "session-flow-1"
-    assert events[1]["type"] == "TEXT_MESSAGE_CONTENT"
-    assert events[1]["delta"] == "hello"
+    assert events[1]["type"] == "TOOL_START"
+    assert events[1]["tool_name"] == "lookup"
     assert events[1]["timestamp"] == "2026-02-26T00:00:00+00:00"
     assert events[1]["details"] == {"note": "ok"}
     assert "session-flow-1" not in chat._LOCAL_CANCEL_EVENTS
@@ -821,7 +821,8 @@ def test_execute_flow_endpoint_replays_file_result_when_evidence_contains_nul(mo
     assert replay_events[2]["details"] == file_row.payload_json["details"]
 
 
-def test_execute_flow_endpoint_persists_and_replays_mixed_text_and_file_outputs(monkeypatch):
+@pytest.mark.parametrize("answer_type", ["CHAT_OUTPUT_READY", "RUN_FINISHED"])
+def test_execute_flow_endpoint_persists_and_replays_mixed_text_and_file_outputs(monkeypatch, answer_type):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(
         flow_id=flow_id,
@@ -844,8 +845,10 @@ def test_execute_flow_endpoint_persists_and_replays_mixed_text_and_file_outputs(
     async def _fake_execute_flow(**_kwargs):
         execute_calls.append(_kwargs["flow_run_id"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-mixed-output"}}
+        yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"content": "Provisional answer"}}
         yield {
-            "type": "CHAT_OUTPUT_READY",
+            "type": answer_type,
+            "data": {"response": "Priority: High — relevant tumor terms were found."},
             "details": {
                 "output": "Priority: High — relevant tumor terms were found.",
                 "specialist_node_id": "priority",
@@ -890,12 +893,13 @@ def test_execute_flow_endpoint_persists_and_replays_mixed_text_and_file_outputs(
     )
     replay_events = asyncio.run(_consume_stream(replay_response))
 
-    assert [event["type"] for event in events] == [
-        "RUN_STARTED",
-        "CHAT_OUTPUT_READY",
-        "FILE_READY",
-        "FLOW_FINISHED",
-    ]
+    terminal_types = (["CHAT_OUTPUT_READY", "FILE_READY", "FLOW_FINISHED"]
+                      if answer_type == "CHAT_OUTPUT_READY"
+                      else ["FILE_READY", "RUN_FINISHED", "FLOW_FINISHED"])
+    visible_types = ["TEXT_MESSAGE_CONTENT" if value == "RUN_FINISHED" else value for value in terminal_types]
+    assert [event["type"] for event in events] == ["RUN_STARTED", *visible_types]
+    if answer_type == "RUN_FINISHED":
+        assert next(event["content"] for event in events if event["type"] == "TEXT_MESSAGE_CONTENT") == "Priority: High — relevant tumor terms were found."
     assert replay_events == events
     assert len(execute_calls) == 1
     repository = calls["repository"]
@@ -916,7 +920,7 @@ def test_execute_flow_endpoint_persists_and_replays_mixed_text_and_file_outputs(
         for event in summary_message.payload_json[
             chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY
         ]
-    ] == ["CHAT_OUTPUT_READY", "FILE_READY", "FLOW_FINISHED"]
+    ] == terminal_types
 
 
 def test_execute_flow_endpoint_failed_outcome_discards_stale_success_everywhere(monkeypatch):
@@ -1207,6 +1211,66 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
     assert calls["clear"] == ["session-flow-title"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("save_fails", [False, True])
+async def test_interrupted_producer_persists_without_observer(monkeypatch, save_fails):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="interrupted", turn_id="interrupted-turn")
+    flow = SimpleNamespace(id=flow_id, user_id=7, name="Interrupted Flow", execution_count=0,
+                           last_executed_at=None, flow_definition={}, is_active=True,
+                           visibility="private", project_id=None, shared_at=None)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    ready = asyncio.Event()
+    closed = []
+    reports = []
+    monkeypatch.setattr(chat, "report_runtime_exception", lambda exc, **kw: reports.append(kw) or True)
+
+    async def execute(**kwargs):
+        try:
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-interrupted"}}
+            yield {"type": "FILE_READY", "details": {"file_id": "discarded-file"}}
+            ready.set()
+            await asyncio.Event().wait()
+        finally:
+            closed.append(True)
+
+    _patch_chat_impl(monkeypatch, "execute_flow", execute)
+    if save_fails:
+        def fail_save(**kwargs):
+            raise RuntimeError("interrupted outcome write failed")
+        _patch_chat_impl(monkeypatch, "_persist_completed_execute_flow_turn", fail_save)
+    await chat.execute_flow_endpoint(request=request, db=_DummyDB(flow=flow),
+                                    user={"sub": "auth-sub", "cognito:groups": []})
+    await ready.wait()
+    run = next(iter(chat.executable_run_manager._runs.values()))
+    run.task.cancel()
+    if save_fails:
+        await run.task
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await run.task
+    assert closed == [True]
+    assert run.outcome_status == "failed"
+    summaries = [m for m in calls["repository"].messages[("auth-sub", request.session_id)]
+                 if m.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE]
+    if save_fails:
+        assert summaries == []
+        assert run.status == "failed"
+        assert any(r["operation"] == "failure_outcome_persistence_failed" for r in reports)
+    else:
+        assert len(summaries) == 1
+        summary = summaries[0].payload_json
+        assert summary["status"] == "failed"
+        assert summary["trace_id"] == "trace-interrupted"
+        assert "interrupted unexpectedly" in summary["failure_reason"]
+        assert summary["flow_run_id"] == run.flow_run_id
+        replay = await chat.execute_flow_endpoint(request=request, db=_DummyDB(flow=flow),
+                                                 user={"sub": "auth-sub", "cognito:groups": []})
+        events = await _consume_stream(replay)
+        assert sum(e["type"] == "RUN_ERROR" for e in events) == 1
+        assert not any(e["type"] in {"FILE_READY", "RUN_FINISHED"} for e in events)
+
+
 def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-cancel")
@@ -1246,6 +1310,10 @@ def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     assert calls["register"] == [("session-flow-cancel", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-flow-cancel", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-cancel"]
+    summaries = [m for m in calls["repository"].messages[("auth-sub", request.session_id)]
+                 if m.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE]
+    assert len(summaries) == 1
+    assert "cancelled by user" in summaries[0].payload_json["failure_reason"]
 
 
 @pytest.mark.asyncio
@@ -1273,10 +1341,10 @@ async def test_flow_stream_closes_in_producer_context(monkeypatch, exit_mode):
 
     async def provider_stream():
         try:
-            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "hello"}}
+            yield {"type": "TOOL_START", "data": {"tool_name": "lookup"}}
             if exit_mode == "disconnect":
                 await resume.wait()
-            yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "again"}}
+            yield {"type": "TOOL_END", "data": {"tool_name": "lookup"}}
         finally:
             lifecycle.append("provider_closed")
 
@@ -1306,7 +1374,7 @@ async def test_flow_stream_closes_in_producer_context(monkeypatch, exit_mode):
         original_sse = chat._stream_event_sse
 
         def fail_content_serialization(event):
-            if event.get("type") == "TEXT_MESSAGE_CONTENT":
+            if event.get("type") == "TOOL_START":
                 raise ValueError("test consumer serialization failure")
             return original_sse(event)
 
@@ -1359,6 +1427,8 @@ def test_execute_flow_endpoint_preserves_event_order_and_domain_warning(monkeypa
             },
         }
         yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "done"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+        yield {"type": "FLOW_FINISHED", "data": {"status": "completed"}}
 
     _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 

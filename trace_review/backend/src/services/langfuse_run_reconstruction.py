@@ -6,6 +6,7 @@ import json
 import re
 from collections import defaultdict
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..config import get_trace_review_payload_preview_max_chars
@@ -222,123 +223,102 @@ def _usage_bucket(
 
 
 def usage_cost_summary(observation: Mapping[str, Any]) -> Dict[str, Any]:
-    """Normalize mutually exclusive token buckets without summing detail subsets."""
+    """Normalize provider-inclusive usage and Langfuse-exclusive usage explicitly.
+
+    Flat Langfuse usageDetails are disjoint buckets. Provider usage contains
+    inclusive input/output totals and nested subset details. Never merge those
+    two sources before determining their semantics.
+    """
     usage = _mapping_or_empty(observation.get("usage"))
-    usage_details = _mapping_or_empty(
+    details = _mapping_or_empty(
         observation.get("usageDetails") or observation.get("usage_details")
     )
-    cost_details = _mapping_or_empty(
+    costs = _mapping_or_empty(
         observation.get("costDetails") or observation.get("cost_details")
     )
-    usage_flat = _flatten_numeric_details(usage)
-    detail_flat = _flatten_numeric_details(usage_details)
-    combined = {**usage_flat, **detail_flat}
-
-    input_tokens = _usage_bucket(
-        combined,
-        ("input", "prompt", "input_tokens", "prompt_tokens", "input_token_count"),
-        allow_suffix=False,
-    )
-    output_tokens = _usage_bucket(
-        combined,
-        ("output", "completion", "output_tokens", "completion_tokens", "output_token_count"),
-        allow_suffix=False,
-    )
-    cache_read_tokens = _usage_bucket(
-        combined,
-        (
-            "cache_read",
-            "cache_read_tokens",
-            "cache_read_input_tokens",
-            "input_cache_read",
-            "input_cached_tokens",
-            "cached_input_tokens",
-            "input_tokens_cache_read",
-            "input_token_details_cached_tokens",
-            "cached_tokens",
-        ),
-    )
-    cache_write_tokens = _usage_bucket(
-        combined,
-        (
-            "cache_write",
-            "cache_write_tokens",
-            "cache_write_input_tokens",
-            "input_cache_write",
-            "input_cache_creation",
-            "input_cache_creation_tokens",
-            "cache_creation_input_tokens",
-            "input_tokens_cache_write",
-        ),
-    )
-    reasoning_tokens = _usage_bucket(
-        combined,
-        (
-            "reasoning",
-            "reasoning_tokens",
-            "output_reasoning",
-            "output_reasoning_tokens",
-            "output_tokens_reasoning",
-        ),
-    )
-
-    if not input_tokens and (cache_read_tokens or cache_write_tokens):
-        input_tokens = cache_read_tokens + cache_write_tokens
-    uncached_input_tokens = max(
-        input_tokens - cache_read_tokens - cache_write_tokens,
-        0,
-    )
-    total_tokens = _usage_bucket(
-        combined,
-        ("total", "total_tokens", "total_token_count"),
-        allow_suffix=False,
-    )
-    if not total_tokens:
-        total_tokens = input_tokens + output_tokens
-
-    total_cost = _numeric(
-        _first_present(
-            observation,
-            (
-                "calculatedTotalCost",
-                "calculated_total_cost",
-                "totalCost",
-                "total_cost",
-            ),
+    # TraceExtractor records the original source before adding analyzer aliases.
+    exclusive = observation.get("usage_semantics") == "langfuse_exclusive" or (
+        bool(details) and not usage and not any(
+            isinstance(value, Mapping) or "." in str(key)
+            for key, value in details.items()
         )
     )
-    if not total_cost:
-        total_cost = _usage_bucket(
-            _flatten_numeric_details(cost_details),
-            ("total", "total_cost"),
-            allow_suffix=False,
-        )
+    flat = _flatten_numeric_details(details if exclusive else {**usage, **details})
+    def bucket(*aliases: str) -> int:
+        return int(_usage_bucket(flat, aliases))
 
-    has_cost_details = bool(cost_details) or any(
-        key in observation
-        for key in (
-            "calculatedTotalCost",
-            "calculated_total_cost",
-            "totalCost",
-            "total_cost",
-        )
-    )
-
+    reads = bucket("input_cached_tokens", "cache_read_input_tokens", "cache_read",
+                   "cache_read_tokens", "input_cache_read", "cached_input_tokens",
+                   "input_tokens_cache_read", "input_token_details_cached_tokens",
+                   "input_tokens_details_cached_tokens", "cached_tokens")
+    writes = bucket("input_cache_creation_tokens", "cache_creation_input_tokens",
+                    "cache_write_input_tokens", "cache_write", "cache_write_tokens",
+                    "input_cache_write", "input_cache_creation", "input_tokens_cache_write",
+                    "input_tokens_details_cache_creation_tokens")
+    reasoning = bucket("output_reasoning_tokens", "reasoning_tokens", "reasoning",
+                       "output_reasoning", "output_tokens_reasoning",
+                       "output_tokens_details_reasoning_tokens")
+    primary_input = int(_usage_bucket(flat, ("input", "prompt", "input_tokens", "prompt_tokens", "input_token_count"), allow_suffix=False))
+    primary_output = int(_usage_bucket(flat, ("output", "completion", "output_tokens", "completion_tokens", "output_token_count"), allow_suffix=False))
+    input_tokens = primary_input + reads + writes if exclusive else primary_input
+    output_tokens = primary_output + reasoning if exclusive else primary_output
+    if not input_tokens and (reads or writes):
+        input_tokens = reads + writes
+    fresh = primary_input if exclusive else input_tokens - reads - writes
+    total = input_tokens + output_tokens
+    supplied = _first_present(flat, ("total", "total_tokens", "total_token_count"))
+    issues = []
+    if fresh < 0 or reasoning > output_tokens or any(value < 0 for value in flat.values()):
+        issues.append("inconsistent_token_buckets")
+    if supplied is not None and supplied != total:
+        issues.append("total_tokens_mismatch")
+    has_usage = bool(flat)
+    raw_cost = _first_present(observation, (
+        "calculatedTotalCost", "calculated_total_cost", "totalCost", "total_cost",
+    ))
+    if raw_cost is None:
+        raw_cost = _first_present(costs, ("total", "total_cost"))
+    if raw_cost is None and costs:
+        values = list(costs.values())
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+            raw_cost = sum(values)
+    try:
+        exact_cost = Decimal(str(raw_cost))
+        valid_cost = not isinstance(raw_cost, bool) and exact_cost.is_finite() and exact_cost >= 0
+    except (InvalidOperation, ValueError):
+        exact_cost = None
+        valid_cost = False
+    # A calculated zero without a matched pricing definition is not free usage.
+    matched_price = _first_present(observation, ("internalModelId", "internal_model_id"))
+    explicit_cost = _metadata(observation).get("cost_source") == "provider"
+    if valid_cost and exact_cost == 0 and not (matched_price or explicit_cost):
+        valid_cost = False
+    total_cost = float(raw_cost) if valid_cost else None
+    reason = None if valid_cost else ("missing_usage" if not has_usage else "unpriced")
     return {
-        "input_tokens": int(input_tokens),
-        "uncached_input_tokens": int(uncached_input_tokens),
-        "output_tokens": int(output_tokens),
-        "cached_tokens": int(cache_read_tokens),
-        "cache_read_tokens": int(cache_read_tokens),
-        "cache_write_tokens": int(cache_write_tokens),
-        "reasoning_tokens": int(reasoning_tokens),
-        "total_tokens": int(total_tokens),
+        "input_tokens": input_tokens,
+        "uncached_input_tokens": max(fresh, 0),
+        "output_tokens": output_tokens,
+        "cached_tokens": reads,
+        "cache_read_tokens": reads,
+        "cache_write_tokens": writes,
+        "reasoning_tokens": reasoning,
+        "total_tokens": total,
+        "supplied_total_tokens": supplied,
+        "usage_status": "missing" if not has_usage else ("inconsistent" if issues else "recorded"),
+        "usage_semantics": "langfuse_exclusive" if exclusive else "provider_inclusive",
+        "usage_issues": issues,
+        "cache_write_status": "recorded" if any("writ" in k or "creation" in k for k in flat)
+                              else "not_recorded",
         "total_cost": total_cost,
-        "cost_source": "langfuse_calculated" if has_cost_details else "unavailable",
+        "total_cost_decimal": str(exact_cost) if valid_cost else None,
+        "cost_source": "langfuse_calculated" if valid_cost else "unavailable",
+        "pricing_status": "measured" if valid_cost else reason,
+        "currency": "USD",
         "estimated_total_cost": None,
         "usage": dict(usage),
-        "usage_details": dict(usage_details),
-        "cost_details": dict(cost_details),
+        "usage_details": dict(details),
+        "cost_details": dict(costs),
     }
 
 
@@ -640,61 +620,45 @@ def _empty_totals() -> Dict[str, Any]:
 
 
 def build_cost_summary(trace_data: Mapping[str, Any]) -> Dict[str, Any]:
-    """Aggregate token/cost accounting by trace, agent, model, and kind."""
-    raw_trace = trace_data.get("raw_trace") or {}
-    trace_id = _trace_id(trace_data)
-    trace_totals = _empty_totals()
-    by_agent: Dict[str, Dict[str, Any]] = defaultdict(_empty_totals)
-    by_model: Dict[str, Dict[str, Any]] = defaultdict(_empty_totals)
-    by_kind: Dict[str, Dict[str, Any]] = defaultdict(_empty_totals)
-    observations: List[Dict[str, Any]] = []
-
-    for observation in trace_data.get("observations") or []:
-        obs_id = _observation_id(observation)
-        usage_cost = usage_cost_summary(observation)
-        kind = _observation_kind(observation)
-        agent_name = _agent_name(observation, raw_trace) or "unknown"
-        model_name = _model_name(observation) or "unknown"
-
-        for bucket in (trace_totals, by_agent[agent_name], by_kind[kind]):
-            _add_totals(bucket, usage_cost)
-            bucket["observation_count"] += 1
-
-        if model_name != "unknown" or kind == "model":
-            _add_totals(by_model[model_name], usage_cost)
-            by_model[model_name]["observation_count"] += 1
-
-        if kind == "model" and (
-            usage_cost["total_tokens"] > 0 or usage_cost["total_cost"] > 0
-        ):
-            for bucket in (trace_totals, by_agent[agent_name], by_kind[kind]):
-                bucket["provider_call_count"] += 1
-            by_model[model_name]["provider_call_count"] += 1
-
-        observations.append({
-            "observation_id": obs_id,
-            "name": observation.get("name"),
-            "kind": kind,
-            "agent_name": agent_name,
-            "model": model_name,
-            "start_time": _timestamp(observation),
-            "usage_cost": usage_cost,
-        })
-
-    trace_usage = raw_trace.get("usage") if isinstance(raw_trace.get("usage"), Mapping) else {}
-    if not trace_totals["total_tokens"] and trace_usage:
-        trace_totals["total_tokens"] = int(_dict_value(trace_usage, ("total", "totalTokens", "total_tokens")))
-    trace_cost = _numeric(_first_present(raw_trace, ("calculatedTotalCost", "totalCost", "total_cost")))
-    if not trace_totals["total_cost"] and trace_cost:
-        trace_totals["total_cost"] = trace_cost
-
+    """Use the same exclusive generation events as the bounded cost report."""
+    from .cost_report import _deduplicate, cost_events, summarize
+    events, duplicates, conflicts = _deduplicate(cost_events(trace_data))
+    def totals(items):
+        summary = summarize(items)
+        return {
+            **summary,
+            "total_cost": float(summary["total_cost"]) if summary["total_cost"] is not None else None,
+            "priced_subtotal": float(summary["priced_subtotal"]),
+            "provider_call_count": len(items),
+            "observation_count": len(items),
+            "cached_tokens": summary["cache_read_tokens"],
+        }
+    agents = defaultdict(list)
+    models = defaultdict(list)
+    workflows = defaultdict(list)
+    for event in events:
+        # Prefer stable IDs so two same-name agents remain separate.
+        agents[event["agent_id"] or event["agent_name"]].append(event)
+        models[event["model"]].append(event)
+        for workflow in event["owning_workflow_spans"]:
+            workflows[workflow].append(event)
     return {
-        "trace_id": trace_id,
-        "totals": trace_totals,
-        "by_agent": dict(by_agent),
-        "by_model": dict(by_model),
-        "by_kind": dict(by_kind),
-        "observations": observations,
+        "trace_id": _trace_id(trace_data),
+        "totals": totals(events),
+        "by_agent": {key: {**totals(items), "agent_name": items[0]["agent_name"]}
+                     for key, items in agents.items()},
+        "by_model": {key: totals(items) for key, items in models.items()},
+        "by_kind": {"model": totals(events)},
+        "inclusive_workflows": {key: totals(items) for key, items in workflows.items()},
+        "inclusive_workflows_note": "Alternative rollups; never add these to exclusive totals",
+        "duplicate_observations": duplicates,
+        "duplicate_conflicts": conflicts,
+        "observations": [
+            {"observation_id": event["span_id"], "kind": "model",
+             "agent_name": event["agent_name"], "model": event["model"],
+             "start_time": event["timestamp"], "usage_cost": event["usage"]}
+            for event in events
+        ],
     }
 
 

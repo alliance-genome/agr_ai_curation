@@ -460,6 +460,10 @@ def _gene_mentions_envelope(mentions: list[str]) -> DomainEnvelope:
                         f"Paper-backed context for {mention}."
                     ],
                     "verified_quote": f"{mention} was discussed in the paper.",
+                    "evidence_records": [{
+                        "evidence_record_id": f"gene-evidence-{index}",
+                        "verified_quote": f"{mention} was discussed in the paper.",
+                    }],
                 },
             )
             for index, mention in enumerate(mentions, start=1)
@@ -1100,6 +1104,8 @@ def test_dispatch_default_runner_uses_worker_thread_from_running_event_loop(
     captured = {}
 
     def _fake_package_validator(request, *, binding):
+        from src.lib.observability.cost_context import current_cost_context
+        captured["cost_context"] = current_cost_context()
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
         captured["thread_id"] = threading.get_ident()
@@ -1118,7 +1124,12 @@ def test_dispatch_default_runner_uses_worker_thread_from_running_event_loop(
             source_envelope_revision=3,
         )
 
-    result = asyncio.run(_dispatch_inside_event_loop())
+    from src.lib.observability.cost_context import cost_scope, current_cost_context
+    with cost_scope({"run_id": "parent-run", "paper": {"namespace": "fixture", "id": "A"}}):
+        result = asyncio.run(_dispatch_inside_event_loop())
+    assert captured["cost_context"]["run_id"] == "parent-run"
+    assert captured["cost_context"]["paper"]["id"] == "A"
+    assert current_cost_context() == {}
 
     assert captured["thread_id"] != event_loop_thread_id
     assert captured["binding"].binding_id == "fixture.identifier_lookup"
@@ -1546,7 +1557,7 @@ def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context(
         mention = str(request.selected_inputs["mention"])
         captured_mentions.append(mention)
         captured_notes.append(list(request.selected_inputs["identity_resolution_notes"]))
-        assert request.selected_inputs["evidence_quote"] == (
+        assert request.selected_inputs["evidence_quotes"][0]["verified_quote"] == (
             f"{mention} was discussed in the paper."
         )
 
@@ -2684,6 +2695,8 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     def _fake_run_sync(agent, **kwargs):
         captured["agent"] = agent
         captured["kwargs"] = kwargs
+        from src.lib.observability.cost_context import current_cost_context
+        captured["cost_context"] = current_cost_context()
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_result"
         )
@@ -2700,12 +2713,16 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
             "reasoning_effort": "medium",
         }
     }
-    with benchmark_route_plan(validator_routes):
+    from src.lib.observability.cost_context import cost_scope, current_cost_context
+    with benchmark_route_plan(validator_routes), cost_scope({"run_id": "continued-run", "paper": {"namespace": "fixture", "id": "paper-A"}}):
         run_package_scoped_validator_agent(
             request,
             binding=binding,
             runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
         )
+    assert captured["cost_context"]["run_id"] == "continued-run"
+    assert captured["cost_context"]["paper"]["id"] == "paper-A"
+    assert current_cost_context() == {}
 
     runtime_agent = captured["agent"]
     assert runtime_agent is not source_agent

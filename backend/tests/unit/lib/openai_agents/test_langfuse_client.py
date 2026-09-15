@@ -139,6 +139,11 @@ def test_initialize_langfuse_handles_import_error(monkeypatch):
 
 def test_instrument_openai_agents_tracing_is_idempotent(monkeypatch):
     calls = []
+    cost_installations = []
+    monkeypatch.setattr(
+        "src.lib.observability.cost_tracing.install_cost_tracing",
+        lambda: cost_installations.append(True),
+    )
 
     class FakeInstrumentor:
         def instrument(self, **kwargs):
@@ -160,6 +165,7 @@ def test_instrument_openai_agents_tracing_is_idempotent(monkeypatch):
     assert lc._instrument_openai_agents_tracing() is True
     assert lc.is_openai_agents_tracing_enabled() is True
     assert calls == [{"exclusive_processor": True}]
+    assert cost_installations == [True]
 
 
 def test_get_and_flush_langfuse_handles_flush_exception(monkeypatch):

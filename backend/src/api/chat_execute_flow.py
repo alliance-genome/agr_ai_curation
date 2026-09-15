@@ -349,6 +349,13 @@ def _build_execute_flow_summary_content(
     return "No final user-visible output was emitted."
 
 
+def _execute_flow_visible_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Project a durable supervisor completion into the chat's text contract."""
+    if event.get("type") != "RUN_FINISHED":
+        return event
+    return {**event, "type": "TEXT_MESSAGE_CONTENT", "content": str(event.get("response") or "").strip()}
+
+
 def _build_execute_flow_transcript_row_from_event(
     event_payload: Dict[str, Any],
 ) -> "ExecuteFlowTranscriptRow | None":
@@ -947,7 +954,7 @@ async def execute_flow_endpoint(
 
         async def replay_stream():
             for event_payload in prepared_turn.replay_events:
-                yield _stream_event_sse(event_payload)
+                yield _stream_event_sse(_execute_flow_visible_event(event_payload))
 
         return StreamingResponse(
             replay_stream(),
@@ -975,6 +982,7 @@ async def execute_flow_endpoint(
         file_outputs: List[Dict[str, Any]] = []
         transcript_rows: List[ExecuteFlowTranscriptRow] = []
         run_started_event: Optional[Dict[str, Any]] = None
+        user_stop = False
 
         set_sentry_transaction_identifiers(
             session_id=current_session_id,
@@ -994,6 +1002,7 @@ async def execute_flow_endpoint(
                 user_query=request.user_query,
                 active_groups=active_groups,
                 flow_run_id=prepared_turn.flow_run_id,
+                cost_run_id=current_turn_id,
                 trace_context=(
                     {"trace_id": prepared_turn.resume_trace_id}
                     if prepared_turn.resume_trace_id
@@ -1012,17 +1021,8 @@ async def execute_flow_endpoint(
                                 "turn_id": current_turn_id,
                             },
                         )
-                        yield _stream_event_sse(
-                            _stream_event_payload(
-                                "RUN_ERROR",
-                                session_id=current_session_id,
-                                turn_id=current_turn_id,
-                                trace_id=trace_id,
-                                message="Flow execution cancelled by user",
-                                error_type="FlowCancelled",
-                            )
-                        )
-                        break
+                        user_stop = True
+                        raise asyncio.CancelledError()
 
                     event_type = event.get("type")
                     event_data = event.get("data", {}) or {}
@@ -1138,6 +1138,9 @@ async def execute_flow_endpoint(
                     outcome.observe(flat_event)
 
                     if event_type in {
+                        "TEXT_MESSAGE_START",
+                        "TEXT_MESSAGE_CONTENT",
+                        "TEXT_MESSAGE_END",
                         "RUN_FINISHED",
                         "CHAT_OUTPUT_READY",
                         "FILE_READY",
@@ -1257,63 +1260,39 @@ async def execute_flow_endpoint(
                 )
 
                 for terminal_event in outcome.publishable_terminal_events():
-                    yield _stream_event_sse(terminal_event)
+                    yield _stream_event_sse(_execute_flow_visible_event(terminal_event))
 
-        except asyncio.CancelledError:
-            logger.warning(
-                "Flow execution cancelled unexpectedly for session %s",
-                current_session_id,
-                extra={
-                    "session_id": current_session_id,
-                    "user_id": user_id,
-                    "trace_id": trace_id,
-                    "turn_id": current_turn_id,
-                },
-            )
-            yield _stream_event_sse(
-                _stream_event_payload(
-                    "SUPERVISOR_ERROR",
-                    session_id=current_session_id,
-                    turn_id=current_turn_id,
-                    trace_id=trace_id,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    details={
-                        "error": "Flow cancelled unexpectedly",
-                        "context": "asyncio.CancelledError",
+        except (Exception, asyncio.CancelledError) as exc:
+            interrupted = isinstance(exc, asyncio.CancelledError)
+            user_stop = interrupted and (user_stop or cancel_event.is_set())
+            if interrupted:
+                run_error_message = (
+                    "Flow execution cancelled by user" if user_stop
+                    else "Flow execution was interrupted unexpectedly."
+                )
+                failure_provider = None
+            else:
+                run_error_message, failure_provider = _flow_execution_error_message(exc)
+            if not user_stop:
+                report_runtime_exception(
+                    exc,
+                    component="execute_flow_stream",
+                    operation="event_generator_failed",
+                    tags=_flow_failure_tags(
+                        flow_id=flow.id,
+                        failure_type=type(exc).__name__,
+                        phase="event_generator",
+                        provider=failure_provider,
+                    ),
+                    context={
+                        "session_id": current_session_id,
+                        "turn_id": current_turn_id,
+                        "trace_id": trace_id,
+                        "flow_id": str(flow.id),
+                        "flow_run_id": prepared_turn.flow_run_id,
+                        "document_id": str(request.document_id) if request.document_id else None,
                     },
                 )
-            )
-            yield _stream_event_sse(
-                _stream_event_payload(
-                    "RUN_ERROR",
-                    session_id=current_session_id,
-                    turn_id=current_turn_id,
-                    trace_id=trace_id,
-                    message="Flow execution was interrupted unexpectedly.",
-                    error_type="StreamCancelled",
-                )
-            )
-        except Exception as exc:
-            run_error_message, failure_provider = _flow_execution_error_message(exc)
-            report_runtime_exception(
-                exc,
-                component="execute_flow_stream",
-                operation="event_generator_failed",
-                tags=_flow_failure_tags(
-                    flow_id=flow.id,
-                    failure_type=type(exc).__name__,
-                    phase="event_generator",
-                    provider=failure_provider,
-                ),
-                context={
-                    "session_id": current_session_id,
-                    "turn_id": current_turn_id,
-                    "trace_id": trace_id,
-                    "flow_id": str(flow.id),
-                    "flow_run_id": prepared_turn.flow_run_id,
-                    "document_id": str(request.document_id) if request.document_id else None,
-                },
-            )
             logger.warning(
                 "Flow execution error: %s",
                 exc,
@@ -1342,14 +1321,14 @@ async def execute_flow_endpoint(
                 turn_id=current_turn_id,
                 trace_id=trace_id,
                 message=run_error_message,
-                error_type=type(exc).__name__,
+                error_type="FlowCancelled" if user_stop else type(exc).__name__,
             )
             outcome.replace_with_failure(
                 run_error_message,
                 failure_type=type(exc).__name__,
                 phase="event_generator",
                 provider=failure_provider,
-                terminal_events=[supervisor_error_event, run_error_event],
+                terminal_events=([run_error_event] if user_stop else [supervisor_error_event, run_error_event]),
             )
             await executable_run_manager.set_outcome_status(run_id, "failed")
 
@@ -1429,6 +1408,10 @@ async def execute_flow_endpoint(
             outcome.mark_persisted(transcript=True, recovered_failure=True)
             for terminal_event in outcome.publishable_terminal_events():
                 yield _stream_event_sse(terminal_event)
+            if interrupted:
+                # The durable failure is saved before publication; retain structured
+                # cancellation ownership and let the manager terminate the producer.
+                raise
         finally:
             await stream_lifecycle.finalize(generated_title_candidate)
 

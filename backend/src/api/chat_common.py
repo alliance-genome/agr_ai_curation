@@ -1334,6 +1334,11 @@ async def _run_resolved_chat_route(
                             "internal": dict(ref),
                         }
                 if event_type in {
+                    # Flow prose is selected at completion and published only
+                    # after persistence, not appended from provisional chunks.
+                    "TEXT_MESSAGE_START",
+                    "TEXT_MESSAGE_CONTENT",
+                    "TEXT_MESSAGE_END",
                     "CHAT_OUTPUT_READY",
                     "FILE_READY",
                     "CURATION_HANDOFF_READY",

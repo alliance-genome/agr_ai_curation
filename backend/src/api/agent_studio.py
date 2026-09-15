@@ -2216,6 +2216,14 @@ def _provider_tool_result_content(
             ),
         }
 
+        if tool_name == "propose_flow_draft_update" and tool_result.get("valid") is not True:
+            provider_tool_result["instruction"] += (
+                " Inspect revised output sources with get_current_flow_projection_plan"
+                "(node_id, view='source_fields', draft='candidate'); use complete_plan for"
+                " its plan. Continue semantic repair without reset_candidate. Do not guess"
+                " replacement columns or drop incompatible fields without curator choice."
+            )
+
     raw_content = _serialize_provider_tool_result(provider_tool_result)
     inline_max_chars = get_agent_studio_provider_tool_result_inline_max_chars()
     if len(raw_content) <= inline_max_chars:
@@ -3646,7 +3654,7 @@ async def _handle_tool_call(
             )
 
     elif tool_name == "report_tool_failure":
-        delivered = await notify_tool_failure(
+        queued = await notify_tool_failure(
             error_type=tool_input.get("error_type", "unexpected_error"),
             error_message=tool_input.get("error_message", "No error message provided"),
             source="opus_report",
@@ -3657,15 +3665,16 @@ async def _handle_tool_call(
             context=tool_input.get("context"),
         )
         return {
-            "status": "success" if delivered else "not_sent",
-            "success": delivered,
-            "error": None if delivered else "Developer notification was not sent; delivery is disabled or unavailable.",
-            "notification_submitted": delivered,
+            "status": "success" if queued else "error",
+            "capture_status": "queued" if queued else "unavailable",
+            "success": queued,
+            "error": None if queued else "Sentry capture is unavailable or failed; the report was not queued.",
+            "sentry_capture_queued": queued,
+            "notification_submitted": False,
             "message": (
-                "Failure report submitted to the developer notification service."
-                if delivered else
-                "The developer notification was not sent. Delivery is disabled or unavailable. "
-                "Do not say the developers were notified."
+                "Failure report queued locally for Sentry. Ingestion and developer notification are not verified."
+                if queued else
+                "The failure report was not queued to Sentry. Capture is unavailable or failed."
             ),
         }
 
@@ -4520,18 +4529,6 @@ async def chat_with_opus(
                 operation="openai_provider_failure",
                 phase="agents_sdk_run",
                 context={"model": AGENT_STUDIO_OPENAI_MODEL},
-            )
-            asyncio.create_task(
-                notify_tool_failure(
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                    source="infrastructure",
-                    specialist_name="agent_studio_openai",
-                    trace_id=run_state.trace_id,
-                    session_id=prepared_turn.session_id,
-                    curator_id=user_email,
-                    capture_sentry=False,
-                )
             )
             logger.error(
                 "OpenAI Agent Studio API error: %s",

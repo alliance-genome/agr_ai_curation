@@ -519,6 +519,23 @@ def test_gene_domain_pack_fixture_converts_to_pending_gene_mention_envelope():
     assert converted.extracted_objects[0].payload["primary_external_id"] == "WB:WBGene00000912"
     assert LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(converted.metadata)
     assert all(LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(obj.payload) for obj in converted.extracted_objects)
+    from agr_ai_curation_alliance.domain_packs import load_alliance_domain_pack_registry
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+
+    pack = load_alliance_domain_pack_registry().get_pack(GENE_DOMAIN_PACK_ID)
+    matches = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(converted)
+    records = {record["evidence_record_id"]: record for record in converted.metadata["evidence_records"]}
+    assert matches
+    for match in matches:
+        built = build_domain_validation_request(match)
+        assert built.request is not None
+        quotes = built.request.selected_inputs["evidence_quotes"]
+        assert [quote["evidence_record_id"] for quote in quotes] == match.object_envelope.evidence_record_ids
+        for quote in quotes:
+            original = records[quote["evidence_record_id"]]
+            assert quote["verified_quote"] == original["verified_quote"]
+            assert quote["chunk_id"] == original["chunk_id"]
 
 
 def test_gene_extractor_schema_synthesizes_missing_raw_mentions_for_retained_objects():

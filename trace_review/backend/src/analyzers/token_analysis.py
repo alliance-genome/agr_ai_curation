@@ -101,6 +101,20 @@ class TokenAnalysisAnalyzer:
 
         # Filter and sort GENERATION observations
         generations = [o for o in observations if o.get("type") == "GENERATION"]
+        from ..services.cost_report import _deduplicate, cost_events
+        events, duplicate_count, _ = _deduplicate(cost_events({
+            "observations": observations, "raw_trace": raw_trace,
+        }))
+        by_span = {event["span_id"]: event for event in events}
+        seen_spans = set()
+        unique_generations = []
+        for observation in generations:
+            span_id = observation.get("id")
+            if span_id and (span_id not in by_span or span_id in seen_spans):
+                continue
+            seen_spans.add(span_id)
+            unique_generations.append(observation)
+        generations = unique_generations
         generations.sort(key=lambda x: x.get("startTime", ""))
         provider_usage = cls._provider_usage(observations)
 
@@ -131,7 +145,8 @@ class TokenAnalysisAnalyzer:
             "cache_write_tokens": 0,
             "completion_tokens": 0,
             "reasoning_tokens": 0,
-            "total_cost": 0
+            "total_cost": 0,
+            "unpriced_calls": 0,
         })
         context_overflow_detected = False
         context_overflow_details = None
@@ -151,10 +166,8 @@ class TokenAnalysisAnalyzer:
             completion_tokens = accounting["output_tokens"]
             total_tokens = accounting["total_tokens"]
             cost = accounting["total_cost"]
-
-            # A zero-usage generation wrapper is not a provider call.
-            if total_tokens == 0 and cost == 0:
-                continue
+            if by_span.get(gen.get("id"), {}).get("duplicate_conflict"):
+                cost = None
 
             generation_number = len(generation_data) + 1
 
@@ -203,7 +216,8 @@ class TokenAnalysisAnalyzer:
             model_breakdown[model]["cache_write_tokens"] += accounting["cache_write_tokens"]
             model_breakdown[model]["completion_tokens"] += completion_tokens
             model_breakdown[model]["reasoning_tokens"] += accounting["reasoning_tokens"]
-            model_breakdown[model]["total_cost"] += cost
+            model_breakdown[model]["total_cost"] += cost or 0
+            model_breakdown[model]["unpriced_calls"] += int(cost is None)
 
             generation_data.append({
                 "generation": generation_number,
@@ -230,17 +244,23 @@ class TokenAnalysisAnalyzer:
         # Calculate totals
         total_prompt = sum(g["prompt_tokens"] for g in generation_data)
         total_completion = sum(g["completion_tokens"] for g in generation_data)
-        total_cost = sum(g["cost"] for g in generation_data)
+        total_cost = sum(g["cost"] or 0 for g in generation_data)
+        unpriced_calls = sum(g["cost"] is None for g in generation_data)
 
         # Get trace-level data
-        trace_total_cost = raw_trace.get("totalCost")
-        if trace_total_cost is None:
-            trace_total_cost = total_cost
+        trace_total_cost = None if unpriced_calls else total_cost
         trace_latency = raw_trace.get("latency", 0)
+        for values in model_breakdown.values():
+            values["priced_subtotal"] = values["total_cost"]
+            if values["unpriced_calls"]:
+                values["total_cost"] = None
 
         return {
             "found": True,
             "total_cost": trace_total_cost,
+            "priced_subtotal": total_cost,
+            "unpriced_calls": unpriced_calls,
+            "duplicate_observations": duplicate_count,
             "total_latency": trace_latency,
             "total_generations": len(generation_data),
             "total_prompt_tokens": total_prompt,

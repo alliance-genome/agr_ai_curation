@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -69,6 +70,83 @@ class _FakeFailingRunResult:
 
     def to_input_list(self):
         return [{"role": "user", "content": "prior query"}]
+
+
+def _saved_file_events(payload, tool_name="finalize_and_save"):
+    return [SimpleNamespace(type="run_item_stream_event", item=item) for item in (
+        SimpleNamespace(type="tool_call_item", name=tool_name,
+                        raw_item=SimpleNamespace(arguments="{}")),
+        SimpleNamespace(type="tool_call_output_item", output=json.dumps(payload),
+                        raw_item=SimpleNamespace()),
+    )]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("file_format", ["csv", "tsv", "json"])
+@pytest.mark.parametrize("final_text", ["Your file is ready.", None])
+async def test_saved_file_metadata_reaches_supervisor_and_card(monkeypatch, file_format, final_text):
+    emitted = []
+    payload = {"status": "ok", "file_id": "5e8b8b20-8fc5-4caa-9973-a3081d28eeeb",
+               "filename": f"occurrences.{file_format}", "format": file_format,
+               "download_url": "/api/files/5e8b8b20-8fc5-4caa-9973-a3081d28eeeb/download",
+               "size_bytes": 15035, "secret": "must-not-leak"}
+    duplicate = {"status": "invalid", "code": "already_finalized", "saved_file": True,
+                 "finalized_file": payload}
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _: None)
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(True)
+        return _FakeRunResult(events=_saved_file_events(payload) + _saved_file_events(duplicate),
+                              final_output=final_text)
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", run)
+    agent = SimpleNamespace(name="Formatter", tools=[], output_type=None, instructions="", model="gpt-4o")
+    output = await streaming_tools.run_specialist_with_events(agent, "export", "Formatter", max_turns=3)
+    handoff = json.loads(output)
+    assert handoff["status"] == "ok" and handoff["saved_file"] is True
+    cards = [event for event in emitted if event["type"] == "FILE_READY"]
+    assert len(cards) == 1
+    assert handoff["file"] == cards[0]["details"]
+    assert handoff["file"]["download_url"] == payload["download_url"]
+    assert "must-not-leak" not in output
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_file_handoff_isolation_and_failed_save(monkeypatch):
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _: None)
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", lambda _: None)
+    class InterleavedResult(_FakeRunResult):
+        async def stream_events(self):
+            for event in self._events:
+                await asyncio.sleep(0)
+                yield event
+    def run(agent, *args, **kwargs):
+        payload = ({"status": "ok", "file_id": agent.name, "filename": agent.name + ".csv",
+                    "download_url": "/api/files/" + agent.name + "/download"}
+                   if agent.name != "failed" else {"status": "invalid", "errors": ["save failed"]})
+        return InterleavedResult(events=_saved_file_events(payload), final_output="Your CSV is ready.")
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", run)
+    async def invoke(name):
+        agent = SimpleNamespace(name=name, tools=[], output_type=None, instructions="", model="gpt-4o")
+        return await streaming_tools.run_specialist_with_events(agent, "export", name, max_turns=3)
+    first, second, failed = await asyncio.gather(invoke("first"), invoke("second"), invoke("failed"))
+    assert json.loads(first)["file"]["file_id"] == "first"
+    assert json.loads(second)["file"]["file_id"] == "second"
+    assert failed == "Your CSV is ready."  # Prose is not promoted to a saved-file contract.
+
+
+@pytest.mark.parametrize("payload", [{"status": "invalid"}, {"status": "cannot_complete", "saved_file": False}, "ready", {}])
+def test_unsuccessful_formatter_output_has_no_saved_handoff(payload):
+    assert streaming_tools._formatter_saved_file_handoff(payload) is None
+
+
+def test_saved_file_missing_metadata_reports_handoff_problem_not_failed_save():
+    result = streaming_tools._formatter_saved_file_handoff({"status": "ok", "file_id": "saved"})
+    assert result["saved_file"] is True
+    assert result["status"] == "handoff_error"
+    assert result["missing_fields"] == ["filename", "download_url"]
+    assert "file" not in result
 
 
 class _FakeContextManager:
@@ -3272,7 +3350,7 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
     assert request.selected_inputs["mention"] == "crumbs"
     assert request.selected_inputs["data_provider_hint"] == "FB"
     assert request.selected_inputs["taxon_hint"] == "NCBITaxon:7227"
-    assert request.selected_inputs["evidence_quote"].startswith("Crumbs protein")
+    assert request.selected_inputs["evidence_quotes"][0]["verified_quote"].startswith("Crumbs protein")
     assert (
         payload["extracted_objects"][0]["payload"]["primary_external_id"]
         == "FB:FBgn0259685"

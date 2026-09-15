@@ -1016,19 +1016,10 @@ metadata:
             required: false
             allow_multiple: true
             context_only: true
-          evidence_quote:
+          evidence_quotes:
             source: evidence_record
-            path: verified_quote
-            required: false
-            context_only: true
-          source_chunk_id:
-            source: evidence_record
-            path: chunk_id
-            required: false
-            context_only: true
-          source_section:
-            source: evidence_record
-            path: section
+            output: quote_bundle
+            allow_multiple: true
             required: false
             context_only: true
           ontology_family:
@@ -1201,9 +1192,10 @@ metadata:
           # ontology components.
           # EVIDENCE CONTRACT: the validator sees the backend-resolved exact source text for the
           # spans the condition was read from; the model never types the quote.
-          evidence_quote:
+          evidence_quotes:
             source: evidence_record
-            path: verified_quote
+            output: quote_bundle
+            allow_multiple: true
             required: false
             context_only: true
         # The composite resolves on the always-present condition_class (the experimental-variable
