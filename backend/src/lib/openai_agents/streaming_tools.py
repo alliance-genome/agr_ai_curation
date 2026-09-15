@@ -4430,6 +4430,29 @@ def _emit_chunk_provenance_from_output(tool_name: str, output: str):
         logger.warning("Error extracting chunk provenance from %s: %s", tool_name, e)
 
 
+def _formatter_saved_file_handoff(output: Any) -> Optional[Dict[str, Any]]:
+    """Project authoritative finalize_and_save output, never model-authored prose."""
+    payload = coerce_tool_event_dict(output)
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("status") == "ok":
+        file_info = payload
+    elif (payload.get("code") == "already_finalized"
+          and payload.get("saved_file") is True):
+        file_info = payload.get("finalized_file")
+    else:
+        return None
+    required = ("file_id", "filename", "download_url")
+    missing = [key for key in required if not isinstance(file_info, dict)
+               or not isinstance(file_info.get(key), str) or not file_info[key].strip()]
+    if missing:
+        return {"status": "handoff_error", "saved_file": True,
+                "message": "Save succeeded, but its download metadata is incomplete. Do not invent a URL or report a failed save.",
+                "missing_fields": missing}
+    return {"status": "ok", "saved_file": True,
+            "file": file_ready_event_details(file_info)}
+
+
 async def run_specialist_with_events(
     agent: Agent,
     input_text: str,
@@ -4474,6 +4497,7 @@ async def run_specialist_with_events(
     wall_started_at = time.monotonic()
     phase_timings_ms: Dict[str, int] = {}
     tool_calls: List[SpecialistToolCall] = []
+    formatter_save_handoff: Optional[Dict[str, Any]] = None
     live_evidence_records: List[Dict[str, Any]] = []
     pending_tool_calls: "deque[Dict[str, Any]]" = deque()
 
@@ -5265,6 +5289,14 @@ async def run_specialist_with_events(
                         if output:
                             try:
                                 output_data = json.loads(str(output)) if isinstance(output, str) else output
+                                if current_tool_name == "finalize_and_save":
+                                    handoff = _formatter_saved_file_handoff(output_data)
+                                    if handoff is not None and formatter_save_handoff is None:
+                                        formatter_save_handoff = handoff
+                                    # Duplicate finalization echoes the original file but
+                                    # must not emit another download-card event.
+                                    output_data = (handoff.get("file") if handoff is not None
+                                                   and output_data.get("status") == "ok" else None)
                                 # Check for FileInfo signature: must have file_id, download_url, filename
                                 if (
                                     isinstance(output_data, dict) and
@@ -5466,7 +5498,11 @@ async def run_specialist_with_events(
         type(getattr(result, "final_output", None)),
     )
 
-    if structured_finalization_state.required and structured_finalization_state.accepted:
+    if formatter_save_handoff is not None:
+        # Save metadata also supplies the result when the model has no final text;
+        # successful saving must not trigger an empty-output retry.
+        final_output = json.dumps(formatter_save_handoff)
+    elif structured_finalization_state.required and structured_finalization_state.accepted:
         final_output = json.dumps(structured_finalization_state.accepted_payload)
         logger.info(
             "%s using accepted %s payload from %s as canonical output",
