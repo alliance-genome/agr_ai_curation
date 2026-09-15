@@ -3174,7 +3174,7 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
     assert request.selected_inputs["mention"] == "crumbs"
     assert request.selected_inputs["data_provider_hint"] == "FB"
     assert request.selected_inputs["taxon_hint"] == "NCBITaxon:7227"
-    assert request.selected_inputs["evidence_quote"].startswith("Crumbs protein")
+    assert request.selected_inputs["evidence_quotes"][0]["verified_quote"].startswith("Crumbs protein")
     assert (
         payload["extracted_objects"][0]["payload"]["primary_external_id"]
         == "FB:FBgn0259685"
