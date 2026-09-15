@@ -1858,9 +1858,11 @@ def _propose_flow_draft_update_handler():
         if (
             reset_candidate
             or not proposal_state
+            or proposal_state.get("user_id") != get_current_user_id()
             or proposal_state.get("base_draft_fingerprint") != base_draft_fingerprint
         ):
             proposal_state = {
+                "user_id": get_current_user_id(),
                 "base_draft_fingerprint": base_draft_fingerprint,
                 "candidate": deepcopy(original),
                 "metadata": {
@@ -2658,13 +2660,13 @@ def _flow_node_type(node: Mapping[str, Any]) -> str:
     return str(node.get("type") or node.get("node_type") or "agent")
 
 
-def _current_flow_state() -> tuple[
+def _current_flow_state(flow_context=None) -> tuple[
     Dict[str, Any],
     list[Mapping[str, Any]],
     dict[str, Mapping[str, Any]],
     Any,
 ] | None:
-    flow_context = get_current_flow_context()
+    flow_context = flow_context if flow_context is not None else get_current_flow_context()
     if not flow_context:
         return None
     nodes = [node for node in flow_context.get("nodes", []) if isinstance(node, Mapping)]
@@ -3269,8 +3271,34 @@ def _get_current_flow_projection_plan_handler():
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
         view: Literal["plan", "complete_plan", "source_fields"] = "plan",
+        draft: Literal["current", "candidate"] = "current",
+        draft_fingerprint: Optional[str] = None,
     ) -> Dict[str, Any]:
-        resolved = _current_node(node_id)
+        context = get_current_flow_context()
+        if not context or draft not in {"current", "candidate"}:
+            return _flow_detail_error("No requested flow draft is available.")
+        fingerprint = str(context.get("flow_draft_fingerprint") or "")
+        if draft == "candidate":
+            proposal = _current_flow_proposal.get()
+            if not proposal or not proposal.get("candidate"):
+                return _flow_detail_error("No retained candidate exists in this request. Compile a proposal first.")
+            if proposal.get("user_id") != get_current_user_id():
+                return _flow_detail_error("The retained candidate is not available to this user.")
+            if not fingerprint or proposal.get("base_draft_fingerprint") != fingerprint:
+                return _flow_detail_error("The retained candidate's base draft is stale. Compile a new proposal.")
+            fingerprint = _flow_candidate_fingerprint(
+                flow_context=context, name=proposal["metadata"]["name"],
+                description=proposal["metadata"]["description"], definition=proposal["candidate"],
+            )
+            context = {**context, **deepcopy(proposal["candidate"])}
+        if (draft_fingerprint is not None and draft_fingerprint != fingerprint) or (
+            draft == "candidate" and cursor is not None and draft_fingerprint is None
+        ):
+            return _flow_detail_error("Draft changed or continuation identity is missing; restart inspection.")
+        identity = {"draft": draft, "draft_fingerprint": fingerprint}
+        state = _current_flow_state(context)
+        node = state[2].get(str(node_id))
+        resolved = (node, state) if node is not None else None
         if resolved is None:
             return _flow_detail_error(f"Current flow has no node_id '{node_id}'")
         if view == "source_fields":
@@ -3304,10 +3332,10 @@ def _get_current_flow_projection_plan_handler():
             }
             return _exact_chunk_response(
                 tool="get_current_flow_projection_plan",
-                arguments={"node_id": str(node_id), "view": "source_fields"},
+                arguments={"node_id": str(node_id), "view": "source_fields", **identity},
                 text=json.dumps(catalog, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
                 limit=limit, cursor=cursor,
-                response_metadata={"success": True, "node_id": str(node_id),
+                response_metadata={**identity, "success": True, "node_id": str(node_id),
                                    "view": "source_fields", "encoding": "canonical_json"},
             )
         if view not in {"plan", "complete_plan"}:
@@ -3318,10 +3346,10 @@ def _get_current_flow_projection_plan_handler():
         if view == "complete_plan":
             return _exact_chunk_response(
                 tool="get_current_flow_projection_plan",
-                arguments={"node_id": str(node_id), "view": "complete_plan"},
+                arguments={"node_id": str(node_id), "view": "complete_plan", **identity},
                 text=json.dumps(plan, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
                 limit=limit, cursor=cursor,
-                response_metadata={"success": True, "node_id": str(node_id),
+                response_metadata={**identity, "success": True, "node_id": str(node_id),
                                    "view": "complete_plan", "encoding": "canonical_json"},
             )
         fields = sorted(str(key) for key in plan)
@@ -3336,9 +3364,10 @@ def _get_current_flow_projection_plan_handler():
                 items=summaries,
                 limit=limit,
                 cursor=cursor,
-                next_arguments={"node_id": str(node_id)},
+                next_arguments={"node_id": str(node_id), **identity},
             )
             response["node_id"] = str(node_id)
+            response.update(identity)
             return response
         if field not in plan:
             return _flow_detail_error(
@@ -3358,11 +3387,12 @@ def _get_current_flow_projection_plan_handler():
         )
         return _exact_chunk_response(
             tool="get_current_flow_projection_plan",
-            arguments={"node_id": str(node_id), "field": field, "section": section},
+            arguments={"node_id": str(node_id), "field": field, "section": section, **identity},
             text=canonical_json,
             limit=limit,
             cursor=cursor,
             response_metadata={
+                **identity,
                 "success": True,
                 "node_id": str(node_id),
                 "field": field,
@@ -3877,12 +3907,18 @@ Do not infer omitted details; use the returned bounded detail calls.""",
             "section as exact bounded canonical JSON. Use view=source_fields to discover "
             "authorized exact saved-profile formatter refs before authoring a plan, even "
             "when no plan exists. Follow next_call to reconstruct the complete result."
+            " Use draft=candidate after a repair_required proposal to inspect its revised "
+            "sources and plan; default draft=current inspects the captured editor draft. "
+            "Copy next_call exactly, including draft_fingerprint. Repair with another "
+            "semantic proposal without reset_candidate; curator Apply and Save remain required."
         ),
         input_schema={
             "type": "object",
             "properties": {
                 "node_id": {"type": "string"},
                 "view": {"type": "string", "enum": ["plan", "complete_plan", "source_fields"]},
+                "draft": {"type": "string", "enum": ["current", "candidate"]},
+                "draft_fingerprint": {"type": "string", "description": "Exact inspected draft identity; copy from next_call."},
                 "field": {"type": "string"},
                 "section": {
                     "type": "string",

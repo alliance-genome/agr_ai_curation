@@ -2285,6 +2285,83 @@ def test_projection_source_catalog_reads_exact_authorized_draft_and_pages(monkey
     assert json.dumps(flow, sort_keys=True) == original
 
 
+@pytest.mark.parametrize("removed_field", [False, True])
+def test_retained_candidate_inspection_and_semantic_repair(monkeypatch, removed_field):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    flow = _inspection_flow()
+    flow["flow_draft_fingerprint"] = "sha256:" + "a" * 64
+    revision = str(uuid4())
+    flow["nodes"][1]["data"].update(agent_id="ca_test", agent_revision_id=str(uuid4()))
+    flow_tools.set_workflow_user_context(28)
+    flow_tools.set_current_flow_context(flow)
+    original = deepcopy(flow)
+    monkeypatch.setattr(flow_tools, "_accessible_flow_agents", lambda: {})
+
+    def validate(definition, *, phase, **kwargs):
+        candidate = deepcopy(definition)
+        data = candidate["nodes"][1]["data"]
+        new = data["agent_revision_id"] == revision
+        fingerprint = "new-schema" if new else "base-schema"
+        receipt = {"agent_revision_id": data["agent_revision_id"]}
+        valid = candidate["nodes"][2]["data"]["projection_plan"].get("schema") == fingerprint
+        return SimpleNamespace(
+            candidate=SimpleNamespace(
+                model_dump=lambda **kw: deepcopy(candidate),
+                nodes=[SimpleNamespace(data=SimpleNamespace(execution_receipt=None)) for _ in candidate["nodes"]],
+            ), valid=valid and not removed_field,
+            findings=[] if valid and not removed_field else [SimpleNamespace(to_dict=lambda: {
+                "code": "missing_field" if removed_field else "invalid_selected_export"})],
+            projection_fields_by_node={"extract": {
+                "execution_receipt": receipt, "schema_fingerprint": fingerprint,
+                "fields": [] if removed_field and new else [{"ref": "object.name"}],
+            }},
+        )
+
+    monkeypatch.setattr(flow_tools, "_validate_exact_flow_for_current_user", validate)
+    propose = flow_tools._propose_flow_draft_update_handler()
+    result = propose(base_draft_fingerprint=flow["flow_draft_fingerprint"],
+                     operations=[{"operation": "retarget_agent_revision", "node_id": "extract",
+                                  "agent_revision_id": revision}], change_summary="Retarget")
+    assert result["approval_status"] == "repair_required"
+    inspect = flow_tools._get_current_flow_projection_plan_handler()
+    base = inspect(node_id="csv", view="source_fields")
+    assert json.loads(base["content"])["sources"]["extract"]["schema_fingerprint"] == "base-schema"
+    args = {"node_id": "csv", "view": "source_fields", "draft": "candidate", "limit": 300}
+    chunks = []
+    continuation = None
+    while True:
+        response = inspect(**args)
+        assert response["success"] and response["draft"] == "candidate"
+        assert response["draft_fingerprint"] == result["candidate_draft_fingerprint"]
+        chunks.append(response["content"])
+        if response["complete"]:
+            break
+        args = response["next_call"]["arguments"]
+        continuation = args
+    source = json.loads("".join(chunks))["sources"]["extract"]
+    assert source["schema_fingerprint"] == "new-schema"
+    assert source["execution_receipt"]["agent_revision_id"] == revision
+    assert source["fields"] == ([] if removed_field else [{"ref": "object.name"}])
+    repair = propose(base_draft_fingerprint=flow["flow_draft_fingerprint"],
+                     operations=[{"operation": "update_step", "node_id": "csv",
+                                  "projection_plan": {"schema": source["schema_fingerprint"]}}],
+                     change_summary="Explicit projection repair")
+    assert repair["pending_user_approval"] is (not removed_field)
+    assert repair["candidate"]["flow_definition"]["nodes"][1]["data"]["agent_revision_id"] == revision
+    assert flow == original
+    assert continuation and not inspect(**continuation)["success"]
+    flow_tools.set_workflow_user_context(99)
+    assert not inspect(node_id="csv", draft="candidate", view="source_fields")["success"]
+    flow_tools.set_workflow_user_context(28)
+    flow["flow_draft_fingerprint"] = "changed"
+    assert not inspect(node_id="csv", draft="candidate", view="source_fields")["success"]
+    flow_tools.set_current_flow_context(original)
+    assert not inspect(node_id="csv", draft="candidate", view="source_fields")["success"]
+
+
 def test_projection_source_catalog_does_not_bypass_unavailable_authorization(monkeypatch):
     from types import SimpleNamespace
     flow_tools.set_current_flow_context(_inspection_flow())

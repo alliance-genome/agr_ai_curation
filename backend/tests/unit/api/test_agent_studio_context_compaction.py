@@ -136,7 +136,8 @@ def test_small_tool_result_stays_inline_for_provider_continuation(monkeypatch):
 
 
 @pytest.mark.parametrize("artifact", ["flow", "workshop"])
-def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypatch, artifact):
+@pytest.mark.parametrize("valid", [False, True])
+def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypatch, artifact, valid):
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     candidate = {
         "name": "Large candidate",
@@ -168,7 +169,7 @@ def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypat
     content = api_module._provider_tool_result_content(
         tool_name=f"propose_{artifact}_draft_update",
         tool_input={"operations": [{"operation": "add_agent_step"}]},
-        tool_result=tool_result,
+        tool_result={**tool_result, "valid": valid, "success": valid},
         session_id="agent-studio-session-1",
         turn_id="opus-turn-1",
     )
@@ -179,7 +180,11 @@ def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypat
     assert "candidate" not in provider_result
     assert "diff" not in provider_result
     assert "Transient only" not in content
-    assert "do not claim it was applied or saved" in provider_result["instruction"]
+    if valid:
+        assert "do not claim it was applied or saved" in provider_result["instruction"]
+    elif artifact == "flow":
+        assert "draft='candidate'" in provider_result["instruction"]
+        assert "without reset_candidate" in provider_result["instruction"]
 
 
 

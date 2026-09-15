@@ -2216,6 +2216,14 @@ def _provider_tool_result_content(
             ),
         }
 
+        if tool_name == "propose_flow_draft_update" and tool_result.get("valid") is not True:
+            provider_tool_result["instruction"] += (
+                " Inspect revised output sources with get_current_flow_projection_plan"
+                "(node_id, view='source_fields', draft='candidate'); use complete_plan for"
+                " its plan. Continue semantic repair without reset_candidate. Do not guess"
+                " replacement columns or drop incompatible fields without curator choice."
+            )
+
     raw_content = _serialize_provider_tool_result(provider_tool_result)
     inline_max_chars = get_agent_studio_provider_tool_result_inline_max_chars()
     if len(raw_content) <= inline_max_chars:
