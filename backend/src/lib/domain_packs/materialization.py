@@ -1502,6 +1502,7 @@ def _lookup_attempt_details(
                 },
                 "lookup_status": lookup_status,
                 "candidate_count": payload["result_count"],
+                **({"coverage": payload["coverage"]} if payload.get("coverage") is not None else {}),
                 "resolved_id": _resolved_id(item.result),
                 "resolved_label": _resolved_label(item.result),
                 "explanation": payload.get("message") or item.result.explanation,

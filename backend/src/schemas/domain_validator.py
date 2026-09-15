@@ -153,6 +153,10 @@ class ValidatorLookupAttempt(DomainValidatorBaseModel):
     provider: StrictStr = Field(description="Lookup provider or data source")
     method: StrictStr = Field(description="Lookup method or endpoint")
     query: dict[str, Any] = Field(description="Lookup query payload")
+    coverage: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Provider-returned discovery/display limits and truncation facts; copy from the lookup, never infer totals",
+    )
     result_count: int = Field(
         default=0, ge=0, description="Number of returned candidates"
     )

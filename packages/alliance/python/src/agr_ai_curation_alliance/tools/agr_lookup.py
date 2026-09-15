@@ -431,140 +431,28 @@ def fetch_allele_details_bulk(
     db: Any,
     allele_curies: list[str],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
-    """Fetch Alliance allele details and classify unresolved per-CURIE lookups."""
+    """Fetch bounded rich allele facts through the maintained client, not duplicate SQL."""
     unique_curies = list(dict.fromkeys(curie for curie in allele_curies if curie))
-    if not unique_curies:
-        return {}, {}
-
-    detail_failures: dict[str, list[dict[str, Any]]] = {}
-    try:
-        from sqlalchemy import text
-
-        session = create_db_session(db)
-    except Exception as exc:
-        logger.warning("Batch allele detail setup failed: %s", exc)
-        _append_batch_detail_failures(
-            detail_failures,
-            unique_curies,
-            lookup_stage="batch_setup_allele_details",
-            error=exc,
-        )
-        session = None
-    if session is not None:
-        try:
-            details: dict[str, dict[str, Any]] = {}
-            try:
-                sql_query = text(
-                    """
-                SELECT
-                    be.primaryexternalid,
-                    symbol.displaytext as allele_symbol,
-                    fullname.displaytext as allele_fullname,
-                    taxon.curie as taxon_curie
-                FROM biologicalentity be
-                JOIN allele a ON be.id = a.id
-                LEFT JOIN ontologyterm taxon ON be.taxon_id = taxon.id
-                LEFT JOIN slotannotation symbol ON a.id = symbol.singleallele_id
-                    AND symbol.slotannotationtype = 'AlleleSymbolSlotAnnotation'
-                    AND symbol.obsolete = false
-                LEFT JOIN slotannotation fullname ON a.id = fullname.singleallele_id
-                    AND fullname.slotannotationtype = 'AlleleFullNameSlotAnnotation'
-                    AND fullname.obsolete = false
-                WHERE be.primaryexternalid IN :allele_ids
-                """
-                )
-                for chunk in chunk_values(unique_curies):
-                    rows = session.execute(
-                        sql_query,
-                        {"allele_ids": tuple(chunk)},
-                    ).fetchall()
-                    for row in rows:
-                        details[row[0]] = {
-                            "curie": row[0],
-                            "symbol": row[1],
-                            "name": row[2],
-                            "taxon": row[3],
-                        }
-            finally:
-                session.close()
-
-            if details:
-                for curie in unique_curies:
-                    if curie not in details:
-                        _append_detail_failure(
-                            detail_failures,
-                            curie,
-                            detail_fetch_failure(LOOKUP_STATUS_NOT_FOUND),
-                        )
-                return details, detail_failures
-        except Exception as exc:
-            logger.warning(
-                "Batch allele detail fetch failed; retrying per-CURIE: %s",
-                exc,
-            )
-            _append_batch_detail_failures(
-                detail_failures,
-                unique_curies,
-                lookup_stage="batch_fetch_allele_details",
-                error=exc,
-            )
-
     details: dict[str, dict[str, Any]] = {}
-    for curie in unique_curies:
+    failures: dict[str, list[dict[str, Any]]] = {}
+    for chunk in chunk_values(unique_curies):
         try:
-            allele = db.get_allele(curie)
+            rows = db.get_allele_candidate_details(chunk)
+            found = {row["curie"]: row for row in rows}
+            details.update(found)
+            for curie in chunk:
+                if curie not in found:
+                    _append_detail_failure(failures, curie, detail_fetch_failure(LOOKUP_STATUS_NOT_FOUND))
         except Exception as exc:
-            logger.warning("Failed to fetch allele details for %s: %s", curie, exc)
-            _append_detail_failure(
-                detail_failures,
-                curie,
-                detail_fetch_failure(
-                    LOOKUP_STATUS_TRANSIENT,
-                    error=exc,
-                    lookup_stage="fetch_allele_details",
-                ),
-            )
-            continue
-        if not allele:
-            _append_detail_failure(
-                detail_failures,
-                curie,
-                detail_fetch_failure(LOOKUP_STATUS_NOT_FOUND),
-            )
-            continue
-        details[curie] = {
-            "curie": getattr(allele, "primaryExternalId", curie),
-            "symbol": (
-                allele.alleleSymbol.displayText
-                if getattr(allele, "alleleSymbol", None)
-                else None
-            ),
-            "name": (
-                allele.alleleFullName.displayText
-                if getattr(allele, "alleleFullName", None)
-                else None
-            ),
-            "taxon": getattr(allele, "taxon", None),
-        }
-    return details, detail_failures
+            _append_batch_detail_failures(failures, chunk, lookup_stage="batch_fetch_allele_details", error=exc)
+    return details, failures
 
 
 __all__ = [
-    "ALLIANCE_CURATION_DB_PROVIDER",
-    "ALLIANCE_CURATION_TOOL_NAME",
-    "ALLIANCE_DETAIL_LOOKUP_STAGES",
-    "DEFAULT_BULK_TOTAL_MATCH_CAP",
-    "alliance_object_type",
-    "alliance_projection_metadata",
-    "alliance_projection_type",
-    "bulk_item_status_from_lookup_status",
-    "candidate_from_result",
-    "cap_bulk_total_matches",
-    "entity_detail_lookup_attempts",
-    "fetch_allele_details_bulk",
-    "fetch_gene_details_bulk",
-    "lookup_attempt",
-    "lookup_response_payload",
-    "projection_from_entity_match",
-    "projection_from_result",
+    "ALLIANCE_CURATION_DB_PROVIDER", "ALLIANCE_CURATION_TOOL_NAME", "ALLIANCE_DETAIL_LOOKUP_STAGES",
+    "DEFAULT_BULK_TOTAL_MATCH_CAP", "alliance_object_type", "alliance_projection_metadata",
+    "alliance_projection_type", "bulk_item_status_from_lookup_status", "candidate_from_result",
+    "cap_bulk_total_matches", "entity_detail_lookup_attempts", "fetch_allele_details_bulk",
+    "fetch_gene_details_bulk", "lookup_attempt", "lookup_response_payload",
+    "projection_from_entity_match", "projection_from_result",
 ]

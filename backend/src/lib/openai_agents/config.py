@@ -54,6 +54,26 @@ def _normalize_provider_id(provider: Optional[str]) -> str:
     return str(provider or "").strip().lower()
 
 
+def get_allele_display_limit() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_DISPLAY_LIMIT", 20))
+
+
+def get_allele_discovery_limit() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_DISCOVERY_LIMIT", 200))
+
+
+def get_allele_discovery_max() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_DISCOVERY_MAX", 1000))
+
+
+def get_allele_annotation_limit() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_ANNOTATION_LIMIT", 20))
+
+
+def get_allele_query_timeout_ms() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_QUERY_TIMEOUT_MS", 15000))
+
+
 def _get_env_bool(key: str, default: bool) -> bool:
     """Parse boolean environment variable with resilient fallback."""
     raw = os.getenv(key)

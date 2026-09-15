@@ -88,6 +88,7 @@ class AgrQueryResult(BaseModel):
     lookup_attempts: Optional[List[Dict[str, Any]]] = None
     candidate_matches: Optional[List[Dict[str, Any]]] = None
     result_projections: Optional[List[Dict[str, Any]]] = None
+    coverage: Optional[Dict[str, Any]] = None
 
 
 GENE_EXPRESSION_DOMAIN_PACK_ID = "agr.alliance.gene_expression"
@@ -831,7 +832,7 @@ def _entity_mapping_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 _ALLELE_FUZZY_IDENTITY_GUIDANCE = (
-    "Fuzzy allele matches are unconfirmed candidates, even when only one is returned. "
+    "Allele search matches are unconfirmed candidates, even when only one is returned. "
     "curie_validated checks identifier format only, not identity with the request. "
     "Compare the source mention and associated-gene/context hints with the returned "
     "symbol or matched synonym. Fetching the same candidate by ID confirms its database "
@@ -1026,6 +1027,73 @@ def _extract_fullname_attribution(fullname: Optional[str], taxon_id: str) -> Opt
     return None
 
 
+def _rich_allele_search(
+    db: Any, *, symbol: str, taxon: Optional[str], gene: Optional[str],
+    attribution: Optional[str], impact: Optional[str], include_synonyms: bool,
+    limit: int, discovery_limit: int,
+) -> AgrQueryResult:
+    """Keep rich facts once in data; retain small canonical candidate projections."""
+    query = _attempt_query("search_alleles", allele_symbol=symbol, taxon_id=taxon,
+        gene_id=gene, allele_attribution=attribution, allele_functional_impact=impact,
+        include_synonyms=include_synonyms, limit=limit, discovery_limit=discovery_limit)
+    result = db.search_allele_candidates(symbol, taxon_curie=taxon, gene_identifier=gene,
+        attribution_hint=attribution, functional_impact_hint=impact,
+        include_synonyms=include_synonyms, limit=limit, discovery_limit=discovery_limit)
+    rows = result["candidates"]
+    coverage = dict(result["coverage"])
+    # Retain existing fuzzy discovery only when literal search found nothing.
+    # An explicit gene scope must not escape to unrelated fuzzy candidates.
+    if not rows and not gene and not coverage.get("detail_missing_count"):
+        matches = _search_alleles_fuzzy_via_db(db, search_pattern=symbol,
+            taxon_curie=taxon, include_synonyms=include_synonyms, limit=discovery_limit + 1)
+        discovered = matches[:discovery_limit]
+        details, failures = _fetch_allele_details_bulk(db, [m["entity_curie"] for m in discovered])
+        if any(f.get("lookup_status") == LOOKUP_STATUS_TRANSIENT for errors in failures.values() for f in errors):
+            raise RuntimeError("Allele candidate detail retrieval failed")
+        rows = []
+        for match in discovered:
+            detail = details.get(match["entity_curie"])
+            if not detail:
+                continue
+            row = {**detail, "match_type": match["match_type"], "matched_text": match.get("entity"),
+                   "identity_status": "unconfirmed", "match_reasons": ["fuzzy_text_similarity"]}
+            enrich_with_match_context(row, match.get("entity") or symbol, row.get("symbol"), "allele")
+            rows.append(row)
+        coverage.update(discovered_count=len(discovered), returned_count=min(len(rows), limit),
+            discovery_capped=len(matches) > discovery_limit, display_capped=len(rows) > limit,
+            detail_missing_count=len(discovered) - len(rows))
+        rows = rows[:limit]
+    rows, invalid_curies = _validate_curie_list(rows)
+    message = (
+        f"Discovered {coverage['discovered_count']} candidate(s) within discovery budget {discovery_limit}; "
+        f"returned {len(rows)}. Discovery capped: {coverage['discovery_capped']}; "
+        f"display capped: {coverage['display_capped']}; missing details: {coverage.get('detail_missing_count', 0)}. "
+        "Counts are not an exact database total. Ranking and missing annotations do not confirm or exclude "
+        "paper identity. Retain plausible candidates; if coverage is capped, refine separate gene/attribution/"
+        "functional-impact clues or increase discovery_limit within its configured maximum. "
+        "Use get_allele_by_id for details."
+    )
+    lightweight = [{key: row.get(key) for key in ("curie", "symbol", "taxon", "match_type")} for row in rows]
+    payload = _lookup_response_payload(method="search_alleles", data=lightweight, count=len(rows),
+        attempted_query=query, message=message)
+    payload["data"] = rows
+    payload["coverage"] = coverage
+    payload["warnings"] = [f"invalid_curie_prefixes:{invalid_curies}"] if invalid_curies else None
+    if rows or coverage.get("detail_missing_count"):
+        payload["lookup_status"] = LOOKUP_STATUS_AMBIGUOUS
+        payload["failure_classification"] = LOOKUP_STATUS_AMBIGUOUS
+    for projection in payload.get("result_projections") or []:
+        projection["projection_status"] = "candidate"
+    for attempt in payload.get("lookup_attempts") or []:
+        attempt["lookup_status"] = payload["lookup_status"]
+        attempt["coverage"] = coverage
+        attempt.pop("resolved_id", None)
+        attempt.pop("resolved_label", None)
+        if attempt.get("target_projection"):
+            attempt["target_projection"]["projection_status"] = "candidate"
+    return _ok(**payload)
+
+
 def _search_alleles_fuzzy_via_db(
     db: Any,
     *,
@@ -1041,12 +1109,13 @@ def _search_alleles_fuzzy_via_db(
 
         session = create_db_session(db)
         if session is None:
-            return []
+            raise RuntimeError("Allele fuzzy search session unavailable")
     except Exception as exc:
-        logger.debug("Allele fuzzy fallback setup failed: %s", exc)
-        return []
+        raise RuntimeError("Allele fuzzy search setup failed") from exc
 
     try:
+        session.execute(text("SELECT set_config('statement_timeout', :timeout, true)"),
+            {"timeout": str(_positive_env_int("AGR_ALLELE_QUERY_TIMEOUT_MS", 15000))})
         sql_query = text(
             """
             WITH candidates AS (
@@ -1148,13 +1217,7 @@ def _search_alleles_fuzzy_via_db(
             for row in rows
         ]
     except Exception as exc:
-        logger.debug(
-            "Allele fuzzy fallback failed for %r in %s: %s",
-            search_pattern,
-            taxon_curie,
-            exc,
-        )
-        return []
+        raise RuntimeError("Allele fuzzy candidate query failed") from exc
     finally:
         if session is not None:
             session.close()
@@ -1171,6 +1234,7 @@ def _ok(
     lookup_attempts: Optional[List[Dict[str, Any]]] = None,
     candidate_matches: Optional[List[Dict[str, Any]]] = None,
     result_projections: Optional[List[Dict[str, Any]]] = None,
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> AgrQueryResult:
     return AgrQueryResult(
         status="ok",
@@ -1184,6 +1248,7 @@ def _ok(
         lookup_attempts=lookup_attempts,
         candidate_matches=candidate_matches,
         result_projections=result_projections,
+        coverage=coverage,
     )
 
 
@@ -1257,6 +1322,9 @@ def agr_curation_query(
     allele_symbol: Optional[str] = None,
     allele_symbols: Optional[List[str]] = None,
     allele_id: Optional[str] = None,
+    allele_attribution: Optional[str] = None,
+    allele_functional_impact: Optional[str] = None,
+    discovery_limit: Optional[int] = None,
     data_provider: Optional[str] = None,
     provider_name: Optional[str] = None,
     taxon_id: Optional[str] = None,
@@ -1292,9 +1360,12 @@ def agr_curation_query(
     across symbols, full names, and synonyms -- so a shorter query returns more
     candidates and adding characters narrows them.
 
-    search_alleles matches by exact, then prefix, then contains (case-insensitive),
-    across symbols, full names, and synonyms -- so a shorter query returns more
-    candidates and adding characters narrows them.
+    search_alleles separates bounded discovery from display. Supply paper-supported
+    gene_id or gene_symbol for exact database gene scope, allele_attribution for a
+    full-name clue, and allele_functional_impact for a structured term such as
+    conditional_ready. Do not concatenate attribution onto allele_symbol. These
+    clues prioritize candidates but never confirm identity. Inspect coverage;
+    discovery_limit can expand the bounded search without displaying every record.
 
     Args:
         method: The query method (search_genes, search_genes_bulk, search_alleles, search_alleles_bulk, etc.)
@@ -1304,6 +1375,9 @@ def agr_curation_query(
         allele_symbol: Allele symbol to search for
         allele_symbols: List of allele symbols for bulk lookup methods
         allele_id: Allele ID/CURIE for direct lookup
+        allele_attribution: Soft full-name attribution text, separate from the literal allele query.
+        allele_functional_impact: Soft structured functional-impact term, e.g. conditional_ready; absent annotation means unknown.
+        discovery_limit: Allele discovery budget, independently bounded from model-visible limit by AGR_ALLELE_DISCOVERY_MAX.
         data_provider: Filter by species (MGI, FB, WB, ZFIN, RGD, SGD, HGNC)
         provider_name: Data provider display name for provider lookup
         taxon_id: Alternative to data_provider (NCBITaxon:XXXXX format)
@@ -1452,6 +1526,11 @@ def agr_curation_query(
                 data_provider=data_provider,
                 include_synonyms=include_synonyms if method == "search_alleles" else None,
                 limit=limit_value if method == "search_alleles" else None,
+                gene_id=gene_id or gene_symbol,
+                taxon_id=taxon_id,
+                allele_attribution=allele_attribution,
+                allele_functional_impact=allele_functional_impact,
+                discovery_limit=discovery_limit,
             )
         if method == "search_alleles_bulk":
             return _attempt_query(
@@ -1461,6 +1540,11 @@ def agr_curation_query(
                 include_synonyms=include_synonyms,
                 limit=limit_value,
                 force=force or None,
+                gene_id=gene_id or gene_symbol,
+                taxon_id=taxon_id,
+                allele_attribution=allele_attribution,
+                allele_functional_impact=allele_functional_impact,
+                discovery_limit=discovery_limit,
             )
         return _attempt_query(method)
 
@@ -2305,628 +2389,105 @@ def agr_curation_query(
                 attempts=lookup_attempts,
             )
 
-        # SEARCH ALLELES (uses LIKE search - supports partial matches)
-        elif method == "search_alleles":
-            if not allele_symbol:
-                return _err(
-                    "search_alleles requires allele_symbol",
-                    method=method,
-                    attempted_query=_attempt_query(method, allele_symbol=allele_symbol),
-                )
-
-            symbol_variants = [allele_symbol]
-
+        # BOUNDED ALLELE SEARCH: shared rich discovery for single and bulk calls.
+        elif method in {"search_alleles", "search_alleles_bulk"}:
+            taxon = taxon_id
             if data_provider:
-                taxon = PROVIDER_TO_TAXON.get(data_provider)
-                if not taxon:
-                    return _err(
-                        f"Unknown data_provider: {data_provider}",
-                        method=method,
-                        attempted_query=_attempt_query(
-                            method,
-                            allele_symbol=allele_symbol,
-                            data_provider=data_provider,
-                        ),
-                    )
-                taxon_ids = [taxon]
-            else:
-                taxon_ids = list(PROVIDER_TO_TAXON.values())
-
-            pending_matches: List[Dict[str, Any]] = []
-            allele_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
-            alleles_data: List[Dict[str, Any]] = []
-            seen_curies = set()  # Avoid duplicates
-            lookup_attempts: List[Dict[str, Any]] = []
-            for tid in taxon_ids:
-                for symbol_variant in symbol_variants:
-                    try:
-                        results = db.search_entities(
-                            entity_type='allele',
-                            search_pattern=symbol_variant,
-                            taxon_curie=tid,
-                            include_synonyms=include_synonyms,
-                            limit=limit_value
-                        )
-                        if data_provider and not results:
-                            results = _search_alleles_fuzzy_via_db(
-                                db,
-                                search_pattern=symbol_variant,
-                                taxon_curie=tid,
-                                include_synonyms=include_synonyms,
-                                limit=limit_value,
-                            )
-                        lookup_attempts.append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(
-                                    method,
-                                    allele_symbol=symbol_variant,
-                                    original_allele_symbol=allele_symbol
-                                    if symbol_variant != allele_symbol
-                                    else None,
-                                    taxon_id=tid,
-                                    data_provider=TAXON_TO_PROVIDER.get(tid),
-                                    include_synonyms=include_synonyms,
-                                    limit=limit_value,
-                                ),
-                                lookup_status=(
-                                    LOOKUP_STATUS_SUCCESS
-                                    if results
-                                    else LOOKUP_STATUS_NOT_FOUND
-                                ),
-                                explanation=(
-                                    f"Searched allele symbol {symbol_variant!r} in taxon {tid}; "
-                                    f"the curation DB returned {len(results)} candidate(s)."
-                                ),
-                                candidate_count=len(results),
-                            )
-                        )
-                        for result in results:
-                            curie = result.get('entity_curie')
-                            if not curie:
-                                continue
-                            result_taxon = result.get("taxon_curie") or tid
-                            if not result_taxon:
-                                continue
-                            pending_matches.append({
-                                "curie": curie,
-                                "taxon": result_taxon,
-                                "matched_entity": result.get('entity', symbol_variant),
-                                "match_type": result.get('match_type', 'unknown'),
-                            })
-                            allele_curies_by_taxon[result_taxon].append(curie)
-                    except Exception as e:
-                        logger.warning('Failed to fuzzy search alleles in taxon %s: %s', tid, e)
-                        lookup_attempts.append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(
-                                    method,
-                                    allele_symbol=symbol_variant,
-                                    original_allele_symbol=allele_symbol
-                                    if symbol_variant != allele_symbol
-                                    else None,
-                                    taxon_id=tid,
-                                    data_provider=TAXON_TO_PROVIDER.get(tid),
-                                    include_synonyms=include_synonyms,
-                                    limit=limit_value,
-                                ),
-                                lookup_status=LOOKUP_STATUS_TRANSIENT,
-                                explanation=(
-                                    f"Allele search for {symbol_variant!r} in taxon {tid} failed "
-                                    "while querying the curation DB."
-                                ),
-                                error=e,
-                            )
-                        )
-            if not data_provider and not pending_matches:
-                for symbol_variant in symbol_variants:
-                    try:
-                        results = _search_alleles_fuzzy_via_db(
-                            db,
-                            search_pattern=symbol_variant,
-                            taxon_curie=None,
-                            include_synonyms=include_synonyms,
-                            limit=limit_value,
-                        )
-                        lookup_attempts.append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(
-                                    method,
-                                    allele_symbol=symbol_variant,
-                                    original_allele_symbol=allele_symbol
-                                    if symbol_variant != allele_symbol
-                                    else None,
-                                    include_synonyms=include_synonyms,
-                                    limit=limit_value,
-                                ),
-                                lookup_status=(
-                                    LOOKUP_STATUS_SUCCESS
-                                    if results
-                                    else LOOKUP_STATUS_NOT_FOUND
-                                ),
-                                explanation=(
-                                    f"Searched allele symbol {symbol_variant!r} across all taxa; "
-                                    f"the curation DB returned {len(results)} fuzzy candidate(s)."
-                                ),
-                                candidate_count=len(results),
-                            )
-                        )
-                        for result in results:
-                            curie = result.get('entity_curie')
-                            result_taxon = result.get("taxon_curie")
-                            if not curie or not result_taxon:
-                                continue
-                            pending_matches.append({
-                                "curie": curie,
-                                "taxon": result_taxon,
-                                "matched_entity": result.get('entity', symbol_variant),
-                                "match_type": result.get('match_type', 'unknown'),
-                            })
-                            allele_curies_by_taxon[result_taxon].append(curie)
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to fuzzy search alleles across all taxa: %s",
-                            e,
-                        )
-                        lookup_attempts.append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(
-                                    method,
-                                    allele_symbol=symbol_variant,
-                                    include_synonyms=include_synonyms,
-                                    limit=limit_value,
-                                ),
-                                lookup_status=LOOKUP_STATUS_TRANSIENT,
-                                explanation=(
-                                    f"Allele search for {symbol_variant!r} across all taxa failed "
-                                    "while querying the curation DB."
-                                ),
-                                error=e,
-                            )
-                        )
-
-            allele_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
-            allele_detail_failures_by_taxon: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
-            for tid, curies in allele_curies_by_taxon.items():
-                details, detail_failures = _fetch_allele_details_bulk(db, curies)
-                allele_details_by_taxon[tid] = details
-                allele_detail_failures_by_taxon[tid] = detail_failures
-
-            for match in pending_matches:
-                curie = match["curie"]
-                if curie in seen_curies:
-                    continue
-                seen_curies.add(curie)
-
-                detail = allele_details_by_taxon.get(match["taxon"], {}).get(curie)
-                detail_failures = allele_detail_failures_by_taxon.get(
-                    match["taxon"], {}
-                ).get(curie, [])
-                if detail_failures:
-                    lookup_attempts.extend(
-                        _entity_detail_lookup_attempts(
-                            method=method,
-                            entity_kind="allele",
-                            input_symbol=allele_symbol,
-                            curie=curie,
-                            taxon_id=match["taxon"],
-                            matched_entity=match["matched_entity"],
-                            match_type=match["match_type"],
-                            detail_failures=detail_failures,
-                            data_provider=TAXON_TO_PROVIDER.get(match["taxon"]),
-                        )
-                    )
-                if not detail:
-                    continue
-
-                matched_entity = match["matched_entity"]
-                primary_symbol = detail.get("symbol") or matched_entity
-                fullname = detail.get("name")
-                allele_entry = {
-                    "curie": detail.get("curie", curie),
-                    "symbol": primary_symbol,
-                    "name": fullname,
-                    "taxon": match["taxon"],
-                    "match_type": match["match_type"],
-                    "fullname_attribution": _extract_fullname_attribution(fullname, match["taxon"]),
-                }
-                enrich_with_match_context(allele_entry, matched_entity, primary_symbol, 'allele')
-                alleles_data.append(allele_entry)
-
-            validated_data = alleles_data[:limit_value]
-            validated_data, invalid_curie_count = _validate_curie_list(validated_data)
-            if invalid_curie_count > 0:
-                warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
-
-            # Log search results for tracing
-            logger.debug(
-                '[agr_curation_query] search_alleles returning %s results: %s',
-                len(validated_data),
-                [d.get('curie') for d in validated_data[:5]],
-            )
-
-            return _lookup_response(
-                method=method,
-                data=validated_data,
-                count=len(validated_data),
-                warnings=warnings,
-                attempted_query=_attempt_query(
-                    method,
-                    allele_symbol=allele_symbol,
-                    data_provider=data_provider,
-                    include_synonyms=include_synonyms,
-                    limit=limit_value,
-                ),
-                attempts=lookup_attempts,
-            )
-
-        # SEARCH ALLELES BULK (single tool call, multiple symbols)
-        elif method == "search_alleles_bulk":
+                provider_taxon = PROVIDER_TO_TAXON.get(data_provider)
+                if not provider_taxon:
+                    return _err(f"Unknown data_provider: {data_provider}", method=method)
+                if taxon and taxon != provider_taxon:
+                    return _err("taxon_id conflicts with data_provider", method=method)
+                taxon = provider_taxon
+            if gene_id and gene_symbol:
+                return _err("Supply gene_id or gene_symbol for allele scope, not both", method=method)
+            budget = discovery_limit if discovery_limit is not None else _positive_env_int("AGR_ALLELE_DISCOVERY_LIMIT", 200)
+            maximum = _positive_env_int("AGR_ALLELE_DISCOVERY_MAX", 1000)
+            if not isinstance(budget, int) or not 1 <= budget <= maximum:
+                return _err("discovery_limit must be positive and within AGR_ALLELE_DISCOVERY_MAX", method=method)
+            if limit is None:
+                limit_value, _ = _normalize_limit(_positive_env_int("AGR_ALLELE_DISPLAY_LIMIT", 20))
+                warnings = [w for w in warnings if not w.startswith("default_limit_applied:")]
+            if method == "search_alleles":
+                if not allele_symbol:
+                    return _err("search_alleles requires allele_symbol", method=method)
+                result = _rich_allele_search(db, symbol=allele_symbol, taxon=taxon,
+                    gene=gene_id or gene_symbol, attribution=allele_attribution,
+                    impact=allele_functional_impact, include_synonyms=include_synonyms,
+                    limit=limit_value, discovery_limit=budget)
+                result.warnings = warnings + (result.warnings or []) or None
+                return result
             if not isinstance(allele_symbols, list) or not allele_symbols:
-                return _err(
-                    "search_alleles_bulk requires allele_symbols (list of symbols)",
-                    method=method,
-                    attempted_query=_attempt_query(method, allele_symbols=allele_symbols),
-                )
-
-            normalized_symbols: List[str] = []
-            seen_inputs: set[str] = set()
-            for raw_symbol in allele_symbols:
-                symbol = str(raw_symbol).strip()
-                if not symbol:
-                    continue
-                key = symbol.lower()
-                if key in seen_inputs:
-                    continue
-                seen_inputs.add(key)
-                normalized_symbols.append(symbol)
-
+                return _err("search_alleles_bulk requires allele_symbols (list of symbols)", method=method)
+            normalized_symbols = list(dict.fromkeys(str(s).strip() for s in allele_symbols if str(s).strip()))
             if not normalized_symbols:
-                return _err(
-                    "search_alleles_bulk received no valid symbols",
-                    method=method,
-                    attempted_query=_attempt_query(method, allele_symbols=allele_symbols),
-                )
-
-            if data_provider:
-                taxon = PROVIDER_TO_TAXON.get(data_provider)
-                if not taxon:
-                    return _err(
-                        f"Unknown data_provider: {data_provider}",
-                        method=method,
-                        attempted_query=_attempt_query(
-                            method,
-                            allele_symbols=normalized_symbols,
-                            data_provider=data_provider,
-                        ),
-                    )
-                taxon_ids = [taxon]
-            else:
-                taxon_ids = list(PROVIDER_TO_TAXON.values())
+                return _err("search_alleles_bulk received no valid symbols", method=method)
             normalized_symbols, cap_warnings = _apply_bulk_symbol_soft_cap(normalized_symbols)
             warnings.extend(cap_warnings)
-
-            pending_matches: Dict[str, List[Dict[str, Any]]] = {}
-            allele_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
-            lookup_attempts_by_symbol: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-
+            items = []
             for symbol in normalized_symbols:
-                symbol_matches: List[Dict[str, Any]] = []
-                for tid in taxon_ids:
-                    try:
-                        results = db.search_entities(
-                            entity_type='allele',
-                            search_pattern=symbol,
-                            taxon_curie=tid,
-                            include_synonyms=include_synonyms,
-                            limit=limit_value
-                        )
-                        if data_provider and not results:
-                            results = _search_alleles_fuzzy_via_db(
-                                db,
-                                search_pattern=symbol,
-                                taxon_curie=tid,
-                                include_synonyms=include_synonyms,
-                                limit=limit_value,
-                            )
-                        lookup_attempts_by_symbol[symbol].append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(
-                                    method,
-                                    allele_symbol=symbol,
-                                    taxon_id=tid,
-                                    data_provider=TAXON_TO_PROVIDER.get(tid),
-                                    include_synonyms=include_synonyms,
-                                    limit=limit_value,
-                                ),
-                                lookup_status=(
-                                    LOOKUP_STATUS_SUCCESS
-                                    if results
-                                    else LOOKUP_STATUS_NOT_FOUND
-                                ),
-                                explanation=(
-                                    f"Searched allele symbol {symbol!r} in taxon {tid}; "
-                                    f"the curation DB returned {len(results)} candidate(s)."
-                                ),
-                                candidate_count=len(results),
-                            )
-                        )
-                        for result in results:
-                            curie = result.get('entity_curie')
-                            if not curie:
-                                continue
-                            result_taxon = result.get("taxon_curie") or tid
-                            if not result_taxon:
-                                continue
-                            symbol_matches.append({
-                                "curie": curie,
-                                "taxon": result_taxon,
-                                "matched_entity": result.get('entity', symbol),
-                                "match_type": result.get('match_type', 'unknown'),
-                            })
-                            allele_curies_by_taxon[result_taxon].append(curie)
-                    except Exception as e:
-                        logger.warning("Failed to fuzzy search alleles in bulk for '%s' taxon %s: %s", symbol, tid, e)
-                        lookup_attempts_by_symbol[symbol].append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(
-                                    method,
-                                    allele_symbol=symbol,
-                                    taxon_id=tid,
-                                    data_provider=TAXON_TO_PROVIDER.get(tid),
-                                    include_synonyms=include_synonyms,
-                                    limit=limit_value,
-                                ),
-                                lookup_status=LOOKUP_STATUS_TRANSIENT,
-                                explanation=(
-                                    f"Allele search for {symbol!r} in taxon {tid} failed "
-                                    "while querying the curation DB."
-                                ),
-                                error=e,
-                            )
-                        )
-                if not data_provider and not symbol_matches:
-                    try:
-                        results = _search_alleles_fuzzy_via_db(
-                            db,
-                            search_pattern=symbol,
-                            taxon_curie=None,
-                            include_synonyms=include_synonyms,
-                            limit=limit_value,
-                        )
-                        lookup_attempts_by_symbol[symbol].append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(
-                                    method,
-                                    allele_symbol=symbol,
-                                    include_synonyms=include_synonyms,
-                                    limit=limit_value,
-                                ),
-                                lookup_status=(
-                                    LOOKUP_STATUS_SUCCESS
-                                    if results
-                                    else LOOKUP_STATUS_NOT_FOUND
-                                ),
-                                explanation=(
-                                    f"Searched allele symbol {symbol!r} across all taxa; "
-                                    f"the curation DB returned {len(results)} fuzzy candidate(s)."
-                                ),
-                                candidate_count=len(results),
-                            )
-                        )
-                        for result in results:
-                            curie = result.get('entity_curie')
-                            result_taxon = result.get("taxon_curie")
-                            if not curie or not result_taxon:
-                                continue
-                            symbol_matches.append({
-                                "curie": curie,
-                                "taxon": result_taxon,
-                                "matched_entity": result.get('entity', symbol),
-                                "match_type": result.get('match_type', 'unknown'),
-                            })
-                            allele_curies_by_taxon[result_taxon].append(curie)
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to fuzzy search alleles in bulk for '%s' across all taxa: %s",
-                            symbol,
-                            e,
-                        )
-                        lookup_attempts_by_symbol[symbol].append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(
-                                    method,
-                                    allele_symbol=symbol,
-                                    include_synonyms=include_synonyms,
-                                    limit=limit_value,
-                                ),
-                                lookup_status=LOOKUP_STATUS_TRANSIENT,
-                                explanation=(
-                                    f"Allele search for {symbol!r} across all taxa failed "
-                                    "while querying the curation DB."
-                                ),
-                                error=e,
-                            )
-                        )
-                pending_matches[symbol] = symbol_matches
+                try:
+                    result = _rich_allele_search(db, symbol=symbol, taxon=taxon,
+                        gene=gene_id or gene_symbol, attribution=allele_attribution,
+                        impact=allele_functional_impact, include_synonyms=include_synonyms,
+                        limit=limit_value, discovery_limit=budget)
+                except Exception as exc:
+                    result = _err("Allele candidate retrieval failed", method=method,
+                        attempted_query=_attempt_query(method, allele_symbol=symbol, taxon_id=taxon,
+                            gene_id=gene_id or gene_symbol, allele_attribution=allele_attribution,
+                            allele_functional_impact=allele_functional_impact, discovery_limit=budget),
+                        failure_classification=LOOKUP_STATUS_TRANSIENT, error=exc)
+                item = result.model_dump(exclude_none=True)
+                item["input"] = symbol
+                item["results"] = item.pop("data", None) or []
+                item["count"] = len(item["results"])
+                item["status"] = "ambiguous" if result.lookup_status == LOOKUP_STATUS_AMBIGUOUS else _bulk_item_status_from_lookup_status(
+                    result.lookup_status, count=item["count"], attempts=result.lookup_attempts)
+                items.append(item)
+            totals = _cap_bulk_total_matches(items)
+            for item in items:
+                coverage = item.get("coverage")
+                if coverage and coverage["returned_count"] != item["count"]:
+                    coverage["returned_count"] = item["count"]
+                    coverage["display_capped"] = True
+                    coverage["bulk_display_capped"] = True
+                    note = f" Bulk response cap applied; {item['count']} candidates remain displayed for this input."
+                    item["explanation"] = item.get("explanation", "") + note
+                    item["message"] = item.get("message", "") + note
+                    for attempt in item.get("lookup_attempts", []):
+                        attempt["coverage"] = dict(coverage)
+                        attempt["explanation"] = attempt.get("explanation", "") + note
+            summary = _bulk_resolution_summary(items)
+            summary["resolved_count"] = sum(item["status"] == "resolved" for item in items)
+            if summary["resolution_status"] == "no_matches" and any(item["status"] == "ambiguous" for item in items):
+                summary["resolution_status"] = "ambiguous"
+            return _lookup_response(method=method, data={"items": items, **summary,
+                "bulk_match_totals": totals, "method": method}, count=summary["total_matches"], warnings=warnings,
+                attempts=[attempt for item in items for attempt in item.get("lookup_attempts", [])],
+                attempted_query=_attempt_query(method, allele_symbols=normalized_symbols, taxon_id=taxon,
+                    gene_id=gene_id or gene_symbol, allele_attribution=allele_attribution,
+                    allele_functional_impact=allele_functional_impact, limit=limit_value, discovery_limit=budget))
 
-            allele_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
-            allele_detail_failures_by_taxon: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
-            for tid, curies in allele_curies_by_taxon.items():
-                details, detail_failures = _fetch_allele_details_bulk(db, curies)
-                allele_details_by_taxon[tid] = details
-                allele_detail_failures_by_taxon[tid] = detail_failures
-
-            bulk_items: List[Dict[str, Any]] = []
-
-            for symbol in normalized_symbols:
-                item_warnings: List[str] = []
-                alleles_data: List[Dict[str, Any]] = []
-                seen_curies = set()
-                for match in pending_matches.get(symbol, []):
-                    curie = match["curie"]
-                    if curie in seen_curies:
-                        continue
-                    seen_curies.add(curie)
-
-                    detail = allele_details_by_taxon.get(match["taxon"], {}).get(curie)
-                    detail_failures = allele_detail_failures_by_taxon.get(
-                        match["taxon"], {}
-                    ).get(curie, [])
-                    if detail_failures:
-                        lookup_attempts_by_symbol[symbol].extend(
-                            _entity_detail_lookup_attempts(
-                                method=method,
-                                entity_kind="allele",
-                                input_symbol=symbol,
-                                curie=curie,
-                                taxon_id=match["taxon"],
-                                matched_entity=match["matched_entity"],
-                                match_type=match["match_type"],
-                                detail_failures=detail_failures,
-                                data_provider=TAXON_TO_PROVIDER.get(match["taxon"]),
-                            )
-                        )
-                    if not detail:
-                        continue
-
-                    primary_symbol = detail.get("symbol") or match["matched_entity"]
-                    fullname = detail.get("name")
-                    allele_entry = {
-                        "curie": detail.get("curie", curie),
-                        "symbol": primary_symbol,
-                        "name": fullname,
-                        "taxon": match["taxon"],
-                        "match_type": match["match_type"],
-                        "fullname_attribution": _extract_fullname_attribution(fullname, match["taxon"]),
-                    }
-                    enrich_with_match_context(
-                        allele_entry,
-                        match["matched_entity"],
-                        primary_symbol,
-                        'allele'
-                    )
-                    alleles_data.append(allele_entry)
-
-                validated_data = alleles_data[:limit_value]
-                validated_data, invalid_curie_count = _validate_curie_list(validated_data)
-                if invalid_curie_count > 0:
-                    item_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
-
-                search_payload = _mark_allele_search_candidates(_lookup_response_payload(
-                    method=method, data=validated_data, count=len(validated_data),
-                    attempted_query=_attempt_query(method, allele_symbol=symbol),
-                    attempts=lookup_attempts_by_symbol.get(symbol),
-                ))
-                item_lookup_status = search_payload["lookup_status"]
-                item_status = (
-                    "ambiguous" if item_lookup_status == LOOKUP_STATUS_AMBIGUOUS
-                    else _bulk_item_status_from_lookup_status(
-                        item_lookup_status, count=len(validated_data),
-                        attempts=lookup_attempts_by_symbol.get(symbol),
-                    )
-                )
-                item_payload: Dict[str, Any] = {
-                    "input": symbol,
-                    "status": item_status,
-                    "results": validated_data,
-                    "count": len(validated_data),
-                    "lookup_status": item_lookup_status,
-                    "failure_classification": (
-                        None
-                        if item_status == "resolved"
-                        else (
-                            "detail_failure"
-                            if item_status == "detail_failure"
-                            else item_lookup_status
-                        )
-                    ),
-                    "explanation": search_payload["explanation"],
-                    "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
-                    "candidate_matches": [
-                        _candidate_from_result(method, row) for row in validated_data
-                    ] or None,
-                    "result_projections": search_payload["result_projections"],
-                }
-                if item_warnings:
-                    item_payload["warnings"] = item_warnings
-                bulk_items.append(item_payload)
-
-            bulk_match_totals = _cap_bulk_total_matches(bulk_items)
-            summary = _bulk_resolution_summary(bulk_items)
-            if summary["status_counts"].get("ambiguous"):
-                summary["resolved_count"] = sum(
-                    item["count"] for item in bulk_items if item["status"] == "resolved"
-                )
-                if summary["resolution_status"] == "no_matches":
-                    summary["resolution_status"] = "ambiguous"
-            return _lookup_response(
-                method=method,
-                data={
-                    "items": bulk_items,
-                    **summary,
-                    "bulk_match_totals": bulk_match_totals,
-                    "method": "search_alleles_bulk",
-                },
-                count=summary["total_matches"],
-                warnings=warnings,
-                attempted_query=_attempt_query(
-                    method,
-                    allele_symbols=normalized_symbols,
-                    data_provider=data_provider,
-                    include_synonyms=include_synonyms,
-                    limit=limit_value,
-                ),
-                attempts=[
-                    attempt
-                    for symbol in normalized_symbols
-                    for attempt in lookup_attempts_by_symbol.get(symbol, [])
-                ],
-            )
-
-        # GET ALLELE BY ID
         elif method == "get_allele_by_id":
             if not allele_id:
-                return _err(
-                    "get_allele_by_id requires allele_id",
-                    method=method,
+                return _err("get_allele_by_id requires allele_id", method=method)
+            details = db.get_allele_candidate_details([allele_id])
+            if len(details) > 1:
+                for detail in details:
+                    _validate_curie_in_result(detail)
+                    detail["identity_status"] = "unconfirmed"
+                result = _lookup_response(method=method, data=details, count=len(details), exact_lookup=True,
                     attempted_query=_attempt_query(method, allele_id=allele_id),
-                )
-
-            allele = db.get_allele(allele_id)
-            if not allele:
-                return _lookup_response(
-                    method=method,
-                    data=None,
-                    count=0,
-                    message=f"Allele not found: {allele_id}",
-                    attempted_query=_attempt_query(method, allele_id=allele_id),
-                    exact_lookup=True,
-                )
-
-            fullname = allele.alleleFullName.displayText if allele.alleleFullName else None
-            taxon = allele.taxon if hasattr(allele, 'taxon') else None
-            allele_dict = {
-                "curie": allele.primaryExternalId,
-                "symbol": allele.alleleSymbol.displayText if allele.alleleSymbol else None,
-                "name": fullname,
-                "taxon": taxon,
-                "fullname_attribution": _extract_fullname_attribution(fullname, taxon) if taxon else None,
-            }
-            _validate_curie_in_result(allele_dict)
-            return _lookup_response(
-                method=method,
-                data=allele_dict,
-                attempted_query=_attempt_query(method, allele_id=allele_id),
-                exact_lookup=True,
-            )
+                    message="Identifier matches multiple allele records; retain candidates without choosing an identity.")
+                for projection in result.result_projections or []:
+                    projection["projection_status"] = "candidate"
+                return result
+            row = details[0] if details else None
+            if row:
+                _validate_curie_in_result(row)
+            return _lookup_response(method=method, data=row, count=1 if row else 0,
+                message=None if row else "Allele not found",
+                attempted_query=_attempt_query(method, allele_id=allele_id), exact_lookup=True)
 
         # GET SPECIES
         elif method == "get_species":

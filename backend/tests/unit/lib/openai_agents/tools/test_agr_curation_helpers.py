@@ -336,6 +336,13 @@ def test_query_simple_methods(monkeypatch):
             return None
 
         @staticmethod
+        def get_allele_candidate_details(identifiers):
+            if allele.primaryExternalId in identifiers:
+                return [{"curie": allele.primaryExternalId, "symbol": allele.alleleSymbol.displayText,
+                         "name": allele.alleleFullName.displayText, "taxon": allele.taxon}]
+            return []
+
+        @staticmethod
         def get_species():
             return [SimpleNamespace(abbreviation="WB", display_name="WormBase")]
 

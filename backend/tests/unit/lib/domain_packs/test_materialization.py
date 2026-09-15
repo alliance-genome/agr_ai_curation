@@ -607,6 +607,10 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
     metadata = _validator_metadata()
     envelope = _validator_envelope()
     item = _validator_item(metadata, envelope)
+    item.result.lookup_attempts[0].coverage = {
+        "discovered_count": 31, "returned_count": 20,
+        "discovery_capped": False, "display_capped": True, "database_total": None,
+    }
 
     result = materialize_validator_results_into_envelope(
         envelope,
@@ -652,6 +656,7 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
         "DEMO:Allele0001817"
     )
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "success"
+    assert finding.details["lookup_attempts"][0]["coverage"] == item.result.lookup_attempts[0].coverage
 
     summaries = project_validation_summary_projections(
         result.envelope,

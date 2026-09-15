@@ -1,21 +1,15 @@
 # Auto-generated lockfile — DO NOT EDIT MANUALLY
-# Updated: 2026-09-04 from backend/requirements.txt in a clean python:3.11-slim container
-# Existing versions were constrained while the obsolete provider dependency closure was removed.
+# Updated: 2026-09-15 from backend/requirements.txt in a clean python:3.11-slim container.
+# Existing dependency versions constrained; only agr-curation-api-client changes (0.15.0).
+# Clean install and pip check passed.
 # Upgrade-gated exact SDK pin openai-agents 0.17.4 / openai 2.41.0.
 # Future openai-agents bumps require dev_release_smoke.py PASS evidence.
-# agr-curation-api-client pinned 0.12.1: 0.12.1 fixes get_data_providers() to use
-# species.genomeassembly_id (live curation DB schema); 0.12.0 queried the dropped
-# assembly_curie column. 0.12.0/0.12.1 have identical requires_dist, and 0.11/0.12
-# share an identical dependency graph, so this is the only line changed vs the re-resolve.
-#
-# To update: rebuild from requirements.txt in a clean environment, verify no
-# malicious .pth files, then re-freeze.
-#
+# To update: resolve requirements.txt in a clean environment and re-freeze.
 # To use: pip install -r requirements.lock.txt
 #
 agr-abc-document-parsers==1.5.1
 agr-cognito-py==0.1.0
-agr-curation-api-client==0.12.1
+agr-curation-api-client==0.15.0
 aiohappyeyeballs==2.6.2
 aiohttp==3.14.1
 aiosignal==1.4.0
