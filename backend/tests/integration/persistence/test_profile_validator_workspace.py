@@ -32,9 +32,11 @@ from .test_domain_envelope_persistence import (
 
 
 @pytest.fixture
-def manual_profile_record(migrated_database, example, monkeypatch):
+def manual_profile_record(migrated_database, example, monkeypatch, request):
     raw, capability, pack = example
     raw["validator_mappings"][0]["policy"]["blocks_readiness"] = True
+    if getattr(request, "param", None) == "unmapped":
+        raw["validator_mappings"] = []
     monkeypatch.setattr("src.lib.agent_studio.profile_mapping_service.capability_catalog", lambda **kw: [capability])
     monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog", lambda **kw: [capability])
     monkeypatch.setattr(validation, "resolve_curation_domain_pack_by_id", lambda key: pack)

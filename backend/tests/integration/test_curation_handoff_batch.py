@@ -487,6 +487,7 @@ def _patched_handoff_execute_flow(
                 extraction_results=extraction_results,
                 document_id=document_id,
                 runner_user_id=user_id,
+                active_groups=tuple(kwargs["active_groups"]) if kwargs.get("active_groups") is not None else None,
                 flow_run_id=flow_run_id,
                 origin_session_id=session_id,
                 conversation_summary="Integration handoff fixture.",

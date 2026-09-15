@@ -3442,6 +3442,7 @@ def get_all_agent_tools(
                             extraction_results=extraction_results,
                             document_id=document_id,
                             runner_user_id=user_id,
+                            active_groups=tuple(active_groups) if active_groups is not None else None,
                             flow_run_id=flow_run_id,
                             origin_session_id=session_id,
                             conversation_summary=flow_conversation_summary,

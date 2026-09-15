@@ -4528,8 +4528,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    @pytest.mark.parametrize("groups", [None, [], ["FB"]])
     def test_curation_handoff_step_runs_deterministic_handoff(
-        self, mock_get_agent, mock_streaming
+        self, mock_get_agent, mock_streaming, groups
     ):
         """Curation handoff steps should materialize review sessions without an LLM specialist."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
@@ -4632,6 +4633,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 session_id="session-123",
                 flow_run_id="flow-run-123",
                 user_query="Focus on the confirmed findings.",
+                active_groups=groups,
             )
 
             assert created_names == {"ask_gene_specialist", "ask_curation_handoff_specialist"}
@@ -4652,6 +4654,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert captured["extraction_results"][0].agent_key == "gene"
         assert captured["document_id"] == "doc-123"
         assert captured["runner_user_id"] == "user-123"
+        assert captured["active_groups"] == (tuple(groups) if groups is not None else None)
         assert captured["flow_run_id"] == "flow-run-123"
         assert captured["origin_session_id"] == "session-123"
         assert captured["conversation_summary"] is not None

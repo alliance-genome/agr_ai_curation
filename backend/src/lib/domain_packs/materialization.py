@@ -327,7 +327,7 @@ def materialize_persisted_envelope_review_rows(
     *,
     revision: int | None = None,
     materializer: DomainEnvelopeReviewRowMaterializer | None = None,
-    active_group_ids: Sequence[str] = (),
+    active_group_ids: Sequence[str] | None = (),
     user_id: int | str | None = None,
 ) -> DomainEnvelopeReviewRowsResponse:
     """Regenerate review rows from the currently persisted envelope JSON."""
