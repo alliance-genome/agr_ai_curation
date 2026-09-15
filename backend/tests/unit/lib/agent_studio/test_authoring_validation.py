@@ -256,6 +256,36 @@ def _agent(**overrides):
     return candidate
 
 
+@pytest.mark.parametrize("phase", ["proposal", "save"])
+def test_disabled_provider_is_distinct_from_missing_model(phase, monkeypatch):
+    from dataclasses import replace
+    from src.lib.agent_studio.custom_agent_service import authorized_agent_validation_sources
+
+    sources = _agent_sources()
+    sources = replace(sources, models={
+        "gpt-test": replace(sources.models["gpt-test"], provider_enabled=False),
+        "hidden-enabled": replace(
+            sources.models["gpt-test"], model_id="hidden-enabled", provider_enabled=True,
+        ),
+    })
+    # Disabled providers are absent from the authenticated selectable catalog.
+    monkeypatch.setattr(
+        "src.lib.agent_studio.capability_catalog.build_authorized_capability_catalog",
+        lambda **kwargs: [],
+    )
+    sources = authorized_agent_validation_sources(
+        None, user_id=7, active_group_ids=["TEAM_C"], sources=sources,
+    )
+    assert "hidden-enabled" not in sources.models
+    assert "gpt-test" in sources.models
+    result = validate_custom_agent_authoring_draft(
+        _agent(), context=AuthoringValidationContext.from_values(db_user_id=7, active_group_ids=["TEAM_C"]),
+        sources=sources, phase=phase,
+    )
+    assert not result.valid
+    assert any(f.code == "provider_disabled" and "approved model" in (f.fix_hint or "") for f in result.findings)
+
+
 def _agent_result(
     candidate,
     *,

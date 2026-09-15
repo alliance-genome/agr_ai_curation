@@ -29,6 +29,7 @@ from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
 from src.lib.agent_studio.domain_output_contract import domain_extraction_ref_for_agent
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.config import list_groups, list_model_definitions
+from src.lib.config.models_loader import is_model_selectable
 from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.group_tool_policy import resolve_group_tool_policy
 from src.lib.openai_agents.bounded_list import (
@@ -332,7 +333,7 @@ def _agent_records(
 def _model_records(context: CapabilityCatalogContext) -> list[CapabilityRecord]:
     records: list[CapabilityRecord] = []
     for model in list_model_definitions():
-        if not bool(getattr(model, "curator_visible", True)):
+        if not is_model_selectable(model):
             continue
         reasoning_options = list(model.reasoning_options or [])
         records.append(

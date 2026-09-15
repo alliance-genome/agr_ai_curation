@@ -116,13 +116,15 @@ def build_provider_runtime_report(
     missing_key_provider_count = 0
     ready_provider_count = 0
     for provider in providers:
+        from src.lib.openai_agents.config import is_provider_enabled
+        enabled = is_provider_enabled(provider.provider_id)
         mapped_models = sorted(model_ids_by_provider.get(provider.provider_id, []))
         mapped_visible_models = sorted(visible_model_ids_by_provider.get(provider.provider_id, []))
         used_by_models = bool(mapped_models)
         api_key_present = bool(str(os.getenv(provider.api_key_env, "")).strip())
         optional_for_runtime = bool(getattr(provider, "optional_for_runtime", False))
         required_for_runtime = bool(
-            provider.default_for_runner or (used_by_models and not optional_for_runtime)
+            enabled and (provider.default_for_runner or (used_by_models and not optional_for_runtime))
         )
         base_url_present = (
             bool(str(os.getenv(provider.base_url_env, "")).strip())
@@ -133,7 +135,12 @@ def build_provider_runtime_report(
 
         route_configured = bool(used_by_models and base_url_configured)
         readiness = "ready"
-        if not (required_for_runtime or used_by_models):
+        if not enabled:
+            readiness = "disabled_by_policy"
+            mapped_visible_models = []
+            if provider.default_for_runner:
+                errors.append(f"Default runner provider '{provider.provider_id}' is disabled by policy")
+        elif not (required_for_runtime or used_by_models):
             readiness = "unused"
         else:
             if not api_key_present:
@@ -177,6 +184,7 @@ def build_provider_runtime_report(
         providers_payload.append(
             {
                 "provider_id": provider.provider_id,
+                "enabled": enabled,
                 "driver": provider.driver,
                 "api_mode": provider.api_mode,
                 "api_key_env": provider.api_key_env,

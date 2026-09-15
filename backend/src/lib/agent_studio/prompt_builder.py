@@ -5,6 +5,7 @@ import re
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from src.lib.agent_studio.models import ChatContext
+from src.lib.config.models_loader import is_model_selectable
 from src.lib.agent_studio.authoring_context import workshop_authoring_metadata_json
 from src.lib.openai_agents.config import (
     get_agent_studio_workshop_context_group_prompt_max_chars,
@@ -505,7 +506,7 @@ LinkML-aligned or submission-ready.
                     [
                         model
                         for model in list_model_definitions()
-                        if bool(getattr(model, "curator_visible", True))
+                        if is_model_selectable(model)
                     ],
                     key=lambda model: (not bool(model.default), model.name.lower()),
                 ):

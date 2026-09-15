@@ -556,6 +556,7 @@ class AgentModelValidationRecord:
     curator_visible: bool
     supports_reasoning: bool
     reasoning_options: tuple[str, ...] = ()
+    provider_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -658,7 +659,17 @@ def validate_custom_agent_authoring_draft(
                 )
             )
     model = sources.models.get(draft.model_id)
-    if model is None or not model.curator_visible:
+    if model is not None and not model.provider_enabled:
+        findings.append(
+            AuthoringValidationFinding(
+                code="provider_disabled",
+                severity="error",
+                path="custom_agent.model_id",
+                message="This model's provider is disabled by policy.",
+                fix_hint="Explicitly choose an approved model; credential setup does not enable the provider.",
+            )
+        )
+    elif model is None or not model.curator_visible:
         findings.append(
             AuthoringValidationFinding(
                 code="unavailable_model",

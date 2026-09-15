@@ -176,6 +176,7 @@ from src.lib.chat_history_repository import (
     ChatSessionRecord,
 )
 from src.lib.config import list_model_definitions
+from src.lib.config.models_loader import is_model_selectable
 from src.lib.packages import load_installed_agent_studio_prompt
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
@@ -471,7 +472,7 @@ async def get_models_endpoint(
     _ = user
     try:
         models = sorted(
-            [model for model in list_model_definitions() if bool(getattr(model, "curator_visible", True))],
+            [model for model in list_model_definitions() if is_model_selectable(model)],
             key=lambda model: (not bool(model.default), model.name.lower()),
         )
         return ModelsResponse(

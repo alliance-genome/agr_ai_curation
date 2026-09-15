@@ -5767,6 +5767,7 @@ class TestExecuteFlowTermination:
         ("allele_validation", "attachment-only validator"),
         ("missing_agent", "agent could not be resolved"),
         ("broken_agent", "private configuration must not leak"),
+        ("disabled_agent", "provider_disabled"),
     ])
     async def test_unavailable_step_fails_before_runner_or_formatter(self, monkeypatch, agent_id, reason):
         flow = _make_flow([
@@ -5775,6 +5776,7 @@ class TestExecuteFlowTermination:
         original_definition = deepcopy(flow.flow_definition)
         supervisor = SimpleNamespace(_flow_unavailable_steps=[{
             "step": 1, "agent_id": agent_id, "agent_name": "Required step", "reason": reason,
+            "error_code": "provider_disabled" if agent_id == "disabled_agent" else None,
         }])
         monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **kwargs: supervisor)
         monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *args: "fixture")
@@ -5782,10 +5784,16 @@ class TestExecuteFlowTermination:
                             lambda **kwargs: pytest.fail("Invalid flow started the model"))
         events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
         assert [event["type"] for event in events] == ["FLOW_STARTED", "FLOW_ERROR", "FLOW_FINISHED"]
-        assert events[1]["details"]["reason"] == "flow_step_unavailable"
-        assert "Documents" in events[1]["details"]["message"]
-        assert "validation attachments" in events[1]["details"]["message"]
-        assert reason not in str(events)
+        if agent_id == "disabled_agent":
+            assert events[1]["details"]["reason"] == "provider_disabled"
+            assert "disabled by policy" in events[1]["details"]["message"]
+            assert "approved model" in events[1]["details"]["message"]
+            assert "load a document" not in events[1]["details"]["message"]
+        else:
+            assert events[1]["details"]["reason"] == "flow_step_unavailable"
+            assert "Documents" in events[1]["details"]["message"]
+            assert "validation attachments" in events[1]["details"]["message"]
+            assert reason not in str(events)
         assert events[-1]["data"]["status"] == "failed"
         assert events[-1]["data"]["output_status"] == "none"
         assert events[-1]["data"]["output_count"] == 0
