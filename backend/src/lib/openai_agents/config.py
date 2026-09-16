@@ -1281,10 +1281,10 @@ def get_document_source_poll_interval_seconds() -> float:
 
 
 def get_document_source_import_timeout_seconds() -> float:
-    """Wall-clock timeout for one provider-backed import job."""
+    """Provider import deadline; in-flight storage drains before terminal failure."""
     return max(
         1.0,
-        _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 300.0),
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 600.0),
     )
 
 

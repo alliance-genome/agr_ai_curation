@@ -2754,3 +2754,85 @@ async def test_execute_upload_skips_replayed_job_for_non_pending_durable_status(
     )
 
     assert tracker.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("storage_fails", [False, True])
+async def test_provider_timeout_waits_for_storage_before_terminal_job(monkeypatch, storage_fails):
+    """Exercise the real wait_for deadline together with storage cancellation."""
+    import threading
+    from unittest.mock import AsyncMock
+    from src.lib.pipeline import store
+
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    events = []
+    properties = {}
+    provider = _Provider()
+
+    def write():
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        events.append("writer_finished")
+        if storage_fails:
+            raise RuntimeError("storage unavailable")
+        return {"stored_count": 1, "failed_count": 0}
+
+    async def chunks(*_args):
+        return await loop.run_in_executor(None, write)
+
+    async def metadata(_document, stats, *_args):
+        properties["chunkCount"] = stats["stored_chunks"]
+        events.append("metadata_finished")
+
+    async def status(*_args, **kwargs):
+        properties.update(kwargs)
+
+    async def ingest(request, *, weaviate_client):
+        await store.store_to_weaviate(
+            [{"chunk_index": 0, "content": "paper"}], request.document_id,
+            weaviate_client, request.user_id,
+        )
+
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=ingest,
+    )
+    monkeypatch.setattr(store, "store_chunks_to_weaviate", chunks)
+    monkeypatch.setattr(store, "update_document_metadata", metadata)
+    monkeypatch.setattr(store, "update_document_status_detailed", status)
+    monkeypatch.setattr(service_module, "get_connection", lambda: object())
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 0.01)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_: False)
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_: None)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_: events.append("job_failed"))
+    monkeypatch.setattr(service_module, "update_document_status", AsyncMock())
+    sql_failure = AsyncMock()
+    monkeypatch.setattr(service, "_sync_provider_markdown_sql_failure", sql_failure)
+    monkeypatch.setattr(service, "_report_execution_failure", lambda *_args, **_: None)
+    request = ProviderMarkdownExecutionRequest(
+        document_id="doc-provider", job_id="job-provider", user_id="user-provider",
+        owner_user_id=42, filename="paper.pdf", file_path=Path("/tmp/paper.pdf"),
+        converted_artifact_id="markdown-1", curator_token="curator-token",
+        source_provenance={"provider": "fake_provider", "access_scope": "global"},
+    )
+    task = asyncio.create_task(service.execute_provider_markdown(request))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.sleep(0.05)  # Cross the actual 10 ms wait_for deadline.
+        assert not task.done()
+        assert "job_failed" not in events
+        sql_failure.assert_not_awaited()
+    finally:
+        release.set()
+        await task
+    assert events.index("writer_finished") < events.index("job_failed")
+    assert properties["embedding_status"] == properties["processing_status"] == "failed"
+    if not storage_fails:
+        assert properties["chunkCount"] == 1
+        assert events.index("metadata_finished") < events.index("job_failed")
+    sql_failure.assert_awaited_once()
+    assert "exceeded 0.01 seconds" in str(sql_failure.await_args.args[1])
+    assert provider.closed

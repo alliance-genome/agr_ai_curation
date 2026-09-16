@@ -157,6 +157,47 @@ async def store_to_weaviate(
         StorageError: If storage fails
         ValueError: If user_id is None (required for tenant scoping)
     """
+    # Executor writes cannot be stopped by cancelling their awaiting coroutine.
+    # Keep ownership through chunk verification and metadata finalization so the
+    # caller cannot expose a terminal job (and permit retry/delete) too early.
+    storage = asyncio.create_task(
+        _store_to_weaviate(chunks, document_id, weaviate_client, user_id)
+    )
+    try:
+        return await asyncio.shield(storage)
+    except asyncio.CancelledError:
+        async def finish_cancelled_storage() -> None:
+            try:
+                await storage
+            except Exception:
+                # The storage path already reports failures. Preserve cancellation
+                # while still waiting for its writes and failure handling to end.
+                logger.warning("Storage failed while draining cancelled document %s", document_id)
+            # Keep the verified chunk counts, but do not advertise a cancelled
+            # import as completed. The caller owns SQL/job terminal status.
+            await update_document_status_detailed(
+                document_id, user_id,
+                processing_status="failed", embedding_status="failed",
+            )
+
+        finalizer = asyncio.create_task(finish_cancelled_storage())
+        while not finalizer.done():
+            try:
+                await asyncio.shield(finalizer)
+            except asyncio.CancelledError:
+                # A second cancellation must not detach the executor writer.
+                continue
+        finalizer.result()
+        raise
+
+
+async def _store_to_weaviate(
+    chunks: Sequence[Union[DocumentChunk, Dict[str, Any]]],
+    document_id: str,
+    weaviate_client: Optional[Any],
+    user_id: str,
+) -> Dict[str, Any]:
+    """Own the complete chunk and metadata write, including failure handling."""
     if not chunks:
         raise StorageError("No chunks to store")
 

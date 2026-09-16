@@ -1616,3 +1616,12 @@ def test_get_model_for_agent_selects_direct_agents_sdk_adapter(
 
     assert type(model).__name__ == expected_type_name
     assert getattr(model, "model") == "compatible-model"
+
+
+def test_provider_import_deadline_default_and_override(monkeypatch):
+    from src.lib.openai_agents.config import get_document_source_import_timeout_seconds
+
+    monkeypatch.delenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", raising=False)
+    assert get_document_source_import_timeout_seconds() == 600.0
+    monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "900")
+    assert get_document_source_import_timeout_seconds() == 900.0
