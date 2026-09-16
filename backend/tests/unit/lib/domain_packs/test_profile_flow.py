@@ -86,7 +86,24 @@ async def test_same_label_profile_mappings_survive_flow_default_hydration(exampl
     monkeypatch.setattr(executor, "_create_streaming_tool", lambda **kwargs: unused_tool)
     saved_definition = definition.model_dump(mode="json")
     saved_flow = SimpleNamespace(id="fixture", name="Fixture", flow_definition=deepcopy(saved_definition))
+    # This hydration unit fixture has no persisted agent/profile. Stub the new
+    # database coverage boundary while asserting it receives the hydrated checks.
+    from contextlib import nullcontext
+    coverage_calls = []
+    monkeypatch.setattr(executor, "SessionLocal", lambda: nullcontext(object()))
+    monkeypatch.setattr(executor, "resolve_flow_execution_revisions",
+                        lambda db, value, **kwargs: SimpleNamespace(definition=value))
+
+    def coverage_metadata(db, value, **kwargs):
+        coverage_calls.append((value, kwargs))
+        assert len(value.nodes[1].data.validation_groups) == 2
+        assert all(choice.enabled for choice in value.nodes[1].data.validation_attachments)
+        return {}
+
+    monkeypatch.setattr("src.lib.agent_studio.validation_coverage.runtime_coverage_metadata", coverage_metadata)
     tools, _ = executor.get_all_agent_tools(saved_flow, db_user_id=1)
+    assert len(coverage_calls) == 1
+    assert coverage_calls[0][1]["user_id"] == 1
     assert len(tools) == 1
     assert saved_flow.flow_definition == saved_definition
     runtime_node = runtime_definitions[0]["nodes"][1]
