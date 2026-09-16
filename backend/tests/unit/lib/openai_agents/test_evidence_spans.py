@@ -104,3 +104,15 @@ def test_resolve_evidence_span_id_rejects_wrong_chunk_or_changed_text():
             chunk_text=changed_text,
             expected_chunk_id="chunk-abc",
         )
+
+
+def test_source_blocks_without_punctuation_are_independent_but_line_wraps_are_not():
+    text = "Heading without punctuation\n\nMice received B. acidifaciens and\nwere studied. Next sentence.\n \nAnother heading\n\nFinal paragraph"
+    spans = build_evidence_spans(chunk_id="blocks", chunk_text=text)
+    assert [s.text for s in spans] == [
+        "Heading without punctuation", "Mice received B. acidifaciens and\nwere studied.",
+        "Next sentence.", "Another heading", "Final paragraph",
+    ]
+    for span in spans:
+        assert span.text == text[span.char_start:span.char_end]
+        assert resolve_evidence_span_id(span_id=span.span_id, chunk_text=text).text == span.text
