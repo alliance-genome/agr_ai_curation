@@ -4502,6 +4502,8 @@ async def run_specialist_with_events(
     formatter_save_handoff: Optional[Dict[str, Any]] = None
     live_evidence_records: List[Dict[str, Any]] = []
     pending_tool_calls: "deque[Dict[str, Any]]" = deque()
+    from src.lib.observability.tool_results import ToolFailureState, classify_tool_result
+    tool_failure_state = ToolFailureState()
 
     # Track consecutive calls for batching nudge
     consecutive_count = 0
@@ -5206,6 +5208,13 @@ async def run_specialist_with_events(
                         current_tool_name = str(completed_tool.get("tool_name") or "unknown_tool")
 
                         output = getattr(item, "output", "")
+                        tool_outcome = classify_tool_result(output)
+                        if tool_outcome.operational_code:
+                            tool_failure_state.capture(
+                                code=tool_outcome.operational_code, tool_name=current_tool_name,
+                                invocation_id=str(completed_tool.get("tool_id") or uuid.uuid4().hex),
+                                trace_id=get_current_trace_id(), session_id=get_current_session_id(),
+                            )
                         output_preview = str(output)[:200]
                         if len(str(output)) > 200:
                             output_preview += "..."
@@ -5273,7 +5282,7 @@ async def run_specialist_with_events(
                                     current_tool_name,
                                     complete=True,
                                 ),
-                                "success": True,
+                                "success": tool_outcome.success,
                                 "durationMs": duration_ms,
                                 "toolCallId": completed_tool_id,
                                 "isSpecialistInternal": True  # Mark as internal specialist tool

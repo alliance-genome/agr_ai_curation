@@ -306,9 +306,9 @@ REPORT_TOOL_FAILURE_TOOL = {
     "name": "report_tool_failure",
     "description": """Queue a sanitized tool-failure report in Sentry.
 
-Use this tool immediately when any tool call returns an infrastructure or service
-failure (error status, timeout, connection failure, service unavailable, or
-unexpected empty response that indicates a system issue).
+Use this tool for confirmed infrastructure/service failures, not an error status
+or an empty lookup alone. If the failed tool returned failure_id, pass that exact
+identifier so the existing capture is reused rather than reported twice.
 
 Do NOT use this for user input errors (e.g., invalid gene names, malformed IDs)
 or repeat a failure already reported by this tool in this turn. A queued capture
@@ -317,6 +317,10 @@ returned capture status.""",
     "input_schema": {
         "type": "object",
         "properties": {
+            "failure_id": {
+                "type": "string",
+                "description": "Exact backend failure_id from this turn's failed tool result, when present.",
+            },
             "tool_name": {
                 "type": "string",
                 "description": "Name of the tool that failed",

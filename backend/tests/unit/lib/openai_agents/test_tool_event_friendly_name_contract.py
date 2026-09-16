@@ -190,10 +190,16 @@ def _agent_updated_stream_event(agent_name: str):
 
 
 @pytest.mark.asyncio
-async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
+@pytest.mark.parametrize("lookup_status", [None, "blocked", "transient"])
+async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch, lookup_status):
+    from src.lib.observability import tool_results
+    captures = []
+    monkeypatch.setattr(tool_results, "report_runtime_exception", lambda *a, **kw: captures.append(kw) or True)
+    payload = json.dumps({"status": "error", "lookup_status": lookup_status,
+                          "failure_classification": "validation_failed" if lookup_status == "blocked" else lookup_status}) if lookup_status else '{"summary":"ok"}'
     fake_events = [
         _tool_call_stream_event("ask_gene_validation_specialist"),
-        _tool_output_stream_event(),
+        _tool_output_stream_event(payload),
     ]
 
     monkeypatch.setattr(runner, "SafeLangfuseAsyncOpenAI", lambda *args, **kwargs: object())
@@ -240,6 +246,8 @@ async def test_runner_tool_events_emit_canonical_friendly_names(monkeypatch):
     assert tool_events[0]["details"]["friendlyName"] == "Calling Gene Validation Agent..."
     assert tool_events[1]["details"]["friendlyName"] == "Gene Validation Agent complete"
     assert tool_events[1]["internal"]["tool_input"] == {"query": "test"}
+    assert tool_events[1]["details"]["success"] is (lookup_status is None)
+    assert len(captures) == int(lookup_status == "transient")
 
 
 @pytest.mark.asyncio
@@ -988,10 +996,16 @@ async def test_runner_guardrail_yields_run_error_and_skips_completion(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch):
+@pytest.mark.parametrize("lookup_status", [None, "blocked", "transient"])
+async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch, lookup_status):
+    from src.lib.observability import tool_results
+    captures = []
+    monkeypatch.setattr(tool_results, "report_runtime_exception", lambda *a, **kw: captures.append(kw) or True)
+    payload = json.dumps({"status": "error", "lookup_status": lookup_status,
+                          "failure_classification": "validation_failed" if lookup_status == "blocked" else lookup_status}) if lookup_status else '{"summary":"ok"}'
     fake_events = [
         _tool_call_stream_event("search_document", call_id="call-search-1"),
-        _tool_output_stream_event(call_id="call-search-1"),
+        _tool_output_stream_event(payload, call_id="call-search-1"),
     ]
     captured_events = []
 
@@ -1030,8 +1044,10 @@ async def test_specialist_tool_events_emit_humanized_internal_labels(monkeypatch
     assert tool_events[1]["details"]["friendlyName"] == "Gene Validation Agent: Search Document complete"
     assert tool_events[0]["details"]["toolCallId"] == "call-search-1"
     assert tool_events[1]["details"]["toolCallId"] == "call-search-1"
-    assert tool_events[1]["internal"]["tool_output"] == '{"summary":"ok"}'
-    assert tool_events[1]["internal"]["output_preview"] == '{"summary":"ok"}'
+    assert tool_events[1]["internal"]["tool_output"] == payload
+    assert tool_events[1]["internal"]["output_preview"] == payload
+    assert tool_events[1]["details"]["success"] is (lookup_status is None)
+    assert len(captures) == int(lookup_status == "transient")
 
 
 @pytest.mark.asyncio

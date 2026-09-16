@@ -29,7 +29,7 @@ def test_report_runtime_exception_captures_with_safe_tags_and_context(monkeypatc
 
     fake_sdk = SimpleNamespace(
         new_scope=lambda: _ScopeManager(),
-        capture_exception=lambda exc: calls["exceptions"].append(exc),
+        capture_exception=lambda exc: calls["exceptions"].append(exc) or "event-id",
     )
 
     def _fake_import(name):

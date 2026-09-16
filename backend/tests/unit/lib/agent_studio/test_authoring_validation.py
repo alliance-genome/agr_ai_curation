@@ -427,4 +427,4 @@ def test_unexpected_engine_reporting_contains_only_sanitized_metadata(monkeypatc
         "validation_path": "flow",
         "validation_phase": "pre_apply",
     }
-    assert kwargs["context"] == {"finding_count": 0}
+    assert kwargs["context"] == {"finding_count": 0, "failure_id": error.failure_id}

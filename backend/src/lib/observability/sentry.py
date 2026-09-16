@@ -117,6 +117,7 @@ _KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURE = (
     ("asyncio.base_events", "_check_closed"),
 )
 _RUNTIME_IDENTIFIER_CONTEXT_KEYS = {
+    "failure_id",
     "batch_id",
     "document_id",
     "flow_id",

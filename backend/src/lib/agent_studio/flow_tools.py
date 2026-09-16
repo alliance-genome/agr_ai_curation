@@ -1146,7 +1146,7 @@ def _validate_flow_handler():
                 phase=phase,
             )
         except Exception:
-            report_authoring_validation_engine_failure(
+            failure = report_authoring_validation_engine_failure(
                 artifact_kind="flow",
                 phase=phase,
             )
@@ -1154,6 +1154,11 @@ def _validate_flow_handler():
                 "artifact_kind": "flow",
                 "phase": phase,
                 "valid": False,
+                "success": False,
+                "code": "authoring_validation_engine_failure",
+                "failure_kind": "operational",
+                "failure_id": failure.failure_id,
+                "sentry_capture_queued": failure.sentry_capture_queued,
                 "findings": [
                     {
                         "code": "validation_engine_failure",
@@ -1954,7 +1959,7 @@ def _propose_flow_draft_update_handler():
                 **({"retargeted_node_ids": retargeted_node_ids} if retargeted_node_ids else {}),
             )
         except Exception:
-            report_authoring_validation_engine_failure(
+            failure = report_authoring_validation_engine_failure(
                 artifact_kind="flow", phase="proposal"
             )
             return {
@@ -1962,6 +1967,8 @@ def _propose_flow_draft_update_handler():
                 "error": "Flow validation is temporarily unavailable.",
                 "code": "authoring_validation_engine_failure",
                 "failure_kind": "operational",
+                "failure_id": failure.failure_id,
+                "sentry_capture_queued": failure.sentry_capture_queued,
                 "help": "Try the proposal again. If the problem persists, contact support.",
             }
         if validation.candidate is not None:

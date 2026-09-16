@@ -3053,7 +3053,9 @@ def agr_curation_query(
             )
 
     except Exception as e:
-        logger.error("AGR query error: %s", e, exc_info=True)
+        # The structured transient result owns tool-level operational capture.
+        # Keep this diagnostic as a breadcrumb when ERROR log promotion is enabled.
+        logger.error("AGR query error: %s", e, exc_info=True, extra={"sentry_skip_event": True})
         return _err(
             f"Query error: {str(e)}",
             method=method,

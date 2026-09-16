@@ -1159,6 +1159,8 @@ async def _run_agent_with_owned_resources(
     structured_result = None
     tools_called: List[str] = []
     pending_tool_calls: deque[Dict[str, Any]] = deque()
+    from src.lib.observability.tool_results import ToolFailureState, classify_tool_result
+    tool_failure_state = ToolFailureState()
     tool_calls_count = 0
     current_agent = agent.name
     canonical_agent_key = _agent_runtime_canonical_agent_key(agent) or current_agent
@@ -1688,6 +1690,13 @@ async def _run_agent_with_owned_resources(
                             output_preview += "..."
                         # Get last tool name for the completion event
                         last_tool = str(completed_tool.get("tool_name") or "tool")
+                        tool_outcome = classify_tool_result(output)
+                        if tool_outcome.operational_code:
+                            tool_failure_state.capture(
+                                code=tool_outcome.operational_code, tool_name=last_tool,
+                                invocation_id=str(completed_tool.get("tool_id") or uuid.uuid4().hex),
+                                trace_id=trace_id, session_id=sentry_conversation_id,
+                            )
                         logger.info(
                             "Tool call completed, output length=%s",
                             len(str(output)),
@@ -1751,7 +1760,7 @@ async def _run_agent_with_owned_resources(
                                     last_tool,
                                     custom_tool_display_names,
                                 ),
-                                "success": True
+                                "success": tool_outcome.success
                             },
                             # Internal payload used by backend-only consumers
                             # (e.g., flow-context memory injection). SSE flatteners

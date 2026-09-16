@@ -109,6 +109,9 @@ class AuthoringValidationError(ValueError):
 class AuthoringValidationEngineError(RuntimeError):
     """Sanitized unexpected validator-engine failure."""
 
+    failure_id: str
+    sentry_capture_queued: bool
+
 
 def report_authoring_validation_engine_failure(
     *,
@@ -118,22 +121,31 @@ def report_authoring_validation_engine_failure(
     """Report only bounded validator metadata and return a safe exception."""
 
     from src.lib.observability.runtime import report_runtime_exception
+    from uuid import uuid4
 
     sanitized = AuthoringValidationEngineError(
         f"Unexpected {artifact_kind} authoring validator engine failure"
     )
-    report_runtime_exception(
-        sanitized,
-        component="agent_studio_authoring_validation",
-        operation="validate_exact_draft",
-        tags={
-            "validator_kind": artifact_kind,
-            "validation_code": "engine_failure",
-            "validation_path": artifact_kind,
-            "validation_phase": phase,
-        },
-        context={"finding_count": 0},
-    )
+    failure_id = uuid4().hex
+    try:
+        captured = report_runtime_exception(
+            sanitized,
+            component="agent_studio_authoring_validation",
+            operation="validate_exact_draft",
+            tags={
+                "validator_kind": artifact_kind,
+                "validation_code": "engine_failure",
+                "validation_path": artifact_kind,
+                "validation_phase": phase,
+            },
+            context={"finding_count": 0, "failure_id": failure_id},
+        )
+    except Exception:
+        captured = False
+    sanitized.failure_id = failure_id
+    sanitized.sentry_capture_queued = captured
+    if captured:
+        setattr(sanitized, "_ai_curation_sentry_captured", True)
     return sanitized
 
 
