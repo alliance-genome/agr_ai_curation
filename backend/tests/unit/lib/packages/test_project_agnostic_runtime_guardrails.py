@@ -187,6 +187,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/packages/test_registry.py"),
     Path("backend/tests/unit/lib/packages/test_tool_registry.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_helpers.py"),
+    # Provider/taxon-specific alias resolution belongs to the Alliance query adapter.
+    Path("backend/tests/unit/lib/openai_agents/tools/test_allele_gene_scope.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_provider_config.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_query_paths.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_alliance_agr_curation_data_provider_helpers.py"),

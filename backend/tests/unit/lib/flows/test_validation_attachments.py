@@ -569,7 +569,7 @@ def test_profile_attachment_resolution_uses_authoring_transaction(monkeypatch):
         assert actual_pack is pack
         assert kwargs['db'] is transaction
         assert kwargs['user_id'] == 8
-        assert kwargs['active_group_ids'] == ['MGI']
+        assert kwargs['active_group_ids'] == ['GROUP_A']
         return context
 
     monkeypatch.setattr(profile_validation, 'resolve_profile_validation', resolve)
@@ -579,7 +579,7 @@ def test_profile_attachment_resolution_uses_authoring_transaction(monkeypatch):
     hydrated = apply_flow_validation_attachment_defaults(
         flow, db=transaction, entries_by_node={'extract_1': {
             'curation': {'domain_pack_id': 'generic'}, 'execution_receipt': {},
-            'authenticated_user_id': 8, 'authenticated_group_ids': ['MGI'],
+            'authenticated_user_id': 8, 'authenticated_group_ids': ['GROUP_A'],
         }},
     )
     assert hydrated.nodes[1].data.validation_attachments == []
