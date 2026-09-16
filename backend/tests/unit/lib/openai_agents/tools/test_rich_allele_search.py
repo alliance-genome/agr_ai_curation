@@ -57,6 +57,10 @@ def context(monkeypatch):
                 raise TimeoutError("fixture source outage")
             return deepcopy(self.result)
 
+        def get_gene(self, identifier):
+            return SimpleNamespace(primaryExternalId=identifier, taxon="NCBITaxon:10090",
+                                   obsolete=False, internal=False)
+
         def get_allele_candidate_details(self, identifiers):
             return [r for r in self.result["candidates"] if r["curie"] in identifiers]
 
@@ -258,7 +262,7 @@ def test_no_match_and_fuzzy_failure_distinct(context, monkeypatch):
     )
     assert (
         query(
-            method="search_alleles", allele_symbol="absent", gene_symbol="explicit gene"
+            method="search_alleles", allele_symbol="absent", gene_id="MGI:103070"
         ).lookup_status
         == "not_found"
     )

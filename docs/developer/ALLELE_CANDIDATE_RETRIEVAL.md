@@ -31,3 +31,23 @@ Regression coverage includes literal FlyBase notation, single/bulk parity, expli
 scope and separate clues, candidate uncertainty, compact projections, source outage
 versus no-match, bulk limits, and durable coverage. Package SQL tests plus separate
 read-only live database checks cover discovery beyond the old display cutoff.
+
+## Gene scope resolution
+
+Before allele discovery, the application resolves `gene_id`/`gene_symbol` to one
+active canonical gene using the pinned client's existing gene APIs. Symbols and
+stored aliases require the supplied taxon/provider; no MOD or species is assumed.
+Only exact, case-insensitive database matches qualify. Partial matches are not
+identity evidence. An explicit gene ID can establish taxon from its record, but
+conflicting supplied scope is rejected. Obsolete/internal genes are excluded.
+
+Gene discovery uses the existing `discovery_limit` budget plus one sentinel row.
+The client returns exact matches before partial matches, so filling the remaining
+budget with partial matches does not imply incomplete exact discovery. Capped
+exact discovery, missing details, ambiguous matches, and unresolved scope prevent
+allele discovery; they are not reported as an allele no-match. Source failures
+remain transient. `coverage.gene_scope` records the original clue, canonical ID
+when resolved, taxon, and outcome. On scope failure, `allele_search_performed` is
+false. Once resolved, the literal allele query and all existing relationship,
+taxon and candidate-coverage checks are preserved for single and bulk searches.
+This does not establish the paper-specific allele identity or generate synonyms.

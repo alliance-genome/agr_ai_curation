@@ -1027,6 +1027,58 @@ def _extract_fullname_attribution(fullname: Optional[str], taxon_id: str) -> Opt
     return None
 
 
+def _resolve_allele_gene_scope(
+    db: Any, gene: str, taxon: Optional[str], discovery_limit: int,
+) -> Dict[str, Any]:
+    """Resolve a gene clue, without treating partial/capped discovery as identity."""
+    scope: Dict[str, Any] = {"input": gene, "taxon": taxon, "status": "unresolved"}
+    if ":" in gene:
+        identifiers = [gene]
+    else:
+        if not taxon:
+            scope["reason"] = "Gene symbols/aliases require species or provider context; no organism is assumed."
+            return scope
+        matches = db.search_entities(
+            entity_type="gene", search_pattern=gene, taxon_curie=taxon,
+            include_synonyms=True, limit=discovery_limit + 1,
+        )
+        identifiers = list(dict.fromkeys(
+            row["entity_curie"] for row in matches
+            if row.get("entity_curie") and row.get("match_type") == "exact"
+            and not row.get("is_obsolete")
+            and str(row.get("entity", "")).casefold() == gene.casefold()
+        ))
+        scope["candidate_ids"] = identifiers
+        # The pinned client returns the exact tier first, then fills with partial
+        # matches. Later tiers cannot hide another exact identity.
+        scope["discovery_capped"] = sum(row.get("match_type") == "exact" for row in matches) > discovery_limit
+        if scope["discovery_capped"]:
+            scope.update(status="incomplete", reason="Gene discovery exceeded its budget; uniqueness is not established.")
+            return scope
+
+    active = []
+    for identifier in identifiers:
+        record = db.get_gene(identifier)
+        if record is None:
+            scope.update(status="incomplete", reason="Gene candidate details are missing; scope cannot be established.")
+            return scope
+        if record.obsolete or record.internal:
+            continue
+        if not record.taxon or (taxon and record.taxon != taxon):
+            scope.update(status="conflict", reason="Gene record taxon is missing or conflicts with the supplied scope.")
+            return scope
+        active.append(record)
+    scope["candidate_ids"] = [record.primaryExternalId for record in active]
+    if len(active) != 1:
+        scope.update(
+            status="ambiguous" if active else "unresolved",
+            reason="Gene scope requires exactly one active, exact database match; allele discovery was not run.",
+        )
+        return scope
+    scope.update(status="resolved", canonical_id=active[0].primaryExternalId, taxon=active[0].taxon)
+    return scope
+
+
 def _rich_allele_search(
     db: Any, *, symbol: str, taxon: Optional[str], gene: Optional[str],
     attribution: Optional[str], impact: Optional[str], include_synonyms: bool,
@@ -1036,11 +1088,29 @@ def _rich_allele_search(
     query = _attempt_query("search_alleles", allele_symbol=symbol, taxon_id=taxon,
         gene_id=gene, allele_attribution=attribution, allele_functional_impact=impact,
         include_synonyms=include_synonyms, limit=limit, discovery_limit=discovery_limit)
+    gene_scope = None
+    if gene:
+        gene_scope = _resolve_allele_gene_scope(db, gene, taxon, discovery_limit)
+        if gene_scope["status"] != "resolved":
+            result = _err(
+                f"Gene scope {gene_scope['status']}: {gene_scope['reason']} This is not an allele no-match result.",
+                method="search_alleles", attempted_query=query,
+                failure_classification=(LOOKUP_STATUS_AMBIGUOUS
+                    if gene_scope["status"] in {"ambiguous", "incomplete"} else LOOKUP_STATUS_BLOCKED),
+            )
+            result.coverage = {"gene_scope": gene_scope, "allele_search_performed": False}
+            for attempt in result.lookup_attempts or []:
+                attempt["coverage"] = result.coverage
+            return result
+        gene = gene_scope["canonical_id"]
+        taxon = gene_scope["taxon"]
     result = db.search_allele_candidates(symbol, taxon_curie=taxon, gene_identifier=gene,
         attribution_hint=attribution, functional_impact_hint=impact,
         include_synonyms=include_synonyms, limit=limit, discovery_limit=discovery_limit)
     rows = result["candidates"]
     coverage = dict(result["coverage"])
+    if gene_scope:
+        coverage["gene_scope"] = gene_scope
     # Retain existing fuzzy discovery only when literal search found nothing.
     # An explicit gene scope must not escape to unrelated fuzzy candidates.
     if not rows and not gene and not coverage.get("detail_missing_count"):
@@ -1361,7 +1431,9 @@ def agr_curation_query(
     candidates and adding characters narrows them.
 
     search_alleles separates bounded discovery from display. Supply paper-supported
-    gene_id or gene_symbol for exact database gene scope, allele_attribution for a
+    gene_id or gene_symbol for database-backed gene scope (exact stored aliases are
+    resolved within the supplied species/provider; ambiguous scope is not an allele
+    no-match), allele_attribution for a
     full-name clue, and allele_functional_impact for a structured term such as
     conditional_ready. Do not concatenate attribution onto allele_symbol. These
     clues prioritize candidates but never confirm identity. Inspect coverage;
@@ -2447,7 +2519,7 @@ def agr_curation_query(
             totals = _cap_bulk_total_matches(items)
             for item in items:
                 coverage = item.get("coverage")
-                if coverage and coverage["returned_count"] != item["count"]:
+                if coverage and "returned_count" in coverage and coverage["returned_count"] != item["count"]:
                     coverage["returned_count"] = item["count"]
                     coverage["display_capped"] = True
                     coverage["bulk_display_capped"] = True
@@ -2461,12 +2533,18 @@ def agr_curation_query(
             summary["resolved_count"] = sum(item["status"] == "resolved" for item in items)
             if summary["resolution_status"] == "no_matches" and any(item["status"] == "ambiguous" for item in items):
                 summary["resolution_status"] = "ambiguous"
-            return _lookup_response(method=method, data={"items": items, **summary,
+            result = _lookup_response(method=method, data={"items": items, **summary,
                 "bulk_match_totals": totals, "method": method}, count=summary["total_matches"], warnings=warnings,
                 attempts=[attempt for item in items for attempt in item.get("lookup_attempts", [])],
                 attempted_query=_attempt_query(method, allele_symbols=normalized_symbols, taxon_id=taxon,
                     gene_id=gene_id or gene_symbol, allele_attribution=allele_attribution,
                     allele_functional_impact=allele_functional_impact, limit=limit_value, discovery_limit=budget))
+            if (result.lookup_status == LOOKUP_STATUS_NOT_FOUND
+                    and any(item["lookup_status"] == LOOKUP_STATUS_AMBIGUOUS for item in items)):
+                result.lookup_status = LOOKUP_STATUS_AMBIGUOUS
+                result.failure_classification = LOOKUP_STATUS_AMBIGUOUS
+                result.explanation = result.message = "Gene scope remains ambiguous or incomplete; no allele no-match conclusion is supported."
+            return result
 
         elif method == "get_allele_by_id":
             if not allele_id:
