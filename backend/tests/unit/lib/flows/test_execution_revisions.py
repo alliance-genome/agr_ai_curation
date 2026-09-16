@@ -650,7 +650,7 @@ def test_ai_retarget_reconciles_revision_attachments_without_changing_other_uses
             default_enabled=True, allow_opt_out=True, curator_label=f"Validate {key}")
 
     stable, previous, replacement = option("stable"), option("previous-profile"), option("new-profile")
-    def options(entry):
+    def options(entry, *, db=None):
         if entry["execution_receipt"]["agent_revision_id"] == str(new.agent_revision_id):
             return (stable, replacement) if new_has_attachments else ()
         return (stable, previous)

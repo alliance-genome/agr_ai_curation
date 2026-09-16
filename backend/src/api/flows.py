@@ -120,7 +120,7 @@ def _validated_flow_definition_payload(
     def _apply_defaults(candidate: FlowDefinition) -> FlowDefinition:
         if resolved.entries_by_node:
             return apply_flow_validation_attachment_defaults(
-                candidate, entries_by_node=resolved.entries_by_node,
+                candidate, entries_by_node=resolved.entries_by_node, db=db,
             )
         agent_registry, _ = _validation_attachment_agent_registry(
             candidate,

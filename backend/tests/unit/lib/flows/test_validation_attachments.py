@@ -548,3 +548,38 @@ def test_curator_wording_survives_canonical_defaults_and_saved_roundtrip(monkeyp
     assert selection["curator_label"] == option.curator_label
     assert selection["when_off"] == option.when_off
     assert selection["enabled"] is True
+
+
+def test_profile_attachment_resolution_uses_authoring_transaction(monkeypatch):
+    """A new profile must be visible before the atomic flow update commits."""
+    from types import SimpleNamespace
+    from src.lib.domain_packs import profile_validation
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+
+    transaction = object()
+    receipt = object()
+    pack = object()
+    context = object()
+    monkeypatch.setattr(validation_attachments_module, '_domain_pack_validation_registries',
+                        lambda: {'generic': SimpleNamespace(domain_pack=pack)})
+    monkeypatch.setattr(AgentExecutionReceipt, 'model_validate', lambda _: receipt)
+
+    def resolve(actual_receipt, actual_pack, **kwargs):
+        assert actual_receipt is receipt
+        assert actual_pack is pack
+        assert kwargs['db'] is transaction
+        assert kwargs['user_id'] == 8
+        assert kwargs['active_group_ids'] == ['MGI']
+        return context
+
+    monkeypatch.setattr(profile_validation, 'resolve_profile_validation', resolve)
+    monkeypatch.setattr(profile_validation, 'profile_validation_attachment_options',
+                        lambda value: () if value is context else pytest.fail('Wrong context'))
+    flow = _flow_definition('custom_extractor')
+    hydrated = apply_flow_validation_attachment_defaults(
+        flow, db=transaction, entries_by_node={'extract_1': {
+            'curation': {'domain_pack_id': 'generic'}, 'execution_receipt': {},
+            'authenticated_user_id': 8, 'authenticated_group_ids': ['MGI'],
+        }},
+    )
+    assert hydrated.nodes[1].data.validation_attachments == []

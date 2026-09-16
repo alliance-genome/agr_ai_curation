@@ -31,7 +31,7 @@ async def test_same_label_profile_mappings_survive_flow_default_hydration(exampl
     options = profile_validation_attachment_options(context)
     assert len(options) == 2
     assert options[0].label == options[1].label
-    monkeypatch.setattr(validation_attachments, "_options_for_agent_entry", lambda entry: options)
+    monkeypatch.setattr(validation_attachments, "_options_for_agent_entry", lambda entry, *, db=None: options)
     definition = _flow_definition(receipt.agent_key)
     node = definition.nodes[1]
     node.data.agent_revision_id = receipt.agent_revision_id
@@ -181,7 +181,7 @@ async def test_flow_cannot_change_pinned_mapping_contract(example, state, bindin
 def test_flow_authoring_rejects_profile_validator_sidecar(example, monkeypatch):
     source, context = prepared(example)
     option, = profile_validation_attachment_options(context)
-    monkeypatch.setattr(validation_attachments, "_options_for_agent_entry", lambda entry: (option,))
+    monkeypatch.setattr(validation_attachments, "_options_for_agent_entry", lambda entry, *, db=None: (option,))
     definition = _flow_definition(context.receipt.agent_key,
         extra_nodes=[_validator_node("replacement", "replacement_output")],
         edges=[{"id": "input", "source": "task_1", "target": "extract_1"},

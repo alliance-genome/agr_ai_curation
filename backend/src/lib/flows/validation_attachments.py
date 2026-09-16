@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Mapping
+from sqlalchemy.orm import Session
 
 from src.lib.domain_packs.registry import load_domain_pack_registry
 from src.lib.domain_packs.validation_registry import (
@@ -88,6 +89,7 @@ def apply_flow_validation_attachment_defaults(
     *,
     agent_registry: Mapping[str, Mapping[str, Any]] | None = None,
     entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
+    db: Session | None = None,
 ) -> FlowDefinition:
     """Attach default validation selections to extraction nodes from metadata."""
 
@@ -106,7 +108,7 @@ def apply_flow_validation_attachment_defaults(
 
         if entries_by_node is not None and node.id in entries_by_node:
             entry = entries_by_node[node.id]
-            options = _options_for_agent_entry(entry) if entry is not None else ()
+            options = _options_for_agent_entry(entry, db=db) if entry is not None else ()
         else:
             options = validation_attachment_options_for_agent(
                 node.data.agent_id,
@@ -229,6 +231,7 @@ def validation_schedule_from_node_data(
 
 def _options_for_agent_entry(
     entry: Mapping[str, Any],
+    *, db: Session | None = None,
 ) -> tuple[ValidationAttachmentOption, ...]:
     curation = entry.get("curation")
     if not isinstance(curation, Mapping):
@@ -249,6 +252,7 @@ def _options_for_agent_entry(
         )
         context = resolve_profile_validation(
             AgentExecutionReceipt.model_validate(entry["execution_receipt"]), registry.domain_pack,
+            db=db,
             active_group_ids=entry.get("authenticated_group_ids") or (), user_id=entry.get("authenticated_user_id"),
         )
         if context is not None:
