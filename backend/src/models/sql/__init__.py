@@ -7,6 +7,7 @@ from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .chat_route_preference import ChatRoutePreference
 from .flow_shortcut_preference import FlowShortcutPreference
+from .validation_acknowledgment import ValidationAcknowledgment
 from .custom_agent import CustomAgentVersion
 from .generic_extraction_profile import GenericExtractionProfile, GenericExtractionProfileRevision
 from .profile_validator_capability import ProfileValidatorCapability, ProfileValidatorCapabilityReference
@@ -40,6 +41,7 @@ __all__ = [
     "ChatSession",
     "ChatRoutePreference",
     "FlowShortcutPreference",
+    "ValidationAcknowledgment",
     "CustomAgentVersion",
     "GenericExtractionProfile",
     "GenericExtractionProfileRevision",

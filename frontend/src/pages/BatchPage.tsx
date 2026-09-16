@@ -1,3 +1,4 @@
+import { fetchWithValidationAcknowledgment } from '@/services/validationAcknowledgment'
 import React, { useState, useEffect } from 'react';
 import {
   Box,
@@ -429,7 +430,7 @@ const BatchPage: React.FC = () => {
   useEffect(() => {
     const fetchRecentBatches = async () => {
       try {
-        const response = await fetch('/api/batches', {
+        const response = await fetchWithValidationAcknowledgment('/api/batches', {
           credentials: 'include',
         });
         if (response.ok) {
@@ -456,7 +457,7 @@ const BatchPage: React.FC = () => {
 
     if (flowId) {
       try {
-        const response = await fetch(`/api/flows/${flowId}/validate-batch`, {
+        const response = await fetchWithValidationAcknowledgment(`/api/flows/${flowId}/validate-batch`, {
           method: 'GET',
           credentials: 'include',
         });
@@ -834,7 +835,7 @@ const BatchPage: React.FC = () => {
     setBatchState(prev => ({ ...prev, status: 'running' }));
 
     try {
-      const response = await fetch('/api/batches', {
+      const response = await fetchWithValidationAcknowledgment('/api/batches', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

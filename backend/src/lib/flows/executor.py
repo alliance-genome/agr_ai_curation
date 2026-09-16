@@ -2791,6 +2791,23 @@ def get_all_agent_tools(
         flow = cast(CurationFlow, SimpleNamespace(
             id=flow.id, name=flow.name, flow_definition=hydrated.model_dump(mode="json"),
         ))
+    coverage_by_node: dict[str, list[dict]] = {}
+    has_coverage_configuration = any(
+        (entry or {}).get("execution_receipt", {}).get("output_contract", {}).get("generic_profile_ref")
+        for entry in custom_entries.values()
+    ) or any(not choice.get("enabled", True)
+             for node in flow.flow_definition.get("nodes", [])
+             for choice in node.get("data", {}).get("validation_attachments", []))
+    if db_user_id is not None and has_coverage_configuration:
+        from src.lib.agent_studio.validation_coverage import runtime_coverage_metadata
+        with SessionLocal() as coverage_db:
+            coverage_definition = resolve_flow_execution_revisions(
+                coverage_db, FlowDefinition.model_validate(flow.flow_definition),
+                user_id=db_user_id, active_group_ids=list(active_groups or []),
+            ).definition
+            coverage_by_node = runtime_coverage_metadata(
+                coverage_db, coverage_definition, user_id=db_user_id, active_group_ids=list(active_groups or []),
+            )
     nodes = _get_ordered_executable_nodes(flow)
     nodes_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
     output_source_by_node_id = _runtime_output_sources_by_node_id(
@@ -3017,6 +3034,8 @@ def get_all_agent_tools(
                     },
                 )
             )
+            from src.lib.agent_studio.validation_coverage import annotate_unvalidated_candidate
+            annotate_unvalidated_candidate(candidate, coverage_by_node.get(node_id, []))
             phase_timings_ms["candidate_evidence_build_ms"] = _elapsed_ms(
                 candidate_started_at
             )

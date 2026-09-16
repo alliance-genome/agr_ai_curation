@@ -6,7 +6,7 @@ import csv
 import io
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Sequence
 
@@ -90,6 +90,7 @@ class FlowEvidenceExportStep:
     agent_name: str | None
     tool_name: str | None
     evidence_records: list[dict[str, Any]]
+    database_validation_coverage: list[dict[str, Any]] = field(default_factory=list)
 
 
 def resolve_authorized_flow_run_extraction_results(
@@ -208,6 +209,7 @@ def build_flow_evidence_steps(
                 agent_name=_optional_text(metadata.get("agent_name")),
                 tool_name=_optional_text(metadata.get("tool_name")),
                 evidence_records=local_registry.records(),
+                database_validation_coverage=list(metadata.get("database_validation_coverage") or []),
             )
         )
 
@@ -253,6 +255,7 @@ def _build_json_export_payload(
                 "tool_name": step.tool_name,
                 "evidence_count": len(step.evidence_records),
                 "evidence_records": list(step.evidence_records),
+                **({"database_validation_coverage": step.database_validation_coverage} if step.database_validation_coverage else {}),
             }
             for step in steps
         ],
@@ -266,9 +269,12 @@ def _build_delimited_export_payload(
     delimiter: str,
 ) -> str:
     buffer = io.StringIO(newline="")
+    field_order = list(EVIDENCE_EXPORT_FIELD_ORDER)
+    if any(row.get("database_validation_status") for row in evidence_rows):
+        field_order.append("database_validation_status")
     writer = csv.DictWriter(
         buffer,
-        fieldnames=list(EVIDENCE_EXPORT_FIELD_ORDER),
+        fieldnames=field_order,
         delimiter=delimiter,
         lineterminator="\n",
         extrasaction="ignore",
@@ -279,7 +285,7 @@ def _build_delimited_export_payload(
         writer.writerow(
             {
                 field: _serialize_tabular_value(evidence_record.get(field))
-                for field in EVIDENCE_EXPORT_FIELD_ORDER
+                for field in field_order
             }
         )
 
@@ -370,6 +376,7 @@ def _build_tabular_evidence_rows(
                     **evidence_record,
                     "agent_id": step.agent_id,
                     "step_number": step.step,
+                    "database_validation_status": "not_database_validated" if step.database_validation_coverage else "",
                 }
             )
     return rows

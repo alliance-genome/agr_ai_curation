@@ -2817,10 +2817,16 @@ def _current_flow_findings(
         from src.lib.flows.execution_revisions import flow_execution_revision_findings
 
         with SessionLocal() as db:
-            contract_findings = flow_execution_revision_findings(
-                db, _flow_context_definition(get_current_flow_context() or {}),
-                user_id=get_current_user_id(), active_group_ids=list(get_current_active_group_ids()),
-            )
+            from src.lib.agent_studio.validation_coverage import ValidationAcknowledgmentRequired
+            try:
+                contract_findings = flow_execution_revision_findings(
+                    db, _flow_context_definition(get_current_flow_context() or {}),
+                    user_id=get_current_user_id(), active_group_ids=list(get_current_active_group_ids()),
+                )
+            except ValidationAcknowledgmentRequired as exc:
+                contract_findings = [{"code": "validation_acknowledgment_required", "message": str(exc),
+                    "fix_hint": "The curator must save or launch the flow and review the extraction-only checkbox. AI Chat cannot acknowledge this choice."}]
+
         findings.extend({
             **finding, "severity": "CRITICAL",
             "node_ids": [finding["node_id"]] if finding.get("node_id") else [],

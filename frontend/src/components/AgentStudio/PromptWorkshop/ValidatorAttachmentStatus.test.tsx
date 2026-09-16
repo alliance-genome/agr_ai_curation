@@ -6,12 +6,12 @@ const value: GenericProfileContract = { name: 'Genes', semantic_class: 'gene', f
 describe('field validator attachment status', () => {
  it('distinguishes a parent from its validated part and unvalidated sibling', () => {
   const {rerender}=render(<ValidatorAttachmentStatus value={value} address={[0]}/>)
-  expect(screen.getByText('No')).toBeInTheDocument()
+  expect(screen.getByText('No database validator')).toBeInTheDocument()
   expect(screen.getByText('1 part has a validator')).toBeInTheDocument()
   rerender(<ValidatorAttachmentStatus value={value} address={[0,0]}/>)
   expect(screen.getByText('Yes · Gene validation')).toBeInTheDocument()
   rerender(<ValidatorAttachmentStatus value={value} address={[0,1]}/>)
-  expect(screen.getByText('No')).toBeInTheDocument()
+  expect(screen.getByText('No database validator')).toBeInTheDocument()
  })
  it('follows canonical keys after a rename or reorder and reports mapping problems', () => {
   const renamed=structuredClone(value)

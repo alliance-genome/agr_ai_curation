@@ -184,6 +184,11 @@ def revise_profile(
             "Profile changed since it was opened; compare or reload before saving"
         )
     previous = get_profile_revision(db, profile_id, row.head_revision, user_id)
+    from src.lib.agent_studio.validation_coverage import profile_coverage_scope, require_acknowledgments
+    scope = profile_coverage_scope(db, parsed, profile_id=profile_id)
+    if scope is not None:
+        require_acknowledgments(db, user_id, [scope])
+
     findings = profile_compatibility(previous.contract, parsed)
     if previous.fingerprint == parsed.fingerprint():
         return row, previous, findings

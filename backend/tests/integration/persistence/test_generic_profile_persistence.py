@@ -265,3 +265,53 @@ def test_keyset_pagination_is_bounded_and_authorized(profile_db, monkeypatch):
         if cursor is None:
             break
     assert seen == expected
+
+
+def test_removed_mapping_acknowledgment_is_durable_actor_scoped_and_configuration_bound(profile_db, monkeypatch):
+    from types import SimpleNamespace
+    from src.api import validation_acknowledgments as api
+    from src.lib.agent_studio.validation_coverage import (
+        ValidationAcknowledgmentRequired, profile_coverage_scope, require_acknowledgments,
+    )
+    from src.models.sql.validation_acknowledgment import ValidationAcknowledgment
+    from src.schemas.generic_extraction_profile import GenericProfileContract
+    db, _ = profile_db
+    path = Path(__file__).resolve().parents[3] / 'alembic/versions/q4f5a6b7c8d9_add_validation_acknowledgments.py'
+    spec = importlib.util.spec_from_file_location('ack_migration', path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with Operations.context(MigrationContext.configure(db.connection())):
+        migration.upgrade()
+    from dataclasses import replace
+    from src.lib.agent_studio import profile_mapping_service as mapping_service
+    from src.schemas.domain_pack_metadata import ReusableValidatorOutput
+    baseline, cap = mapped_contract(monkeypatch)
+    reuse = cap.binding.custom_profile_reuse.model_copy(update={"outputs": {
+        "symbol": ReusableValidatorOutput(value_schema={"kind":"string"}, nullable=True, result_path="resolved_values.symbol")}})
+    cap = replace(cap, binding=replace(cap.binding, custom_profile_reuse=reuse,
+        expected_result_fields={"resolved_values.symbol": "string"}, raw={"custom_profile_reuse":reuse.model_dump(mode="json")}))
+    baseline['validator_mappings'][0]['outputs'] = {'symbol':'attributes.paper_name'}
+    baseline['validator_mappings'][0]['capability_fingerprint'] = cap.fingerprint()
+    monkeypatch.setattr(mapping_service, 'capability_catalog', lambda **kwargs:[cap])
+    profile, previous = service.create_profile(db, 1, baseline)
+    proposal = {**baseline, 'validator_mappings':[]}
+    with pytest.raises(ValidationAcknowledgmentRequired) as error:
+        service.revise_profile(db, profile.id, 1, proposal, expected_revision=1)
+    assert profile.head_revision == 1
+    assert previous.contract['validator_mappings']
+    scope = error.value.scopes[0]
+    monkeypatch.setattr(api, 'set_global_user_from_cognito', lambda *_: SimpleNamespace(id=1))
+    api.acknowledge_validation(api.AcknowledgmentRequest(acknowledge_extraction_only=True,scopes=[scope]), user={'sub':'actor'}, db=db)
+    record = db.get(ValidationAcknowledgment, (1,scope.fingerprint()))
+    assert record.acknowledged_at is not None
+    assert record.scope['status'] == 'not_database_validated'
+    _, saved, _ = service.revise_profile(db, profile.id, 1, proposal, expected_revision=1)
+    assert saved.revision == 2
+    assert saved.contract['validator_mappings'] == []
+    assert previous.contract['validator_mappings']
+    current_scope = profile_coverage_scope(db, GenericProfileContract.model_validate(saved.contract), profile_id=profile.id)
+    require_acknowledgments(db, 1, [current_scope])
+    with pytest.raises(ValidationAcknowledgmentRequired):
+        require_acknowledgments(db, 2, [current_scope])
+    with pytest.raises(ValidationAcknowledgmentRequired):
+        service.revise_profile(db, profile.id, 1, {**proposal,'description':'New guidance'}, expected_revision=2)

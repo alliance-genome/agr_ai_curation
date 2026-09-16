@@ -1,3 +1,4 @@
+import { fetchWithValidationAcknowledgment } from './validationAcknowledgment'
 /**
  * API service for Agent Studio feature.
  */
@@ -581,7 +582,7 @@ export async function listCustomAgents(templateSource?: string): Promise<ListCus
 export async function createCustomAgent(
   request: CreateCustomAgentRequest
 ): Promise<CustomAgent> {
-  const response = await fetch(`${BASE_URL}/custom-agents`, {
+  const response = await fetchWithValidationAcknowledgment(`${BASE_URL}/custom-agents`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -604,7 +605,7 @@ export async function updateCustomAgent(
   customAgentId: string,
   request: UpdateCustomAgentRequest
 ): Promise<CustomAgent> {
-  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}`, {
+  const response = await fetchWithValidationAcknowledgment(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -656,7 +657,7 @@ export async function getAgentExecutionRevision(
 export async function restoreAgentExecutionRevision(
   customAgentId: string, revisionId: string, expectedRevisionId: string,
 ): Promise<CustomAgent> {
-  const response = await fetch(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions/${encodeURIComponent(revisionId)}/restore`, {
+  const response = await fetchWithValidationAcknowledgment(`${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/execution-revisions/${encodeURIComponent(revisionId)}/restore`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ expected_revision_id: expectedRevisionId }),
   })
@@ -677,7 +678,7 @@ export async function cloneAgentToWorkshop(
   sourceAgentId: string,
   request: CloneAgentRequest = {}
 ): Promise<CustomAgent> {
-  const response = await fetch(
+  const response = await fetchWithValidationAcknowledgment(
     `${BASE_URL}/agents/${encodeURIComponent(sourceAgentId)}/clone`,
     {
       method: 'POST',
@@ -730,7 +731,7 @@ export async function* streamCustomAgentTest(
   customAgentId: string,
   request: CustomAgentTestRequest
 ): AsyncGenerator<Record<string, unknown>> {
-  const response = await fetch(
+  const response = await fetchWithValidationAcknowledgment(
     `${BASE_URL}/custom-agents/${encodeURIComponent(customAgentId)}/test`,
     {
       method: 'POST',
@@ -1200,7 +1201,7 @@ export async function selectFlowRevision(
  * Create a new flow
  */
 export async function createFlow(flow: CreateFlowRequest): Promise<FlowResponse> {
-  const response = await fetch(FLOWS_URL, {
+  const response = await fetchWithValidationAcknowledgment(FLOWS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(flow),
@@ -1219,7 +1220,7 @@ export async function updateFlow(
   flowId: string,
   updates: UpdateFlowRequest
 ): Promise<FlowResponse> {
-  const response = await fetch(`${FLOWS_URL}/${flowId}`, {
+  const response = await fetchWithValidationAcknowledgment(`${FLOWS_URL}/${flowId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
