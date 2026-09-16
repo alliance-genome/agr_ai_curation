@@ -4167,11 +4167,17 @@ class TestGetAllAgentToolsStepOrderRuntime:
         binding_match = SimpleNamespace(binding=binding)
 
         routes = {f"agent:{agent_key}": BenchmarkSuiteRoute(provider="openai", model="fixture-model", reasoning_effort="low")}
-        with benchmark_route_plan(routes) if benchmark else nullcontext():
+        from src.lib.benchmarks.source_revisions import benchmark_source_revisions
+        from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
+
+        pinned_receipt = source_receipt().model_copy(update={"agent_key": agent_key})
+        pin_revision = str(pinned_receipt.agent_revision_id)
+        frozen_sources = {f"agent:{agent_key}": pinned_receipt} if (benchmark and custom) else {}
+        with benchmark_route_plan(routes) if benchmark else nullcontext(), benchmark_source_revisions(frozen_sources):
             asyncio.run(executor._run_custom_flow_validator_agent(
                 request,
                 binding_match=binding_match,
-                validator_node={"data": {"agent_id": agent_key, "agent_revision_id": "pinned-revision", "execution_receipt": {"agent_revision_id": "pinned-revision"}}},
+                validator_node={"data": {"agent_id": agent_key, "agent_revision_id": pin_revision, "execution_receipt": pinned_receipt.model_dump(mode="json")}},
                 agent_context={"user_id": "curator-1", "execution_revision_id": "extractor-revision", "execution_receipt": {"agent_revision_id": "extractor-revision"}},
                 source_envelope_id="env-1",
                 source_envelope_revision=3,
@@ -4180,6 +4186,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
         if benchmark and custom:
             assert captured["agent_kwargs"]["benchmark_slot"] == f"agent:{agent_key}"
             assert "model_id_override" not in captured["agent_kwargs"]
+            # Benchmark identity comes solely from the frozen cell; the flow pin is only cross-checked.
+            assert "execution_receipt" not in captured["agent_kwargs"]
+            assert "execution_revision_id" not in captured["agent_kwargs"]
         elif benchmark:
             assert captured["agent_kwargs"]["benchmark_route_slot"] == "agent:custom_validator"
             assert captured["agent_kwargs"]["model_id_override"] == "fixture-model"
@@ -4190,9 +4199,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
         payload = json.loads(captured["args"]["query"])
         validation_request = payload["validation_request"]
         assert captured["tool_name"] == f"validate_{agent_key}_custom_supplemental"
-        if custom:
-            assert captured["agent_kwargs"]["execution_revision_id"] == "pinned-revision"
-            assert captured["agent_kwargs"]["execution_receipt"] == {"agent_revision_id": "pinned-revision"}
+        if custom and not benchmark:
+            assert captured["agent_kwargs"]["execution_revision_id"] == pin_revision
+            assert captured["agent_kwargs"]["execution_receipt"] == pinned_receipt.model_dump(mode="json")
         assert validation_request["selected_inputs"] == request.selected_inputs
         assert "input_selectors" not in validation_request
         assert "evidence" not in validation_request
@@ -4204,6 +4213,43 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert validation_request["runtime_compaction"]["input_values_source"] == (
             "selected_inputs"
         )
+
+    def test_custom_flow_validator_benchmark_pin_must_match_frozen_source(self, monkeypatch):
+        executor = _executor_module()
+        from src.schemas.domain_validator import DomainValidationRequest, ValidationTarget, ValidatorAgentRef
+        from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
+        from src.lib.benchmarks.models import BenchmarkSuiteRoute
+        from src.lib.benchmarks.source_revisions import benchmark_source_revisions
+        from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
+
+        agent_key = "ca_pinned_validator"
+        frozen = source_receipt().model_copy(update={"agent_key": agent_key})
+        stale_pin = frozen.model_copy(update={"revision": frozen.revision + 1})
+        constructor = MagicMock()
+        monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_benchmark_agent_by_id", constructor)
+        monkeypatch.setattr(executor, "_create_streaming_tool", MagicMock())
+        request = DomainValidationRequest(
+            request_id="env-1:object-1:custom.supplemental",
+            validator_binding_id="custom.supplemental",
+            validator_agent=ValidatorAgentRef(package_id="flow", agent_id="custom_validator"),
+            target=ValidationTarget(domain_pack_id="fixture.validation", object_type="GeneAssertion", object_id="object-1",
+                                    field_path="gene.identifier", expected_fields=["gene.identifier"], input_values={"identifier": "AGR:0001"}),
+            selected_inputs={"identifier": "AGR:0001"},
+            input_selectors={"identifier": {"source": "payload", "path": "gene.identifier"}},
+            evidence=[], expected_result_fields={"identifier": "gene.identifier"},
+        )
+        binding_match = SimpleNamespace(binding=SimpleNamespace(identity_details=lambda: {"binding_id": "custom.supplemental"}))
+        routes = {f"agent:{agent_key}": BenchmarkSuiteRoute(provider="openai", model="fixture-model", reasoning_effort="low")}
+        with benchmark_route_plan(routes), benchmark_source_revisions({f"agent:{agent_key}": frozen}):
+            with pytest.raises(ValueError, match="differs from the frozen benchmark source"):
+                asyncio.run(executor._run_custom_flow_validator_agent(
+                    request, binding_match=binding_match,
+                    validator_node={"data": {"agent_id": agent_key, "agent_revision_id": str(stale_pin.agent_revision_id), "execution_receipt": stale_pin.model_dump(mode="json")}},
+                    agent_context={"user_id": "curator-1"}, source_envelope_id="env-1", source_envelope_revision=3,
+                ))
+        constructor.assert_not_called()
+
+
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")

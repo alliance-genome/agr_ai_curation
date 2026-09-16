@@ -1327,7 +1327,19 @@ async def _run_custom_flow_validator_agent(
     route_kwargs = benchmark_route_kwargs(benchmark_slot)
     if validator_agent_id.startswith("ca_") and route_kwargs:
         from src.lib.agent_studio.catalog_service import get_benchmark_agent_by_id
+        from src.lib.benchmarks.source_revisions import require_benchmark_source
+        from src.schemas.agent_execution_revision import AgentExecutionReceipt
 
+        # The attachment pin and the frozen benchmark cell must agree before the
+        # constructor takes its identity solely from the cell (same rule as
+        # ordinary custom graph nodes).
+        source = require_benchmark_source(benchmark_slot, validator_agent_id)
+        flow_source = AgentExecutionReceipt.model_validate(
+            agent_kwargs.pop("execution_receipt", None)
+        )
+        revision = agent_kwargs.pop("execution_revision_id", None)
+        if source != flow_source or str(revision) != str(source.agent_revision_id):
+            raise ValueError("Flow validator revision differs from the frozen benchmark source")
         agent = get_benchmark_agent_by_id(
             validator_agent_id, benchmark_slot=benchmark_slot, **agent_kwargs,
         )
