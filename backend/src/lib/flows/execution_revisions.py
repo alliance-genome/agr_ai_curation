@@ -68,13 +68,17 @@ def _revision_entry(
 
     required_params = _required_context_for_tool_ids(saved.tool_ids)
     structured = saved.output_contract.output_state == "structured_extraction"
+    from src.lib.config.schema_discovery import resolve_output_schema
+    from src.schemas.domain_validator import is_domain_validator_result_schema
+    schema_key = saved.output_contract.output_schema_key
+    validator = bool(schema_key and is_domain_validator_result_schema(resolve_output_schema(schema_key)))
     from src.lib.flows.formatter_capability import snapshot_formatter_format
     formatter_format = snapshot_formatter_format(saved)
     return {
         "agent_id": node.data.agent_id,
         "name": node.data.agent_display_name,
         "display_name": node.data.agent_display_name,
-        "category": "Output" if formatter_format else "Extraction" if structured else "Custom",
+        "category": "Output" if formatter_format else "Validation" if validator else "Extraction" if structured else "Custom",
         "output_formatter_format": formatter_format,
         "default_export_execution_mode": saved.default_export_execution_mode or "ai",
         "subcategory": "",

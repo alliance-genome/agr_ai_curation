@@ -523,6 +523,11 @@ def _normalize_output_schema_key(value: Optional[str]) -> Optional[str]:
     return normalized or None
 
 
+def _model_provider_enabled(model_def) -> bool:
+    from src.lib.openai_agents.config import is_provider_enabled
+    return is_provider_enabled(getattr(model_def, "provider", "openai"))
+
+
 def _validate_model_id(model_id: str) -> str:
     """Validate model selection against the configured model catalog."""
     normalized = str(model_id or "").strip()
@@ -531,6 +536,8 @@ def _validate_model_id(model_id: str) -> str:
     model_def = get_model(normalized)
     if model_def is None:
         raise ValueError(f"Unknown model_id: {normalized}")
+    from src.lib.openai_agents.config import require_provider_enabled
+    require_provider_enabled(getattr(model_def, "provider", "openai"))
     if not bool(getattr(model_def, "curator_visible", True)):
         raise ValueError(f"Model is not selectable in Agent Workshop: {normalized}")
     return normalized
@@ -559,6 +566,7 @@ def _agent_validation_sources(
         models[model_id] = AgentModelValidationRecord(
             model_id=model_id,
             curator_visible=bool(getattr(model_def, "curator_visible", True)),
+            provider_enabled=_model_provider_enabled(model_def),
             supports_reasoning=supports_reasoning,
             reasoning_options=reasoning_options,
         )
@@ -637,7 +645,10 @@ def authorized_agent_validation_sources(db, *, user_id, active_group_ids, source
     }
     return replace(
         sources,
-        models={key: value for key, value in sources.models.items() if key in available["model"]},
+        # Keep policy-disabled records for an actionable validation error, not
+        # selection. The canonical validator rejects them before other checks.
+        models={key: value for key, value in sources.models.items()
+                if key in available["model"] or not value.provider_enabled},
         tools={key: replace(value, system_managed=key in inherited)
                for key, value in sources.tools.items() if key in available["tool"] or key in inherited},
         output_schema_keys=sources.output_schema_keys & available["output_contract"],

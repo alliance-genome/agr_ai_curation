@@ -33,6 +33,7 @@ from typing import Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequ
 from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
 
 from ..streaming_tools import (
+    SpecialistOutputError,
     SupervisorExtractionHandoff,
     pop_last_supervisor_extraction_handoff,
     run_specialist_with_events,
@@ -354,6 +355,19 @@ def fetch_document_hierarchy_sync(document_id: str, user_id: str) -> Optional[Di
             return asyncio.run(get_document_sections_hierarchical(document_id, user_id))
     except Exception as e:
         logger.warning("Failed to fetch document hierarchy: %s", e)
+        try:
+            from src.lib.observability.runtime import report_runtime_exception
+
+            report_runtime_exception(
+                e,
+                component="document_context",
+                operation="fetch_document_hierarchy_failed",
+                tags={"phase": "context_preparation"},
+                context={"document_id": document_id, "hierarchy_available": False},
+            )
+        except Exception:
+            # Observability must not turn optional context into a chat failure.
+            logger.warning("Could not report document hierarchy retrieval failure")
         return None
 
 
@@ -704,6 +718,9 @@ async def _run_streaming_specialist_tool(
             if ledger is not None and handoff is not None and validated_handoff is None:
                 ledger.record_extraction_handoff(tool_name, query, handoff)
             return result
+        except SpecialistOutputError as exc:
+            exc.tool_name = tool_name
+            raise
         finally:
             if isolated_resources is not None and close_isolated_resources is not None:
                 await close_isolated_resources(

@@ -942,6 +942,7 @@ def materialize_gene_builder_state(
                     object_role=GENE_OBJECT_ROLE,
                     pending_ref_id=pending_ref_id,
                     model_ref=GENE_MENTION_EVIDENCE_MODEL_ID,
+                    validation_guidance=staged_fields.get("validation_guidance"),
                     schema_ref=_gene_schema_ref(),
                     definition_state=DefinitionState.IN_DEVELOPMENT,
                     definition_notes=list(GENE_MENTION_EVIDENCE_DEFINITION_NOTES),

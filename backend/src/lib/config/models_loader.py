@@ -227,6 +227,15 @@ def get_default_model() -> Optional[ModelDefinition]:
     return next(iter(_model_registry.values()), None)
 
 
+def is_model_selectable(model: ModelDefinition) -> bool:
+    """Shared curator catalog policy, including assistant authoring surfaces."""
+    from src.lib.openai_agents.config import is_provider_enabled
+
+    return bool(getattr(model, "curator_visible", True)) and is_provider_enabled(
+        getattr(model, "provider", "openai")
+    )
+
+
 def list_models() -> List[ModelDefinition]:
     """List all model definitions."""
     if not _initialized:

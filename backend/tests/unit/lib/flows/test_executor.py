@@ -749,7 +749,7 @@ def _make_flow_execution_state(*completed_steps, ordered_tool_names=None):
     }
 
 
-def _finalized_empty_step():
+def _finalized_empty_step(monkeypatch=None):
     from src.lib.openai_agents.extraction_builder_workspace import (
         ExtractionBuilderWorkspace, build_internal_extraction_result_event,
     )
@@ -758,6 +758,18 @@ def _finalized_empty_step():
     payload = {"envelope_id": "empty-envelope", "domain_pack_id": "gene", "extracted_objects": []}
     workspace.upsert_candidate(candidate_id="materialized-empty", staged_fields=payload, status="valid")
     finalization = workspace.finalize(candidate_ids=["materialized-empty"], source_candidate_ids=[])
+    if monkeypatch is not None:
+        from dataclasses import replace
+        from agr_ai_curation_alliance.tools import disease_builder_tools
+        from agr_ai_curation_alliance.domain_packs.disease.conversion import disease_extraction_output_to_pending_envelope
+
+        workspace = ExtractionBuilderWorkspace(run_id="empty-disease", agent_id="disease_extractor")
+        monkeypatch.setattr(disease_builder_tools, "get_active_extraction_builder_workspace", lambda: workspace)
+        monkeypatch.setattr(disease_builder_tools, "get_active_evidence_records_snapshot", lambda: [])
+        assert disease_builder_tools._finalize_disease_extraction_impl([]).status == "ok"
+        finalization = workspace.finalization
+        envelope = disease_extraction_output_to_pending_envelope(finalization.payload, envelope_id="empty-envelope")
+        finalization = replace(finalization, payload=envelope.model_dump(mode="json"))
     event = build_internal_extraction_result_event(
         tool_name="ask_gene_specialist", specialist_name="Gene", finalization=finalization,
     )
@@ -812,9 +824,10 @@ def test_finalized_empty_contract_is_explicit_and_fail_closed(corruption):
 @pytest.mark.parametrize("mixed", [False, True])
 @pytest.mark.parametrize("attached", [False, True])
 @pytest.mark.parametrize("raw_summary", [False, True])
-async def test_flow_preserves_finalized_empty_and_sibling_output(monkeypatch, mixed, attached, raw_summary):
+@pytest.mark.parametrize("disease_finalizer", [False, True])
+async def test_flow_preserves_finalized_empty_and_sibling_output(monkeypatch, mixed, attached, raw_summary, disease_finalizer):
     executor = _executor_module()
-    empty, _ = _finalized_empty_step()
+    empty, _ = _finalized_empty_step(monkeypatch if disease_finalizer else None)
     steps = [empty]
     nodes = [_task_input_node(), _agent_node("n1", "gene", step_goal="Extract genes")]
     if mixed:
@@ -3121,6 +3134,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "provider": "fixture",
                 "method": "identifier_lookup",
                 "query": {"identifier": "AGR:0001"},
+                "coverage": None,
                 "result_count": 1,
                 "outcome": "success",
                 "message": None,
@@ -4074,6 +4088,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     "provider": "flow_validator",
                     "method": "non_lookup_validation",
                     "query": {"source_envelope_revision": 7},
+                    "coverage": None,
                     "result_count": 1,
                     "outcome": "success",
                     "message": None,
@@ -4119,7 +4134,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             expected_result_fields={"identifier": "gene.identifier"},
         )
         captured = {}
-        agent_key = "ca_custom_validator" if custom else "custom_validator"
+        agent_key = "ca_pinned_validator" if custom else "custom_validator"
 
         from contextlib import nullcontext
         from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
@@ -4156,8 +4171,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             asyncio.run(executor._run_custom_flow_validator_agent(
                 request,
                 binding_match=binding_match,
-                validator_node={"data": {"agent_id": agent_key}},
-                agent_context={"user_id": "curator-1"},
+                validator_node={"data": {"agent_id": agent_key, "agent_revision_id": "pinned-revision", "execution_receipt": {"agent_revision_id": "pinned-revision"}}},
+                agent_context={"user_id": "curator-1", "execution_revision_id": "extractor-revision", "execution_receipt": {"agent_revision_id": "extractor-revision"}},
                 source_envelope_id="env-1",
                 source_envelope_revision=3,
             ))
@@ -4175,6 +4190,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
         payload = json.loads(captured["args"]["query"])
         validation_request = payload["validation_request"]
         assert captured["tool_name"] == f"validate_{agent_key}_custom_supplemental"
+        if custom:
+            assert captured["agent_kwargs"]["execution_revision_id"] == "pinned-revision"
+            assert captured["agent_kwargs"]["execution_receipt"] == {"agent_revision_id": "pinned-revision"}
         assert validation_request["selected_inputs"] == request.selected_inputs
         assert "input_selectors" not in validation_request
         assert "evidence" not in validation_request
@@ -4566,8 +4584,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    @pytest.mark.parametrize("groups", [None, [], ["FB"]])
     def test_curation_handoff_step_runs_deterministic_handoff(
-        self, mock_get_agent, mock_streaming
+        self, mock_get_agent, mock_streaming, groups
     ):
         """Curation handoff steps should materialize review sessions without an LLM specialist."""
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
@@ -4670,6 +4689,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 session_id="session-123",
                 flow_run_id="flow-run-123",
                 user_query="Focus on the confirmed findings.",
+                active_groups=groups,
             )
 
             assert created_names == {"ask_gene_specialist", "ask_curation_handoff_specialist"}
@@ -4690,6 +4710,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert captured["extraction_results"][0].agent_key == "gene"
         assert captured["document_id"] == "doc-123"
         assert captured["runner_user_id"] == "user-123"
+        assert captured["active_groups"] == (tuple(groups) if groups is not None else None)
         assert captured["flow_run_id"] == "flow-run-123"
         assert captured["origin_session_id"] == "session-123"
         assert captured["conversation_summary"] is not None
@@ -5886,6 +5907,7 @@ class TestExecuteFlowTermination:
         ("allele_validation", "attachment-only validator"),
         ("missing_agent", "agent could not be resolved"),
         ("broken_agent", "private configuration must not leak"),
+        ("disabled_agent", "provider_disabled"),
     ])
     async def test_unavailable_step_fails_before_runner_or_formatter(self, monkeypatch, agent_id, reason):
         flow = _make_flow([
@@ -5894,6 +5916,7 @@ class TestExecuteFlowTermination:
         original_definition = deepcopy(flow.flow_definition)
         supervisor = SimpleNamespace(_flow_unavailable_steps=[{
             "step": 1, "agent_id": agent_id, "agent_name": "Required step", "reason": reason,
+            "error_code": "provider_disabled" if agent_id == "disabled_agent" else None,
         }])
         monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **kwargs: supervisor)
         monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *args: "fixture")
@@ -5901,10 +5924,16 @@ class TestExecuteFlowTermination:
                             lambda **kwargs: pytest.fail("Invalid flow started the model"))
         events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
         assert [event["type"] for event in events] == ["FLOW_STARTED", "FLOW_ERROR", "FLOW_FINISHED"]
-        assert events[1]["details"]["reason"] == "flow_step_unavailable"
-        assert "Documents" in events[1]["details"]["message"]
-        assert "validation attachments" in events[1]["details"]["message"]
-        assert reason not in str(events)
+        if agent_id == "disabled_agent":
+            assert events[1]["details"]["reason"] == "provider_disabled"
+            assert "disabled by policy" in events[1]["details"]["message"]
+            assert "approved model" in events[1]["details"]["message"]
+            assert "load a document" not in events[1]["details"]["message"]
+        else:
+            assert events[1]["details"]["reason"] == "flow_step_unavailable"
+            assert "Documents" in events[1]["details"]["message"]
+            assert "validation attachments" in events[1]["details"]["message"]
+            assert reason not in str(events)
         assert events[-1]["data"]["status"] == "failed"
         assert events[-1]["data"]["output_status"] == "none"
         assert events[-1]["data"]["output_count"] == 0

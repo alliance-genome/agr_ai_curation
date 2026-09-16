@@ -15,8 +15,11 @@ from src.lib.openai_agents.config import (
 logger = logging.getLogger(__name__)
 
 _ALLOWED_TAG_KEYS = {
+    "ai_curation.trace.id_hash",
+    "ai_curation.chat.session_id_hash",
     "ai_curation.flow.id_hash",
     "flow_failure_type",
+    "failure_category",
     "phase",
     "provider",
     "run_kind",
@@ -76,6 +79,14 @@ def report_runtime_exception(
 ) -> bool:
     """Best-effort Sentry capture for caught runtime exceptions."""
 
+    cause: BaseException | None = exc
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if getattr(cause, "_ai_curation_sentry_captured", False):
+            return False
+        cause = cause.__cause__
+
     try:
         sentry_sdk = importlib.import_module("sentry_sdk")
     except Exception as import_exc:
@@ -102,8 +113,8 @@ def report_runtime_exception(
                     **_safe_context(context),
                 },
             )
-            sentry_sdk.capture_exception(exc)
-        return True
+            event_id = sentry_sdk.capture_exception(exc)
+        return bool(event_id)
     except Exception as capture_exc:
         logger.warning("Failed to capture runtime exception in Sentry: %s", capture_exc)
         return False

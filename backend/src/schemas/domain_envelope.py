@@ -334,6 +334,14 @@ class EnvelopeMetadataRef(DomainEnvelopeBaseModel):
 class CuratableObjectEnvelope(DomainEnvelopeBaseModel):
     """One curatable object carried by a domain envelope."""
 
+    validation_guidance: Optional[StrictStr] = Field(
+        default=None,
+        description=(
+            "Optional short advisory sentence for validators of this finding. "
+            "Convey relevant configured domain rules and evidence-backed context; "
+            "distinguish rules from paper facts. Not source evidence or a decision."
+        ),
+    )
     object_type: str = Field(description="Domain-pack object type key")
     object_role: Optional[str] = Field(
         default=None,

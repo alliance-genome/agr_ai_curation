@@ -130,6 +130,7 @@ def test_build_provider_runtime_report_rejects_missing_compatible_base_url(monke
 
 
 def test_optional_provider_missing_key_degrades_without_startup_error(monkeypatch):
+    monkeypatch.setenv("LLM_DISABLED_PROVIDERS", "")
     import src.lib.config.provider_validation as module
 
     providers = [

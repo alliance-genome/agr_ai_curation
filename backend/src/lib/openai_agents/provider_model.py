@@ -177,6 +177,10 @@ class ProviderConfiguredChatCompletionsModel(OpenAIChatCompletionsModel):
         )
 
     async def _fetch_response(self, *args: Any, **kwargs: Any) -> Any:
+        from src.lib.openai_agents.config import require_provider_enabled
+
+        # Recheck cached/previously constructed models before any SDK request.
+        require_provider_enabled(self._provider_id)
         if len(args) >= 3:
             positional_args = list(args)
             positional_args[2] = self._apply_provider_policy(positional_args[2])

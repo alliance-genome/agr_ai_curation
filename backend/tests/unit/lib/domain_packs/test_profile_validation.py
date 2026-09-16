@@ -165,13 +165,34 @@ def test_profile_receipt_mismatch_fails_before_compilation(example):
         compile_profile_validation(other, profile, pack, capabilities=[cap])
 
 
-def test_unmapped_fields_get_no_guessed_validators(example):
+@pytest.mark.parametrize("groups", [None, (), ("FB",)])
+def test_unmapped_fields_get_no_guessed_validators(example, groups):
     raw, cap, pack = example
     raw["validator_mappings"] = []
     receipt, profile = resolve(raw)
-    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap])
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap], active_group_ids=groups)
     assert not context.registry.bindings and not context.unavailable
     assert context.registry.domain_pack.pack_id == "generic"
+
+
+@pytest.mark.parametrize("groups", [None, (), ("MGI",), ("FB",)])
+def test_missing_group_context_never_grants_group_scoped_validation(example, groups):
+    from src.lib.domain_packs.profile_validation import profile_dispatch_matches
+
+    raw, cap, pack = example
+    cap = replace(cap, binding=replace(cap.binding, required_any_active_group=("FB",)))
+    raw["validator_mappings"][0]["capability_fingerprint"] = cap.fingerprint()
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap], active_group_ids=groups)
+    eligible, findings, _ = profile_dispatch_matches(
+        profile_envelope({"paper_name": "A"}, receipt, profile), context, authenticated_groups=groups,
+    )
+    if groups == ("FB",):
+        assert eligible and not context.unavailable and not findings
+    else:
+        assert not eligible
+        assert context.unavailable
+        assert findings and findings[0].message
 
 
 def test_conflicting_destinations_disable_both_mappings(example):

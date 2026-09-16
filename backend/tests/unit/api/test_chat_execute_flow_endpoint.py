@@ -27,6 +27,32 @@ _patch_chat_impl = patch_chat_impl_for(_CHAT_IMPLEMENTATION_MODULES)
 CONFIG_PATH = Path(__file__).resolve().parents[4] / "config"
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_flow_failure_tags_preserve_typed_specialist_metadata(wrapped):
+    from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+    from src.lib.observability.sentry import _redact_event
+    error = SpecialistOutputError("Private curator display name", "Envelope", "PRIVATE PAPER")
+    error.tool_name = "ask_gene_extraction_specialist"
+    outer = RuntimeError("PRIVATE WRAPPER") if wrapped else error
+    if wrapped:
+        outer.__cause__ = error
+    tags = chat._flow_failure_tags(flow_id="private-flow", failure_type=type(outer).__name__, phase="event_generator", exc=outer)
+    event = _redact_event({"tags": tags})
+    assert event["tags"]["tool_name"] == "ask_gene_extraction_specialist"
+    assert event["tags"]["failure_category"] == "specialist_output_invalid"
+    assert "private-flow" not in str(event)
+    assert "PRIVATE" not in str(event)
+    assert "curator" not in str(event)
+
+
+def test_flow_failure_tags_terminate_on_cyclic_unknown_cause():
+    error = RuntimeError("unknown")
+    error.__cause__ = error
+    tags = chat._flow_failure_tags(flow_id="f", failure_type="RuntimeError", phase="event_generator", exc=error)
+    assert tags["tool_name"] is None
+    assert "failure_category" not in tags
+
+
 @pytest.fixture(autouse=True)
 def _reset_stream_state():
     chat._LOCAL_CANCEL_EVENTS.clear()
@@ -2743,8 +2769,10 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
     assert keepalive_calls == [True]
 
 
-@pytest.mark.parametrize("websocket_failure", [False, True])
+@pytest.mark.parametrize("websocket_failure", [False, True, "specialist"])
 def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog, websocket_failure):
+    specialist_failure = websocket_failure == "specialist"
+    websocket_failure = websocket_failure is True
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-error")
     flow = SimpleNamespace(
@@ -2768,6 +2796,12 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     async def _fake_execute_flow(**_kwargs):
         if False:
             yield {"type": "RUN_STARTED"}
+        if specialist_failure:
+            from agents import UserError
+            from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+            cause = SpecialistOutputError("Private display name", "Envelope", "PRIVATE PAPER")
+            cause.tool_name = "ask_gene_extraction_specialist"
+            raise UserError("executor boom") from cause
         if websocket_failure:
             from agents import UserError
             from agents.models.openai_responses import ResponsesWebSocketError
@@ -2814,7 +2848,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     assert len(summaries) == 1
     assert summaries[0].payload_json["failure_reason"] == expected_message
     assert "terminal outcome was durable" not in json.dumps(summaries[0].payload_json)
-    expected_type = "UserError" if websocket_failure else "RuntimeError"
+    expected_type = "UserError" if websocket_failure or specialist_failure else "RuntimeError"
     assert events[1]["error_type"] == expected_type
     assert events[1]["session_id"] == "session-flow-error"
     assert calls["unregister"] == [("session-flow-error", "auth-sub", ANY)]
@@ -2831,7 +2865,8 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
             "flow_failure_type": expected_type,
             "phase": "event_generator",
             "provider": "openai" if websocket_failure else None,
-            "tool_name": None,
+            "tool_name": "ask_gene_extraction_specialist" if specialist_failure else None,
+            **({"failure_category": "specialist_output_invalid"} if specialist_failure else {}),
         },
         "context": {
             "session_id": "session-flow-error",

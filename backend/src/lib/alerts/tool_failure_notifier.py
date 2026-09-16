@@ -2,12 +2,31 @@
 
 import importlib
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from src.lib.observability.sentry import hash_sentry_identifier
 
 
 logger = logging.getLogger(__name__)
+
+
+def _sentry_extra(
+    *,
+    error_type: str,
+    source: str,
+    specialist_name: Optional[str],
+    trace_id: Optional[str],
+    session_id: Optional[str],
+) -> dict[str, Any]:
+    """Build Sentry-safe structured context for a runtime alert."""
+
+    return {
+        "error_type": error_type or "UnknownError",
+        "source": source or "unknown",
+        "tool_name": specialist_name or "N/A",
+        "trace_id": hash_sentry_identifier(trace_id),
+        "session_id": hash_sentry_identifier(session_id),
+    }
 
 
 def _capture_tool_failure_to_sentry(
@@ -27,6 +46,13 @@ def _capture_tool_failure_to_sentry(
         return False
 
     tool_name = specialist_name or "N/A"
+    extra = _sentry_extra(
+        error_type=error_type,
+        source=source,
+        specialist_name=specialist_name,
+        trace_id=trace_id,
+        session_id=session_id,
+    )
 
     try:
         if not sentry_sdk.is_initialized():
@@ -44,6 +70,7 @@ def _capture_tool_failure_to_sentry(
                 hashed = hash_sentry_identifier(identifier)
                 if hashed is not None:
                     scope.set_tag(key, hashed)
+            scope.set_context("runtime_alert", extra)
             event_id = sentry_sdk.capture_message(
                 f"Tool failure: {error_type or 'UnknownError'} ({tool_name})",
                 level="error",

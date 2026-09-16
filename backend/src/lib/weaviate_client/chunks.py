@@ -1692,19 +1692,25 @@ async def get_document_sections_hierarchical(
                 props = obj.properties
                 parent = props.get("parentSection") or "Unknown"
                 subsection = props.get("subsection")
-                page = props.get("pageNumber", 1)
-                idx = props.get("chunkIndex", 0)
+                page = props.get("pageNumber")
+                idx = props.get("chunkIndex")
+                # Retain chunks without inventing page/index metadata. Stable
+                # sorting places wholly unindexed subsections after known ones.
+                if idx is None:
+                    idx = float('inf')
 
                 # Track order of first occurrence
                 if parent not in top_level_order:
                     top_level_order.append(parent)
 
-                sections[parent]["pages"].add(page)
+                if page is not None:
+                    sections[parent]["pages"].add(page)
                 sections[parent]["chunks"] += 1
                 sections[parent]["first_index"] = min(sections[parent]["first_index"], idx)
 
                 if subsection:
-                    sections[parent]["subsections"][subsection]["pages"].add(page)
+                    if page is not None:
+                        sections[parent]["subsections"][subsection]["pages"].add(page)
                     sections[parent]["subsections"][subsection]["chunks"] += 1
                     sections[parent]["subsections"][subsection]["first_index"] = min(
                         sections[parent]["subsections"][subsection]["first_index"], idx

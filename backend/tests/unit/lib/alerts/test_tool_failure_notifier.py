@@ -45,7 +45,9 @@ def test_sentry_capture_never_publishes_sns(monkeypatch, legacy_flag, mode):
         recorded = str(sdk.mock_calls)
         for secret in ("PRIVATE PAPER TEXT", "SECRET CONTEXT", "private@example.org", "trace-1", "session-1"):
             assert secret not in recorded
-        scope.set_context.assert_not_called()
+        context = scope.set_context.call_args.args[1]
+        assert "curator_id" not in context
+        assert context["session_id"] == notifier.hash_sentry_identifier("session-1")
 
 
 @pytest.mark.parametrize("trace_id,session_id", [("application-trace-123", "application-session-456"), (None, None), ("", "")])
@@ -71,3 +73,17 @@ def test_tool_failure_correlation_survives_final_redactor(monkeypatch, trace_id,
             assert key not in event["tags"]
     assert event["contexts"]["trace"]["trace_id"] == sdk_trace_id
     assert event["tags"]["error_type"] == "TimeoutError"
+
+
+def test_final_redactor_preserves_canonical_hashes_not_application_ids():
+    from src.lib.observability.sentry import _redact_event
+    event = _redact_event({
+        "tags": {"trace_id": "raw-app-trace", "session_id": "raw-app-session",
+                 "ai_curation.trace.id_hash": notifier.hash_sentry_identifier("raw-app-trace"),
+                 "ai_curation.chat.session_id_hash": notifier.hash_sentry_identifier("raw-app-session")},
+        "contexts": {"trace": {"trace_id": "a" * 32, "span_id": "b" * 16}},
+    })
+    assert "raw-app" not in str(event)
+    assert event["tags"]["ai_curation.trace.id_hash"] == notifier.hash_sentry_identifier("raw-app-trace")
+    assert event["tags"]["ai_curation.chat.session_id_hash"] == notifier.hash_sentry_identifier("raw-app-session")
+    assert event["contexts"]["trace"]["trace_id"] == "a" * 32

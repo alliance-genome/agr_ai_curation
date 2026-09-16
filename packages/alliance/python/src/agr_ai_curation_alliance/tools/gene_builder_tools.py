@@ -69,6 +69,7 @@ _GENE_CONFIDENCE_VALUES = frozenset({"high", "medium", "low"})
 # Patch field paths that map staging-input names to gene_mention_evidence payload field paths.
 _GENE_PATCH_FIELD_PATHS = frozenset(
     {
+        "validation_guidance",
         "mention",
         "species",
         "taxon_hint",
@@ -87,6 +88,10 @@ class _StrictToolModel(BaseModel):
 
 
 class GeneStageInput(_StrictToolModel):
+    validation_guidance: Optional[StrictStr] = Field(
+        default=None,
+        description="One short advisory sentence conveying relevant configured validation rules and evidence-backed context for this finding; not source evidence or a resolved identity",
+    )
     pending_ref_id: StrictStr
     mention: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
@@ -254,6 +259,7 @@ def _stage_payload_from_gene_input(stage_input: GeneStageInput) -> dict[str, Any
         "identity_resolution_notes": list(stage_input.identity_resolution_notes),
     }
     for field_name in (
+        "validation_guidance",
         "species",
         "taxon_hint",
         "data_provider_hint",
@@ -279,8 +285,16 @@ def _stage_gene_mention_evidence_impl(
     proposed_primary_external_id: Optional[str] = None,
     proposed_gene_symbol: Optional[str] = None,
     proposed_taxon: Optional[str] = None,
+    validation_guidance: Optional[str] = None,
 ) -> AgrQueryResult:
-    """Stage one retained, evidence-backed gene mention through the builder workspace."""
+    """Stage one retained, evidence-backed gene mention through the builder workspace.
+
+    Args:
+        validation_guidance: Optional short sentence forwarding relevant rules from your
+            configured prompt and case-specific paper context to this finding's validators.
+            Distinguish domain rules from paper facts. Do not copy whole prompts, quote
+            document instructions, guess an identity, or replace verified evidence.
+    """
 
     attempted_query = _attempt_query(
         "stage_gene_mention_evidence",
@@ -294,6 +308,7 @@ def _stage_gene_mention_evidence_impl(
     )
     try:
         stage_input = GeneStageInput(
+            validation_guidance=validation_guidance,
             pending_ref_id=pending_ref_id,
             mention=mention,
             evidence_record_ids=evidence_record_ids,

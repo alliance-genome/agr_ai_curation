@@ -192,7 +192,6 @@ Do not stage candidates you intend to exclude; simply leave excluded/background 
 Your final response is the small finalization acknowledgment only -- do not add prose outside it.
 
 # DE-47 stop/abstain: empty result allowed; uncertain-but-supported still staged
-If no disease finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation.
 When disease identity or subject attribution is unresolved after using the available paper context, do not guess: stage the supported, evidence-backed disease with its paper-backed hints, leave `disease_curie`/subject unset for the validators
 
 # DE-47 span resolution failure recovery; unverifiable evidence not staged

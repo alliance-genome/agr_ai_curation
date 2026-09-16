@@ -971,10 +971,21 @@ async def test_identifier_import_service_returns_partial_success_and_dispatches_
 
 
 @pytest.mark.asyncio
-async def test_identifier_import_reports_source_pdf_download_access_denied(tmp_path):
+@pytest.mark.parametrize("operational", [False, True])
+@pytest.mark.parametrize("reporter_broken", [False, True])
+async def test_identifier_import_reports_source_pdf_download_access_denied(tmp_path, monkeypatch, caplog, operational, reporter_broken):
+    from src.lib.document_sources import identifier_import as module
+    from src.lib.document_sources.models import DocumentSourceError
+    captures = []
+    def capture(exc, **kwargs):
+        captures.append((exc, kwargs))
+        if reporter_broken:
+            raise RuntimeError("reporter unavailable")
+        return True
+    monkeypatch.setattr(module, "report_runtime_exception", capture)
     sessions = []
     provider = _FakeProvider()
-    provider.download_error = DocumentSourceAccessDenied(
+    provider.download_error = (DocumentSourceError if operational else DocumentSourceAccessDenied)(
         "Document-source artifact access was denied"
     )
     dispatch_recorder = _DispatchRecorder()
@@ -1007,7 +1018,11 @@ async def test_identifier_import_reports_source_pdf_download_access_denied(tmp_p
 
     assert result.error_count == 1
     assert result.results[0].status == "error"
-    assert result.results[0].error_code == "document_source_access_denied"
+    assert result.results[0].error_code == ("document_source_unavailable" if operational else "document_source_access_denied")
+    assert len(captures) == int(operational)
+    source_warnings = [record for record in caplog.records if record.name == module.logger.name]
+    assert source_warnings
+    assert all(getattr(record, "sentry_skip_event", False) for record in source_warnings)
     assert dispatch_recorder.provider_markdown_calls == []
     assert dispatch_recorder.provider_conversion_calls == []
     assert dispatch_recorder.upload_calls == []

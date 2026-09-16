@@ -1958,6 +1958,47 @@ def test_sanitized_http_exception_emits_one_real_sentry_event_with_framework_int
     assert completed.returncode == 0, completed.stderr + completed.stdout
 
 
+def test_pdf_conversion_timeouts_have_one_capture_owner_with_logging_enabled():
+    script = textwrap.dedent('''
+        import asyncio
+        import logging
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        from src.lib.observability import sentry
+        from src.lib.pdf_jobs import upload_execution_service as module
+
+        events = []
+        sentry_sdk.init(dsn="http://public@example.invalid/1", transport=events.append,
+            before_send=sentry.before_send, include_local_variables=False,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+            default_integrations=False)
+        service = module.UploadExecutionService.__new__(module.UploadExecutionService)
+        service._execute_provider_conversion_unbounded = AsyncMock(side_effect=asyncio.TimeoutError())
+        service._sync_provider_conversion_sql_failure = AsyncMock()
+        service._mark_failed_and_sync_tracker = AsyncMock()
+        module.update_document_status = AsyncMock()
+        request = SimpleNamespace(document_id="private-doc", user_id="private-user", job_id="private-job")
+        async def run():
+            await service.execute_provider_conversion(request)
+            await service.execute_provider_conversion(request)
+        asyncio.run(run())
+        sentry_sdk.flush(timeout=1)
+        assert len(events) == 2, [(e.get("tags"), e.get("logentry")) for e in events]
+        assert all(e["tags"]["failure_stage"] == "timeout" for e in events)
+        assert all(e["tags"]["alert_type"] == "background_task_failure" for e in events)
+        assert all(e["tags"]["ai_curation.document.id_hash"] == sentry.hash_sentry_identifier("private-doc") for e in events)
+        assert all("document_id" not in e["tags"] for e in events)
+        assert "private-doc" not in repr(events)
+        assert "private-user" not in repr(events)
+        assert "private-job" not in repr(events)
+        assert any(b.get("category") == module.__name__ for b in events[0].get("breadcrumbs", {}).get("values", []))
+    ''')
+    completed = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+
+
 def test_real_sentry_logging_integration_promotes_redacted_error_with_safe_grouping():
     pytest.importorskip("sentry_sdk")
     script = textwrap.dedent(

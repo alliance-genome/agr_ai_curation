@@ -1312,6 +1312,11 @@ async def _run_custom_flow_validator_agent(
         # Flow-wide model overrides do not replace saved custom configurations.
         agent_kwargs.pop("model_id_override", None)
         agent_kwargs.pop("model_provider_override", None)
+        revision_id = node_data.get("agent_revision_id")
+        if not revision_id:
+            raise ValueError("Custom validation attachment requires an exact execution revision")
+        agent_kwargs["execution_revision_id"] = str(revision_id)
+        agent_kwargs["execution_receipt"] = node_data.get("execution_receipt")
     # Explicit benchmark settings use the same canonical agent slot as other
     # graph nodes. Ordinary flow overrides above still do not replace custom
     # saved configurations; only an active benchmark route supplies these.
@@ -3490,6 +3495,7 @@ def get_all_agent_tools(
                             extraction_results=extraction_results,
                             document_id=document_id,
                             runner_user_id=user_id,
+                            active_groups=tuple(active_groups) if active_groups is not None else None,
                             flow_run_id=flow_run_id,
                             origin_session_id=session_id,
                             conversation_summary=flow_conversation_summary,
@@ -3601,11 +3607,13 @@ def get_all_agent_tools(
                         agent = get_agent_by_id(agent_id, **agent_kwargs)
                 except Exception as e:
                     logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
+                    from src.lib.openai_agents.config import ProviderDisabledError
                     unavailable_steps.append({
                         "step": step_num,
                         "agent_id": agent_id,
                         "agent_name": entry.get("name", agent_id),
                         "reason": str(e),
+                        "error_code": "provider_disabled" if isinstance(e, ProviderDisabledError) else None,
                     })
                     continue
 
@@ -4679,11 +4687,18 @@ async def execute_flow(
             "a document into chat. In Flow Builder, check that each step uses an "
             "available agent; add validators as validation attachments, not ordinary steps."
         )
+        provider_disabled = any(step.get("error_code") == "provider_disabled" for step in unavailable_steps)
+        if provider_disabled:
+            message = (
+                f"Flow cannot start: a model provider for these steps is disabled by policy: {step_labels}. "
+                "Explicitly choose an approved model, save a new agent revision, and update the flow's "
+                "pinned reference. Credential setup, PDFs, and validator placement do not resolve this policy block."
+            )
         yield {
             "type": "FLOW_ERROR",
             "timestamp": _now_iso(),
             "details": {
-                "reason": "flow_step_unavailable",
+                "reason": "provider_disabled" if provider_disabled else "flow_step_unavailable",
                 "message": message,
                 # Omit underlying creation exceptions: they can contain private
                 # configuration. The curator needs node identity and repair steps.

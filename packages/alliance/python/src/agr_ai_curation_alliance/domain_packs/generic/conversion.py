@@ -327,6 +327,7 @@ def materialize_generic_builder_state(
                 object_type=entry.generic_object_type,
                 object_role=_object_role(entry),
                 pending_ref_id=pending_ref_id,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 model_ref=_model_ref(entry),
                 schema_ref=_schema_ref_for_entry(
                     entry,

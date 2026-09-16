@@ -15,6 +15,11 @@ from src.lib.openai_agents.provider_model import ProviderConfiguredChatCompletio
 from src.lib.openai_agents.provider_usage import capture_provider_usage
 
 
+@pytest.fixture(autouse=True)
+def explicitly_enable_adapter_for_policy_tests(monkeypatch):
+    monkeypatch.setenv("LLM_DISABLED_PROVIDERS", "")
+
+
 def _model(*, telemetry_adapter=None):
     return ProviderConfiguredChatCompletionsModel(
         model="deepseek/deepseek-v4-pro-0813",

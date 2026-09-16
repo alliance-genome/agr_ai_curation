@@ -54,6 +54,56 @@ def _normalize_provider_id(provider: Optional[str]) -> str:
     return str(provider or "").strip().lower()
 
 
+def get_disabled_llm_providers() -> frozenset[str]:
+    """Explicit operator policy, independent of catalog visibility or credentials."""
+    return frozenset(
+        value.strip().lower()
+        for value in os.getenv("LLM_DISABLED_PROVIDERS", "openrouter").split(",")
+        if value.strip()
+    )
+
+
+class ProviderDisabledError(ValueError):
+    """Safe, distinct error for a provider disabled by deployment policy."""
+
+    def __init__(self, provider_id: str):
+        self.provider_id = provider_id
+        super().__init__(
+            f"Provider '{provider_id}' is disabled by policy. Explicitly select an "
+            "approved model and save a new agent revision; credential setup will not "
+            "enable this provider."
+        )
+
+
+def is_provider_enabled(provider_id: str) -> bool:
+    return _normalize_provider_id(provider_id) not in get_disabled_llm_providers()
+
+
+def require_provider_enabled(provider_id: str) -> None:
+    if not is_provider_enabled(provider_id):
+        raise ProviderDisabledError(_normalize_provider_id(provider_id))
+
+
+def get_allele_display_limit() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_DISPLAY_LIMIT", 20))
+
+
+def get_allele_discovery_limit() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_DISCOVERY_LIMIT", 200))
+
+
+def get_allele_discovery_max() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_DISCOVERY_MAX", 1000))
+
+
+def get_allele_annotation_limit() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_ANNOTATION_LIMIT", 20))
+
+
+def get_allele_query_timeout_ms() -> int:
+    return max(1, _get_env_int_with_fallback("AGR_ALLELE_QUERY_TIMEOUT_MS", 15000))
+
+
 def _get_env_bool(key: str, default: bool) -> bool:
     """Parse boolean environment variable with resilient fallback."""
     raw = os.getenv(key)
@@ -300,6 +350,7 @@ def runtime_model_uses_provider(model: object, provider_id: str) -> bool:
 def get_api_key(provider_override: Optional[str] = None) -> Optional[str]:
     """Get API key for a specific provider (or default runner provider)."""
     provider_id = _resolve_provider_from_override(provider_override)
+    require_provider_enabled(provider_id)
     provider = _get_provider_definition(provider_id)
     return os.getenv(provider.api_key_env)
 
@@ -332,6 +383,7 @@ def get_model_for_agent(
         Model name string for native OpenAI, or a direct SDK model otherwise.
     """
     provider_id = resolve_model_provider(model_name, provider_override)
+    require_provider_enabled(provider_id)
     provider = _get_provider_definition(provider_id)
     api_key = get_api_key(provider.provider_id)
     if not str(api_key or "").strip():

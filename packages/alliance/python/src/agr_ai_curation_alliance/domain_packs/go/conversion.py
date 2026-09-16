@@ -280,6 +280,7 @@ def materialize_go_builder_state(
                 object_role=GO_OBJECT_ROLE,
                 pending_ref_id=pending_ref_id,
                 model_ref=GO_MODEL_ID,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 status=(
                     CuratableObjectStatus.NEEDS_REVIEW
                     if unresolved

@@ -111,6 +111,47 @@ def _materialize_one_candidate() -> Any:
     )
 
 
+def test_h2_ab1_guidance_survives_stage_materialization_request_and_review(monkeypatch):
+    """Historical mention/source facts; quote and guidance are synthetic fixture text."""
+    from agr_ai_curation_alliance.tools import allele_builder_tools as tools
+    from src.lib.openai_agents import extraction_builder_workspace as builder
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry, ValidationBindingState
+    from src.lib.domain_packs.validator_dispatch import validator_request_payload_for_agent
+    from src.lib.domain_packs.materialization import _validation_request_finding_payload
+    from src.schemas.domain_envelope import DomainEnvelope
+    events = []
+    monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **event: events.append(event))
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **event: events.append(event))
+    workspace = ExtractionBuilderWorkspace(run_id="guidance-fixture", domain_pack_id=ALLELE_DOMAIN_PACK_ID)
+    monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+    guidance = "The paper describes H2-Ab1 f/f mice from Cyagen; check conditional allele and source compatibility, not gene name alone."
+    staged = tools._stage_allele_observation_impl(
+        pending_ref_id="h2-ab1", mention="H2-Ab1 f/f", evidence_record_ids=["evidence-unc54-1"],
+        source_mentions=["H2-Ab1 f/f", "Cyagen"], associated_gene="H2-Ab1",
+        taxon="Mus musculus", validation_guidance=guidance,
+    )
+    assert staged.status == "ok"
+    assert any((event.get("output_summary") or {}).get("candidate", {}).get("staged_fields", {}).get("validation_guidance") == guidance for event in events)
+    records = _evidence_records()
+    records[0]["verified_quote"] = "Fixture: H2-Ab1 f/f mice were obtained from Cyagen."
+    result = materialize_allele_builder_state(workspace=workspace, candidate_ids=[staged.data["candidate_id"]], evidence_records=records, resolver_entry_lookup=None)
+    assert result.ok, result.summary()
+    objects = result.payload["curatable_objects"]
+    assert [obj["object_type"] for obj in objects if obj.get("validation_guidance")] == [ALLELE_MENTION_OBJECT_TYPE]
+    envelope = DomainEnvelope(envelope_id="guidance", domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        extracted_objects=objects, metadata=result.payload["metadata"])
+    pack = load_alliance_domain_pack_registry().get_pack(ALLELE_DOMAIN_PACK_ID)
+    matches = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+    requests = [build_domain_validation_request(match).request for match in matches if match.object_envelope.object_type == ALLELE_MENTION_OBJECT_TYPE]
+    assert requests and all(request is not None for request in requests)
+    for request in requests:
+        assert request.validation_guidance == guidance
+        assert validator_request_payload_for_agent(request)["validation_guidance"] == guidance
+        assert _validation_request_finding_payload(request)["validation_guidance"] == guidance
+        assert "MGI:7584221" not in str(request.selected_inputs)
+
+
 def test_allele_pack_loads_with_builder_fixture():
     registry = load_alliance_domain_pack_registry()
     pack = registry.get_pack(ALLELE_DOMAIN_PACK_ID)

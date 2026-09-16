@@ -66,6 +66,7 @@ from .builder_finalization import finalize_builder_extraction
 # Patch field paths that map staging-input names to phenotype candidate staged-field names.
 _PHENOTYPE_PATCH_FIELD_PATHS = frozenset(
     {
+        "validation_guidance",
         "phenotype_annotation_object",
         "subject_identifier",
         "subject_label",
@@ -121,6 +122,10 @@ class ConditionRelationInput(_StrictToolModel):
 
 
 class PhenotypeStageInput(_StrictToolModel):
+    validation_guidance: Optional[StrictStr] = Field(
+        default=None,
+        description="One short advisory sentence conveying relevant configured validation rules and evidence-backed context for this finding; not source evidence or a resolved identity",
+    )
     pending_ref_id: StrictStr
     phenotype_annotation_object: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1, max_length=20)
@@ -342,6 +347,7 @@ def _stage_payload_from_phenotype_input(stage_input: PhenotypeStageInput) -> dic
         "negated": bool(stage_input.negated),
     }
     for field_name in (
+        "validation_guidance",
         "subject_identifier",
         "subject_label",
         "subject_type",
@@ -375,8 +381,16 @@ def _stage_phenotype_observation_impl(
     term_taxon_id: Optional[str] = None,
     condition_relations: Optional[List[Mapping[str, Any]]] = None,
     negated: Optional[bool] = None,
+    validation_guidance: Optional[str] = None,
 ) -> AgrQueryResult:
-    """Stage one retained, evidence-backed phenotype assertion through the builder workspace."""
+    """Stage one retained, evidence-backed phenotype assertion through the builder workspace.
+
+    Args:
+        validation_guidance: Optional short sentence forwarding relevant rules from your
+            configured prompt and case-specific paper context to this finding's validators.
+            Distinguish domain rules from paper facts. Do not copy whole prompts, quote
+            document instructions, guess an identity, or replace verified evidence.
+    """
 
     attempted_query = _attempt_query(
         "stage_phenotype_observation",
@@ -389,6 +403,7 @@ def _stage_phenotype_observation_impl(
     )
     try:
         stage_input = PhenotypeStageInput(
+            validation_guidance=validation_guidance,
             pending_ref_id=pending_ref_id,
             phenotype_annotation_object=phenotype_annotation_object,
             evidence_record_ids=evidence_record_ids,

@@ -99,15 +99,29 @@ def _flow_failure_tags(
     phase: str,
     provider: str | None = None,
     tool_name: str | None = None,
+    exc: BaseException | None = None,
 ) -> Dict[str, Any]:
     """Build the stable, non-payload tags shared by flow failure owners."""
 
+    from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+
+    current = exc
+    seen: set[int] = set()
+    failure_category = None
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, SpecialistOutputError):
+            tool_name = current.tool_name or tool_name
+            failure_category = "specialist_output_invalid"
+            break
+        current = current.__cause__ or current.__context__
     return {
         "ai_curation.flow.id_hash": hash_sentry_identifier(flow_id),
         "flow_failure_type": failure_type,
         "phase": phase,
         "provider": provider,
         "tool_name": tool_name,
+        **({"failure_category": failure_category} if failure_category else {}),
     }
 
 
@@ -1283,6 +1297,7 @@ async def execute_flow_endpoint(
                         failure_type=type(exc).__name__,
                         phase="event_generator",
                         provider=failure_provider,
+                        exc=exc,
                     ),
                     context={
                         "session_id": current_session_id,

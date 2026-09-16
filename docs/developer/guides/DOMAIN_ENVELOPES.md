@@ -133,6 +133,29 @@ profile-bound agent. Advisory capabilities cannot widen a saved profile.
 
 ## Validation
 
+### Extractor guidance
+
+`CuratableObjectEnvelope.validation_guidance` is an optional short advisory
+sentence scoped to one finding. Supported builder stage/patch tools retain it
+outside the domain payload; materializers attach it to the finding's validation
+objects, not shared references or unrelated findings. Custom profile-bound
+generic staging also accepts it without relaxing the profile's attribute schema.
+
+Extractors should convey relevant rules from their configured prompt and
+case-specific paper context, distinguishing rules from facts and keeping verified
+evidence separate. Do not copy whole prompts or document instructions. Validators
+treat guidance as advisory, check source/database support, and may disagree or
+return unresolved; guidance never directly writes resolved fields.
+
+The shared selector builder carries the sentence into
+`DomainValidationRequest.validation_guidance`. Request identity and dispatch
+deduplication include it. Single and batched model inputs retain it during
+compaction; builder trace snapshots and saved validation-request review details
+retain it too. Omission remains valid. There is no additional model call or forced
+signoff, and static tests do not guarantee that a model forwards every useful rule.
+
+### Metadata-driven validation
+
 Automatic validation is metadata-driven. `DomainPackValidationRegistry` reads
 `metadata.validators` and `metadata.validator_bindings` from the domain pack,
 object definitions, and field definitions, then normalizes them into:

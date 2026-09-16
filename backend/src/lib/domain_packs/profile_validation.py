@@ -62,7 +62,7 @@ def resolve_profile_validation(
     receipt: AgentExecutionReceipt,
     generic_pack: LoadedDomainPack,
     *,
-    active_group_ids: Iterable[str] = (),
+    active_group_ids: Iterable[str] | None = (),
     db: Session | None = None,
     user_id: int | str | None = None,
 ) -> ProfileValidationContext | None:
@@ -80,7 +80,7 @@ def resolve_envelope_profile_validation(
     envelope: DomainEnvelope,
     generic_pack: LoadedDomainPack,
     *,
-    active_group_ids: Iterable[str] = (),
+    active_group_ids: Iterable[str] | None = (),
     db: Session | None = None,
     user_id: int | str | None = None,
 ) -> ProfileValidationContext | None:
@@ -117,7 +117,7 @@ def compile_profile_validation(
     profile: ResolvedGenericProfile,
     generic_pack: LoadedDomainPack,
     *,
-    active_group_ids: Iterable[str] = (),
+    active_group_ids: Iterable[str] | None = (),
     capabilities: Iterable[ReusableCapability] | None = None,
     user_id: int | str | None = None,
 ) -> ProfileValidationContext:
@@ -133,7 +133,11 @@ def compile_profile_validation(
     if generic_pack.pack_id != "generic":
         raise ProfileIdentityError("Custom profiles require the generic domain pack")
     contract = profile.contract
-    groups = tuple(active_group_ids)
+    # None means the caller has no authenticated group context; () means it
+    # supplied an explicitly empty membership. Neither grants group access.
+    # Profiles without mappings remain reviewable; scoped mappings keep the
+    # existing controlled unavailable findings rather than crashing here.
+    groups = tuple(active_group_ids) if active_group_ids is not None else ()
     from src.lib.agent_studio.custom_profile_validators import runtime_validator_user_id
     catalog = list(capabilities) if capabilities is not None else capability_catalog(
         active_group_ids=groups, user_id=runtime_validator_user_id(user_id),

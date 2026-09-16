@@ -35,6 +35,22 @@ def flow(*receipts):
     })
 
 
+def test_pinned_validator_is_not_misclassified_as_extraction(monkeypatch):
+    saved_receipt = receipt("domain")
+    saved_receipt.output_contract.output_schema_key = "AlleleResultEnvelope"
+    install_resolver(monkeypatch, [saved_receipt])
+    resolved = module.resolve_flow_execution_revisions(Mock(), flow(saved_receipt), user_id=7, active_group_ids=[])
+    entry = resolved.entries_by_node["node_0"]
+    assert entry is not None
+    assert entry["category"] == "Validation"
+    result = validate_flow_authoring_draft(
+        resolved.definition, context=AuthoringValidationContext.from_values(db_user_id=7, active_group_ids=[]),
+        resolve_agent=lambda *_: None, apply_attachment_defaults=lambda value: value,
+        entries_by_node=resolved.entries_by_node,
+    )
+    assert "attachment_only_agent_in_control_flow" in {finding.code for finding in result.findings}
+
+
 def receipt(mode):
     contract = {"output_state": "none"} if mode is None else {
         "output_state": "structured_extraction", "output_mode": mode,

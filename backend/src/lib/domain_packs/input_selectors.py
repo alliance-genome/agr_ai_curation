@@ -116,6 +116,11 @@ def build_domain_validation_request(
         match, binding.expected_result_fields
     )
     target = _validation_target(match, selected_inputs)
+    validation_guidance = (
+        match.object_envelope.validation_guidance
+        if match.object_envelope is not None
+        else None
+    )
     request_payload = {
         "validator_binding_id": binding.binding_id,
         "validator_agent": binding.validator_agent.to_dict(),
@@ -123,6 +128,8 @@ def build_domain_validation_request(
         "selected_inputs": selected_inputs,
         "expected_result_fields": expected_result_fields,
     }
+    if validation_guidance is not None:
+        request_payload["validation_guidance"] = validation_guidance
     request_id = (
         "domain-validation:"
         + sha256(
@@ -132,6 +139,7 @@ def build_domain_validation_request(
 
     return SelectorBuildResult(
         request=DomainValidationRequest(
+            validation_guidance=validation_guidance,
             request_id=request_id,
             validator_binding_id=binding.binding_id,
             validator_agent=ValidatorAgentRef.model_validate(

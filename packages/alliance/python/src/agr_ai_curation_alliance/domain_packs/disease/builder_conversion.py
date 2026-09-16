@@ -406,7 +406,7 @@ def validate_disease_builder_objects(
     annotations = [
         obj for obj in output.curatable_objects if _is_concrete_or_abstract_annotation(obj.object_type)
     ]
-    if not annotations:
+    if output.curatable_objects and not annotations:
         errors.append("curatable_objects must contain at least one disease annotation")
 
     for index, obj in enumerate(annotations):
@@ -732,6 +732,7 @@ def materialize_disease_builder_state(
                 object_type=DISEASE_SUBJECT_OBJECT_TYPE,
                 object_role="validated_reference",
                 pending_ref_id=subject_ref_id,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 schema_ref=_subject_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 definition_notes=[
@@ -752,6 +753,7 @@ def materialize_disease_builder_state(
                 object_type=DISEASE_TERM_OBJECT_TYPE,
                 object_role="validated_reference",
                 pending_ref_id=term_ref_id,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 schema_ref=_term_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 payload=copy.deepcopy(term_payload),
@@ -877,6 +879,7 @@ def materialize_disease_builder_state(
                 object_type=object_type,
                 object_role=DISEASE_ANNOTATION_OBJECT_ROLE,
                 pending_ref_id=annotation_ref,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 model_ref=DISEASE_MODEL_ID,
                 schema_ref=_annotation_schema_ref(schema_id, class_name),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
@@ -905,7 +908,11 @@ def materialize_disease_builder_state(
         "source_candidate_ids": list(normalized_candidate_ids),
     }
     output_payload = {
-        "summary": "Finalized disease extraction from builder-staged assertions.",
+        "summary": (
+            "Finalized disease extraction from builder-staged assertions."
+            if normalized_candidate_ids
+            else "Explicitly finalized disease extraction with no retained annotations."
+        ),
         "curatable_objects": [
             obj.model_dump(mode="json", exclude_none=True) for obj in curatable_objects
         ],
@@ -933,7 +940,7 @@ def materialize_disease_builder_state(
         ).model_dump(mode="json", exclude_none=True),
     }
 
-    if annotation_index == 0 and not issues:
+    if normalized_candidate_ids and annotation_index == 0 and not issues:
         issues.append(
             _materialization_issue(
                 field_path="curatable_objects",

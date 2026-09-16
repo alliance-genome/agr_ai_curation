@@ -177,6 +177,7 @@ from src.lib.chat_history_repository import (
     ChatSessionRecord,
 )
 from src.lib.config import list_model_definitions
+from src.lib.config.models_loader import is_model_selectable
 from src.lib.packages import load_installed_agent_studio_prompt
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
@@ -471,7 +472,7 @@ async def get_models_endpoint(
     _ = user
     try:
         models = sorted(
-            [model for model in list_model_definitions() if bool(getattr(model, "curator_visible", True))],
+            [model for model in list_model_definitions() if is_model_selectable(model)],
             key=lambda model: (not bool(model.default), model.name.lower()),
         )
         return ModelsResponse(
@@ -2797,6 +2798,56 @@ def _should_force_workshop_prompt_refresh(
 
 
 async def _handle_tool_call(
+    tool_name: str, tool_input: dict, context: Optional[ChatContext],
+    user_email: str, user_auth_sub: str, messages=None, user_db_id=None,
+    active_group_ids=None, workshop_proposal_state=None,
+    failure_state=None, runtime_trace_id=None, runtime_session_id=None, tool_call_id=None,
+) -> dict:
+    from src.lib.observability.tool_results import ToolFailureState, ReturnedToolFailure, classify_tool_result
+
+    state = failure_state if failure_state is not None else ToolFailureState()
+    identity = tool_input.get("failure_id") if tool_name == "report_tool_failure" else None
+    if identity:
+        known = state.failures.get(identity) if isinstance(identity, str) else None
+        if known is None:
+            return {"success": False, "code": "unknown_failure_id",
+                    "error": "Use a failure_id returned in this turn; no report was sent."}
+        return {"success": known[1], "status": "success" if known[1] else "error",
+                "capture_status": "queued" if known[1] else "unavailable",
+                "sentry_capture_queued": known[1], "notification_submitted": False,
+                "failure_id": identity, "already_reported": known[1]}
+    report_context = context
+    if tool_name == "report_tool_failure" and (runtime_trace_id or runtime_session_id):
+        report_context = (context or ChatContext.model_validate({})).model_copy(update={
+            "trace_id": runtime_trace_id, "session_id": runtime_session_id,
+        })
+    result = await _execute_tool_call(
+        tool_name, tool_input, report_context, user_email, user_auth_sub,
+        messages=messages, user_db_id=user_db_id, active_group_ids=active_group_ids,
+        workshop_proposal_state=workshop_proposal_state,
+    )
+    outcome = classify_tool_result(result, studio=True)
+    if (isinstance(result, dict) and result.get("code") == "authoring_validation_engine_failure"
+            and result.get("failure_kind") == "operational" and result.get("failure_id")):
+        # Adopt the backend engine owner's receipt; never create a second event.
+        owned = ReturnedToolFailure("authoring_validation_engine_failure")
+        captured = result.get("sentry_capture_queued") is True
+        if captured:
+            setattr(owned, "_ai_curation_sentry_captured", True)
+        state.failures[result["failure_id"]] = (owned, captured)
+    if outcome.operational_code:
+        identity, captured = state.capture(
+            code=outcome.operational_code, tool_name=tool_name,
+            invocation_id=tool_call_id or uuid.uuid4().hex,
+            trace_id=runtime_trace_id or (context.trace_id if context else None),
+            session_id=runtime_session_id or (context.session_id if context else None),
+        )
+        result = {**result, "failure_id": identity, "sentry_capture_queued": captured,
+                  "notification_submitted": False}
+    return result
+
+
+async def _execute_tool_call(
     tool_name: str,
     tool_input: dict,
     context: Optional[ChatContext],
@@ -4217,6 +4268,8 @@ async def chat_with_opus(
         completed_tool_calls: List[Dict[str, Any]] = []
         domain_reference_events: List[Dict[str, Any]] = []
         workshop_proposal_state: dict = {}
+        from src.lib.observability.tool_results import ToolFailureState
+        tool_failure_state = ToolFailureState()
 
         async def execute_tool(
             tool_name: str,
@@ -4253,6 +4306,10 @@ async def chat_with_opus(
                         user_db_id=db_user_id,
                         active_group_ids=active_group_ids,
                         workshop_proposal_state=workshop_proposal_state,
+                        failure_state=tool_failure_state,
+                        runtime_trace_id=run_state.trace_id,
+                        runtime_session_id=prepared_turn.session_id,
+                        tool_call_id=call_id,
                     )
                 except Exception as exc:
                     _report_agent_studio_exception_once(

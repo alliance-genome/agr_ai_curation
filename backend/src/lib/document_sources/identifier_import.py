@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+from src.lib.observability.runtime import report_runtime_exception
 import logging
 import re
 import shutil
@@ -76,6 +77,16 @@ from src.services.user_service import principal_from_claims, provision_user
 logger = logging.getLogger(__name__)
 
 _PMID_RE = re.compile(r"^(?:PMID|PUBMED(?:\s+ID)?)\s*[:#]?\s*(\d+)$", re.IGNORECASE)
+
+
+def _report_source_failure(exc: Exception, operation: str) -> None:
+    """Capture only unexpected source failures; reporting never changes imports."""
+    if isinstance(exc, DocumentSourceAccessDenied):
+        return
+    try:
+        report_runtime_exception(exc, component="identifier_import", operation=operation)
+    except Exception:
+        pass
 
 
 class IdentifierImportValidationError(ValueError):
@@ -590,7 +601,9 @@ class IdentifierImportService:
         try:
             normalization_provider = self._provider_factory()
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
-            logger.warning("Document-source identifier normalization unavailable: %s", exc)
+            _report_source_failure(exc, "source_normalization_failed")
+            logger.warning("Document-source identifier normalization unavailable: %s", exc,
+                           extra={"sentry_skip_event": True})
             return IdentifierImportBatchResult(
                 results=tuple(
                     IdentifierImportItemResult(
@@ -671,7 +684,9 @@ class IdentifierImportService:
         try:
             normalization_provider = self._provider_factory()
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
-            logger.warning("Document-source identifier normalization unavailable: %s", exc)
+            _report_source_failure(exc, "source_normalization_failed")
+            logger.warning("Document-source identifier normalization unavailable: %s", exc,
+                           extra={"sentry_skip_event": True})
             return IdentifierImportBatchResult(
                 results=tuple(
                     IdentifierImportItemResult(
@@ -792,10 +807,12 @@ class IdentifierImportService:
                 source_provenance=source_provenance,
             )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
+            _report_source_failure(exc, "source_resolve_failed")
             logger.warning(
                 "Document-source identifier resolve failed for %s: %s",
                 normalized.normalized,
                 exc,
+                extra={"sentry_skip_event": True},
             )
             return IdentifierImportItemResult(
                 identifier=normalized.original,
@@ -890,6 +907,7 @@ class IdentifierImportService:
                 "Document-source PDF access denied for %s: %s",
                 normalized.normalized,
                 exc,
+                extra={"sentry_skip_event": True},
             )
             return IdentifierImportItemResult(
                 identifier=normalized.original,
@@ -899,10 +917,12 @@ class IdentifierImportService:
                 message="Access to the document-source PDF was denied.",
             )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
+            _report_source_failure(exc, "source_import_failed")
             logger.warning(
                 "Document-source identifier import failed for %s: %s",
                 normalized.normalized,
                 exc,
+                extra={"sentry_skip_event": True},
             )
             return IdentifierImportItemResult(
                 identifier=normalized.original,

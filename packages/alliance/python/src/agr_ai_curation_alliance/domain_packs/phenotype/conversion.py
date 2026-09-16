@@ -929,6 +929,7 @@ def materialize_phenotype_builder_state(
                 object_type=PHENOTYPE_SUBJECT_OBJECT_TYPE,
                 object_role="validated_reference",
                 pending_ref_id=subject_ref_id,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 schema_ref=_phenotype_subject_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 definition_notes=[
@@ -949,6 +950,7 @@ def materialize_phenotype_builder_state(
                 object_type=PHENOTYPE_TERM_OBJECT_TYPE,
                 object_role="validated_reference",
                 pending_ref_id=term_ref_id,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 schema_ref=_phenotype_term_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 payload=copy.deepcopy(term_payload),
@@ -1065,6 +1067,7 @@ def materialize_phenotype_builder_state(
                 object_type=PHENOTYPE_OBJECT_TYPE,
                 object_role=PHENOTYPE_ANNOTATION_OBJECT_ROLE,
                 pending_ref_id=annotation_ref,
+                validation_guidance=staged_fields.get("validation_guidance"),
                 model_ref=PHENOTYPE_ANNOTATION_MODEL_ID,
                 schema_ref=_phenotype_annotation_schema_ref(),
                 definition_state=DefinitionState.IN_DEVELOPMENT,

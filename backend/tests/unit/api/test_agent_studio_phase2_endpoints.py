@@ -57,6 +57,19 @@ def test_get_models_endpoint_returns_sorted_models(monkeypatch):
     assert response.models[0].default_reasoning == "high"
 
 
+def test_disabled_provider_models_are_not_returned_to_workshop(monkeypatch):
+    import src.api.agent_studio as api_module
+    from src.lib.config.models_loader import get_model
+
+    monkeypatch.delenv("LLM_DISABLED_PROVIDERS", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy-not-a-secret")
+    monkeypatch.setattr(api_module, "list_model_definitions", lambda: [
+        get_model("gpt-5.6-sol"), get_model("deepseek/deepseek-v4-pro-0813"),
+    ])
+    response = asyncio.run(api_module.get_models_endpoint(user={"sub": "test"}))
+    assert [model.model_id for model in response.models] == ["gpt-5.6-sol"]
+
+
 def test_get_tool_library_endpoint_returns_curator_visible_policy_rows(monkeypatch):
     import src.api.agent_studio as api_module
 

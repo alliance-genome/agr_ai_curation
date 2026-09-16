@@ -281,6 +281,25 @@ failure. For each case, record whether Sentry provides:
 - a useful error issue linked to the surrounding transaction;
 - an ingest result rather than `too_large:event` or another relay/store drop.
 
+### Caught failures and correlation
+
+PDF upload/conversion exception handlers own their explicit background-task
+capture. Their diagnostic ERROR logs use `extra={"sentry_skip_event": True}`
+so logging integration keeps breadcrumbs without promoting a second event.
+Unrelated errors without an explicit capture owner remain eligible for logging
+capture; there is no global trace/message deduplication cache.
+
+The specialist invocation wrapper attaches the actual invoked tool name to
+`SpecialistOutputError`. Flow capture follows the typed exception cause/context
+chain (with cycle protection), retaining that technical identity and the
+`specialist_output_invalid` category. It does not extract metadata from error
+messages or publish custom-agent display names. Unknown origins remain unknown.
+
+Tool-failure notifications use canonical `ai_curation.trace.id_hash` and
+`ai_curation.chat.session_id_hash` tags. Final redaction removes raw application
+identifier tags, while preserving Sentry's native `contexts.trace` identifiers.
+An SDK capture ID still proves queueing only, not ingestion or email delivery.
+
 Compare those results with the matching Langfuse/TraceReview evidence. Do not
 retire TraceReview based only on Sentry UI parity: Agent Studio and Prompt
 Explorer currently call TraceReview APIs, and TraceReview provides exact

@@ -1524,6 +1524,7 @@ def test_get_model_for_agent_preserves_namespaced_model_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_model_for_agent_builds_single_attempt_openrouter_adapter(monkeypatch):
+    monkeypatch.setenv("LLM_DISABLED_PROVIDERS", "")
     attempts = 0
 
     async def failing_route(_request):

@@ -720,6 +720,7 @@ def _create_search_codebase_handler():
         per_file_matches: int = 1,
         limit: int = 20,
         cursor: Optional[str] = None,
+        match_mode: str = "regex",
     ) -> Dict[str, Any]:
         return search_codebase(
             query=query,
@@ -728,6 +729,7 @@ def _create_search_codebase_handler():
             per_file_matches=per_file_matches,
             limit=limit,
             cursor=cursor,
+            match_mode=match_mode,
         )
 
     return handler
@@ -1224,8 +1226,13 @@ Use this when a curator asks whether the current code supports a feature,
 contains a limitation, or implements a specific Agent Studio behavior.
 
 Two search modes:
-- content: search file contents and return matching lines with file paths
-- files: search repository-relative file paths only
+- content: search file contents using ripgrep regex by default; use match_mode="literal"
+  for exact text such as materialize_persisted_envelope_review_rows(. Both use smart-case.
+- files: search repository-relative file paths as case-insensitive substrings;
+  match_mode does not change filename matching.
+
+An invalid_regex result means correct/escape the regex or explicitly retry in
+literal mode. It is not evidence that no matching code exists.
 
 Typical workflow:
 1. search_codebase(query="agent_studio", search_mode="files")
@@ -1242,7 +1249,7 @@ current repository checkout and never executes code.""",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Substring or ripgrep search text to find in file paths or contents.",
+                    "description": "Content: ripgrep regex unless match_mode='literal'. Files: path substring.",
                 },
                 "search_mode": {
                     "type": "string",
@@ -1253,6 +1260,12 @@ current repository checkout and never executes code.""",
                 "path_glob": {
                     "type": "string",
                     "description": "Optional rg-style glob to narrow the search, for example 'backend/src/**/*.py'.",
+                },
+                "match_mode": {
+                    "type": "string",
+                    "enum": ["regex", "literal"],
+                    "default": "regex",
+                    "description": "Content matching syntax. Use literal for function text with parentheses; files mode always uses substrings.",
                 },
                 "per_file_matches": {
                     "type": "integer",

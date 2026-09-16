@@ -53,6 +53,7 @@ from .builder_finalization import finalize_builder_extraction
 
 _GENERIC_TOP_LEVEL_PATCH_FIELDS = frozenset(
     {
+        "validation_guidance",
         "class_key",
         "label",
         "pending_ref_id",
@@ -202,6 +203,10 @@ class GenericClassListInput(_StrictToolModel):
 
 
 class GenericStageInput(_StrictToolModel):
+    validation_guidance: Optional[StrictStr] = Field(
+        default=None,
+        description="One short advisory sentence conveying relevant configured validation rules and evidence-backed context for this finding; not source evidence or a resolved identity",
+    )
     class_key: StrictStr
     label: StrictStr
     evidence_record_ids: List[StrictStr] = Field(min_length=1)
@@ -252,6 +257,13 @@ class GenericPatchUpdateInput(_StrictToolModel):
     field_path: StrictStr
     value: Any = None
     evidence_record_ids: Optional[List[StrictStr]] = None
+
+    @field_validator("value")
+    @classmethod
+    def _guidance_is_text(cls, value, info):
+        if info.data.get("field_path") == "validation_guidance" and value is not None and not isinstance(value, str):
+            raise ValueError("validation_guidance must be a string or null")
+        return value
 
     @field_validator("field_path")
     @classmethod
@@ -390,6 +402,7 @@ def _stage_payload_from_generic_input(
     if stage_input.pending_ref_id:
         payload["pending_ref_id"] = stage_input.pending_ref_id
     for field_name in (
+        "validation_guidance",
         "source_label",
         "description",
         "confidence",
@@ -456,8 +469,16 @@ def _stage_generic_object_impl(
     semantic_class: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
     attributes: Optional[Dict[str, Any]] = None,
+    validation_guidance: Optional[str] = None,
 ) -> AgrQueryResult:
-    """Stage one retained, evidence-backed generic object through the builder."""
+    """Stage one retained, evidence-backed generic object through the builder.
+
+    Args:
+        validation_guidance: Optional short sentence forwarding relevant rules from your
+            configured prompt and case-specific paper context to this finding's validators.
+            Distinguish domain rules from paper facts. Do not copy whole prompts, quote
+            document instructions, guess an identity, or replace verified evidence.
+    """
 
     attempted_query = _attempt_query(
         "stage_generic_object",
@@ -473,6 +494,7 @@ def _stage_generic_object_impl(
     profile = getattr(workspace, "generic_profile", None)
     try:
         stage_input = GenericStageInput(
+            validation_guidance=validation_guidance,
             class_key=class_key,
             label=label,
             evidence_record_ids=evidence_record_ids,
@@ -680,7 +702,7 @@ def _patch_generic_object_impl(
         if profile is not None:
             if update.field_path == "attributes" or update.field_path.startswith("attributes."):
                 profile_attribute_updates.append({"field_path": update.field_path, "value": update.value})
-            elif update.field_path in {"label", "classification_notes"}:
+            elif update.field_path in {"label", "classification_notes", "validation_guidance"}:
                 staged_payload[update.field_path] = update.value
             else:
                 return _generic_validation_result(

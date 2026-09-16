@@ -136,7 +136,8 @@ def _require_rg() -> str:
 def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iterable[Dict[str, Any]]:
     """Yield file path matches using rg."""
     rg_path = _require_rg()
-    command = [rg_path, "--files", "."]
+    # Stable path order keeps cursor-based paging deterministic across rg runs.
+    command = [rg_path, "--files", "--sort", "path", "."]
     if path_glob:
         command.extend(["-g", path_glob])
     try:
@@ -160,11 +161,16 @@ def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iter
             yield {"path": relative}
 
 
+class InvalidSearchRegex(ValueError):
+    """The ripgrep engine rejected the caller's regular expression."""
+
+
 def _iter_content_matches(
     root: Path,
     query: str,
     path_glob: Optional[str],
     per_file_matches: int,
+    match_mode: str = "regex",
 ) -> Iterable[Dict[str, Any]]:
     """Yield content matches using rg."""
     rg_path = _require_rg()
@@ -175,6 +181,8 @@ def _iter_content_matches(
         "--color",
         "never",
         "--smart-case",
+        "--sort",
+        "path",
         "--max-count",
         str(per_file_matches),
         "--max-filesize",
@@ -182,6 +190,8 @@ def _iter_content_matches(
     ]
     if path_glob:
         command.extend(["-g", path_glob])
+    if match_mode == "literal":
+        command.append("--fixed-strings")
     command.extend(["--", query, "."])
     try:
         completed = subprocess.run(
@@ -195,6 +205,12 @@ def _iter_content_matches(
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("rg content search timed out") from exc
     if completed.returncode not in (0, 1):
+        # Use the actual regex engine's diagnostic, not Python's different
+        # grammar. Other exit-2 errors (including glob/I/O errors) stay fatal.
+        if completed.returncode == 2 and completed.stderr.startswith(
+            ("regex parse error:\n", "rg: regex parse error:\n")
+        ):
+            raise InvalidSearchRegex("Invalid ripgrep regular expression")
         raise RuntimeError(completed.stderr.strip() or "rg search failed")
 
     for raw_line in completed.stdout.splitlines():
@@ -222,6 +238,7 @@ def search_codebase(
     per_file_matches: int = 1,
     limit: int = 20,
     cursor: Optional[str] = None,
+    match_mode: str = "regex",
 ) -> Dict[str, Any]:
     """Search the runtime repository by filename or file content."""
     if not isinstance(query, str) or not query.strip():
@@ -229,6 +246,10 @@ def search_codebase(
 
     if search_mode not in {"content", "files"}:
         raise ValueError("search_mode must be 'content' or 'files'")
+
+    if match_mode not in {"regex", "literal"}:
+        return {"status": "error", "success": False, "error": "invalid_match_mode",
+                "message": "match_mode must be 'regex' or 'literal'."}
 
     if per_file_matches < 1 or per_file_matches > 20:
         raise ValueError("per_file_matches must be between 1 and 20")
@@ -245,16 +266,23 @@ def search_codebase(
             query=query.strip(),
             path_glob=path_glob,
             per_file_matches=per_file_matches,
+            match_mode=match_mode,
         )
 
     max_catalog_results = _MAX_SEARCH_RESULTS if search_mode == "content" else _MAX_FILE_LIST_RESULTS
     matches: List[Dict[str, Any]] = []
     result_set_truncated = False
-    for match in iterator:
-        if len(matches) >= max_catalog_results:
-            result_set_truncated = True
-            break
-        matches.append(match)
+    try:
+        for match in iterator:
+            if len(matches) >= max_catalog_results:
+                result_set_truncated = True
+                break
+            matches.append(match)
+    except InvalidSearchRegex:
+        # Do not echo stderr/query: both can be large or contain private text.
+        return {"status": "error", "success": False, "error": "invalid_regex",
+                "message": "Invalid ripgrep regular expression. Correct or escape the regex, "
+                           "or retry with match_mode='literal' to search exact text such as function_name(."}
 
     match_index, line_char_start = _parse_search_cursor(cursor)
     if match_index > len(matches) or (match_index == len(matches) and line_char_start):
@@ -265,11 +293,11 @@ def search_codebase(
         next_call = None
         if next_cursor is not None:
             next_call = {"tool": "search_codebase", "arguments": {
-                "query": query.strip(), "search_mode": search_mode,
+                "query": query.strip(), "search_mode": search_mode, "match_mode": match_mode,
                 **({"path_glob": path_glob} if path_glob else {}),
                 "per_file_matches": per_file_matches, "limit": limit, "cursor": next_cursor,
             }}
-        return {"status": "ok", "search_mode": search_mode, "query": query.strip(),
+        return {"status": "ok", "search_mode": search_mode, "match_mode": match_mode, "query": query.strip(),
                 "path_glob": path_glob, "repo_root": str(root), "results": results,
                 "result_count": len(results), "result_set_count": len(matches),
                 "result_set_truncated": result_set_truncated,
