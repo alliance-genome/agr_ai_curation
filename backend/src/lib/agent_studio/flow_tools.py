@@ -800,27 +800,13 @@ def _validate_exact_flow_for_current_user(
 
     def _apply_defaults(candidate: "FlowDefinition") -> "FlowDefinition":
         if node_entries:
-            # Only an explicit revision retarget may retire attachment identities.
-            # Resolve the exact authorized revision first; retain opt-outs for
-            # identities it still declares and let canonical hydration add new ones.
             if retargeted_node_ids:
-                from src.lib.flows.validation_attachments import validation_attachment_options_for_agent
+                from src.lib.flows.validation_attachments import reconcile_revision_attachments
 
-                candidate = candidate.model_copy(deep=True)
-                for node in candidate.nodes:
-                    entry = node_entries.get(node.id)
-                    if node.id not in retargeted_node_ids or entry is None:
-                        continue
-                    option_ids = {
-                        option.attachment_id
-                        for option in validation_attachment_options_for_agent(
-                            node.data.agent_id, agent_registry={node.data.agent_id: entry},
-                        )
-                    }
-                    node.data.validation_attachments = [
-                        selection for selection in node.data.validation_attachments
-                        if selection.attachment_id in option_ids
-                    ]
+                candidate = reconcile_revision_attachments(
+                    candidate, entries_by_node=node_entries,
+                    retargeted_node_ids=retargeted_node_ids,
+                )
             return apply_flow_validation_attachment_defaults(candidate, entries_by_node=node_entries)
         node_ids = {
             str(node.data.agent_id or "").strip()

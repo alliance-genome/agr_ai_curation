@@ -72,6 +72,7 @@ export interface NodeDraft {
   /** Reason Apply is not allowed right now, empty when the draft is valid. */
   blockingError: string
   set: <K extends keyof NodeDraftValues>(key: K, value: NodeDraftValues[K]) => void
+  setRevision: (data: AgentNodeData) => void
   setAttachmentsEnabled: (attachmentIds: string[], enabled: boolean) => void
   reset: () => void
   /** Exact current editor projection, including values that are not yet valid to Apply. */
@@ -199,6 +200,13 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
     setValues((current) => ({ ...current, [key]: value }))
   }, [])
 
+  const setRevision = useCallback((data: AgentNodeData) => {
+    setValues((current) => ({ ...current,
+      executionSelection: { agent_revision_id: data.agent_revision_id, execution_receipt: data.execution_receipt },
+      attachments: data.validation_attachments || [],
+    }))
+  }, [])
+
   const setAttachmentsEnabled = useCallback((attachmentIds: string[], enabled: boolean) => {
     const ids = new Set(attachmentIds)
     setValues((current) => ({
@@ -279,6 +287,7 @@ export function useNodeDraft({ node, agentMetadata, isTaskInput, supportsFileOut
     changeSummary,
     blockingError,
     set,
+    setRevision,
     setAttachmentsEnabled,
     reset,
     snapshotPayload,

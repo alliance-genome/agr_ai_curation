@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import re
 from typing import Any, Mapping
 from sqlalchemy.orm import Session
 
@@ -82,6 +83,68 @@ def validation_attachment_options_for_agent(
     if entry is None:
         return ()
     return _options_for_agent_entry(entry)
+
+
+def reconcile_revision_attachments(
+    candidate: FlowDefinition,
+    *,
+    entries_by_node: Mapping[str, Mapping[str, Any] | None],
+    retargeted_node_ids: frozenset[str],
+    db: Session | None = None,
+) -> FlowDefinition:
+    """Refresh checks only for an explicit, authorized exact-revision selection.
+
+    Profile fingerprints change even for instruction-only edits. Carry opt-outs
+    across that identity change only when the mapping and validator target agree.
+    Replacement edges need explicit review when their declared identity changes;
+    never delete them as a side effect of changing a revision.
+    """
+    refreshed = candidate.model_copy(deep=True)
+
+    def identity(item):
+        return (
+            re.sub(r"profile-[0-9a-f]{64}-", "profile-", item.attachment_id),
+            item.validator_package_id, item.validator_agent_id, item.tool_name,
+            item.scope, item.object_type, item.object_role, item.field_path,
+        )
+
+    for node in refreshed.nodes:
+        if node.id not in retargeted_node_ids:
+            continue
+        entry = entries_by_node.get(node.id)
+        if entry is None:
+            raise FlowValidationAttachmentError("Select an accessible saved agent revision before refreshing its checks.")
+        options = _options_for_agent_entry(entry, db=db)
+        old_by_identity: dict[tuple, list[FlowValidationAttachmentSelection]] = {}
+        for selection in node.data.validation_attachments:
+            old_by_identity.setdefault(identity(selection), []).append(selection)
+        selections = []
+        matched_old_ids = set()
+        for option in options:
+            matches = old_by_identity.get(identity(option), [])
+            if len(matches) > 1:
+                raise FlowValidationAttachmentError("Review this step's automatic checks before changing its revision: multiple old choices match one new check.")
+            existing = matches[0] if matches else None
+            if existing is not None:
+                matched_old_ids.add(existing.attachment_id)
+            payload = option.to_dict()
+            payload["enabled"] = existing.enabled if existing is not None else option.default_enabled
+            if existing is not None and not existing.enabled and option.default_enabled and not option.allow_opt_out:
+                raise FlowValidationAttachmentError("The selected revision requires a check you previously disabled. Review and enable that check before changing revisions.")
+            selections.append(FlowValidationAttachmentSelection(**payload))
+        if options and any(not old.enabled and old.attachment_id not in matched_old_ids for old in node.data.validation_attachments):
+            raise FlowValidationAttachmentError("A disabled check cannot be matched to the selected revision. Review its automatic checks before changing revisions.")
+        new_ids = {item.attachment_id for item in selections}
+        new_bindings = {item.validator_binding_id for item in selections}
+        for edge in refreshed.edges:
+            if edge.source != node.id or edge.role != VALIDATION_ATTACHMENT_EDGE_ROLE:
+                continue
+            if ((edge.replaces_attachment_id and edge.replaces_attachment_id not in new_ids)
+                    or (edge.satisfies_binding_id and edge.satisfies_binding_id not in new_bindings)):
+                raise FlowValidationAttachmentError("This revision changes a check used by an attached validator step. Remove that attachment edge, select the revision, then reconnect the validator to the new check.")
+        node.data.validation_attachments = selections
+        node.data.validation_groups = []
+    return refreshed
 
 
 def apply_flow_validation_attachment_defaults(

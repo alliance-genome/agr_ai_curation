@@ -1,4 +1,4 @@
-import { getAgentExecutionRevision } from '@/services/agentStudioService'
+import { getAgentExecutionRevision, selectFlowRevision } from '@/services/agentStudioService'
 import DirectExportSetting from '../../DirectExportSetting'
 import ExportOptionHelp from '../../ExportOptionHelp'
 /**
@@ -48,7 +48,7 @@ import {
 } from '../agentMetadataUtils'
 import type { AgentBrowserRequest, AgentNode, AgentNodeData, OutputBindingView } from '../types'
 import OutputFieldEditor from './OutputFieldEditor'
-import type { FlowDefinition } from '../types'
+import type { FlowDefinition, FlowNodeDefinition } from '../types'
 import AutomaticChecks from './AutomaticChecks'
 import ExecutionRevisionPicker from './ExecutionRevisionPicker'
 import NodePanelHeader from './NodePanelHeader'
@@ -178,21 +178,47 @@ function NodePanel({
   const lastLeaveOutcomeRef = useRef<NodePanelLeaveOutcome>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
+  const revisionRequest = useRef(0)
+  const [revisionPending, setRevisionPending] = useState(false)
+  useEffect(() => () => { revisionRequest.current += 1 }, [node.id, agentId])
+  const resetDraft = () => {
+    revisionRequest.current += 1
+    setRevisionPending(false)
+    draft.reset()
+  }
+  const selectRevision = async (selection: typeof draft.values.executionSelection) => {
+    if (!selection.agent_revision_id) return
+    const requestId = ++revisionRequest.current
+    setRevisionPending(true)
+    const currentNode: FlowNodeDefinition = { id: node.id, type: node.type || 'agent', position: node.position, data: { ...node.data, ...draft.snapshotPayload() } }
+    const definition: FlowDefinition = flowDefinition
+      ? { ...flowDefinition, nodes: flowDefinition.nodes.map((item) => item.id === node.id ? currentNode : item) }
+      : { version: '1.1', entry_node_id: node.id, nodes: [currentNode], edges: [] }
+    try {
+      const data = await selectFlowRevision(definition, node.id, selection.agent_revision_id)
+      if (revisionRequest.current === requestId) draft.setRevision(data)
+    } finally {
+      if (revisionRequest.current === requestId) setRevisionPending(false)
+    }
+  }
+
   const checksView = useMemo(
     () => buildAutomaticChecksView(draft.values.attachments, node.data.validation_groups ?? [], envelopeMetadata),
     [draft.values.attachments, node.data.validation_groups, envelopeMetadata]
   )
 
   const applyDraft = useCallback((): boolean => {
+    if (revisionPending) return false
     const payload = draft.buildPayload()
     if (!payload) return false
     onApply(node.id, payload)
     if (isTaskInput) onTaskInstructionsAuthored?.()
     return true
-  }, [draft, isTaskInput, node.id, onApply, onTaskInstructionsAuthored])
+  }, [draft, isTaskInput, node.id, onApply, onTaskInstructionsAuthored, revisionPending])
 
   const requestLeave = useCallback((): Promise<boolean> => {
     lastLeaveOutcomeRef.current = null
+    if (revisionPending) return Promise.resolve(false)
     if (!draft.dirty) {
       lastLeaveOutcomeRef.current = 'clean'
       return Promise.resolve(true)
@@ -203,7 +229,7 @@ function NodePanel({
         cancel: () => resolve(false),
       })
     })
-  }, [draft.dirty])
+  }, [draft.dirty, revisionPending])
 
   const captureAuthoringDraft = useCallback((): NodePanelAuthoringDraft => ({
     nodeId: node.id,
@@ -300,10 +326,10 @@ function NodePanel({
         kindLabel={KIND_LABEL[kind]}
         status={status}
         errorMessage={node.data.errorMessage}
-        applyDisabled={!draft.dirty || Boolean(draft.blockingError)}
+        applyDisabled={revisionPending || !draft.dirty || Boolean(draft.blockingError)}
         mode={mode}
         onApply={() => { applyDraft() }}
-        onCancel={draft.reset}
+        onCancel={resetDraft}
         onDelete={() => onDelete(node.id)}
         onHide={guardedHide}
       />
@@ -314,7 +340,7 @@ function NodePanel({
             key={`${node.id}:${agentId}`}
             agentKey={agentId}
             selection={draft.values.executionSelection}
-            onChange={(selection) => draft.set('executionSelection', selection)}
+            onChange={selectRevision}
           />
         )}
         {kind === 'input' && (
@@ -398,6 +424,7 @@ function NodePanel({
             view={checksView}
             envelopeAgentId={agentId}
             agentMetadata={agentMetadata}
+            disabled={revisionPending}
             onToggle={draft.setAttachmentsEnabled}
             onOpenAgent={onOpenAgent ? guardedOpenAgent : undefined}
           />

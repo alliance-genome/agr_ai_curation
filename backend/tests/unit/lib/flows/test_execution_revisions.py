@@ -727,3 +727,37 @@ def test_packaged_export_catalog_resolves_public_system_key():
         field["payload_path"] == "expression_annotation_subject.gene_symbol"
         for field in public_fields
     )
+
+
+@pytest.mark.asyncio
+async def test_manual_revision_preview_authorizes_exact_revision_and_keeps_other_nodes(monkeypatch):
+    from src.api import flows as api
+    from src.lib.flows import validation_attachments as attachments
+    from src.lib.domain_packs.validation_registry import ValidationAttachmentOption, ValidationBindingState
+    old, new = receipt(None), receipt(None)
+    new.agent_id = old.agent_id
+    install_resolver(monkeypatch, [old, new])
+    db = Mock()
+    db.query.return_value.filter.return_value.one_or_none.return_value = SimpleNamespace(id=7)
+    db.execute.return_value.scalar_one_or_none.return_value = old.agent_id
+    option = ValidationAttachmentOption(attachment_id="new-check", domain_pack_id="generic", domain_pack_version="1",
+        validator_id="check", validator_binding_id="check", state=ValidationBindingState.ACTIVE,
+        scope="object", default_enabled=True, allow_opt_out=True)
+    monkeypatch.setattr(attachments, "_options_for_agent_entry", lambda entry, db=None: (option,))
+    original = flow(old, old)
+    before = original.model_dump(mode="json")
+    result = await api.select_flow_revision(api.FlowRevisionSelectionRequest(
+        flow_definition=original, node_id="node_0", agent_revision_id=new.agent_revision_id,
+    ), user={"sub": "curator"}, db=db)
+    assert result["execution_receipt"]["agent_revision_id"] == str(new.agent_revision_id)
+    assert result["validation_attachments"][0]["attachment_id"] == "new-check"
+    assert original.model_dump(mode="json") == before
+    db.commit.assert_not_called()
+    from fastapi import HTTPException
+    from src.lib.agent_studio.execution_revision_service import ExecutionRevisionNotFoundError
+    monkeypatch.setattr(module, "get_execution_revision", Mock(side_effect=ExecutionRevisionNotFoundError("unavailable")))
+    with pytest.raises(HTTPException) as error:
+        await api.select_flow_revision(api.FlowRevisionSelectionRequest(
+            flow_definition=original, node_id="node_0", agent_revision_id=uuid4(),
+        ), user={"sub": "curator"}, db=db)
+    assert error.value.status_code == 422

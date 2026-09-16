@@ -502,6 +502,17 @@ describe('agentStudioService', () => {
     expect(result).toEqual(createdFlow)
   })
 
+  it.each(['create', 'update'])('shows canonical findings and repair hints for %s failures', async (operation) => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 422, json: async () => ({ detail: {
+      findings: [{ severity: 'error', message: 'The saved checks do not match this revision.', fix_hint: 'Refresh the automatic checks.' }],
+    } }) } as Response)
+    const definition = { version: '1.1' as const, nodes: [], edges: [], entry_node_id: 'input' }
+    const request = operation === 'create'
+      ? createFlow({ name: 'Test', flow_definition: definition })
+      : updateFlow('flow-123', { flow_definition: definition })
+    await expect(request).rejects.toThrow('The saved checks do not match this revision. Refresh the automatic checks.')
+  })
+
   it('updateFlow returns the updated flow object after saving changes', async () => {
     const updatedFlow = {
       id: 'flow-123',

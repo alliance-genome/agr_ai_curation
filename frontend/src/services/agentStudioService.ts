@@ -1166,15 +1166,34 @@ export async function getFlow(flowId: string): Promise<FlowResponse> {
 /**
  * Helper to extract error message from API response
  */
-function extractErrorMessage(error: { detail?: string | Array<{ msg?: string; message?: string }> }, fallback: string): string {
-  if (typeof error.detail === 'string') {
-    return error.detail
-  }
+function extractErrorMessage(error: { detail?: unknown }, fallback: string): string {
+  if (typeof error.detail === 'string') return error.detail
   if (Array.isArray(error.detail)) {
-    // Pydantic validation errors are arrays
-    return error.detail.map((e) => e.msg || e.message || String(e)).join('; ')
+    return error.detail.map((entry) => isRecord(entry) ? entry.msg || entry.message || fallback : fallback).join('; ')
+  }
+  if (isRecord(error.detail) && Array.isArray(error.detail.findings)) {
+    const messages = error.detail.findings
+      .filter((finding) => isRecord(finding) && finding.severity === 'error' && typeof finding.message === 'string')
+      .map((finding) => [finding.message, finding.fix_hint].filter((value) => typeof value === 'string' && value.trim()).join(' '))
+    if (messages.length) return messages[0]
   }
   return fallback
+}
+
+/** Preview the selected revision and its canonical automatic checks; no writes. */
+export async function selectFlowRevision(
+  flowDefinition: FlowDefinition, nodeId: string, agentRevisionId: string,
+): Promise<import('@/components/AgentStudio/FlowBuilder/types').AgentNodeData> {
+  const response = await fetch(`${FLOWS_URL}/select-revision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ flow_definition: flowDefinition, node_id: nodeId, agent_revision_id: agentRevisionId }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(extractErrorMessage(error, 'Could not refresh this revision’s automatic checks. Try again.'))
+  }
+  return response.json()
 }
 
 /**

@@ -7,13 +7,15 @@ import type { NodeDraftValues } from './useNodeDraft'
 interface Props {
   agentKey: string
   selection: NodeDraftValues['executionSelection']
-  onChange: (selection: NodeDraftValues['executionSelection']) => void
+  onChange: (selection: NodeDraftValues['executionSelection']) => Promise<void>
 }
 
 /** Browse only: selecting a revision never restores or changes the agent head. */
 export default function ExecutionRevisionPicker({ agentKey, selection, onChange }: Props) {
   const [opened, setOpened] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [selectionError, setSelectionError] = useState('')
+  const [selecting, setSelecting] = useState(false)
   const [error, setError] = useState(false)
   const [revisions, setRevisions] = useState<AgentExecutionRevision[]>([])
   const [cursor, setCursor] = useState<number | null>(null)
@@ -50,10 +52,13 @@ export default function ExecutionRevisionPicker({ agentKey, selection, onChange 
           <RadioGroup
             aria-label="Available saved revisions"
             value={selection.agent_revision_id || ''}
-            onChange={(_, id) => {
+            onChange={async (_, id) => {
               const revision = revisions.find((item) => item.id === id)
               if (!revision) return
-              onChange({
+              setSelecting(true)
+              setSelectionError('')
+              try {
+                await onChange({
                 agent_revision_id: revision.id,
                 execution_receipt: {
                   agent_id: revision.agent_id,
@@ -63,14 +68,21 @@ export default function ExecutionRevisionPicker({ agentKey, selection, onChange 
                   fingerprint: revision.fingerprint,
                   output_contract: revision.snapshot.output_contract,
                 },
-              })
+                })
+              } catch (error) {
+                setSelectionError(error instanceof Error ? error.message : 'Could not select this revision. Try again.')
+              } finally {
+                setSelecting(false)
+              }
             }}
           >
             {revisions.map((revision) => (
-              <FormControlLabel key={revision.id} value={revision.id} control={<Radio />}
+              <FormControlLabel key={revision.id} value={revision.id} control={<Radio disabled={selecting} />}
                 label={`Revision ${revision.revision}${revision.notes ? ` — ${revision.notes}` : ''}`} />
             ))}
           </RadioGroup>
+          {selecting && <Typography role="status">Refreshing automatic checks…</Typography>}
+          {selectionError && <Alert severity="error">{selectionError}</Alert>}
           {loading && <Typography role="status">Loading saved revisions…</Typography>}
           {error && <Alert severity="error">Could not load revisions. Your selection has not changed.</Alert>}
           {!loading && !error && revisions.length === 0 && <Typography>No accessible saved revisions were found.</Typography>}
