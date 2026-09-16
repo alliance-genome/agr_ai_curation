@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { debug } from '@/utils/env'
 import { Box, Backdrop, CircularProgress, Typography, Stack, Button, Alert } from '@mui/material'
 import { alpha, styled } from '@mui/material/styles'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import { Panel, PanelGroup } from 'react-resizable-panels'
+import WorkspaceResizeHandle from '@/components/WorkspaceResizeHandle'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import Chat from '@/components/Chat'
@@ -59,6 +60,7 @@ const Root = styled(Box)(({ theme }) => ({
   display: 'flex',
   height: '100%',
   minHeight: 0,
+  minWidth: 0,
   overflow: 'hidden',
   backgroundColor: theme.palette.background.default,
   color: theme.palette.text.primary,
@@ -69,16 +71,18 @@ const PanelSection = styled(Box)(() => ({
   display: 'flex',
   flexDirection: 'column',
   minHeight: 0,
+  minWidth: 0,
   height: '100%',
   paddingTop: 0,
   '& > *': {
     flex: 1,
     minHeight: 0,
+    minWidth: 0,
     height: '100%',
   },
 }))
 
-const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
+const ResizeHandle = styled(WorkspaceResizeHandle)(({ theme }) => ({
   width: 4,
   flex: '0 0 4px',
   backgroundColor: theme.palette.divider,
@@ -86,7 +90,7 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
   transition: 'background-color 0.2s ease',
   borderRadius: theme.shape.borderRadius,
   position: 'relative',
-  '&:hover, &[data-resize-handle-active="true"]': {
+  '&:hover, &[data-resize-handle-active]': {
     backgroundColor: theme.palette.primary.main,
   },
   '&::after': {
@@ -884,6 +888,7 @@ function HomePage() {
               height: '100%',
               flex: 1,
               minHeight: 0,
+              minWidth: 0,
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
@@ -902,10 +907,15 @@ function HomePage() {
           </Box>
         </Panel>
 
-        <ResizeHandle />
+        <ResizeHandle aria-label="Resize chat and Audit/Tools panels" />
 
         <Panel defaultSize={50} minSize={20} maxSize={58}>
-          <PanelSection sx={{ pl: 1 }}>
+          <PanelSection sx={{
+            pl: 1,
+            overflowX: 'auto',
+            // Keep Audit/Tools usable when the PDF leaves little horizontal room.
+            '& > *': { minWidth: '18rem' },
+          }}>
             <RightPanel
               sessionId={sessionId}
               sseEvents={events}
