@@ -411,3 +411,26 @@ def test_allele_prompt_requires_source_clue_accounting_and_attribution_refinemen
     )["content"]
     assert "finalize_allele_lookup" not in base
     assert "finalize_validator_result" not in base
+
+
+def test_mgi_allele_prompt_requires_independent_support_without_disabling_discovery():
+    from tests.unit.lib.prompts.phase_c_harness import assembled_prompt_text
+
+    prompt = assembled_prompt_text("allele", group_id="MGI")
+    for requirement in (
+        "Keep literal-name and database-synonym searches",
+        "an exact synonym match—even a unique result—is insufficient",
+        "This applies even when no conflicting clue is apparent",
+        "it is not independent evidence connecting",
+        "even if only one candidate remains",
+        "A source-supplied explicit allele ID or full official designation",
+        "BMAL1 fl/fl cardiac-specific mice",
+        "p53 -/- knockout mice",
+        "Do not select `Arntl<sup>tm1Bra</sup>` merely because",
+        "An attribution match alone is a clue, not confirmation",
+        "supplier and\ncreator are distinct roles",
+    ):
+        assert requirement in prompt
+    for obsolete in ("Trust it.", "✓ (matches", "Selected Arntl", "select floxed allele"):
+        assert obsolete not in prompt
+    assert "Synonym matches identify candidates, not confirmed alleles" not in assembled_prompt_text("allele")

@@ -414,3 +414,18 @@ are updated when that contract intentionally changes:
 
 The schema-validation tests assert against the `AlleleResultEnvelope` model, not the
 prompt text, so they are unaffected. No re-baseline was needed.
+
+
+## September 16 MGI identity policy (ALL-1239)
+
+The MGI overlay now separates synonym discovery from identity confirmation. A unique
+exact synonym hit, compatible gene/species/generic design, and a fetch of the
+discovered ID remain insufficient without independent source-supported identifying
+information. BMAL1/p53 and attribution examples retain candidates and abstain
+when that information is missing. Source-supplied IDs/full official designations
+remain valid direct inputs; supplier and creator remain distinct clues.
+
+The shared base and other MOD overlays are unchanged. Static assembled-prompt
+guards establish instruction consistency, not model decision quality. Release
+evaluation should cover unique/generic-only hits, discovered-ID fetches, source IDs,
+corroborated repository/design clues, and unexplained supplier differences.
