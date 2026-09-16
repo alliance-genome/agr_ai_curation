@@ -136,7 +136,8 @@ def _require_rg() -> str:
 def _iter_file_matches(root: Path, query: str, path_glob: Optional[str]) -> Iterable[Dict[str, Any]]:
     """Yield file path matches using rg."""
     rg_path = _require_rg()
-    command = [rg_path, "--files", "."]
+    # Stable path order keeps cursor-based paging deterministic across rg runs.
+    command = [rg_path, "--files", "--sort", "path", "."]
     if path_glob:
         command.extend(["-g", path_glob])
     try:
@@ -180,6 +181,8 @@ def _iter_content_matches(
         "--color",
         "never",
         "--smart-case",
+        "--sort",
+        "path",
         "--max-count",
         str(per_file_matches),
         "--max-filesize",

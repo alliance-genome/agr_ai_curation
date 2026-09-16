@@ -250,6 +250,13 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/api/test_flows_api.py"),
     Path("backend/tests/unit/lib/alerts/test_tool_failure_notifier.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_bootstrap_service.py"),
+    # September 15 hotfix: installed Alliance allele retrieval, custom-validator
+    # attachment, returned-result contracts and trusted-group handoff coverage.
+    Path("backend/tests/contract/alliance/domain_packs/test_allele_builder_domain_pack.py"),
+    Path("backend/tests/integration/persistence/test_profile_handoff_groups.py"),
+    Path("backend/tests/unit/lib/agent_studio/test_custom_validator_authoring.py"),
+    Path("backend/tests/unit/lib/observability/test_tool_results.py"),
+    Path("backend/tests/unit/lib/openai_agents/tools/test_rich_allele_search.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_envelope_field_patch_service.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_extraction_results.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_gene_expression_export_submission.py"),

@@ -5716,6 +5716,13 @@
           "name": "section_limitations",
           "required": false,
           "type": "any"
+        },
+        {
+          "default": null,
+          "description": "Optional short sentence forwarding relevant rules from your\nconfigured prompt and case-specific paper context to this finding's validators.\nDistinguish domain rules from paper facts. Do not copy whole prompts, quote\ndocument instructions, guess an identity, or replace verified evidence.",
+          "name": "validation_guidance",
+          "required": false,
+          "type": "any"
         }
       ],
       "summary": "Stages one typed GOCuratableObject recommendation with verified evidence, resolved or explicitly ambiguous identity, current-annotation context, and curator-visible limitations."

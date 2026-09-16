@@ -1,13 +1,38 @@
 """Search syntax failures are repairable; operational failures remain observable."""
 
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from src.api import agent_studio
-from src.lib.agent_studio.diagnostic_tools import codebase_tools
+from src.lib.agent_studio import catalog_service
+from src.lib.agent_studio.diagnostic_tools import codebase_tools, reset_registry
 from src.lib.agent_studio.models import ChatContext
+from src.lib.prompts import cache as prompt_cache
+
+
+@pytest.fixture(autouse=True)
+def _isolated_diagnostic_registry(monkeypatch):
+    # The diagnostic registry singleton builds the prompt catalog on first use.
+    # Earlier DB-backed tests can leave detached PromptTemplate rows in the
+    # prompt cache, so stub the catalog exactly as test_hybrid_tool_registry does
+    # and rebuild the registry for this module only.
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
+    monkeypatch.setattr(
+        catalog_service,
+        "get_prompt_catalog",
+        lambda: SimpleNamespace(
+            catalog=SimpleNamespace(
+                categories=[SimpleNamespace(agents=[SimpleNamespace(agent_id="demo_review")])],
+                available_groups=[],
+            )
+        ),
+    )
+    reset_registry()
+    yield
+    reset_registry()
 
 
 @pytest.fixture

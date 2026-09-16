@@ -514,6 +514,10 @@ def test_configured_provider_serialization_preserves_final_profile_schema(profil
     from src.lib.openai_agents.resolver_call_ledger import ResolverCallLedger
 
     monkeypatch.setenv(provider.upper() + "_API_KEY", "test-only-not-a-credential")
+    # Adapter serialization support is retained for every provider; the deployment
+    # policy gate (LLM_DISABLED_PROVIDERS, default openrouter) is a separate concern
+    # covered by test_provider_enablement.py.
+    monkeypatch.setenv("LLM_DISABLED_PROVIDERS", "")
     model = config.get_model_for_agent("test-profile-model", provider_override=provider)
     stage = profile_bound_tool(tools._stage_generic_object_impl, tools.stage_generic_object, profile)
     patch = profile_bound_tool(tools._patch_generic_object_impl, tools.patch_generic_object, profile)

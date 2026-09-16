@@ -43,5 +43,13 @@
     "reason": "DE-13/DE-34/template rule 1. INACCURATE for the builder pattern: DiseaseStageInput exposes no exclusion/reason_code parameter, DiseaseDiscardInput takes only a free-text reason, and materialize_disease_builder_state hard-codes metadata.exclusions: [], metadata.ambiguities: [], metadata.notes: [], and run_summary.excluded_count/ambiguous_count: 0 (builder_conversion.py L916-934). The model has NO channel to write metadata.exclusions[]. The curation INTENT is preserved by the accurate rule kept in <success_criteria>/<evidence_and_curation_rules>: an exclusion is expressed by NOT staging the candidate (or discard_disease_observation with a free-text reason). No home for the literal 'belong in metadata.exclusions[]' framing because the channel does not exist; recorded here so the deletion is visible in review.",
     "old_source": "packages/alliance/agents/disease_extractor/prompt.yaml:<experimental_support_rules>",
     "new_home": ""
+  },
+  {
+    "phrase": "If no disease finding has direct experimental support in this paper, stage nothing and report the empty result rather than forcing an annotation.",
+    "category": "relocated",
+    "reason": "ALL-1229 (91a533c8). The rule was strengthened in place in <stop_rules>: an empty result must be an actual finalize_disease_extraction(candidate_ids=[]) call, because prose alone never produced a finalized empty result. The stage-nothing / never-force-an-annotation intent is unchanged and remains in the same prompt.yaml bullet.",
+    "old_source": "packages/alliance/agents/disease_extractor/prompt.yaml:<stop_rules>",
+    "new_home": "render",
+    "synonyms": ["If no disease finding has direct experimental support in this paper, stage nothing and explicitly call `finalize_disease_extraction(candidate_ids=[])`"]
   }
 ]

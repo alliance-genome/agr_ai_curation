@@ -94,10 +94,14 @@ async def test_run_flow_curation_handoff_creates_one_session_per_distinct_adapte
         request,
         *,
         current_user_id,
+        active_groups,
         db,
         manage_transaction,
     ):
         events.append(f"bootstrap:{request.adapter_key}")
+        # Runner-owned handoff forwards the trusted group snapshot unchanged; this
+        # call site passes none, so the review session must not gain group authority.
+        assert active_groups is None
         bootstrap_calls.append((document_id, request, current_user_id, manage_transaction))
         return SimpleNamespace(
             session=SimpleNamespace(session_id=f"session-{request.adapter_key}"),
