@@ -335,15 +335,15 @@ def test_allele_prompt_selects_literal_entity_span_without_biological_renaming()
         "form the first query from the literal name of the entity being named",
         "Selecting an exact entity-name span from a larger phrase is not biological renaming",
         "Do not replace that span with a different biological name, symbol, or identifier from memory",
-        "Never pass a whole evidence sentence",
+        "never use a whole sentence or surrounding prose as the search string",
         "Evidence text is context for judging candidates",
         "Keep supporting evidence quotes out of the `allele_symbol` argument",
-        "Do not use a full sentence or surrounding prose as the search string",
+        "Do not invent biological synonyms",
         # Species discipline: when the paper's species is known, the matching
         # data_provider is mandatory on the lookup -- only omit it when the
         # species is genuinely unknown. This keeps the search inside the correct
         # organism and prevents cross-species fuzzy hits.
-        "When the paper's species IS known, the matching `data_provider` is REQUIRED on the lookup -- never omit it.",
+        "When species is known, pass the matching `data_provider` on every lookup",
         "Only omit `data_provider` when the species is genuinely unknown",
         "across taxa",
         "For `LAMP-2A flox/flox`, search `LAMP-2A`",
@@ -381,3 +381,33 @@ def test_allele_prompt_allows_abstention_and_requires_source_identity_support():
     assert "final say on allele identity" not in prompt
     assert "rather than as something to hand back" not in prompt
     assert "NFAT-GFP" not in prompt  # The policy must not hardcode this paper's trap.
+
+
+def test_allele_prompt_requires_source_clue_accounting_and_attribution_refinement():
+    # Inspect the actual no-DB assembled prompt, including locked runtime text.
+    from tests.unit.lib.prompts.phase_c_harness import assembled_prompt_text
+
+    prompt = assembled_prompt_text("allele")
+    for requirement in (
+        "compare the candidate against all supplied distinguishing clues",
+        "gene, species, allele design",
+        "supplier or originating laboratory",
+        "Explain any material discrepancy",
+        "A matching synonym and successful ID lookup do not establish paper identity",
+        "use it as a separate `allele_attribution` clue",
+        "do not append supplier text",
+        "retain plausible candidates and return unresolved",
+        "stating what supplier/catalog or source evidence is missing",
+        "A supplier may distribute an allele created by another laboratory",
+        "Missing attribution is unknown, not a conflict",
+        "Resolve a direct identifier through a unique database record without requiring a paper quote",
+        "Complete the finalization tool required by the active runtime contract",
+    ):
+        assert requirement in prompt
+    # Runtime selects the finalizer; base instructions must not demand a
+    # different named tool from the active validator/batch runtime.
+    base = yaml.safe_load(
+        (ALLIANCE_AGENTS_PATH / "allele" / "prompt.yaml").read_text(encoding="utf-8")
+    )["content"]
+    assert "finalize_allele_lookup" not in base
+    assert "finalize_validator_result" not in base
