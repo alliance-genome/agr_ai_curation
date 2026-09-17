@@ -419,7 +419,7 @@ function NodePanel({
           </Section>
         )}
 
-        {(kind === 'extraction' || kind === 'agent') && (envelopeMetadata || draft.values.attachments.length > 0 || draft.values.executionSelection.execution_receipt?.output_contract.output_state === 'structured_extraction') && (
+        {(kind === 'extraction' || kind === 'agent') && (envelopeMetadata || draft.values.attachments.length > 0) && (
           <AutomaticChecks
             view={checksView}
             envelopeAgentId={agentId}

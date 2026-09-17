@@ -1,4 +1,3 @@
-import { fetchWithValidationAcknowledgment } from '@/services/validationAcknowledgment'
 /**
  * useChatStream Hook
  *
@@ -332,7 +331,7 @@ async function observeRun(
     let response: Response | null = null
 
     try {
-      response = await fetchWithValidationAcknowledgment(url, {
+      response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

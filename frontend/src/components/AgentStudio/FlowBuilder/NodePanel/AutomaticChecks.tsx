@@ -46,7 +46,6 @@ function AutomaticChecks({ disabled = false, view, envelopeAgentId, agentMetadat
         <StateDot tone={view.total > 0 ? 'active' : 'none'} />
         <Typography sx={{ fontSize: 13 }}>{checksSummarySentence(view)}</Typography>
       </Box>
-      {view.total === 0 && <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>No database checks are configured for this step. Extracted values will not be database-validated.</Typography>}
       {helper && (
         <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>{helper}</Typography>
       )}

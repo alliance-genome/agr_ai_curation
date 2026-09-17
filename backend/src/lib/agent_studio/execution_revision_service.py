@@ -231,13 +231,6 @@ def append_execution_revision(
             or profile.fingerprint != pin.fingerprint
         ):
             raise ValueError("Selected profile revision identity mismatch")
-        from src.lib.agent_studio.validation_coverage import profile_coverage_scope, require_acknowledgments
-        from src.schemas.generic_extraction_profile import GenericProfileContract
-        scope = profile_coverage_scope(db, GenericProfileContract.model_validate(profile.contract),
-                                       profile_id=pin.profile_id, agent_id=agent.id)
-        if scope is not None:
-            require_acknowledgments(db, user_id, [scope])
-
     row = AgentExecutionRevision(
         agent_id=agent.id,
         revision=revision_number,

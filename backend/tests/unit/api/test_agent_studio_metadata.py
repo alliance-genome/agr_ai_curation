@@ -278,10 +278,17 @@ class TestGetRegistryMetadata:
         """Metadata endpoint should append current user's active custom agents."""
         import asyncio
         from src.api import agent_studio as api_module
+        from src.schemas.agent_execution_revision import AgentExecutionReceipt
+        receipt = AgentExecutionReceipt.model_validate({
+            "agent_id": "11111111-2222-3333-4444-555555555555",
+            "agent_key": "ca_11111111-2222-3333-4444-555555555555",
+            "agent_revision_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "revision": 1, "fingerprint": "sha256:" + "a" * 64,
+            "output_contract": {"output_state": "none"},
+        })
         monkeypatch.setattr(
             "src.lib.agent_studio.domain_envelope_metadata.custom_agent_revision_metadata",
-            lambda *args, **kwargs: (SimpleNamespace(output_contract=SimpleNamespace(
-                output_state="none", output_schema_key=None)), None),
+            lambda *args, **kwargs: (receipt, None),
         )
 
         fake_custom = SimpleNamespace(
@@ -327,6 +334,7 @@ class TestGetRegistryMetadata:
         assert result.agents[custom_id].visible is True
         assert result.agents[custom_id].produces_flow_artifacts is False
         assert result.agents[custom_id].domain_envelope is None
+        assert result.agents[custom_id].execution_receipt == receipt.model_dump(mode="json")
 
     def test_get_registry_metadata_never_falls_back_to_template_for_unavailable_revision(self, monkeypatch):
         """Unavailable saved metadata must not advertise template validators."""

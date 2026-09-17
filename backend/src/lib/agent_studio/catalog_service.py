@@ -2191,12 +2191,6 @@ def _get_pinned_agent_by_id(agent_id: str, **kwargs: Any) -> Agent:
             pin = saved.output_contract.generic_profile_ref
             profile_revision = get_profile_revision(db, pin.profile_id, pin.revision, user_id, include_archived=True)
             resolved_profile = ResolvedGenericProfile(pin, normalize_profile_contract(profile_revision.contract))
-            if not has_explicit_pin:
-                from src.lib.agent_studio.validation_coverage import profile_coverage_scope, require_acknowledgments
-                scope = profile_coverage_scope(db, resolved_profile.contract, profile_id=pin.profile_id, agent_id=head.id)
-                if scope is not None:
-                    require_acknowledgments(db, user_id, [scope])
-
         built = _create_db_agent(head, execution_snapshot=saved, resolved_profile=resolved_profile, **kwargs)
         if built is None:
             raise ValueError("Executable agent revision could not be built")

@@ -18,7 +18,7 @@ export default function ValidatorAttachmentStatus({ value, address, issues = [],
   const own = mappings.filter(mapping => mappingUsesField(mapping, path))
   const parts = profileFieldRows(value).filter(row => row.address.length > address.length && row.address.slice(0, address.length).join('.') === address.join('.') && mappings.some(mapping => mappingUsesField(mapping, profileFieldPath(value, row.address)))).length
   return <Stack alignItems="flex-start" spacing={0.5}>
-    {!own.length && <Typography>No database validator</Typography>}
+    {!own.length && <Typography>No</Typography>}
     {own.map(mapping => {
       const prefix = `validator_mappings[${mappings.indexOf(mapping)}]`
       const cap = catalog.find(c => canonicalAuthoringJson(c.capability_ref) === canonicalAuthoringJson(mapping.capability_ref))

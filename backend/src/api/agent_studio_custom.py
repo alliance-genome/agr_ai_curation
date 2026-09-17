@@ -40,7 +40,6 @@ from src.lib.agent_studio.custom_agent_service import (
     update_custom_agent,
 )
 from src.lib.agent_studio.authoring_validation import AuthoringValidationError
-from src.lib.agent_studio.validation_coverage import ValidationAcknowledgmentRequired
 from src.lib.agent_studio.profile_mapping_service import ProfileMappingError
 from src.lib.agent_studio.models import AgentWorkshopContext
 from src.lib.agent_studio.models import ChatContext, ChatRequest
@@ -878,8 +877,6 @@ async def test_custom_agent_endpoint(
             active_groups=active_groups,
             authenticated_groups=authenticated_groups,
         )
-    except ValidationAcknowledgmentRequired:
-        raise
     except Exception as exc:
         raise_sanitized_http_exception(
             logger,

@@ -9,7 +9,6 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import {
   fetchRegistryMetadata,
   AgentMetadata,
-  RegistryMetadataResponse,
 } from '../services/agentStudioService'
 import { logger } from '../services/logger'
 
@@ -18,6 +17,7 @@ import { logger } from '../services/logger'
  */
 interface AgentMetadataContextValue {
   /** Agent metadata indexed by agent ID */
+  validatorOutputSchemaKeys: string[]
   agents: Record<string, AgentMetadata>
   /** Loading state */
   isLoading: boolean
@@ -37,6 +37,7 @@ interface AgentMetadataProviderProps {
  * Provider component that fetches and caches agent metadata.
  */
 export const AgentMetadataProvider: React.FC<AgentMetadataProviderProps> = ({ children }) => {
+  const [validatorOutputSchemaKeys, setValidatorOutputSchemaKeys] = useState<string[]>([])
   const [agents, setAgents] = useState<Record<string, AgentMetadata>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -47,16 +48,17 @@ export const AgentMetadataProvider: React.FC<AgentMetadataProviderProps> = ({ ch
     try {
       const response = await fetchRegistryMetadata()
       setAgents(response.agents)
+      setValidatorOutputSchemaKeys(response.validator_output_schema_keys)
       logger.debug('Agent metadata loaded', {
         component: 'AgentMetadataContext',
-        agentCount: Object.keys(response.agents).length,
+        metadata: { agentCount: Object.keys(response.agents).length },
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load agent metadata'
       setError(message)
-      logger.error('Failed to fetch agent metadata', {
+      logger.error('Failed to fetch agent metadata', err instanceof Error ? err : new Error(message), {
         component: 'AgentMetadataContext',
-        error: message,
+        metadata: { error: message },
       })
     } finally {
       setIsLoading(false)
@@ -69,6 +71,7 @@ export const AgentMetadataProvider: React.FC<AgentMetadataProviderProps> = ({ ch
 
   const value: AgentMetadataContextValue = {
     agents,
+    validatorOutputSchemaKeys,
     isLoading,
     error,
     refresh: fetchMetadata,

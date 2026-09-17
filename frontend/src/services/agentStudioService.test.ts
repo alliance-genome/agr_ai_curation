@@ -25,7 +25,6 @@ import {
   validateFlowDraft,
 } from './agentStudioService'
 import { logger } from './logger'
-import { registerValidationReview } from './validationAcknowledgment'
 
 const mockFetch = vi.fn()
 global.fetch = mockFetch
@@ -282,28 +281,6 @@ describe('agentStudioService', () => {
     )
     const fetchOptions = mockFetch.mock.calls[0][1]
     expect(JSON.parse(fetchOptions.body as string)).toEqual({ name: 'Gene Copy', allowed_group_ids: ['GROUP_A'] })
-  })
-
-  it('cloning asks for explicit extraction-only acknowledgment and retries the same request', async () => {
-    const scopes = [{ configuration_fingerprint: 'sha256:scope', data_type: 'Alleles',
-      unvalidated_fields: [{ path: 'symbol', label: 'Allele symbol' }], disabled_checks: [],
-      status: 'not_database_validated' }]
-    const review = vi.fn().mockResolvedValue(true)
-    const unregister = registerValidationReview(review)
-    try {
-      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ detail: {
-        code: 'validation_acknowledgment_required', scopes,
-      } }), { status: 409 }))
-      mockFetch.mockResolvedValueOnce(new Response('{}', { status: 200 }))
-      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ name: 'Copy' }), { status: 200 }))
-      await expect(cloneAgentToWorkshop('ca_source', { name: 'Copy' })).resolves.toEqual({ name: 'Copy' })
-      expect(review).toHaveBeenCalledWith(scopes, undefined)
-      expect(mockFetch.mock.calls[1][0]).toBe('/api/validation-acknowledgments')
-      expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({ acknowledge_extraction_only: true, scopes })
-      expect(mockFetch.mock.calls[2]).toEqual(mockFetch.mock.calls[0])
-    } finally {
-      unregister()
-    }
   })
 
   it('updateCustomAgent sends allowed_group_ids', async () => {

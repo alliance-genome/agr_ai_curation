@@ -894,14 +894,6 @@ def create_app() -> FastAPI:
     application.include_router(observability.router, tags=["Observability"])
     application.include_router(agent_studio.router, tags=["Agent Studio"])
     application.include_router(agent_studio_custom.router, tags=["Agent Studio"])
-    from src.api import validation_acknowledgments
-    from src.lib.agent_studio.validation_coverage import ValidationAcknowledgmentRequired
-
-    async def missing_validation_acknowledgment(request, exc):
-        return JSONResponse(status_code=409, content={"detail": exc.detail()})
-
-    application.add_exception_handler(ValidationAcknowledgmentRequired, missing_validation_acknowledgment)
-    application.include_router(validation_acknowledgments.router, tags=["Agent Studio"])
     application.include_router(generic_profiles.router, tags=["Agent Studio"])
     application.include_router(flows.router, tags=["Flows"])
     application.include_router(batch.router, tags=["Batches"])

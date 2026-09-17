@@ -484,20 +484,3 @@ def test_export_flow_evidence_route_maps_service_errors(
     assert exc.value.status_code == expected_status
     assert exc.value.detail == expected_detail
     assert str(error) in caplog.text
-
-
-@pytest.mark.parametrize("export_format", ["csv", "tsv", "json"])
-def test_extraction_only_status_survives_evidence_export(export_format):
-    record = _extraction_result(extraction_result_id="result-unverified", evidence_records=[
-        _evidence_record(evidence_record_id="ev", entity="paper label", quote="Exact paper wording.", page=1, section="Methods", chunk_id="c1")])
-    scope = {"status":"not_database_validated", "data_type":"Identity", "unvalidated_fields":[{"path":"attributes.id", "label":"Database ID"}],
-             "acknowledgment":{"user_id":8, "fingerprint":"sha256:" + "a" * 64}}
-    record.metadata["database_validation_coverage"] = [scope]
-    artifact = evidence_export.build_flow_evidence_export_artifact(
-        extraction_results=[record], flow_run_id="flow-run-123", export_format=evidence_export.FlowEvidenceExportFormat(export_format))
-    if export_format == "json":
-        assert json.loads(artifact.payload_text)["steps"][0]["database_validation_coverage"] == [scope]
-    else:
-        rows = list(csv.DictReader(io.StringIO(artifact.payload_text), delimiter="," if export_format == "csv" else "\t"))
-        assert rows[0]["database_validation_status"] == "not_database_validated"
-        assert rows[0]["verified_quote"] == "Exact paper wording."

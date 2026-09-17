@@ -17,7 +17,6 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { AgentMetadataProvider } from './contexts/AgentMetadataContext'
 import { ThemeModeProvider } from './contexts/ThemeModeContext'
 import LogoutDialog from './components/LogoutDialog'
-import ValidationAcknowledgmentDialog from './components/ValidationAcknowledgmentDialog'
 import ThemeModeToggle from './components/ThemeModeToggle'
 import WeaviateNavIcon from './components/weaviate/WeaviateNavIcon'
 import WeaviateLayout from './components/weaviate/WeaviateLayout'
@@ -953,7 +952,6 @@ function App() {
           <AuthProvider>
             <ProtectedRoutes>
               <AgentMetadataProvider>
-                <ValidationAcknowledgmentDialog />
                 <AppContent />
               </AgentMetadataProvider>
             </ProtectedRoutes>

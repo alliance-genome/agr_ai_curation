@@ -209,14 +209,6 @@ def _validated_flow_definition_payload(
             status_code=500,
             detail="Flow validation is temporarily unavailable",
         )
-    if db is not None and db_user_id is not None:
-        from src.lib.agent_studio.validation_coverage import flow_coverage_scopes, require_acknowledgments
-        from src.lib.agent_studio.profile_mapping_service import ProfileMappingError
-        try:
-            scopes = flow_coverage_scopes(db, validated_candidate, user_id=db_user_id, active_group_ids=list(active_group_ids or []))
-        except ProfileMappingError:
-            raise HTTPException(422, detail="A configured validator is unavailable. Repair the selected validator mapping before saving; this is not an extraction-only choice.") from None
-        require_acknowledgments(db, db_user_id, scopes)
     return validated_candidate.model_dump(mode="json")
 
 

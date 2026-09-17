@@ -338,7 +338,6 @@ class FlowOutputField(BaseModel):
 
 
 class FlowOutputArtifact(BaseModel):
-    database_validation_coverage: list[dict[str, Any]] = Field(default_factory=list)
     node_id: str = ""
     export_schema_fingerprint: str = ""
     execution_receipt: AgentExecutionReceipt | None = None
@@ -1620,12 +1619,7 @@ def _build_artifact_from_step(
             row["artifact.node_id"] = node_id
     extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object")
                       for f in catalog["fields"] if not f["ref"].startswith("object.attribute.")]
-    coverage = list(metadata.get("database_validation_coverage") or [])
-    if coverage:
-        warnings.append("Not database-validated: extraction-only operation was acknowledged for " +
-                        "; ".join(", ".join(field["label"] for field in scope["unvalidated_fields"]) for scope in coverage))
     return FlowOutputArtifact(
-        database_validation_coverage=coverage,
         node_id=node_id, export_schema_fingerprint=catalog["schema_fingerprint"],
         execution_receipt=receipt,
         declared_fields=[FlowOutputField(

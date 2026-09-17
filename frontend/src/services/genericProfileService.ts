@@ -1,4 +1,3 @@
-import { fetchWithValidationAcknowledgment } from './validationAcknowledgment'
 /** Closed generic profiles are curator-owned contracts, not submission schemas. */
 
 export type GenericProfileValueSchema =
@@ -199,7 +198,7 @@ export class GenericProfileApiError extends Error {
 const BASE = '/api/agent-studio/generic-profiles'
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetchWithValidationAcknowledgment(BASE + path, body === undefined ? undefined : {
+  const response = await fetch(BASE + path, body === undefined ? undefined : {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

@@ -53,4 +53,4 @@ const definition = shape({ version: oneOf('1.1'), entry_node_id: string, task_in
   edges: array(shape({ id: string, source: string, target: string, role: optional(oneOf('control_flow', 'output_attachment', 'validation_attachment')),
     satisfies_binding_id: maybeString, replaces_attachment_id: maybeString,
     condition: optional(nullable(shape({ type: oneOf('contains', 'not_empty', 'matches_pattern'), value: maybeString }))) })) })
-export const isFlowRecovery = shape({ currentFlowId: nullable(string), draft: shape({ name: string, description: string, definition }) })
+export const isFlowRecovery = shape({ noticeDraftId: optional(string), currentFlowId: nullable(string), draft: shape({ name: string, description: string, definition }) })

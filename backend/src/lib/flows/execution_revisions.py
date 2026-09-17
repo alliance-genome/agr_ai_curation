@@ -44,8 +44,7 @@ def flow_execution_revision_findings(
 ) -> list[dict[str, Any]]:
     """HTTP/pre-run adapter: report safe contract findings before starting work."""
     if not any(isinstance(node, dict) and isinstance(node.get("data"), dict)
-               and (str(node["data"].get("agent_id", "")).startswith("ca_") or (node["data"].get("projection_plan") or {}).get("selection_mode") == "selected_fields"
-                   or any(not item.get("enabled", True) for item in node["data"].get("validation_attachments", [])))
+               and (str(node["data"].get("agent_id", "")).startswith("ca_") or (node["data"].get("projection_plan") or {}).get("selection_mode") == "selected_fields")
                for node in definition.get("nodes", [])):
         return []
     try:
@@ -59,18 +58,7 @@ def flow_execution_revision_findings(
     resolved = resolve_flow_execution_revisions(
         db, parsed, user_id=user_id, active_group_ids=active_group_ids,
     )
-    findings = [finding.to_dict() for finding in resolved.findings if finding.severity == "error"]
-    if not findings and user_id is not None:
-        from src.lib.agent_studio.validation_coverage import flow_coverage_scopes, require_acknowledgments
-        from src.lib.agent_studio.profile_mapping_service import ProfileMappingError
-        try:
-            scopes = flow_coverage_scopes(db, resolved.definition, user_id=user_id, active_group_ids=active_group_ids)
-        except ProfileMappingError:
-            return [{"code": "configured_validator_unavailable", "severity": "error", "path": "flow_definition.nodes",
-                     "message": "A configured validator is unavailable. Repair its mapping before running.",
-                     "fix_hint": "Open the affected agent and select an available validator revision."}]
-        require_acknowledgments(db, user_id, scopes)
-    return findings
+    return [finding.to_dict() for finding in resolved.findings if finding.severity == "error"]
 
 
 def _revision_entry(
