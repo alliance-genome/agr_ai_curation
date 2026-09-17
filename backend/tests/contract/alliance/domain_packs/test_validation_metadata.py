@@ -354,11 +354,14 @@ def test_source_mentions_prompt_and_tool_language_is_consistent():
         if path.parent.name in {"experimental_condition", "ontology_term", "gene"}:
             expected_context = expected_context.replace("`evidence_quote`", "`evidence_quotes`")
         if path.parent.name == "allele":
-            expected_context = expected_context.replace(
-                "database lookup or `evidence_quote`; never resolve a target from `source_mentions` alone.",
-                "database lookup; never resolve a target from source phrases without database support.",
+            # The streamlined allele prompt states the same boundary in its
+            # request-context section rather than repeating the legacy paragraph.
+            assert "Resolve a direct identifier through a unique database record without requiring a paper quote" in prompt_text
+            assert "Report only database-returned IDs and allele facts" in prompt_text
+            expected_context = (
+                "Use `selected_inputs.taxon`, `selected_inputs.source_mentions`, supplied evidence records, "
+                "and `selected_inputs.evidence_quotes` as context."
             )
-            assert "do not require a paper quote to validate a database identity" in prompt_text
         assert expected_context in prompt_text
         assert "had access to the paper; you do not" not in prompt_text
         assert "paper; you do not" not in prompt_text

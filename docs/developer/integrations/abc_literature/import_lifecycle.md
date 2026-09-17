@@ -126,14 +126,34 @@ not be retried with a service-token bypass.
 Configured knobs:
 
 - `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`: provider-conversion poll interval.
-- `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`: wall-clock timeout for one
-  provider conversion/import job.
+- `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`: deadline for one provider
+  conversion/import job (default 600 seconds), including downloads, hierarchy
+  and figure classification, and vector storage.
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`: individual provider HTTP timeout.
 - `PDF_JOB_STALE_TIMEOUT_SECONDS`: stale durable-job reconciliation timeout
   when set; otherwise PDF extraction timeout-derived fallback applies.
 
+Once vector storage starts, cancellation waits for chunk verification and metadata
+writes to finish before propagating the timeout. Executor threads cannot be stopped
+by cancelling their await. Successfully written chunks retain their verified counts;
+the cancelled operation marks both Weaviate processing and embedding status failed,
+and the provider execution service then marks the SQL document and durable job
+failed. The job remains active while writes drain, so the normal active-job guards
+continue to block deletion/reprocessing. This drain can extend elapsed time past
+the configured deadline; it does not convert a timeout into a successful import.
+
+Existing deployment overrides remain authoritative: a deployment explicitly set to
+300 seconds must update its environment to use the proposed 600-second budget.
+Longer deadlines also delay subsequent papers in sequential import batches.
+
 Retry policy:
 
+- Re-importing the same identifier returns the existing duplicate document.
+  To start a fresh provider import after failure, wait for the job to be terminal,
+  delete the failed document through the normal authenticated document API (which
+  removes its chunks), then import the identifier again. Do not repair an old
+  failed import by only changing its status. This change does not repair historical
+  failed documents automatically.
 - AI Curation does not do unbounded provider retry loops beyond the local
   polling loop and wall-clock import timeout.
 - HTTP/provider/config failures are sanitized and surfaced as provider

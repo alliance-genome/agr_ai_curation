@@ -350,3 +350,79 @@ async def test_update_document_metadata_best_effort():
         await update_document_metadata("doc-1", stats, weaviate_client, "test_user")
 
     pdf_collection.data.update.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_stage", ["batch", "metadata"])
+async def test_cancelled_storage_drains_worker_before_failure_and_retry(monkeypatch, blocked_stage):
+    """A deadline must not let a late executor write resurrect terminal state."""
+    import threading
+    from types import SimpleNamespace
+
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    persisted = {}
+    properties = {"chunkCount": 0, "vectorCount": 0}
+    block_once = True
+
+    def block(stage):
+        nonlocal block_once
+        if block_once and stage == blocked_stage:
+            block_once = False
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "test did not release storage worker"
+
+    batch = MagicMock(number_errors=0, failed_objects=[])
+
+    def insert(*, uuid, properties):
+        block("batch")
+        persisted[uuid] = properties
+
+    batch.add_object.side_effect = insert
+    chunks_collection = MagicMock()
+    chunks_collection.batch.rate_limit.return_value.__enter__.return_value = batch
+    chunks_collection.query.fetch_objects.side_effect = lambda **_: SimpleNamespace(objects=list(persisted.values()))
+    pdf_collection = MagicMock()
+
+    def update(*, uuid, properties: dict):
+        block("metadata")
+        document_properties.update(properties)
+
+    document_properties = properties
+    pdf_collection.data.update.side_effect = update
+    connection = MagicMock()
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (chunks_collection, pdf_collection))
+
+    async def status(_document, _user, *, embedding_status=None, processing_status=None):
+        if embedding_status:
+            properties["embeddingStatus"] = embedding_status
+        if processing_status:
+            properties["processingStatus"] = processing_status
+
+    monkeypatch.setattr(store_module, "update_document_status_detailed", status)
+    chunks = [{"chunk_index": 0, "content": "alpha"}, {"chunk_index": 1, "content": "beta"}]
+    task = asyncio.create_task(store_to_weaviate(chunks, "doc-1", connection, "test_user"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        # Synchronize with the cancellation handler without a wall-clock sleep.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not task.done(), "failure was exposed while storage could still write"
+        task.cancel()  # Repeated shutdown cancellation must not detach the writer.
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert properties == {
+        "chunkCount": 2, "vectorCount": 2,
+        "processingStatus": "failed", "embeddingStatus": "failed",
+    }
+    assert len(persisted) == 2
+
+    # The same deterministic chunk IDs are reused on reprocessing.
+    result = await store_to_weaviate(chunks, "doc-1", connection, "test_user")
+    assert result["stored_chunks"] == len(persisted) == 2
+    assert properties["processingStatus"] == properties["embeddingStatus"] == "completed"

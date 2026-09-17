@@ -10,6 +10,7 @@ import type { NodePanelAuthoringDraft } from './NodePanel/NodePanel'
 
 import { useState, useCallback, useRef, useMemo, useEffect, useImperativeHandle } from 'react'
 import { flushSync } from 'react-dom'
+import { v4 as uuidv4 } from 'uuid'
 import ReactFlow, {
   ReactFlowProvider,
   Controls,
@@ -66,6 +67,8 @@ import CloseIcon from '@mui/icons-material/Close'
 import UndoIcon from '@mui/icons-material/Undo'
 
 import FlowNode from './FlowNode'
+import ExtractionValidationNotices from './ExtractionValidationNotices'
+import { copyNoticeDismissals } from './extractionValidationNotices'
 import DeletableEdge from './DeletableEdge'
 import AgentPalette from './AgentPalette'
 import { NodePanel, NodePanelDock, nodePanelMode, stepOrder } from './NodePanel'
@@ -782,7 +785,7 @@ function FlowBuilderInner({
   active = true,
   authoringContextRef,
 }: FlowBuilderProps) {
-  const { agents: agentMetadata } = useAgentMetadata()
+  const { agents: agentMetadata, isLoading: metadataLoading, error: metadataError, validatorOutputSchemaKeys } = useAgentMetadata()
 
   const isValidationAgentDynamic = useCallback(
     (agentId: string): boolean => isValidationAgentFromMetadata(agentId, agentMetadata),
@@ -997,6 +1000,7 @@ function FlowBuilderInner({
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
   const displayedFlowIdRef = useRef<string | null>(null)
   const loadRequestRef = useRef(0)
+  const [noticeDraftId, setNoticeDraftId] = useState(() => uuidv4())
   const [flowUpdatedAt, setFlowUpdatedAt] = useState<string | null>(null)
   const [savedBaseline, setSavedBaseline] = useState<FlowDraftBaseline>(() => ({
     name: flowName,
@@ -1086,7 +1090,7 @@ function FlowBuilderInner({
         type: n.type === 'task_input'
           ? 'task_input'
           : n.type === 'output'
-            || isOutputFormatterAgentFromMetadata(n.data.agent_id, agentMetadata)
+            || (!n.data.execution_receipt && isOutputFormatterAgentFromMetadata(n.data.agent_id, agentMetadata))
             ? 'output'
             : 'agent',
         position: n.position,
@@ -1259,7 +1263,7 @@ function FlowBuilderInner({
       type: node.type === 'task_input'
         ? 'task_input'
         : node.type === 'output'
-          || isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
+          || (!node.data.execution_receipt && isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata))
           ? 'output'
           : 'agent',
       position: { ...node.position },
@@ -1688,6 +1692,7 @@ function FlowBuilderInner({
           description: flowDescription || undefined,
           flow_definition: flowDefinition,
         })
+        copyNoticeDismissals(recoveryOwnerId, currentFlowId ?? noticeDraftId, savedFlow.id)
       }
       const flowMutationReason = currentFlowId && !forceCreate ? 'updated' : 'created'
       notifyFlowListInvalidated({ flowId: savedFlow.id, reason: flowMutationReason })
@@ -1756,12 +1761,13 @@ function FlowBuilderInner({
 
   const recoveryDraft = useMemo(() => ({
     currentFlowId,
+    noticeDraftId,
     draft: { name: flowName, description: flowDescription, definition: buildFlowDefinition(
       nodes.map(node => nodePanelRecovery?.dirty && nodePanelRecovery.nodeId === node.id
         ? { ...node, data: { ...node.data, ...nodePanelRecovery.data } } : node) as AgentNode[],
       edges as FlowEdge[], taskInstructionsDefaultOnly,
     ) },
-  }), [currentFlowId, flowName, flowDescription, nodes, edges, taskInstructionsDefaultOnly, nodePanelRecovery])
+  }), [currentFlowId, noticeDraftId, flowName, flowDescription, nodes, edges, taskInstructionsDefaultOnly, nodePanelRecovery])
   const recovery = useDraftRecovery({ ownerId: recoveryOwnerId, kind: 'flow', value: recoveryDraft,
     dirty: flowIsDirty, ready: !loading && !saving && !applyingProposal,
     restore: (stored) => {
@@ -1772,6 +1778,7 @@ function FlowBuilderInner({
       displayedFlowIdRef.current = null
       setFlowAccess(null)
       applyDefinitionToEditor(draft)
+      setNoticeDraftId(stored.noticeDraftId ?? uuidv4())
       setCurrentFlowId(null); setFlowUpdatedAt(null); setSavedBaseline(initialFlowDraftBaseline())
       setSnackbar({ severity: 'success', message: 'Recovered your flow edits, including unfinished step edits. Save this draft when ready; existing saved flows are unchanged.' })
     },
@@ -1793,6 +1800,7 @@ function FlowBuilderInner({
     setTaskInstructionsDefaultOnly(false)
     setCurrentFlowId(null)
     setFlowAccess(null)
+    setNoticeDraftId(uuidv4())
     setFlowUpdatedAt(null)
     setSelectedNode(null)
     nodeIdRef.current = 1  // Start from 1 since node_0 is used
@@ -2078,7 +2086,11 @@ function FlowBuilderInner({
             custom_instructions: '',
             export_execution_mode: isOutputFormatter ? agentMetadata[agentId]?.default_export_execution_mode || 'ai' : undefined,
             prompt_version: promptVersion,
-            ...(agentId.startsWith('ca_') ? { agent_revision_id: agentRevisionId } : {}),
+            ...(agentId.startsWith('ca_') ? {
+              agent_revision_id: agentRevisionId,
+              execution_receipt: agentMetadata[agentId]?.execution_receipt?.agent_revision_id === agentRevisionId
+                ? agentMetadata[agentId].execution_receipt : undefined,
+            } : {}),
             include_evidence: isTaskInput
               ? undefined
               : resolveOutputFormatterIncludeEvidence(agentId, agentMetadata),
@@ -2086,9 +2098,7 @@ function FlowBuilderInner({
               ? '{{input_filename_stem}}'
               : undefined,
             output_key: isTaskInput ? 'task_input' : `${agentId.replace(/-/g, '_')}_output`,
-            validation_attachments: validationAttachments.length > 0
-              ? validationAttachments
-              : undefined,
+            validation_attachments: validationAttachments,
           },
         }
 
@@ -2894,6 +2904,12 @@ function FlowBuilderInner({
                 </ReactFlow>
               )}
 
+              {!loading && !metadataLoading && !metadataError && <ExtractionValidationNotices
+                key={`${recoveryOwnerId ?? ''}:${currentFlowId ?? noticeDraftId}`}
+                definition={currentFlowDefinition} metadata={agentMetadata} ownerId={recoveryOwnerId}
+                validatorSchemaKeys={validatorOutputSchemaKeys}
+                scopeId={currentFlowId ?? noticeDraftId}
+              />}
             </CanvasArea>
 
             {/* Node panel: docked beside the canvas so the canvas shrinks instead of being covered. */}

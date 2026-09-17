@@ -1363,6 +1363,20 @@ describe('FlowBuilder', () => {
     expect(screen.getByText('1 step')).toBeInTheDocument()
   })
 
+  it('retains a pinned extractor when its current head is now a formatter', async () => {
+    const saved = buildFlowResponse()
+    saved.flow_definition.nodes.push({ id: 'custom-extract', type: 'agent', position: { x: 200, y: 0 }, data: {
+      agent_id: 'ca_changed', agent_display_name: 'Pinned extractor', output_key: 'result', validation_attachments: [],
+      execution_receipt: { agent_id: 'c', agent_key: 'ca_changed', agent_revision_id: 'old', revision: 1, fingerprint: 'fp',
+        output_contract: { output_state: 'structured_extraction', output_mode: 'unprofiled_generic' } },
+    } })
+    agentMetadataMocks.agents = { ca_changed: { name: 'New formatter', icon: '', category: 'Output', output_formatter_format: 'csv' } }
+    serviceMocks.getFlow.mockResolvedValue(saved)
+    render(<FlowBuilder flowId={saved.id} />)
+    expect(await screen.findByText('Pinned extractor: no database validation configured')).toBeInTheDocument()
+    expect(reactFlowMocks.nodes.find(n => n.id === 'custom-extract')?.type).toBe('agent')
+  })
+
   it('preserves a saved custom revision in state and the exact AI authoring snapshot', async () => {
     const receipt = {
       agent_id: '11111111-2222-4333-8444-555555555555', agent_key: 'ca_fixture',
@@ -2456,7 +2470,7 @@ describe('FlowBuilder', () => {
     serviceMocks.createFlow.mockResolvedValue(buildFlowResponse({ name: 'Versioned Flow' }))
     serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Versioned Flow'))
 
-    render(<FlowBuilder />)
+    render(<FlowBuilder recoveryOwnerId="notice-curator" />)
 
     await screen.findByText('1 step')
 
@@ -2485,6 +2499,9 @@ describe('FlowBuilder', () => {
       reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
     })
 
+    await user.click(await screen.findByRole('button', { name: 'Dismiss validation notice for PDF Extraction' }))
+    expect(screen.queryByText('PDF Extraction: no database validation configured')).not.toBeInTheDocument()
+
     await user.click(screen.getByText('File'))
 
     const fileMenu = await screen.findByRole('menu')
@@ -2512,6 +2529,90 @@ describe('FlowBuilder', () => {
         })
       )
     })
+
+    expect(screen.queryByText('PDF Extraction: no database validation configured')).not.toBeInTheDocument()
+    expect(localStorage.getItem('agr-flow-validation-notices:v1:notice-curator:flow-1')).toContain('node_1')
+
+    const createPayload = serviceMocks.createFlow.mock.calls[0][0]
+    createPayload.flow_definition.nodes.forEach((node: { data: Record<string, unknown> }) => {
+      expect(node.data).not.toHaveProperty('hasError')
+      expect(node.data).not.toHaveProperty('errorMessage')
+      expect(node.data).not.toHaveProperty('isSelected')
+      expect(node.data).not.toHaveProperty('validation_groups')
+    })
+  }, 15000) // Builder bootstrap plus save dialog interactions can exceed 5s in the full suite.
+
+  it('shows fresh custom extraction notices and preserves dismissal through first save', async () => {
+    const user = userEvent.setup()
+
+    const receipt = { agent_id: 'custom', agent_key: 'ca_custom', agent_revision_id: 'rev1', revision: 1,
+      fingerprint: 'sha256:custom', output_contract: { output_state: 'structured_extraction', output_mode: 'unprofiled_generic' } }
+    agentMetadataMocks.agents = { ca_custom: { name: 'PDF Extraction', icon: '', category: 'Custom', execution_receipt: receipt, validation_attachments: [] } }
+    serviceMocks.createFlow.mockImplementation(async (payload) => buildFlowResponse({ name: 'Versioned Flow', flow_definition: payload.flow_definition }))
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Versioned Flow'))
+
+    render(<FlowBuilder recoveryOwnerId="notice-curator" />)
+
+    await screen.findByText('1 step')
+
+    const dataTransfer = {
+      getData: vi.fn((format: string) => (
+        format === 'application/reactflow'
+          ? JSON.stringify({
+            type: 'agent',
+            agentId: 'ca_custom', agentRevisionId: 'rev1',
+            agentName: 'PDF Extraction',
+            agentDescription: 'Extract text from the uploaded PDF',
+            promptVersion: 7,
+          })
+          : ''
+      )),
+    }
+
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320,
+      clientY: 220,
+      dataTransfer,
+    })
+
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' })
+    })
+
+    await user.click(await screen.findByRole('button', { name: 'Dismiss validation notice for PDF Extraction' }))
+    expect(screen.queryByText('PDF Extraction: no database validation configured')).not.toBeInTheDocument()
+
+    await user.click(screen.getByText('File'))
+
+    const fileMenu = await screen.findByRole('menu')
+    await user.click(within(fileMenu).getByText('Save'))
+
+    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
+    await user.type(within(saveDialog).getByPlaceholderText('Flow name'), 'Versioned Flow')
+    await user.click(within(saveDialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.createFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Versioned Flow',
+          flow_definition: expect.objectContaining({
+            nodes: expect.arrayContaining([
+              expect.objectContaining({
+                type: 'agent',
+                data: expect.objectContaining({
+                  agent_id: 'ca_custom',
+                  prompt_version: 7,
+                }),
+              }),
+            ]),
+          }),
+        })
+      )
+    })
+
+    expect(screen.queryByText('PDF Extraction: no database validation configured')).not.toBeInTheDocument()
+    expect(localStorage.getItem('agr-flow-validation-notices:v1:notice-curator:flow-1')).toContain('node_1')
 
     const createPayload = serviceMocks.createFlow.mock.calls[0][0]
     createPayload.flow_definition.nodes.forEach((node: { data: Record<string, unknown> }) => {

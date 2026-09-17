@@ -118,10 +118,15 @@ def build_evidence_spans(
     page_number: int | None = None,
     section_title: str | None = None,
 ) -> list[EvidenceSpan]:
-    """Split raw chunk text into deterministic exact-text sentence spans."""
+    """Split source blocks into exact-text sentences, preserving chunk offsets.
+
+    Blank lines delimit source blocks; single newlines can be PDF line wraps.
+    The span ID/hash contract remains unchanged: existing IDs resolve directly
+    by their stored offsets/hash, independent of current segmentation choices.
+    """
 
     spans: list[EvidenceSpan] = []
-    for span_index, (char_start, char_end) in enumerate(_iter_sentence_offsets(chunk_text)):
+    for span_index, (char_start, char_end) in enumerate(_iter_block_sentence_offsets(chunk_text)):
         text = chunk_text[char_start:char_end]
         spans.append(
             EvidenceSpan(
@@ -178,6 +183,23 @@ def resolve_evidence_span_id(
         page_number=page_number,
         section_title=section_title,
     )
+
+
+def _iter_block_sentence_offsets(text: str) -> list[tuple[int, int]]:
+    offsets: list[tuple[int, int]] = []
+    block_start = 0
+    # A source block can end without sentence punctuation (e.g. a heading).
+    for boundary in re.finditer(r"\r?\n[ \t]*\r?\n", text):
+        offsets.extend(
+            (block_start + start, block_start + end)
+            for start, end in _iter_sentence_offsets(text[block_start:boundary.start()])
+        )
+        block_start = boundary.end()
+    offsets.extend(
+        (block_start + start, block_start + end)
+        for start, end in _iter_sentence_offsets(text[block_start:])
+    )
+    return offsets
 
 
 def _iter_sentence_offsets(text: str) -> list[tuple[int, int]]:

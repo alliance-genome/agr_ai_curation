@@ -209,31 +209,25 @@ def _chunk_by_title(
         # Start new chunk on title
         if element_type == "Title" and current_chunk["content"]:
             chunks.append(current_chunk)
-            # Create overlap if configured
-            overlap_text = ""
-            if strategy.overlap_characters > 0:
-                overlap_text = current_chunk["content"][-strategy.overlap_characters:]
-
+            # A new section owns its own text/provenance. Borrowing the prior
+            # section's tail misattributes it to this heading/page.
             current_chunk = {
-                "content": overlap_text + element_text,
+                "content": element_text,
                 "elements": [element],
                 "metadata": dict(element.get("metadata", {}))
             }
         else:
             # Add to current chunk if within size limit
-            new_content = current_chunk["content"] + "\n" + element_text if current_chunk["content"] else element_text
+            new_content = current_chunk["content"] + "\n\n" + element_text if current_chunk["content"] else element_text
 
             if len(new_content) > strategy.max_characters:
                 # Save current chunk and start new one
                 if current_chunk["content"]:
                     chunks.append(current_chunk)
 
-                # Create overlap
-                overlap_text = ""
-                if strategy.overlap_characters > 0 and current_chunk["content"]:
-                    overlap_text = current_chunk["content"][-strategy.overlap_characters:]
-
-                combined_content = overlap_text + element_text
+                # Keep source elements independent across chunk boundaries.
+                # Overlap remains available within an oversized element below.
+                combined_content = element_text
                 if len(combined_content) > strategy.max_characters:
                     logger.warning(
                         "Single element exceeds max_characters (%d > %d). Splitting element of type '%s'.",
@@ -301,12 +295,9 @@ def _chunk_by_paragraph(
             if current_chunk["content"]:
                 chunks.append(current_chunk)
 
-            # Create overlap
-            overlap_text = ""
-            if strategy.overlap_characters > 0 and current_chunk["content"]:
-                overlap_text = current_chunk["content"][-strategy.overlap_characters:]
-
-            combined_content = overlap_text + element_text
+            # Do not borrow text whose element provenance is absent here.
+            # Oversized single-element splitting still uses configured overlap.
+            combined_content = element_text
             if len(combined_content) > strategy.max_characters:
                 logger.warning(
                     "Single element exceeds max_characters (%d > %d). Splitting oversized paragraph element.",

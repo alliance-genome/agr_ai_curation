@@ -879,9 +879,18 @@ async def get_registry_metadata(
                 validation_attachments=envelope_metadata["validation_attachments"] if envelope_metadata else [],
                 domain_envelope=envelope_metadata,
                 execution_metadata_error=execution_metadata_error,
+                execution_receipt=receipt.model_dump(mode="json") if receipt else None,
             )
 
-    return RegistryMetadataResponse(agents=agents)
+    from src.lib.config.schema_discovery import discover_agent_schemas
+    from src.schemas.domain_validator import is_domain_validator_result_schema
+    return RegistryMetadataResponse(
+        agents=agents,
+        validator_output_schema_keys=sorted(
+            key for key, schema in discover_agent_schemas().items()
+            if is_domain_validator_result_schema(schema)
+        ),
+    )
 
 
 def _custom_agent_template_source(custom: Any) -> Optional[str]:

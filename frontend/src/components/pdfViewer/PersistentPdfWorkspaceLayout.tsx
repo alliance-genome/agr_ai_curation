@@ -9,7 +9,8 @@ import {
 import { Outlet, matchPath, useLocation } from 'react-router-dom'
 import { Box, useMediaQuery } from '@mui/material'
 import { alpha, styled, useTheme } from '@mui/material/styles'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import { Panel, PanelGroup } from 'react-resizable-panels'
+import WorkspaceResizeHandle from '../WorkspaceResizeHandle'
 
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -44,7 +45,7 @@ const PanelSection = styled(Box)(() => ({
   },
 }))
 
-const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
+const ResizeHandle = styled(WorkspaceResizeHandle)(({ theme }) => ({
   width: 4,
   flex: '0 0 4px',
   backgroundColor: theme.palette.divider,
@@ -52,7 +53,7 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
   transition: 'background-color 0.2s ease',
   borderRadius: theme.shape.borderRadius,
   position: 'relative',
-  '&:hover, &[data-resize-handle-active="true"]': {
+  '&:hover, &[data-resize-handle-active]': {
     backgroundColor: theme.palette.primary.main,
   },
   '&::after': {

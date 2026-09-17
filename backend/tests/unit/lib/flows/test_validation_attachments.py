@@ -575,3 +575,80 @@ def test_curator_wording_survives_canonical_defaults_and_saved_roundtrip(monkeyp
     assert selection["curator_label"] == option.curator_label
     assert selection["when_off"] == option.when_off
     assert selection["enabled"] is True
+
+
+def test_profile_attachment_resolution_uses_authoring_transaction(monkeypatch):
+    """A new profile must be visible before the atomic flow update commits."""
+    from types import SimpleNamespace
+    from src.lib.domain_packs import profile_validation
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+
+    transaction = object()
+    receipt = object()
+    pack = object()
+    context = object()
+    monkeypatch.setattr(validation_attachments_module, '_domain_pack_validation_registries',
+                        lambda: {'generic': SimpleNamespace(domain_pack=pack)})
+    monkeypatch.setattr(AgentExecutionReceipt, 'model_validate', lambda _: receipt)
+
+    def resolve(actual_receipt, actual_pack, **kwargs):
+        assert actual_receipt is receipt
+        assert actual_pack is pack
+        assert kwargs['db'] is transaction
+        assert kwargs['user_id'] == 8
+        assert kwargs['active_group_ids'] == ['GROUP_A']
+        return context
+
+    monkeypatch.setattr(profile_validation, 'resolve_profile_validation', resolve)
+    monkeypatch.setattr(profile_validation, 'profile_validation_attachment_options',
+                        lambda value: () if value is context else pytest.fail('Wrong context'))
+    flow = _flow_definition('custom_extractor')
+    hydrated = apply_flow_validation_attachment_defaults(
+        flow, db=transaction, entries_by_node={'extract_1': {
+            'curation': {'domain_pack_id': 'generic'}, 'execution_receipt': {},
+            'authenticated_user_id': 8, 'authenticated_group_ids': ['GROUP_A'],
+        }},
+    )
+    assert hydrated.nodes[1].data.validation_attachments == []
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_revision_reconciliation_preserves_choice_across_profile_fingerprint(monkeypatch, enabled):
+    from dataclasses import replace
+    old = _option("profile-" + "a" * 64 + "-validator_1")
+    new = replace(old, attachment_id=old.attachment_id.replace("a" * 64, "b" * 64),
+                  validator_binding_id=old.validator_binding_id.replace("a" * 64, "b" * 64))
+    original = _flow_definition(attachments=[{**old.to_dict(), "enabled": enabled}])
+    monkeypatch.setattr(validation_attachments_module, "_options_for_agent_entry", lambda entry, db=None: (new,))
+    result = validation_attachments_module.reconcile_revision_attachments(
+        original, entries_by_node={"extract_1": {}}, retargeted_node_ids=frozenset({"extract_1"}),
+    )
+    selected = result.nodes[1].data.validation_attachments
+    assert [(item.attachment_id, item.enabled) for item in selected] == [(new.attachment_id, enabled)]
+    assert original.nodes[1].data.validation_attachments[0].attachment_id == old.attachment_id
+    assert result.edges == original.edges
+
+
+def test_revision_reconciliation_does_not_drop_explicit_validator_edges(monkeypatch):
+    old, new = _option("old"), _option("new")
+    original = _flow_definition(attachments=[{**old.to_dict(), "enabled": True}],
+        extra_nodes=[_validator_node("validator", "validation_output")], edges=[
+            {"id": "e1", "source": "task_1", "target": "extract_1"},
+            {"id": "validation", "source": "extract_1", "target": "validator",
+             "role": "validation_attachment", "replaces_attachment_id": old.attachment_id},
+        ])
+    monkeypatch.setattr(validation_attachments_module, "_options_for_agent_entry", lambda entry, db=None: (new,))
+    with pytest.raises(FlowValidationAttachmentError, match="reconnect the validator"):
+        validation_attachments_module.reconcile_revision_attachments(
+            original, entries_by_node={"extract_1": {}}, retargeted_node_ids=frozenset({"extract_1"}),
+        )
+    assert len(original.edges) == 2
+
+
+def test_revision_reconciliation_refuses_to_silently_enable_unmatched_optout(monkeypatch):
+    original = _flow_definition(attachments=[{**_option("old").to_dict(), "enabled": False}])
+    monkeypatch.setattr(validation_attachments_module, "_options_for_agent_entry", lambda entry, db=None: (_option("new"),))
+    with pytest.raises(FlowValidationAttachmentError, match="disabled check cannot be matched"):
+        validation_attachments_module.reconcile_revision_attachments(
+            original, entries_by_node={"extract_1": {}}, retargeted_node_ids=frozenset({"extract_1"}),
+        )

@@ -51,3 +51,31 @@ Previously pinned custom-profile mappings must pass the existing review/resave
 flow against the new capability before use; do not silently rewrite saved
 revisions or bypass fingerprint checks. Historical failed validation results
 are not automatically repaired; revalidation is a separate curator action.
+
+### Source-block boundaries and existing documents
+
+Title- and paragraph-based ingestion keeps source elements separated by blank
+lines. New chunks do not borrow the preceding element/section's tail: doing so
+would attach text to a chunk whose element/page/section provenance does not own
+it. Configured overlap still applies when splitting an oversized single element;
+character/sentence chunking is unchanged. Adjacent-chunk navigation remains
+available for contextual reading.
+
+Evidence sentence generation treats blank lines as source-block boundaries,
+including headings without terminal punctuation. Single line breaks remain
+possible PDF line wraps. Spans are exact slices of stored chunk text; no cleanup
+or invented sentence punctuation is included in verified quotes.
+
+The `pdf_sentence_v1` offset/hash identity contract is unchanged. New span lists
+can have finer boundaries, but resolution of a saved ID validates its encoded
+source offsets and hash directly rather than regenerating the sentence list.
+Previously saved evidence and IDs therefore remain valid against unchanged
+stored chunks, including historical mixed spans. Existing fused text without
+boundaries is not repaired by deploying this correction.
+
+Existing documents need explicit reprocessing to benefit from corrected ingestion.
+Do not replace indexed text beneath existing evidence references or silently
+rewrite historical quotes. Before repairing an existing document, verify the
+chosen import/reprocessing workflow preserves the historical source identity and
+audit records (use a distinct document/source identity when necessary). Broad
+reindexing and repair of stored curator documents are separate operational work.

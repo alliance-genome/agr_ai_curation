@@ -11,9 +11,10 @@ import type { AgentNode } from '../types'
 import NodePanel from './NodePanel'
 import type { NodePanelLeaveGuard } from './NodePanel'
 
-const revisionMocks = vi.hoisted(() => ({ list: vi.fn() }))
+const revisionMocks = vi.hoisted(() => ({ list: vi.fn(), select: vi.fn() }))
 vi.mock('@/services/agentStudioService', () => ({
   listAgentExecutionRevisions: revisionMocks.list,
+  selectFlowRevision: revisionMocks.select,
 }))
 
 const metadataMocks = vi.hoisted(() => ({
@@ -100,6 +101,7 @@ describe('NodePanel', () => {
   beforeEach(() => {
     metadataMocks.agents = extractionMetadata
     revisionMocks.list.mockReset()
+    revisionMocks.select.mockReset()
   })
 
   it('keeps revision selection local until Apply and restores the exact receipt on Cancel', async () => {
@@ -117,6 +119,13 @@ describe('NodePanel', () => {
         fingerprint: 'new-fingerprint', snapshot: { output_contract: nextContract } }],
       next_before_revision: null,
     })
+    const newCheck = { ...optionalCheck, attachment_id: 'new-profile-check', enabled: false }
+    revisionMocks.select.mockResolvedValue({
+      agent_id: oldReceipt.agent_key, agent_revision_id: 'revision-new',
+      execution_receipt: { ...oldReceipt, agent_revision_id: 'revision-new', revision: 2,
+        fingerprint: 'new-fingerprint', output_contract: nextContract },
+      validation_attachments: [newCheck],
+    })
     const guard = createRef<NodePanelLeaveGuard>()
     const { onApply } = renderPanel(buildNode({
       agent_id: oldReceipt.agent_key, agent_revision_id: oldReceipt.agent_revision_id,
@@ -129,6 +138,7 @@ describe('NodePanel', () => {
     expect(onApply).not.toHaveBeenCalled()
     expect(guard.current?.captureAuthoringDraft().data).toMatchObject({
       agent_revision_id: 'revision-new', execution_receipt: { output_contract: nextContract },
+      validation_attachments: [expect.objectContaining({ attachment_id: 'new-profile-check', enabled: false })],
     })
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(guard.current?.captureAuthoringDraft().data.execution_receipt).toEqual(oldReceipt)
@@ -141,6 +151,29 @@ describe('NodePanel', () => {
         revision: 2, fingerprint: 'new-fingerprint', output_contract: nextContract,
       },
     }))
+  })
+
+  it('keeps the old revision after a failed refresh and ignores a pending refresh after Cancel', async () => {
+    const user = userEvent.setup()
+    const guard = createRef<NodePanelLeaveGuard>()
+    const node = buildNode({ agent_id: 'ca_agent-uuid', agent_revision_id: 'old' })
+    revisionMocks.list.mockResolvedValue({ revisions: [{ id: 'new', agent_id: 'agent-uuid', revision: 2,
+      fingerprint: 'new-fingerprint', snapshot: { output_contract: { output_state: 'none' } } }], next_before_revision: null })
+    revisionMocks.select.mockRejectedValueOnce(new Error('Review the attached validator before changing revisions.'))
+    renderPanel(node, { leaveGuardRef: guard })
+    await user.click(screen.getByRole('button', { name: 'Choose a saved revision' }))
+    await user.click(await screen.findByRole('radio', { name: 'Revision 2' }))
+    expect(await screen.findByText('Review the attached validator before changing revisions.')).toBeInTheDocument()
+    expect(guard.current?.captureAuthoringDraft().data.agent_revision_id).toBe('old')
+    let resolve!: (value: unknown) => void
+    revisionMocks.select.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    await user.click(screen.getByRole('radio', { name: 'Revision 2' }))
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    resolve({ ...node.data, agent_revision_id: 'new', validation_attachments: [] })
+    await waitFor(() => expect(screen.queryByText('Refreshing automatic checks…')).not.toBeInTheDocument())
+    expect(guard.current?.captureAuthoringDraft().data.agent_revision_id).toBe('old')
+    expect(guard.current?.captureAuthoringDraft().data.validation_attachments).toHaveLength(1)
   })
 
   it('preserves the draft selection when history fails and supports retry and pagination', async () => {

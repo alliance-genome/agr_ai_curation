@@ -1,3 +1,59 @@
+# September 16, 2026: streamlined allele policy (ALL-1208 / KANBAN-1728)
+
+This section supersedes the historical section layout and verbatim phrase pins
+below. Historical AV identifiers remain useful for the coverage audit. The
+current workflow is role -> identity decision -> request context -> lookup ->
+result contract. The model and reasoning setting remain Terra/medium.
+
+## Coverage audit
+
+| Previous rules | Current home and treatment |
+| --- | --- |
+| AV-01–03, AV-12, AV-13s–16: role, scope, database grounding, no invented identities | `role`, `request_context`, and literal-first lookup step. Repeated no-memory and literal-symbol warnings consolidated. |
+| AV-04, AV-14, AV-17: selected inputs, optional quotes/custom fields, taxon/provider | `request_context`, direct-ID exception in `identity_decision`, complete seven-provider mapping in lookup step 2. All evidence records and conflicting quotes still matter. |
+| AV-05–07, AV-15, AV-18–19: source wording vs query, literal first, no biological renaming | Lookup step 1. Retains LAMP-2A, BMAL1 and N fa-g examples because they define different query boundaries. Synonyms must come from source/database evidence. |
+| AV-08–11, AV-28–34: statuses, shared fields, candidate detail, lookup provenance | `result_contract`; required root fields stay explicit. Candidate attribute lists consolidated; the supplied schema remains authoritative. |
+| AV-20–22: method choice, ordered discovery, refinement, not-found reporting | Lookup steps 2–4. ID, exact-symbol and synonym searches retained. Replace blind character narrowing with supported separate clues and explicit coverage. Empty bounded searches no longer claim database-wide absence. |
+| AV-37–38 and stop rules: bounded work, abstention and error handling | Lookup steps 3–4 and `result_contract`: preserve ambiguity, candidates, coverage, missing information and tool failures. |
+| Group hooks and previous core/tool relocations | Unchanged. Existing MGI render inventory and dropped-rule home checks still run. No group-loader change. |
+| Hard-coded base `finalize_allele_lookup` instruction | Replaced by active-runtime finalization instruction. Runtime may select standalone, single-validator or batch finalization; do not prescribe a competing tool name in the editable base. |
+
+## Added source-compatibility decision
+
+Compare all supplied material clues: gene, species, allele design, supplier or
+originating laboratory. Explain discrepancies. Use existing `allele_attribution`
+separately for supplier-aware discovery; retain plausible candidates and abstain
+with specific missing evidence if the connection remains unsupported. Supplier
+and creator are distinct: differing names are not automatic exclusion, missing
+attribution is unknown, and ranking is not proof. Valid synonym matches and
+quote-free direct-ID validation remain supported. No case-specific ID/vendor
+mapping is embedded in the prompt.
+
+## Prompting reference and validation
+
+[Official GPT-5.6 prompting guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6#prompting-best-practices)
+recommends lean prompts, one statement per instruction, retaining useful examples,
+and measuring changes on representative cases. Applied those principles without
+changing tools, output schemas, model parameters or runtime code.
+
+Editable content shrank from 2,429 to 1,154 whitespace-delimited words (17,002 to
+8,613 characters). These are text counts, not tokenizer or total-context measures.
+The full rendered request also includes locked instructions, tool schemas and
+source context. Focused Docker prompt/contract checks passed: 22 tests. They
+verify assembled-policy retention, ordering, schema contracts and group rendering;
+they do not prove that Terra makes better biological decisions.
+
+Before release acceptance, replay the attached ALL-1208 Cyagen fixture alongside
+valid synonyms, direct IDs without quotes, genuine ambiguous matches, and a
+supplier distributing another laboratory's allele. Assess source-clue accounting,
+attribution refinement and justified resolution/abstention. Do not score blanket
+refusal as success. No paid replay or full-paper rerun was performed during this
+rewrite. The existing ticket retains its model-evaluation budget gate.
+
+---
+
+## Historical Phase C coverage record
+
 # Phase C semantic-coverage checklist: `allele` validator (Wave 3 — VALIDATOR skeleton)
 
 This is the **authoritative inventory source** for the outcome-first rewrite of
@@ -358,3 +414,18 @@ are updated when that contract intentionally changes:
 
 The schema-validation tests assert against the `AlleleResultEnvelope` model, not the
 prompt text, so they are unaffected. No re-baseline was needed.
+
+
+## September 16 MGI identity policy (ALL-1239)
+
+The MGI overlay now separates synonym discovery from identity confirmation. A unique
+exact synonym hit, compatible gene/species/generic design, and a fetch of the
+discovered ID remain insufficient without independent source-supported identifying
+information. BMAL1/p53 and attribution examples retain candidates and abstain
+when that information is missing. Source-supplied IDs/full official designations
+remain valid direct inputs; supplier and creator remain distinct clues.
+
+The shared base and other MOD overlays are unchanged. Static assembled-prompt
+guards establish instruction consistency, not model decision quality. Release
+evaluation should cover unique/generic-only hits, discovered-ID fetches, source IDs,
+corroborated repository/design clues, and unexplained supplier differences.

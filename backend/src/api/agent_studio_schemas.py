@@ -127,12 +127,14 @@ class AgentMetadata(BaseModel):
     output_formatter_format: Optional[str] = None
     default_export_execution_mode: str = "ai"
     execution_metadata_error: Optional[str] = None
+    execution_receipt: Optional[Dict[str, Any]] = None
 
 
 class RegistryMetadataResponse(BaseModel):
     """Response for registry metadata endpoint."""
 
     agents: Dict[str, AgentMetadata]
+    validator_output_schema_keys: List[str] = Field(default_factory=list)
 
 
 class ModelOption(BaseModel):

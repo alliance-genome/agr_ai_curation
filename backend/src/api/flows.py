@@ -36,6 +36,7 @@ from ..lib.flows.evidence_export import (
 from ..lib.flows.validation_attachments import (
     FlowValidationAttachmentError,
     apply_flow_validation_attachment_defaults,
+    reconcile_revision_attachments,
 )
 from ..lib.flows.persisted_flow_migrations import (
     PersistedFlowMigrationError,
@@ -94,6 +95,42 @@ class FlowDraftValidationRequest(BaseModel):
     current_draft_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
+class FlowRevisionSelectionRequest(BaseModel):
+    flow_definition: FlowDefinition
+    node_id: str
+    agent_revision_id: UUID
+
+
+@router.post("/select-revision")
+async def select_flow_revision(
+    request: FlowRevisionSelectionRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Preview exact revision checks without saving a flow or changing an agent."""
+    db_user = db.query(User).filter(User.auth_sub == str(user.get("sub") or "")).one_or_none()
+    groups = get_groups_from_provider_groups(user.get("cognito:groups", []))
+    candidate = request.flow_definition.model_copy(deep=True)
+    node = next((node for node in candidate.nodes if node.id == request.node_id), None)
+    if node is None or not node.data.agent_id.startswith("ca_"):
+        raise HTTPException(422, detail="Select a custom agent step before choosing its revision.")
+    node.data.agent_revision_id = request.agent_revision_id
+    node.data.execution_receipt = None
+    resolved = resolve_flow_execution_revisions(
+        db, candidate, user_id=getattr(db_user, "id", None), active_group_ids=groups,
+    )
+    if resolved.entries_by_node.get(node.id) is None:
+        raise HTTPException(422, detail="The selected agent revision is unavailable. Choose an accessible saved revision.")
+    try:
+        refreshed = reconcile_revision_attachments(
+            resolved.definition, entries_by_node=resolved.entries_by_node,
+            retargeted_node_ids=frozenset({node.id}), db=db,
+        )
+    except FlowValidationAttachmentError as exc:
+        raise HTTPException(422, detail=str(exc)) from None
+    return next(item.data.model_dump(mode="json") for item in refreshed.nodes if item.id == node.id)
+
+
 def _sanitized_flow_db_error(orig_type_name: str, *, operation: str) -> _FlowDatabaseError:
     try:
         raise _FlowDatabaseError(f"Flow {operation} failed ({orig_type_name})") from None
@@ -131,7 +168,7 @@ def _validated_flow_definition_payload(
     def _apply_defaults(candidate: FlowDefinition) -> FlowDefinition:
         if resolved.entries_by_node:
             return apply_flow_validation_attachment_defaults(
-                candidate, entries_by_node=resolved.entries_by_node,
+                candidate, entries_by_node=resolved.entries_by_node, db=db,
             )
         agent_registry, _ = _validation_attachment_agent_registry(
             candidate,
@@ -728,7 +765,7 @@ async def validate_flow_draft(
     def _apply_defaults(candidate: FlowDefinition) -> FlowDefinition:
         if resolved.entries_by_node:
             return apply_flow_validation_attachment_defaults(
-                candidate, entries_by_node=resolved.entries_by_node,
+                candidate, entries_by_node=resolved.entries_by_node, db=db,
             )
         agent_registry, _ = _validation_attachment_agent_registry(
             candidate,

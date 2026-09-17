@@ -822,8 +822,9 @@ async def test_common_supplementary_continuation_label_is_structured(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("historical_overlap", [False, True])
 async def test_provider_reference_ranges_exclude_cross_title_overlap(
-    monkeypatch,
+    monkeypatch, historical_overlap,
 ) -> None:
     first_caption = (
         "Context padding keeps the final sentence inside the configured overlap. "
@@ -854,6 +855,13 @@ async def test_provider_reference_ranges_exclude_cross_title_overlap(
         ChunkingStrategy.get_research_strategy(),
         "doc-overlap",
     )
+    second_chunk = next(chunk for chunk in chunks if "Provider Figure: Figure 2" in chunk.content)
+    # New processing preserves section boundaries. Also exercise retained chunks
+    # produced before that fix, whose text can contain a prior caption's tail.
+    assert "must not inherit the next reference" not in second_chunk.content
+    if historical_overlap:
+        second_chunk.content = first_caption + "\n\n" + second_chunk.content
+
     captured_candidate_text: dict[str, str] = {}
 
     async def fake_classifier(candidates, **_kwargs):
@@ -882,7 +890,6 @@ async def test_provider_reference_ranges_exclude_cross_title_overlap(
         for chunk in chunks
         if "Provider Figure: Figure 2" in chunk.content
     )
-    assert "must not inherit the next reference" in second_chunk.content
     assert "must not inherit" not in captured_candidate_text[second_chunk.id]
     provider = _provider_reference_for(second_chunk)
     assert provider.canonical_reference == "Figure 2"
@@ -898,21 +905,19 @@ async def test_provider_reference_ranges_exclude_cross_title_overlap(
         chunk_id=second_chunk.id,
         chunk_text=second_chunk.content,
     )
-    overlapped_span = next(
-        span for span in spans if "must not inherit" in span.text
-    )
     second_span = next(
         span for span in spans if "Second caption" in span.text
     )
 
-    overlap_result = _resolve_stored_figure_reference(
-        stored_chunk,
-        overlapped_span,
-    )
+    if historical_overlap:
+        overlapped_span = next(span for span in spans if "must not inherit" in span.text)
+        overlap_result = _resolve_stored_figure_reference(stored_chunk, overlapped_span)
+        assert overlap_result.reference is None
+        assert overlap_result.blocked is False
+    else:
+        assert all("must not inherit" not in span.text for span in spans)
     second_result = _resolve_stored_figure_reference(stored_chunk, second_span)
 
-    assert overlap_result.reference is None
-    assert overlap_result.blocked is False
     assert second_result.reference == "Figure 2"
     assert second_result.blocked is False
 

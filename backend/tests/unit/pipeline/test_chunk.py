@@ -325,3 +325,42 @@ async def test_store_chunks_batch_counts_all_chunks():
 
     stored = await store_chunks_batch(chunks, batch_size=2)
     assert stored == 5
+
+
+@pytest.mark.asyncio
+async def test_section_boundary_fixture_isolates_crossing_evidence_and_preserves_old_id():
+    import json
+    from pathlib import Path
+    from src.lib.openai_agents.evidence_spans import build_evidence_spans, resolve_evidence_span_id
+
+    fixture = json.loads((Path(__file__).parent / "fixtures/section_boundary.json").read_text())
+    # Captured production chunk = previous section's last 200 chars + heading/body.
+    assert fixture["stored_text"].startswith(fixture["previous_text"][-200:])
+    heading, body = fixture["stored_text"][200:].split("\n", 1)
+    elements = [
+        {"type": "NarrativeText", "text": fixture["previous_text"], "metadata": {"page_number": 20, "section_title": "Mouse models"}},
+        {"type": "Title", "text": heading, "metadata": {"page_number": 21, "section_title": heading}},
+        {"type": "NarrativeText", "text": body, "metadata": {"page_number": 21, "section_title": heading}},
+    ]
+    chunks = await chunk_parsed_document(elements, _strategy(ChunkingMethod.BY_TITLE, 3000, 200), "fixture")
+    current = chunks[-1]
+    assert "antibiotic" not in current.content
+    spans = build_evidence_spans(chunk_id=current.id, chunk_text=current.content, page_number=current.page_number, section_title=current.section_title)
+    crossing = next(s for s in spans if "We generated intestine-specific" in s.text)
+    assert crossing.text == body.split(". ", 1)[0] + "."
+    assert crossing.page_number == 21
+    assert crossing.section_title == heading
+    assert resolve_evidence_span_id(span_id=crossing.span_id, chunk_text=current.content, expected_chunk_id=current.id).text == crossing.text
+    historical = resolve_evidence_span_id(span_id=fixture["historical_span_id"], chunk_text=fixture["stored_text"])
+    assert historical.text == fixture["stored_text"][97:383]
+
+
+@pytest.mark.parametrize("chunker", [_chunk_by_title, _chunk_by_paragraph])
+def test_element_rollover_does_not_borrow_text_with_wrong_provenance(chunker):
+    elements = [
+        {"type": "NarrativeText", "text": "A" * 400, "metadata": {"page_number": 1}},
+        {"type": "NarrativeText", "text": "B" * 200, "metadata": {"page_number": 2}},
+    ]
+    chunks = chunker(elements, _strategy(ChunkingMethod.BY_TITLE, 500, 100))
+    assert chunks[1]["content"] == "B" * 200
+    assert chunks[1]["metadata"]["page_number"] == 2
