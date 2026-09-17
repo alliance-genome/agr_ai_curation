@@ -733,3 +733,71 @@ async def test_read_subsection_bounds_pages_and_filters(monkeypatch):
     assert filtered.subsection.content == "beta mention"
     for source in filtered.subsection.source_chunks:
         assert not hasattr(source, "content")
+
+
+@pytest.mark.asyncio
+async def test_search_tool_reports_one_sentry_event_after_deadline_retry_fails(monkeypatch, caplog):
+    """ALL-1246: backend search + tool logs yield one Sentry-eligible ERROR."""
+    import asyncio
+    import logging
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    import grpc
+    from weaviate.exceptions import WeaviateQueryError
+
+    import src.lib.weaviate_client.chunks as chunks
+    from src.lib.observability.sentry import _with_safe_log_record_metadata
+
+    class _DeadlineRpcError(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.DEADLINE_EXCEEDED
+
+    def _deadline_error():
+        try:
+            try:
+                raise _DeadlineRpcError()
+            except grpc.RpcError:
+                raise WeaviateQueryError("Deadline Exceeded", "GRPC search")
+        except WeaviateQueryError as error:
+            return error
+
+    async def _immediate(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    @contextmanager
+    def _session():
+        yield MagicMock()
+
+    monkeypatch.setattr(asyncio, "to_thread", _immediate)
+    monkeypatch.setattr(chunks, "get_effective_rerank_provider", lambda: "none")
+    connection = MagicMock()
+    connection.session.side_effect = _session
+    collection = MagicMock()
+    collection.query.hybrid.side_effect = [_deadline_error(), _deadline_error()]
+    caplog.set_level(logging.INFO)
+
+    tool = weaviate_search.create_search_tool("doc-12345678", "user-1")
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
+        result = await tool(query="Methods allele search", section_keywords=["Methods"])
+
+    assert result.summary.startswith("Error searching document:")
+    assert result.hits == []
+    assert collection.query.hybrid.call_count == 2
+    error_records = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert {record.name for record in error_records} == {
+        chunks.logger.name,
+        weaviate_search.logger.name,
+    }
+    sentry_eligible = [
+        record for record in error_records
+        if _with_safe_log_record_metadata({}, {"log_record": record}) is not None
+    ]
+    assert [record.name for record in sentry_eligible] == [weaviate_search.logger.name]
+    assert len([
+        record for record in caplog.records
+        if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"
+        and record.levelno == logging.WARNING
+    ]) == 1

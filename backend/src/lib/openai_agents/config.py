@@ -20,6 +20,7 @@ Provider Configuration:
 """
 
 import logging
+import math
 import os
 from typing import Literal, Optional, TYPE_CHECKING, Union
 from dataclasses import dataclass
@@ -1289,6 +1290,26 @@ def get_document_source_import_timeout_seconds() -> float:
 
 
 # --- Document retrieval ---
+
+
+def get_weaviate_query_timeout_seconds() -> float:
+    """weaviate-client query timeout in seconds (default 30, the library default).
+
+    weaviate-client applies ``Timeout.query`` to gRPC searches and also to batch
+    deletes, tenant reads, aggregates and HTTP GET requests. Invalid,
+    non-finite or non-positive values fall back to the default.
+    """
+
+    default = 30.0
+    value = _get_env_float_with_fallback("WEAVIATE_QUERY_TIMEOUT_SECONDS", default)
+    if not math.isfinite(value) or value <= 0:
+        logger.warning(
+            "WEAVIATE_QUERY_TIMEOUT_SECONDS=%s must be a positive number; using default %s",
+            value,
+            default,
+        )
+        return default
+    return value
 
 
 def get_weaviate_search_initial_limit() -> int:

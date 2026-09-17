@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 import weaviate
 from weaviate import WeaviateClient
 from weaviate.auth import Auth
+from weaviate.classes.init import AdditionalConfig, Timeout
+
+from ..openai_agents.config import get_weaviate_query_timeout_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +59,16 @@ class WeaviateConnection:
             host = parsed.hostname or "localhost"
             port = parsed.port or (443 if parsed.scheme == "https" else 8080)
             auth_config = Auth.api_key(self.api_key) if self.api_key else None
+            query_timeout_seconds = get_weaviate_query_timeout_seconds()
+            # Only the query timeout is configured; init and insert keep the
+            # weaviate-client defaults.
+            additional_config = AdditionalConfig(
+                timeout=Timeout(query=query_timeout_seconds)
+            )
 
             # For local connections, use the simpler connect_to_local method
             if host in ["localhost", "127.0.0.1", "weaviate"] and port == 8080:
-                local_kwargs = {}
+                local_kwargs = {"additional_config": additional_config}
                 if host == "weaviate":
                     # Docker container hostname
                     local_kwargs.update(host="weaviate", port=8080)
@@ -93,10 +102,15 @@ class WeaviateConnection:
                     grpc_port=grpc_port,
                     grpc_secure=grpc_secure,
                     auth_credentials=auth_config,
+                    additional_config=additional_config,
                     skip_init_checks=False
                 )
 
-            logger.info('Connected to Weaviate at %s', self.url)
+            logger.info(
+                'Connected to Weaviate at %s (query_timeout_seconds=%s)',
+                self.url,
+                query_timeout_seconds,
+            )
             return self._client
 
         except Exception as e:

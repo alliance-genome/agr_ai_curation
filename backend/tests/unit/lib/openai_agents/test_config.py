@@ -191,6 +191,34 @@ def test_weaviate_search_defaults_are_bounded_and_configurable(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, 30.0), ("45", 45.0), ("7.5", 7.5), ("0", 30.0), ("-1", 30.0),
+     ("nan", 30.0), ("inf", 30.0), ("soon", 30.0)],
+)
+def test_weaviate_query_timeout_defaults_to_client_default(monkeypatch, raw, expected):
+    """ALL-1246: WEAVIATE_QUERY_TIMEOUT_SECONDS keeps weaviate-client's 30s default."""
+    from src.lib.openai_agents.config import get_weaviate_query_timeout_seconds
+
+    if raw is None:
+        monkeypatch.delenv("WEAVIATE_QUERY_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("WEAVIATE_QUERY_TIMEOUT_SECONDS", raw)
+    assert get_weaviate_query_timeout_seconds() == expected
+
+    workspace_root = Path("/workspace")
+    if not (workspace_root / ".env.example").exists():
+        workspace_root = Path(__file__).resolve().parents[5]
+    env_example = (workspace_root / ".env.example").read_text(encoding="utf-8")
+    assert "\nWEAVIATE_QUERY_TIMEOUT_SECONDS=30\n" in env_example
+    for compose_name, expected_value in (
+        ("docker-compose.production.yml", '"${WEAVIATE_QUERY_TIMEOUT_SECONDS:-30}"'),
+        ("docker-compose.test.yml", "WEAVIATE_QUERY_TIMEOUT_SECONDS=${WEAVIATE_QUERY_TIMEOUT_SECONDS:-30}"),
+    ):
+        compose_text = (workspace_root / compose_name).read_text(encoding="utf-8")
+        assert expected_value in compose_text, compose_name
+
+
+@pytest.mark.parametrize(
     ("environment_name", "getter", "default"),
     [
         (
