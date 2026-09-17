@@ -176,6 +176,44 @@ describe('NodePanel', () => {
     expect(guard.current?.captureAuthoringDraft().data.validation_attachments).toHaveLength(1)
   })
 
+  it.each([
+    ['with the flow definition', true],
+    ['without a flow definition', false],
+  ])('sends only persisted step fields when selecting a revision %s', async (_label, withDefinition) => {
+    const user = userEvent.setup()
+    const node = buildNode({
+      agent_id: 'ca_agent-uuid', agent_revision_id: 'old',
+      hasError: true, errorMessage: 'Step needs attention', isSelected: true,
+      outputBinding: { status: 'bound', sources: [{ sourceNodeId: 'node_0', sourceLabel: 'Input' }] },
+    })
+    revisionMocks.list.mockResolvedValue({ revisions: [{ id: 'new', agent_id: 'agent-uuid', revision: 2,
+      fingerprint: 'new-fingerprint', snapshot: { output_contract: { output_state: 'none' } } }], next_before_revision: null })
+    revisionMocks.select.mockResolvedValue({ ...buildNode().data, agent_id: 'ca_agent-uuid', agent_revision_id: 'new' })
+    const flowDefinition = {
+      version: '1.1' as const, entry_node_id: 'node_0', edges: [],
+      nodes: [
+        { id: 'node_0', type: 'task_input' as const, position: { x: 0, y: 0 },
+          data: { agent_id: 'task_input', agent_display_name: 'Initial Instructions', output_key: 'task_input' } },
+        { id: 'node_1', type: 'agent' as const, position: { x: 0, y: 0 },
+          data: { agent_id: 'ca_agent-uuid', agent_display_name: 'Gene Extractor', output_key: 'gene_output' } },
+      ],
+    }
+    renderPanel(node, withDefinition ? { flowDefinition } : {})
+    await user.click(screen.getByRole('button', { name: 'Choose a saved revision' }))
+    await user.click(await screen.findByRole('radio', { name: 'Revision 2' }))
+    await waitFor(() => expect(revisionMocks.select).toHaveBeenCalledTimes(1))
+    const [definition, nodeId, revisionId] = revisionMocks.select.mock.calls[0]
+    expect(nodeId).toBe('node_1')
+    expect(revisionId).toBe('new')
+    const selected = definition.nodes.find((item: { id: string }) => item.id === 'node_1')
+    expect(selected.type).toBe('agent')
+    expect(selected.data).toMatchObject({ agent_id: 'ca_agent-uuid', agent_display_name: 'Gene Extractor', output_key: 'gene_output' })
+    for (const field of ['hasError', 'errorMessage', 'isSelected', 'outputBinding']) {
+      expect(selected.data).not.toHaveProperty(field)
+    }
+    expect(definition.nodes).toHaveLength(withDefinition ? 2 : 1)
+  })
+
   it('preserves the draft selection when history fails and supports retry and pagination', async () => {
     const user = userEvent.setup()
     revisionMocks.list.mockRejectedValueOnce(new Error('unavailable'))

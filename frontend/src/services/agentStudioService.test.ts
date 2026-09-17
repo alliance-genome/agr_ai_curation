@@ -23,6 +23,7 @@ import {
   restoreAgentExecutionRevision,
   updateFlow,
   validateFlowDraft,
+  selectFlowRevision,
 } from './agentStudioService'
 import { logger } from './logger'
 
@@ -511,6 +512,28 @@ describe('agentStudioService', () => {
       ? createFlow({ name: 'Test', flow_definition: definition })
       : updateFlow('flow-123', { flow_definition: definition })
     await expect(request).rejects.toThrow('The saved checks do not match this revision. Refresh the automatic checks.')
+  })
+
+  it('names the field path for request validation errors when selecting a revision', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 422, json: async () => ({ detail: [
+      { type: 'extra_forbidden', loc: ['body', 'flow_definition', 'nodes', 1, 'data', 'hasError'], msg: 'Extra inputs are not permitted' },
+      { type: 'missing', loc: ['body', 'node_id'], msg: 'Field required' },
+      { type: 'value_error', msg: 'No location' },
+    ] }) } as Response)
+    const definition = { version: '1.1' as const, nodes: [], edges: [], entry_node_id: 'input' }
+    await expect(selectFlowRevision(definition, 'node_1', 'revision-new')).rejects.toThrow(
+      'flow_definition.nodes[1].data.hasError: Extra inputs are not permitted; node_id: Field required; No location'
+    )
+  })
+
+  it('keeps plain string details when selecting a revision fails', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 409, json: async () => ({
+      detail: 'Review the attached validator before changing revisions.',
+    }) } as Response)
+    const definition = { version: '1.1' as const, nodes: [], edges: [], entry_node_id: 'input' }
+    await expect(selectFlowRevision(definition, 'node_1', 'revision-new')).rejects.toThrow(
+      'Review the attached validator before changing revisions.'
+    )
   })
 
   it('updateFlow returns the updated flow object after saving changes', async () => {

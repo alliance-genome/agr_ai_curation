@@ -72,7 +72,11 @@ import AgentPalette from './AgentPalette'
 import { NodePanel, NodePanelDock, nodePanelMode, stepOrder } from './NodePanel'
 import type { NodePanelLeaveGuard, ValidatorAttachmentView } from './NodePanel'
 import { useContainerWidth } from '../useContainerWidth'
-import { validationAttachmentForPersistence } from './types'
+import {
+  flowNodeDataForPersistence,
+  flowNodeTypeForPersistence,
+  validationAttachmentForPersistence,
+} from './types'
 import { projectExecutableFlowGraph } from './executableFlowGraph'
 import type {
   FlowBuilderProps,
@@ -80,7 +84,6 @@ import type {
   AgentNode,
   AgentNodeData,
   FlowDefinition,
-  FlowNodeData,
   FlowResponse,
   FlowEdge,
   FlowEdgeRole,
@@ -140,51 +143,6 @@ const buildDefaultValidationSelections = (
   })) ?? []
 )
 
-const flowNodeDataForPersistence = (data: AgentNodeData): FlowNodeData => {
-  const persisted: FlowNodeData = {
-    agent_id: data.agent_id,
-    agent_display_name: data.agent_display_name,
-    output_key: data.output_key,
-  }
-
-  if (data.agent_description !== undefined) {
-    persisted.agent_description = data.agent_description
-  }
-  if (data.task_instructions !== undefined) {
-    persisted.task_instructions = data.task_instructions
-  }
-  if (data.step_goal !== undefined) {
-    persisted.step_goal = data.step_goal
-  }
-  if (data.custom_instructions !== undefined) {
-    persisted.custom_instructions = data.custom_instructions
-  }
-  if (data.prompt_version !== undefined) {
-    persisted.prompt_version = data.prompt_version
-  }
-  if (data.agent_revision_id !== undefined) {
-    persisted.agent_revision_id = data.agent_revision_id
-  }
-  if (data.execution_receipt !== undefined) {
-    persisted.execution_receipt = data.execution_receipt
-  }
-  if (data.include_evidence !== undefined) {
-    persisted.include_evidence = data.include_evidence
-  }
-  if (data.output_filename_template !== undefined) {
-    persisted.output_filename_template = data.output_filename_template
-  }
-  if (data.export_execution_mode !== undefined) persisted.export_execution_mode = data.export_execution_mode
-  if (data.projection_plan !== undefined) {
-    persisted.projection_plan = data.projection_plan
-  }
-  if (data.validation_attachments !== undefined) {
-    persisted.validation_attachments = data.validation_attachments.map(validationAttachmentForPersistence)
-  }
-
-  return persisted
-}
-
 const buildFlowDefinition = (
   nodes: AgentNode[],
   edges: FlowEdge[],
@@ -196,11 +154,7 @@ const buildFlowDefinition = (
     ...(taskInstructionsDefaultOnly ? { task_instructions_default_only: true } : {}),
     nodes: nodes.map((node) => ({
       id: node.id,
-      type: node.data.agent_id === 'task_input'
-        ? 'task_input'
-        : node.type === 'output'
-          ? 'output'
-          : 'agent',
+      type: flowNodeTypeForPersistence(node),
       position: { ...node.position },
       data: flowNodeDataForPersistence(node.data),
     })),
