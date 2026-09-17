@@ -43,6 +43,7 @@ from src.lib.flows.outcome import (
 )
 from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 from src.lib.flows.execution_revisions import flow_execution_revision_findings
+from src.lib.flows.unavailable_steps import stored_flow_step_reason_codes
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -461,6 +462,16 @@ def _build_execute_flow_summary_row(
         "trace_id": trace_id,
         "failure_reason": failure_reason,
         "final_user_output": str(final_user_output or "").strip() or None,
+        # Safe per-step codes from the terminal event. New records always carry
+        # a list; records written before ALL-1244 lack the key.
+        "unavailable_step_reason_codes": next(
+            (
+                stored_flow_step_reason_codes(event.get("unavailable_step_reason_codes")) or []
+                for event in reversed(terminal_events)
+                if isinstance(event, dict) and event.get("type") == "FLOW_FINISHED"
+            ),
+            [],
+        ),
         FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: assistant_message,
         _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
             dict(event)

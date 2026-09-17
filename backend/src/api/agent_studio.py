@@ -3675,6 +3675,14 @@ async def _execute_tool_call(
             return {"success": False, "error": "Authenticated saved-work access is unavailable."}
         try:
             request = SavedResourceInspection.model_validate(tool_input)
+            if request.action == "recent_flow_runs" and not request.flow_id:
+                # Default to the saved flow open in the editor; never guess otherwise.
+                open_flow_id = context.flow_id if context else None
+                if not open_flow_id:
+                    return {"success": False, "error": (
+                        "No saved flow is open. Pass flow_id from list_flows to list its recent runs."
+                    )}
+                request = request.model_copy(update={"flow_id": open_flow_id})
             with SessionLocal() as inspection_db:
                 # Enforce the read-only contract in PostgreSQL as well as in the
                 # typed handler. Closing the session rolls back the transaction.

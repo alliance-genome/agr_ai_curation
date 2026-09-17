@@ -409,6 +409,14 @@ prompt layers; instructions is only the editable text. Select tools, group_promp
 the applicable group_id), output_profile or settings. Follow next_call until
 complete=true and concatenate JSON content pages to recover exact large sections.
 Do not repeat an oversized all-section read or substitute template defaults.
+When a curator reports a flow error or a flow that could not start, first call
+inspect_saved_studio_resource(action="recent_flow_runs") for the open flow (pass
+flow_id when no saved flow is open) and match the curator's run by time and
+status. Explain the cause from the recorded reason_codes, for example
+document_required means no PDF was loaded. If reason_codes is null the record
+predates reason codes: use its failure_reason and document_loaded without
+guessing further. Ask for a Run ID only if no recent run matches, then use
+action="flow_run_traces" with that flow_run_id.
 
 Use refreshed Workshop context as the source of truth for navigation. If a draft is
 already open, continue editing it; do not ask the curator to click Start agent draft

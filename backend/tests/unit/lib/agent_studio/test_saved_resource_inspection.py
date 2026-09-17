@@ -1,5 +1,7 @@
 """Saved-work inspection must preserve caller scope and exact revision identity."""
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -263,3 +265,224 @@ def test_missing_or_unowned_flow_run_reveals_no_traces():
         request=inspection.SavedResourceInspection(action="flow_run_traces", flow_run_id=str(uuid4())))
     assert result["trace_ids"] == []
     assert result["complete"] is True and result["next_call"] is None
+
+
+# ---------------------------------------------------------------------------
+# ALL-1244: failed flow runs are readable from durable chat records
+# ---------------------------------------------------------------------------
+
+REFUSAL_RUN_ID = "d202ed58-76ca-474d-ab48-d152adfd32c6"
+REFUSAL_FLOW_ID = "f05d8320-c96d-4145-8c67-f18408edb3ca"
+LEGACY_REFUSAL_MESSAGE = (
+    "Flow cannot start because these steps are unavailable: 1 (Mouse Allele Identification), "
+    "2 (Allele/Variant Extraction Agent (Custom)2). If a step needs a PDF, open Documents in the "
+    "top navigation and load a document into chat."
+)
+
+
+def _summary_row(*, run_id=REFUSAL_RUN_ID, codes="absent", minute=19, document_id=None,
+                 status="failed", trace_id=None, failure_reason=LEGACY_REFUSAL_MESSAGE):
+    payload = {
+        "flow_id": REFUSAL_FLOW_ID, "flow_name": "Identify MGI Allele IDs",
+        "flow_run_id": run_id, "session_id": "ff185910-87a4-4112-80ff-96b9855df133",
+        "document_id": document_id, "status": status, "trace_id": trace_id,
+        "failure_reason": failure_reason,
+        "_replay_terminal_events": [{"type": "FLOW_FINISHED", "reason": "raw private reason"}],
+    }
+    if codes != "absent":
+        payload["unavailable_step_reason_codes"] = codes
+    return SimpleNamespace(
+        created_at=datetime(2026, 9, 17, 11, minute, 10, tzinfo=timezone.utc),
+        payload_json=payload, trace_id=trace_id,
+        session_id="ff185910-87a4-4112-80ff-96b9855df133",
+    )
+
+
+def _owned_flow_db(rows, *, owned=True):
+    db = MagicMock()
+    owned_flow = SimpleNamespace(id=REFUSAL_FLOW_ID, name="Identify MGI Allele IDs")
+    db.scalars.return_value.one_or_none.return_value = owned_flow if owned else None
+    db.execute.return_value.all.return_value = rows
+    return db
+
+
+def test_recent_flow_runs_returns_refused_run_without_trace_for_owner():
+    rows = [_summary_row(codes=[{"step": 1, "reason_code": "document_required"},
+                                {"step": 2, "reason_code": "document_required"}])]
+    db = _owned_flow_db(rows)
+    result = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=["MGI"],
+        request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID))
+    assert result["saved"] is True and result["loaded_in_editor"] is False
+    assert result["flow_id"] == REFUSAL_FLOW_ID
+    run = result["runs"][0]
+    assert run["flow_run_id"] == REFUSAL_RUN_ID
+    assert run["status"] == "failed"
+    assert run["document_loaded"] is False and run["document_id"] is None
+    assert run["trace_id"] is None
+    assert run["created_at"] == "2026-09-17T11:19:10+00:00"
+    assert run["reason_codes"] == [{"step": 1, "reason_code": "document_required"},
+                                   {"step": 2, "reason_code": "document_required"}]
+    assert "raw private reason" not in json.dumps(result)
+    assert "_replay_terminal_events" not in json.dumps(result)
+    assert result["complete"] is True and result["next_call"] is None
+
+    flow_query = db.scalars.call_args.args[0].compile()
+    assert "curation_flows.user_id =" in str(flow_query)
+    assert "curation_flows.is_active IS true" in str(flow_query)
+    assert 28 in flow_query.params.values()
+    runs_query = db.execute.call_args.args[0].compile()
+    sql = str(runs_query)
+    assert "users.user_id =" in sql
+    assert "chat_sessions.deleted_at IS NULL" in sql
+    assert "chat_messages.chat_kind = chat_sessions.chat_kind" in sql
+    assert "chat_messages.message_type =" in sql
+    assert "chat_messages.created_at >=" in sql
+    assert "ORDER BY chat_messages.created_at DESC" in sql
+    assert "flow_summary" in runs_query.params.values()
+    assert REFUSAL_FLOW_ID in runs_query.params.values()
+    # Active groups never widen the owner-only read.
+    assert "MGI" not in runs_query.params.values()
+    db.commit.assert_not_called()
+    db.add.assert_not_called()
+
+
+def test_recent_flow_runs_for_another_users_flow_is_unavailable():
+    db = _owned_flow_db([_summary_row()], owned=False)
+    with pytest.raises(ValueError, match="unavailable to you"):
+        inspection.inspect_saved_resource(db, user_id=8, active_group_ids=["MGI"],
+            request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID))
+    db.execute.assert_not_called()
+
+
+def test_recent_flow_runs_requires_a_flow():
+    with pytest.raises(ValueError, match="flow"):
+        inspection.inspect_saved_resource(MagicMock(), user_id=8, active_group_ids=[],
+            request=inspection.SavedResourceInspection(action="recent_flow_runs"))
+
+
+def test_recent_flow_runs_legacy_record_returns_null_codes_and_stored_reason():
+    db = _owned_flow_db([_summary_row(codes="absent")])
+    run = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID))["runs"][0]
+    assert run["reason_codes"] is None
+    assert run["failure_reason"] == LEGACY_REFUSAL_MESSAGE
+    assert run["document_loaded"] is False
+
+
+def test_recent_flow_runs_drops_unknown_codes_and_includes_completed_runs():
+    rows = [
+        _summary_row(run_id="run-new", codes=[{"step": 1, "reason_code": "private exception text"},
+                                             {"step": 2, "reason_code": "provider_disabled"}, "bad"]),
+        _summary_row(run_id="run-done", codes=[], status="completed", document_id="doc-7",
+                     trace_id="trace-7", failure_reason=None, minute=10),
+    ]
+    db = _owned_flow_db(rows)
+    runs = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID))["runs"]
+    assert runs[0]["reason_codes"] == [{"step": 1, "reason_code": "agent_unavailable"},
+                                       {"step": 2, "reason_code": "provider_disabled"}]
+    assert "private exception text" not in json.dumps(runs)
+    assert runs[1] == {**runs[1], "status": "completed", "document_loaded": True,
+                       "document_id": "doc-7", "trace_id": "trace-7", "reason_codes": []}
+
+
+def test_recent_flow_runs_pages_newest_first_with_next_call(monkeypatch):
+    monkeypatch.setattr(inspection, "get_tool_page_default_limit", lambda: 2)
+    rows = [_summary_row(run_id=f"run-{minute}", minute=minute) for minute in (30, 20, 10)]
+    db = _owned_flow_db(rows)
+    result = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID, offset=4))
+    assert [run["flow_run_id"] for run in result["runs"]] == ["run-30", "run-20"]
+    assert result["complete"] is False
+    assert result["next_call"] == {"tool": "inspect_saved_studio_resource", "arguments": {
+        "action": "recent_flow_runs", "flow_id": REFUSAL_FLOW_ID, "offset": 6}}
+    runs_query = db.execute.call_args.args[0].compile()
+    assert 4 in runs_query.params.values() and 3 in runs_query.params.values()
+
+
+def test_recent_flow_runs_page_fits_provider_result_cap(monkeypatch):
+    monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 3000)
+    rows = [_summary_row(run_id=f"run-{minute}", minute=minute, failure_reason="x" * 900)
+            for minute in (30, 20, 10)]
+    db = _owned_flow_db(rows)
+    result = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID))
+    assert len(api._serialize_provider_tool_result({"success": True, **result})) <= 3000
+    shown = len(result["runs"])
+    assert 1 <= shown < 3
+    assert result["next_call"]["arguments"]["offset"] == shown
+
+
+def test_flow_run_lookup_returns_failure_record_without_trace_ids():
+    db = MagicMock()
+    db.scalars.return_value.all.return_value = []
+    db.execute.return_value.all.return_value = [
+        _summary_row(codes=[{"step": 1, "reason_code": "document_required"}])
+    ]
+    result = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="flow_run_traces", flow_run_id=REFUSAL_RUN_ID))
+    assert result["trace_ids"] == []
+    assert result["runs"][0]["flow_run_id"] == REFUSAL_RUN_ID
+    assert result["runs"][0]["status"] == "failed"
+    assert result["runs"][0]["reason_codes"] == [{"step": 1, "reason_code": "document_required"}]
+    runs_query = db.execute.call_args.args[0].compile()
+    assert "users.user_id =" in str(runs_query)
+    assert "chat_sessions.deleted_at IS NULL" in str(runs_query)
+    assert 28 in runs_query.params.values() and REFUSAL_RUN_ID in runs_query.params.values()
+
+
+def test_unowned_flow_run_lookup_returns_no_failure_record():
+    db = MagicMock()
+    db.scalars.return_value.all.return_value = []
+    db.execute.return_value.all.return_value = []
+    result = inspection.inspect_saved_resource(db, user_id=8, active_group_ids=[],
+        request=inspection.SavedResourceInspection(action="flow_run_traces", flow_run_id=REFUSAL_RUN_ID))
+    assert result["trace_ids"] == [] and result["runs"] == []
+
+
+async def test_recent_flow_runs_defaults_to_open_flow_and_stays_readonly(monkeypatch):
+    db = MagicMock()
+    session = MagicMock()
+    session.return_value.__enter__.return_value = db
+    monkeypatch.setattr(api, "SessionLocal", session)
+    read = MagicMock(return_value={"saved": True, "runs": []})
+    monkeypatch.setattr(inspection, "inspect_saved_resource", read)
+    context = ChatContext.model_validate({"active_tab": "flows", "flow_id": REFUSAL_FLOW_ID})
+    result = await api._handle_tool_call("inspect_saved_studio_resource", {"action": "recent_flow_runs"},
+        context, "curator@example.org", "curator", user_db_id=28, active_group_ids=["MGI"])
+    assert result["success"] is True
+    assert read.call_args.kwargs["request"].flow_id == REFUSAL_FLOW_ID
+    assert read.call_args.kwargs["user_id"] == 28
+    assert str(db.execute.call_args.args[0]) == "SET TRANSACTION READ ONLY"
+    db.commit.assert_not_called()
+
+    explicit = await api._handle_tool_call("inspect_saved_studio_resource",
+        {"action": "recent_flow_runs", "flow_id": "11111111-1111-1111-1111-111111111111"},
+        context, "curator@example.org", "curator", user_db_id=28, active_group_ids=[])
+    assert explicit["success"] is True
+    assert read.call_args.kwargs["request"].flow_id == "11111111-1111-1111-1111-111111111111"
+
+
+async def test_recent_flow_runs_without_open_flow_asks_for_flow_id(monkeypatch):
+    session = MagicMock()
+    session.return_value.__enter__.return_value = MagicMock()
+    monkeypatch.setattr(api, "SessionLocal", session)
+    result = await api._handle_tool_call("inspect_saved_studio_resource", {"action": "recent_flow_runs"},
+        ChatContext.model_validate({"active_tab": "agents"}), "curator@example.org", "curator",
+        user_db_id=28, active_group_ids=[])
+    assert result["success"] is False
+    assert "flow_id" in result["error"]
+
+
+def test_tool_description_and_prompt_direct_assistant_to_recorded_run_reasons():
+    from src.api.agent_studio_opus_tools import INSPECT_SAVED_STUDIO_RESOURCE_TOOL
+    from src.lib.agent_studio import prompt_builder
+
+    description = INSPECT_SAVED_STUDIO_RESOURCE_TOOL["description"]
+    assert "recent_flow_runs" in description
+    assert "reason_codes" in description
+    schema_actions = INSPECT_SAVED_STUDIO_RESOURCE_TOOL["input_schema"]["properties"]["action"]["enum"]
+    assert {"recent_flow_runs", "flow_run_traces"} <= set(schema_actions)
+    source = Path(prompt_builder.__file__).read_text(encoding="utf-8")
+    assert "recent_flow_runs" in source
+    assert "Run ID" in source

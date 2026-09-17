@@ -3112,3 +3112,93 @@ def test_flow_provider_failure_description_handles_context_and_cycles(error_type
     assert chat._flow_execution_error_message(cyclic) == (
         "Flow execution failed unexpectedly.", None,
     )
+
+
+def test_execute_flow_endpoint_persists_unavailable_step_reason_codes(monkeypatch):
+    """ALL-1244: flow_summary alone carries the refusal's safe per-step codes."""
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-refusal")
+    flow = SimpleNamespace(
+        id=flow_id, user_id=7, name="Identify MGI Allele IDs",
+        execution_count=0, last_executed_at=None, flow_definition={},
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    runtime_reports = []
+    monkeypatch.setattr(
+        chat,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
+    message = (
+        "Flow cannot start. Steps 1 (Mouse Allele Identification) and 2 (Allele Extraction) "
+        "need a PDF. Open Documents in the top navigation and load a paper into chat, "
+        "then run the flow again."
+    )
+    codes = [
+        {"step": 1, "reason_code": "document_required"},
+        {"step": 2, "reason_code": "document_required"},
+    ]
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "FLOW_STARTED", "data": {"flow_id": str(flow_id), "flow_run_id": "run-refused"}}
+        yield {
+            "type": "FLOW_ERROR",
+            "timestamp": "2026-09-17T11:19:10.971676+00:00",
+            "details": {
+                "reason": "flow_step_unavailable",
+                "message": message,
+                "unavailable_steps": [
+                    {"step": 1, "agent_id": "ca_1", "agent_name": "Mouse Allele Identification",
+                     "reason_code": "document_required"},
+                    {"step": 2, "agent_id": "ca_2", "agent_name": "Allele Extraction",
+                     "reason_code": "document_required"},
+                ],
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": "2026-09-17T11:19:10.972028+00:00",
+            "data": {
+                "flow_id": str(flow_id), "flow_name": flow.name, "flow_run_id": "run-refused",
+                "document_id": None, "status": "failed", "failure_reason": message,
+                "unavailable_step_reason_codes": codes,
+            },
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+    response = asyncio.run(
+        chat.execute_flow_endpoint(request=request, db=db, user={"sub": "auth-sub", "cognito:groups": []})
+    )
+    asyncio.run(_consume_stream(response))
+
+    stored = [
+        message_row
+        for messages in calls["repository"].messages.values()
+        for message_row in messages
+    ]
+    summary = next(row for row in stored if row.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE)
+    assert summary.payload_json["status"] == "failed"
+    assert summary.payload_json["document_id"] is None
+    assert summary.payload_json["failure_reason"] == message
+    assert summary.payload_json["unavailable_step_reason_codes"] == codes
+    diagnostic = next(row for row in stored if row.message_type == "flow_diagnostic")
+    assert [step["reason_code"] for step in diagnostic.payload_json["details"]["unavailable_steps"]] == [
+        "document_required", "document_required",
+    ]
+    # The Sentry failure type still comes from details.reason.
+    assert [kwargs["tags"]["flow_failure_type"] for _exc, kwargs in runtime_reports] == [
+        "flow_step_unavailable",
+    ]
+
+
+def test_flow_summary_row_marks_new_records_without_step_codes():
+    """New summaries store [] so legacy rows (key absent) stay distinguishable."""
+    row = chat._build_execute_flow_summary_row(
+        flow_id="flow-1", flow_name="Flow", flow_run_id="run-1", session_id="s1",
+        document_id="doc-1", status="completed", trace_id="trace-1",
+        final_user_output="done", failure_reason=None, assistant_message="memory",
+        run_started_event=None,
+        terminal_events=[{"type": "FLOW_FINISHED", "status": "completed", "flow_run_id": "run-1"}],
+    )
+    assert row.payload_json["unavailable_step_reason_codes"] == []

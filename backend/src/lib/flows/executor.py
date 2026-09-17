@@ -108,6 +108,10 @@ from src.lib.executable_flow_graph import project_executable_flow_graph
 from src.lib.flow_edge_roles import (
     agent_can_source_output_attachment,
 )
+from src.lib.flows.unavailable_steps import (
+    build_flow_step_unavailable_message,
+    flow_step_unavailable_reason_code,
+)
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
@@ -3278,6 +3282,7 @@ def get_all_agent_tools(
                 "agent_id": None,
                 "agent_name": "Unknown",
                 "reason": "missing agent_id in flow node",
+                "reason_code": "missing_agent_id",
             })
             continue
 
@@ -3290,6 +3295,7 @@ def get_all_agent_tools(
                 "agent_id": agent_id,
                 "agent_name": data.get("agent_display_name") or agent_id,
                 "reason": "agent could not be resolved from unified registry",
+                "reason_code": "agent_unresolvable",
             })
             continue
 
@@ -3305,6 +3311,7 @@ def get_all_agent_tools(
                 "agent_id": agent_id,
                 "agent_name": agent_name,
                 "reason": reason,
+                "reason_code": "attachment_only_validator",
             })
             continue
 
@@ -3317,6 +3324,7 @@ def get_all_agent_tools(
                 "agent_id": agent_id,
                 "agent_name": entry.get("name", agent_id),
                 "reason": "agent requires a document, but no document is loaded",
+                "reason_code": "document_required",
             })
             continue
 
@@ -3539,12 +3547,14 @@ def get_all_agent_tools(
                 except Exception as e:
                     logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
                     from src.lib.openai_agents.config import ProviderDisabledError
+                    provider_disabled = isinstance(e, ProviderDisabledError)
                     unavailable_steps.append({
                         "step": step_num,
                         "agent_id": agent_id,
                         "agent_name": entry.get("name", agent_id),
                         "reason": str(e),
-                        "error_code": "provider_disabled" if isinstance(e, ProviderDisabledError) else None,
+                        "error_code": "provider_disabled" if provider_disabled else None,
+                        "reason_code": "provider_disabled" if provider_disabled else "agent_unavailable",
                     })
                     continue
 
@@ -4594,34 +4604,28 @@ async def execute_flow(
     # a smaller one and let its formatter run without the missing source work.
     unavailable_steps = list(getattr(supervisor, "_flow_unavailable_steps", []) or [])
     if unavailable_steps:
-        step_labels = ", ".join(
-            f"{step.get('step')} ({step.get('agent_name') or 'Unknown Agent'})"
+        # Only stable reason codes leave the executor: raw reasons can embed
+        # curator-written names or private configuration from exceptions.
+        step_reason_codes = [
+            {"step": step.get("step"), "reason_code": flow_step_unavailable_reason_code(step)}
             for step in unavailable_steps
+        ]
+        message = build_flow_step_unavailable_message(unavailable_steps)
+        provider_disabled = any(
+            item["reason_code"] == "provider_disabled" for item in step_reason_codes
         )
-        message = (
-            f"Flow cannot start because these steps are unavailable: {step_labels}. "
-            "If a step needs a PDF, open Documents in the top navigation and load "
-            "a document into chat. In Flow Builder, check that each step uses an "
-            "available agent; add validators as validation attachments, not ordinary steps."
-        )
-        provider_disabled = any(step.get("error_code") == "provider_disabled" for step in unavailable_steps)
-        if provider_disabled:
-            message = (
-                f"Flow cannot start: a model provider for these steps is disabled by policy: {step_labels}. "
-                "Explicitly choose an approved model, save a new agent revision, and update the flow's "
-                "pinned reference. Credential setup, PDFs, and validator placement do not resolve this policy block."
-            )
         yield {
             "type": "FLOW_ERROR",
             "timestamp": _now_iso(),
             "details": {
                 "reason": "provider_disabled" if provider_disabled else "flow_step_unavailable",
                 "message": message,
-                # Omit underlying creation exceptions: they can contain private
-                # configuration. The curator needs node identity and repair steps.
                 "unavailable_steps": [
-                    {key: step.get(key) for key in ("step", "agent_id", "agent_name")}
-                    for step in unavailable_steps
+                    {
+                        **{key: step.get(key) for key in ("step", "agent_id", "agent_name")},
+                        "reason_code": codes["reason_code"],
+                    }
+                    for step, codes in zip(unavailable_steps, step_reason_codes)
                 ],
             },
         }
@@ -4638,6 +4642,7 @@ async def execute_flow(
                 "adapter_keys": [], "extraction_handoff_audits": [],
                 "extraction_result_refs": [], "extraction_result_ids": [],
                 "review_session_ids": [],
+                "unavailable_step_reason_codes": step_reason_codes,
             },
         }
         return

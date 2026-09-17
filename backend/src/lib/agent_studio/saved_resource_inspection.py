@@ -7,6 +7,7 @@ draft inspection remains separate so saved settings cannot masquerade as edits.
 import hashlib
 import json
 
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -17,6 +18,8 @@ from src.lib.agent_studio.execution_revision_service import (
     get_execution_revision, list_execution_revisions,
 )
 from src.lib.agent_studio.generic_profile_service import get_profile_revision
+from src.lib.chat_transcript import FLOW_SUMMARY_MESSAGE_TYPE
+from src.lib.flows.unavailable_steps import stored_flow_step_reason_codes
 from src.lib.openai_agents.config import (
     get_tool_page_default_limit, get_agent_studio_provider_tool_result_inline_max_chars,
 )
@@ -28,7 +31,9 @@ from src.models.sql.user import User
 
 class SavedResourceInspection(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    action: Literal["list_flows", "flow", "agent_revisions", "agent_revision", "flow_run_traces"]
+    action: Literal[
+        "list_flows", "flow", "agent_revisions", "agent_revision", "flow_run_traces", "recent_flow_runs",
+    ]
     flow_id: str | None = None
     flow_run_id: str | None = None
     agent_id: str | None = None
@@ -54,10 +59,99 @@ def _flow_summary(row):
             "updated_at": row.updated_at.isoformat(), "execution_count": row.execution_count}
 
 
+RECENT_FLOW_RUN_WINDOW_DAYS = 7
+_FLOW_RUN_LOOKUP_MAX_RECORDS = 5
+_FLOW_RUN_FAILURE_REASON_MAX_CHARS = 2000
+_LIST_ACTIONS = {"list_flows", "agent_revisions", "flow_run_traces", "recent_flow_runs"}
+
+
+def _owned_flow_run_summaries(user_id: int, *conditions):
+    """Select the caller's own flow_summary rows from non-deleted sessions, newest first."""
+    return (
+        select(ChatMessage.created_at, ChatMessage.payload_json,
+               ChatMessage.trace_id, ChatMessage.session_id)
+        .join(ChatSession, ChatSession.session_id == ChatMessage.session_id)
+        .join(User, User.auth_sub == ChatSession.user_auth_sub)
+        .where(User.id == user_id, ChatSession.deleted_at.is_(None),
+               ChatMessage.chat_kind == ChatSession.chat_kind,
+               ChatMessage.message_type == FLOW_SUMMARY_MESSAGE_TYPE, *conditions)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.message_id.desc())
+    )
+
+
+def _flow_run_record(row) -> dict:
+    """Project a stored flow summary to safe fields; never raw reasons or replay events."""
+    payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+    document_id = str(payload.get("document_id") or "").strip() or None
+    trace_id = str(payload.get("trace_id") or row.trace_id or "").strip() or None
+    failure_reason = payload.get("failure_reason")
+    if isinstance(failure_reason, str) and len(failure_reason) > _FLOW_RUN_FAILURE_REASON_MAX_CHARS:
+        failure_reason = failure_reason[:_FLOW_RUN_FAILURE_REASON_MAX_CHARS] + "... [truncated]"
+    elif not isinstance(failure_reason, str):
+        failure_reason = None
+    return {
+        "flow_run_id": str(payload.get("flow_run_id") or "").strip() or None,
+        "flow_name": payload.get("flow_name") if isinstance(payload.get("flow_name"), str) else None,
+        "created_at": row.created_at.isoformat(),
+        "status": payload.get("status") if payload.get("status") in {"completed", "failed"} else None,
+        "session_id": row.session_id,
+        "document_loaded": document_id is not None,
+        "document_id": document_id,
+        "trace_id": trace_id,
+        "failure_reason": failure_reason,
+        # None: the record predates stored reason codes; use failure_reason only.
+        "reason_codes": stored_flow_step_reason_codes(payload.get("unavailable_step_reason_codes")),
+    }
+
+
+def _fit_run_page(build, records: list[dict], *, has_more: bool, offset: int, next_arguments: dict):
+    """Return the largest newest-first page whose result fits the provider cap."""
+    cap = get_agent_studio_provider_tool_result_inline_max_chars()
+    count = len(records)
+    while True:
+        more = has_more or count < len(records)
+        result = build(records[:count], complete=not more, next_call={
+            "tool": "inspect_saved_studio_resource",
+            "arguments": {**next_arguments, "offset": offset + count},
+        } if more else None)
+        if count <= 1 or len(_serialized({"success": True, **result})) <= cap:
+            return result
+        count -= 1
+
+
 def _read_saved_resource(db, *, user_id: int, active_group_ids: list[str], request: SavedResourceInspection):
     """No writes or arbitrary SQL; all selectors are constrained to the caller."""
     if user_id is None:
         raise ValueError("Authenticated saved-work access is unavailable")
+    if request.action == "recent_flow_runs":
+        if not request.flow_id:
+            raise ValueError("Open a saved flow or pass its flow_id to list its recent runs")
+        flow_id = _id(request.flow_id, "flow")
+        flow = db.scalars(select(CurationFlow).where(
+            CurationFlow.user_id == user_id, CurationFlow.is_active.is_(True),
+            CurationFlow.id == flow_id,
+        )).one_or_none()
+        if flow is None:
+            raise ValueError("This saved flow is unavailable to you")
+        limit = get_tool_page_default_limit()
+        since = datetime.now(timezone.utc) - timedelta(days=RECENT_FLOW_RUN_WINDOW_DAYS)
+        rows = db.execute(
+            _owned_flow_run_summaries(
+                user_id,
+                ChatMessage.created_at >= since,
+                ChatMessage.payload_json["flow_id"].astext == str(flow_id),
+            ).offset(request.offset).limit(limit + 1)
+        ).all()
+        records = [_flow_run_record(row) for row in rows[:limit]]
+        return _fit_run_page(
+            lambda page, **paging: {
+                "saved": True, "loaded_in_editor": False, "flow_id": str(flow_id),
+                "flow_name": flow.name, "source": "owned_saved_chat_run_records",
+                "window_days": RECENT_FLOW_RUN_WINDOW_DAYS, "runs": page, **paging,
+            },
+            records, has_more=len(rows) > limit, offset=request.offset,
+            next_arguments={"action": "recent_flow_runs", "flow_id": str(flow_id)},
+        )
     if request.action == "flow_run_traces":
         run_id = str(_id(request.flow_run_id, "flow run"))
         limit = get_tool_page_default_limit()
@@ -71,9 +165,16 @@ def _read_saved_resource(db, *, user_id: int, active_group_ids: list[str], reque
                    ChatMessage.trace_id.is_not(None), ChatMessage.trace_id != "")
             .order_by(ChatMessage.trace_id).offset(request.offset).limit(limit + 1)
         )
+        # A run refused before start has no trace; return its stored terminal
+        # record so the lookup never looks empty for a real, owned run.
+        run_records = [_flow_run_record(row) for row in db.execute(
+            _owned_flow_run_summaries(
+                user_id, ChatMessage.payload_json["flow_run_id"].astext == run_id,
+            ).limit(_FLOW_RUN_LOOKUP_MAX_RECORDS)
+        ).all()]
         rows = db.scalars(statement).all()
         return {"saved": True, "loaded_in_editor": False, "flow_run_id": run_id,
-                "source": "owned_saved_chat_run_records",
+                "source": "owned_saved_chat_run_records", "runs": run_records,
                 "trace_ids": rows[:limit], "complete": len(rows) <= limit,
                 "next_call": {"tool": "inspect_saved_studio_resource", "arguments": {
                     "action": "flow_run_traces", "flow_run_id": run_id,
@@ -221,7 +322,7 @@ def _bounded_saved_record(record: dict, request: SavedResourceInspection) -> dic
 def inspect_saved_resource(db, *, user_id: int, active_group_ids: list[str], request: SavedResourceInspection):
     # Reauthorize on every page; hashes are continuity checks, never access grants.
     record = _read_saved_resource(db, user_id=user_id, active_group_ids=active_group_ids, request=request)
-    if request.action in {"list_flows", "agent_revisions", "flow_run_traces"}:
+    if request.action in _LIST_ACTIONS:
         if request.section != "all" or request.start or request.content_hash or request.group_id:
             raise ValueError("Use the list's next_call to continue saved record listings")
         return record
