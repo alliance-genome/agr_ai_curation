@@ -41,7 +41,7 @@ def _flow(*agent_ids):
                   for i in range(len(nodes) - 1)],
         "entry_node_id": nodes[0]["id"],
     }
-    flow.name = "Identify MGI Allele IDs"
+    flow.name = "Identify Mouse Allele IDs"
     flow.id = "f05d8320-c96d-4145-8c67-f18408edb3ca"
     return flow
 

@@ -24,7 +24,7 @@ _TOKEN = uuid4().hex[:12]
 OWNER_SUB = f"flow-run-inspection-owner-{_TOKEN}"
 OTHER_SUB = f"flow-run-inspection-other-{_TOKEN}"
 SESSION_PREFIX = f"flow-run-inspection-{_TOKEN}-"
-FLOW_NAME = f"ALL-1244 Identify MGI Allele IDs {_TOKEN}"
+FLOW_NAME = f"ALL-1244 Identify Mouse Allele IDs {_TOKEN}"
 # Identifiers from the production refusal fixture (2026-09-17 11:19 UTC).
 REFUSED_RUN_ID = "d202ed58-76ca-474d-ab48-d152adfd32c6"
 RUN = {name: str(uuid4()) for name in (
@@ -100,7 +100,7 @@ def _summary(db, session_id, flow_id, run_id, *, age, codes="absent", status="fa
 
 def _inspect(db, user, **kwargs):
     return inspection.inspect_saved_resource(
-        db, user_id=user.id, active_group_ids=["MGI"],
+        db, user_id=user.id, active_group_ids=["GROUP_A"],
         request=inspection.SavedResourceInspection(**kwargs),
     )
 

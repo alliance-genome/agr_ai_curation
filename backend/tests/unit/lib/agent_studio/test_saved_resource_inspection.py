@@ -283,7 +283,7 @@ LEGACY_REFUSAL_MESSAGE = (
 def _summary_row(*, run_id=REFUSAL_RUN_ID, codes="absent", minute=19, document_id=None,
                  status="failed", trace_id=None, failure_reason=LEGACY_REFUSAL_MESSAGE):
     payload = {
-        "flow_id": REFUSAL_FLOW_ID, "flow_name": "Identify MGI Allele IDs",
+        "flow_id": REFUSAL_FLOW_ID, "flow_name": "Identify Mouse Allele IDs",
         "flow_run_id": run_id, "session_id": "ff185910-87a4-4112-80ff-96b9855df133",
         "document_id": document_id, "status": status, "trace_id": trace_id,
         "failure_reason": failure_reason,
@@ -300,7 +300,7 @@ def _summary_row(*, run_id=REFUSAL_RUN_ID, codes="absent", minute=19, document_i
 
 def _owned_flow_db(rows, *, owned=True):
     db = MagicMock()
-    owned_flow = SimpleNamespace(id=REFUSAL_FLOW_ID, name="Identify MGI Allele IDs")
+    owned_flow = SimpleNamespace(id=REFUSAL_FLOW_ID, name="Identify Mouse Allele IDs")
     db.scalars.return_value.one_or_none.return_value = owned_flow if owned else None
     db.execute.return_value.all.return_value = rows
     return db
@@ -310,7 +310,7 @@ def test_recent_flow_runs_returns_refused_run_without_trace_for_owner():
     rows = [_summary_row(codes=[{"step": 1, "reason_code": "document_required"},
                                 {"step": 2, "reason_code": "document_required"}])]
     db = _owned_flow_db(rows)
-    result = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=["MGI"],
+    result = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=["GROUP_A"],
         request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID))
     assert result["saved"] is True and result["loaded_in_editor"] is False
     assert result["flow_id"] == REFUSAL_FLOW_ID
@@ -341,7 +341,7 @@ def test_recent_flow_runs_returns_refused_run_without_trace_for_owner():
     assert "flow_summary" in runs_query.params.values()
     assert REFUSAL_FLOW_ID in runs_query.params.values()
     # Active groups never widen the owner-only read.
-    assert "MGI" not in runs_query.params.values()
+    assert "GROUP_A" not in runs_query.params.values()
     db.commit.assert_not_called()
     db.add.assert_not_called()
 
@@ -349,7 +349,7 @@ def test_recent_flow_runs_returns_refused_run_without_trace_for_owner():
 def test_recent_flow_runs_for_another_users_flow_is_unavailable():
     db = _owned_flow_db([_summary_row()], owned=False)
     with pytest.raises(ValueError, match="unavailable to you"):
-        inspection.inspect_saved_resource(db, user_id=8, active_group_ids=["MGI"],
+        inspection.inspect_saved_resource(db, user_id=8, active_group_ids=["GROUP_A"],
             request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID))
     db.execute.assert_not_called()
 
@@ -449,7 +449,7 @@ async def test_recent_flow_runs_defaults_to_open_flow_and_stays_readonly(monkeyp
     monkeypatch.setattr(inspection, "inspect_saved_resource", read)
     context = ChatContext.model_validate({"active_tab": "flows", "flow_id": REFUSAL_FLOW_ID})
     result = await api._handle_tool_call("inspect_saved_studio_resource", {"action": "recent_flow_runs"},
-        context, "curator@example.org", "curator", user_db_id=28, active_group_ids=["MGI"])
+        context, "curator@example.org", "curator", user_db_id=28, active_group_ids=["GROUP_A"])
     assert result["success"] is True
     assert read.call_args.kwargs["request"].flow_id == REFUSAL_FLOW_ID
     assert read.call_args.kwargs["user_id"] == 28
