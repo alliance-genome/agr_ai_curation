@@ -401,9 +401,37 @@ and bounded truncation. This exception does not enable upstream
 Sentry/OpenAI `gen_ai.*` prompt fields; those remain controlled by
 `SENTRY_OPENAI_INCLUDE_PROMPTS`.
 
+`contexts.error_detail` is the second reviewed exception, added in v0.9.18 for
+KANBAN-1771. It publishes the structured detail our own error types already
+carry: `issues` (field path, reason, expected, actual kind, message) from the
+conformance and integrity errors, and `details` from `SpecialistOutputError`,
+which includes the underlying database error on a persistence failure.
+
+Chris's decision, 2026-09-18: this Sentry is self-hosted in the same compose
+stack, these payloads are published literature and extraction output rather
+than personal data, and over-scrubbing them repeatedly cost more than it
+protected. A curator's flow failed on 2026-09-18 and the exact offending field
+had to be traced by hand because the alert said only "Record does not conform
+to its saved output structure".
+
+That context is attached after `_redact_event`, so it is deliberately outside
+the global scrubber. Two limits remain, and neither is about content:
+
+- credential-shaped **values** are still redacted with `_SECRET_PATTERNS`,
+  because a DSN or bearer token can sit inside an ordinary-looking string such
+  as a SQLAlchemy connection error;
+- the context is capped at 60,000 characters and trims its entries rather than
+  dropping the context, because Sentry discards an over-large event outright
+  and that would lose the alert entirely.
+
+Only our own error types qualify. That allowlist is noise control, not a
+privacy boundary: without it, any third-party exception exposing `.code` or
+`.details` would tag most events with a meaningless context.
+
 Global redaction filters sensitive keys, content-like keys, common secret
 patterns, request query strings, cookies, request bodies, exception values,
-breadcrumbs, arbitrary extra data, and stack-frame locals.
+breadcrumbs, arbitrary extra data, and stack-frame locals. The two reviewed
+exceptions above are not subject to it.
 
 ## Reporting Facades
 

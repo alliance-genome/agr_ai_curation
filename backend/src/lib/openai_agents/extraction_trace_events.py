@@ -18,7 +18,13 @@ from typing import Any, Mapping
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "extraction_trace_event.v1"
-DEFAULT_PREVIEW_LIMIT = 1200
+DEFAULT_PREVIEW_LIMIT = 100000
+DEFAULT_MAX_DEPTH = 64
+DEFAULT_MAX_LIST_ITEMS = 5000
+DEFAULT_MAX_TOTAL_CHARS = 5_000_000
+MAX_TOTAL_CHARS_CEILING = 50_000_000
+_BUDGET_SENTINEL = "<truncated:budget>"
+_BUDGET_KEY = "__truncated_budget__"
 DEFAULT_PAYLOAD_SIZE_LOG_THRESHOLD_CHARS = 500_000
 MAX_EVENTS_PER_TRACE = 10000
 _SECRET_KEY_PATTERN = re.compile(
@@ -53,9 +59,60 @@ def _preview_limit() -> int:
     if not raw:
         return DEFAULT_PREVIEW_LIMIT
     try:
-        return max(100, min(int(raw), 10000))
+        return max(100, min(int(raw), 1000000))
     except ValueError:
         return DEFAULT_PREVIEW_LIMIT
+
+
+def _max_depth() -> int:
+    """Nesting depth captured in a trace event payload.
+
+    KANBAN-1771. Was a hardcoded 6, which replaced a nested validation reason
+    with "<redacted:depth_limit>" before it could be read. Bounded so one event
+    cannot recurse without limit.
+    """
+    raw = os.getenv("EXTRACTION_TRACE_EVENT_MAX_DEPTH", "").strip()
+    if not raw:
+        return DEFAULT_MAX_DEPTH
+    try:
+        return max(1, min(int(raw), 512))
+    except ValueError:
+        return DEFAULT_MAX_DEPTH
+
+
+def _max_list_items() -> int:
+    """List entries captured in a trace event payload.
+
+    KANBAN-1771. Was a hardcoded 25, so a 128-tool-call run lost most of its
+    calls before anyone could read them.
+    """
+    raw = os.getenv("EXTRACTION_TRACE_EVENT_MAX_LIST_ITEMS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_LIST_ITEMS
+    try:
+        return max(1, min(int(raw), 100000))
+    except ValueError:
+        return DEFAULT_MAX_LIST_ITEMS
+
+
+
+def _max_total_chars() -> int:
+    """Total serialized size budget for one trace-event payload.
+
+    KANBAN-1771. The depth, string and list caps are per-node, so they
+    multiply: depth 64 x 5000 items x 100000 chars is not a bound. These files
+    land on a production volume with no retention policy, so one pathological
+    payload could be enormous. This is the only cap that actually bounds an
+    event, and it is generous enough that a realistic diagnostic payload never
+    reaches it.
+    """
+    raw = os.getenv("EXTRACTION_TRACE_EVENT_MAX_TOTAL_CHARS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_TOTAL_CHARS
+    try:
+        return max(10_000, min(int(raw), MAX_TOTAL_CHARS_CEILING))
+    except ValueError:
+        return DEFAULT_MAX_TOTAL_CHARS
 
 
 def _payload_size_log_threshold_chars() -> int:
@@ -128,14 +185,47 @@ def _is_secret_key(key: str) -> bool:
     return bool(_SECRET_KEY_PATTERN.search(key))
 
 
-def _redact_value(value: Any, *, depth: int = 0) -> Any:
+def _redact_value(value: Any, *, budget: "_Budget | None" = None) -> Any:
+    """Redact one payload, bounded by a total serialized-size budget.
+
+    The previous signature took a `depth`, and any caller passing one silently
+    got a brand-new budget. Recursion belongs to _redact_with_budget; callers
+    that need to share one budget across several payloads pass it explicitly.
+    """
+    return _redact_with_budget(value, budget or _Budget(_max_total_chars()))
+
+
+class _Budget:
+    __slots__ = ("remaining",)
+
+    def __init__(self, remaining: int) -> None:
+        self.remaining = remaining
+
+    def take(self, amount: int) -> bool:
+        if self.remaining <= 0:
+            return False
+        self.remaining -= amount
+        return True
+
+
+def _redact_with_budget(value: Any, budget: _Budget, *, depth: int = 0) -> Any:
+    # KANBAN-1771. These payloads carry no curator or personal data, and the
+    # old caps (depth 6, 1200-char previews, 25 list items) removed exactly the
+    # field paths and reason codes needed to diagnose a production failure.
+    # Capture is now generous by default and still bounded, so one event cannot
+    # grow without limit. Credential-shaped keys stay redacted.
     limit = _preview_limit()
-    if depth > 6:
+    if depth > _max_depth():
         return "<redacted:depth_limit>"
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
         compact = " ".join(value.split())
+        if not budget.take(len(compact)):
+            # A dict marker would serialize LARGER than the short string it
+            # replaces, so exhaustion would inflate the payload instead of
+            # bounding it. Use a bare sentinel.
+            return _BUDGET_SENTINEL
         if len(compact) > limit:
             return {
                 "preview": compact[:limit],
@@ -147,23 +237,34 @@ def _redact_value(value: Any, *, depth: int = 0) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
+            # Keys are payload too. Without charging them, a mapping of a
+            # million short keys costs nothing and the budget bounds nothing.
+            if not budget.take(len(key_text) + 4):
+                redacted[_BUDGET_KEY] = True
+                break
             if _is_secret_key(key_text):
                 redacted[key_text] = "<redacted>"
             else:
-                redacted[key_text] = _redact_value(item, depth=depth + 1)
+                redacted[key_text] = _redact_with_budget(item, budget, depth=depth + 1)
         return redacted
     if isinstance(value, (list, tuple)):
         items = list(value)
-        visible = [_redact_value(item, depth=depth + 1) for item in items[:25]]
-        if len(items) > 25:
-            visible.append({"truncated": True, "omitted_count": len(items) - 25})
+        max_items = _max_list_items()
+        visible = []
+        for item in items[:max_items]:
+            if budget.remaining <= 0:
+                visible.append(_BUDGET_SENTINEL)
+                break
+            visible.append(_redact_with_budget(item, budget, depth=depth + 1))
+        if len(items) > max_items:
+            visible.append({"truncated": True, "omitted_count": len(items) - max_items})
         return visible
     if hasattr(value, "model_dump"):
         try:
-            return _redact_value(value.model_dump(mode="json"), depth=depth + 1)
+            return _redact_with_budget(value.model_dump(mode="json"), budget, depth=depth + 1)
         except Exception:
             pass
-    return _redact_value(str(value), depth=depth + 1)
+    return _redact_with_budget(str(value), budget, depth=depth + 1)
 
 
 def _json_size(value: Any) -> tuple[int | None, int | None]:

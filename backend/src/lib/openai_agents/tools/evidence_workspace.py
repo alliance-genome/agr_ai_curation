@@ -689,8 +689,22 @@ def create_discard_recorded_evidence_tool(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
+    *,
+    workspace_records: list[dict[str, Any]] | None = None,
+    allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
 ):
-    """Create a tool for discarding weak or wrong evidence without deleting it."""
+    """Create a tool for discarding weak or wrong evidence without deleting it.
+
+    KANBAN-1775. This was the only evidence tool with no explicit workspace
+    parameter, so it always resolved the _ACTIVE_EVIDENCE_RECORDS ContextVar.
+    Validator dispatch runs under asyncio.to_thread, which copies the caller
+    context, so inside a validator that ContextVar still points at the
+    specialist's collection. The tool is not currently handed to validators,
+    but any future caller that passed the other five scoped tools and forgot
+    this one would have mutated the wrong collection silently.
+    """
+
+    allowed_ids = _allowed_ids_set(allowed_evidence_record_ids)
 
     @function_tool
     async def discard_recorded_evidence(
@@ -708,7 +722,14 @@ def create_discard_recorded_evidence_tool(
         """
 
         _track(tracker, "discard_recorded_evidence")
-        record = _find_record(evidence_record_id, document_id=document_id)
+        scope_error = _allowed_id_error(evidence_record_id, allowed_ids)
+        if scope_error is not None:
+            return scope_error
+        record = _find_record(
+            evidence_record_id,
+            document_id=document_id,
+            records=workspace_records,
+        )
         if record is None:
             return _not_found(evidence_record_id)
 

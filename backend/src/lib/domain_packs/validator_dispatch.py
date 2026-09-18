@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Collection, Literal, Mapping, Protocol, cast
 
 if TYPE_CHECKING:
     from .profile_validation import ProfileValidationContext
@@ -30,6 +30,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
 )
+from src.schemas.evidence_workspace import is_discarded, strip_workspace_fields
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     DomainValidatorResultBase,
@@ -842,13 +843,17 @@ def _apply_validator_evidence_updates_to_envelope(
     envelope: DomainEnvelope,
     items: list[ValidatorResultMaterializationInput],
 ) -> DomainEnvelope:
-    updated_records = _validator_updated_evidence_records_by_id(items)
-    if not updated_records:
+    updated_records, discarded_ids = _validator_updated_evidence_records_by_id(
+        items,
+        current=_envelope_evidence_records_by_id(envelope),
+    )
+    if not updated_records and not discarded_ids:
         return envelope
 
     metadata, metadata_changed = _replace_evidence_records_in_mapping(
         envelope.metadata,
         updated_records,
+        discarded_ids,
     )
     changed = metadata_changed
     objects: list[CuratableObjectEnvelope] = []
@@ -856,16 +861,30 @@ def _apply_validator_evidence_updates_to_envelope(
         payload, payload_changed = _replace_evidence_records_in_mapping(
             domain_object.payload,
             updated_records,
+            discarded_ids,
         )
         object_metadata, object_metadata_changed = _replace_evidence_records_in_mapping(
             domain_object.metadata,
             updated_records,
+            discarded_ids,
         )
-        if payload_changed or object_metadata_changed:
+        # Dropping a discarded record without pruning its ID would leave a
+        # dangling reference. The gene_expression pack raises
+        # alliance.gene_expression.evidence_records_missing (BLOCKER) for that
+        # state, and inspect_results reports a runtime exception when it cannot
+        # resolve the ID to text, so a normal discard would manufacture a
+        # non-repairable finding and a false alert.
+        retained_ids = [
+            record_id for record_id in (domain_object.evidence_record_ids or [])
+            if record_id not in discarded_ids
+        ]
+        references_changed = retained_ids != list(domain_object.evidence_record_ids or [])
+        if payload_changed or object_metadata_changed or references_changed:
             domain_object = domain_object.model_copy(
                 update={
                     "payload": payload,
                     "metadata": object_metadata,
+                    "evidence_record_ids": retained_ids,
                 }
             )
             changed = True
@@ -880,27 +899,91 @@ def _apply_validator_evidence_updates_to_envelope(
     return envelope.model_copy(update={"metadata": metadata, "extracted_objects": objects})
 
 
+def _collect_evidence_records_in_mapping(
+    value: Any,
+    collected: dict[str, Mapping[str, Any]],
+) -> None:
+    """Gather evidence records from one mapping, mirroring the replace traversal."""
+    if not isinstance(value, Mapping):
+        return
+    raw_records = value.get("evidence_records")
+    if isinstance(raw_records, list):
+        for record in raw_records:
+            if not isinstance(record, Mapping):
+                continue
+            evidence_record_id = _optional_string(record.get("evidence_record_id"))
+            if evidence_record_id and evidence_record_id not in collected:
+                collected[evidence_record_id] = record
+    extraction_metadata = value.get("extraction_metadata")
+    if isinstance(extraction_metadata, Mapping):
+        _collect_evidence_records_in_mapping(extraction_metadata, collected)
+
+
+def _envelope_evidence_records_by_id(
+    envelope: DomainEnvelope,
+) -> dict[str, Mapping[str, Any]]:
+    """The envelope's current evidence, keyed by ID.
+
+    This is the "before" image the write-back compares against, so a change can
+    be detected directly instead of inferred from a timestamp.
+    """
+    collected: dict[str, Mapping[str, Any]] = {}
+    _collect_evidence_records_in_mapping(envelope.metadata, collected)
+    for domain_object in envelope.extracted_objects:
+        _collect_evidence_records_in_mapping(domain_object.payload, collected)
+        _collect_evidence_records_in_mapping(domain_object.metadata, collected)
+    return collected
+
+
 def _validator_updated_evidence_records_by_id(
     items: list[ValidatorResultMaterializationInput],
-) -> dict[str, dict[str, Any]]:
+    *,
+    current: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Collect validator-changed evidence, projected to canonical provenance.
+
+    The validator mutates the same dictionaries it received as its workspace
+    (record_evidence.py:1203-1206), so these records carry workspace lifecycle
+    state and the legacy span alias. They are going into a closed canonical
+    namespace, so they are projected here rather than deep-copied verbatim.
+
+    Selection is by actual change against the envelope's current evidence. The
+    previous gate required `updated_at` or `evidence_revision_history` to be
+    present, which coupled correctness to a side effect of the mutating tools:
+    every tool a validator currently holds stamps `updated_at`, but discard
+    does not stamp it at all, so the gate would have missed a discard the day
+    that tool was added to the validator set.
+    """
+    current = current or {}
     updated_records: dict[str, dict[str, Any]] = {}
+    discarded_ids: set[str] = set()
     for item in items:
         for record in item.request.evidence:
             evidence_record_id = _optional_string(record.get("evidence_record_id"))
             if not evidence_record_id:
                 continue
-            if not (
-                record.get("evidence_revision_history")
-                or record.get("updated_at")
-            ):
+            # A discard is invisible to the comparison below, because every key
+            # it writes (status, workspace_status, discard_reason, discarded_at)
+            # is workspace-only and is stripped from both sides. Lifecycle is
+            # therefore read before projecting, exactly as the pack
+            # materializers do.
+            if is_discarded(record):
+                discarded_ids.add(evidence_record_id)
                 continue
-            updated_records[evidence_record_id] = copy.deepcopy(record)
-    return updated_records
+            projected = strip_workspace_fields(record)
+            existing = current.get(evidence_record_id)
+            # A record the validator never touched strips to exactly what the
+            # envelope already holds, so there is nothing to write back.
+            if existing is not None and strip_workspace_fields(existing) == projected:
+                continue
+            updated_records[evidence_record_id] = projected
+    return updated_records, discarded_ids
 
 
 def _replace_evidence_records_in_mapping(
     value: Mapping[str, Any],
     updated_records: Mapping[str, dict[str, Any]],
+    discarded_ids: Collection[str] = (),
 ) -> tuple[dict[str, Any], bool]:
     payload = dict(value)
     changed = False
@@ -916,6 +999,12 @@ def _replace_evidence_records_in_mapping(
                     if evidence_record_id
                     else None
                 )
+                if evidence_record_id and evidence_record_id in discarded_ids:
+                    # A validator discarded this evidence, so it stops being
+                    # active support. Dropping it here is what makes a discard
+                    # visible in the envelope at all.
+                    changed = True
+                    continue
                 if replacement is not None:
                     replaced_records.append(copy.deepcopy(replacement))
                     changed = True
@@ -930,6 +1019,7 @@ def _replace_evidence_records_in_mapping(
             _replace_evidence_records_in_mapping(
                 extraction_metadata,
                 updated_records,
+                discarded_ids,
             )
         )
         if extraction_changed:

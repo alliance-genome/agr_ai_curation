@@ -1639,3 +1639,24 @@ async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
     assert response.candidate_count == 2
     assert response.document_id == "document-1"
     assert response.summary_text == "Prepared 2 candidate annotations for curation review."
+
+
+# --- KANBAN-1773: internal integrity failures are not curator 422s -----------
+
+
+def test_envelope_integrity_failure_rolls_back_and_returns_server_error():
+    """A broken canonical envelope is our defect, not a curator 422."""
+    db = _TransactionSpy()
+    findings = [{"field_path": "metadata.evidence_records.0.status", "reason": "invalid_envelope"}]
+    error = module.EnvelopeIntegrityError(findings)
+
+    with pytest.raises(module.HTTPException) as caught:
+        module._run_curation_mutation(db, lambda: (_ for _ in ()).throw(error))
+
+    assert caught.value.status_code == 500
+    assert caught.value.detail["code"] == "envelope_integrity"
+    assert caught.value.detail["code"] != "output_structure_conformance"
+    assert "does not need to change" in caught.value.detail["message"]
+    assert caught.value.detail["findings"] == findings
+    assert db.commit_calls == 0
+    assert db.rollback_calls == 1

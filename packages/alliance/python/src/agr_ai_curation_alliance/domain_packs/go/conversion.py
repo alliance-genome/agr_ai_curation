@@ -15,6 +15,7 @@ from src.schemas.domain_envelope import (
     DefinitionState,
 )
 from src.schemas.models.base import EvidenceRecord
+from src.schemas.evidence_workspace import normalize_workspace_records
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 from .constants import (
@@ -588,34 +589,16 @@ def _validate_payload(
 def _normalized_evidence_records(
     evidence_records: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    allowed_fields = set(EvidenceRecord.model_fields)
-    for record in evidence_records:
-        if not isinstance(record, Mapping):
-            continue
-        if (
-            str(record.get("workspace_status") or record.get("status") or "").strip()
-            == "discarded"
-        ):
-            continue
-        payload = {
-            key: value
-            for key, value in record.items()
-            if key in allowed_fields and value is not None
-        }
-        evidence_id = str(payload.get("evidence_record_id") or "").strip()
-        if not evidence_id or evidence_id in seen:
-            continue
-        try:
-            item = EvidenceRecord.model_validate(payload)
-        except ValidationError:
-            continue
-        if not item.verified_quote:
-            continue
-        seen.add(evidence_id)
-        normalized.append(item.model_dump(mode="json", exclude_none=True))
-    return normalized
+    """Project workspace evidence records into canonical provenance.
+
+    Shared with every other domain pack and the validator write-back; see
+    src/schemas/models/evidence_workspace.py. GO additionally requires a
+    verified quote, so evidence with no quote is not admitted here.
+    """
+    return normalize_workspace_records(
+        evidence_records,
+        admit=lambda record: bool(record.verified_quote),
+    )
 
 
 def _excluded_evidence_section(value: Any) -> bool:

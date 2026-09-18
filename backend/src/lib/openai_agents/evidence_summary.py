@@ -324,6 +324,15 @@ def _copy_workspace_metadata_fields(
     if revision_history:
         evidence_record["evidence_revision_history"] = revision_history
 
+    # KANBAN-1775 note: do NOT copy lifecycle state (status, workspace_status,
+    # discard_reason, discarded_at, updated_at, created_at) here. The record
+    # this builds is canonical output: it flows through
+    # canonicalize_structured_result_payload into DomainEnvelopeExtractionResult,
+    # which forbids exactly those keys. Adding them reintroduces the KANBAN-1773
+    # leak from the other side. Lifecycle state has to live on a workspace
+    # wrapper that canonical output projects away, which is the typed-workspace
+    # work, not a wider whitelist here.
+
 
 def _normalize_evidence_targets(record_dict: Dict[str, Any]) -> list[dict[str, str]]:
     targets: list[dict[str, str]] = []

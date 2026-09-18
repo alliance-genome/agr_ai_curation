@@ -50,6 +50,7 @@ from src.schemas.domain_envelope import (
     SchemaRef,
 )
 from src.schemas.models.base import EvidenceRecord
+from src.schemas.evidence_workspace import normalize_workspace_records
 
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,
@@ -202,29 +203,14 @@ def _blocked_write_behavior() -> dict[str, Any]:
 def _normalized_evidence_records(
     evidence_records: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    allowed_fields = set(EvidenceRecord.model_fields)
-    for record in evidence_records:
-        if not isinstance(record, Mapping):
-            continue
-        if str(record.get("workspace_status") or record.get("status") or "").strip() == "discarded":
-            continue
-        payload = {
-            key: value
-            for key, value in record.items()
-            if key in allowed_fields and value is not None
-        }
-        evidence_id = str(payload.get("evidence_record_id") or "").strip()
-        if not evidence_id or evidence_id in seen:
-            continue
-        try:
-            normalized_record = EvidenceRecord.model_validate(payload)
-        except ValidationError:
-            continue
-        seen.add(evidence_id)
-        normalized.append(normalized_record.model_dump(mode="json", exclude_none=True))
-    return normalized
+    """Project workspace evidence records into canonical provenance.
+
+    Shared with every other domain pack and the validator write-back; see
+    src/schemas/models/evidence_workspace.py. This pack uses the baseline
+    policy: skip discarded records, require a unique evidence_record_id, and
+    drop anything that fails canonical validation.
+    """
+    return normalize_workspace_records(evidence_records)
 
 
 def _mention_payload(staged_fields: Mapping[str, Any], *, source_mentions: Sequence[str]) -> dict[str, Any]:

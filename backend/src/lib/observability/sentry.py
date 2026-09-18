@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 import hashlib
 import importlib
+from functools import lru_cache
 import json
 import logging
 import os
@@ -322,6 +323,26 @@ def _scrub_string(value: str) -> str:
     return scrubbed
 
 
+
+def _content_redaction_enabled() -> bool:
+    """Whether to scrub curator/document CONTENT from Sentry events.
+
+    KANBAN-1771. Off by default since v0.9.18. Chris's decision, 2026-09-18:
+    this Sentry is self-hosted on a private VPC address, patched and behind
+    login, and the redaction was costing more than it protected. The alert for
+    a curator's failed flow showed "[Filtered]" where the field-level reason
+    should have been, so the fault had to be traced by hand.
+
+    Credential scrubbing is NOT governed by this switch. Sensitive keys,
+    request bodies, cookies and the secret value patterns are always applied.
+
+    Set SENTRY_CONTENT_REDACTION_ENABLED=true to restore the old behavior
+    without a code change.
+    """
+    raw = os.getenv("SENTRY_CONTENT_REDACTION_ENABLED", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _scrub_value(
     value: Any,
     *,
@@ -334,7 +355,12 @@ def _scrub_value(
 
     if key and _key_matches(_SENSITIVE_KEY_MARKERS, key):
         return _REDACTED
-    if key and not allow_content and _key_matches(_CONTENT_KEY_MARKERS, key):
+    if (
+        key
+        and not allow_content
+        and _content_redaction_enabled()
+        and _key_matches(_CONTENT_KEY_MARKERS, key)
+    ):
         return _REDACTED
 
     if isinstance(value, Mapping):
@@ -371,13 +397,24 @@ def _redact_request_url(url: str) -> str:
 
 
 def _redact_untrusted_strings(value: Any, *, depth: int = 0) -> Any:
-    """Redact arbitrary string values from untrusted event containers."""
+    """Redact string values from untrusted event containers.
+
+    KANBAN-1771. This replaced EVERY string in ``extra`` with "[Filtered]",
+    which is the single biggest reason an alert arrived unreadable. With
+    content redaction off (the default since v0.9.18) it keeps the strings and
+    applies credential scrubbing only: sensitive keys are still replaced and
+    the secret value patterns still run.
+    """
 
     if depth > _MAX_REDACTION_DEPTH:
         return _REDACTED
     if isinstance(value, Mapping):
         return {
-            str(child_key): _redact_untrusted_strings(child_value, depth=depth + 1)
+            str(child_key): (
+                _REDACTED
+                if _key_matches(_SENSITIVE_KEY_MARKERS, str(child_key))
+                else _redact_untrusted_strings(child_value, depth=depth + 1)
+            )
             for child_key, child_value in value.items()
         }
     if isinstance(value, list):
@@ -385,7 +422,7 @@ def _redact_untrusted_strings(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, tuple):
         return tuple(_redact_untrusted_strings(item, depth=depth + 1) for item in value)
     if isinstance(value, str):
-        return _REDACTED
+        return _REDACTED if _content_redaction_enabled() else _scrub_string(value)
     return value
 
 
@@ -1476,9 +1513,10 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
         if isinstance(request.get("url"), str):
             request["url"] = _redact_request_url(request["url"])
 
-    for key in ("message", "logentry"):
-        if key in scrubbed:
-            scrubbed[key] = _REDACTED
+    if _content_redaction_enabled():
+        for key in ("message", "logentry"):
+            if key in scrubbed:
+                scrubbed[key] = _REDACTED
 
     if isinstance(scrubbed.get("extra"), dict):
         scrubbed["extra"] = _redact_untrusted_strings(scrubbed["extra"])
@@ -1527,9 +1565,16 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
 
     exception = scrubbed.get("exception")
     if isinstance(exception, dict) and isinstance(exception.get("values"), list):
-        for value in exception["values"]:
-            if isinstance(value, dict) and "value" in value:
-                value["value"] = _REDACTED
+        # The exception value is the single most useful line in an alert. It is
+        # replaced only when content redaction is explicitly switched back on.
+        if _content_redaction_enabled():
+            for value in exception["values"]:
+                if isinstance(value, dict) and "value" in value:
+                    value["value"] = _REDACTED
+        else:
+            for value in exception["values"]:
+                if isinstance(value, dict) and isinstance(value.get("value"), str):
+                    value["value"] = _scrub_string(value["value"])
         _remove_stack_frame_vars(exception)
 
     threads = scrubbed.get("threads")
@@ -1621,6 +1666,142 @@ def _add_safe_log_event_title(event: dict[str, Any]) -> None:
     }
 
 
+_MAX_STRUCTURED_ENTRIES = 200
+_MAX_STRUCTURED_DETAIL_CHARS = 60000
+
+
+@lru_cache(maxsize=1)
+def _owned_diagnostic_error_types() -> tuple[type, ...]:
+    """Our own error types, whose structured detail is worth publishing.
+
+    The allowlist is not a privacy boundary. It keeps third-party exceptions
+    that happen to expose ``.code`` or ``.details`` from tagging most events
+    with a context that means nothing.
+    """
+    # streaming_tools imports this module at module scope, so this is a real
+    # cycle, deferred only by importing late. An ImportError here used to
+    # propagate out of before_send and make Sentry drop the event, which would
+    # lose exactly the error class this ticket exists to preserve. Resolved
+    # once, and never allowed to raise.
+    resolved: list[type] = []
+    for module_path, name in (
+        ("src.lib.agent_studio.profile_conformance", "EnvelopeIntegrityError"),
+        ("src.lib.agent_studio.profile_conformance", "ProfileConformanceError"),
+        ("src.schemas.evidence_workspace", "EvidenceIntegrityError"),
+        ("src.lib.openai_agents.streaming_tools", "SpecialistOutputError"),
+    ):
+        try:
+            resolved.append(getattr(importlib.import_module(module_path), name))
+        except Exception:  # pragma: no cover - import cycle or partial init
+            continue
+    return tuple(resolved)
+
+
+def _scrub_credential_values(value: Any, *, depth: int = 0) -> Any:
+    """Redact credential-shaped VALUES, leaving everything else intact.
+
+    KANBAN-1771 keeps credential redaction and drops the rest. Key-based
+    redaction is not enough here: a SQLAlchemy connection error stringifies
+    with its DSN, and a request dump can carry an Authorization header, both
+    under ordinary keys like ``error``.
+    """
+    # Every other scrubber in this module guards depth (_MAX_REDACTION_DEPTH).
+    # Without it, a deeply nested or self-referential details payload raises
+    # RecursionError inside before_send and the event is dropped.
+    if depth > _MAX_REDACTION_DEPTH:
+        return _REDACTED
+    if isinstance(value, str):
+        return _scrub_string(value)
+    if isinstance(value, Mapping):
+        return {
+            key: _scrub_credential_values(item, depth=depth + 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_scrub_credential_values(item, depth=depth + 1) for item in value]
+    return value
+
+
+def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Publish the diagnostic payload our own errors already carry.
+
+    KANBAN-1771. These errors know the exact field path, reason, expected shape
+    and actual kind, and the persistence failures carry the underlying database
+    error. None of it reached Sentry, because the message is replaced wholesale
+    during scrubbing, so an alert said only "Record does not conform to its
+    saved output structure" while the offending field stayed unknown.
+
+    Chris's decision (2026-09-18): this Sentry is self-hosted in the same
+    compose stack, the payloads are published literature and extraction output
+    rather than personal data, and over-scrubbing them cost more than it
+    protected. So curator and document content goes in.
+
+    Two limits remain, and neither is about privacy:
+
+    * Credential-shaped values are redacted, because the ticket keeps
+      credential redaction and a DSN or bearer token can sit inside an
+      ordinary-looking string.
+    * The context is size-bounded, because Sentry drops an over-large event
+      outright. An unbounded context would lose the whole alert, which is the
+      opposite of what this ticket is for.
+    """
+    exc_info = (hint or {}).get("exc_info")
+    if not isinstance(exc_info, tuple) or len(exc_info) < 2:
+        return None
+    error = exc_info[1]
+    if error is None or not isinstance(error, _owned_diagnostic_error_types()):
+        return None
+
+    detail: dict[str, Any] = {}
+    for attribute in ("issues", "details"):
+        value = getattr(error, attribute, None)
+        if isinstance(value, list) and value:
+            detail[attribute] = value[:_MAX_STRUCTURED_ENTRIES]
+            if len(value) > _MAX_STRUCTURED_ENTRIES:
+                detail[f"{attribute}_omitted"] = len(value) - _MAX_STRUCTURED_ENTRIES
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and code:
+        detail["code"] = code
+    unknown_fields = getattr(error, "unknown_fields", None)
+    if isinstance(unknown_fields, tuple) and unknown_fields:
+        detail["unknown_fields"] = [str(name) for name in unknown_fields[:_MAX_STRUCTURED_ENTRIES]]
+
+    if not detail:
+        return None
+    detail["exception_type"] = type(error).__name__
+    detail = _scrub_credential_values(detail)
+
+    # Trim entries rather than drop the context, so a very noisy failure still
+    # arrives with usable diagnosis instead of being discarded by Sentry.
+    for attribute in ("details", "issues"):
+        while len(json.dumps(detail, default=str)) > _MAX_STRUCTURED_DETAIL_CHARS:
+            current = detail.get(attribute)
+            if not isinstance(current, list) or not current:
+                break
+            if len(current) == 1:
+                detail[attribute] = [
+                    json.dumps(current[0], default=str)[:_MAX_STRUCTURED_DETAIL_CHARS // 2]
+                ]
+                break
+            kept = len(current) // 2
+            detail[attribute] = current[:kept]
+            detail[f"{attribute}_omitted"] = (
+                detail.get(f"{attribute}_omitted", 0) + (len(current) - kept)
+            )
+
+    # The loop only trims list-shaped keys, so a detail whose bulk is elsewhere
+    # (a long unknown_fields, a single huge entry) could still exceed the cap
+    # and be dropped by Sentry as too_large. Guarantee the bound.
+    if len(json.dumps(detail, default=str)) > _MAX_STRUCTURED_DETAIL_CHARS:
+        detail = {
+            "exception_type": detail.get("exception_type"),
+            "code": detail.get("code"),
+            "truncated": True,
+            "reason": "structured detail exceeded the Sentry context budget",
+        }
+    return detail
+
+
 def before_send(
     event: dict[str, Any],
     hint: dict[str, Any] | None = None,
@@ -1635,6 +1816,13 @@ def before_send(
     scrubbed = _redact_event(enriched)
     if isinstance((hint or {}).get("log_record"), logging.LogRecord):
         _add_safe_log_event_title(scrubbed)
+    # Attached after scrubbing on purpose: this is our own structured detail,
+    # and routing it through the content scrubber is what removed it before.
+    structured_detail = _structured_error_detail(hint)
+    if structured_detail:
+        contexts = scrubbed.setdefault("contexts", {})
+        if isinstance(contexts, dict):
+            contexts["error_detail"] = structured_detail
     return scrubbed
 
 
