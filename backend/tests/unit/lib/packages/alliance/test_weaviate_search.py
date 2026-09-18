@@ -763,7 +763,14 @@ async def test_read_subsection_bounds_pages_and_filters(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_search_tool_reports_one_sentry_event_after_deadline_retry_fails(monkeypatch, caplog):
-    """ALL-1246: backend search + tool logs yield one Sentry-eligible ERROR."""
+    """ALL-1246: a failed search retries once and emits no duplicate Sentry event.
+
+    ALL-933 (main) removed search_document's legacy error-summary fallback, so the
+    failure now propagates to canonical runtime failure reporting, which owns the
+    single Sentry event. ALL-1246's guarantees still hold on that path: exactly one
+    deadline retry, exactly one retry WARNING, and the chunks.py "Search failed"
+    ERROR stays Sentry-skipped so the search path raises no Sentry event of its own.
+    """
     import asyncio
     import logging
     from contextlib import contextmanager
@@ -807,21 +814,17 @@ async def test_search_tool_reports_one_sentry_event_after_deadline_retry_fails(m
     tool = weaviate_search.create_search_tool("doc-12345678", "user-1")
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
-        result = await tool(query="Methods allele search", section_keywords=["Methods"])
+        with pytest.raises(WeaviateQueryError):
+            await tool(query="Methods allele search", section_keywords=["Methods"])
 
-    assert result.summary.startswith("Error searching document:")
-    assert result.hits == []
     assert collection.query.hybrid.call_count == 2
     error_records = [record for record in caplog.records if record.levelno >= logging.ERROR]
-    assert {record.name for record in error_records} == {
-        chunks.logger.name,
-        weaviate_search.logger.name,
-    }
+    assert {record.name for record in error_records} == {chunks.logger.name}
     sentry_eligible = [
         record for record in error_records
         if _with_safe_log_record_metadata({}, {"log_record": record}) is not None
     ]
-    assert [record.name for record in sentry_eligible] == [weaviate_search.logger.name]
+    assert sentry_eligible == []
     assert len([
         record for record in caplog.records
         if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"

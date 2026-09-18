@@ -2956,6 +2956,7 @@ def test_execute_flow_endpoint_stores_bio_policy_refusal_message(monkeypatch):
     flow = SimpleNamespace(
         id=flow_id, user_id=7, name="Identify MGI Allele IDs",
         execution_count=0, last_executed_at=None, flow_definition={},
+        is_active=True, visibility="private", project_id=None, shared_at=None,
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
@@ -3322,6 +3323,7 @@ def test_execute_flow_endpoint_persists_unavailable_step_reason_codes(monkeypatc
     flow = SimpleNamespace(
         id=flow_id, user_id=7, name="Identify MGI Allele IDs",
         execution_count=0, last_executed_at=None, flow_definition={},
+        is_active=True, visibility="private", project_id=None, shared_at=None,
     )
     db = _DummyDB(flow=flow)
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)

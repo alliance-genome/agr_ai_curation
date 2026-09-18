@@ -147,6 +147,10 @@ services:
       - ./scripts/install:/workspace/scripts/install:ro
       - ./scripts/testing:/app/scripts/testing:ro
       - ./scripts/testing:/workspace/scripts/testing:ro
+      # tests/unit/scripts/test_run_benchmarks.py runs the CLI entrypoint from
+      # /app/scripts. Dockerfile.test builds from ./backend so it cannot COPY it
+      # (Dockerfile.unit-test, built from the repo root, does).
+      - ./scripts/run_benchmarks.py:/app/scripts/run_benchmarks.py:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
