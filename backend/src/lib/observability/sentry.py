@@ -1640,101 +1640,118 @@ def _add_safe_log_event_title(event: dict[str, Any]) -> None:
     }
 
 
-_MAX_STRUCTURED_ISSUES = 50
-_MAX_STRUCTURED_DETAIL_CHARS = 20000
-_STRUCTURED_ISSUE_KEYS = (
-    "candidate_id", "field_path", "reason", "expected", "actual_kind", "message",
-)
-_MAX_STRUCTURED_ISSUE_VALUE_CHARS = 500
+_MAX_STRUCTURED_ENTRIES = 200
+_MAX_STRUCTURED_DETAIL_CHARS = 60000
 
 
-def _owned_conformance_error_types() -> tuple[type, ...]:
-    """The exception types whose structured detail we are willing to publish."""
+def _owned_diagnostic_error_types() -> tuple[type, ...]:
+    """Our own error types, whose structured detail is worth publishing.
+
+    The allowlist is not a privacy boundary. It keeps third-party exceptions
+    that happen to expose ``.code`` or ``.details`` from tagging most events
+    with a context that means nothing.
+    """
     from src.lib.agent_studio.profile_conformance import (
         EnvelopeIntegrityError,
         ProfileConformanceError,
     )
+    from src.lib.openai_agents.streaming_tools import SpecialistOutputError
     from src.schemas.evidence_workspace import EvidenceIntegrityError
 
-    return (EnvelopeIntegrityError, ProfileConformanceError, EvidenceIntegrityError)
+    return (
+        EnvelopeIntegrityError,
+        EvidenceIntegrityError,
+        ProfileConformanceError,
+        SpecialistOutputError,
+    )
 
 
-def _bounded_issue(issue: Any) -> dict[str, Any] | None:
-    """Keep only the declared issue keys, each length-capped."""
-    if not isinstance(issue, Mapping):
-        return None
-    bounded: dict[str, Any] = {}
-    for key in _STRUCTURED_ISSUE_KEYS:
-        value = issue.get(key)
-        if value is None:
-            continue
-        text = str(value)
-        if len(text) > _MAX_STRUCTURED_ISSUE_VALUE_CHARS:
-            text = text[:_MAX_STRUCTURED_ISSUE_VALUE_CHARS] + "…"
-        bounded[key] = text
-    return bounded or None
+def _scrub_credentials_in_place(value: Any) -> Any:
+    """Redact credential-shaped VALUES, leaving everything else intact.
+
+    KANBAN-1771 keeps credential redaction and drops the rest. Key-based
+    redaction is not enough here: a SQLAlchemy connection error stringifies
+    with its DSN, and a request dump can carry an Authorization header, both
+    under ordinary keys like ``error``.
+    """
+    if isinstance(value, str):
+        scrubbed = value
+        for pattern in _SECRET_PATTERNS:
+            scrubbed = pattern.sub(_REDACTED, scrubbed)
+        return scrubbed
+    if isinstance(value, Mapping):
+        return {key: _scrub_credentials_in_place(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_credentials_in_place(item) for item in value]
+    return value
 
 
 def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """Pull machine-readable detail off our own conformance exceptions.
+    """Publish the diagnostic payload our own errors already carry.
 
-    KANBAN-1771. These errors already carry the exact field path, reason,
-    expected shape and actual kind, but none of it reached Sentry: the message
-    is replaced wholesale during scrubbing, so an alert said only "Record does
-    not conform to its saved output structure" while the offending field stayed
-    unknown.
+    KANBAN-1771. These errors know the exact field path, reason, expected shape
+    and actual kind, and the persistence failures carry the underlying database
+    error. None of it reached Sentry, because the message is replaced wholesale
+    during scrubbing, so an alert said only "Record does not conform to its
+    saved output structure" while the offending field stayed unknown.
 
-    This is attached AFTER the scrubber, so it must be safe by construction:
+    Chris's decision (2026-09-18): this Sentry is self-hosted in the same
+    compose stack, the payloads are published literature and extraction output
+    rather than personal data, and over-scrubbing them cost more than it
+    protected. So curator and document content goes in.
 
-    * Only our own three conformance types qualify. An earlier version was
-      duck-typed on ``.issues``/``.details``/``.code``, which matched far more
-      than intended. ``SpecialistOutputError.details`` in particular carries
-      ``str(exc)`` from a persistence failure, and a SQLAlchemy error
-      stringifies with its SQL parameters, i.e. the extracted envelope. That
-      was a raw curator-content path and it is now closed.
-    * Only the six declared issue keys are copied, each length-capped, so a
-      curator-authored enum list in ``message`` cannot arrive unbounded.
-    * The whole context is size-capped. An unbounded context risks the event
-      being dropped as too_large, which would lose the alert entirely.
+    Two limits remain, and neither is about privacy:
+
+    * Credential-shaped values are redacted, because the ticket keeps
+      credential redaction and a DSN or bearer token can sit inside an
+      ordinary-looking string.
+    * The context is size-bounded, because Sentry drops an over-large event
+      outright. An unbounded context would lose the whole alert, which is the
+      opposite of what this ticket is for.
     """
     exc_info = (hint or {}).get("exc_info")
     if not isinstance(exc_info, tuple) or len(exc_info) < 2:
         return None
     error = exc_info[1]
-    if error is None or not isinstance(error, _owned_conformance_error_types()):
+    if error is None or not isinstance(error, _owned_diagnostic_error_types()):
         return None
 
     detail: dict[str, Any] = {}
-    issues = getattr(error, "issues", None)
-    if isinstance(issues, list) and issues:
-        bounded = [
-            entry for entry in (_bounded_issue(issue) for issue in issues[:_MAX_STRUCTURED_ISSUES])
-            if entry is not None
-        ]
-        if bounded:
-            detail["issues"] = bounded
-        if len(issues) > _MAX_STRUCTURED_ISSUES:
-            detail["issues_omitted"] = len(issues) - _MAX_STRUCTURED_ISSUES
+    for attribute in ("issues", "details"):
+        value = getattr(error, attribute, None)
+        if isinstance(value, list) and value:
+            detail[attribute] = value[:_MAX_STRUCTURED_ENTRIES]
+            if len(value) > _MAX_STRUCTURED_ENTRIES:
+                detail[f"{attribute}_omitted"] = len(value) - _MAX_STRUCTURED_ENTRIES
     code = getattr(error, "code", None)
     if isinstance(code, str) and code:
         detail["code"] = code
     unknown_fields = getattr(error, "unknown_fields", None)
     if isinstance(unknown_fields, tuple) and unknown_fields:
-        detail["unknown_fields"] = [str(name)[:200] for name in unknown_fields[:50]]
+        detail["unknown_fields"] = list(unknown_fields)
 
     if not detail:
         return None
     detail["exception_type"] = type(error).__name__
+    detail = _scrub_credentials_in_place(detail)
 
-    while len(json.dumps(detail, default=str)) > _MAX_STRUCTURED_DETAIL_CHARS:
-        current = detail.get("issues")
-        if not isinstance(current, list) or len(current) <= 1:
-            detail.pop("issues", None)
-            detail["issues_truncated"] = True
-            break
-        kept = len(current) // 2
-        detail["issues"] = current[:kept]
-        detail["issues_omitted"] = detail.get("issues_omitted", 0) + (len(current) - kept)
+    # Trim entries rather than drop the context, so a very noisy failure still
+    # arrives with usable diagnosis instead of being discarded by Sentry.
+    for attribute in ("details", "issues"):
+        while len(json.dumps(detail, default=str)) > _MAX_STRUCTURED_DETAIL_CHARS:
+            current = detail.get(attribute)
+            if not isinstance(current, list) or not current:
+                break
+            if len(current) == 1:
+                detail[attribute] = [
+                    json.dumps(current[0], default=str)[:_MAX_STRUCTURED_DETAIL_CHARS // 2]
+                ]
+                break
+            kept = len(current) // 2
+            detail[attribute] = current[:kept]
+            detail[f"{attribute}_omitted"] = (
+                detail.get(f"{attribute}_omitted", 0) + (len(current) - kept)
+            )
     return detail
 
 

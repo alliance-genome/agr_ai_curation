@@ -163,45 +163,86 @@ class TestSentryStructuredErrorDetail:
         assert detail["code"] == "envelope_integrity"
 
 
-class TestStructuredDetailCannotLeakContent:
-    """Review finding: the `details` branch was a raw-content path to Sentry.
+class TestStructuredDetailIsUsefulAndSafe:
+    """Chris's decision (2026-09-18): capture the diagnostic payload.
 
-    SpecialistOutputError.details carries `str(exc)` from a persistence failure
-    (streaming_tools.py:2954). A SQLAlchemy error stringifies as
-    "... [SQL: INSERT ...] [parameters: (...)]", and those parameters are the
-    extracted envelope: labels, descriptions and quotes from the curator's PDF.
-    It also carries `last_rejection`, the model's rejected output including the
-    evidence reference report.
+    Sentry here is self-hosted inside this compose stack. Curator and document
+    content is published literature and extraction output, not PII, and
+    over-scrubbing it is what made these failures undiagnosable. So the content
+    goes in.
 
-    contexts.error_detail is attached after _redact_event, so nothing scrubs it.
+    Two things stay out, for reasons that are not privacy:
+
+    * Credential-shaped VALUES. The ticket says keep credential redaction. A
+      SQLAlchemy connection error stringifies with its DSN, so key-based
+      redaction alone is not enough on this path.
+    * Unbounded size. Sentry drops an over-large event outright, which would
+      lose the alert entirely and defeat the point of the ticket.
     """
 
-    def test_specialist_output_error_details_are_not_emitted(self):
+    def test_specialist_output_error_details_are_captured(self):
+        """This is the payload Chris wants: the real persistence failure."""
         from src.lib.observability.sentry import _structured_error_detail
+        from src.lib.openai_agents.streaming_tools import SpecialistOutputError
 
-        class FakeSpecialistOutputError(Exception):
-            def __init__(self):
-                super().__init__("persist failed")
-                self.details = [{
-                    "reason": "inline_extraction_persistence_failed",
-                    "error": "IntegrityError [SQL: INSERT INTO extraction_results] "
-                             "[parameters: ('Adgrl1 was detected in embryonic brain', ...)]",
-                }]
+        error = SpecialistOutputError(
+            specialist_name="allele_extractor",
+            output_type_name="inline_extraction_persistence",
+            message="Validated extraction could not be persisted inline.",
+            details=[{
+                "reason": "inline_extraction_persistence_failed",
+                "error": "IntegrityError [SQL: INSERT INTO extraction_results] "
+                         "[parameters: ('Adgrl1 was detected in embryonic brain', ...)]",
+            }],
+        )
 
-        error = FakeSpecialistOutputError()
         detail = _structured_error_detail({"exc_info": (type(error), error, None)})
 
-        assert detail is None, "details must not reach Sentry unscrubbed"
+        assert detail is not None
+        assert "Adgrl1 was detected in embryonic brain" in str(detail["details"]), (
+            "the extracted content is the diagnostic value; it must survive"
+        )
 
-    def test_a_foreign_exception_with_issues_is_ignored(self):
-        """The helper was duck-typed, so any library error with .code matched."""
+    def test_a_credential_in_a_value_is_still_redacted(self):
+        """Key-based redaction misses a DSN inside an exception string."""
+        from src.lib.observability.sentry import _structured_error_detail
+        from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+
+        error = SpecialistOutputError(
+            specialist_name="allele_extractor",
+            output_type_name="x",
+            message="connection failed",
+            details=[{
+                "reason": "db_unavailable",
+                "error": "could not connect: Authorization: Bearer abcdef0123456789xyz",
+            }],
+        )
+
+        detail = _structured_error_detail({"exc_info": (type(error), error, None)})
+
+        assert "abcdef0123456789xyz" not in str(detail)
+
+    def test_an_openai_key_in_a_value_is_redacted(self):
+        from src.lib.observability.sentry import _structured_error_detail
+        from src.lib.agent_studio.profile_conformance import ProfileConformanceError
+
+        error = ProfileConformanceError([
+            {"field_path": "attributes.note", "reason": "wrong_type",
+             "message": "value was sk-abcdefghijklmnop0123456789"}
+        ])
+
+        detail = _structured_error_detail({"exc_info": (type(error), error, None)})
+
+        assert "sk-abcdefghijklmnop0123456789" not in str(detail)
+
+    def test_a_foreign_library_exception_is_ignored(self):
+        """Not privacy: an untyped .code match would tag most events with noise."""
         from src.lib.observability.sentry import _structured_error_detail
 
         class ForeignApiError(Exception):
             def __init__(self):
                 super().__init__("upstream failed")
                 self.code = "rate_limit"
-                self.issues = [{"raw": "could contain anything"}]
 
         error = ForeignApiError()
         assert _structured_error_detail({"exc_info": (type(error), error, None)}) is None
@@ -221,21 +262,23 @@ class TestStructuredDetailCannotLeakContent:
             assert detail is not None
             assert detail["issues"]
 
-    def test_detail_is_bounded_by_total_size(self):
-        """An unbounded context can get the whole Sentry event dropped."""
+    def test_detail_is_bounded_so_the_event_is_not_dropped(self):
+        """Sentry drops an over-large event; that would lose the alert."""
+        import json
+
         from src.lib.agent_studio.profile_conformance import ProfileConformanceError
         from src.lib.observability.sentry import _structured_error_detail
-        import json
 
         error = ProfileConformanceError([
             {"field_path": f"attributes.f{index}", "reason": "wrong_type",
              "message": "x" * 5000}
-            for index in range(40)
+            for index in range(200)
         ])
 
         detail = _structured_error_detail({"exc_info": (type(error), error, None)})
 
-        assert len(json.dumps(detail, default=str)) <= 20000
+        assert len(json.dumps(detail, default=str)) <= 60000
+        assert detail["issues"], "it must still carry usable diagnosis after trimming"
 
 
 class TestConformanceDegradationPreserved:
