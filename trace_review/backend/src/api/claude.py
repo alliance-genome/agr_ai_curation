@@ -592,6 +592,101 @@ def _complete_provider_token_info(
     return token_info
 
 
+def _overview_fits(data: Mapping[str, Any]) -> bool:
+    return len(json.dumps(_aggregate_provider_result(data), default=str)) <= (
+        TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+    )
+
+
+_COMPACTED_NOTE = (
+    "This overview was reduced to fit the tool-result limit. Nothing was lost: "
+    "fetch each section with its next_call handle. Do not retry this same call."
+)
+
+
+def _compacted_overview(base: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the largest overview that fits, never an error.
+
+    KANBAN-1772. This used to raise HTTP 400 when the complete overview did not
+    fit, so the tool that exists to explain a failed run was unavailable for
+    exactly the large runs that need explaining. The data is always reachable
+    through the per-section next_call handles, so the overview degrades in a
+    fixed order instead of refusing:
+
+    1. The complete overview.
+    2. Drop the filters echo.
+    3. Trim the summary to its small scalar keys.
+    4. Drop the summary entirely.
+    5. Keep only section names, item counts and next_call handles.
+    6. Keep only section names and counts, without handles.
+
+    The trace identity and the section inventory survive to the end, because a
+    reader who knows the sections can still ask for them one at a time.
+    """
+    if _overview_fits(base):
+        return base
+
+    def compacted(data: Dict[str, Any]) -> Dict[str, Any]:
+        return {**data, "status": "compacted_overview", "note": _COMPACTED_NOTE}
+
+    candidate = dict(base)
+    candidate.pop("filters", None)
+    if _overview_fits(compacted(candidate)):
+        return compacted(candidate)
+
+    summary = candidate.get("summary")
+    if isinstance(summary, Mapping):
+        trimmed = {
+            key: value
+            for key, value in summary.items()
+            if isinstance(value, (int, float, bool)) or (
+                isinstance(value, str) and len(value) <= 200
+            )
+        }
+        candidate["summary"] = trimmed
+        if _overview_fits(compacted(candidate)):
+            return compacted(candidate)
+
+    candidate.pop("summary", None)
+    if _overview_fits(compacted(candidate)):
+        return compacted(candidate)
+
+    collections = candidate.get("collections") or []
+    candidate["collections"] = [
+        {
+            "section": row.get("section"),
+            "total_items": row.get("total_items"),
+            "next_call": row.get("next_call"),
+        }
+        for row in collections
+    ]
+    if _overview_fits(compacted(candidate)):
+        return compacted(candidate)
+
+    names_only = [
+        {"section": row.get("section"), "total_items": row.get("total_items")}
+        for row in collections
+    ]
+    candidate["collections"] = names_only
+    if _overview_fits(compacted(candidate)):
+        return compacted(candidate)
+
+    # Last resort: a run with hundreds of sections cannot list them all, so page
+    # the inventory itself and say how many are missing. The reader can still
+    # ask for a named section, which beats an error that says nothing at all.
+    kept = len(names_only)
+    while kept > 1:
+        kept //= 2
+        candidate["collections"] = names_only[:kept]
+        candidate["sections_omitted"] = len(names_only) - kept
+        if _overview_fits(compacted(candidate)):
+            return compacted(candidate)
+
+    candidate["collections"] = names_only[:1]
+    candidate["sections_omitted"] = max(0, len(names_only) - 1)
+    return compacted(candidate)
+
+
 def _aggregate_response_data(
     *,
     source: str,
@@ -638,14 +733,7 @@ def _aggregate_response_data(
     }
     if section is None:
         base["page"] = None
-        if len(json.dumps(_aggregate_provider_result(base), default=str)) > (
-            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="Aggregate summary exceeds the provider inline tool-result limit",
-            )
-        return base
+        return _compacted_overview(base)
     if section not in collections:
         raise HTTPException(
             status_code=400,
