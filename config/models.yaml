@@ -2,31 +2,31 @@ models:
   - model_id: gpt-6-astra
     name: GPT-6 Astra
     provider: openai
-    description: Reasoning model for document extraction and curation.
-    guidance: Default for extraction, routing, and output agents. Start with low reasoning; increase it when difficult evidence needs more analysis. Agent Studio AI Chat uses medium reasoning separately.
-    default: true
+    description: Reasoning model for routing, output, and explicitly selected document extraction.
+    guidance: Default for routing and output agents, with low reasoning. Available for extraction agents by explicit selection; new extraction agents use GPT-5.6 Sol with medium reasoning. Agent Studio AI Chat uses medium reasoning separately.
+    default: false
     curator_visible: true
     supports_reasoning: true
     supports_temperature: false
     reasoning_options: [low, medium, high, xhigh]
     default_reasoning: low
     reasoning_descriptions:
-      low: Default for extraction and curation. Start here when designing a new agent.
+      low: Default for routing and output agents, and when Astra is explicitly selected.
       medium: More reasoning for complex instructions or ambiguous evidence.
       high: Deeper reasoning for difficult evidence synthesis.
       xhigh: Most intensive supported setting in this application; use for especially difficult cases.
     recommended_for:
-      - Paper extraction and custom data structures
       - Routing and formatting extracted information
+      - Paper extraction when explicitly selected
     avoid_for:
       - Routine validation and database lookups where Terra is the default
 
   - model_id: gpt-5.6-sol
     name: GPT-5.6 Sol
     provider: openai
-    description: Alternative extraction model, retained for existing saved agents and explicit selection.
-    guidance: Existing Sol agents retain their saved settings. Use Astra with low reasoning for new extraction agents.
-    default: false
+    description: Default reasoning model for document extraction and curation.
+    guidance: Default for new extraction agents. Start with medium reasoning; increase it when difficult evidence needs more analysis. Existing saved agents retain their saved settings; GPT-6 Astra is available by explicit selection.
+    default: true
     supports_reasoning: true
     supports_temperature: false
     reasoning_options:
@@ -37,7 +37,7 @@ models:
     default_reasoning: medium
     reasoning_descriptions:
       low: Fastest GPT-5.6 Sol mode. Good for quick checks and straightforward extraction.
-      medium: Default reasoning when Sol is explicitly selected.
+      medium: Default for extraction and curation. Start here when designing a new agent.
       high: Deep reasoning for hard ambiguity.
       xhigh: Deepest reasoning but slowest. Use sparingly for hard ambiguity, not routine DB lookups.
     recommended_for:
@@ -51,7 +51,7 @@ models:
     name: GPT-5.6 Terra
     provider: openai
     description: Faster, lower-cost reasoning model for validation and lightweight tasks.
-    guidance: Use for validation and utility agents where speed matters but reasoning still helps. Use GPT-6 Astra for new document extraction agents.
+    guidance: Use for validation and utility agents where speed matters but reasoning still helps. Use GPT-5.6 Sol for new document extraction agents.
     default: false
     supports_reasoning: true
     supports_temperature: false

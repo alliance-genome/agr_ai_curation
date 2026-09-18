@@ -10,7 +10,9 @@ import time
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 
+from grpc import StatusCode
 from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
+from weaviate.exceptions import WeaviateQueryError
 
 from ..bedrock_reranker import get_effective_rerank_provider, rerank_chunks
 from ..openai_agents.config import (
@@ -460,6 +462,28 @@ async def get_chunk_neighbor_ids(
     return await asyncio.to_thread(_fetch)
 
 
+def _is_weaviate_deadline_exceeded(error: BaseException) -> bool:
+    """Return whether a Weaviate query failed on the gRPC client deadline.
+
+    weaviate-client raises WeaviateQueryError inside its RpcError handler, so the
+    gRPC error is only on ``__context__``. Its status code decides when present;
+    the "Deadline Exceeded" message is the fallback.
+    """
+
+    if not isinstance(error, WeaviateQueryError):
+        return False
+    grpc_error = error.__cause__ or error.__context__
+    status_code = getattr(grpc_error, "code", None)
+    if callable(status_code):
+        try:
+            status = status_code()
+        except Exception:
+            status = None
+        if isinstance(status, StatusCode):
+            return status == StatusCode.DEADLINE_EXCEEDED
+    return "deadline exceeded" in str(error).lower()
+
+
 async def hybrid_search_chunks(
     document_id: str,
     query: str,
@@ -536,9 +560,15 @@ async def hybrid_search_chunks(
         logger.info("Detected short/symbol-like query; enabling BM25 boost while preserving rerank/MMR")
         use_bm25_boost = True
 
+    # One deadline retry per logical search, shared by every attempt the
+    # lexical-first retry adapter makes. UNAVAILABLE is already retried inside
+    # weaviate-client, and other errors are not retried.
+    deadline_retry_available = True
+
     def _search(alpha_override: Optional[float] = None,
                 rerank_override: Optional[bool] = None,
                 mmr_override: Optional[bool] = None) -> List[Dict[str, Any]]:
+        nonlocal deadline_retry_available
         try:
             search_start = time.monotonic()
             search_id = uuid4().hex
@@ -679,7 +709,29 @@ async def hybrid_search_chunks(
 
                 # Execute query
                 weaviate_start = time.monotonic()
-                response = collection.query.hybrid(**query_params)
+                try:
+                    response = collection.query.hybrid(**query_params)
+                except WeaviateQueryError as query_error:
+                    if not (
+                        deadline_retry_available
+                        and _is_weaviate_deadline_exceeded(query_error)
+                    ):
+                        raise
+                    deadline_retry_available = False
+                    logger.warning(
+                        "Weaviate hybrid query exceeded its deadline; retrying once search_id=%s",
+                        search_id,
+                        extra={
+                            "operation": "weaviate_hybrid_search_deadline_retry",
+                            "attempt": 1,
+                            "duration_ms": round(
+                                (time.monotonic() - weaviate_start) * 1000, 1
+                            ),
+                            "retrieval_search_id": search_id,
+                            "retrieval_query_fingerprint": query_fingerprint,
+                        },
+                    )
+                    response = collection.query.hybrid(**query_params)
                 weaviate_duration_ms = (time.monotonic() - weaviate_start) * 1000
 
                 # V5: Log retrieval results
@@ -879,7 +931,14 @@ async def hybrid_search_chunks(
                 return chunks
 
         except Exception as e:
-            logger.error("Search failed: %s", e, exc_info=True)
+            # The calling document tool owns the Sentry event for a failed
+            # search; keep this record as a log line only.
+            logger.error(
+                "Search failed: %s",
+                e,
+                exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
             raise
 
     # Retry strategy: lexical-first fallbacks for short/symbol queries or explicit strategy

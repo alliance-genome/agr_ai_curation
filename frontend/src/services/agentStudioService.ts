@@ -1186,10 +1186,25 @@ export async function getFlow(flowId: string): Promise<FlowResponse> {
 /**
  * Helper to extract error message from API response
  */
+function validationFieldPath(loc: unknown): string {
+  if (!Array.isArray(loc)) return ''
+  const parts = loc[0] === 'body' ? loc.slice(1) : loc
+  return parts.reduce<string>((path, part) => {
+    if (typeof part === 'number') return `${path}[${part}]`
+    if (typeof part !== 'string' || !part) return path
+    return path ? `${path}.${part}` : part
+  }, '')
+}
+
 function extractErrorMessage(error: { detail?: unknown }, fallback: string): string {
   if (typeof error.detail === 'string') return error.detail
   if (Array.isArray(error.detail)) {
-    return error.detail.map((entry) => isRecord(entry) ? entry.msg || entry.message || fallback : fallback).join('; ')
+    return error.detail.map((entry) => {
+      if (!isRecord(entry)) return fallback
+      const message = entry.msg || entry.message || fallback
+      const path = validationFieldPath(entry.loc)
+      return path ? `${path}: ${message}` : message
+    }).join('; ')
   }
   if (isRecord(error.detail) && Array.isArray(error.detail.findings)) {
     const messages = error.detail.findings

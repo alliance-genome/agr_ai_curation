@@ -622,6 +622,7 @@ def test_unavailable_step_fixture_has_consistent_save_load_runtime_and_batch_dia
             "agent_id": "unavailable_agent",
             "agent_name": "unavailable_agent",
             "reason": "agent could not be resolved from unified registry",
+            "reason_code": "agent_unresolvable",
         }
     ]
 

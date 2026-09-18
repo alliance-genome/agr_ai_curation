@@ -979,3 +979,60 @@ def test_clone_rejects_private_source_or_unavailable_dependencies(monkeypatch, v
         asyncio.run(flows.clone_flow(source.id, CloneFlowRequest(), {"sub": "member"}, db))
     assert exc.value.status_code == status
     assert not db.commit_called and source.execution_count == 8
+def _revision_selection_payload(extra_node_data=None):
+    agent_data = {
+        "agent_id": "ca_example-agent",
+        "agent_display_name": "Example Extractor",
+        "output_key": "example_output",
+        **(extra_node_data or {}),
+    }
+    return {
+        "flow_definition": {
+            "version": "1.1",
+            "entry_node_id": "node_0",
+            "nodes": [
+                {
+                    "id": "node_0",
+                    "type": "task_input",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "output_key": "task_input",
+                        "task_instructions": "Find the example entities.",
+                    },
+                },
+                {
+                    "id": "node_1",
+                    "type": "agent",
+                    "position": {"x": 0, "y": 100},
+                    "data": agent_data,
+                },
+            ],
+            "edges": [{"id": "edge_0", "source": "node_0", "target": "node_1"}],
+        },
+        "node_id": "node_1",
+        "agent_revision_id": str(uuid4()),
+    }
+
+
+def test_revision_selection_request_accepts_persisted_node_data():
+    request = flows.FlowRevisionSelectionRequest.model_validate(_revision_selection_payload())
+
+    assert request.node_id == "node_1"
+
+
+def test_revision_selection_request_rejects_browser_only_node_fields():
+    """The browser must strip UI state such as hasError before selecting a revision."""
+    with pytest.raises(ValidationError) as exc_info:
+        flows.FlowRevisionSelectionRequest.model_validate(
+            _revision_selection_payload({"hasError": False, "errorMessage": "Needs attention"})
+        )
+
+    rejected = {
+        (tuple(error["loc"]), error["type"]) for error in exc_info.value.errors()
+    }
+    assert rejected == {
+        (("flow_definition", "nodes", 1, "data", "hasError"), "extra_forbidden"),
+        (("flow_definition", "nodes", 1, "data", "errorMessage"), "extra_forbidden"),
+    }

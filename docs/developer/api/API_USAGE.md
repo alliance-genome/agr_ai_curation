@@ -377,7 +377,14 @@ ordinary hybrid search defaults to alpha `0.4`, a 50-candidate rerank pool, and
 MMR disabled; `WEAVIATE_SEARCH_HYBRID_ALPHA`,
 `WEAVIATE_SEARCH_INITIAL_LIMIT`, `WEAVIATE_SEARCH_MMR_ENABLED`, and
 `WEAVIATE_SEARCH_MMR_LAMBDA` tune those choices for controlled diagnostics.
-Explicit lexical modes still force alpha `0`. Each
+Explicit lexical modes still force alpha `0`. Backend Weaviate connections use
+`WEAVIATE_QUERY_TIMEOUT_SECONDS` (default `30`, the weaviate-client default) as
+the client query timeout. The same timeout also governs batch deletes, tenant
+reads, aggregates and HTTP GET requests; connection-init and insert timeouts
+keep the library defaults. When a hybrid search hits the gRPC
+`DEADLINE_EXCEEDED` deadline, the backend retries the query once per logical
+search and logs a `weaviate_hybrid_search_deadline_retry` warning. Other errors
+are not retried. Each
 search emits a structured `weaviate_retrieval_ranking_audit` log record. The
 record contains a query fingerprint, effective alpha, stage timings, and
 content-free candidate ranks before reranking, after reranking, and after MMR.

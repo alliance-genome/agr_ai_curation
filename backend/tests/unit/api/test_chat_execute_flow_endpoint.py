@@ -53,6 +53,70 @@ def test_flow_failure_tags_terminate_on_cyclic_unknown_cause():
     assert "failure_category" not in tags
 
 
+_PROVIDER_REFUSAL_SENTINEL = "PROVIDER-REFUSAL-SENTINEL-4c1e"
+_BIO_POLICY_FLOW_MESSAGE = (
+    "The AI provider's automatic safety check flagged this request as possible "
+    "biological risk and stopped the flow. This check is run by the provider, "
+    "not by AI Curation, and it can flag routine research content. Please report "
+    "the paper using the feedback button so we can follow up."
+)
+
+
+def _sdk_wrapped_provider_error(error_type, code):
+    """Build the Agents SDK tool-failure chain seen in Sentry PROD-1J."""
+    from agents import UserError
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    try:
+        try:
+            raise ResponsesWebSocketError({
+                "type": "error", "sequence_number": 4,
+                "error": {"type": error_type, "code": code,
+                          "message": _PROVIDER_REFUSAL_SENTINEL, "param": None},
+            })
+        except ResponsesWebSocketError as provider_error:
+            raise UserError(
+                f"Error running tool ask_mouse_allele_specialist: {provider_error}"
+            ) from provider_error
+    except UserError as wrapped:
+        return wrapped
+
+
+@pytest.mark.parametrize(
+    ("error_type", "code", "expected_message", "expected_category"),
+    [
+        ("invalid_request_error", "bio_policy", _BIO_POLICY_FLOW_MESSAGE, "provider_content_policy"),
+        (
+            "server_error", None,
+            "The AI service interrupted this run before it finished. "
+            "Please try running the flow again. If this keeps happening, "
+            "report the problem using the feedback button.",
+            None,
+        ),
+        ("invalid_request_error", "context_length_exceeded",
+         "The AI service could not complete this run.", None),
+    ],
+)
+def test_flow_provider_policy_refusal_message_and_tag(
+    error_type, code, expected_message, expected_category,
+):
+    """ALL-1245: bio_policy refusals get curator wording and a stable Sentry tag."""
+    from src.lib.observability.runtime import _safe_tags
+
+    error = _sdk_wrapped_provider_error(error_type, code)
+    message, provider = chat._flow_execution_error_message(error)
+    assert (message, provider) == (expected_message, "openai")
+    tags = chat._flow_failure_tags(
+        flow_id="f", failure_type=type(error).__name__, phase="event_generator",
+        provider=provider, exc=error,
+    )
+    assert tags.get("failure_category") == expected_category
+    assert tags["provider"] == "openai"
+    safe_tags = _safe_tags(tags)
+    assert safe_tags.get("failure_category") == expected_category
+    assert _PROVIDER_REFUSAL_SENTINEL not in json.dumps([message, tags, safe_tags])
+
+
 @pytest.fixture(autouse=True)
 def _reset_stream_state():
     chat._LOCAL_CANCEL_EVENTS.clear()
@@ -2885,6 +2949,63 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     assert failure_logs[0].exc_info is not None
 
 
+def test_execute_flow_endpoint_stores_bio_policy_refusal_message(monkeypatch):
+    """ALL-1245: replay the 12:54 PROD-1J failure shape through the endpoint."""
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-bio-policy")
+    flow = SimpleNamespace(
+        id=flow_id, user_id=7, name="Identify MGI Allele IDs",
+        execution_count=0, last_executed_at=None, flow_definition={},
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    runtime_reports = []
+    monkeypatch.setattr(
+        chat,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
+
+    async def _fake_execute_flow(**_kwargs):
+        if False:
+            yield {"type": "RUN_STARTED"}
+        raise _sdk_wrapped_provider_error("invalid_request_error", "bio_policy")
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    events = asyncio.run(_consume_stream(response))
+
+    assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert events[0]["details"]["error"] == _BIO_POLICY_FLOW_MESSAGE
+    assert events[1]["message"] == _BIO_POLICY_FLOW_MESSAGE
+    summaries = [
+        message
+        for messages in calls["repository"].messages.values()
+        for message in messages
+        if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    ]
+    assert len(summaries) == 1
+    assert summaries[0].payload_json["failure_reason"] == _BIO_POLICY_FLOW_MESSAGE
+    assert len(runtime_reports) == 1
+    reported_exc, report_kwargs = runtime_reports[0]
+    assert type(reported_exc).__name__ == "UserError"
+    assert report_kwargs["operation"] == "event_generator_failed"
+    assert report_kwargs["tags"]["provider"] == "openai"
+    assert report_kwargs["tags"]["failure_category"] == "provider_content_policy"
+    assert _PROVIDER_REFUSAL_SENTINEL not in json.dumps(events)
+    assert _PROVIDER_REFUSAL_SENTINEL not in json.dumps(
+        summaries[0].payload_json, default=str
+    )
+    assert _PROVIDER_REFUSAL_SENTINEL not in json.dumps(report_kwargs, default=str)
+
+
 def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, caplog):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-run-error")
@@ -3192,3 +3313,93 @@ def test_flow_provider_failure_description_handles_context_and_cycles(error_type
     assert chat._flow_execution_error_message(cyclic) == (
         "Flow execution failed unexpectedly.", None,
     )
+
+
+def test_execute_flow_endpoint_persists_unavailable_step_reason_codes(monkeypatch):
+    """ALL-1244: flow_summary alone carries the refusal's safe per-step codes."""
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-refusal")
+    flow = SimpleNamespace(
+        id=flow_id, user_id=7, name="Identify MGI Allele IDs",
+        execution_count=0, last_executed_at=None, flow_definition={},
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    runtime_reports = []
+    monkeypatch.setattr(
+        chat,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
+    )
+    message = (
+        "Flow cannot start. Steps 1 (Mouse Allele Identification) and 2 (Allele Extraction) "
+        "need a PDF. Open Documents in the top navigation and load a paper into chat, "
+        "then run the flow again."
+    )
+    codes = [
+        {"step": 1, "reason_code": "document_required"},
+        {"step": 2, "reason_code": "document_required"},
+    ]
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "FLOW_STARTED", "data": {"flow_id": str(flow_id), "flow_run_id": "run-refused"}}
+        yield {
+            "type": "FLOW_ERROR",
+            "timestamp": "2026-09-17T11:19:10.971676+00:00",
+            "details": {
+                "reason": "flow_step_unavailable",
+                "message": message,
+                "unavailable_steps": [
+                    {"step": 1, "agent_id": "ca_1", "agent_name": "Mouse Allele Identification",
+                     "reason_code": "document_required"},
+                    {"step": 2, "agent_id": "ca_2", "agent_name": "Allele Extraction",
+                     "reason_code": "document_required"},
+                ],
+            },
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": "2026-09-17T11:19:10.972028+00:00",
+            "data": {
+                "flow_id": str(flow_id), "flow_name": flow.name, "flow_run_id": "run-refused",
+                "document_id": None, "status": "failed", "failure_reason": message,
+                "unavailable_step_reason_codes": codes,
+            },
+        }
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+    response = asyncio.run(
+        chat.execute_flow_endpoint(request=request, db=db, user={"sub": "auth-sub", "cognito:groups": []})
+    )
+    asyncio.run(_consume_stream(response))
+
+    stored = [
+        message_row
+        for messages in calls["repository"].messages.values()
+        for message_row in messages
+    ]
+    summary = next(row for row in stored if row.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE)
+    assert summary.payload_json["status"] == "failed"
+    assert summary.payload_json["document_id"] is None
+    assert summary.payload_json["failure_reason"] == message
+    assert summary.payload_json["unavailable_step_reason_codes"] == codes
+    diagnostic = next(row for row in stored if row.message_type == "flow_diagnostic")
+    assert [step["reason_code"] for step in diagnostic.payload_json["details"]["unavailable_steps"]] == [
+        "document_required", "document_required",
+    ]
+    # The Sentry failure type still comes from details.reason.
+    assert [kwargs["tags"]["flow_failure_type"] for _exc, kwargs in runtime_reports] == [
+        "flow_step_unavailable",
+    ]
+
+
+def test_flow_summary_row_marks_new_records_without_step_codes():
+    """New summaries store [] so legacy rows (key absent) stay distinguishable."""
+    row = chat._build_execute_flow_summary_row(
+        flow_id="flow-1", flow_name="Flow", flow_run_id="run-1", session_id="s1",
+        document_id="doc-1", status="completed", trace_id="trace-1",
+        final_user_output="done", failure_reason=None, assistant_message="memory",
+        run_started_event=None,
+        terminal_events=[{"type": "FLOW_FINISHED", "status": "completed", "flow_run_id": "run-1"}],
+    )
+    assert row.payload_json["unavailable_step_reason_codes"] == []

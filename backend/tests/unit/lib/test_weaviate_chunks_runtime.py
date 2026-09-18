@@ -2,10 +2,13 @@
 
 import asyncio
 from contextlib import contextmanager
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import grpc
 import pytest
+from weaviate.exceptions import WeaviateQueryError
 
 import src.lib.weaviate_client.chunks as chunks
 
@@ -544,3 +547,179 @@ async def test_hybrid_search_retry_adapter_branches(monkeypatch):
     short = await chunks.hybrid_search_chunks_retry_adapter(_search_short, strategy="hybrid", short_token=True)
     assert short == [{"id": "chunk-2"}]
     assert calls == [(None, None, None)]
+
+
+# --- ALL-1246: single retry on Weaviate gRPC DEADLINE_EXCEEDED ---
+
+_SEARCH_QUERY_SENTINEL = "QUERY-TEXT-SENTINEL-91b2 allele mentions in methods"
+
+
+class _FakeRpcError(grpc.RpcError):
+    def __init__(self, status_code):
+        super().__init__()
+        self._status_code = status_code
+
+    def code(self):
+        return self._status_code
+
+    def details(self):
+        return "Deadline Exceeded" if self._status_code == grpc.StatusCode.DEADLINE_EXCEEDED else "unavailable"
+
+
+def _weaviate_query_error(status_code=None, message="Deadline Exceeded"):
+    """Raise and capture WeaviateQueryError the way weaviate-client 4.21 does."""
+    try:
+        try:
+            if status_code is None:
+                raise RuntimeError("no grpc context")
+            raise _FakeRpcError(status_code)
+        except Exception:
+            raise WeaviateQueryError(message, "GRPC search")
+    except WeaviateQueryError as error:
+        if status_code is None:
+            error.__context__ = None
+        return error
+
+
+def _hybrid_response(uuid="chunk-1"):
+    return SimpleNamespace(objects=[
+        SimpleNamespace(
+            uuid=uuid,
+            properties={
+                "content": "Allele text", "contentPreview": "Allele", "pageNumber": 3,
+                "chunkIndex": 1, "sectionTitle": "Methods", "elementType": "NarrativeText",
+                "documentId": "doc-1", "metadata": None, "docItemProvenance": None,
+            },
+            metadata=SimpleNamespace(score=0.9),
+            vector=None,
+        )
+    ])
+
+
+async def _run_hybrid_search(monkeypatch, hybrid_side_effect, **kwargs):
+    _sync_to_thread(monkeypatch)
+    monkeypatch.setattr(chunks, "get_effective_rerank_provider", lambda: "none")
+    chunk_collection = MagicMock()
+    chunk_collection.query.hybrid.side_effect = hybrid_side_effect
+    connection = _connection_with_client(MagicMock())
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        try:
+            return await chunks.hybrid_search_chunks(
+                document_id="doc-1",
+                query=kwargs.pop("query", _SEARCH_QUERY_SENTINEL),
+                user_id="user-1",
+                limit=5,
+                apply_mmr=False,
+                **kwargs,
+            ), chunk_collection
+        except Exception as error:
+            error.chunk_collection = chunk_collection
+            raise
+
+
+def _search_records(caplog, level):
+    return [
+        record for record in caplog.records
+        if record.name == chunks.logger.name and record.levelno == level
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_error",
+    [
+        _weaviate_query_error(grpc.StatusCode.DEADLINE_EXCEEDED),
+        _weaviate_query_error(None, message="Deadline Exceeded"),
+    ],
+    ids=["grpc-status", "message-fallback"],
+)
+async def test_hybrid_search_retries_once_after_deadline_exceeded(monkeypatch, caplog, first_error):
+    caplog.set_level(logging.INFO, logger=chunks.logger.name)
+
+    results, collection = await _run_hybrid_search(
+        monkeypatch, [first_error, _hybrid_response()],
+    )
+
+    assert [chunk["id"] for chunk in results] == ["chunk-1"]
+    assert collection.query.hybrid.call_count == 2
+    assert _search_records(caplog, logging.ERROR) == []
+    warnings = [
+        record for record in _search_records(caplog, logging.WARNING)
+        if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].attempt == 1
+    assert isinstance(warnings[0].duration_ms, float)
+    assert warnings[0].exc_info is None
+    assert "QUERY-TEXT-SENTINEL" not in warnings[0].getMessage()
+    assert "QUERY-TEXT-SENTINEL" not in repr(vars(warnings[0]))
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_reports_second_deadline_failure_without_sentry_event(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=chunks.logger.name)
+    deadline = grpc.StatusCode.DEADLINE_EXCEEDED
+
+    with pytest.raises(WeaviateQueryError) as raised:
+        await _run_hybrid_search(
+            monkeypatch,
+            [_weaviate_query_error(deadline), _weaviate_query_error(deadline)],
+        )
+
+    assert raised.value.chunk_collection.query.hybrid.call_count == 2
+    errors = _search_records(caplog, logging.ERROR)
+    assert len(errors) == 1
+    assert errors[0].sentry_skip_event is True
+    assert errors[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        _weaviate_query_error(grpc.StatusCode.UNAVAILABLE, message="unavailable"),
+        _weaviate_query_error(grpc.StatusCode.INTERNAL, message="Deadline Exceeded"),
+        _weaviate_query_error(None, message="index not found"),
+        RuntimeError("Deadline Exceeded"),
+    ],
+    ids=["unavailable", "grpc-status-wins-over-message", "other-query-error", "not-a-query-error"],
+)
+async def test_hybrid_search_does_not_retry_other_errors(monkeypatch, caplog, error):
+    caplog.set_level(logging.INFO, logger=chunks.logger.name)
+
+    with pytest.raises(type(error)) as raised:
+        await _run_hybrid_search(monkeypatch, [error, _hybrid_response()])
+
+    assert raised.value.chunk_collection.query.hybrid.call_count == 1
+    assert not [
+        record for record in caplog.records
+        if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_deadline_retry_budget_spans_lexical_first_attempts(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=chunks.logger.name)
+    deadline = grpc.StatusCode.DEADLINE_EXCEEDED
+
+    # Attempt 1 times out and its single retry returns no rows, so the
+    # lexical-first adapter moves on; the adapter's next attempt must not get
+    # a second deadline retry.
+    with pytest.raises(WeaviateQueryError) as raised:
+        await _run_hybrid_search(
+            monkeypatch,
+            [
+                _weaviate_query_error(deadline),
+                SimpleNamespace(objects=[]),
+                _weaviate_query_error(deadline),
+                _hybrid_response(),
+            ],
+            strategy="hybrid_lexical_first",
+        )
+
+    assert raised.value.chunk_collection.query.hybrid.call_count == 3
+    assert len([
+        record for record in caplog.records
+        if getattr(record, "operation", None) == "weaviate_hybrid_search_deadline_retry"
+    ]) == 1

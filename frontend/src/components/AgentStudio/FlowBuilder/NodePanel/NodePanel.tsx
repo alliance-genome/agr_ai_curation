@@ -49,6 +49,7 @@ import {
 import type { AgentBrowserRequest, AgentNode, AgentNodeData, OutputBindingView } from '../types'
 import OutputFieldEditor from './OutputFieldEditor'
 import type { FlowDefinition, FlowNodeDefinition } from '../types'
+import { flowNodeDataForPersistence, flowNodeTypeForPersistence } from '../types'
 import AutomaticChecks from './AutomaticChecks'
 import ExecutionRevisionPicker from './ExecutionRevisionPicker'
 import NodePanelHeader from './NodePanelHeader'
@@ -192,7 +193,12 @@ function NodePanel({
     if (!selection.agent_revision_id) return
     const requestId = ++revisionRequest.current
     setRevisionPending(true)
-    const currentNode: FlowNodeDefinition = { id: node.id, type: node.type || 'agent', position: node.position, data: { ...node.data, ...draft.snapshotPayload() } }
+    const currentNode: FlowNodeDefinition = {
+      id: node.id,
+      type: flowNodeTypeForPersistence(node),
+      position: node.position,
+      data: { ...flowNodeDataForPersistence(node.data), ...draft.snapshotPayload() },
+    }
     const definition: FlowDefinition = flowDefinition
       ? { ...flowDefinition, nodes: flowDefinition.nodes.map((item) => item.id === node.id ? currentNode : item) }
       : { version: '1.1', entry_node_id: node.id, nodes: [currentNode], edges: [] }

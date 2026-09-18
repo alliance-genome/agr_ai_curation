@@ -1670,6 +1670,7 @@ class TestDbUserIdPropagation:
                     "as a validation attachment on an extraction step so it receives "
                     "a structured extraction envelope and DomainValidationRequest."
                 ),
+                "reason_code": "attachment_only_validator",
             }
         ]
         mock_get_agent.assert_not_called()
@@ -5948,14 +5949,17 @@ class TestExecuteFlowTermination:
     """Tests flow-level termination behavior for success and failure paths."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("agent_id,reason", [
-        ("pdf_extraction", "requires document"),
-        ("allele_validation", "attachment-only validator"),
-        ("missing_agent", "agent could not be resolved"),
-        ("broken_agent", "private configuration must not leak"),
-        ("disabled_agent", "provider_disabled"),
+    @pytest.mark.parametrize("agent_id,reason,reason_code,advice", [
+        ("pdf_extraction", "requires document", "document_required", "Open Documents"),
+        ("allele_validation", "raw attachment-only policy reason", "attachment_only_validator",
+         "validation attachment"),
+        ("missing_agent", "agent could not be resolved", "agent_unresolvable", "available agent"),
+        ("broken_agent", "private configuration must not leak", "agent_unavailable", "available agent"),
+        ("disabled_agent", "provider_disabled", "provider_disabled", "approved model"),
     ])
-    async def test_unavailable_step_fails_before_runner_or_formatter(self, monkeypatch, agent_id, reason):
+    async def test_unavailable_step_fails_before_runner_or_formatter(
+        self, monkeypatch, agent_id, reason, reason_code, advice,
+    ):
         flow = _make_flow([
             _task_input_node(), _agent_node("n1", agent_id), _agent_node("n2", "chat_output"),
         ])
@@ -5963,6 +5967,7 @@ class TestExecuteFlowTermination:
         supervisor = SimpleNamespace(_flow_unavailable_steps=[{
             "step": 1, "agent_id": agent_id, "agent_name": "Required step", "reason": reason,
             "error_code": "provider_disabled" if agent_id == "disabled_agent" else None,
+            "reason_code": reason_code,
         }])
         monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **kwargs: supervisor)
         monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *args: "fixture")
@@ -5977,9 +5982,12 @@ class TestExecuteFlowTermination:
             assert "load a document" not in events[1]["details"]["message"]
         else:
             assert events[1]["details"]["reason"] == "flow_step_unavailable"
-            assert "Documents" in events[1]["details"]["message"]
-            assert "validation attachments" in events[1]["details"]["message"]
             assert reason not in str(events)
+        assert advice in events[1]["details"]["message"]
+        assert events[1]["details"]["unavailable_steps"][0]["reason_code"] == reason_code
+        assert events[-1]["data"]["unavailable_step_reason_codes"] == [
+            {"step": 1, "reason_code": reason_code},
+        ]
         assert events[-1]["data"]["status"] == "failed"
         assert events[-1]["data"]["output_status"] == "none"
         assert events[-1]["data"]["output_count"] == 0

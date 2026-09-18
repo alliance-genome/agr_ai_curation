@@ -45,6 +45,7 @@ from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 from src.lib.flows.access import get_visible_flow
 from src.services.document_access import exclude_benchmark_document
 from src.lib.flows.execution_revisions import flow_execution_revision_findings
+from src.lib.flows.unavailable_steps import stored_flow_step_reason_codes
 
 
 def _extract_execute_flow_runtime_identifiers(
@@ -68,6 +69,25 @@ def _extract_execute_flow_runtime_identifiers(
     return flow_run_id, trace_id
 
 
+_PROVIDER_CONTENT_POLICY_CODES = frozenset({"bio_policy"})
+_PROVIDER_CONTENT_POLICY_MESSAGE = (
+    "The AI provider's automatic safety check flagged this request as possible "
+    "biological risk and stopped the flow. This check is run by the provider, "
+    "not by AI Curation, and it can flag routine research content. Please report "
+    "the paper using the feedback button so we can follow up."
+)
+
+
+def _is_provider_content_policy_refusal(error: BaseException) -> bool:
+    """Return whether a provider error is an automatic content-policy refusal."""
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    return (
+        isinstance(error, ResponsesWebSocketError)
+        and error.code in _PROVIDER_CONTENT_POLICY_CODES
+    )
+
+
 def _flow_execution_error_message(exc: Exception) -> tuple[str, str | None]:
     """Describe typed provider failures without exposing provider payloads."""
     from agents.models.openai_responses import ResponsesWebSocketError
@@ -77,6 +97,8 @@ def _flow_execution_error_message(exc: Exception) -> tuple[str, str | None]:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, ResponsesWebSocketError):
+            if _is_provider_content_policy_refusal(current):
+                return _PROVIDER_CONTENT_POLICY_MESSAGE, "openai"
             if current.error_type in {"server_error", "service_unavailable_error"}:
                 return (
                     "The AI service interrupted this run before it finished. "
@@ -113,6 +135,9 @@ def _flow_failure_tags(
         if isinstance(current, SpecialistOutputError):
             tool_name = current.tool_name or tool_name
             failure_category = "specialist_output_invalid"
+            break
+        if _is_provider_content_policy_refusal(current):
+            failure_category = "provider_content_policy"
             break
         current = current.__cause__ or current.__context__
     return {
@@ -463,6 +488,16 @@ def _build_execute_flow_summary_row(
         "trace_id": trace_id,
         "failure_reason": failure_reason,
         "final_user_output": str(final_user_output or "").strip() or None,
+        # Safe per-step codes from the terminal event. New records always carry
+        # a list; records written before ALL-1244 lack the key.
+        "unavailable_step_reason_codes": next(
+            (
+                stored_flow_step_reason_codes(event.get("unavailable_step_reason_codes")) or []
+                for event in reversed(terminal_events)
+                if isinstance(event, dict) and event.get("type") == "FLOW_FINISHED"
+            ),
+            [],
+        ),
         FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: assistant_message,
         _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
             dict(event)
