@@ -3628,6 +3628,31 @@ def _agent_runtime_canonical_agent_key(agent: Agent) -> Optional[str]:
     return None
 
 
+
+def _append_live_evidence_record(
+    live_evidence_records: List[Dict[str, Any]],
+    evidence_record: Dict[str, Any],
+) -> None:
+    """Insert one record into a specialist's evidence collection, by identity.
+
+    KANBAN-1775. This used to be a plain append while the runner merged by
+    evidence_record_id. Re-recording the same ID inside one specialist run
+    therefore left a second copy that nothing could ever reach again:
+    evidence_workspace._find_record returns the first match, so a later attach,
+    detach or metadata update silently addressed the stale copy.
+
+    Records with no ID cannot be identified, so they keep append semantics.
+    """
+    evidence_record_id = str(evidence_record.get("evidence_record_id") or "").strip()
+    if evidence_record_id:
+        for index, existing in enumerate(live_evidence_records):
+            existing_id = str(existing.get("evidence_record_id") or "").strip()
+            if existing_id == evidence_record_id:
+                live_evidence_records[index] = evidence_record
+                return
+    live_evidence_records.append(evidence_record)
+
+
 async def _dispatch_domain_envelope_validators_for_chat(
     final_output: str,
     *,
@@ -5287,7 +5312,9 @@ async def run_specialist_with_events(
                             tool_output=output,
                         )
                         if evidence_record is not None:
-                            live_evidence_records.append(evidence_record)
+                            _append_live_evidence_record(
+                                live_evidence_records, evidence_record
+                            )
 
                         resolver_call_ledger.record_tool_output(
                             tool_call_id=str(completed_tool.get("tool_id") or "") or None,
