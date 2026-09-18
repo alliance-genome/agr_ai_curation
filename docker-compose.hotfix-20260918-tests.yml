@@ -1,0 +1,37 @@
+# Isolation override for the 2026-09-18 hotfix gate.
+#
+# The hotfix procedure requires this gate to own its Compose project, its image
+# tags and an explicit unused subnet, so it cannot replace a shared :latest
+# image or collide with another session's stack. Address pools on this host are
+# already crowded (38 networks), so the subnet is pinned rather than allocated.
+#
+# Run with:
+#   docker compose -f docker-compose.test.yml \
+#     -f docker-compose.hotfix-20260918-tests.yml \
+#     -p hotfix_20260918_tests run --rm <service>
+#
+# This file is a local gate artifact and is not part of the release.
+
+services:
+  backend-tests:
+    image: ai-curation-backend-tests:hotfix-20260918
+
+  backend-unit-tests:
+    image: ai-curation-unit-tests:hotfix-20260918
+
+  backend-integration-tests:
+    image: ai-curation-backend-tests:hotfix-20260918
+
+  backend-contract-tests:
+    image: ai-curation-unit-tests:hotfix-20260918
+
+  backend-persistence-tests:
+    image: ai-curation-backend-tests:hotfix-20260918
+
+networks:
+  test-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.244.18.0/24
