@@ -1641,46 +1641,100 @@ def _add_safe_log_event_title(event: dict[str, Any]) -> None:
 
 
 _MAX_STRUCTURED_ISSUES = 50
+_MAX_STRUCTURED_DETAIL_CHARS = 20000
+_STRUCTURED_ISSUE_KEYS = (
+    "candidate_id", "field_path", "reason", "expected", "actual_kind", "message",
+)
+_MAX_STRUCTURED_ISSUE_VALUE_CHARS = 500
+
+
+def _owned_conformance_error_types() -> tuple[type, ...]:
+    """The exception types whose structured detail we are willing to publish."""
+    from src.lib.agent_studio.profile_conformance import (
+        EnvelopeIntegrityError,
+        ProfileConformanceError,
+    )
+    from src.schemas.evidence_workspace import EvidenceIntegrityError
+
+    return (EnvelopeIntegrityError, ProfileConformanceError, EvidenceIntegrityError)
+
+
+def _bounded_issue(issue: Any) -> dict[str, Any] | None:
+    """Keep only the declared issue keys, each length-capped."""
+    if not isinstance(issue, Mapping):
+        return None
+    bounded: dict[str, Any] = {}
+    for key in _STRUCTURED_ISSUE_KEYS:
+        value = issue.get(key)
+        if value is None:
+            continue
+        text = str(value)
+        if len(text) > _MAX_STRUCTURED_ISSUE_VALUE_CHARS:
+            text = text[:_MAX_STRUCTURED_ISSUE_VALUE_CHARS] + "…"
+        bounded[key] = text
+    return bounded or None
 
 
 def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """Pull machine-readable detail off our own typed exceptions.
+    """Pull machine-readable detail off our own conformance exceptions.
 
-    KANBAN-1771. The conformance and integrity errors already carry the exact
-    field path, reason, expected shape and actual kind, but none of it reached
-    Sentry: the message is replaced wholesale during scrubbing, so an alert
-    said only "Record does not conform to its saved output structure" while the
-    offending field stayed unknown.
+    KANBAN-1771. These errors already carry the exact field path, reason,
+    expected shape and actual kind, but none of it reached Sentry: the message
+    is replaced wholesale during scrubbing, so an alert said only "Record does
+    not conform to its saved output structure" while the offending field stayed
+    unknown.
 
-    This reads our own error types, so the values are field paths and reason
-    codes rather than curator or document content.
+    This is attached AFTER the scrubber, so it must be safe by construction:
+
+    * Only our own three conformance types qualify. An earlier version was
+      duck-typed on ``.issues``/``.details``/``.code``, which matched far more
+      than intended. ``SpecialistOutputError.details`` in particular carries
+      ``str(exc)`` from a persistence failure, and a SQLAlchemy error
+      stringifies with its SQL parameters, i.e. the extracted envelope. That
+      was a raw curator-content path and it is now closed.
+    * Only the six declared issue keys are copied, each length-capped, so a
+      curator-authored enum list in ``message`` cannot arrive unbounded.
+    * The whole context is size-capped. An unbounded context risks the event
+      being dropped as too_large, which would lose the alert entirely.
     """
     exc_info = (hint or {}).get("exc_info")
     if not isinstance(exc_info, tuple) or len(exc_info) < 2:
         return None
     error = exc_info[1]
-    if error is None:
+    if error is None or not isinstance(error, _owned_conformance_error_types()):
         return None
 
     detail: dict[str, Any] = {}
     issues = getattr(error, "issues", None)
     if isinstance(issues, list) and issues:
-        detail["issues"] = issues[:_MAX_STRUCTURED_ISSUES]
+        bounded = [
+            entry for entry in (_bounded_issue(issue) for issue in issues[:_MAX_STRUCTURED_ISSUES])
+            if entry is not None
+        ]
+        if bounded:
+            detail["issues"] = bounded
         if len(issues) > _MAX_STRUCTURED_ISSUES:
             detail["issues_omitted"] = len(issues) - _MAX_STRUCTURED_ISSUES
-    details = getattr(error, "details", None)
-    if isinstance(details, list) and details:
-        detail["details"] = details[:_MAX_STRUCTURED_ISSUES]
     code = getattr(error, "code", None)
     if isinstance(code, str) and code:
         detail["code"] = code
     unknown_fields = getattr(error, "unknown_fields", None)
     if isinstance(unknown_fields, tuple) and unknown_fields:
-        detail["unknown_fields"] = list(unknown_fields)
+        detail["unknown_fields"] = [str(name)[:200] for name in unknown_fields[:50]]
 
     if not detail:
         return None
     detail["exception_type"] = type(error).__name__
+
+    while len(json.dumps(detail, default=str)) > _MAX_STRUCTURED_DETAIL_CHARS:
+        current = detail.get("issues")
+        if not isinstance(current, list) or len(current) <= 1:
+            detail.pop("issues", None)
+            detail["issues_truncated"] = True
+            break
+        kept = len(current) // 2
+        detail["issues"] = current[:kept]
+        detail["issues_omitted"] = detail.get("issues_omitted", 0) + (len(current) - kept)
     return detail
 
 

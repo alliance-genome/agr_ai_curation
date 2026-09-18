@@ -7,6 +7,7 @@ from typing import Any, Iterable, Sequence
 
 from sqlalchemy.orm import Session
 
+from src.lib.agent_studio.profile_conformance import EnvelopeIntegrityError
 from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.domain_envelope_normalization import (
@@ -348,7 +349,17 @@ def _materialize_extraction_results_to_envelope_refs(
                 persist=persist,
                 db=db,
             )
-        except (ValueError, DomainEnvelopeMaterializationError) as exc:
+        except (
+            ValueError,
+            DomainEnvelopeMaterializationError,
+            EnvelopeIntegrityError,
+        ) as exc:
+            # EnvelopeIntegrityError is a deliberate sibling of
+            # ProfileConformanceError rather than a ValueError subclass
+            # (KANBAN-1773), so it must be named here. Without it, one
+            # contaminated extraction result would fail the whole prep request
+            # instead of being skipped with a warning like every other
+            # unmappable result.
             skipped_unmappable += max(int(extraction_result.candidate_count), 1)
             warnings.append(
                 "Skipped extraction result "
