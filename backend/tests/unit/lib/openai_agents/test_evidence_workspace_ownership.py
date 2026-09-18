@@ -82,6 +82,83 @@ class TestDefect1SpecialistInsertPolicy:
         assert found["verified_quote"] == "Second quote."
 
 
+class TestReplacementPreservesTheRicherCopy:
+    """Review findings on the defect-1 fix. Replacing by ID is not enough.
+
+    record_evidence mutates the workspace dict in place and keeps the revision
+    history there, but strips history from its own tool OUTPUT
+    (record_evidence.py:1208 _strip_hidden_revision_history). The stream
+    handler builds the replacement from that output, so a naive slot
+    replacement swaps the rich copy for the poor one and the audit trail is
+    lost. runner.py:691-699 has exactly this guard; the specialist side needs
+    it too, and more so, because the specialist dict is the only carrier.
+    """
+
+    def test_revision_history_is_carried_forward(self):
+        from src.lib.openai_agents.streaming_tools import _append_live_evidence_record
+
+        history = [{"revision": 1, "previous_source": {"verified_quote": "Old quote."}}]
+        live = [_record(verified_quote="Old quote.", evidence_revision_history=history)]
+
+        # The summary built from the tool output has no history.
+        _append_live_evidence_record(live, _record(verified_quote="Corrected quote."))
+
+        assert live[0]["verified_quote"] == "Corrected quote."
+        assert live[0]["evidence_revision_history"] == history
+
+    def test_incoming_history_wins_when_present(self):
+        from src.lib.openai_agents.streaming_tools import _append_live_evidence_record
+
+        old = [{"revision": 1, "previous_source": {"verified_quote": "First."}}]
+        new = [
+            {"revision": 1, "previous_source": {"verified_quote": "First."}},
+            {"revision": 2, "previous_source": {"verified_quote": "Second."}},
+        ]
+        live = [_record(evidence_revision_history=old)]
+
+        _append_live_evidence_record(live, _record(evidence_revision_history=new))
+
+        assert live[0]["evidence_revision_history"] == new
+
+    def test_a_discarded_record_is_not_resurrected(self):
+        """The id is a content hash, so re-quoting the same span reuses it.
+
+        record_evidence only runs its "discarded evidence cannot be
+        source-updated" guard when the agent supplies an explicit id. Without
+        one, a clean ACTIVE record carrying the same derived id would overwrite
+        the discard and delete discard_reason with it.
+        """
+        from src.lib.openai_agents.streaming_tools import _append_live_evidence_record
+
+        live = [_record(
+            status="discarded",
+            workspace_status="discarded",
+            discard_reason="Superseded by a better quote.",
+            discarded_at="2026-09-18T12:32:00+00:00",
+        )]
+
+        _append_live_evidence_record(live, _record(status="verified"))
+
+        assert live[0]["workspace_status"] == "discarded"
+        assert live[0]["discard_reason"] == "Superseded by a better quote."
+        assert len(live) == 1, "the discard stands; do not append a rival copy either"
+
+    def test_attachment_metadata_is_not_lost(self):
+        from src.lib.openai_agents.streaming_tools import _append_live_evidence_record
+
+        live = [_record(
+            object_id="obj-1",
+            field_path="attributes.symbol",
+            envelope_targets=[{"object_id": "obj-1", "field_path": "attributes.symbol"}],
+        )]
+
+        _append_live_evidence_record(live, _record(verified_quote="Corrected quote."))
+
+        assert live[0]["verified_quote"] == "Corrected quote."
+        assert live[0]["object_id"] == "obj-1"
+        assert live[0]["envelope_targets"][0]["field_path"] == "attributes.symbol"
+
+
 class TestDefect2LifecycleMustNotEnterCanonicalOutput:
     """Defect 2 has no safe local fix, and this test records why.
 

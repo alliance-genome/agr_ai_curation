@@ -3629,6 +3629,26 @@ def _agent_runtime_canonical_agent_key(agent: Agent) -> Optional[str]:
 
 
 
+def _evidence_record_status(record: Dict[str, Any]) -> str:
+    from .evidence_summary import evidence_record_status
+
+    return evidence_record_status(record)
+
+
+#: Attachment metadata the stream summary does not rebuild, so it is carried
+#: forward when a re-record replaces a workspace entry (KANBAN-1775).
+_ATTACHMENT_CARRY_FORWARD_FIELDS = (
+    "object_id",
+    "pending_ref_id",
+    "object_ref",
+    "envelope_target",
+    "envelope_targets",
+    "field_path",
+    "field_paths",
+    "agent_note",
+)
+
+
 def _append_live_evidence_record(
     live_evidence_records: List[Dict[str, Any]],
     evidence_record: Dict[str, Any],
@@ -3641,15 +3661,37 @@ def _append_live_evidence_record(
     evidence_workspace._find_record returns the first match, so a later attach,
     detach or metadata update silently addressed the stale copy.
 
+    Replacement is a merge onto the existing record, not a swap. record_evidence
+    mutates the workspace dict in place and keeps the revision history there,
+    but strips history from its own tool OUTPUT
+    (record_evidence.py:1208 _strip_hidden_revision_history). The replacement is
+    built from that output, so a plain swap would discard the audit trail and
+    the attachment metadata. runner.py:691-699 carries history forward for the
+    same reason; here it matters more, because this dict is the only carrier.
+
+    A discarded record is never overwritten. The evidence ID is a content hash,
+    so re-quoting the same span derives the same ID, and record_evidence only
+    runs its "discarded evidence cannot be source-updated" guard when the agent
+    supplies an explicit ID. Without this check a clean ACTIVE record would
+    overwrite the discard and delete discard_reason with it.
+
     Records with no ID cannot be identified, so they keep append semantics.
     """
     evidence_record_id = str(evidence_record.get("evidence_record_id") or "").strip()
     if evidence_record_id:
         for index, existing in enumerate(live_evidence_records):
             existing_id = str(existing.get("evidence_record_id") or "").strip()
-            if existing_id == evidence_record_id:
-                live_evidence_records[index] = evidence_record
+            if existing_id != evidence_record_id:
+                continue
+            if _evidence_record_status(existing) == "discarded":
                 return
+            merged = dict(existing)
+            merged.update(evidence_record)
+            for carried in ("evidence_revision_history", *_ATTACHMENT_CARRY_FORWARD_FIELDS):
+                if not evidence_record.get(carried) and existing.get(carried):
+                    merged[carried] = copy.deepcopy(existing[carried])
+            live_evidence_records[index] = merged
+            return
     live_evidence_records.append(evidence_record)
 
 

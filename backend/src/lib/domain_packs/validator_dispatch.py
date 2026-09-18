@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Collection, Mapping, Protocol, cast
 
 if TYPE_CHECKING:
     from .profile_validation import ProfileValidationContext
@@ -30,7 +30,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
 )
-from src.schemas.evidence_workspace import strip_workspace_fields
+from src.schemas.evidence_workspace import is_discarded, strip_workspace_fields
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     DomainValidatorResultBase,
@@ -795,16 +795,17 @@ def _apply_validator_evidence_updates_to_envelope(
     envelope: DomainEnvelope,
     items: list[ValidatorResultMaterializationInput],
 ) -> DomainEnvelope:
-    updated_records = _validator_updated_evidence_records_by_id(
+    updated_records, discarded_ids = _validator_updated_evidence_records_by_id(
         items,
         current=_envelope_evidence_records_by_id(envelope),
     )
-    if not updated_records:
+    if not updated_records and not discarded_ids:
         return envelope
 
     metadata, metadata_changed = _replace_evidence_records_in_mapping(
         envelope.metadata,
         updated_records,
+        discarded_ids,
     )
     changed = metadata_changed
     objects: list[CuratableObjectEnvelope] = []
@@ -812,10 +813,12 @@ def _apply_validator_evidence_updates_to_envelope(
         payload, payload_changed = _replace_evidence_records_in_mapping(
             domain_object.payload,
             updated_records,
+            discarded_ids,
         )
         object_metadata, object_metadata_changed = _replace_evidence_records_in_mapping(
             domain_object.metadata,
             updated_records,
+            discarded_ids,
         )
         if payload_changed or object_metadata_changed:
             domain_object = domain_object.model_copy(
@@ -876,7 +879,7 @@ def _validator_updated_evidence_records_by_id(
     items: list[ValidatorResultMaterializationInput],
     *,
     current: Mapping[str, Mapping[str, Any]] | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """Collect validator-changed evidence, projected to canonical provenance.
 
     The validator mutates the same dictionaries it received as its workspace
@@ -893,10 +896,19 @@ def _validator_updated_evidence_records_by_id(
     """
     current = current or {}
     updated_records: dict[str, dict[str, Any]] = {}
+    discarded_ids: set[str] = set()
     for item in items:
         for record in item.request.evidence:
             evidence_record_id = _optional_string(record.get("evidence_record_id"))
             if not evidence_record_id:
+                continue
+            # A discard is invisible to the comparison below, because every key
+            # it writes (status, workspace_status, discard_reason, discarded_at)
+            # is workspace-only and is stripped from both sides. Lifecycle is
+            # therefore read before projecting, exactly as the pack
+            # materializers do.
+            if is_discarded(record):
+                discarded_ids.add(evidence_record_id)
                 continue
             projected = strip_workspace_fields(record)
             existing = current.get(evidence_record_id)
@@ -905,12 +917,13 @@ def _validator_updated_evidence_records_by_id(
             if existing is not None and strip_workspace_fields(existing) == projected:
                 continue
             updated_records[evidence_record_id] = projected
-    return updated_records
+    return updated_records, discarded_ids
 
 
 def _replace_evidence_records_in_mapping(
     value: Mapping[str, Any],
     updated_records: Mapping[str, dict[str, Any]],
+    discarded_ids: Collection[str] = (),
 ) -> tuple[dict[str, Any], bool]:
     payload = dict(value)
     changed = False
@@ -926,6 +939,12 @@ def _replace_evidence_records_in_mapping(
                     if evidence_record_id
                     else None
                 )
+                if evidence_record_id and evidence_record_id in discarded_ids:
+                    # A validator discarded this evidence, so it stops being
+                    # active support. Dropping it here is what makes a discard
+                    # visible in the envelope at all.
+                    changed = True
+                    continue
                 if replacement is not None:
                     replaced_records.append(copy.deepcopy(replacement))
                     changed = True
@@ -940,6 +959,7 @@ def _replace_evidence_records_in_mapping(
             _replace_evidence_records_in_mapping(
                 extraction_metadata,
                 updated_records,
+                discarded_ids,
             )
         )
         if extraction_changed:

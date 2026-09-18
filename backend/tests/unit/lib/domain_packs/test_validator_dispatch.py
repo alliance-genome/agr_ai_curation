@@ -3769,3 +3769,32 @@ def test_written_back_evidence_is_projected_to_canonical_provenance():
     assert written["source_span_ids"] == ["span-1"]
     for field in ("status", "span_ids", "updated_at"):
         assert field not in written
+
+
+def test_a_discarded_record_is_written_back():
+    """Review finding: the new gate misses a discard, like the old one did.
+
+    discard writes status/workspace_status/discard_reason/discarded_at, all of
+    which are workspace-only keys. strip_workspace_fields removes them from
+    BOTH sides of the comparison, so a discarded record compares equal to its
+    active envelope copy and nothing is written back.
+
+    Validators hold no discard tool today, so this is latent. It is exactly the
+    latency the previous commit claimed to remove.
+    """
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+    discarded = {
+        **_canonical_evidence(),
+        "status": "discarded",
+        "workspace_status": "discarded",
+        "discard_reason": "Superseded by a better quote.",
+        "discarded_at": "2026-09-18T12:32:00+00:00",
+    }
+
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([discarded])
+    )
+
+    assert updated is not envelope, "a discard must reach the envelope"
+    records = updated.extracted_objects[0].payload["evidence_records"]
+    assert records == [], "discarded evidence must not remain as active support"
