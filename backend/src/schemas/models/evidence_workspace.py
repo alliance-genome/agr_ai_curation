@@ -18,7 +18,7 @@ serialization policy, so callers keep their own rules.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from pydantic import ValidationError
 
@@ -29,6 +29,7 @@ __all__ = [
     "EvidenceIntegrityError",
     "canonical_evidence_payload",
     "is_discarded",
+    "normalize_workspace_records",
     "project_to_provenance",
     "try_project_to_provenance",
 ]
@@ -85,28 +86,34 @@ def is_discarded(record: Any) -> bool:
     return str(state).strip() == "discarded"
 
 
-def project_to_provenance(record: Any) -> EvidenceRecord:
+def project_to_provenance(record: Any, *, strict: bool = True) -> EvidenceRecord:
     """Convert one internal workspace record into canonical provenance.
 
-    Raises ``EvidenceIntegrityError`` when the record carries a field that is
-    neither canonical provenance nor known workspace state, or when the
-    projected payload fails ``EvidenceRecord``. An unexpected field is a defect
-    in a writer, so it surfaces instead of being dropped.
+    With ``strict`` (the default, used at the canonical envelope boundary) a
+    field that is neither canonical provenance nor known workspace state raises
+    ``EvidenceIntegrityError``, because an unexpected field is a writer defect
+    and must not be swallowed.
+
+    With ``strict=False`` an unexpected field is filtered out instead, which is
+    what the domain-pack materializers did with their own ``allowed_fields``
+    copies. Their callers already drop a record they cannot validate, so raising
+    there would turn one bad record into a failed extraction.
     """
     if not isinstance(record, Mapping):
         raise EvidenceIntegrityError(
             f"Evidence record must be a mapping, got {type(record).__name__}"
         )
 
-    unknown = tuple(sorted(
-        str(key) for key in record
-        if key not in _CANONICAL_FIELDS and key not in WORKSPACE_ONLY_FIELDS
-    ))
-    if unknown:
-        raise EvidenceIntegrityError(
-            "Evidence record carries unknown field(s): " + ", ".join(unknown),
-            unknown_fields=unknown,
-        )
+    if strict:
+        unknown = tuple(sorted(
+            str(key) for key in record
+            if key not in _CANONICAL_FIELDS and key not in WORKSPACE_ONLY_FIELDS
+        ))
+        if unknown:
+            raise EvidenceIntegrityError(
+                "Evidence record carries unknown field(s): " + ", ".join(unknown),
+                unknown_fields=unknown,
+            )
 
     payload: dict[str, Any] = {
         key: value
@@ -149,3 +156,60 @@ def canonical_evidence_payload(record: Any) -> dict[str, Any]:
     already emit, so envelope payloads keep their current shape.
     """
     return project_to_provenance(record).model_dump(mode="json", exclude_none=True)
+
+
+def normalize_workspace_records(
+    records: Iterable[Any],
+    *,
+    admit: Callable[[EvidenceRecord], bool] | None = None,
+    on_drop: Callable[[str, Exception | None], None] | None = None,
+    strict: bool = False,
+) -> list[dict[str, Any]]:
+    """Select, project, de-duplicate and serialize a workspace collection.
+
+    This replaces the seven identical ``allowed_fields = set(EvidenceRecord.model_fields)``
+    loops that each domain pack carried. The loop order is preserved exactly,
+    because the packs depend on it:
+
+    1. Skip anything that is not a mapping.
+    2. Skip discarded records, reading lifecycle state *before* projecting.
+       Canonical provenance has no lifecycle field to select on afterwards.
+    3. Require a non-empty ``evidence_record_id`` that has not been kept yet.
+    4. Project to canonical provenance; drop the record if that fails.
+    5. Apply the caller's ``admit`` predicate.
+    6. Only then mark the ID as seen, so a rejected record does not consume it.
+
+    ``admit`` carries per-pack policy: GO requires a verified quote
+    (go/conversion.py:610). ``on_drop`` carries per-pack reporting:
+    gene_expression logs a warning (gene_expression/conversion.py:913). Chat has
+    a stricter policy still and supplies its own predicate.
+    """
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        if is_discarded(record):
+            continue
+
+        evidence_id = str(record.get("evidence_record_id") or "").strip()
+        if not evidence_id or evidence_id in seen:
+            continue
+
+        try:
+            projected = project_to_provenance(record, strict=strict)
+        except EvidenceIntegrityError as exc:
+            if strict:
+                raise
+            if on_drop is not None:
+                on_drop(evidence_id, exc)
+            continue
+
+        if admit is not None and not admit(projected):
+            continue
+
+        seen.add(evidence_id)
+        normalized.append(projected.model_dump(mode="json", exclude_none=True))
+
+    return normalized

@@ -140,3 +140,94 @@ class TestLifecycle:
 
     def test_tolerates_surrounding_whitespace(self):
         assert is_discarded({"status": "  discarded  "}) is True
+
+
+class TestNormalizeWorkspaceRecords:
+    """The shared replacement for the seven duplicated pack whitelists.
+
+    Each pack keeps its own admission policy; this helper owns selection order,
+    projection, de-duplication and serialization.
+    """
+
+    def _records(self):
+        return [
+            _workspace_record(),
+            _workspace_record(evidence_record_id="evidence-2", entity="Wnt1"),
+        ]
+
+    def test_projects_and_serializes_each_record(self):
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        out = normalize_workspace_records(self._records())
+        assert [r["evidence_record_id"] for r in out] == ["evidence-24d4a4973cd8d45f", "evidence-2"]
+        assert all("span_ids" not in r and "status" not in r for r in out)
+
+    def test_skips_non_mappings(self):
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        assert normalize_workspace_records(["nonsense", None, _workspace_record()]) != []
+        assert len(normalize_workspace_records(["nonsense", None, _workspace_record()])) == 1
+
+    def test_skips_discarded_before_projecting(self):
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        records = [_workspace_record(workspace_status="discarded", status="discarded")]
+        assert normalize_workspace_records(records) == []
+
+    def test_requires_an_evidence_record_id(self):
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        records = [_workspace_record(evidence_record_id="  ")]
+        assert normalize_workspace_records(records) == []
+
+    def test_keeps_first_of_a_duplicate_id(self):
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        records = [_workspace_record(entity="first"), _workspace_record(entity="second")]
+        out = normalize_workspace_records(records)
+        assert len(out) == 1
+        assert out[0]["entity"] == "first"
+
+    def test_admission_predicate_can_reject_a_valid_record(self):
+        """GO drops evidence with no verified quote (go/conversion.py:610)."""
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        records = [_workspace_record(verified_quote=None)]
+        assert normalize_workspace_records(records) != []
+        assert normalize_workspace_records(records, admit=lambda r: bool(r.verified_quote)) == []
+
+    def test_rejected_record_does_not_consume_its_id(self):
+        """Matches the packs: seen.add happens only after validation and admission."""
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        records = [
+            _workspace_record(verified_quote=None),
+            _workspace_record(verified_quote="A real quote."),
+        ]
+        out = normalize_workspace_records(records, admit=lambda r: bool(r.verified_quote))
+        assert len(out) == 1
+        assert out[0]["verified_quote"] == "A real quote."
+
+    def test_on_drop_is_notified_for_a_malformed_record(self):
+        """gene_expression logs before dropping (gene_expression/conversion.py:913)."""
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        dropped = []
+        records = [_workspace_record(page="not an integer")]
+        out = normalize_workspace_records(records, on_drop=lambda rid, exc: dropped.append(rid))
+        assert out == []
+        assert dropped == ["evidence-24d4a4973cd8d45f"]
+
+    def test_unknown_field_is_stripped_not_dropped_by_default(self):
+        """Preserves current pack behavior: the whitelist ignored unknown keys."""
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        out = normalize_workspace_records([_workspace_record(mystery_field="surprise")])
+        assert len(out) == 1
+        assert "mystery_field" not in out[0]
+
+    def test_strict_mode_surfaces_an_unknown_field(self):
+        from src.schemas.models.evidence_workspace import normalize_workspace_records
+
+        with pytest.raises(EvidenceIntegrityError):
+            normalize_workspace_records([_workspace_record(mystery_field="surprise")], strict=True)
