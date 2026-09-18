@@ -9,7 +9,7 @@ import pytest
 
 from src.lib.openai_agents.evidence_summary import _copy_workspace_metadata_fields
 from src.lib.openai_agents.tools import evidence_workspace as workspace_module
-from src.schemas.models.evidence_workspace import WORKSPACE_ONLY_FIELDS
+from src.schemas.evidence_workspace import WORKSPACE_ONLY_FIELDS
 
 
 @pytest.fixture

@@ -18,7 +18,9 @@ from typing import Any, Mapping
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "extraction_trace_event.v1"
-DEFAULT_PREVIEW_LIMIT = 1200
+DEFAULT_PREVIEW_LIMIT = 100000
+DEFAULT_MAX_DEPTH = 64
+DEFAULT_MAX_LIST_ITEMS = 5000
 DEFAULT_PAYLOAD_SIZE_LOG_THRESHOLD_CHARS = 500_000
 MAX_EVENTS_PER_TRACE = 10000
 _SECRET_KEY_PATTERN = re.compile(
@@ -53,9 +55,40 @@ def _preview_limit() -> int:
     if not raw:
         return DEFAULT_PREVIEW_LIMIT
     try:
-        return max(100, min(int(raw), 10000))
+        return max(100, min(int(raw), 1000000))
     except ValueError:
         return DEFAULT_PREVIEW_LIMIT
+
+
+def _max_depth() -> int:
+    """Nesting depth captured in a trace event payload.
+
+    KANBAN-1771. Was a hardcoded 6, which replaced a nested validation reason
+    with "<redacted:depth_limit>" before it could be read. Bounded so one event
+    cannot recurse without limit.
+    """
+    raw = os.getenv("EXTRACTION_TRACE_EVENT_MAX_DEPTH", "").strip()
+    if not raw:
+        return DEFAULT_MAX_DEPTH
+    try:
+        return max(1, min(int(raw), 512))
+    except ValueError:
+        return DEFAULT_MAX_DEPTH
+
+
+def _max_list_items() -> int:
+    """List entries captured in a trace event payload.
+
+    KANBAN-1771. Was a hardcoded 25, so a 128-tool-call run lost most of its
+    calls before anyone could read them.
+    """
+    raw = os.getenv("EXTRACTION_TRACE_EVENT_MAX_LIST_ITEMS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_LIST_ITEMS
+    try:
+        return max(1, min(int(raw), 100000))
+    except ValueError:
+        return DEFAULT_MAX_LIST_ITEMS
 
 
 def _payload_size_log_threshold_chars() -> int:
@@ -129,8 +162,13 @@ def _is_secret_key(key: str) -> bool:
 
 
 def _redact_value(value: Any, *, depth: int = 0) -> Any:
+    # KANBAN-1771. These payloads carry no curator or personal data, and the
+    # old caps (depth 6, 1200-char previews, 25 list items) removed exactly the
+    # field paths and reason codes needed to diagnose a production failure.
+    # Capture is now generous by default and still bounded, so one event cannot
+    # grow without limit. Credential-shaped keys stay redacted.
     limit = _preview_limit()
-    if depth > 6:
+    if depth > _max_depth():
         return "<redacted:depth_limit>"
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -154,9 +192,10 @@ def _redact_value(value: Any, *, depth: int = 0) -> Any:
         return redacted
     if isinstance(value, (list, tuple)):
         items = list(value)
-        visible = [_redact_value(item, depth=depth + 1) for item in items[:25]]
-        if len(items) > 25:
-            visible.append({"truncated": True, "omitted_count": len(items) - 25})
+        max_items = _max_list_items()
+        visible = [_redact_value(item, depth=depth + 1) for item in items[:max_items]]
+        if len(items) > max_items:
+            visible.append({"truncated": True, "omitted_count": len(items) - max_items})
         return visible
     if hasattr(value, "model_dump"):
         try:

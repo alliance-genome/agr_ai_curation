@@ -4011,15 +4011,22 @@ async def _dispatch_domain_envelope_validators_for_chat(
             exc,
             exc_info=exc,
         )
+        specialist_error_details: Dict[str, Any] = {
+            "specialist": specialist_name,
+            "error": f"Domain-envelope validator dispatch failed: {exc}",
+            "reason": "domain_validator_dispatch_failed",
+            "severity": "error",
+        }
+        # KANBAN-1771. A typed error already knows the field path and reason.
+        # Carry it onto the stored event instead of leaving only the message,
+        # so a later trace review does not need a live reproduction.
+        structured_issues = getattr(exc, "issues", None)
+        if isinstance(structured_issues, list) and structured_issues:
+            specialist_error_details["conformanceIssues"] = structured_issues[:50]
         add_specialist_event({
             "type": "SPECIALIST_ERROR",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "details": {
-                "specialist": specialist_name,
-                "error": f"Domain-envelope validator dispatch failed: {exc}",
-                "reason": "domain_validator_dispatch_failed",
-                "severity": "error",
-            },
+            "details": specialist_error_details,
         })
         raise SpecialistOutputError(
             specialist_name=specialist_name,

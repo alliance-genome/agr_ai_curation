@@ -37,7 +37,7 @@ from src.schemas.domain_envelope import (
     SchemaRef,
 )
 from src.schemas.models.base import EvidenceRecord
-from src.schemas.models.evidence_workspace import normalize_workspace_records
+from src.schemas.evidence_workspace import normalize_workspace_records
 
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,

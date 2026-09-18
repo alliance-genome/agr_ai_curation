@@ -1640,6 +1640,50 @@ def _add_safe_log_event_title(event: dict[str, Any]) -> None:
     }
 
 
+_MAX_STRUCTURED_ISSUES = 50
+
+
+def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Pull machine-readable detail off our own typed exceptions.
+
+    KANBAN-1771. The conformance and integrity errors already carry the exact
+    field path, reason, expected shape and actual kind, but none of it reached
+    Sentry: the message is replaced wholesale during scrubbing, so an alert
+    said only "Record does not conform to its saved output structure" while the
+    offending field stayed unknown.
+
+    This reads our own error types, so the values are field paths and reason
+    codes rather than curator or document content.
+    """
+    exc_info = (hint or {}).get("exc_info")
+    if not isinstance(exc_info, tuple) or len(exc_info) < 2:
+        return None
+    error = exc_info[1]
+    if error is None:
+        return None
+
+    detail: dict[str, Any] = {}
+    issues = getattr(error, "issues", None)
+    if isinstance(issues, list) and issues:
+        detail["issues"] = issues[:_MAX_STRUCTURED_ISSUES]
+        if len(issues) > _MAX_STRUCTURED_ISSUES:
+            detail["issues_omitted"] = len(issues) - _MAX_STRUCTURED_ISSUES
+    details = getattr(error, "details", None)
+    if isinstance(details, list) and details:
+        detail["details"] = details[:_MAX_STRUCTURED_ISSUES]
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and code:
+        detail["code"] = code
+    unknown_fields = getattr(error, "unknown_fields", None)
+    if isinstance(unknown_fields, tuple) and unknown_fields:
+        detail["unknown_fields"] = list(unknown_fields)
+
+    if not detail:
+        return None
+    detail["exception_type"] = type(error).__name__
+    return detail
+
+
 def before_send(
     event: dict[str, Any],
     hint: dict[str, Any] | None = None,
@@ -1654,6 +1698,13 @@ def before_send(
     scrubbed = _redact_event(enriched)
     if isinstance((hint or {}).get("log_record"), logging.LogRecord):
         _add_safe_log_event_title(scrubbed)
+    # Attached after scrubbing on purpose: this is our own structured detail,
+    # and routing it through the content scrubber is what removed it before.
+    structured_detail = _structured_error_detail(hint)
+    if structured_detail:
+        contexts = scrubbed.setdefault("contexts", {})
+        if isinstance(contexts, dict):
+            contexts["error_detail"] = structured_detail
     return scrubbed
 
 

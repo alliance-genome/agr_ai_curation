@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.schemas.models.base import EvidenceRecord
-from src.schemas.models.evidence_workspace import (
+from src.schemas.evidence_workspace import (
     WORKSPACE_ONLY_FIELDS,
     EvidenceIntegrityError,
     canonical_evidence_payload,
@@ -156,32 +156,32 @@ class TestNormalizeWorkspaceRecords:
         ]
 
     def test_projects_and_serializes_each_record(self):
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         out = normalize_workspace_records(self._records())
         assert [r["evidence_record_id"] for r in out] == ["evidence-24d4a4973cd8d45f", "evidence-2"]
         assert all("span_ids" not in r and "status" not in r for r in out)
 
     def test_skips_non_mappings(self):
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         assert normalize_workspace_records(["nonsense", None, _workspace_record()]) != []
         assert len(normalize_workspace_records(["nonsense", None, _workspace_record()])) == 1
 
     def test_skips_discarded_before_projecting(self):
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         records = [_workspace_record(workspace_status="discarded", status="discarded")]
         assert normalize_workspace_records(records) == []
 
     def test_requires_an_evidence_record_id(self):
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         records = [_workspace_record(evidence_record_id="  ")]
         assert normalize_workspace_records(records) == []
 
     def test_keeps_first_of_a_duplicate_id(self):
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         records = [_workspace_record(entity="first"), _workspace_record(entity="second")]
         out = normalize_workspace_records(records)
@@ -190,7 +190,7 @@ class TestNormalizeWorkspaceRecords:
 
     def test_admission_predicate_can_reject_a_valid_record(self):
         """GO drops evidence with no verified quote (go/conversion.py:610)."""
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         records = [_workspace_record(verified_quote=None)]
         assert normalize_workspace_records(records) != []
@@ -198,7 +198,7 @@ class TestNormalizeWorkspaceRecords:
 
     def test_rejected_record_does_not_consume_its_id(self):
         """Matches the packs: seen.add happens only after validation and admission."""
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         records = [
             _workspace_record(verified_quote=None),
@@ -210,7 +210,7 @@ class TestNormalizeWorkspaceRecords:
 
     def test_on_drop_is_notified_for_a_malformed_record(self):
         """gene_expression logs before dropping (gene_expression/conversion.py:913)."""
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         dropped = []
         records = [_workspace_record(page="not an integer")]
@@ -220,14 +220,14 @@ class TestNormalizeWorkspaceRecords:
 
     def test_unknown_field_is_stripped_not_dropped_by_default(self):
         """Preserves current pack behavior: the whitelist ignored unknown keys."""
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         out = normalize_workspace_records([_workspace_record(mystery_field="surprise")])
         assert len(out) == 1
         assert "mystery_field" not in out[0]
 
     def test_strict_mode_surfaces_an_unknown_field(self):
-        from src.schemas.models.evidence_workspace import normalize_workspace_records
+        from src.schemas.evidence_workspace import normalize_workspace_records
 
         with pytest.raises(EvidenceIntegrityError):
             normalize_workspace_records([_workspace_record(mystery_field="surprise")], strict=True)
@@ -237,7 +237,7 @@ class TestStripWorkspaceFields:
     """The surgical update path, used when a record already lives in an envelope."""
 
     def test_removes_every_workspace_field(self):
-        from src.schemas.models.evidence_workspace import strip_workspace_fields
+        from src.schemas.evidence_workspace import strip_workspace_fields
 
         stripped = strip_workspace_fields(_workspace_record())
         for field in WORKSPACE_ONLY_FIELDS:
@@ -248,26 +248,26 @@ class TestStripWorkspaceFields:
 
         project_to_provenance would delete this; the write-back must not.
         """
-        from src.schemas.models.evidence_workspace import strip_workspace_fields
+        from src.schemas.evidence_workspace import strip_workspace_fields
 
         stripped = strip_workspace_fields(_workspace_record(quote="A pack-specific key."))
         assert stripped["quote"] == "A pack-specific key."
 
     def test_adopts_the_span_alias_when_canonical_is_absent(self):
-        from src.schemas.models.evidence_workspace import strip_workspace_fields
+        from src.schemas.evidence_workspace import strip_workspace_fields
 
         record = _workspace_record()
         del record["source_span_ids"]
         assert strip_workspace_fields(record)["source_span_ids"] == ["span-1", "span-2"]
 
     def test_canonical_span_list_wins(self):
-        from src.schemas.models.evidence_workspace import strip_workspace_fields
+        from src.schemas.evidence_workspace import strip_workspace_fields
 
         record = _workspace_record(source_span_ids=["span-9"], span_ids=["span-1"])
         assert strip_workspace_fields(record)["source_span_ids"] == ["span-9"]
 
     def test_does_not_mutate_the_input(self):
-        from src.schemas.models.evidence_workspace import strip_workspace_fields
+        from src.schemas.evidence_workspace import strip_workspace_fields
 
         record = _workspace_record()
         strip_workspace_fields(record)
@@ -275,6 +275,6 @@ class TestStripWorkspaceFields:
         assert record["span_ids"] == ["span-1", "span-2"]
 
     def test_result_passes_the_strict_evidence_model(self):
-        from src.schemas.models.evidence_workspace import strip_workspace_fields
+        from src.schemas.evidence_workspace import strip_workspace_fields
 
         EvidenceRecord.model_validate(strip_workspace_fields(_workspace_record()))

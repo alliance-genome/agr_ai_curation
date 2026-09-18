@@ -30,7 +30,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
 )
-from src.schemas.models.evidence_workspace import strip_workspace_fields
+from src.schemas.evidence_workspace import strip_workspace_fields
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     DomainValidatorResultBase,
