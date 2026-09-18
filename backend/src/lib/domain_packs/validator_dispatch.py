@@ -820,11 +820,23 @@ def _apply_validator_evidence_updates_to_envelope(
             updated_records,
             discarded_ids,
         )
-        if payload_changed or object_metadata_changed:
+        # Dropping a discarded record without pruning its ID would leave a
+        # dangling reference. The gene_expression pack raises
+        # alliance.gene_expression.evidence_records_missing (BLOCKER) for that
+        # state, and inspect_results reports a runtime exception when it cannot
+        # resolve the ID to text, so a normal discard would manufacture a
+        # non-repairable finding and a false alert.
+        retained_ids = [
+            record_id for record_id in (domain_object.evidence_record_ids or [])
+            if record_id not in discarded_ids
+        ]
+        references_changed = retained_ids != list(domain_object.evidence_record_ids or [])
+        if payload_changed or object_metadata_changed or references_changed:
             domain_object = domain_object.model_copy(
                 update={
                     "payload": payload,
                     "metadata": object_metadata,
+                    "evidence_record_ids": retained_ids,
                 }
             )
             changed = True

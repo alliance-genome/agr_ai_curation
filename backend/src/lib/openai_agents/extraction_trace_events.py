@@ -22,6 +22,9 @@ DEFAULT_PREVIEW_LIMIT = 100000
 DEFAULT_MAX_DEPTH = 64
 DEFAULT_MAX_LIST_ITEMS = 5000
 DEFAULT_MAX_TOTAL_CHARS = 5_000_000
+MAX_TOTAL_CHARS_CEILING = 50_000_000
+_BUDGET_SENTINEL = "<truncated:budget>"
+_BUDGET_KEY = "__truncated_budget__"
 DEFAULT_PAYLOAD_SIZE_LOG_THRESHOLD_CHARS = 500_000
 MAX_EVENTS_PER_TRACE = 10000
 _SECRET_KEY_PATTERN = re.compile(
@@ -107,7 +110,7 @@ def _max_total_chars() -> int:
     if not raw:
         return DEFAULT_MAX_TOTAL_CHARS
     try:
-        return max(10_000, int(raw))
+        return max(10_000, min(int(raw), MAX_TOTAL_CHARS_CEILING))
     except ValueError:
         return DEFAULT_MAX_TOTAL_CHARS
 
@@ -182,11 +185,14 @@ def _is_secret_key(key: str) -> bool:
     return bool(_SECRET_KEY_PATTERN.search(key))
 
 
-def _redact_value(value: Any, *, depth: int = 0) -> Any:
-    """Redact one payload, bounded by a total serialized-size budget."""
-    if depth == 0:
-        return _redact_with_budget(value, _Budget(_max_total_chars()))
-    return _redact_with_budget(value, _Budget(_max_total_chars()), depth=depth)
+def _redact_value(value: Any, *, budget: "_Budget | None" = None) -> Any:
+    """Redact one payload, bounded by a total serialized-size budget.
+
+    The previous signature took a `depth`, and any caller passing one silently
+    got a brand-new budget. Recursion belongs to _redact_with_budget; callers
+    that need to share one budget across several payloads pass it explicitly.
+    """
+    return _redact_with_budget(value, budget or _Budget(_max_total_chars()))
 
 
 class _Budget:
@@ -216,7 +222,10 @@ def _redact_with_budget(value: Any, budget: _Budget, *, depth: int = 0) -> Any:
     if isinstance(value, str):
         compact = " ".join(value.split())
         if not budget.take(len(compact)):
-            return {"truncated": True, "reason": "budget", "length": len(compact)}
+            # A dict marker would serialize LARGER than the short string it
+            # replaces, so exhaustion would inflate the payload instead of
+            # bounding it. Use a bare sentinel.
+            return _BUDGET_SENTINEL
         if len(compact) > limit:
             return {
                 "preview": compact[:limit],
@@ -228,6 +237,11 @@ def _redact_with_budget(value: Any, budget: _Budget, *, depth: int = 0) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
+            # Keys are payload too. Without charging them, a mapping of a
+            # million short keys costs nothing and the budget bounds nothing.
+            if not budget.take(len(key_text) + 4):
+                redacted[_BUDGET_KEY] = True
+                break
             if _is_secret_key(key_text):
                 redacted[key_text] = "<redacted>"
             else:
@@ -239,7 +253,7 @@ def _redact_with_budget(value: Any, budget: _Budget, *, depth: int = 0) -> Any:
         visible = []
         for item in items[:max_items]:
             if budget.remaining <= 0:
-                visible.append({"truncated": True, "reason": "budget"})
+                visible.append(_BUDGET_SENTINEL)
                 break
             visible.append(_redact_with_budget(item, budget, depth=depth + 1))
         if len(items) > max_items:

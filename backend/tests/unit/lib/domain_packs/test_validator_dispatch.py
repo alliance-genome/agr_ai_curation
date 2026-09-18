@@ -3798,3 +3798,43 @@ def test_a_discarded_record_is_written_back():
     assert updated is not envelope, "a discard must reach the envelope"
     records = updated.extracted_objects[0].payload["evidence_records"]
     assert records == [], "discarded evidence must not remain as active support"
+
+
+def test_a_discard_prunes_the_object_reference():
+    """Second-review finding C1: dropping the record orphaned its ID.
+
+    CuratableObjectEnvelope.evidence_record_ids was never pruned, so a discard
+    left a dangling reference. gene_expression/conversion.py:1693 raises
+    alliance.gene_expression.evidence_records_missing (severity BLOCKER) for
+    exactly that state, and inspect_results reports a runtime exception to
+    Sentry when it cannot resolve the id to text. A normal curator action would
+    have manufactured a non-repairable blocker and a false alert.
+    """
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+    assert envelope.extracted_objects[0].evidence_record_ids == ["evidence-1"]
+
+    discarded = {
+        **_canonical_evidence(),
+        "status": "discarded",
+        "workspace_status": "discarded",
+        "discard_reason": "Superseded by a better quote.",
+    }
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([discarded])
+    )
+
+    assert updated.extracted_objects[0].payload["evidence_records"] == []
+    assert updated.extracted_objects[0].evidence_record_ids == [], (
+        "a dropped record must not leave a dangling reference"
+    )
+
+
+def test_an_update_leaves_the_object_reference_intact():
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+    mutated = _canonical_evidence(verified_quote="Corrected quote.")
+
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([mutated])
+    )
+
+    assert updated.extracted_objects[0].evidence_record_ids == ["evidence-1"]

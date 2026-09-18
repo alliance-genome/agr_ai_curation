@@ -408,14 +408,31 @@ class TestTraceEventTotalBudget:
         assert redacted["tool_calls"][0]["text"] == "x" * 2000
 
     def test_a_pathological_payload_is_bounded(self, monkeypatch):
-        import json
-
         monkeypatch.delenv("EXTRACTION_TRACE_EVENT_MAX_TOTAL_CHARS", raising=False)
         payload = {"chunks": [{"text": "x" * 100_000} for _ in range(5000)]}
 
         redacted = trace_events._redact_value(payload)
 
         assert len(json.dumps(redacted, default=str)) <= trace_events.DEFAULT_MAX_TOTAL_CHARS * 2
+
+    def test_many_small_keys_cannot_evade_the_budget(self, monkeypatch):
+        """Review finding C2: keys were never charged, so a wide dict was free."""
+        monkeypatch.setenv("EXTRACTION_TRACE_EVENT_MAX_TOTAL_CHARS", "50000")
+        payload = {f"key_number_{index:08d}": index for index in range(200_000)}
+
+        redacted = trace_events._redact_value(payload)
+
+        assert len(json.dumps(redacted, default=str)) < 2_000_000
+
+    def test_many_short_strings_cannot_inflate_past_the_budget(self, monkeypatch):
+        """Review finding C2: the dict marker was larger than the string it replaced."""
+        monkeypatch.setenv("EXTRACTION_TRACE_EVENT_MAX_TOTAL_CHARS", "50000")
+        payload = {"values": ["x" * 20 for _ in range(200_000)]}
+
+        raw = len(json.dumps(payload))
+        redacted = trace_events._redact_value(payload)
+
+        assert len(json.dumps(redacted, default=str)) < raw
 
     def test_the_budget_is_configurable(self, monkeypatch):
         import json

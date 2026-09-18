@@ -3684,6 +3684,17 @@ def _append_live_evidence_record(
             if existing_id != evidence_record_id:
                 continue
             if _evidence_record_status(existing) == "discarded":
+                # The agent was told this record was verified, because
+                # record_evidence only runs its discard guard when an explicit
+                # ID is supplied and this path derives the ID from content.
+                # Keep the discard authoritative, but say so: a later
+                # requires_evidence or unverified_record_ids failure is
+                # otherwise untraceable.
+                logger.warning(
+                    "Keeping discarded evidence %s; a re-record with a derived "
+                    "ID tried to replace it as active",
+                    evidence_record_id,
+                )
                 return
             merged = dict(existing)
             merged.update(evidence_record)
