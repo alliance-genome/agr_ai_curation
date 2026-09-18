@@ -774,7 +774,6 @@ async def test_search_tool_reports_one_sentry_event_after_deadline_retry_fails(m
     import asyncio
     import logging
     from contextlib import contextmanager
-    from types import SimpleNamespace
     from unittest.mock import MagicMock, patch
 
     import grpc
