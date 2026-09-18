@@ -231,3 +231,50 @@ class TestNormalizeWorkspaceRecords:
 
         with pytest.raises(EvidenceIntegrityError):
             normalize_workspace_records([_workspace_record(mystery_field="surprise")], strict=True)
+
+
+class TestStripWorkspaceFields:
+    """The surgical update path, used when a record already lives in an envelope."""
+
+    def test_removes_every_workspace_field(self):
+        from src.schemas.models.evidence_workspace import strip_workspace_fields
+
+        stripped = strip_workspace_fields(_workspace_record())
+        for field in WORKSPACE_ONLY_FIELDS:
+            assert field not in stripped
+
+    def test_preserves_an_unrecognized_key(self):
+        """Domain-pack payload evidence is not a closed namespace.
+
+        project_to_provenance would delete this; the write-back must not.
+        """
+        from src.schemas.models.evidence_workspace import strip_workspace_fields
+
+        stripped = strip_workspace_fields(_workspace_record(quote="A pack-specific key."))
+        assert stripped["quote"] == "A pack-specific key."
+
+    def test_adopts_the_span_alias_when_canonical_is_absent(self):
+        from src.schemas.models.evidence_workspace import strip_workspace_fields
+
+        record = _workspace_record()
+        del record["source_span_ids"]
+        assert strip_workspace_fields(record)["source_span_ids"] == ["span-1", "span-2"]
+
+    def test_canonical_span_list_wins(self):
+        from src.schemas.models.evidence_workspace import strip_workspace_fields
+
+        record = _workspace_record(source_span_ids=["span-9"], span_ids=["span-1"])
+        assert strip_workspace_fields(record)["source_span_ids"] == ["span-9"]
+
+    def test_does_not_mutate_the_input(self):
+        from src.schemas.models.evidence_workspace import strip_workspace_fields
+
+        record = _workspace_record()
+        strip_workspace_fields(record)
+        assert record["status"] == "verified"
+        assert record["span_ids"] == ["span-1", "span-2"]
+
+    def test_result_passes_the_strict_evidence_model(self):
+        from src.schemas.models.evidence_workspace import strip_workspace_fields
+
+        EvidenceRecord.model_validate(strip_workspace_fields(_workspace_record()))

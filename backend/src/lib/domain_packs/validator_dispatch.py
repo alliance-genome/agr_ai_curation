@@ -30,7 +30,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
 )
-from src.schemas.models.evidence_workspace import canonical_evidence_payload
+from src.schemas.models.evidence_workspace import strip_workspace_fields
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     DomainValidatorResultBase,
@@ -795,7 +795,10 @@ def _apply_validator_evidence_updates_to_envelope(
     envelope: DomainEnvelope,
     items: list[ValidatorResultMaterializationInput],
 ) -> DomainEnvelope:
-    updated_records = _validator_updated_evidence_records_by_id(items)
+    updated_records = _validator_updated_evidence_records_by_id(
+        items,
+        current=_envelope_evidence_records_by_id(envelope),
+    )
     if not updated_records:
         return envelope
 
@@ -833,28 +836,75 @@ def _apply_validator_evidence_updates_to_envelope(
     return envelope.model_copy(update={"metadata": metadata, "extracted_objects": objects})
 
 
+def _collect_evidence_records_in_mapping(
+    value: Any,
+    collected: dict[str, Mapping[str, Any]],
+) -> None:
+    """Gather evidence records from one mapping, mirroring the replace traversal."""
+    if not isinstance(value, Mapping):
+        return
+    raw_records = value.get("evidence_records")
+    if isinstance(raw_records, list):
+        for record in raw_records:
+            if not isinstance(record, Mapping):
+                continue
+            evidence_record_id = _optional_string(record.get("evidence_record_id"))
+            if evidence_record_id and evidence_record_id not in collected:
+                collected[evidence_record_id] = record
+    extraction_metadata = value.get("extraction_metadata")
+    if isinstance(extraction_metadata, Mapping):
+        _collect_evidence_records_in_mapping(extraction_metadata, collected)
+
+
+def _envelope_evidence_records_by_id(
+    envelope: DomainEnvelope,
+) -> dict[str, Mapping[str, Any]]:
+    """The envelope's current evidence, keyed by ID.
+
+    This is the "before" image the write-back compares against, so a change can
+    be detected directly instead of inferred from a timestamp.
+    """
+    collected: dict[str, Mapping[str, Any]] = {}
+    _collect_evidence_records_in_mapping(envelope.metadata, collected)
+    for domain_object in envelope.extracted_objects:
+        _collect_evidence_records_in_mapping(domain_object.payload, collected)
+        _collect_evidence_records_in_mapping(domain_object.metadata, collected)
+    return collected
+
+
 def _validator_updated_evidence_records_by_id(
     items: list[ValidatorResultMaterializationInput],
+    *,
+    current: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Collect validator-updated evidence, projected to canonical provenance.
+    """Collect validator-changed evidence, projected to canonical provenance.
 
     The validator mutates the same dictionaries it received as its workspace
     (record_evidence.py:1203-1206), so these records carry workspace lifecycle
     state and the legacy span alias. They are going into a closed canonical
-    namespace, so they must be projected here rather than deep-copied verbatim.
+    namespace, so they are projected here rather than deep-copied verbatim.
+
+    Selection is by actual change against the envelope's current evidence. The
+    previous gate required `updated_at` or `evidence_revision_history` to be
+    present, which coupled correctness to a side effect of the mutating tools:
+    every tool a validator currently holds stamps `updated_at`, but discard
+    does not stamp it at all, so the gate would have missed a discard the day
+    that tool was added to the validator set.
     """
+    current = current or {}
     updated_records: dict[str, dict[str, Any]] = {}
     for item in items:
         for record in item.request.evidence:
             evidence_record_id = _optional_string(record.get("evidence_record_id"))
             if not evidence_record_id:
                 continue
-            if not (
-                record.get("evidence_revision_history")
-                or record.get("updated_at")
-            ):
+            projected = strip_workspace_fields(record)
+            existing = current.get(evidence_record_id)
+            # A record the validator never touched strips to exactly what the
+            # envelope already holds, so there is nothing to write back.
+            if existing is not None and strip_workspace_fields(existing) == projected:
                 continue
-            updated_records[evidence_record_id] = canonical_evidence_payload(record)
+            updated_records[evidence_record_id] = projected
     return updated_records
 
 

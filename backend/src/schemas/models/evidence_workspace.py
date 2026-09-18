@@ -31,6 +31,7 @@ __all__ = [
     "is_discarded",
     "normalize_workspace_records",
     "project_to_provenance",
+    "strip_workspace_fields",
     "try_project_to_provenance",
 ]
 
@@ -156,6 +157,31 @@ def canonical_evidence_payload(record: Any) -> dict[str, Any]:
     already emit, so envelope payloads keep their current shape.
     """
     return project_to_provenance(record).model_dump(mode="json", exclude_none=True)
+
+
+def strip_workspace_fields(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove workspace state from an existing record, preserving everything else.
+
+    This is the surgical counterpart to ``project_to_provenance``. Use it when
+    *updating* a record that already lives in an envelope, rather than building
+    a canonical record from a workspace one.
+
+    The difference matters. ``project_to_provenance`` whitelists to declared
+    fields, which is right for a materializer constructing canonical evidence,
+    but at the validator write-back it would silently delete any other key the
+    envelope legitimately carries. Domain-pack payload evidence is not a closed
+    namespace, so this removes exactly the seven known workspace keys, merges
+    the span alias, and leaves every other key untouched.
+    """
+    stripped = {
+        key: value for key, value in record.items()
+        if key not in WORKSPACE_ONLY_FIELDS
+    }
+    if _SPAN_CANONICAL not in stripped:
+        alias = record.get(_SPAN_ALIAS)
+        if alias is not None:
+            stripped[_SPAN_CANONICAL] = alias
+    return stripped
 
 
 def normalize_workspace_records(
