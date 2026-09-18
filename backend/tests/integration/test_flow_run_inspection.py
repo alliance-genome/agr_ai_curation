@@ -135,7 +135,7 @@ def test_refused_run_is_listed_for_owner_only_and_found_by_run_id(db):
 
 def test_recent_runs_are_owned_windowed_ordered_and_paged(db, monkeypatch):
     monkeypatch.setattr(inspection, "get_tool_page_default_limit", lambda: 2)
-    owner, other = _user(db, OWNER_SUB), _user(db, OTHER_SUB)
+    owner, _other = _user(db, OWNER_SUB), _user(db, OTHER_SUB)
     flow = _flow(db, owner)
     owner_session = _session(db, OWNER_SUB, "paged")
     deleted_session = _session(db, OWNER_SUB, "deleted", deleted=True)
