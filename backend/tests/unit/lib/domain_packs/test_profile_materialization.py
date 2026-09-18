@@ -403,3 +403,75 @@ def test_validator_evidence_writeback_preserves_provenance(example):
     assert "span_ids" not in written
     assert "status" not in written
     assert "updated_at" not in written
+
+
+# --- KANBAN-1773: integrity failures are not curator configuration errors ----
+
+
+def test_structural_failure_raises_integrity_not_conformance(example):
+    """An internal evidence contamination must not be reported as a curator error."""
+    from src.lib.agent_studio.profile_conformance import (
+        EnvelopeIntegrityError,
+        ProfileConformanceError,
+    )
+
+    source, context = prepared(example)
+    # Contaminate directly, bypassing the write-back, to exercise the classifier.
+    source.metadata["extraction_metadata"]["evidence_records"] = [
+        _revalidated_workspace_record()
+    ]
+
+    with pytest.raises(EnvelopeIntegrityError) as exc:
+        materialize_profile_validator_results(
+            source, context, results(source, context, [{"identifier": "EX:1"}])
+        )
+
+    assert not isinstance(exc.value, ProfileConformanceError)
+    # It must not accuse the curator's Output Structure; it must reassure them.
+    assert str(exc.value) != "Record does not conform to its saved output structure"
+    assert "does not need to change" in str(exc.value)
+
+
+def test_integrity_error_escapes_value_error_handlers():
+    """Broad ValueError/ProfileConformanceError catches must not reclassify it."""
+    from src.lib.agent_studio.profile_conformance import (
+        EnvelopeIntegrityError,
+        ProfileConformanceError,
+    )
+
+    assert not issubclass(EnvelopeIntegrityError, ValueError)
+    assert not issubclass(EnvelopeIntegrityError, ProfileConformanceError)
+
+
+def test_integrity_error_carries_structured_diagnostics(example):
+    from src.lib.agent_studio.profile_conformance import EnvelopeIntegrityError
+
+    source, context = prepared(example)
+    source.metadata["extraction_metadata"]["evidence_records"] = [
+        _revalidated_workspace_record()
+    ]
+
+    with pytest.raises(EnvelopeIntegrityError) as exc:
+        materialize_profile_validator_results(
+            source, context, results(source, context, [{"identifier": "EX:1"}])
+        )
+
+    paths = {issue["field_path"] for issue in exc.value.issues}
+    assert any(path.endswith(".status") for path in paths)
+    assert any(path.endswith(".span_ids") for path in paths)
+    assert any(path.endswith(".updated_at") for path in paths)
+
+
+def test_genuine_profile_violation_keeps_curator_wording(example):
+    """A real Output Structure violation must keep its existing message."""
+    from src.lib.agent_studio.profile_conformance import ProfileConformanceError
+
+    source, context = prepared(example)
+    source.extracted_objects[0].payload["attributes"]["paper_name"] = 12345
+
+    with pytest.raises(ProfileConformanceError) as exc:
+        materialize_profile_validator_results(
+            source, context, results(source, context, [{"identifier": "EX:1"}])
+        )
+
+    assert str(exc.value) == "Record does not conform to its saved output structure"

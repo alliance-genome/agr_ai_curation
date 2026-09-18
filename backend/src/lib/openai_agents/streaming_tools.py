@@ -3650,6 +3650,10 @@ async def _dispatch_domain_envelope_validators_for_chat(
     envelope's JSON) to run the same validator dispatch on it.
     """
 
+    # Imported here, like the other agent_studio imports in this module, to keep
+    # the import graph acyclic.
+    from src.lib.agent_studio.profile_conformance import EnvelopeIntegrityError
+
     if not is_builder_envelope and not _is_domain_envelope_output_json(
         final_output,
         expected_output_type=expected_output_type,
@@ -3949,6 +3953,32 @@ async def _dispatch_domain_envelope_validators_for_chat(
             },
         })
         raise
+    except EnvelopeIntegrityError as exc:
+        # KANBAN-1773. The canonical envelope schema is ours, so a failure here
+        # is an internal defect. Caught before the generic handler below so the
+        # curator is not told to repair an Output Structure that is correct.
+        logger.error(
+            "Canonical envelope integrity failure for %s: %s",
+            specialist_name,
+            exc.issues,
+            exc_info=exc,
+        )
+        add_specialist_event({
+            "type": "SPECIALIST_ERROR",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "specialist": specialist_name,
+                "error": str(exc),
+                "reason": exc.code,
+                "severity": "error",
+                "envelopeIntegrityIssues": exc.issues,
+            },
+        })
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=getattr(expected_output_type, "__name__", "response"),
+            message=str(exc),
+        ) from exc
     except Exception as exc:
         logger.warning(
             "Domain-envelope chat validation failed for %s: %s",

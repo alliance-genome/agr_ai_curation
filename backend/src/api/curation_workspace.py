@@ -128,7 +128,11 @@ from src.schemas.curation_workspace import (
     DomainEnvelopeReviewRowsResponse,
 )
 from src.services.user_service import set_global_user_from_cognito
-from src.lib.agent_studio.profile_conformance import ProfileConformanceError, ProfileIdentityError
+from src.lib.agent_studio.profile_conformance import (
+    EnvelopeIntegrityError,
+    ProfileConformanceError,
+    ProfileIdentityError,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -146,6 +150,25 @@ def _run_curation_mutation(
         result = mutation()
         db.commit()
         return result
+    except EnvelopeIntegrityError as exc:
+        # Our canonical envelope is broken, not the curator's Output Structure.
+        # Must be caught before the profile handlers so it cannot be reported
+        # as a 422 the curator is expected to act on (KANBAN-1773).
+        if db.in_transaction():
+            db.rollback()
+        logger.error(
+            "Canonical envelope integrity failure during curation mutation: %s",
+            exc.issues,
+            exc_info=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": exc.code,
+                "message": str(exc),
+                "findings": exc.issues,
+            },
+        ) from exc
     except (ProfileConformanceError, ProfileIdentityError) as exc:
         if db.in_transaction():
             db.rollback()
