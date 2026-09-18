@@ -30,6 +30,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
 )
+from src.schemas.models.evidence_workspace import canonical_evidence_payload
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     DomainValidatorResultBase,
@@ -835,6 +836,13 @@ def _apply_validator_evidence_updates_to_envelope(
 def _validator_updated_evidence_records_by_id(
     items: list[ValidatorResultMaterializationInput],
 ) -> dict[str, dict[str, Any]]:
+    """Collect validator-updated evidence, projected to canonical provenance.
+
+    The validator mutates the same dictionaries it received as its workspace
+    (record_evidence.py:1203-1206), so these records carry workspace lifecycle
+    state and the legacy span alias. They are going into a closed canonical
+    namespace, so they must be projected here rather than deep-copied verbatim.
+    """
     updated_records: dict[str, dict[str, Any]] = {}
     for item in items:
         for record in item.request.evidence:
@@ -846,7 +854,7 @@ def _validator_updated_evidence_records_by_id(
                 or record.get("updated_at")
             ):
                 continue
-            updated_records[evidence_record_id] = copy.deepcopy(record)
+            updated_records[evidence_record_id] = canonical_evidence_payload(record)
     return updated_records
 
 
