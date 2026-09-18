@@ -28,7 +28,7 @@ def test_connect_uses_local_defaults_for_localhost(monkeypatch):
     conn = wc.WeaviateConnection(url="http://localhost:8080")
     client = SimpleNamespace(is_ready=lambda: True)
 
-    monkeypatch.setattr(wc.weaviate, "connect_to_local", lambda: client)
+    monkeypatch.setattr(wc.weaviate, "connect_to_local", lambda additional_config: client)
 
     assert conn.connect() is client
 
@@ -38,7 +38,7 @@ def test_connect_uses_local_docker_hostname(monkeypatch):
     called = {}
     client = SimpleNamespace(is_ready=lambda: True)
 
-    def _fake_connect_to_local(host=None, port=None):
+    def _fake_connect_to_local(host=None, port=None, additional_config=None):
         called["host"] = host
         called["port"] = port
         return client
@@ -105,7 +105,7 @@ def test_connect_wraps_connection_errors(monkeypatch):
     monkeypatch.setattr(
         wc.weaviate,
         "connect_to_local",
-        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda additional_config: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
     with pytest.raises(Exception, match="Connection failed: boom"):
@@ -324,3 +324,45 @@ def test_get_collection_info_paths():
     wc._connection = _FailConn()
     error = wc.get_collection_info("MissingCollection")
     assert "missing collection" in error["error"]
+
+
+# --- ALL-1246: explicit, configurable Weaviate query timeout ---
+
+
+def _capture_connect(monkeypatch, name):
+    captured = {}
+    client = SimpleNamespace(is_ready=lambda: True)
+
+    def _fake_connect(**kwargs):
+        captured.update(kwargs)
+        return client
+
+    monkeypatch.setattr(wc.weaviate, name, _fake_connect)
+    return captured
+
+
+@pytest.mark.parametrize(
+    ("url", "connect_name"),
+    [
+        ("http://weaviate:8080", "connect_to_local"),
+        ("http://localhost:8080", "connect_to_local"),
+        ("https://remote.example.org:9443", "connect_to_custom"),
+    ],
+)
+@pytest.mark.parametrize(("env_value", "expected_query"), [(None, 30), ("45", 45)])
+def test_connect_passes_configured_query_timeout(
+    monkeypatch, url, connect_name, env_value, expected_query,
+):
+    if env_value is None:
+        monkeypatch.delenv("WEAVIATE_QUERY_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("WEAVIATE_QUERY_TIMEOUT_SECONDS", env_value)
+    captured = _capture_connect(monkeypatch, connect_name)
+
+    wc.WeaviateConnection(url=url).connect()
+
+    timeout = captured["additional_config"].timeout
+    assert timeout.query == expected_query
+    # Only the query timeout is configured; init and insert keep library defaults.
+    assert timeout.init == 2
+    assert timeout.insert == 90

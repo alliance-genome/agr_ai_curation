@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from threading import Barrier
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -68,25 +68,32 @@ def boundary(monkeypatch):
     tenants = Mock(
         return_value=False
     )  # Normal best-effort tenant failure is not a new strict gate.
-    monkeypatch.setattr(user_service, "provision_weaviate_tenants", tenants)
-    app = FastAPI()
-    app.include_router(benchmark_onboarding.router)
-    app.include_router(benchmark_catalog.router)
-    app.dependency_overrides[benchmark_onboarding.require_benchmark_read] = lambda: {
-        "sub": "service:portal",
-        "client_id": "portal",
-        "token_use": "access",
-    }
-    with SessionLocal() as session:
-        initial_jobs = session.scalar(select(func.count()).select_from(BenchmarkJob))
-    yield app, principal, current, tenants
-    with SessionLocal() as session:
-        assert (
-            session.scalar(select(func.count()).select_from(BenchmarkJob))
-            == initial_jobs
-        )
-        session.execute(delete(User).where(User.auth_sub == principal.subject))
-        session.commit()
+    # user_service.provision_weaviate_tenants is already patched by the autouse
+    # mock_auth_system fixture in tests/integration/conftest.py. The shared
+    # `monkeypatch` fixture is created earlier still (tests/conftest.py's autouse
+    # _ensure_required_model_env requests it), so monkeypatch.undo() runs AFTER
+    # that patch is unwound and would restore its mock permanently, leaking into
+    # tests/unit/services/test_user_service.py. Patching here instead keeps the
+    # restore order LIFO within this fixture.
+    with patch.object(user_service, "provision_weaviate_tenants", tenants):
+        app = FastAPI()
+        app.include_router(benchmark_onboarding.router)
+        app.include_router(benchmark_catalog.router)
+        app.dependency_overrides[benchmark_onboarding.require_benchmark_read] = lambda: {
+            "sub": "service:portal",
+            "client_id": "portal",
+            "token_use": "access",
+        }
+        with SessionLocal() as session:
+            initial_jobs = session.scalar(select(func.count()).select_from(BenchmarkJob))
+        yield app, principal, current, tenants
+        with SessionLocal() as session:
+            assert (
+                session.scalar(select(func.count()).select_from(BenchmarkJob))
+                == initial_jobs
+            )
+            session.execute(delete(User).where(User.auth_sub == principal.subject))
+            session.commit()
 
 
 def request(app, *, onboard=True):

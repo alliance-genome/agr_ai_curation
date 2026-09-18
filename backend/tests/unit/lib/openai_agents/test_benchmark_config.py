@@ -24,8 +24,10 @@ def test_approved_benchmark_models_load_from_canonical_registry(tmp_path):
         ("google/gemini-3.7-flash", "openrouter"),
         ("qwen/qwen3.8-27b", "openrouter"),
     ]
+    # ALL-1248 (v0.9.17) moved the registry default to GPT-5.6 Sol: Astra stays
+    # available by explicit selection, new extraction agents default to Sol.
     assert [model_id for model_id, model in models.items() if model.default] == [
-        "gpt-6-astra"
+        "gpt-5.6-sol"
     ]
 
 

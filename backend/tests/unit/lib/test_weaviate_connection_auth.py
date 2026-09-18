@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from src.lib.weaviate_client import connection as connection_module
 
@@ -28,6 +28,7 @@ def test_docker_weaviate_connection_passes_api_key_credentials():
         host="weaviate",
         port=8080,
         auth_credentials=auth,
+        additional_config=ANY,
     )
 
 

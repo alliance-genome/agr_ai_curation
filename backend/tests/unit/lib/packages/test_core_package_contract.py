@@ -150,7 +150,7 @@ def test_core_package_mirrors_shipped_runtime_config_files():
         )
 
 
-def test_shipped_catalog_defaults_to_astra_and_retains_alternative_routes():
+def test_shipped_catalog_defaults_to_sol_and_retains_alternative_routes():
     runtime_catalog = yaml.safe_load(
         (REPO_ROOT / "config" / "models.yaml").read_text(encoding="utf-8")
     )["models"]
@@ -167,7 +167,7 @@ def test_shipped_catalog_defaults_to_astra_and_retains_alternative_routes():
         "google/gemini-3.7-flash",
         "qwen/qwen3.8-27b",
     ]
-    assert [model["default"] for model in runtime_catalog] == [True, False, False, False, False, False]
+    assert [model["default"] for model in runtime_catalog] == [False, True, False, False, False, False]
     assert all(model["provider"] == "openrouter" for model in runtime_catalog[3:])
     for model in runtime_catalog[:3]:
         assert model["reasoning_options"] == ["low", "medium", "high", "xhigh"]

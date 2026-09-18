@@ -262,8 +262,8 @@ model_config:
   temperature: ${AGENT_GENE_TEMP:-0.1}
 ```
 
-Document extractors use Astra low instead, for example
-`AGENT_GENE_EXTRACTOR_MODEL` defaults to `gpt-6-astra` with low reasoning.
+Document extractors use Sol medium instead, for example
+`AGENT_GENE_EXTRACTOR_MODEL` defaults to `gpt-5.6-sol` with medium reasoning.
 
 Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 

@@ -150,6 +150,14 @@ INSPECT_SAVED_STUDIO_RESOURCE_TOOL = {
         "until complete=true. Each page reauthorizes access and verifies content_hash. "
         "Use a Flow step's exact revision pin when explaining its behavior, never today's head. "
         "Use get_current_flow or refresh_workshop_prompt for unsaved edits. Follow next_call. "
+        "When a curator reports that a flow failed or could not start, first call recent_flow_runs "
+        "(defaults to the saved flow open in the editor; otherwise pass flow_id) to list your own runs "
+        "of that flow from the last 7 days, newest first, with status, document_loaded, trace_id, "
+        "failure_reason and per-step reason_codes (document_required, attachment_only_validator, "
+        "agent_unresolvable, missing_agent_id, provider_disabled, agent_unavailable). Answer from those "
+        "recorded codes. reason_codes null means an older record without codes: rely on its "
+        "failure_reason and document_loaded and do not guess a cause. Ask for a Run ID only when no "
+        "run matches; flow_run_traces with that ID returns its stored runs records even without trace_ids. "
         "Compare records to explain changes; these reads never restore, save, retarget or execute work."
     ),
     "input_schema": SavedResourceInspection.model_json_schema(),
