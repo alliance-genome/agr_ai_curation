@@ -116,7 +116,11 @@ def test_get_sentry_settings_rejects_invalid_log_event_level(monkeypatch, caplog
     assert "Log-event promotion remains disabled" in caplog.text
 
 
-def test_before_send_redacts_sensitive_and_document_content():
+def test_before_send_redacts_sensitive_and_document_content(monkeypatch):
+    # KANBAN-1771: content redaction is OFF by default since v0.9.18.
+    # This test covers the redaction machinery itself, which must keep
+    # working when an operator switches it back on, so it opts in.
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
     fake_api_key = "sk-" + "testsecret" + "0123456789"
     event = {
         "message": f"raw prompt leaked {fake_api_key}",
@@ -174,7 +178,11 @@ def test_before_send_redacts_sensitive_and_document_content():
     assert "vars" not in scrubbed["threads"]["values"][0]["stacktrace"]["frames"][0]
 
 
-def test_before_send_promoted_log_uses_safe_code_metadata_not_message_content():
+def test_before_send_promoted_log_uses_safe_code_metadata_not_message_content(monkeypatch):
+    # KANBAN-1771: content redaction is OFF by default since v0.9.18.
+    # This test covers the redaction machinery itself, which must keep
+    # working when an operator switches it back on, so it opts in.
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
     fake_secret = "sk-" + "abcdefghijklmnopqrstuvwxyz"
     record = logging.LogRecord(
         name="src.api.documents",
@@ -343,7 +351,11 @@ def test_before_send_preserves_request_url_identifiers_but_strips_query_string()
     assert "query_string" not in scrubbed["request"]
 
 
-def test_before_send_preserves_sentry_trace_context_and_redacts_custom_contexts():
+def test_before_send_preserves_sentry_trace_context_and_redacts_custom_contexts(monkeypatch):
+    # KANBAN-1771: content redaction is OFF by default since v0.9.18.
+    # This test covers the redaction machinery itself, which must keep
+    # working when an operator switches it back on, so it opts in.
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
     event = {
         "contexts": {
             "trace": {
@@ -410,7 +422,11 @@ def test_before_send_omits_malformed_trace_context_fields():
     }
 
 
-def test_before_send_preserves_safe_runtime_exception_context_without_raw_ids():
+def test_before_send_preserves_safe_runtime_exception_context_without_raw_ids(monkeypatch):
+    # KANBAN-1771: content redaction is OFF by default since v0.9.18.
+    # This test covers the redaction machinery itself, which must keep
+    # working when an operator switches it back on, so it opts in.
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
     event = {
         "contexts": {
             "runtime_exception": {
@@ -469,7 +485,11 @@ def test_before_send_preserves_safe_runtime_exception_context_without_raw_ids():
     assert scrubbed["exception"]["values"][0]["value"] == "[Filtered]"
 
 
-def test_before_send_transaction_uses_same_redaction_policy():
+def test_before_send_transaction_uses_same_redaction_policy(monkeypatch):
+    # KANBAN-1771: content redaction is OFF by default since v0.9.18.
+    # This test covers the redaction machinery itself, which must keep
+    # working when an operator switches it back on, so it opts in.
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
     event = {
         "transaction": "GET /api/chat",
         "request": {"url": "https://example.org/api/chat?prompt=raw"},
@@ -683,6 +703,10 @@ def test_before_send_transaction_limits_spans_while_preserving_gen_ai(monkeypatc
 
 
 def test_before_send_transaction_preserves_safe_gen_ai_metadata_without_content(monkeypatch):
+    # KANBAN-1771: content redaction is OFF by default since v0.9.18.
+    # This test covers the redaction machinery itself, which must keep
+    # working when an operator switches it back on, so it opts in.
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
     monkeypatch.setenv("SENTRY_AI_CONTENT_CAPTURE_TIER", "0")
     event = {
         "spans": [
