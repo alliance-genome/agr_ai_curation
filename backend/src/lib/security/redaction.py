@@ -32,6 +32,23 @@ SECRET_PATTERNS = (
     re.compile(r"pk-[A-Za-z0-9_-]{16,}"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"(?i)(bearer|basic)\s+[^\s,;]+"),
+    # KANBAN-1771 (v0.9.18). Sentry content redaction is now off by default, so
+    # these patterns are the only backstop for a credential VALUE under an
+    # ordinary key, such as a SQLAlchemy connection error that stringifies its
+    # DSN. They also apply to application log lines via redact_secrets. Each
+    # matches a genuine credential shape, never ordinary curator content.
+    # URL userinfo only: between "//" and "@", with no "/", "?" or "#" in it,
+    # per RFC 3986. That keeps a host:port?query@... URL intact, allows an
+    # empty username (redis://:password@host), and leaves the scheme, "@" and
+    # host visible so a redacted DSN still says which server it was.
+    re.compile(r"(?<=//)[^:@/?#\s]*:[^@/?#\s]*(?=@)"),
+    re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{35}"),
+    # The whole key, not just its header line: the base64 body is the secret.
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
 )
 
 _ACTIVE_SECRET_VALUES: ContextVar[tuple[str, ...]] = ContextVar(

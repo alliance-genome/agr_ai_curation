@@ -34,6 +34,30 @@ class ProfileConformanceError(ValueError):
         self.issues = issues
 
 
+class EnvelopeIntegrityError(Exception):
+    """The envelope's own structure is broken, independently of the curator's profile.
+
+    KANBAN-1773. A sibling of ProfileConformanceError, deliberately not a
+    subclass and deliberately not a ValueError: broad handlers on the extraction
+    path catch both of those and re-report them as "Record does not conform to
+    its saved output structure", which tells a curator to fix an Output
+    Structure that was never wrong.
+
+    Raise this only for failures the curator cannot act on. Genuine profile and
+    identity violations keep their own types and wording.
+    """
+
+    CURATOR_MESSAGE = (
+        "The run encountered an internal problem while saving evidence. "
+        "Your Output Structure does not need to change."
+    )
+
+    def __init__(self, issues: list[dict[str, Any]], *, code: str = "envelope_integrity") -> None:
+        super().__init__(self.CURATOR_MESSAGE)
+        self.issues = issues
+        self.code = code
+
+
 def _kind(value: Any) -> str:
     if value is None:
         return "null"
@@ -228,7 +252,10 @@ class ResolvedGenericProfile:
         try:
             DomainEnvelopeExtractionResult.model_validate(envelope)
         except ValidationError as exc:
-            raise ProfileConformanceError([
+            # The canonical envelope schema is ours, not the curator's. A failure
+            # here means an internal writer produced a shape the system itself
+            # forbids, so it must not be reported as an Output Structure problem.
+            raise EnvelopeIntegrityError([
                 {"candidate_id": None, "field_path": ".".join(map(str, error["loc"])),
                  "reason": "invalid_envelope", "expected": "canonical extraction envelope",
                  "actual_kind": "invalid", "message": "Repair the extraction envelope structure."}

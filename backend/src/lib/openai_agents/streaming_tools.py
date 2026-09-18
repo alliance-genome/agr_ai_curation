@@ -3673,6 +3673,84 @@ def _agent_runtime_canonical_agent_key(agent: Agent) -> Optional[str]:
     return None
 
 
+
+def _evidence_record_status(record: Dict[str, Any]) -> str:
+    from .evidence_summary import evidence_record_status
+
+    return evidence_record_status(record)
+
+
+#: Attachment metadata the stream summary does not rebuild, so it is carried
+#: forward when a re-record replaces a workspace entry (KANBAN-1775).
+_ATTACHMENT_CARRY_FORWARD_FIELDS = (
+    "object_id",
+    "pending_ref_id",
+    "object_ref",
+    "envelope_target",
+    "envelope_targets",
+    "field_path",
+    "field_paths",
+    "agent_note",
+)
+
+
+def _append_live_evidence_record(
+    live_evidence_records: List[Dict[str, Any]],
+    evidence_record: Dict[str, Any],
+) -> None:
+    """Insert one record into a specialist's evidence collection, by identity.
+
+    KANBAN-1775. This used to be a plain append while the runner merged by
+    evidence_record_id. Re-recording the same ID inside one specialist run
+    therefore left a second copy that nothing could ever reach again:
+    evidence_workspace._find_record returns the first match, so a later attach,
+    detach or metadata update silently addressed the stale copy.
+
+    Replacement is a merge onto the existing record, not a swap. record_evidence
+    mutates the workspace dict in place and keeps the revision history there,
+    but strips history from its own tool OUTPUT
+    (record_evidence.py:1208 _strip_hidden_revision_history). The replacement is
+    built from that output, so a plain swap would discard the audit trail and
+    the attachment metadata. runner.py:691-699 carries history forward for the
+    same reason; here it matters more, because this dict is the only carrier.
+
+    A discarded record is never overwritten. The evidence ID is a content hash,
+    so re-quoting the same span derives the same ID, and record_evidence only
+    runs its "discarded evidence cannot be source-updated" guard when the agent
+    supplies an explicit ID. Without this check a clean ACTIVE record would
+    overwrite the discard and delete discard_reason with it.
+
+    Records with no ID cannot be identified, so they keep append semantics.
+    """
+    evidence_record_id = str(evidence_record.get("evidence_record_id") or "").strip()
+    if evidence_record_id:
+        for index, existing in enumerate(live_evidence_records):
+            existing_id = str(existing.get("evidence_record_id") or "").strip()
+            if existing_id != evidence_record_id:
+                continue
+            if _evidence_record_status(existing) == "discarded":
+                # The agent was told this record was verified, because
+                # record_evidence only runs its discard guard when an explicit
+                # ID is supplied and this path derives the ID from content.
+                # Keep the discard authoritative, but say so: a later
+                # requires_evidence or unverified_record_ids failure is
+                # otherwise untraceable.
+                logger.warning(
+                    "Keeping discarded evidence %s; a re-record with a derived "
+                    "ID tried to replace it as active",
+                    evidence_record_id,
+                )
+                return
+            merged = dict(existing)
+            merged.update(evidence_record)
+            for carried in ("evidence_revision_history", *_ATTACHMENT_CARRY_FORWARD_FIELDS):
+                if not evidence_record.get(carried) and existing.get(carried):
+                    merged[carried] = copy.deepcopy(existing[carried])
+            live_evidence_records[index] = merged
+            return
+    live_evidence_records.append(evidence_record)
+
+
 async def _dispatch_domain_envelope_validators_for_chat(
     final_output: str,
     *,
@@ -3694,6 +3772,10 @@ async def _dispatch_domain_envelope_validators_for_chat(
     envelope it passes ``is_builder_envelope=True`` (with ``final_output`` set to that
     envelope's JSON) to run the same validator dispatch on it.
     """
+
+    # Imported here, like the other agent_studio imports in this module, to keep
+    # the import graph acyclic.
+    from src.lib.agent_studio.profile_conformance import EnvelopeIntegrityError
 
     if not is_builder_envelope and not _is_domain_envelope_output_json(
         final_output,
@@ -3994,11 +4076,14 @@ async def _dispatch_domain_envelope_validators_for_chat(
             },
         })
         raise
-    except Exception as exc:
-        logger.warning(
-            "Domain-envelope chat validation failed for %s: %s",
+    except EnvelopeIntegrityError as exc:
+        # KANBAN-1773. The canonical envelope schema is ours, so a failure here
+        # is an internal defect. Caught before the generic handler below so the
+        # curator is not told to repair an Output Structure that is correct.
+        logger.error(
+            "Canonical envelope integrity failure for %s: %s",
             specialist_name,
-            exc,
+            exc.issues,
             exc_info=exc,
         )
         add_specialist_event({
@@ -4006,10 +4091,40 @@ async def _dispatch_domain_envelope_validators_for_chat(
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "details": {
                 "specialist": specialist_name,
-                "error": f"Domain-envelope validator dispatch failed: {exc}",
-                "reason": "domain_validator_dispatch_failed",
+                "error": str(exc),
+                "reason": exc.code,
                 "severity": "error",
+                "envelopeIntegrityIssues": exc.issues,
             },
+        })
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=getattr(expected_output_type, "__name__", "response"),
+            message=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.warning(
+            "Domain-envelope chat validation failed for %s: %s",
+            specialist_name,
+            exc,
+            exc_info=exc,
+        )
+        specialist_error_details: Dict[str, Any] = {
+            "specialist": specialist_name,
+            "error": f"Domain-envelope validator dispatch failed: {exc}",
+            "reason": "domain_validator_dispatch_failed",
+            "severity": "error",
+        }
+        # KANBAN-1771. A typed error already knows the field path and reason.
+        # Carry it onto the stored event instead of leaving only the message,
+        # so a later trace review does not need a live reproduction.
+        structured_issues = getattr(exc, "issues", None)
+        if isinstance(structured_issues, list) and structured_issues:
+            specialist_error_details["conformanceIssues"] = structured_issues[:50]
+        add_specialist_event({
+            "type": "SPECIALIST_ERROR",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": specialist_error_details,
         })
         raise SpecialistOutputError(
             specialist_name=specialist_name,
@@ -5341,7 +5456,9 @@ async def run_specialist_with_events(
                             tool_output=output,
                         )
                         if evidence_record is not None:
-                            live_evidence_records.append(evidence_record)
+                            _append_live_evidence_record(
+                                live_evidence_records, evidence_record
+                            )
 
                         resolver_call_ledger.record_tool_output(
                             tool_call_id=str(completed_tool.get("tool_id") or "") or None,

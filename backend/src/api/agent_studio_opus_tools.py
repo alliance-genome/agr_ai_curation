@@ -751,7 +751,7 @@ SEARCH_TRACES_TOOL = {
 
 GET_EXTRACTION_DIAGNOSTIC_REPORT_TOOL = {
     "name": "get_extraction_diagnostic_report",
-    "description": "Get a concise TraceReview report of what the extraction/builder/validator flow actually did. Use early for traces involving domain envelopes, extraction events, validation failures, lookup attempts, staged objects, patches, or finalize/envelope output. Includes ordered durable events, tool-call summaries, validation signals, and reasoning-summary status when available.",
+    "description": "Get a concise TraceReview report of what the extraction/builder/validator flow actually did. Use early for traces involving domain envelopes, extraction events, validation failures, lookup attempts, staged objects, patches, or finalize/envelope output. Includes ordered durable events, tool-call summaries, validation signals, and reasoning-summary status when available. A large run returns a compact overview first, marked status=\"compacted_overview\": read its collections list and follow each section's next_call handle to browse the detail. Do not retry the same call when you see that status, and do not fall back to reading source files.",
     "input_schema": {
         "type": "object",
         "properties": {

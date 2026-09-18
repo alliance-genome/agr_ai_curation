@@ -3848,3 +3848,146 @@ def test_profile_finalization_instructions_scope_package_override_to_requests(ba
     assert "takes precedence over package instructions" in agent.instructions
     assert "resolved_objects as an empty list" in agent.instructions
     assert "must remain unresolved" in agent.instructions
+
+
+# --- KANBAN-1773: write-back selects by actual change, not by a timestamp ----
+
+
+def _canonical_evidence(**overrides):
+    record = {
+        "evidence_record_id": "evidence-1",
+        "entity": "BAD:0001",
+        "verified_quote": "Previous quote.",
+        "page": 3,
+        "section": "Results",
+        "chunk_id": "chunk-1",
+        "source_span_ids": ["span-1"],
+    }
+    record.update(overrides)
+    return record
+
+
+def _items_with_evidence(evidence):
+    request = _validation_request().model_copy(update={"evidence": evidence}, deep=True)
+    return cast(Any, [SimpleNamespace(
+        request=request,
+        match=SimpleNamespace(binding=SimpleNamespace(raw={})),
+    )])
+
+
+def test_untouched_evidence_is_not_written_back():
+    """A validator that reads but does not change evidence leaves the envelope alone."""
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([_canonical_evidence()])
+    )
+
+    assert updated is envelope
+
+
+def test_changed_evidence_is_written_back_without_a_timestamp():
+    """The old gate required updated_at or evidence_revision_history to be present.
+
+    Every mutating tool a validator currently holds stamps updated_at, so the
+    gate happened to be correct. It coupled correctness to a side effect, and
+    discard writes no updated_at at all. Selection is now by actual change.
+    """
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+    mutated = _canonical_evidence(verified_quote="Corrected quote.")
+    assert "updated_at" not in mutated
+
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([mutated])
+    )
+
+    written = updated.extracted_objects[0].payload["evidence_records"][0]
+    assert written["verified_quote"] == "Corrected quote."
+
+
+def test_written_back_evidence_is_projected_to_canonical_provenance():
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+    mutated = {
+        **_canonical_evidence(verified_quote="Corrected quote."),
+        "status": "verified",
+        "span_ids": ["span-1"],
+        "updated_at": "2026-09-18T12:31:54+00:00",
+    }
+
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([mutated])
+    )
+
+    written = updated.extracted_objects[0].payload["evidence_records"][0]
+    assert written["source_span_ids"] == ["span-1"]
+    for field in ("status", "span_ids", "updated_at"):
+        assert field not in written
+
+
+def test_a_discarded_record_is_written_back():
+    """Review finding: the new gate misses a discard, like the old one did.
+
+    discard writes status/workspace_status/discard_reason/discarded_at, all of
+    which are workspace-only keys. strip_workspace_fields removes them from
+    BOTH sides of the comparison, so a discarded record compares equal to its
+    active envelope copy and nothing is written back.
+
+    Validators hold no discard tool today, so this is latent. It is exactly the
+    latency the previous commit claimed to remove.
+    """
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+    discarded = {
+        **_canonical_evidence(),
+        "status": "discarded",
+        "workspace_status": "discarded",
+        "discard_reason": "Superseded by a better quote.",
+        "discarded_at": "2026-09-18T12:32:00+00:00",
+    }
+
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([discarded])
+    )
+
+    assert updated is not envelope, "a discard must reach the envelope"
+    records = updated.extracted_objects[0].payload["evidence_records"]
+    assert records == [], "discarded evidence must not remain as active support"
+
+
+def test_a_discard_prunes_the_object_reference():
+    """Second-review finding C1: dropping the record orphaned its ID.
+
+    CuratableObjectEnvelope.evidence_record_ids was never pruned, so a discard
+    left a dangling reference. gene_expression/conversion.py:1693 raises
+    alliance.gene_expression.evidence_records_missing (severity BLOCKER) for
+    exactly that state, and inspect_results reports a runtime exception to
+    Sentry when it cannot resolve the id to text. A normal curator action would
+    have manufactured a non-repairable blocker and a false alert.
+    """
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+    assert envelope.extracted_objects[0].evidence_record_ids == ["evidence-1"]
+
+    discarded = {
+        **_canonical_evidence(),
+        "status": "discarded",
+        "workspace_status": "discarded",
+        "discard_reason": "Superseded by a better quote.",
+    }
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([discarded])
+    )
+
+    assert updated.extracted_objects[0].payload["evidence_records"] == []
+    assert updated.extracted_objects[0].evidence_record_ids == [], (
+        "a dropped record must not leave a dangling reference"
+    )
+
+
+def test_an_update_leaves_the_object_reference_intact():
+    envelope = _envelope(evidence_records=[_canonical_evidence()])
+    mutated = _canonical_evidence(verified_quote="Corrected quote.")
+
+    updated = _apply_validator_evidence_updates_to_envelope(
+        envelope, _items_with_evidence([mutated])
+    )
+
+    assert updated.extracted_objects[0].evidence_record_ids == ["evidence-1"]
