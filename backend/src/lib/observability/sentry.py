@@ -1749,26 +1749,51 @@ def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] |
     if not isinstance(exc_info, tuple) or len(exc_info) < 2:
         return None
     error = exc_info[1]
-    if error is None or not isinstance(error, _owned_diagnostic_error_types()):
+    if error is None:
+        return None
+
+    # Walk the cause chain. A caller can re-raise a conformance or integrity
+    # failure as a SpecialistOutputError with no details (main's direct-chat
+    # persistence in runner.py does), and reading only the top-level exception
+    # would then lose the field-level diagnosis. The first owned error to supply
+    # each field wins, so the outermost context is kept and the root cause adds
+    # what the wrapper lacks. Bounded and cycle-safe.
+    owned_types = _owned_diagnostic_error_types()
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        seen.add(id(current))
+        if isinstance(current, owned_types):
+            chain.append(current)
+        current = current.__cause__ or current.__context__
+    if not chain:
         return None
 
     detail: dict[str, Any] = {}
-    for attribute in ("issues", "details"):
-        value = getattr(error, attribute, None)
-        if isinstance(value, list) and value:
-            detail[attribute] = value[:_MAX_STRUCTURED_ENTRIES]
-            if len(value) > _MAX_STRUCTURED_ENTRIES:
-                detail[f"{attribute}_omitted"] = len(value) - _MAX_STRUCTURED_ENTRIES
-    code = getattr(error, "code", None)
-    if isinstance(code, str) and code:
-        detail["code"] = code
-    unknown_fields = getattr(error, "unknown_fields", None)
-    if isinstance(unknown_fields, tuple) and unknown_fields:
-        detail["unknown_fields"] = [str(name) for name in unknown_fields[:_MAX_STRUCTURED_ENTRIES]]
+    for link in chain:
+        for attribute in ("issues", "details"):
+            if attribute in detail:
+                continue
+            value = getattr(link, attribute, None)
+            if isinstance(value, list) and value:
+                detail[attribute] = value[:_MAX_STRUCTURED_ENTRIES]
+                if len(value) > _MAX_STRUCTURED_ENTRIES:
+                    detail[f"{attribute}_omitted"] = len(value) - _MAX_STRUCTURED_ENTRIES
+        code = getattr(link, "code", None)
+        if "code" not in detail and isinstance(code, str) and code:
+            detail["code"] = code
+        unknown_fields = getattr(link, "unknown_fields", None)
+        if "unknown_fields" not in detail and isinstance(unknown_fields, tuple) and unknown_fields:
+            detail["unknown_fields"] = [
+                str(name) for name in unknown_fields[:_MAX_STRUCTURED_ENTRIES]
+            ]
 
     if not detail:
         return None
     detail["exception_type"] = type(error).__name__
+    if len(chain) > 1 or chain[0] is not error:
+        detail["cause_types"] = [type(link).__name__ for link in chain]
     detail = _scrub_credential_values(detail)
 
     # Trim entries rather than drop the context, so a very noisy failure still

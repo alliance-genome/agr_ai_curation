@@ -451,3 +451,66 @@ class TestTraceEventTotalBudget:
         redacted = trace_events._redact_value(payload)
 
         assert "budget" in json.dumps(redacted, default=str)
+
+
+class TestStructuredDetailFollowsTheCauseChain:
+    """Merge-back review: main's direct-chat persistence (runner.py) re-raises a
+    conformance or integrity failure as a SpecialistOutputError with no details.
+    Reading only the top-level exception lost the field-level diagnosis there.
+    """
+
+    def test_issues_from_a_wrapped_integrity_error_reach_sentry(self):
+        from src.lib.agent_studio.profile_conformance import EnvelopeIntegrityError
+        from src.lib.observability.sentry import _structured_error_detail
+        from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+
+        cause = EnvelopeIntegrityError([
+            {"field_path": "metadata.evidence_records.0.status", "reason": "invalid_envelope"}
+        ])
+        try:
+            try:
+                raise cause
+            except EnvelopeIntegrityError as inner:
+                raise SpecialistOutputError(
+                    specialist_name="supervisor",
+                    output_type_name="inline_extraction_persistence",
+                    message="Validated extraction could not be persisted inline.",
+                ) from inner
+        except SpecialistOutputError as outer:
+            error = outer
+
+        detail = _structured_error_detail({"exc_info": (type(error), error, None)})
+
+        assert detail is not None
+        assert detail["issues"][0]["field_path"] == "metadata.evidence_records.0.status"
+        assert detail["code"] == "envelope_integrity"
+
+    def test_the_outer_details_are_kept_alongside_the_cause(self):
+        from src.lib.agent_studio.profile_conformance import ProfileConformanceError
+        from src.lib.observability.sentry import _structured_error_detail
+        from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+
+        try:
+            try:
+                raise ProfileConformanceError([{"field_path": "attributes.symbol", "reason": "wrong_type"}])
+            except ProfileConformanceError as inner:
+                raise SpecialistOutputError(
+                    specialist_name="s", output_type_name="o", message="m",
+                    details=[{"reason": "inline_extraction_persistence_failed"}],
+                ) from inner
+        except SpecialistOutputError as outer:
+            error = outer
+
+        detail = _structured_error_detail({"exc_info": (type(error), error, None)})
+
+        assert detail["details"][0]["reason"] == "inline_extraction_persistence_failed"
+        assert detail["issues"][0]["field_path"] == "attributes.symbol"
+
+    def test_a_self_referential_chain_terminates(self):
+        from src.lib.agent_studio.profile_conformance import EnvelopeIntegrityError
+        from src.lib.observability.sentry import _structured_error_detail
+
+        error = EnvelopeIntegrityError([{"field_path": "a", "reason": "r"}])
+        error.__cause__ = error
+
+        assert _structured_error_detail({"exc_info": (type(error), error, None)}) is not None
