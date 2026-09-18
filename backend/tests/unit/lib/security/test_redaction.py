@@ -145,5 +145,5 @@ def test_a_jwt_is_redacted():
 
 
 def test_ordinary_curator_text_is_untouched():
-    text = "Adgrl1 was detected in embryonic brain; see FB:FBal0001816."
+    text = "Gene7 was detected in embryonic brain; see identifier EXAMPLE:0001816."
     assert redact_secrets(text) == text
