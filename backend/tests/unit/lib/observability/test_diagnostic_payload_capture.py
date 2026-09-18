@@ -10,9 +10,23 @@ Chris's decision (2026-09-18): stop redacting these payloads. They carry no
 curator or personal data. Credential-shaped keys stay redacted.
 """
 
+import json
+
 import pytest
 
 from src.lib.openai_agents import extraction_trace_events as trace_events
+
+
+
+# Credential-shaped fixtures are assembled at runtime so no literal in this
+# file matches a secret-scanning rule. The scrubber under test matches on
+# shape, so the fixture has to have the shape.
+def _fake_openai_key() -> str:
+    return "sk-" + ("abcdefghijklmnop" + "0123456789")
+
+
+def _fake_bearer_header() -> str:
+    return "Authorization: Bearer " + ("abcdef0123456789" + "xyz")
 
 
 class TestTracePayloadDepth:
@@ -214,7 +228,7 @@ class TestStructuredDetailIsUsefulAndSafe:
             message="connection failed",
             details=[{
                 "reason": "db_unavailable",
-                "error": "could not connect: Authorization: Bearer abcdef0123456789xyz",
+                "error": "could not connect: " + _fake_bearer_header(),
             }],
         )
 
@@ -228,12 +242,12 @@ class TestStructuredDetailIsUsefulAndSafe:
 
         error = ProfileConformanceError([
             {"field_path": "attributes.note", "reason": "wrong_type",
-             "message": "value was sk-abcdefghijklmnop0123456789"}
+             "message": "value was " + _fake_openai_key()}
         ])
 
         detail = _structured_error_detail({"exc_info": (type(error), error, None)})
 
-        assert "sk-abcdefghijklmnop0123456789" not in str(detail)
+        assert _fake_openai_key() not in str(detail)
 
     def test_a_foreign_library_exception_is_ignored(self):
         """Not privacy: an untyped .code match would tag most events with noise."""
@@ -301,3 +315,122 @@ class TestConformanceDegradationPreserved:
             "curation_prep must handle the integrity sibling or it loses the "
             "skip-one-and-continue behavior for every other result"
         )
+
+
+class TestContentRedactionIsOffByDefault:
+    """KANBAN-1771: the redaction itself was harming debugging.
+
+    Chris, 2026-09-18: Sentry is self-hosted on a private VPC address
+    (verified: 172.31.70.182:9000), patched, behind login. Content redaction
+    cost more than it protected. The alert for Michelle Perry's failure showed
+    "[Filtered]" instead of the error, because every exception value, the
+    message and every content-marker key were replaced wholesale.
+
+    Content scrubbing is now OFF by default with an explicit switch to restore
+    it. Credential scrubbing is always on.
+    """
+
+    def _event(self):
+        return {
+            "level": "error",
+            "message": "Domain-envelope validator dispatch failed",
+            "exception": {"values": [{
+                "type": "ProfileConformanceError",
+                "value": "metadata.evidence_records.0.status extra_forbidden",
+            }]},
+            "extra": {"verified_quote": "Adgrl1 was detected in embryonic brain."},
+        }
+
+    def test_the_exception_value_survives(self, monkeypatch):
+        monkeypatch.delenv("SENTRY_CONTENT_REDACTION_ENABLED", raising=False)
+        from src.lib.observability.sentry import before_send
+
+        sent = before_send(self._event(), None)
+
+        assert "extra_forbidden" in sent["exception"]["values"][0]["value"], (
+            "this is the field-level reason the alert exists to deliver"
+        )
+
+    def test_the_message_survives(self, monkeypatch):
+        monkeypatch.delenv("SENTRY_CONTENT_REDACTION_ENABLED", raising=False)
+        from src.lib.observability.sentry import before_send
+
+        sent = before_send(self._event(), None)
+        assert sent["message"] == "Domain-envelope validator dispatch failed"
+
+    def test_content_marker_keys_survive(self, monkeypatch):
+        monkeypatch.delenv("SENTRY_CONTENT_REDACTION_ENABLED", raising=False)
+        from src.lib.observability.sentry import before_send
+
+        sent = before_send(self._event(), None)
+        assert "embryonic brain" in str(sent["extra"])
+
+    def test_the_old_behavior_is_restorable(self, monkeypatch):
+        monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
+        from src.lib.observability.sentry import before_send
+
+        sent = before_send(self._event(), None)
+        assert sent["exception"]["values"][0]["value"] == "[Filtered]"
+        assert sent["message"] == "[Filtered]"
+
+    def test_credentials_are_redacted_either_way(self, monkeypatch):
+        from src.lib.observability.sentry import before_send
+
+        for setting in ("false", "true"):
+            monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", setting)
+            event = {
+                "level": "error",
+                "extra": {"api_key": _fake_openai_key()},
+            }
+            sent = before_send(event, None)
+            assert _fake_openai_key() not in str(sent), setting
+
+
+class TestTraceEventTotalBudget:
+    """Review finding: the caps are per-node, so they multiply.
+
+    depth 64 x 5000 list items x 100000 chars is not a bound in any useful
+    sense. The docstring claimed one event cannot grow without limit; that was
+    not what the code did. These files land on a production volume that has no
+    retention policy, so a single pathological event could be enormous.
+
+    This is a size guard, not a content guard. The cap is generous enough that
+    a realistic diagnostic payload is untouched.
+    """
+
+    def test_a_realistic_payload_is_untouched(self, monkeypatch):
+        monkeypatch.delenv("EXTRACTION_TRACE_EVENT_MAX_TOTAL_CHARS", raising=False)
+        payload = {"tool_calls": [{"name": f"call-{i}", "text": "x" * 2000} for i in range(128)]}
+
+        redacted = trace_events._redact_value(payload)
+
+        assert len(redacted["tool_calls"]) == 128
+        assert redacted["tool_calls"][0]["text"] == "x" * 2000
+
+    def test_a_pathological_payload_is_bounded(self, monkeypatch):
+        import json
+
+        monkeypatch.delenv("EXTRACTION_TRACE_EVENT_MAX_TOTAL_CHARS", raising=False)
+        payload = {"chunks": [{"text": "x" * 100_000} for _ in range(5000)]}
+
+        redacted = trace_events._redact_value(payload)
+
+        assert len(json.dumps(redacted, default=str)) <= trace_events.DEFAULT_MAX_TOTAL_CHARS * 2
+
+    def test_the_budget_is_configurable(self, monkeypatch):
+        import json
+
+        monkeypatch.setenv("EXTRACTION_TRACE_EVENT_MAX_TOTAL_CHARS", "5000")
+        payload = {"chunks": [{"text": "x" * 1000} for _ in range(500)]}
+
+        redacted = trace_events._redact_value(payload)
+
+        assert len(json.dumps(redacted, default=str)) < 200_000
+
+    def test_truncation_is_visible_to_the_reader(self, monkeypatch):
+        monkeypatch.setenv("EXTRACTION_TRACE_EVENT_MAX_TOTAL_CHARS", "2000")
+        payload = {"chunks": [{"text": "x" * 1000} for _ in range(100)]}
+
+        redacted = trace_events._redact_value(payload)
+
+        assert "budget" in json.dumps(redacted, default=str)
