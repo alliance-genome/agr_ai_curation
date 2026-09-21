@@ -113,6 +113,11 @@ from src.lib.flows.unavailable_steps import (
     flow_step_unavailable_reason_code,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
+from src.lib.domain_packs.flow_validator_selection import (
+    effective_flow_validation_groups,
+    set_flow_validator_selections,
+    reset_flow_validator_selections,
+)
 from src.lib.observability.runtime import report_runtime_exception
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
@@ -1237,14 +1242,14 @@ def _plain_validation_group(raw_group: Any) -> dict[str, Any]:
 
 
 def _validation_groups_from_node_data(node_data: Mapping[str, Any]) -> list[dict[str, Any]]:
-    return [
+    return effective_flow_validation_groups([
         group
         for group in (
             _plain_validation_group(raw_group)
             for raw_group in node_data.get("validation_groups") or []
         )
         if group.get("state") in {"automatic", "replaced", "supplemental", "skipped"}
-    ]
+    ])
 
 
 def _binding_id_from_group(group: Mapping[str, Any]) -> str | None:
@@ -1429,6 +1434,7 @@ async def _collect_flow_validator_materialization_inputs(
     list[dict[str, Any]],
 ]:
     authenticated_groups = _authenticated_groups_from_agent_context(agent_context)
+    groups = effective_flow_validation_groups(groups)
     if profile_context is not None:
         from src.lib.domain_packs.profile_validation import profile_dispatch_matches, profile_mapping_binding_id
         from src.lib.agent_studio.profile_conformance import ProfileIdentityError
@@ -2879,6 +2885,7 @@ def get_all_agent_tools(
             ctx: RunContextWrapper[Any], query: str, claimed_step_index: int
         ) -> str:
             step_started_at = time.monotonic()
+            effective_validation_groups = _validation_groups_from_node_data(node_data)
             phase_timings_ms: dict[str, int] = {}
             template_timestamp = _format_flow_template_timestamp()
             template_variables = _build_flow_builtin_template_variables(
@@ -2942,6 +2949,9 @@ def get_all_agent_tools(
             internal_event_cursor = _capture_internal_extraction_event_cursor()
             specialist_started_at = time.monotonic()
             projected_chat_output: str | None = None
+            selection_token = set_flow_validator_selections(
+                effective_validation_groups
+            )
             try:
                 if hasattr(tool_callable, "on_invoke_tool"):
                     # Newer openai-agents tool invokers dereference ctx.tool_name and,
@@ -2967,6 +2977,7 @@ def get_all_agent_tools(
                 else:
                     result = await tool_callable(query=resolved_query)
             finally:
+                reset_flow_validator_selections(selection_token)
                 if output_attachment_token is not None:
                     reset_current_flow_output_attachment(output_attachment_token)
                 reset_current_output_filename_stem(output_filename_token)

@@ -54,6 +54,7 @@ from src.lib.observability.sentry import (
 )
 
 from .input_selectors import build_domain_validation_request
+from .flow_validator_selection import current_flow_validator_selections
 from .materialization import (
     ValidatorResultMaterializationInput,
     materialize_validator_results_into_envelope,
@@ -404,7 +405,18 @@ def dispatch_active_validator_bindings(
     selector_findings: list[ValidationFinding] = list(eligibility_findings)
     jobs: list[ValidatorDispatchJob] = []
     dispatch_context = group_dispatch_context(authenticated_groups)
+    flow_selections = current_flow_validator_selections()
+    suppressed_bindings = []
     for match in eligible_matches:
+        selection = flow_selections.get(match.binding.binding_id)
+        if selection is not None:
+            suppressed_bindings.append({
+                "validator_binding_id": match.binding.binding_id,
+                "target": match.target_details(),
+                **selection,
+                "reason": "flow_skip" if selection["state"] == "skipped" else "custom_replacement",
+            })
+            continue
         if not _binding_has_dispatch_contract(match.binding):
             LOGGER.info(
                 "Skipping active validator binding %s because it declares no "
@@ -485,6 +497,11 @@ def dispatch_active_validator_bindings(
         updated_envelope = materialization_result.envelope
         appended_findings.extend(materialization_result.appended_findings)
 
+    if suppressed_bindings:
+        updated_envelope = updated_envelope.model_copy(update={"metadata": {
+            **updated_envelope.metadata,
+            "suppressed_upstream_validators": suppressed_bindings,
+        }})
     if any(entry.get("group_scope") is not None for entry in binding_audit):
         updated_metadata = dict(updated_envelope.metadata)
         updated_metadata["validator_binding_audit"] = list(binding_audit)

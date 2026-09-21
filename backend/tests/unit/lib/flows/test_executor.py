@@ -1999,6 +1999,33 @@ class TestGetAllAgentToolsStepOrderRuntime:
     @pytest.mark.asyncio
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_flow_selection_reaches_extractor_and_resets(self, mock_get_agent, mock_streaming):
+        from src.lib.domain_packs.flow_validator_selection import current_flow_validator_selections
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        observed = []
+
+        def make_tool(agent, tool_name, tool_description, specialist_name, **kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def tool(query: str) -> str:
+                observed.append(await asyncio.to_thread(current_flow_validator_selections))
+                return "ok"
+            return tool
+
+        mock_streaming.side_effect = make_tool
+        flow = _make_flow([_agent_node("source", "gene", validation_groups=[{
+            "group_id": "custom", "state": "replaced", "binding_id": "fixture.identifier",
+            "validator_node_id": "custom-node",
+        }])])
+        tools, _ = get_all_agent_tools(flow)
+        # This fixture stops at the structured-envelope guard after invocation.
+        with pytest.raises(RuntimeError, match="structured extraction envelope"):
+            await tools[0].on_invoke_tool(SimpleNamespace(tool_name="flow", run_config=None), json.dumps({"query": "run"}))
+        assert observed == [{"fixture.identifier": {"state": "replaced", "validator_node_id": "custom-node"}}]
+        assert current_flow_validator_selections() == {}
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     async def test_concurrent_duplicate_claim_invokes_specialist_once(
         self, mock_get_agent, mock_streaming
     ):

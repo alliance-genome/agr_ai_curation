@@ -956,6 +956,89 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
     assert result.validator_results[0].status == "resolved"
 
 
+@pytest.mark.parametrize("state", ["replaced", "supplemental", "skipped"])
+def test_flow_selection_suppresses_upstream_before_any_model_call(tmp_path, state):
+    from src.lib.domain_packs.flow_validator_selection import (
+        set_flow_validator_selections, reset_flow_validator_selections,
+    )
+    pack = _loaded_pack(tmp_path, second_binding=True)
+    calls = []
+
+    def runner(request, *, binding):
+        calls.append(request.validator_binding_id)
+        return _result_payload(request)
+
+    token = set_flow_validator_selections([{
+        "binding_id": "fixture.identifier_lookup", "state": state,
+        "validator_node_id": "custom-validator" if state != "skipped" else None,
+    }])
+    try:
+        # The real extraction dispatcher crosses an asyncio.to_thread boundary.
+        async def dispatch():
+            return await asyncio.to_thread(dispatch_active_validator_bindings,
+                _envelope(), pack, runner=runner)
+        result = asyncio.run(dispatch())
+    finally:
+        reset_flow_validator_selections(token)
+    assert calls == ["fixture.symbol_lookup"]
+    audit = result.envelope.metadata["suppressed_upstream_validators"]
+    assert audit[0]["validator_binding_id"] == "fixture.identifier_lookup"
+    assert audit[0]["reason"] == ("flow_skip" if state == "skipped" else "custom_replacement")
+    assert audit[0]["target"]["pending_ref_id"] == "object-1"
+    calls.clear()
+    dispatch_active_validator_bindings(_envelope(), pack, runner=runner)
+    assert set(calls) == {"fixture.identifier_lookup", "fixture.symbol_lookup"}
+
+
+@pytest.mark.parametrize("custom_fails", [False, True])
+def test_extractor_to_flow_runs_custom_once_without_standard_fallback(tmp_path, monkeypatch, custom_fails):
+    from src.lib.flows import executor
+    from src.lib.domain_packs.flow_validator_selection import (
+        set_flow_validator_selections, reset_flow_validator_selections,
+    )
+    from src.lib.domain_packs.materialization import materialize_validator_results_into_envelope
+    pack = _loaded_pack(tmp_path)
+    groups = [{"group_id": "custom", "binding_id": "fixture.identifier_lookup",
+               "state": "replaced", "validator_node_id": "custom-node"}]
+    calls = []
+
+    def standard(*args, **kwargs):
+        calls.append("standard")
+        raise AssertionError("standard must not run")
+
+    async def custom(request, **kwargs):
+        calls.append("custom")
+        assert request.validator_agent.agent_id == "custom-agent"
+        if custom_fails:
+            raise RuntimeError("custom source failed")
+        return _result_payload(request)
+
+    monkeypatch.setattr(executor, "_run_custom_flow_validator_agent", custom)
+    token = set_flow_validator_selections(groups)
+    try:
+        upstream = dispatch_active_validator_bindings(_envelope(), pack, runner=standard)
+    finally:
+        reset_flow_validator_selections(token)
+    assert upstream.validator_agent_run_count == 0
+    flow = SimpleNamespace(flow_definition={"nodes": [{"id": "custom-node", "data": {"agent_id": "custom-agent"}}]})
+    units, findings, audit = asyncio.run(executor._collect_flow_validator_materialization_inputs(
+        source_envelope=upstream.envelope, source_envelope_revision=1,
+        registry=upstream.registry, groups=groups, flow=flow, agent_context={},
+    ))
+    assert calls == ["custom"]
+    assert not findings
+    assert len(units) == 1
+    assert audit[-1]["validator_agent"]["agent_id"] == "custom-agent"
+    assert audit[-1]["status"] == ("unresolved" if custom_fails else "resolved")
+    materialized = materialize_validator_results_into_envelope(
+        upstream.envelope, pack.metadata, units, actor_id="flow", source_envelope_revision=1,
+    )
+    results = [f.details["validation_result"] for f in materialized.envelope.validation_findings
+               if "validation_result" in f.details]
+    assert results
+    assert all(r["validator_agent"]["agent_id"] == "custom-agent" for r in results)
+
+
 def test_group_scope_normalizes_and_matching_authenticated_group_dispatches(
     tmp_path: Path,
 ):
