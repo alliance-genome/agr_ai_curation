@@ -8776,6 +8776,7 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
             rows_by_source={"object": rows, "evidence": [{"evidence.evidence_record_id": "evidence-81", "evidence.verified_quote": "Exact source quote"}],
                             "validation_finding": [{"validation.message": "Requires review",
                                 "validation.candidate_matches": [{"value": "TEST:1", "label": "Possible match"}],
+                                "validation.lookup_attempts": [{"method": "search_alleles_bulk", "candidate_count": 26, "lookup_status": "ambiguous"}],
                                 "validation.target": {"object_id": "observation-81", "field_path": "attributes.identity"}}]},
         )], field_catalog=[FlowOutputField(ref="object.attribute.phenotype", label="Phenotype", row_source="object", value_type="string")],
     )
@@ -8816,6 +8817,8 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
     assert payload["rows"]["evidence"][0]["evidence.verified_quote"] == "Exact source quote"
     assert payload["rows"]["validation_finding"][0]["validation.message"] == "Requires review"
     assert payload["rows"]["validation_finding"][0]["validation.candidate_matches"] == [{"value": "TEST:1", "label": "Possible match"}]
+    assert payload["rows"]["validation_finding"][0]["validation.lookup_attempts"] == [
+        {"method": "search_alleles_bulk", "candidate_count": 26, "lookup_status": "ambiguous"}]
     assert payload["rows"]["validation_finding"][0]["validation.target"]["object_id"] == "observation-81"
     assert payload["curator_output_request"]["custom_instructions"] == instructions
     assert captured["query"] == "Use the requested six columns"

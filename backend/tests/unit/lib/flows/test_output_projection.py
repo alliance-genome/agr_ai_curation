@@ -2751,7 +2751,7 @@ def test_canonical_validation_review_retains_candidates_and_field_identity():
     payload = step['candidate'].payload_json
     candidates = [{'value': 'TEST:ALLELE1', 'label': 'candidate one'},
                   {'value': 'TEST:ALLELE2', 'label': 'candidate two'}]
-    attempts = [{'method': 'search_alleles', 'lookup_status': 'ambiguous', 'candidate_count': 2}]
+    attempts = [{'method': 'search_alleles_bulk', 'lookup_status': 'ambiguous', 'candidate_count': 26}]
     target = {'object_id': 'gene-2', 'field_path': 'attributes.identity', 'object_type': 'Gene'}
     payload['validation_findings'] = [{
         'finding_id': 'canonical-ambiguous', 'status': 'open',
