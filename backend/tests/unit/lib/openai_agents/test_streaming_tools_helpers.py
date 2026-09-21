@@ -1717,6 +1717,57 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
     assert output_payload["data"]["annotations"]["__full_count"] == 60
 
 
+@pytest.mark.parametrize("group_sizes", [(1, 2), (1, 20, 5), (0, 0), (51, 2), (1,) * 51])
+def test_lookup_finalization_preserves_returned_bulk_count_after_compaction(
+    monkeypatch, group_sizes,
+):
+    monkeypatch.setattr(
+        streaming_tools, "_lookup_finalization_config_for_tool", lambda _: {},
+    )
+    groups = [
+        {
+            "results": [{"curie": f"TEST:{group}-{index}"} for index in range(size)],
+            "count": size,
+            "coverage": {"discovered_count": size + 10, "display_capped": True},
+        }
+        for group, size in enumerate(group_sizes)
+    ]
+    output = {
+        "status": "ok",
+        "count": sum(group_sizes),
+        "data": {
+            "items": groups,
+            "total_matches": sum(group_sizes),
+            "bulk_match_totals": {
+                "returned_count": sum(group_sizes),
+                "total_count": sum(group_sizes),
+                "truncated": False,
+            },
+        },
+    }
+    captured = streaming_tools._tool_output_payload_for_finalization("lookup", output)
+
+    assert streaming_tools._lookup_tool_data_result_count(captured) == sum(group_sizes)
+
+
+def test_lookup_count_uses_returned_records_not_discovered_total():
+    output = {
+        "status": "ok",
+        "data": {"results": [{"curie": "TEST:1"}], "total_count": 50},
+    }
+    assert streaming_tools._lookup_tool_data_result_count(output) == 1
+
+
+def test_unknown_bulk_returned_count_remains_unknown_after_compaction(monkeypatch):
+    monkeypatch.setattr(
+        streaming_tools, "_lookup_finalization_config_for_tool", lambda _: {},
+    )
+    captured = streaming_tools._tool_output_payload_for_finalization(
+        "lookup", {"status": "ok", "data": {"items": [{"total_count": 50}]}},
+    )
+    assert streaming_tools._lookup_tool_data_result_count(captured) is None
+
+
 def test_chemical_finalization_rejects_invented_resolved_identity(
     _repo_package_curation_registry,
 ):

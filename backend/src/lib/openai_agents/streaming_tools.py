@@ -295,6 +295,11 @@ def _tool_output_payload_for_finalization(
     else:
         data = _lookup_tool_configured_result_payload(payload, config=lookup_config)
     if data is not None:
+        # Count actual returned records before compaction can truncate bulk groups
+        # or discard their shape. Discovered totals are not returned candidates.
+        compact["returned_count"] = _lookup_tool_data_result_count(
+            {**compact, "data": data}
+        )
         compact["data"] = _compact_lookup_tool_data(data)
         compact["scalar_tokens"] = sorted(_lookup_scalar_tokens(data))
         fidelity = _lookup_fact_fidelity_signatures(data, config=lookup_config)
@@ -1699,11 +1704,24 @@ def _lookup_tool_data_result_count(payload: Optional[Dict[str, Any]]) -> Optiona
         SpecialistToolCall(tool_name="", output_payload=payload)
     ):
         return 0
+    if "returned_count" in payload:
+        returned_count = payload["returned_count"]
+        return returned_count if type(returned_count) is int and returned_count >= 0 else None
     data = payload.get("data")
     if isinstance(data, list):
         return len(data)
     if not isinstance(data, dict):
         return 1 if data else 0
+    # Bulk search returns groups, each with its own results list. Count records,
+    # not groups, and never substitute per-group discovered/database totals.
+    items = data.get("items")
+    if isinstance(items, list):
+        if all(
+            isinstance(item, dict) and isinstance(item.get("results"), list)
+            for item in items
+        ):
+            return sum(len(item["results"]) for item in items)
+        return None
     full_count = data.get("__full_count")
     if isinstance(full_count, int):
         return full_count
