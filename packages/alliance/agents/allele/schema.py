@@ -29,7 +29,7 @@ class AlleleCandidateDetail(DomainValidatorBaseModel):
         default=None, description="Full species name returned by the lookup"
     )
     data_provider: Optional[StrictStr] = Field(
-        default=None, description="Alliance data provider code"
+        default=None, description="Provider code explicitly returned on this allele record; null when absent, never inferred from species, identifier prefix, or query filters"
     )
     name: Optional[StrictStr] = Field(
         default=None, description="Full allele name returned by the lookup"
