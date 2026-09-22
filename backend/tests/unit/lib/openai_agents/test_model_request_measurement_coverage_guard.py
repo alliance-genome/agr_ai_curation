@@ -16,6 +16,7 @@ cover:
 from __future__ import annotations
 
 import ast
+from functools import lru_cache
 import os
 from pathlib import Path
 import subprocess
@@ -34,16 +35,11 @@ MATRIX_CANDIDATES = [
 RUNNER_MODULE = "src.lib.openai_agents.runner"
 MEASUREMENT_MODULE = "src/lib/openai_agents/model_request_measurement.py"
 
-# Provider request methods that send a model request when called directly.
-DIRECT_REQUEST_CHAINS = {
-    ("responses", "create"),
-    ("responses", "parse"),
-    ("responses", "stream"),
-    ("responses", "compact"),
-    ("completions", "create"),
-    ("completions", "parse"),
-    ("completions", "stream"),
-}
+# Provider request methods that send a model request when called directly,
+# including the ``with_raw_response`` / ``with_streaming_response`` variants.
+DIRECT_REQUEST_RESOURCES = {"responses", "completions"}
+DIRECT_REQUEST_METHODS = {"create", "parse", "stream", "compact"}
+RAW_RESPONSE_WRAPPERS = {"with_raw_response", "with_streaming_response"}
 
 # Every module that constructs an OpenAI SDK client, and how its requests are
 # measured. Keep in sync with the matrix document.
@@ -55,13 +51,18 @@ CLIENT_CONSTRUCTION_SITES = {
 }
 
 
-def _python_files():
+@lru_cache(maxsize=1)
+def _source_trees() -> tuple[tuple[Path, ast.Module], ...]:
+    trees = []
     for root in SOURCE_ROOTS:
         for path in root.rglob("*.py"):
             parts = set(path.parts)
-            if "tests" in parts or "node_modules" in parts or ".venv" in parts:
+            if parts & {"tests", "node_modules", ".venv", "venv", "site-packages"}:
                 continue
-            yield path
+            tree = _parse(path)
+            if tree is not None:
+                trees.append((path, tree))
+    return tuple(trees)
 
 
 def _relative(path: Path) -> str:
@@ -93,6 +94,10 @@ def _parse(path: Path) -> ast.Module | None:
 
 def _module_installs_measurement(tree: ast.Module, module_path: str) -> bool:
     for node in tree.body:
+        if isinstance(node, ast.Import) and any(
+            alias.name == RUNNER_MODULE for alias in node.names
+        ):
+            return True
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             if _attribute_chain(node.value.func)[-1:] == ["install_model_request_measurement"]:
                 return True
@@ -109,19 +114,44 @@ def _module_installs_measurement(tree: ast.Module, module_path: str) -> bool:
     return False
 
 
+def _runner_names(tree: ast.Module) -> set[str]:
+    names = {"Runner", "DEFAULT_AGENT_RUNNER"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("agents"):
+            for alias in node.names:
+                if alias.name in {"Runner", "AgentRunner", "DEFAULT_AGENT_RUNNER"}:
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _calls_runner(tree: ast.Module) -> bool:
+    runner_names = _runner_names(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        chain = _attribute_chain(node.func)
+        if chain[-1:] in (["run_streamed"], ["run_sync"]):
+            return True
+        if len(chain) >= 2 and chain[-1] == "run" and chain[-2] in runner_names:
+            return True
+    return False
+
+
+def _is_direct_request_call(node: ast.Call) -> bool:
+    chain = _attribute_chain(node.func)
+    if not chain or chain[-1] not in DIRECT_REQUEST_METHODS:
+        return False
+    head = chain[:-1]
+    if head and head[-1] in RAW_RESPONSE_WRAPPERS:
+        head = head[:-1]
+    return bool(head) and head[-1] in DIRECT_REQUEST_RESOURCES
+
+
 def test_every_runner_call_site_installs_measurement():
     offenders = []
     runner_modules = []
-    for path in _python_files():
-        tree = _parse(path)
-        if tree is None:
-            continue
-        calls_runner = any(
-            isinstance(node, ast.Call)
-            and _attribute_chain(node.func)[:1] == ["Runner"]
-            and _attribute_chain(node.func)[-1:] in (["run"], ["run_streamed"], ["run_sync"])
-            for node in ast.walk(tree)
-        )
+    for path, tree in _source_trees():
+        calls_runner = _calls_runner(tree)
         if not calls_runner:
             continue
         module_path = _relative(path)
@@ -137,15 +167,9 @@ def test_every_runner_call_site_installs_measurement():
 
 def test_no_direct_provider_request_calls_bypass_measurement():
     offenders = []
-    for path in _python_files():
-        tree = _parse(path)
-        if tree is None:
-            continue
+    for path, tree in _source_trees():
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            chain = tuple(_attribute_chain(node.func)[-2:])
-            if chain in DIRECT_REQUEST_CHAINS:
+            if isinstance(node, ast.Call) and _is_direct_request_call(node):
                 offenders.append(f"{_relative(path)}:{node.lineno}")
     assert offenders == [], (
         "Direct provider requests must go through call_measured_direct_request "
@@ -156,12 +180,9 @@ def test_no_direct_provider_request_calls_bypass_measurement():
 def test_no_direct_model_calls_outside_measurement_wrapper():
     allowed = {MEASUREMENT_MODULE}
     offenders = []
-    for path in _python_files():
+    for path, tree in _source_trees():
         module_path = _relative(path)
         if module_path in allowed:
-            continue
-        tree = _parse(path)
-        if tree is None:
             continue
         for node in ast.walk(tree):
             if (
@@ -178,10 +199,7 @@ def test_no_direct_model_calls_outside_measurement_wrapper():
 
 def test_client_construction_sites_are_documented_in_matrix():
     found = set()
-    for path in _python_files():
-        tree = _parse(path)
-        if tree is None:
-            continue
+    for path, tree in _source_trees():
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and _attribute_chain(node.func)[-1:] in (
                 ["AsyncOpenAI"],
@@ -206,6 +224,7 @@ def test_client_construction_sites_are_documented_in_matrix():
 
 
 def test_importing_specialist_or_studio_runtime_alone_installs_measurement():
+    processes = {}
     for module in (
         "src.lib.openai_agents.streaming_tools",
         "src.lib.agent_studio.openai_runtime",
@@ -217,12 +236,45 @@ def test_importing_specialist_or_studio_runtime_alone_installs_measurement():
             "model_request_measurement_installed\n"
             "assert model_request_measurement_installed()\n"
         )
-        completed = subprocess.run(
+        processes[module] = subprocess.Popen(
             [sys.executable, "-c", script],
             cwd=BACKEND_ROOT,
             env={**os.environ, "PYTHONPATH": str(BACKEND_ROOT)},
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=300,
         )
-        assert completed.returncode == 0, (module, completed.stderr[-2000:])
+    for module, process in processes.items():
+        _, stderr = process.communicate(timeout=300)
+        assert process.returncode == 0, (module, stderr[-2000:])
+
+
+def test_guard_detects_aliased_runner_and_raw_response_calls():
+    aliased = ast.parse(
+        "from agents import Runner as R\n"
+        "async def f(agent):\n"
+        "    await R.run(agent, 'x')\n"
+    )
+    assert _calls_runner(aliased)
+    raw = ast.parse("client.responses.with_raw_response.create(model='m')").body[0].value
+    assert _is_direct_request_call(raw)
+    unrelated = ast.parse("session.create(name='x')").body[0].value
+    assert not _is_direct_request_call(unrelated)
+
+
+def test_app_startup_installs_measurement():
+    main_path = BACKEND_ROOT / "main.py"
+    tree = ast.parse(main_path.read_text(encoding="utf-8"))
+    create_app = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "create_app"
+    )
+    first_calls = [
+        _attribute_chain(statement.value.func)[-1]
+        for statement in create_app.body
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
+    ]
+    assert first_calls[:2] == [
+        "install_model_request_measurement",
+        "initialize_sentry_if_configured",
+    ]

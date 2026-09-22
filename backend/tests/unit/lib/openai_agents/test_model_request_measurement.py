@@ -248,6 +248,68 @@ def test_sdk_model_resolution_is_measured():
     assert isinstance(wrapped, measurement_module.MeasuredModel)
 
 
+@pytest.mark.parametrize("order", ["foreign_wrapper_first", "measurement_first"])
+def test_install_order_with_dynamic_foreign_wrapper(monkeypatch, order):
+    """Sentry's OpenAI Agents integration rebinds run_loop.get_model to a wrapper
+    that resolves turn_preparation.get_model at call time. Either install order
+    must measure exactly once and never recurse."""
+    import functools
+
+    from agents.run_internal import run_loop, turn_preparation
+
+    sdk_get_model = measurement_module._SDK_GET_MODEL
+    assert sdk_get_model is not None
+    monkeypatch.setattr(turn_preparation, "get_model", sdk_get_model)
+    monkeypatch.setattr(run_loop, "get_model", sdk_get_model)
+    monkeypatch.setattr(measurement_module, "_SDK_GET_MODEL", None)
+    monkeypatch.setattr(measurement_module, "_MEASURED_GET_MODEL", None)
+
+    def install_foreign_wrapper():
+        @functools.wraps(turn_preparation.get_model)
+        def foreign_get_model(agent, run_config):
+            return turn_preparation.get_model(agent, run_config)
+
+        run_loop.get_model = foreign_get_model
+
+    if order == "foreign_wrapper_first":
+        install_foreign_wrapper()
+        measurement_module.install_model_request_measurement()
+    else:
+        measurement_module.install_model_request_measurement()
+        install_foreign_wrapper()
+    measurement_module.install_model_request_measurement()  # idempotent
+
+    resolved = run_loop.get_model(Agent(name="probe", model=FakeResponsesHTTPModel()), RunConfig())
+    assert isinstance(resolved, measurement_module.MeasuredModel)
+    assert not isinstance(resolved.inner_model, measurement_module.MeasuredModel)
+    assert model_request_measurement_installed()
+
+
+def test_owned_openai_responses_provider_classifies_as_openai(monkeypatch):
+    """Agent Studio's owned provider stays native OpenAI even if the default runner changes."""
+    from src.lib.openai_agents import runner
+
+    resources = runner.build_owned_openai_responses_resources()
+    assert resources.provider._agr_provider_id == "openai"
+    monkeypatch.setattr(
+        "src.lib.config.providers_loader.get_default_runner_provider",
+        lambda: SimpleNamespace(provider_id="some_other_default"),
+    )
+    wrapped = measurement_module.measure_resolved_model(
+        FakeResponsesHTTPModel(),
+        agent=None,
+        run_config=RunConfig(model_provider=resources.provider),
+    )
+    assert measurement_module.describe_model(
+        wrapped.inner_model, provider_hint=wrapped._provider_hint
+    ) == ("openai", "responses", "http")
+    assert measurement_module.describe_model(wrapped.inner_model) == (
+        "some_other_default",
+        "responses",
+        "http",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Blocking the Daniela instruction overflow
 # ---------------------------------------------------------------------------

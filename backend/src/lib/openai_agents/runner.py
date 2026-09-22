@@ -262,9 +262,13 @@ def build_owned_openai_responses_resources() -> OwnedOpenAIResources:
     else:
         provider_kwargs["use_responses_websocket"] = False
 
+    provider = OpenAIProvider(**provider_kwargs)
+    # Request measurement classifies models this provider resolves as native
+    # OpenAI even if the default runner provider changes (ALL-1279).
+    provider._agr_provider_id = "openai"
     return OwnedOpenAIResources(
         client=client,
-        provider=OpenAIProvider(**provider_kwargs),
+        provider=provider,
     )
 
 

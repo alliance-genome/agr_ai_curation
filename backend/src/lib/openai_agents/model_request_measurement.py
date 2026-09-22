@@ -63,6 +63,8 @@ INSTRUCTIONS_COMPONENT = "openai_responses.instructions"
 INSTRUCTIONS_SETTING = "OPENAI_INSTRUCTIONS_MAX_CHARS"
 
 _MEASURED_FLAG = "_ai_curation_model_request_measured"
+_SDK_GET_MODEL: Any = None
+_MEASURED_GET_MODEL: Any = None
 _REPORTED_BLOCKS_MAX = 1024
 _reported_blocks: "OrderedDict[tuple[Any, ...], None]" = OrderedDict()
 _reported_blocks_lock = threading.Lock()
@@ -259,9 +261,11 @@ def _tool_definition(tool: Any) -> tuple[dict[str, Any], bool, bool]:
     if isinstance(tool, HostedMCPTool):
         config = dict(tool.tool_config)
         return config, bool(config.get("defer_loading")), True
+    # Other hosted/custom tools are sized by type and name only; their
+    # provider-side definitions are not observable here.
     return (
         {"type": type(tool).__name__, "name": getattr(tool, "name", None)},
-        False,
+        bool(getattr(tool, "defer_loading", False)),
         True,
     )
 
@@ -505,18 +509,14 @@ def _report_block_once(violation: ModelRequestBlockedError, measurement: Mapping
     """Report one grouped Sentry event per underlying blocked request.
 
     A supervisor or flow may re-issue the same oversized request (a later turn,
-    a re-invoked specialist). Those repeats in the same trace/run are logged
+    a re-invoked specialist, possibly a few characters different). Those
+    repeats for the same agent and component in the same trace/run are logged
     but not captured again, and the violation is marked captured so wrapper
     boundaries do not capture it either.
     """
 
     scope = measurement.get("trace_id") or measurement.get("run_id")
-    key = (
-        scope,
-        violation.component,
-        measurement.get("agent_name"),
-        violation.measured,
-    )
+    key = (scope, violation.component, measurement.get("agent_name"))
     if scope:
         with _reported_blocks_lock:
             if key in _reported_blocks:
@@ -757,13 +757,21 @@ def _request_identity(agent: Any | None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def describe_model(model: Any) -> tuple[str, str, str]:
-    """Return (provider, api, transport) for a resolved SDK model."""
+def describe_model(model: Any, *, provider_hint: str | None = None) -> tuple[str, str, str]:
+    """Return (provider, api, transport) for a resolved SDK model.
+
+    A provider tag on the model wins, then a tag on the ``RunConfig`` model
+    provider that resolved it (Agent Studio pins native OpenAI this way).
+    """
 
     from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
     from agents.models.openai_responses import OpenAIResponsesModel, OpenAIResponsesWSModel
 
-    tagged = getattr(model, "_agr_provider_id", None) or getattr(model, "_provider_id", None)
+    tagged = (
+        getattr(model, "_agr_provider_id", None)
+        or getattr(model, "_provider_id", None)
+        or provider_hint
+    )
     if isinstance(model, OpenAIResponsesWSModel):
         api, transport = "responses", "websocket"
     elif isinstance(model, OpenAIResponsesModel):
@@ -788,9 +796,16 @@ class MeasuredModel(Model):
     counter is the SDK retry attempt number for that turn.
     """
 
-    def __init__(self, inner: Model, *, agent: Any | None) -> None:
+    def __init__(
+        self,
+        inner: Model,
+        *,
+        agent: Any | None,
+        provider_hint: str | None = None,
+    ) -> None:
         self._inner = inner
         self._agent = agent
+        self._provider_hint = provider_hint
         self._attempts = 0
 
     def __getattr__(self, name: str) -> Any:
@@ -830,7 +845,7 @@ class MeasuredModel(Model):
         prompt: Any,
     ) -> dict[str, Any]:
         self._attempts += 1
-        provider, api, transport = describe_model(self._inner)
+        provider, api, transport = describe_model(self._inner, provider_hint=self._provider_hint)
         identity = _request_identity(self._agent)
         identity["attempt"] = self._attempts
         measurement = build_measurement(
@@ -978,12 +993,18 @@ def _failure_outcome(exc: BaseException) -> str:
     return "provider_error"
 
 
-def measure_resolved_model(model: Model, *, agent: Any | None) -> Model:
+def measure_resolved_model(
+    model: Model,
+    *,
+    agent: Any | None,
+    run_config: Any | None = None,
+) -> Model:
     """Wrap one SDK-resolved model so its requests are measured."""
 
     if isinstance(model, MeasuredModel):
         return model
-    return MeasuredModel(model, agent=agent)
+    provider_hint = getattr(getattr(run_config, "model_provider", None), "_agr_provider_id", None)
+    return MeasuredModel(model, agent=agent, provider_hint=provider_hint)
 
 
 def install_model_request_measurement() -> None:
@@ -994,29 +1015,48 @@ def install_model_request_measurement() -> None:
     through ``run_loop.get_model``. Wrapping there covers agent-bound model
     objects, provider-resolved model names, WebSocket and HTTP transports, and
     SDK-managed retries without per-call-site instrumentation. The pinned SDK
-    (0.17.4) binds ``get_model`` into ``run_loop`` by name; the regression guard
-    test fails if an SDK upgrade moves it.
+    (0.17.4) defines ``get_model`` in ``turn_preparation`` and binds it into
+    ``run_loop`` by name; the regression guard test fails if an SDK upgrade
+    moves it.
     """
 
+    global _SDK_GET_MODEL, _MEASURED_GET_MODEL
     from agents.run_internal import run_loop, turn_preparation
 
-    if getattr(run_loop.get_model, _MEASURED_FLAG, False):
-        return
-    resolve_model = run_loop.get_model
+    if _MEASURED_GET_MODEL is None:
+        resolve_model = turn_preparation.get_model
 
-    def get_measured_model(agent: Any, run_config: Any) -> Model:
-        return measure_resolved_model(resolve_model(agent, run_config), agent=agent)
+        def get_measured_model(agent: Any, run_config: Any) -> Model:
+            return measure_resolved_model(
+                resolve_model(agent, run_config),
+                agent=agent,
+                run_config=run_config,
+            )
 
-    setattr(get_measured_model, _MEASURED_FLAG, True)
-    setattr(get_measured_model, "__wrapped__", resolve_model)
-    run_loop.get_model = get_measured_model
-    turn_preparation.get_model = get_measured_model
+        setattr(get_measured_model, _MEASURED_FLAG, True)
+        setattr(get_measured_model, "__wrapped__", resolve_model)
+        _SDK_GET_MODEL = resolve_model
+        _MEASURED_GET_MODEL = get_measured_model
+
+    # Wrap the SDK resolver at its definition. ``run_loop`` imports it by name,
+    # so rebind that name too, but only while it is still the unwrapped SDK
+    # function: a foreign wrapper installed there (for example Sentry's OpenAI
+    # Agents integration) resolves ``turn_preparation.get_model`` at call time
+    # and therefore reaches this wrapper in either install order. Wrapping the
+    # foreign wrapper instead would recurse through it.
+    turn_preparation.get_model = _MEASURED_GET_MODEL
+    if run_loop.get_model is _SDK_GET_MODEL:
+        run_loop.get_model = _MEASURED_GET_MODEL
 
 
 def model_request_measurement_installed() -> bool:
-    from agents.run_internal import run_loop
+    from agents.run_internal import run_loop, turn_preparation
 
-    return bool(getattr(run_loop.get_model, _MEASURED_FLAG, False))
+    return (
+        _MEASURED_GET_MODEL is not None
+        and turn_preparation.get_model is _MEASURED_GET_MODEL
+        and run_loop.get_model is not _SDK_GET_MODEL
+    )
 
 
 # ---------------------------------------------------------------------------

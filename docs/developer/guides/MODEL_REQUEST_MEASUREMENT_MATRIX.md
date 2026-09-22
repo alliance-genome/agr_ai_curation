@@ -29,9 +29,15 @@ There are two measurement points and no per-call-site instrumentation.
    its model there, whatever the `RunConfig`, so each turn's model is wrapped in
    `MeasuredModel`. It measures the arguments handed to the provider adapter
    (`get_response` / `stream_response`) before the adapter sends anything, then
-   attaches provider-reported usage from the response. Installed at import by
+   attaches provider-reported usage from the response. Installed by
+   `backend/main.py` `create_app()` before Sentry initializes, and at import by
    `lib/openai_agents/runner.py` and `lib/openai_agents/streaming_tools.py`
-   (and transitively by every module that imports the runner).
+   (and transitively by every module that imports the runner). The wrapper is
+   installed on `turn_preparation.get_model`; `run_loop.get_model` is rebound
+   only while it is still the SDK function, so a foreign wrapper such as
+   Sentry's OpenAI Agents integration (which resolves
+   `turn_preparation.get_model` at call time) reaches it in either install
+   order without recursion.
 2. **Direct provider clients.** Code that calls an OpenAI client without the
    Agents SDK passes the bound request method to
    `call_measured_direct_request(surface=..., provider=..., api=..., kwargs=..., call=...)`,
@@ -52,6 +58,7 @@ There are two measurement points and no per-call-site instrumentation.
 | Agent Studio authoring chat | `agent_studio/openai_runtime.stream_agent_studio_run` -> `Runner.run_streamed` (and `Runner.run`) | SDK resolution; deferred tool definitions sized separately | WebSocket or HTTP | `test_agent_studio_run_measures_visible_and_deferred_tools`, `test_output_schema_visible_and_deferred_tool_definitions_are_separate` |
 | Later tool-loop turns | SDK run loop resolves the model again each turn | a new `MeasuredModel` per turn | any | `test_every_tool_loop_turn_is_measured_with_single_large_tool_result`, `test_accumulated_small_tool_results_counted_and_warned` |
 | SDK-managed retries | `get_response_with_retry` / `stream_response_with_retry` re-invoke the wrapped model | per-turn attempt counter (`attempt`) | any | `test_sdk_retry_attempts_are_each_measured`, `test_blocked_request_is_not_retried_by_sdk_retry_policy` |
+| Transport-internal retries | OpenAI HTTP client `max_retries` (including `OPENAI_COMPATIBLE_HTTP_MAX_RETRIES`) and WebSocket reconnect-before-first-event retries resend the same payload inside one SDK attempt | covered by that attempt's record; not counted separately | HTTP / WebSocket | not separately observable |
 | OpenAI-compatible providers (Gemini, Groq, OpenRouter) | `lib/openai_agents/config.py` `get_model_for_agent` builds provider-bound SDK models | SDK resolution; provider-aware limits | HTTP (chat completions) | `test_compatible_provider_is_measured_not_blocked_by_openai_field_limit` |
 | Standard-chat context compaction | SDK `OpenAIResponsesCompactionSession` -> `client.responses.compact` on `SafeAsyncOpenAI` in `lib/openai_agents/runner.py` | `SafeAsyncOpenAI._wrap_responses_compact` -> `call_measured_direct_request` | HTTP | `test_safe_client_compaction_request_is_measured` |
 | Abstract extraction | `lib/openai_agents/prompt_utils.py` `_extract_abstract_with_llm` (`chat.completions`) | `call_measured_direct_request` | HTTP | `test_direct_chat_completion_measured_with_usage` |
@@ -72,7 +79,7 @@ The guard compares these with the code. A new site must be measured and added.
 
 ## What one measurement record contains
 
-Each request attempt produces one record: a `model_request_measurement` INFO
+Each SDK-level request attempt (and each direct-client call) produces one record: a `model_request_measurement` INFO
 log line (numeric sizes and small labels only; `extra.model_request_measurement`
 holds the full record) and a `runtime.model_request_measurement` extraction
 trace event, which is mirrored to Langfuse as an EVENT observation.
@@ -83,7 +90,7 @@ trace event, which is mirrored to Langfuse as an EVENT observation.
 | `measurement_basis`, `transport_payload_observed` | `agents_sdk_model_call` measures the adapter arguments; the final wire frame (HTTP body or WebSocket frame) is built inside the SDK and is not separately observed. `direct_client_kwargs` measures the exact client request |
 | `outbound.instructions` | characters and UTF-8 bytes of the `instructions` field (exact) |
 | `outbound.input` | input/history size, items by role, `tool_calls`, `tool_results` (count, total, largest with tool name), reasoning items, `loaded_deferred_tool_definitions` (from `tool_search_output` items) |
-| `outbound.tools` | `initially_visible` and `deferred` tool definitions, hosted tool types, handoffs |
+| `outbound.tools` | `initially_visible` and `deferred` function tool definitions (name, description, parameters schema), hosted tool types, handoffs. Hosted tools other than hosted MCP are sized by type and name only; their provider-side definitions are not observable |
 | `outbound.output_schema` | structured output schema size, or null for plain text |
 | `model_visible` | instructions + input + initially visible tools + handoffs + output schema, with `estimated_tokens` (characters / 4, labelled `estimate_basis`) |
 | `deferred_tools` | definitions transported for hosted tool search; `loaded_status=provider_managed` because the provider decides what it loads during the response |
@@ -118,12 +125,18 @@ A blocked request is reported once through
 `report_payload_contract_violation` with fingerprint
 `[payload_contract, provider_request_blocked, openai_responses.instructions]`,
 compact size/limit/setting context and hashed trace/session/flow tags. Repeats
-of the same blocked request in the same trace are logged, not captured again,
-and `before_send` drops events that re-report an exception already captured
-(`raise ... from`, `exc_info`, or the exception passed as a log argument). Size
+for the same agent and component in the same trace or run are logged, not
+captured again, and `before_send` drops events that re-report an exception
+already captured (`raise ... from`, `exc_info`, or the exception passed as a
+log argument; implicit `__context__` chains are distinct failures and are not
+dropped). Size
 warnings and normal paging do not create Sentry events. If Sentry is
 unavailable, the structured `payload contract violation` log line and the
 original error remain.
+
+When Sentry's optional OpenAI Agents integration is enabled, it wraps the
+`MeasuredModel` returned by resolution, so its response-model span attribute
+(set from `_fetch_response`) is not populated; its client spans still record.
 
 Alert delivery is a separate release-validation step: a returned event id
 proves local capture only. Verify ingestion and delivery through the existing
