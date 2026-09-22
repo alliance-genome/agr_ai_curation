@@ -2973,16 +2973,22 @@ def _payload_path_for_ref(field_ref: str) -> str | None:
 
 
 def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[str, list[str]]:
-    """Open validation finding paths per object id, relative to the payload."""
+    """Open validation finding paths per object reference, relative to the payload.
+
+    Findings reference their object by object_id or pending_ref_id.
+    """
 
     paths: dict[str, list[str]] = defaultdict(list)
     for row in bundle.rows_for_source("validation_finding"):
         if str(row.get("validation.status") or "").strip().lower() != "open":
             continue
-        object_id = _string_value(row.get("object.object_id"))
         field_path = _string_value(row.get("validation.field_path")).removeprefix("payload.")
-        if object_id and field_path:
-            paths[object_id].append(field_path)
+        if not field_path:
+            continue
+        for key in ("object.object_id", "object.pending_ref_id"):
+            reference = _string_value(row.get(key))
+            if reference:
+                paths[reference].append(field_path)
     return paths
 
 
@@ -3011,7 +3017,14 @@ def _display_renderer(
     specs: Mapping[str, Any],
     open_paths: Mapping[str, list[str]],
 ) -> ValueRenderer:
-    finding_paths = open_paths.get(_string_value(row.get("object.object_id")), [])
+    finding_paths = [
+        path
+        for reference in dict.fromkeys(
+            _string_value(row.get(key)) for key in ("object.object_id", "object.pending_ref_id")
+        )
+        if reference
+        for path in open_paths.get(reference, [])
+    ]
 
     def render(field_ref: str, value: Any, index: int | None) -> str:
         unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref))

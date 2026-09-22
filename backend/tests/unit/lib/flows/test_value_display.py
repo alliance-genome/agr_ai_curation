@@ -130,7 +130,10 @@ def _structured_bundle():
         FlowOutputField(ref=STATEMENT, label="Statement", value_type="string", row_source="object"),
         FlowOutputField(ref="object.object_id", label="Object", value_type="string", row_source="object"),
     ]
-    findings = [{"object.object_id": "o1", "validation.status": "open",
+    rows[1]["object.pending_ref_id"] = "pending-o2"
+    findings = [{"object.object_id": "", "object.pending_ref_id": "pending-o2", "validation.status": "open",
+                 "validation.field_path": "where_expressed_statement"},
+                {"object.object_id": "o1", "validation.status": "open",
                  "validation.field_path": "expression_pattern.when_expressed.stage_uberon_slim_terms[1]"},
                 {"object.object_id": "o2", "validation.status": "resolved",
                  "validation.field_path": "expression_pattern.where_expressed.anatomical_structure"}]
@@ -168,6 +171,8 @@ def test_every_non_json_rendering_path_uses_display_text(output_format):
     assert first["first"] == "hypodermis (WBbt:0005733)"
     # Declared id role missing while a label is present marks the proposal.
     assert second["anatomy"] == "residual body (unresolved)"
+    # An open finding referenced by pending_ref_id marks that object's field.
+    assert second["pair"] == "residual body (unresolved) | near the residual body (unresolved)"
     assert second["stages"] == "—"
     for row in result.rows:
         for value in row.values():
