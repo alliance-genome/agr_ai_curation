@@ -278,6 +278,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # These regressions intentionally exercise the installed Alliance domain pack.
     Path("backend/tests/unit/lib/domain_packs/test_supporting_evidence_contract.py"),
     Path("backend/tests/unit/lib/domain_packs/test_materialization.py"),
+    Path("backend/tests/unit/lib/domain_packs/test_pack_display_declarations.py"),
     Path("backend/tests/unit/lib/domain_packs/test_pack_workspace_display.py"),
     Path("backend/tests/unit/lib/domain_packs/test_validator_dispatch.py"),
     Path("backend/tests/unit/lib/domain_packs/test_validation_registry_metadata.py"),

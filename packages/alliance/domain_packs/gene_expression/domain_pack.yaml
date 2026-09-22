@@ -37,6 +37,9 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/expression.yaml
             class: GeneExpressionAnnotation
+    metadata:
+      display:
+        label: expression_annotation_subject.gene_symbol
   - model_id: GeneExpressionExperimentPayload
     display_name: Gene expression experiment payload
     description: Embedded expression experiment fields needed to ground assay context for one annotation.
@@ -69,6 +72,10 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/gene.yaml
             class: Gene
+    metadata:
+      display:
+        label: gene_symbol
+        id: primary_external_id
   - model_id: ReferenceSnapshotPayload
     display_name: Reference snapshot payload
     description: Embedded reference identifier for the annotation evidence.
@@ -85,6 +92,10 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/reference.yaml
             class: Reference
+    metadata:
+      display:
+        label: title
+        id: reference_id
   - model_id: OrganizationSnapshotPayload
     display_name: Organization snapshot payload
     description: Embedded data provider identity for the annotation.
@@ -101,6 +112,9 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/agent.yaml
             class: Organization
+    metadata:
+      display:
+        label: abbreviation
   - model_id: VocabularyTermSnapshotPayload
     display_name: Vocabulary term snapshot payload
     description: Embedded controlled vocabulary term identity.
@@ -117,6 +131,9 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/controlledVocabulary.yaml
             class: VocabularyTerm
+    metadata:
+      display:
+        label: name
   - model_id: OntologyTermSnapshotPayload
     display_name: Ontology term snapshot payload
     description: Embedded ontology term identity for assay, stage, anatomy, UBERON slim, and cellular component refs.
@@ -133,6 +150,10 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/ontologyTerm.yaml
             class: OntologyTerm
+    metadata:
+      display:
+        label: name
+        id: curie
   - model_id: ReagentSnapshotPayload
     display_name: Detection reagent snapshot payload
     description: Embedded detection reagent selector or placeholder for expression assay context.
@@ -218,6 +239,10 @@ model_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
             class: ExperimentalCondition
+    metadata:
+      display:
+        label: condition_summary
+        id: condition_class.curie
   - model_id: ExpressionPatternPayload
     display_name: Expression pattern payload
     description: Embedded expression pattern context for one annotation.
@@ -729,6 +754,11 @@ object_definitions:
         required: true
         model_ref: GeneExpressionExperimentPayload
         metadata:
+          display:
+            compose:
+              - entity_assayed
+              - expression_assay_used
+            separator: "; "
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1051,6 +1081,11 @@ object_definitions:
         display_name: Condition relations
         model_ref: ConditionRelationPayload
         metadata:
+          display:
+            compose:
+              - condition_relation_type.name
+              - conditions
+            separator: ": "
           render_as: sub-table
           hide_when_empty: true
           multivalued: true
@@ -1318,6 +1353,11 @@ object_definitions:
         required: true
         model_ref: ExpressionPatternPayload
         metadata:
+          display:
+            compose:
+              - where_expressed
+              - when_expressed
+            separator: "; "
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1333,6 +1373,10 @@ object_definitions:
         display_name: Temporal context
         model_ref: TemporalContextPayload
         metadata:
+          display:
+            compose:
+              - developmental_stage_start
+            separator: "; "
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1482,6 +1526,11 @@ object_definitions:
         required: true
         model_ref: AnatomicalSitePayload
         metadata:
+          display:
+            compose:
+              - anatomical_structure
+              - cellular_component
+            separator: "; "
           anatomical_site_postcondition:
             required_any:
               - expression_pattern.where_expressed.anatomical_structure
