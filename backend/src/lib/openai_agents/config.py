@@ -2906,18 +2906,20 @@ def get_flow_projection_max_row_chars() -> int:
 
 
 def get_flow_projection_max_rows() -> int:
-    """Hard cap on rows a deterministic flow output projection emits (FLOW_PROJECTION_MAX_ROWS).
+    """Operational ceiling on rows a flow output projection emits (FLOW_PROJECTION_MAX_ROWS).
 
     Safety ceiling so a runaway projection cannot build an unbounded table.
-    Default 10000.
+    Finalized files and chat output above it fail explicitly rather than being
+    cut short; curator-requested max_rows limits are separate. Default 10000.
     """
     return max(1, _get_env_int_with_fallback("FLOW_PROJECTION_MAX_ROWS", 10_000))
 
 
 def get_flow_chat_max_rows() -> int:
-    """Max rows rendered in a chat-format flow output (FLOW_CHAT_MAX_ROWS).
+    """Default rows per formatter row-inspection page (FLOW_CHAT_MAX_ROWS).
 
-    Bounds chat table/section length. Default 50.
+    Delivered chat output is not limited by this value; application code
+    renders every requested row. Default 50.
     """
     return max(1, _get_env_int_with_fallback("FLOW_CHAT_MAX_ROWS", 50))
 
@@ -3169,3 +3171,61 @@ def log_agent_config(agent_name: str, config: AgentConfig) -> None:
         config.reasoning,
         config.tool_choice,
     )
+
+
+# =============================================================================
+# ALL-1275: Application-owned flow output rendering
+# =============================================================================
+
+def get_output_tool_max_response_chars() -> int:
+    """Total serialized chars one output-formatter tool response may return (OUTPUT_TOOL_MAX_RESPONSE_CHARS).
+
+    Applies to every formatter tool response (inventory/catalog pages, row and
+    value pages, previews, plans, errors and finalization receipts). Paged
+    tools fill pages up to this budget and return a continuation cursor; the
+    full data stays in the application-held bundle. Default 24000 (about 6k
+    tokens), a third of the 72k-char inventory that one production formatter
+    call returned for seven objects.
+    """
+    return max(2_000, _get_env_int_with_fallback("OUTPUT_TOOL_MAX_RESPONSE_CHARS", 24_000))
+
+
+def get_output_tool_catalog_page_size() -> int:
+    """Field-catalog entries per output-formatter inventory page (OUTPUT_TOOL_CATALOG_PAGE_SIZE).
+
+    Upper bound on catalog entries returned per page before the response budget
+    applies; later entries are reached through the returned cursor or a
+    catalog search. Default 40.
+    """
+    return max(1, _get_env_int_with_fallback("OUTPUT_TOOL_CATALOG_PAGE_SIZE", 40))
+
+
+def get_output_tool_value_read_chars() -> int:
+    """Max chars returned by one exact bounded value read (OUTPUT_TOOL_VALUE_READ_CHARS).
+
+    ``read_output_value`` returns an exact slice of one saved cell's serialized
+    value plus the next offset, so one giant field stays readable in order.
+    Default 8000.
+    """
+    return max(200, _get_env_int_with_fallback("OUTPUT_TOOL_VALUE_READ_CHARS", 8_000))
+
+
+def get_flow_output_chat_max_chars() -> int:
+    """Operational ceiling on application-rendered chat output chars (FLOW_OUTPUT_CHAT_MAX_CHARS).
+
+    Chat tables are rendered from every requested row by application code and
+    delivered to the UI and transcript once. Output above this ceiling fails
+    explicitly (reported to Sentry) instead of being cut short; the saved
+    results are unaffected. Curator-requested row limits are separate and
+    remain valid. Default 4000000.
+    """
+    return max(1_000, _get_env_int_with_fallback("FLOW_OUTPUT_CHAT_MAX_CHARS", 4_000_000))
+
+
+def get_flow_output_chat_notes_max_chars() -> int:
+    """Max chars of formatter-written notes appended to a chat table (FLOW_OUTPUT_CHAT_NOTES_MAX_CHARS).
+
+    Notes carry brief curator-requested caveats; table rows always come from
+    the saved results. Longer notes are rejected, not truncated. Default 1200.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_CHAT_NOTES_MAX_CHARS", 1_200))

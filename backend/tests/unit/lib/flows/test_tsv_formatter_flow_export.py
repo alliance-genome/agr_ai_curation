@@ -238,10 +238,20 @@ async def test_runtime_file_formatter_rejects_empty_bundle_before_agent(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_chat_output_formatter_flow_output_renders_authored_chat_table(monkeypatch):
+async def test_chat_output_formatter_binds_bundle_tools_and_returns_receipt(monkeypatch):
+    from src.lib.flows.chat_output_delivery import (
+        chat_output_delivery_scope,
+        deliver_projected_chat_output,
+    )
+    from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
+
     executor = _executor_module()
     captured = {}
-    expected = "| Symbol |\n| --- |\n| TP53 |\n| BRCA1 |"
+    plan = {
+        "format": "chat",
+        "row_source": "object",
+        "columns": [{"key": "symbol", "header": "Symbol", "field_ref": "object.payload.symbol"}],
+    }
 
     def fake_get_agent(agent_id, **kwargs):
         captured["agent_id"] = agent_id
@@ -250,11 +260,22 @@ async def test_chat_output_formatter_flow_output_renders_authored_chat_table(mon
 
     def fake_streaming_tool(**kwargs):
         captured["streaming"] = kwargs
+        context = captured["context"]
+        tools = build_output_formatter_tools(
+            bundle=context["formatter_bundle"],
+            output_format=context["formatter_output_format"],
+            formatter_agent_id=context["formatter_agent_id"],
+            deliver_chat_output=deliver_projected_chat_output,
+        )
+        finalize = next(tool for tool in tools if tool.name == "finalize_chat_output")
 
         @function_tool
         async def render(query: str) -> str:
             captured["query"] = query
-            return expected
+            captured["finalize"] = json.loads(
+                await _invoke_tool(finalize, {"plan_json": json.dumps(plan)})
+            )
+            return "Chat output delivered."
 
         return render
 
@@ -275,18 +296,26 @@ async def test_chat_output_formatter_flow_output_renders_authored_chat_table(mon
         node_data={"custom_instructions": "Only include symbols."},
     )
 
-    result_text = await _invoke_tool(tool, {"query": "Render both saved genes."})
+    with chat_output_delivery_scope() as delivery:
+        result_text = await _invoke_tool(tool, {"query": "Render both saved genes."})
 
-    assert result_text == expected
+    receipt = json.loads(result_text)
+    assert receipt["delivered"] is True
+    assert receipt["projection_summary"]["row_count"] == 2
+    assert "TP53" not in result_text
+    assert delivery.output == "| Symbol |\n| --- |\n| TP53 |\n| BRCA1 |"
+    assert captured["finalize"]["status"] == "ok"
     assert captured["agent_id"] == "chat_output_formatter"
     assert captured["context"]["db_user_id"] == 22
     assert captured["context"]["active_groups"] == ["demo_group"]
+    assert captured["context"]["formatter_output_format"] == "chat"
+    assert captured["context"]["formatter_agent_id"] == "chat_output_formatter"
     contexts = captured["context"]["additional_runtime_context"]
     assert contexts[0] == "Preserve the curator's requested columns."
-    payload = json.loads(contexts[1].split("\n", 2)[2])
-    assert len(payload["rows"]["object"]) == 2
-    assert "TP53" in json.dumps(payload["rows"]["object"])
-    assert "BRCA1" in json.dumps(payload["rows"]["object"])
+    assert contexts[1].startswith("FLOW CHAT OUTPUT SOURCE BUNDLE")
+    payload = json.loads(contexts[1][contexts[1].index("{"):])
+    assert payload["row_sources"]["object"] == 2
+    assert "TP53" not in contexts[1]
     assert payload["curator_output_request"]["custom_instructions"] == "Only include symbols."
     assert captured["query"] == "Render both saved genes."
     assert captured["streaming"]["inline_chat_persistence"] is False

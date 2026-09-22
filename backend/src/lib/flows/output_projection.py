@@ -17,7 +17,6 @@ from src.lib.curation_workspace.domain_envelope_normalization import (
     is_canonical_domain_envelope_payload,
 )
 from src.lib.openai_agents.config import (
-    get_flow_chat_max_rows,
     get_flow_output_projection_preview_max_depth,
     get_flow_projection_max_field_examples,
     get_flow_projection_max_list_items,
@@ -51,6 +50,7 @@ FlowOutputTransformType = Literal[
     "count",
     "map_value",
     "boolean_label",
+    "format_elements",
 ]
 FlowOutputFilterOperator = Literal[
     "eq",
@@ -69,7 +69,6 @@ FlowOutputSortDirection = Literal["asc", "desc"]
 # Env-configurable (defaults unchanged); see config.py getters and .env.example
 # (flow projection tooling group).
 MAX_PROJECTION_ROWS = get_flow_projection_max_rows()
-MAX_CHAT_ROWS = get_flow_chat_max_rows()
 MAX_FIELD_EXAMPLES = get_flow_projection_max_field_examples()
 MAX_PROJECTION_TEXT_CHARS = get_flow_projection_max_text_chars()
 MAX_PROJECTION_LIST_ITEMS = get_flow_projection_max_list_items()
@@ -273,6 +272,20 @@ class FlowOutputTransformSpec(BaseModel):
         return self
 
 
+class FlowOutputOverrideSpec(BaseModel):
+    """Explicit curator-directed change to one derived output row or cell.
+
+    ``row_ref`` is a runtime row reference (``<row_source>#<n>``) resolved
+    against the bound bundle; it never carries data. Overrides change only the
+    derived output, never the saved results.
+    """
+
+    row_ref: str
+    column_key: str | None = None
+    value: Any = None
+    exclude: bool = False
+
+
 class FlowOutputColumnSpec(BaseModel):
     key: str
     header: str | None = None
@@ -314,6 +327,7 @@ class FlowOutputProjectionPlan(BaseModel):
     max_rows: int | None = None
     selection_mode: Literal["guided", "selected_fields"] = "guided"
     selected_sources: list[FlowOutputSelectedSource] = Field(default_factory=list)
+    overrides: list[FlowOutputOverrideSpec] = Field(default_factory=list)
 
 
 class FlowOutputProfileBinding(BaseModel):
@@ -396,6 +410,10 @@ class FlowOutputProjectionResult(BaseModel):
     json_data: Any = None
     chat_output: str | None = None
     group_by: list[str] = Field(default_factory=list)
+    row_refs: list[str] = Field(default_factory=list)
+    limited_by_max_rows: bool = False
+    overrides_applied: int = 0
+    rows_excluded: int = 0
 
 
 class FlowOutputProjectionPreview(BaseModel):
@@ -2132,6 +2150,140 @@ def _pair_join_value(
     return transform.separator.join(rendered) if rendered else missing_value
 
 
+_ELEMENT_PLACEHOLDER = re.compile(r"\{(\d+)\}")
+
+
+def _element_template_errors(transform: FlowOutputTransformSpec) -> list[str]:
+    """Validate format_elements templates and their 1-based placeholders."""
+
+    errors: list[str] = []
+    if not transform.field_refs:
+        errors.append("format_elements requires at least one field_ref in field_refs.")
+    if transform.values:
+        errors.append("format_elements uses field_refs and templates; values are not supported.")
+    templates = [("default", transform.default)]
+    templates.extend((f"mapping[{key!r}]", value) for key, value in transform.mapping.items())
+    for name, template in templates:
+        if not isinstance(template, str) or not template:
+            errors.append(f"format_elements {name} must be a non-empty template string.")
+            continue
+        for match in _ELEMENT_PLACEHOLDER.finditer(template):
+            position = int(match.group(1))
+            if position < 1 or position > len(transform.field_refs):
+                errors.append(
+                    f"format_elements {name} placeholder {{{position}}} does not match "
+                    f"one of the {len(transform.field_refs)} field_refs."
+                )
+    return errors
+
+
+def _aligned_elements(values: Sequence[Any]) -> list[tuple[Any, ...]]:
+    """Align list values by index; scalars broadcast and empty lists stay empty."""
+
+    width = 0
+    for value in values:
+        if isinstance(value, list) and value:
+            if width and len(value) != width:
+                raise ValueError(
+                    "format_elements cannot align list values with incompatible lengths "
+                    f"{width} and {len(value)}."
+                )
+            width = len(value)
+    if not width:
+        width = 1 if any(not _is_empty(value) for value in values) else 0
+    columns: list[list[Any]] = []
+    for value in values:
+        if isinstance(value, list):
+            columns.append(list(value) if value else [None] * width)
+        else:
+            columns.append([None if _is_empty(value) else value] * width)
+    return list(zip(*columns)) if width else []
+
+
+def _format_elements_value(
+    row: Mapping[str, Any],
+    transform: FlowOutputTransformSpec,
+    *,
+    missing_value: str | None,
+) -> str | None:
+    refs = list(transform.field_refs)
+    selector_ref = transform.field_ref
+    values = [row.get(ref) for ref in refs]
+    if selector_ref:
+        values.append(row.get(selector_ref))
+    rendered: list[str] = []
+    for element in _aligned_elements(values):
+        field_values = element[: len(refs)]
+        if all(_is_empty(value) for value in field_values):
+            continue
+        template = transform.default
+        if selector_ref:
+            selector = element[len(refs)]
+            if not _is_empty(selector) and str(selector) in transform.mapping:
+                template = transform.mapping[str(selector)]
+
+        def substitute(match: re.Match[str]) -> str:
+            value = field_values[int(match.group(1)) - 1]
+            return (missing_value or "") if _is_empty(value) else _string_value(value)
+
+        rendered.append(_ELEMENT_PLACEHOLDER.sub(substitute, str(template)))
+    return transform.separator.join(rendered) if rendered else missing_value
+
+
+def projection_row_ref(row_source: str, index: int) -> str:
+    """Runtime reference for the 1-based ``index`` row of one bundle row source."""
+
+    return f"{row_source}#{index}"
+
+
+def bundle_row_refs(
+    bundle: FlowOutputArtifactBundle,
+    row_source: FlowOutputRowSource,
+) -> dict[int, str]:
+    """Map bundle row identity to its stable runtime row reference."""
+
+    return {
+        id(row): projection_row_ref(row_source, index)
+        for index, row in enumerate(bundle.rows_for_source(row_source), start=1)
+    }
+
+
+def bundle_row_for_ref(
+    bundle: FlowOutputArtifactBundle,
+    row_ref: str,
+) -> tuple[FlowOutputRowSource, dict[str, Any]]:
+    """Resolve a runtime row reference against the bound bundle, or fail."""
+
+    raw = str(row_ref or "").strip()
+    row_source, separator, position = raw.partition("#")
+    if (
+        not separator
+        or row_source not in ("artifact", "object", "evidence", "validation_finding")
+        or not position.isdigit()
+    ):
+        raise ValueError(
+            f"row_ref '{raw}' is not a runtime row reference such as 'object#1'."
+        )
+    rows = bundle.rows_for_source(row_source)  # type: ignore[arg-type]
+    index = int(position)
+    if index < 1 or index > len(rows):
+        raise ValueError(
+            f"row_ref '{raw}' is outside the {len(rows)} saved {row_source} row(s)."
+        )
+    return row_source, rows[index - 1]  # type: ignore[return-value]
+
+
+class FlowOutputOperationalCeilingError(RuntimeError):
+    """A finalized output exceeded an operational ceiling and was not produced."""
+
+    def __init__(self, message: str, *, measured: int, limit: int, setting: str, unit: str) -> None:
+        super().__init__(message)
+        self.measured = measured
+        self.limit = limit
+        self.setting = setting
+        self.unit = unit
+
+
 def projection_plan_allows_empty_bundle(plan: FlowOutputProjectionPlan) -> bool:
     """Return whether a projection plan can safely create one literal-only row."""
 
@@ -2261,6 +2413,51 @@ def _rows_for_plan(
             or (selected_source_keys and _source_key_for_row(row) in selected_source_keys)
         )
     ]
+
+
+def _override_errors(
+    bundle: FlowOutputArtifactBundle,
+    plan: FlowOutputProjectionPlan,
+    rows: Sequence[Mapping[str, Any]],
+    columns: Sequence[FlowOutputColumnSpec],
+) -> list[str]:
+    """Validate explicit row/cell overrides against authorized bundle rows."""
+
+    if not plan.overrides:
+        return []
+    errors: list[str] = []
+    selected_row_ids = {id(row) for row in rows}
+    selected_refs = {
+        ref
+        for row_id, ref in bundle_row_refs(bundle, plan.row_source).items()
+        if row_id in selected_row_ids
+    }
+    column_keys = {column.key for column in columns}
+    seen: set[tuple[str, str | None]] = set()
+    for index, override in enumerate(plan.overrides, start=1):
+        context = f"Override {index}"
+        try:
+            row_source, _row = bundle_row_for_ref(bundle, override.row_ref)
+        except ValueError as exc:
+            errors.append(f"{context}: {exc}")
+            continue
+        if row_source != plan.row_source or override.row_ref not in selected_refs:
+            errors.append(
+                f"{context}: row_ref '{override.row_ref}' is not one of this projection's "
+                f"selected {plan.row_source} rows."
+            )
+        if override.exclude:
+            if override.column_key is not None or override.value is not None:
+                errors.append(f"{context}: an exclude override cannot also set column_key or value.")
+        elif not override.column_key or override.column_key not in column_keys:
+            errors.append(
+                f"{context}: column_key '{override.column_key}' is not an output column key."
+            )
+        identity = (override.row_ref, None if override.exclude else override.column_key)
+        if identity in seen:
+            errors.append(f"{context}: duplicate override for {identity[0]} {identity[1] or '(row)'}.")
+        seen.add(identity)
+    return errors
 
 
 def validate_projection_plan(
@@ -2396,6 +2593,11 @@ def validate_projection_plan(
             )
         else:
             for transform in _transform_specs(column.transform):
+                if transform.type == "format_elements":
+                    errors.extend(
+                        f"Column '{column.key}' {error}"
+                        for error in _element_template_errors(transform)
+                    )
                 if transform.type != "pair_join":
                     continue
                 if transform.field_ref is not None or transform.values:
@@ -2424,6 +2626,13 @@ def validate_projection_plan(
                     for row in transform_rows:
                         try:
                             _pair_join_value(row, transform, missing_value=plan.missing_value)
+                        except ValueError as exc:
+                            errors.append(f"Column '{column.key}' {exc}")
+                            break
+                if transform.type == "format_elements" and not _element_template_errors(transform):
+                    for row in transform_rows:
+                        try:
+                            _format_elements_value(row, transform, missing_value=plan.missing_value)
                         except ValueError as exc:
                             errors.append(f"Column '{column.key}' {exc}")
                             break
@@ -2456,6 +2665,7 @@ def validate_projection_plan(
             errors=errors,
             context="Group by",
         )
+    errors.extend(_override_errors(bundle, plan, rows, columns))
     if plan.group_by and plan.format in {"csv", "tsv"}:
         errors.append(
             f"group_by is not supported for {plan.format.upper()} projections; "
@@ -2596,6 +2806,8 @@ def _transform_value(
         if key in transform.mapping:
             return transform.mapping[key]
         return transform.default if transform.default is not None else missing_value
+    if transform.type == "format_elements":
+        return _format_elements_value(row, transform, missing_value=missing_value)
     if transform.type == "boolean_label":
         value = row.get(transform.field_ref or "")
         if isinstance(value, bool):
@@ -2665,6 +2877,23 @@ def apply_projection_plan(
     for filter_spec in plan.filters:
         rows = [row for row in rows if _row_matches_filter(row, filter_spec)]
     rows = _sort_rows(rows, plan.sort)
+    ref_by_row_id = bundle_row_refs(bundle, plan.row_source)
+    excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
+    if plan.overrides:
+        present_refs = {ref_by_row_id.get(id(row)) for row in rows}
+        missing_refs = sorted(
+            {override.row_ref for override in plan.overrides} - present_refs
+        )
+        if missing_refs:
+            raise ValueError(
+                "Override row_ref(s) are not in the filtered projection: "
+                + ", ".join(missing_refs)
+            )
+    rows_excluded = 0
+    if excluded_refs:
+        kept_rows = [row for row in rows if ref_by_row_id.get(id(row)) not in excluded_refs]
+        rows_excluded = len(rows) - len(kept_rows)
+        rows = kept_rows
 
     total_count = len(rows)
     max_rows = plan.max_rows or MAX_PROJECTION_ROWS
@@ -2672,10 +2901,29 @@ def apply_projection_plan(
         max_rows = min(max_rows, max(1, preview_limit))
     limited_rows = rows[:max_rows]
     truncated = len(rows) > len(limited_rows)
+    limited_by_max_rows = bool(
+        plan.max_rows is not None and total_count > plan.max_rows
+    )
+    row_refs = [ref_by_row_id.get(id(row), "") for row in limited_rows]
     projected_rows = [
         _project_row(row, columns, missing_value=plan.missing_value, preserve_empty=plan.selection_mode == "selected_fields")
         for row in limited_rows
     ]
+    cell_overrides = [override for override in plan.overrides if not override.exclude]
+    if cell_overrides:
+        position_by_ref = {ref: position for position, ref in enumerate(row_refs)}
+        beyond_limit = sorted(
+            {override.row_ref for override in cell_overrides} - set(position_by_ref)
+        )
+        if beyond_limit and preview_limit is None:
+            raise ValueError(
+                "Override row_ref(s) fall outside the output row limit: "
+                + ", ".join(beyond_limit)
+            )
+        for override in cell_overrides:
+            position = position_by_ref.get(override.row_ref)
+            if position is not None and override.column_key is not None:
+                projected_rows[position][override.column_key] = _jsonable(override.value)
 
     json_data: Any = None
     chat_output: str | None = None
@@ -2699,24 +2947,23 @@ def apply_projection_plan(
         else:
             json_data = projected_rows
     elif plan.format == "chat":
-        source_chat_rows = limited_rows[:MAX_CHAT_ROWS]
-        chat_rows = projected_rows[:MAX_CHAT_ROWS]
-        chat_truncated = truncated or len(projected_rows) > len(chat_rows)
+        # Chat output renders every projected row; row counts are limited only
+        # by an explicit max_rows or an explicit preview request.
         if plan.group_by:
             chat_output = render_grouped_chat_projection(
-                groups=_group_projected_rows(source_chat_rows, chat_rows, plan.group_by),
+                groups=_group_projected_rows(limited_rows, projected_rows, plan.group_by),
                 columns=columns,
                 layout=plan.chat_layout,
                 total_count=total_count,
-                truncated=chat_truncated,
+                truncated=truncated,
             )
         else:
             chat_output = render_chat_projection(
-                rows=chat_rows,
+                rows=projected_rows,
                 columns=columns,
                 layout=plan.chat_layout,
                 total_count=total_count,
-                truncated=chat_truncated,
+                truncated=truncated,
             )
 
     return FlowOutputProjectionResult(
@@ -2730,6 +2977,10 @@ def apply_projection_plan(
         json_data=json_data,
         chat_output=chat_output,
         group_by=list(plan.group_by),
+        row_refs=row_refs,
+        limited_by_max_rows=limited_by_max_rows,
+        overrides_applied=len(cell_overrides),
+        rows_excluded=rows_excluded,
     )
 
 
@@ -2798,7 +3049,24 @@ def finalize_output_projection(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
 ) -> FlowOutputProjectionResult:
-    return apply_projection_plan(bundle, plan)
+    """Project every requested row, or fail when an operational ceiling cuts rows.
+
+    An explicit ``max_rows`` is a requested limit and is honored. Without one,
+    rows beyond ``FLOW_PROJECTION_MAX_ROWS`` are never silently dropped.
+    """
+
+    result = apply_projection_plan(bundle, plan)
+    if result.truncated and not result.limited_by_max_rows:
+        raise FlowOutputOperationalCeilingError(
+            f"The projection matched {result.total_count} rows, above the operational "
+            f"ceiling of {MAX_PROJECTION_ROWS} rows. No partial output was produced; "
+            "the saved results are unchanged.",
+            measured=result.total_count,
+            limit=MAX_PROJECTION_ROWS,
+            setting="FLOW_PROJECTION_MAX_ROWS",
+            unit="rows",
+        )
+    return result
 
 
 def render_chat_projection(
@@ -2897,6 +3165,8 @@ __all__ = [
     "FlowOutputColumnSpec",
     "FlowOutputField",
     "FlowOutputFilterSpec",
+    "FlowOutputOperationalCeilingError",
+    "FlowOutputOverrideSpec",
     "FlowOutputProjectionPlan",
     "FlowOutputProjectionPreview",
     "FlowOutputProjectionResult",
@@ -2904,12 +3174,15 @@ __all__ = [
     "FlowOutputTransformSpec",
     "apply_projection_plan",
     "build_extraction_result_artifact_bundle",
+    "bundle_row_for_ref",
+    "bundle_row_refs",
     "build_flow_output_artifact_bundle",
     "default_columns_for_row_source",
     "default_projection_plan",
     "finalize_output_projection",
     "inspect_output_artifacts",
     "projection_plan_allows_empty_bundle",
+    "projection_row_ref",
     "preview_output_projection",
     "render_grouped_chat_projection",
     "render_chat_projection",

@@ -106,10 +106,12 @@ _OUTPUT_FORMATTER_RUNTIME_TOOL_IDS = (
     "inspect_output_artifacts",
     "inspect_output_rows",
     "inspect_field_values",
+    "read_output_value",
     "build_default_projection_plan",
     "validate_output_projection",
     "preview_output_projection",
     "finalize_and_save",
+    "finalize_chat_output",
     "formatter_cannot_complete",
 )
 _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET = frozenset(_OUTPUT_FORMATTER_RUNTIME_TOOL_IDS)
@@ -120,24 +122,48 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
     "explain_formatter_capabilities": {
         "name": "Explain Formatter Capabilities",
         "description": (
-            "Explain the bound CSV/TSV/JSON formatter workflow, available saved "
-            "row sources, supported plan operations, and completion rules."
+            "Explain the bound CSV/TSV/JSON or chat formatter workflow, available saved "
+            "row sources, supported plan operations, response budgets, and completion rules."
         ),
         "parameters": [],
     },
     "inspect_output_artifacts": {
         "name": "Inspect Output Artifacts",
         "description": (
-            "Inspect saved row-source counts, default columns, field refs, source "
-            "ids/keys, bounded examples, and warnings for the bound export bundle."
+            "Inspect saved row-source counts, default column refs, source ids/keys, "
+            "warnings, and one searchable, bounded page of the field catalog."
         ),
         "parameters": [
+            {
+                "name": "catalog_query",
+                "type": "string",
+                "required": False,
+                "description": "Optional text matched against field refs and labels.",
+            },
+            {
+                "name": "row_source",
+                "type": "string",
+                "required": False,
+                "description": "Optional row source whose catalog fields to list.",
+            },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Cursor returned by a prior catalog page.",
+            },
+            {
+                "name": "limit",
+                "type": "integer",
+                "required": False,
+                "description": "Maximum catalog entries in this page.",
+            },
             {
                 "name": "example_limit",
                 "type": "integer",
                 "required": False,
-                "description": "Maximum bounded examples to include per source.",
-            }
+                "description": "Short example previews per catalog field (default 1).",
+            },
         ],
     },
     "inspect_output_rows": {
@@ -216,6 +242,45 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
                 "required": False,
                 "description": "Maximum distinct values to return.",
             },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Cursor returned by a prior distinct-value page.",
+            },
+        ],
+    },
+    "read_output_value": {
+        "name": "Read Output Value",
+        "description": (
+            "Read an exact, bounded slice of one saved value by row reference and "
+            "field ref, with the offset of the next slice."
+        ),
+        "parameters": [
+            {
+                "name": "row_ref",
+                "type": "string",
+                "required": True,
+                "description": "Runtime row reference such as object#1.",
+            },
+            {
+                "name": "field_ref",
+                "type": "string",
+                "required": True,
+                "description": "Saved field ref to read.",
+            },
+            {
+                "name": "offset",
+                "type": "integer",
+                "required": False,
+                "description": "Character offset to start reading from.",
+            },
+            {
+                "name": "max_chars",
+                "type": "integer",
+                "required": False,
+                "description": "Maximum characters in this slice.",
+            },
         ],
     },
     "build_default_projection_plan": {
@@ -279,6 +344,12 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
                 "required": False,
                 "description": "Maximum preview rows to return.",
             },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Cursor returned by a prior preview page.",
+            },
         ],
     },
     "finalize_and_save": {
@@ -302,6 +373,30 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
                 "type": "string",
                 "required": False,
                 "description": "Clean base filename hint without extension or timestamp.",
+            },
+        ],
+    },
+    "finalize_chat_output": {
+        "name": "Finalize Chat Output",
+        "description": (
+            "Finalize a source-backed projection over every saved row and deliver the "
+            "rendered chat table to the curator exactly once."
+        ),
+        "parameters": [
+            {
+                "name": "plan_json",
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Projection plan JSON. Empty input uses the validated default "
+                    "projection."
+                ),
+            },
+            {
+                "name": "notes",
+                "type": "string",
+                "required": False,
+                "description": "Brief curator-requested caveat shown below the table.",
             },
         ],
     },
@@ -1005,6 +1100,7 @@ def _resolve_runtime_formatter_tool(
 ) -> Any:
     """Resolve one runtime-bound formatter tool from the current export bundle."""
 
+    from src.lib.flows.chat_output_delivery import deliver_projected_chat_output
     from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
     from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
 
@@ -1023,6 +1119,7 @@ def _resolve_runtime_formatter_tool(
         formatter_agent_id=formatter_agent_id,
         save_projected_output=save_projected_file_output,
         configured_plan=execution_context.formatter_projection_plan,
+        deliver_chat_output=deliver_projected_chat_output,
     )
     for tool in tools:
         if getattr(tool, "name", None) == tool_id:

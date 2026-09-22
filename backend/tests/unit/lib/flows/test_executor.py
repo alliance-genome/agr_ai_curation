@@ -7102,13 +7102,17 @@ class TestExecuteFlowTermination:
             adapter_key="gene",
             payload=_structured_step_output("TP53", actor="gene", destination="gene"),
         )
+        # The chat step returns only a compact receipt to the supervisor; the
+        # application-held rendering is the single CHAT_OUTPUT_READY source.
         chat_step = {
             "step": 2,
             "node_id": "n2",
             "agent_id": "chat_output_formatter",
             "agent_name": "Chat Output",
             "tool_name": "ask_chat_output_specialist",
-            "output": "Found one supported gene.",
+            "output": json.dumps(
+                {"status": "ok", "delivered": True, "chat_output_id": "chat-output-1"}
+            ),
             "projected_chat_output": "Found one supported gene.",
             "candidate": None,
             "evidence_records": [],
@@ -7376,6 +7380,12 @@ class TestExecuteFlowTermination:
         assert lifecycle_order == expected_lifecycle_order
         chat_ready = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
         assert chat_ready["details"]["output"] == "Found one supported gene."
+        assert chat_ready["details"]["formatter_node_id"] == "n2"
+        assert not any(
+            "chat-output-1" in json.dumps(event, default=str)
+            for event in events
+            if event.get("type") == "CHAT_OUTPUT_READY"
+        )
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
@@ -8821,10 +8831,15 @@ class TestExecuteFlowTermination:
 
 
 @pytest.mark.asyncio
-async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypatch):
-    """A long custom extraction must not become a default fifty-row metadata preview."""
+async def test_chat_formatter_delivers_all_custom_rows_through_bound_tools(monkeypatch):
+    """A long custom extraction is rendered in full by the application, not the model."""
     from agents.tool_context import ToolContext
+    from src.lib.flows.chat_output_delivery import (
+        chat_output_delivery_scope,
+        deliver_projected_chat_output,
+    )
     from src.lib.flows.output_projection import FlowOutputArtifact, FlowOutputArtifactBundle, FlowOutputField
+    from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
     executor = _executor_module()
     rows = [
         {"object.object_id": f"observation-{i}", "object.attribute.phenotype": f"Phenotype {i}",
@@ -8839,7 +8854,10 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
                                 "validation.candidate_matches": [{"value": "TEST:1", "label": "Possible match"}],
                                 "validation.lookup_attempts": [{"method": "search_alleles_bulk", "candidate_count": 26, "lookup_status": "ambiguous"}],
                                 "validation.target": {"object_id": "observation-81", "field_path": "attributes.identity"}}]},
-        )], field_catalog=[FlowOutputField(ref="object.attribute.phenotype", label="Phenotype", row_source="object", value_type="string")],
+        )], field_catalog=[
+            FlowOutputField(ref="object.attribute.phenotype", label="Phenotype", row_source="object", value_type="string"),
+            FlowOutputField(ref="object.attribute.genotype", label="Genotype", row_source="object", value_type="string"),
+        ],
     )
     monkeypatch.setattr(executor, "_build_terminal_flow_artifact_bundle", lambda **kwargs: bundle)
     captured = {}
@@ -8848,38 +8866,58 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
         captured.update(agent_id=agent_id, kwargs=kwargs)
         return agent
     monkeypatch.setattr(executor, "get_agent_by_id", get_agent)
+    plan = {"format": "chat", "row_source": "object", "columns": [
+        {"key": "genotype", "header": "Genotype", "field_ref": "object.attribute.genotype"},
+        {"key": "phenotype", "header": "Phenotype", "field_ref": "object.attribute.phenotype"},
+    ]}
     async def invoke(ctx, arguments):
         captured["query"] = json.loads(arguments)["query"]
         captured["run_config"] = ctx.run_config
-        return "Authored six-column table with all 82 records"
+        tools = build_output_formatter_tools(
+            bundle=captured["kwargs"]["formatter_bundle"], output_format="chat",
+            formatter_agent_id="chat_output_formatter", deliver_chat_output=deliver_projected_chat_output,
+        )
+        finalize = next(tool for tool in tools if tool.name == "finalize_chat_output")
+        finalize_args = json.dumps({"plan_json": json.dumps(plan)})
+        captured["finalize"] = json.loads(await finalize.on_invoke_tool(
+            ToolContext(context=None, tool_name=finalize.name, tool_call_id="finalize", tool_arguments=finalize_args),
+            finalize_args,
+        ))
+        return "Chat output delivered."
     def streaming(**kwargs):
         assert kwargs["agent"] is agent and kwargs["propagate_errors"]
         assert kwargs["inline_chat_persistence"] is False
         return SimpleNamespace(on_invoke_tool=invoke)
     monkeypatch.setattr(executor, "_create_streaming_tool", streaming)
-    instructions = "Show all records in six columns: Figure, Genotype, Stage, Conditions, Phenotype, Qualifier."
+    instructions = "Show all records in two columns: Genotype, Phenotype."
     tool = executor._make_flow_chat_output_tool(
         agent_id="chat_output_formatter", output_format="chat", tool_name="ask_chat_output_formatter_specialist",
         tool_description="Display results", specialist_name="Chat Output", base_context={"db_user_id": 22, "authenticated_groups": []},
         step_instruction_prefix=instructions, completed_steps=[], flow_name="Phenotype flow", flow_run_id="run", document_id="paper",
         node_data={"custom_instructions": instructions, "step_goal": "Display every phenotype"}, source_node_ids=["extractor"],
     )
-    arguments = json.dumps({"query": "Use the requested six columns"})
+    arguments = json.dumps({"query": "Use the requested columns"})
     ctx = ToolContext(context=None, tool_name=tool.name, tool_call_id="chat-call", tool_arguments=arguments)
-    output = await tool.on_invoke_tool(ctx, arguments)
-    assert output == "Authored six-column table with all 82 records"
+    with chat_output_delivery_scope() as delivery:
+        output = await tool.on_invoke_tool(ctx, arguments)
+    receipt = json.loads(output)
+    assert receipt["delivered"] is True
+    assert receipt["projection_summary"]["row_count"] == 82
+    assert "Phenotype 81" not in output
+    table_lines = (delivery.output or "").split("\n")
+    assert len(table_lines) == 84
+    assert table_lines[-1] == "| genotype-81 | Phenotype 81 |"
+    assert "Showing" not in (delivery.output or "")
     assert captured["agent_id"] == "chat_output_formatter"
     assert captured["kwargs"]["db_user_id"] == 22
     assert captured["kwargs"]["authenticated_groups"] == []
+    assert captured["kwargs"]["formatter_bundle"] is bundle
     contexts = captured["kwargs"]["additional_runtime_context"]
     assert contexts[0] == instructions
-    payload = json.loads(contexts[1].split("\n", 2)[2])
-    assert payload["rows"]["object"] == rows
-    assert payload["rows"]["evidence"][0]["evidence.verified_quote"] == "Exact source quote"
-    assert payload["rows"]["validation_finding"][0]["validation.message"] == "Requires review"
-    assert payload["rows"]["validation_finding"][0]["validation.candidate_matches"] == [{"value": "TEST:1", "label": "Possible match"}]
-    assert payload["rows"]["validation_finding"][0]["validation.lookup_attempts"] == [
-        {"method": "search_alleles_bulk", "candidate_count": 26, "lookup_status": "ambiguous"}]
-    assert payload["rows"]["validation_finding"][0]["validation.target"]["object_id"] == "observation-81"
+    assert "Phenotype 81" not in contexts[1]
+    assert "search_alleles_bulk" not in contexts[1]
+    assert "Exact source quote" not in contexts[1]
+    payload = json.loads(contexts[1][contexts[1].index("{"):])
+    assert payload["row_sources"] == {"artifact": 0, "object": 82, "evidence": 1, "validation_finding": 1}
     assert payload["curator_output_request"]["custom_instructions"] == instructions
-    assert captured["query"] == "Use the requested six columns"
+    assert captured["query"] == "Use the requested columns"

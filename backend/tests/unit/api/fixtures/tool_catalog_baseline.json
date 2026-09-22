@@ -1625,10 +1625,10 @@
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
     "category": "Output",
-    "description": "Explain the bound CSV/TSV/JSON formatter workflow, available saved row sources, supported plan operations, and completion rules.",
+    "description": "Explain the bound CSV/TSV/JSON or chat formatter workflow, available saved row sources, supported plan operations, response budgets, and completion rules.",
     "documentation": {
       "parameters": [],
-      "summary": "Explain the bound CSV/TSV/JSON formatter workflow, available saved row sources, supported plan operations, and completion rules."
+      "summary": "Explain the bound CSV/TSV/JSON or chat formatter workflow, available saved row sources, supported plan operations, response budgets, and completion rules."
     },
     "methods": null,
     "name": "Explain Formatter Capabilities",
@@ -1697,6 +1697,39 @@
     },
     "methods": null,
     "name": "Finalize And Save",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
+  },
+  "finalize_chat_output": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Finalize a source-backed projection over every saved row and deliver the rendered chat table to the curator exactly once.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Projection plan JSON. Empty input uses the validated default projection.",
+          "name": "plan_json",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Brief curator-requested caveat shown below the table.",
+          "name": "notes",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "summary": "Finalize a source-backed projection over every saved row and deliver the rendered chat table to the curator exactly once."
+    },
+    "methods": null,
+    "name": "Finalize Chat Output",
     "package_backed": false,
     "required_context": [
       "formatter_bundle",
@@ -2987,6 +3020,12 @@
           "name": "limit",
           "required": false,
           "type": "integer"
+        },
+        {
+          "description": "Cursor returned by a prior distinct-value page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
         }
       ],
       "summary": "Inspect distinct saved values and counts for one source field ref after optional projection filters."
@@ -3089,17 +3128,41 @@
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
     "category": "Output",
-    "description": "Inspect saved row-source counts, default columns, field refs, source ids/keys, bounded examples, and warnings for the bound export bundle.",
+    "description": "Inspect saved row-source counts, default column refs, source ids/keys, warnings, and one searchable, bounded page of the field catalog.",
     "documentation": {
       "parameters": [
         {
-          "description": "Maximum bounded examples to include per source.",
+          "description": "Optional text matched against field refs and labels.",
+          "name": "catalog_query",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Optional row source whose catalog fields to list.",
+          "name": "row_source",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Cursor returned by a prior catalog page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Maximum catalog entries in this page.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "Short example previews per catalog field (default 1).",
           "name": "example_limit",
           "required": false,
           "type": "integer"
         }
       ],
-      "summary": "Inspect saved row-source counts, default columns, field refs, source ids/keys, bounded examples, and warnings for the bound export bundle."
+      "summary": "Inspect saved row-source counts, default column refs, source ids/keys, warnings, and one searchable, bounded page of the field catalog."
     },
     "methods": null,
     "name": "Inspect Output Artifacts",
@@ -3974,6 +4037,12 @@
           "name": "limit",
           "required": false,
           "type": "integer"
+        },
+        {
+          "description": "Cursor returned by a prior preview page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
         }
       ],
       "summary": "Validate and preview a source-backed projection plan without saving a file."
@@ -4111,6 +4180,51 @@
       "user_id"
     ],
     "source_file": "python/src/agr_ai_curation_alliance/tools/documents.py"
+  },
+  "read_output_value": {
+    "agent_methods": null,
+    "binding_kind": "runtime_context_factory",
+    "category": "Output",
+    "description": "Read an exact, bounded slice of one saved value by row reference and field ref, with the offset of the next slice.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Runtime row reference such as object#1.",
+          "name": "row_ref",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Saved field ref to read.",
+          "name": "field_ref",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Character offset to start reading from.",
+          "name": "offset",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "Maximum characters in this slice.",
+          "name": "max_chars",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Read an exact, bounded slice of one saved value by row reference and field ref, with the offset of the next slice."
+    },
+    "methods": null,
+    "name": "Read Output Value",
+    "package_backed": false,
+    "required_context": [
+      "formatter_bundle",
+      "formatter_output_format",
+      "formatter_agent_id"
+    ],
+    "runtime_bound": true,
+    "source_file": "src.lib.openai_agents.tools.output_formatter_tools"
   },
   "read_section": {
     "agent_methods": null,

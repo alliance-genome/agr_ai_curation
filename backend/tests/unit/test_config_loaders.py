@@ -237,6 +237,7 @@ class TestAgentLoader:
             "inspect_output_artifacts",
             "inspect_output_rows",
             "inspect_field_values",
+            "read_output_value",
             "build_default_projection_plan",
             "validate_output_projection",
             "preview_output_projection",
