@@ -27,6 +27,7 @@ from src.lib.database.postgres_connection_resolver import (
     get_postgres_connection_resolver,
 )
 from src.lib.observability.sentry import initialize_sentry_if_configured
+from src.lib.openai_agents.model_request_measurement import install_model_request_measurement
 from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
@@ -859,6 +860,9 @@ async def deep_health_check():
 
 def create_app() -> FastAPI:
     """Create a FastAPI application instance."""
+    # Every model request in this process is measured and checked against
+    # known provider field limits, independent of router import order (ALL-1279).
+    install_model_request_measurement()
     initialize_sentry_if_configured()
 
     application = FastAPI(

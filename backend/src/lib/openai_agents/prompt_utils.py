@@ -365,7 +365,17 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
                     model, require_env("ABSTRACT_EXTRACTION_REASONING")
                 )
 
-            response = await client.chat.completions.create(**completion_kwargs)
+            from src.lib.openai_agents.model_request_measurement import (
+                call_measured_direct_request,
+            )
+
+            response = await call_measured_direct_request(
+                surface="abstract_extraction",
+                provider="openai",
+                api="chat_completions",
+                kwargs=completion_kwargs,
+                call=client.chat.completions.create,
+            )
 
             content = response.choices[0].message.content
             if content is None:

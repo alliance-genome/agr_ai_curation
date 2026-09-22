@@ -72,6 +72,10 @@ from .config import (
     runtime_model_uses_provider,
 )
 from src.lib.runtime_payload_budget import provider_context_preflight
+from .model_request_measurement import (
+    call_measured_direct_request,
+    install_model_request_measurement,
+)
 from .extraction_trace_events import (
     clear_extraction_trace_run,
     get_current_extraction_trace_run,
@@ -258,9 +262,13 @@ def build_owned_openai_responses_resources() -> OwnedOpenAIResources:
     else:
         provider_kwargs["use_responses_websocket"] = False
 
+    provider = OpenAIProvider(**provider_kwargs)
+    # Request measurement classifies models this provider resolves as native
+    # OpenAI even if the default runner provider changes (ALL-1279).
+    provider._agr_provider_id = "openai"
     return OwnedOpenAIResources(
         client=client,
-        provider=OpenAIProvider(**provider_kwargs),
+        provider=provider,
     )
 
 
@@ -432,6 +440,7 @@ class SafeAsyncOpenAI(AsyncOpenAI):
         super().__init__(*args, **merged_kwargs)
         self._wrap_responses_api()
         self._wrap_chat_api()
+        self._wrap_responses_compact()
 
     def _wrap_responses_api(self):
         """Wrap responses.create to sanitize metadata."""
@@ -445,6 +454,26 @@ class SafeAsyncOpenAI(AsyncOpenAI):
                 return await original_create(*args, **kwargs)
 
             self.responses.create = safe_create
+
+    def _wrap_responses_compact(self):
+        """Measure SDK context-compaction requests sent through this client.
+
+        Agents SDK model calls are measured at model resolution; compaction is a
+        separate ``responses.compact`` request the SDK sends directly.
+        """
+        if hasattr(self, 'responses') and hasattr(self.responses, 'compact'):
+            original_compact = self.responses.compact
+
+            async def measured_compact(**kwargs):
+                return await call_measured_direct_request(
+                    surface="standard_chat_compaction",
+                    provider=get_default_runner_provider().provider_id,
+                    api="responses.compact",
+                    kwargs=kwargs,
+                    call=original_compact,
+                )
+
+            self.responses.compact = measured_compact
 
     def _wrap_chat_api(self):
         """Wrap chat.completions.create to sanitize metadata."""
@@ -486,6 +515,10 @@ SafeLangfuseAsyncOpenAI = SafeAsyncOpenAI
 # that handles metadata=None gracefully
 _default_client = SafeAsyncOpenAI()
 set_default_openai_client(_default_client)
+
+# Measure every model request (all runtimes, turns and retries) at the SDK's
+# per-turn model resolution; blocks known-invalid provider requests (ALL-1279).
+install_model_request_measurement()
 
 
 def _build_agents_run_config(

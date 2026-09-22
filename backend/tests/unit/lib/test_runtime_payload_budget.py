@@ -82,5 +82,6 @@ def test_preflight_trace_event_is_summary_only(monkeypatch):
     assert event["trace_id"] == "trace-123"
     assert event["event_type"] == "runtime.provider_context_preflight"
     assert event["input_summary"]["payload_summary"]["json_chars"] > 0
+    assert event["input_summary"]["measurement_scope"] == "application_payload"
     assert "raw prompt value that must not be emitted" not in serialized_event
     assert "full selected input quote that must not be emitted" not in serialized_event

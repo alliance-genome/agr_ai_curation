@@ -129,8 +129,12 @@ from src.lib.curation_workspace.extraction_results import (
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.domain_validator import is_domain_validator_result_schema
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
+from .model_request_measurement import install_model_request_measurement
 
 logger = logging.getLogger(__name__)
+
+# Specialist runs (streamed and retry) measure every model request (ALL-1279).
+install_model_request_measurement()
 
 INTERNAL_EXTRACTION_RESULT_EVENT_TYPE = _INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)

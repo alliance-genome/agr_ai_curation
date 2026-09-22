@@ -1840,6 +1840,8 @@ def before_send(
 
     if _is_known_httpcore_closed_loop_cleanup(event):
         return None
+    if _reports_already_captured_exception(hint):
+        return None
     enriched = _with_safe_log_record_metadata(event, hint)
     if enriched is None:
         return None
@@ -1854,6 +1856,49 @@ def before_send(
         if isinstance(contexts, dict):
             contexts["error_detail"] = structured_detail
     return scrubbed
+
+
+def _exception_chain_already_captured(exc: Any) -> bool:
+    seen: set[int] = set()
+    while isinstance(exc, BaseException) and id(exc) not in seen:
+        seen.add(id(exc))
+        if getattr(exc, "_ai_curation_sentry_captured", False):
+            return True
+        exc = exc.__cause__
+    return False
+
+
+def _reports_already_captured_exception(hint: Mapping[str, Any] | None) -> bool:
+    """Whether this event re-reports a failure an application capture already owns.
+
+    Application reporters mark an exception once it is captured (for example
+    ``report_payload_contract_violation``). A wrapper that later re-raises it
+    with ``raise ... from``, logs it with ``exc_info``, or logs it as a message
+    argument would otherwise create a second event for one underlying failure.
+    """
+
+    hint = hint or {}
+    candidates: list[Any] = []
+    exc_info = hint.get("exc_info")
+    if isinstance(exc_info, tuple) and len(exc_info) >= 2:
+        candidates.append(exc_info[1])
+    log_record = hint.get("log_record")
+    if isinstance(log_record, logging.LogRecord):
+        record_exc_info = log_record.exc_info
+        if (
+            isinstance(record_exc_info, tuple)
+            and len(record_exc_info) >= 2
+            and record_exc_info[1] is not None
+        ):
+            # The record's own exception is the failure being reported; a
+            # captured exception merely mentioned in its arguments must not
+            # suppress a distinct error.
+            candidates.append(record_exc_info[1])
+        elif isinstance(log_record.args, tuple):
+            candidates.extend(
+                arg for arg in log_record.args if isinstance(arg, BaseException)
+            )
+    return any(_exception_chain_already_captured(candidate) for candidate in candidates)
 
 
 def _is_known_httpcore_closed_loop_cleanup(event: Mapping[str, Any]) -> bool:

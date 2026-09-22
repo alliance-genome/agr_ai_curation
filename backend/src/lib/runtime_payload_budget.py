@@ -132,6 +132,10 @@ def provider_context_preflight(
     size = json_size(payload)
     summary = {
         "event": "provider_context_preflight",
+        # Application-assembled context before the SDK adds instructions, tool
+        # schemas and later-turn history. The effective per-request size is the
+        # runtime.model_request_measurement record (model_request_measurement.py).
+        "measurement_scope": "application_payload",
         "surface": surface,
         "operation": operation,
         "provider": provider,
@@ -168,6 +172,7 @@ def _preflight_event_details(summary: Mapping[str, Any]) -> dict[str, Any]:
         "provider": summary.get("provider"),
         "model": summary.get("model"),
         "model_live": True,
+        "measurement_scope": summary.get("measurement_scope"),
         "payload_summary": {
             "json_chars": summary.get("json_chars"),
             "estimated_tokens": summary.get("estimated_tokens"),

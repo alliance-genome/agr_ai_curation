@@ -3291,3 +3291,45 @@ def get_section_read_page_max_chunks() -> int:
     SECTION_READ_MAX_CHUNKS default page of 30).
     """
     return max(1, _get_env_int_with_fallback("SECTION_READ_PAGE_MAX_CHUNKS", 100))
+
+
+# =============================================================================
+# ALL-1279: Effective model request measurement and provider field limits
+# =============================================================================
+
+def get_openai_instructions_max_chars() -> int:
+    """Max characters in one OpenAI Responses ``instructions`` field (OPENAI_INSTRUCTIONS_MAX_CHARS).
+
+    OpenAI rejects a Responses request whose ``instructions`` string is longer
+    than 1,048,576 characters (HTTP 400 observed in production on Sep 22 2026).
+    Requests over this limit are blocked before sending with an actionable
+    ``provider_request_blocked`` failure instead of a provider rejection. The
+    limit applies only to the native OpenAI provider's Responses
+    ``instructions`` field; other providers and fields are measured, not
+    blocked. Raise it only if OpenAI documents a higher ceiling. Default 1048576.
+    """
+    return max(1, _get_env_int_with_fallback("OPENAI_INSTRUCTIONS_MAX_CHARS", 1_048_576))
+
+
+def get_model_request_warning_estimated_tokens() -> int:
+    """Estimated model-visible tokens that trigger a request-size warning (MODEL_REQUEST_WARNING_ESTIMATED_TOKENS).
+
+    Warning only: the request is still sent. The estimate is characters / 4 over
+    instructions, input, initially visible tool definitions and output schema,
+    not provider-reported usage. The default sits well above the largest normal
+    curation requests seen in production (about 109k provider-reported input
+    tokens on Sep 22 2026) so ordinary scientific evidence reads stay quiet.
+    Default 250000.
+    """
+    return max(1, _get_env_int_with_fallback("MODEL_REQUEST_WARNING_ESTIMATED_TOKENS", 250_000))
+
+
+def get_model_request_tool_result_warning_chars() -> int:
+    """Characters in one tool result that trigger a request-size warning (MODEL_REQUEST_TOOL_RESULT_WARNING_CHARS).
+
+    Warning only: the request is still sent unchanged. Bounded tool responses
+    should stay far below this; a larger single result usually means a tool
+    returned a full dataset instead of a bounded inspection. Default 200000
+    (about 50k estimated tokens).
+    """
+    return max(1, _get_env_int_with_fallback("MODEL_REQUEST_TOOL_RESULT_WARNING_CHARS", 200_000))
