@@ -11,6 +11,12 @@ model_definitions:
     definition_state: in_development
     definition_notes:
       - This local payload is not a submission or export DTO and does not change Alliance LinkML.
+    metadata:
+      display:
+        label: gene_product.label
+        state: resolution_state
+        resolved_states:
+          - resolved
 enum_definitions:
   - enum_id: GOAspect
     display_name: GO aspect
@@ -98,6 +104,10 @@ object_definitions:
         field_type: object
         display_name: Gene product
         required: true
+        metadata:
+          display:
+            label: label
+            id: curie
       - field_path: gene_product.mention
         field_type: string
         display_name: Paper mention
@@ -127,6 +137,10 @@ object_definitions:
         field_type: object
         display_name: GO term
         required: true
+        metadata:
+          display:
+            label: label
+            id: curie
       - field_path: go_term.curie
         field_type: string
         display_name: GO term CURIE
