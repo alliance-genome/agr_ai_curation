@@ -67,6 +67,15 @@ from same-identity lookups, with final schema validation rejecting incomplete
 required facts. Orthology query-gene metadata is separate from ortholog rows.
 Condition components retain their owner, source inputs, field path, partial
 results and scoped lookup audit; root values cannot contradict component values.
+Each request exposes its package-owned `domain_contract`: the exact component
+names, allowed statuses, owning lookup methods and component-slot rules. Include
+supplemental `relation` and `evidence_quotes` components as `not_checked` when
+listed, with no candidate, slot or lookup assertions. Component slots use record
+field names (for example, `curie` copies `curie`); root slots such as
+`condition_class_curie` are separate. Missing, extra or duplicate components and
+invalid component-slot mappings return explicit repair diagnostics. This
+guidance is request-specific even in a batch and does not copy provider records
+or weaken the existing grounding checks.
 The RGD policy evaluator is unchanged: proposed facts come from supplied inputs,
 scientific judgments come from the model, and code computes policy consequences.
 

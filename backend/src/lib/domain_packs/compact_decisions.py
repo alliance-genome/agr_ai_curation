@@ -85,6 +85,8 @@ class DecisionContract:
     # typed; their assembler may add domain fields but not silently replace the
     # runtime identity or lookup audit.
     assemble_domain: Callable[[dict[str, Any], CompactValidatorDecision, "ValidatorDecisionWorkspace"], dict[str, Any]] | None = None
+    # Package-owned request-specific decision shape, not copied provider facts.
+    domain_contract: Mapping[str, Any] = field(default_factory=dict)
 
 
 class ValidatorDecisionWorkspace:

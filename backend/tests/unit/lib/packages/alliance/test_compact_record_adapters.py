@@ -291,6 +291,105 @@ def test_condition_bundle_preserves_quantity_unit_and_supplemental_context(schem
     assert components["free_text"].owner is None
 
 
+def _condition_context_runtime(schemas):
+    from agr_ai_curation_alliance.compact_conditions import condition_decision_contract
+    from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord
+    from src.lib.domain_packs.compact_runtime import CompactValidatorRuntime
+    from src.schemas.domain_validator import DomainValidationRequest, ValidatorCandidate, ValidatorLookupAttempt
+
+    request = DomainValidationRequest(
+        request_id="condition-context", validator_binding_id="experimental_condition_validation",
+        validator_agent={"package_id": "agr.alliance", "agent_id": "experimental_condition_validation"},
+        target={"domain_pack_id": "fixture"},
+        selected_inputs={"condition_class_curie": "ZECO:0000111", "condition_relation_type": "induced_by",
+                         "evidence_quotes": [{"evidence_record_id": "paper-1", "verified_quote": "Treatment disrupted segmentation."}]},
+        expected_result_fields={"condition_class_curie": "condition_class.curie"},
+    )
+    contract = condition_decision_contract(request, schemas["ExperimentalConditionValidationResult"])
+    runtime = CompactValidatorRuntime([contract], adapter=None)
+    ref = runtime.workspace.record_lookup(request.request_id, call_id="ontology-call", attempt=ValidatorLookupAttempt(
+        provider="agr_curation_query", method="get_ontology_terms", query={"terms": ["ZECO:0000111"]},
+        result_count=1, outcome="success"), records=[CanonicalValidatorRecord(
+            candidate=ValidatorCandidate(value="ZECO:0000111", label="chemical treatment"),
+            values={"curie": "ZECO:0000111", "name": "chemical treatment"},
+            resolved_object={"curie": "ZECO:0000111", "name": "chemical treatment"})])[0]
+    selection = {"kind": "record", "record_ref": ref, "field": "curie"}
+    assessment = _assessment(ref)
+    decision = {"request_id": request.request_id, "status": "resolved", "explanation": "Class matches.",
+        "candidates": [assessment], "slots": {"condition_class_curie": selection}, "components": [
+            {"component_type": "condition_class", "status": "resolved", "candidates": [assessment],
+             "slots": {"curie": selection}, "lookup_refs": ["ontology-call"], "explanation": "Class matches."},
+            {"component_type": "relation", "status": "not_checked", "explanation": "Coherent relation context."},
+            {"component_type": "evidence_quotes", "status": "not_checked", "explanation": "Paper context retained."},
+        ]}
+    return runtime, decision
+
+
+def test_condition_context_contract_is_exposed_and_assembles_without_copied_facts(schemas):
+    import json
+    from src.lib.domain_packs.compact_runtime import compact_finalization_instruction
+    runtime, decision = _condition_context_runtime(schemas)
+    instruction = compact_finalization_instruction(runtime, tool_name="finalize_validator_result")
+    contracts = json.loads(instruction.split("Slot contracts: ", 1)[1].split(" Supplied-context", 1)[0])
+    guidance = contracts[0]["domain_contract"]
+    assert [item["component_type"] for item in guidance["components"]] == ["condition_class", "relation", "evidence_quotes"]
+    assert guidance["components"][0]["allowed_statuses"] == ["resolved", "unresolved"]
+    assert all(item["allowed_statuses"] == ["not_checked"] for item in guidance["components"][1:])
+    assert guidance["component_slots"]["namesake_fields"] == "validator_record_refs.available_fields"
+    assert guidance["component_slots"]["root_slots_are_component_slots"] is False
+    result = runtime.assemble(decision)
+    assert result.status == "resolved"
+    assert result.resolved_values["condition_class_curie"] == "ZECO:0000111"
+    assert result.normalized_components[0].resolved_values == {"curie": "ZECO:0000111"}
+    assert [row.component_type for row in result.component_validations] == ["condition_class", "relation", "evidence_quotes"]
+    assert result.component_validations[-1].selected_inputs["evidence_quotes"][0]["evidence_record_id"] == "paper-1"
+    assert len(result.lookup_attempts) == 1
+
+
+@pytest.mark.parametrize("problem,diagnostic", [("missing", "missing=['relation']"),
+    ("duplicate", "duplicates=['condition_class']"), ("unexpected", "unexpected=['unit']")])
+def test_condition_component_rejection_identifies_exact_repair(schemas, problem, diagnostic):
+    runtime, decision = _condition_context_runtime(schemas)
+    if problem == "missing":
+        decision["components"].pop(1)
+    elif problem == "duplicate":
+        decision["components"].append(decision["components"][0])
+    else:
+        decision["components"].append({"component_type": "unit", "status": "not_checked", "explanation": "Absent."})
+    with pytest.raises(ValueError) as error:
+        runtime.assemble(decision)
+    assert diagnostic in str(error.value)
+    assert "expected=['condition_class', 'relation', 'evidence_quotes']" in str(error.value)
+
+
+def test_condition_component_slot_diagnostic_distinguishes_root_slots(schemas):
+    runtime, decision = _condition_context_runtime(schemas)
+    decision["components"][0]["slots"] = decision["slots"]
+    with pytest.raises(ValueError) as error:
+        runtime.assemble(decision)
+    assert "condition_class_curie" in str(error.value)
+    assert "component slot 'curie'" in str(error.value)
+    assert "Root" in str(error.value)
+
+
+def test_condition_guidance_is_request_specific_in_batch(schemas):
+    import json
+    from agr_ai_curation_alliance.compact_conditions import condition_decision_contract
+    from src.lib.domain_packs.compact_runtime import CompactValidatorRuntime, compact_finalization_instruction
+    runtime, _ = _condition_context_runtime(schemas)
+    first = runtime.contracts["condition-context"]
+    second_request = first.request.model_copy(update={"request_id": "quantity-only", "expected_result_fields": {},
+                                                    "selected_inputs": {"condition_quantity": "high"}})
+    second = condition_decision_contract(second_request, schemas["ExperimentalConditionValidationResult"])
+    batch = CompactValidatorRuntime([first, second], adapter=None)
+    instruction = compact_finalization_instruction(batch, tool_name="finalize_validator_result", batch=True)
+    contracts = json.loads(instruction.split("Slot contracts: ", 1)[1].split(" Supplied-context", 1)[0])
+    by_request = {item["request_id"]: item["domain_contract"]["components"] for item in contracts}
+    assert [item["component_type"] for item in by_request["condition-context"]] == ["condition_class", "relation", "evidence_quotes"]
+    assert [item["component_type"] for item in by_request["quantity-only"]] == ["quantity"]
+    assert by_request["quantity-only"][0]["lookup_methods"] == ["get_vocabulary_term", "search_vocabulary_terms"]
+
+
 def test_chebi_search_and_compound_use_accession_not_internal_elasticsearch_id(schemas):
     from agr_ai_curation_alliance.compact_validation import canonical_record
     search = {"_id": "17234", "_score": 45.4,

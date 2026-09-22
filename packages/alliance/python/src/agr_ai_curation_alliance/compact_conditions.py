@@ -1,6 +1,7 @@
 """Component-level scientific decisions with program-owned condition assembly."""
 
 from copy import deepcopy
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -13,17 +14,20 @@ from src.schemas.domain_validator import DomainValidatorBaseModel
 
 
 class ComponentDecision(DomainValidatorBaseModel):
-    component_type: StrictStr
+    component_type: Literal[
+        "condition_class", "condition_id", "condition_chemical", "condition_taxon",
+        "data_provider", "unit", "quantity", "relation", "free_text", "evidence_quotes",
+    ] = Field(description="Use exactly the component types enumerated by this request's domain_contract.")
     status: Literal["resolved", "unresolved", "not_present", "not_checked"]
     candidates: list[CandidateAssessment] = Field(default_factory=list)
     slots: dict[str, RecordValue] = Field(default_factory=dict)
-    lookup_refs: list[StrictStr] = Field(default_factory=list)
+    lookup_refs: list[StrictStr] = Field(default_factory=list, description="validator_lookup_refs.lookup_ref values for this component's actual calls.")
     explanation: StrictStr
     curator_message: StrictStr | None = None
 
 
 class ConditionDecision(CompactValidatorDecision):
-    components: list[ComponentDecision]
+    components: list[ComponentDecision] = Field(description="Exactly one decision for each component in this request's domain_contract, including supplemental context; no absent extra components.")
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,7 @@ _METHODS = {
     "controlled_vocabulary_validation": {"get_vocabulary_term", "search_vocabulary_terms"},
     "data_provider_validation": {"get_data_provider", "get_data_providers"},
 }
+_COMPONENT_FIELD_ALIASES = {"chebi_id": ("chebi_id", "curie"), "term_name": ("name", "term_name", "label")}
 
 
 def condition_components(request) -> dict[str, ConditionComponent]:
@@ -87,7 +92,13 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
     def assemble_domain(payload, decision, workspace):
         names = [component.component_type for component in decision.components]
         if len(names) != len(set(names)) or set(names) != set(components):
-            raise ValueError("Condition decision must assess every present or required component exactly once")
+            raise ValueError(
+                "Condition decision must assess every present or required component exactly once: "
+                f"expected={list(components)}; missing={sorted(set(components) - set(names))}; "
+                f"unexpected={sorted(set(names) - set(components))}; "
+                f"duplicates={sorted(name for name, count in Counter(names).items() if count > 1)}. "
+                "Use the exact component names and statuses in this request's domain_contract."
+            )
         validations, normalized, unresolved = [], [], []
         for judgment in decision.components:
             component = components[judgment.component_type]
@@ -126,9 +137,12 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                 record = selected.get(selection.record_ref)
                 if record is None or selection.field not in record.values:
                     raise ValueError("Component slot requires an available field on a selected record")
-                aliases = {"chebi_id": ("chebi_id", "curie"), "term_name": ("name", "term_name", "label")}
-                if selection.field not in aliases.get(slot, (slot,)):
-                    raise ValueError("Component slot does not declare that factual source field")
+                if selection.field not in _COMPONENT_FIELD_ALIASES.get(slot, (slot,)):
+                    raise ValueError(
+                        f"Component {component.component_type} slot '{slot}' cannot copy field '{selection.field}'; "
+                        f"use namesake component slot '{selection.field}' or a declared component alias. "
+                        "Root slots are separate; see domain_contract.component_slots."
+                    )
                 values[slot] = deepcopy(record.values[selection.field])
             if judgment.status == "resolved" and (not attempts or len(selected) != 1 or not values):
                 raise ValueError("Resolved component requires one authoritative selection and resolved fields")
@@ -172,4 +186,25 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
                             profile_mapped=profile_mapped, decision_schema=ConditionDecision,
                             record_slot_fields={name + "_curie": ("curie",) for name in (
                                 "condition_class", "condition_id", "condition_chemical", "condition_taxon")},
+                            domain_contract={
+                                "components": [{
+                                    "component_type": component.component_type,
+                                    "required": component.required,
+                                    "allowed_statuses": ["resolved", "unresolved"] if component.owner else ["not_checked"],
+                                    "lookup_methods": sorted(_METHODS.get(component.owner, ())),
+                                } for component in components.values()],
+                                "component_slots": {
+                                    "namesake_fields": "validator_record_refs.available_fields",
+                                    "aliases": _COMPONENT_FIELD_ALIASES,
+                                    "root_slots_are_component_slots": False,
+                                    "rule": "Copy a selected record's available field into the same-named component slot, "
+                                            "or use a declared alias. For example, component curie copies field curie; "
+                                            "root condition_class_curie separately copies field curie.",
+                                },
+                                "rules": "Assess every listed component exactly once, no extras. "
+                                         "Lookup components use candidate record_refs and their actual lookup_refs. "
+                                         "Resolved requires one selected record, lookup evidence and resolved fields. "
+                                         "Supplemental not_checked components have no candidates, slots or lookup_refs. "
+                                         "An unresolved required component keeps the condition unresolved.",
+                            },
                             assemble_domain=assemble_domain)

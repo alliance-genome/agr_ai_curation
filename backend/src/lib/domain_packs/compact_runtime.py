@@ -184,14 +184,16 @@ def compact_finalization_instruction(runtime, *, tool_name, batch=False):
     contracts = [{"request_id": identifier,
                   "expected_slots": list(contract.request.expected_result_fields),
                   "record_slot_fields": dict(contract.record_slot_fields),
-                  "scientific_slots": list(contract.scientific_slots)}
+                  "scientific_slots": list(contract.scientific_slots),
+                  "domain_contract": deepcopy(dict(contract.domain_contract))}
                  for identifier, contract in runtime.contracts.items()]
     return (
         "Runtime compact-decision contract: this replaces prior instructions to author a complete "
         "validator result or copy provider facts, identity metadata, or lookup_attempts. "
         "Make the scientific judgment, assess candidates with the returned validator_record_refs, "
         "and select authoritative fields for requested slots. Preserve ambiguity, explanations, "
-        "and evidence references. Component/policy scientific fields retain their existing meaning. "
+        "and evidence references. Follow each request's domain_contract for its package-specific "
+        "decision shape; component slots are distinct from root slots. "
         "The program copies source facts, request identity and actual lookup counts into the canonical result. "
         f"Call {tool_name} with {'results containing exactly one compact decision per request' if batch else 'result containing one compact decision'} "
         "using the tool's declared schema. Repair rejected decisions; stop after acceptance. "
