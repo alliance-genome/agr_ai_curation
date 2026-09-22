@@ -1,0 +1,571 @@
+"""ALL-1282: structured values render as standard display text in non-JSON outputs."""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+
+from src.lib.flows import export_fields
+from src.lib.flows.output_projection import (
+    FlowOutputArtifact,
+    FlowOutputArtifactBundle,
+    FlowOutputField,
+    FlowOutputProjectionPlan,
+    apply_projection_plan,
+    build_flow_output_artifact_bundle,
+    default_projection_plan,
+    finalize_output_projection,
+)
+from src.lib.flows.value_display import display_text
+from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+
+TERM = {"label": "name", "id": "curie"}
+GENE = {"label": "gene_symbol", "id": "primary_external_id"}
+SUBJECT = {"label": "subject_label", "id": "subject_identifier", "state": "resolution_state",
+           "resolved_states": ["resolved"]}
+PHENOTYPE_TERM = {"label": "label", "id": "curie", "state": "resolution_state",
+                  "resolved_states": ["resolved"]}
+
+
+def _no_object_text(text: str) -> None:
+    assert "{" not in text and "}" not in text, text
+    assert "': " not in text and '": ' not in text, text
+
+
+# Value shapes observed in production (key sets from the Sep 22 inventory).
+PRODUCTION_SHAPES = [
+    ({"curie": "WBbt:0005733", "name": "hypodermis"}, TERM, "hypodermis (WBbt:0005733)"),
+    ({"curie": "MMO:0000672", "name": "knock-in in situ reporter assay"}, TERM,
+     "knock-in in situ reporter assay (MMO:0000672)"),
+    ({"gene_symbol": "Y71G12B.17", "primary_external_id": "WB:WBGene00022155",
+      "source_phrase": "PPIT-2 (Y71G12B.17)"}, GENE, "Y71G12B.17 (WB:WBGene00022155)"),
+    ({"allele_symbol": "e1370", "primary_external_id": "WB:WBVar00143949", "taxon": "NCBITaxon:6239"},
+     {"label": "allele_symbol", "id": "primary_external_id"}, "e1370 (WB:WBVar00143949)"),
+    ({"subject_label": "daf-2", "subject_identifier": "WB:WBGene00000898", "subject_type": "gene",
+      "resolution_state": "resolved"}, SUBJECT, "daf-2 (WB:WBGene00000898)"),
+    ({"subject_label": "daf-2(e1370)", "resolution_state": "pending_lookup", "resolution_note": "n"},
+     SUBJECT, "daf-2(e1370) (unresolved)"),
+    ({"curie": "WBPhenotype:0000154", "label": "reduced brood size", "resolution_state": "resolved",
+      "export_state": "ready", "write_blocked_reason": None}, PHENOTYPE_TERM,
+     "reduced brood size (WBPhenotype:0000154)"),
+    ({"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200},
+     {"label": "name"}, "is_expressed_in"),
+    ({"abbreviation": "WB"}, {"label": "abbreviation"}, "WB"),
+    ({"curie": "NCBITaxon:6239"}, TERM, "NCBITaxon:6239"),
+    ({"name": "alzheimer disease"}, TERM, "alzheimer disease (unresolved)"),
+    ({"reference_id": "DOI:10.17912/micropub.biology.002386", "doi": "10.17912/micropub.biology.002386",
+      "title": "Endogenous Expression of PPIT-2", "source_phrase": "x"},
+     {"label": "title", "id": "reference_id"},
+     "Endogenous Expression of PPIT-2 (DOI:10.17912/micropub.biology.002386)"),
+    # Generic reading without any declaration.
+    ({"curie": "DOID:10652", "name": "Alzheimer's disease"}, None, "Alzheimer's disease (DOID:10652)"),
+    ({"text": "PVD", "normalized_hint": "WBbt:0006831"}, None, "text: PVD; normalized_hint: WBbt:0006831"),
+    ({"symbol": "unc-54"}, None, "symbol: unc-54"),
+    ({"condition_relation_type": {"name": "has_condition"},
+      "conditions": [{"condition_class": {"curie": "ZECO:0000111"}, "condition_summary": "heat"}]}, None,
+     "condition_relation_type: has_condition; conditions: condition_class: ZECO:0000111; "
+     "condition_summary: heat"),
+    ([{"curie": "UBERON:0001008", "name": "renal system"}, {"curie": "UBERON:0002113", "name": "kidney"}],
+     TERM, "renal system (UBERON:0001008); kidney (UBERON:0002113)"),
+    ({}, TERM, ""),
+    ("free text", None, "free text"),
+]
+
+
+@pytest.mark.parametrize("value,spec,expected", PRODUCTION_SHAPES)
+def test_display_text_renders_production_shapes(value, spec, expected):
+    text = display_text(value, spec)
+    assert text == expected
+    _no_object_text(text.replace("Alzheimer's", "Alzheimers"))
+
+
+def test_display_text_composite_and_unresolved_rules():
+    where = {"anatomical_structure": {"curie": "WBbt:0005733", "name": "hypodermis"},
+             "cellular_component": {"curie": "GO:0005634", "name": "nucleus"}}
+    compose = {"compose": [{"path": "anatomical_structure", "display": TERM},
+                           {"path": "cellular_component", "display": TERM}], "separator": "; "}
+    assert display_text(where, compose) == "hypodermis (WBbt:0005733); nucleus (GO:0005634)"
+    # Open finding: a paper CURIE alone is not proof of resolution.
+    assert display_text({"curie": "WBbt:1", "name": "sperm"}, TERM, unresolved=True) == "sperm (WBbt:1, unresolved)"
+    assert display_text("L4 larval stage", None, unresolved=True) == "L4 larval stage (unresolved)"
+    terms = [{"curie": "A:1", "name": "a"}, {"name": "b"}, {"curie": "C:3", "name": "c"}]
+    assert display_text(terms, TERM, unresolved=frozenset({2})) == "a (A:1); b (unresolved); c (C:3, unresolved)"
+
+
+def _bundle(rows, catalog, findings=()):
+    return FlowOutputArtifactBundle(
+        flow_name="Display",
+        artifacts=[FlowOutputArtifact(source_key="s", rows_by_source={
+            "object": rows, "validation_finding": list(findings)})],
+        field_catalog=catalog,
+        default_row_source="object",
+    )
+
+
+ANATOMY = "object.pack.GeneExpressionAnnotation.expression_pattern.where_expressed.anatomical_structure"
+SUBJECT_REF = "object.pack.GeneExpressionAnnotation.expression_annotation_subject"
+STAGES = "object.pack.GeneExpressionAnnotation.expression_pattern.when_expressed.stage_uberon_slim_terms"
+STATEMENT = "object.pack.GeneExpressionAnnotation.where_expressed_statement"
+
+
+def _structured_bundle():
+    rows = [
+        {"artifact.is_canonical_curation_data": True, "object.object_id": "o1", ANATOMY: {"curie": "WBbt:0005733", "name": "hypodermis"},
+         SUBJECT_REF: {"gene_symbol": "Y71G12B.17", "primary_external_id": "WB:WBGene00022155"},
+         STAGES: [{"curie": "UBERON:1", "name": "adult"}, {"curie": "UBERON:2", "name": "L4"}],
+         STATEMENT: "detected in hypodermis"},
+        {"artifact.is_canonical_curation_data": True, "object.object_id": "o2", ANATOMY: {"name": "residual body"},
+         SUBJECT_REF: {"gene_symbol": "Y71G12B.17", "primary_external_id": "WB:WBGene00022155"},
+         STAGES: [], STATEMENT: "near the residual body"},
+    ]
+    catalog = [
+        FlowOutputField(ref=ANATOMY, label="Anatomical structure", value_type="object", row_source="object", display=TERM),
+        FlowOutputField(ref=SUBJECT_REF, label="Gene", value_type="object", row_source="object", display=GENE),
+        FlowOutputField(ref=STAGES, label="Stages", value_type="list", row_source="object", display=TERM),
+        FlowOutputField(ref=STATEMENT, label="Statement", value_type="string", row_source="object"),
+        FlowOutputField(ref="object.object_id", label="Object", value_type="string", row_source="object"),
+    ]
+    rows[1]["object.pending_ref_id"] = "pending-o2"
+    findings = [{"object.object_id": "", "object.pending_ref_id": "pending-o2", "validation.status": "open",
+                 "validation.field_path": "where_expressed_statement"},
+                {"object.object_id": "o1", "validation.status": "open",
+                 "validation.field_path": "expression_pattern.when_expressed.stage_uberon_slim_terms[1]"},
+                {"object.object_id": "o2", "validation.status": "resolved",
+                 "validation.field_path": "expression_pattern.where_expressed.anatomical_structure"}]
+    return _bundle(rows, catalog, findings)
+
+
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
+def test_every_non_json_rendering_path_uses_display_text(output_format):
+    bundle = _structured_bundle()
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": output_format, "row_source": "object", "missing_value": "—",
+        "columns": [
+            {"key": "gene", "header": "Gene", "field_ref": SUBJECT_REF},
+            {"key": "anatomy", "header": "Anatomy", "field_ref": ANATOMY},
+            {"key": "pair", "header": "Pair", "transform": {
+                "type": "pair_join", "field_refs": [ANATOMY, STATEMENT], "pair_separator": " | "}},
+            {"key": "concat", "header": "Concat", "transform": {
+                "type": "concat", "values": [{"field_ref": SUBJECT_REF}, " in ", {"field_ref": ANATOMY}]}},
+            {"key": "stages", "header": "Stages", "transform": {
+                "type": "join_list", "field_ref": STAGES, "separator": " / "}},
+            {"key": "elements", "header": "Elements", "transform": {
+                "type": "format_elements", "field_refs": [STAGES], "default": "[{1}]", "separator": ", "}},
+            {"key": "first", "header": "First", "transform": {
+                "type": "first_non_empty", "field_refs": [ANATOMY]}},
+        ],
+    })
+    result = finalize_output_projection(bundle, plan)
+    first, second = result.rows
+    assert first["gene"] == "Y71G12B.17 (WB:WBGene00022155)"
+    assert first["anatomy"] == "hypodermis (WBbt:0005733)"
+    assert first["pair"] == "hypodermis (WBbt:0005733) | detected in hypodermis"
+    assert first["concat"] == "Y71G12B.17 (WB:WBGene00022155) in hypodermis (WBbt:0005733)"
+    assert first["stages"] == "adult (UBERON:1) / L4 (UBERON:2, unresolved)"
+    assert first["elements"] == "[adult (UBERON:1)], [L4 (UBERON:2, unresolved)]"
+    assert first["first"] == "hypodermis (WBbt:0005733)"
+    # Declared id role missing while a label is present marks the proposal.
+    assert second["anatomy"] == "residual body (unresolved)"
+    # An open finding referenced by pending_ref_id marks that object's field.
+    assert second["pair"] == "residual body (unresolved) | near the residual body (unresolved)"
+    assert second["stages"] == "—"
+    for row in result.rows:
+        for value in row.values():
+            _no_object_text(str(value))
+    if output_format == "chat":
+        _no_object_text(result.chat_output or "")
+        assert "| Y71G12B.17 (WB:WBGene00022155) | hypodermis (WBbt:0005733) |" in result.chat_output
+    else:
+        content = _projection_content_for_file_type(output_format=output_format, projection=result)
+        _no_object_text(content)
+
+
+def test_json_output_stays_lossless():
+    bundle = _structured_bundle()
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "json", "row_source": "object",
+        "columns": [{"key": "anatomy", "field_ref": ANATOMY}, {"key": "stages", "field_ref": STAGES}],
+    })
+    result = finalize_output_projection(bundle, plan)
+    assert result.rows[0]["anatomy"] == {"curie": "WBbt:0005733", "name": "hypodermis"}
+    assert result.rows[0]["stages"][1] == {"curie": "UBERON:2", "name": "L4"}
+    assert json.loads(_projection_content_for_file_type(output_format="json", projection=result))[0] == result.rows[0]
+
+
+def test_packaged_field_value_fans_out_through_arrays():
+    item = {"object_type": "T", "payload": {"condition_relations": [
+        {"conditions": [{"condition_free_text": "heat"}, {"condition_free_text": "cold"}]},
+        {"conditions": [{"condition_free_text": "dark"}]},
+    ]}}
+    field = {"object_type": "T", "payload_path": "condition_relations.conditions.condition_free_text"}
+    assert export_fields.packaged_field_value(item, field) == [["heat", "cold"], ["dark"]]
+    assert display_text(export_fields.packaged_field_value(item, field)) == "heat; cold; dark"
+
+
+def _gene_expression_step():
+    subject = {"gene_symbol": "Y71G12B.17", "primary_external_id": "WB:WBGene00022155",
+               "source_phrase": "PPIT-2 (Y71G12B.17)"}
+    assay = {"curie": "MMO:0000672", "name": "knock-in in situ reporter assay"}
+
+    def statement(object_id, anatomy, stage, statement_text):
+        pattern = {"where_expressed": {"anatomical_structure": anatomy} if anatomy else {}}
+        if stage:
+            pattern["when_expressed"] = {"developmental_stage_start": stage}
+        return {
+            "object_type": "GeneExpressionAnnotation", "object_id": object_id,
+            "payload": {
+                "expression_annotation_subject": deepcopy(subject),
+                "expression_experiment": {"expression_assay_used": deepcopy(assay),
+                                          "entity_assayed": deepcopy(subject)},
+                "relation": {"name": "is_expressed_in", "vocabulary": "Expression Relation", "id": 200000200},
+                "expression_pattern": pattern,
+                "where_expressed_statement": statement_text,
+                "when_expressed_stage_name": (stage or {}).get("name") or "young adult",
+                "single_reference": {"reference_id": "DOI:10.17912/micropub.biology.002386"},
+            },
+        }
+
+    objects = [
+        statement("s1", {"curie": "WBbt:0005733", "name": "hypodermis"},
+                  {"curie": "WBls:0000109", "name": "L4 larval stage"}, "GFP::PPIT-2 in hypodermis"),
+        statement("s2", None, None, "signal near the residual body"),
+    ]
+    return {
+        "step": 1, "node_id": "node_1", "agent_id": "gene_expression", "agent_name": "Gene Expression",
+        "candidate": SimpleNamespace(
+            agent_key="gene_expression", adapter_key="gene_expression", candidate_count=2,
+            conversation_summary="two statements",
+            payload_json={"domain_pack_id": "agr.alliance.gene_expression", "envelope_id": "env-ge",
+                          "extracted_objects": objects,
+                          "validation_findings": [{
+                              "finding_id": "f1", "status": "open",
+                              "field_path": "when_expressed_stage_name",
+                              "field_ref": {"object_ref": {"object_id": "s2"},
+                                            "field_path": "when_expressed_stage_name"},
+                          }]},
+        ),
+    }
+
+
+def _declared_gene_expression_pack(monkeypatch):
+    """The real gene_expression pack plus in-test display declarations."""
+
+    original = export_fields._packaged_domain_pack
+    pack = original("gene_expression", {"curation": {"domain_pack_id": "agr.alliance.gene_expression"}})
+    assert pack is not None
+    declared = SimpleNamespace(metadata=pack.metadata.model_copy(deep=True))
+    displays = {
+        "OntologyTermSnapshotPayload": TERM,
+        "GeneReferenceSnapshotPayload": GENE,
+        "VocabularyTermSnapshotPayload": {"label": "name"},
+        "OrganizationSnapshotPayload": {"label": "abbreviation"},
+        "ReferenceSnapshotPayload": {"label": "title", "id": "reference_id"},
+    }
+    for model in declared.metadata.model_definitions:
+        if model.model_id in displays:
+            model.metadata["display"] = dict(displays[model.model_id])
+    monkeypatch.setattr(export_fields, "_packaged_domain_pack", lambda *_args, **_kwargs: declared)
+    return declared
+
+
+@pytest.mark.parametrize("output_format", ["csv", "chat"])
+def test_default_layout_for_gene_expression_uses_declared_parents(monkeypatch, output_format):
+    _declared_gene_expression_pack(monkeypatch)
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_gene_expression_step()], flow_name="GE", output_format=output_format,
+    )
+    plan = default_projection_plan(bundle, output_format=output_format, row_source="object")
+    headers = [column.header for column in plan.columns]
+    refs = [column.field_ref for column in plan.columns]
+    assert refs[0] == "object.pack.GeneExpressionAnnotation.expression_annotation_subject"
+    assert "object.pack.GeneExpressionAnnotation.expression_experiment.expression_assay_used" in refs
+    assert "object.pack.GeneExpressionAnnotation.expression_pattern.where_expressed.anatomical_structure" in refs
+    assert not any(ref.endswith((".curie", ".name", ".gene_symbol")) for ref in refs)
+    assert refs[-1] == "object.validation_status"
+    assert "Adapter" not in headers
+    result = finalize_output_projection(bundle, plan)
+    first = result.rows[0]
+    cells = [str(value) for row in result.rows for value in row.values()]
+    for cell in cells:
+        _no_object_text(cell)
+    assert "Y71G12B.17 (WB:WBGene00022155)" in first.values()
+    assert "knock-in in situ reporter assay (MMO:0000672)" in first.values()
+    assert "hypodermis (WBbt:0005733)" in first.values()
+    # Open finding on the flat stage text of s2 marks that value.
+    assert "young adult (unresolved)" in result.rows[1].values()
+
+
+def test_selected_saved_plan_for_packaged_source_still_validates(monkeypatch):
+    """A saved guided plan over leaf refs keeps validating and rendering."""
+    _declared_gene_expression_pack(monkeypatch)
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_gene_expression_step()], flow_name="GE", output_format="csv",
+    )
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object", "columns": [
+            {"key": "gene", "field_ref": "object.pack.GeneExpressionAnnotation.expression_annotation_subject.gene_symbol"},
+            {"key": "assay", "field_ref": "object.pack.GeneExpressionAnnotation.expression_experiment.expression_assay_used"},
+        ],
+    })
+    result = apply_projection_plan(bundle, plan)
+    assert result.rows[0] == {"gene": "Y71G12B.17", "assay": "knock-in in situ reporter assay (MMO:0000672)"}
+    rows = list(csv.reader(io.StringIO(_projection_content_for_file_type(output_format="csv", projection=result))))
+    assert rows[1] == ["Y71G12B.17", "knock-in in situ reporter assay (MMO:0000672)"]
+
+
+def test_packaged_gene_expression_declarations_render_daniela_values():
+    """Integration with the packaged declarations (ALL-1282 packs)."""
+
+    pack = export_fields._packaged_domain_pack("gene_expression", {"curation": {"domain_pack_id": "agr.alliance.gene_expression"}})
+    models = {model.model_id: model for model in pack.metadata.model_definitions}
+    if not models["OntologyTermSnapshotPayload"].metadata.get("display"):
+        pytest.skip("gene_expression pack display declarations are not present in this checkout")
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_gene_expression_step()], flow_name="GE", output_format="csv",
+    )
+    for output_format in ("csv", "chat"):
+        plan = default_projection_plan(bundle, output_format=output_format, row_source="object")
+        result = finalize_output_projection(bundle, plan)
+        values = [str(value) for row in result.rows for value in row.values()]
+        for value in values:
+            _no_object_text(value)
+        assert "hypodermis (WBbt:0005733)" in " ".join(values)
+        assert "Y71G12B.17 (WB:WBGene00022155)" in values
+        assert "knock-in in situ reporter assay (MMO:0000672)" in values
+        if output_format == "csv":
+            _no_object_text(_projection_content_for_file_type(output_format="csv", projection=result))
+
+
+# --- split_list: list items in separate columns, never extra rows ---------------------
+
+TERMS = "object.pack.GeneExpressionAnnotation.anatomy_terms"
+
+
+def _split_bundle():
+    rows = [
+        {"artifact.is_canonical_curation_data": True, "object.object_id": f"o{index}",
+         "object.label": f"statement {index}", TERMS: terms}
+        for index, terms in enumerate([
+            [{"curie": "WBbt:1", "name": "hypodermis"}, {"curie": "WBbt:2", "name": "vulva"},
+             {"name": "residual body"}],
+            [{"curie": "WBbt:3", "name": "sperm"}],
+            [],
+        ], start=1)
+    ]
+    catalog = [
+        FlowOutputField(ref=TERMS, label="Anatomy", value_type="list", row_source="object", display=TERM),
+        FlowOutputField(ref="object.label", label="Label", value_type="string", row_source="object"),
+        FlowOutputField(ref="object.object_id", label="Object", value_type="string", row_source="object"),
+    ]
+    return _bundle(rows, catalog)
+
+
+def _split_plan(output_format="csv", split=None, **extra):
+    return FlowOutputProjectionPlan.model_validate({
+        "format": output_format, "row_source": "object", "missing_value": "—",
+        "columns": [
+            {"key": "anatomy", "header": "Anatomy", "field_ref": TERMS, "split_list": split or {}},
+            {"key": "label", "header": "Statement", "field_ref": "object.label"},
+        ],
+        **extra,
+    })
+
+
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
+def test_split_list_expands_columns_with_display_items(output_format):
+    bundle = _split_bundle()
+    result = finalize_output_projection(bundle, _split_plan(output_format))
+    assert [column.header for column in result.columns] == ["Anatomy 1", "Anatomy 2", "Anatomy 3", "Statement"]
+    assert len(result.rows) == 3 and result.row_refs == ["object#1", "object#2", "object#3"]
+    assert result.rows[0] == {"anatomy_1": "hypodermis (WBbt:1)", "anatomy_2": "vulva (WBbt:2)",
+                              "anatomy_3": "residual body (unresolved)", "label": "statement 1"}
+    assert result.rows[1] == {"anatomy_1": "sperm (WBbt:3)", "anatomy_2": "—",
+                              "anatomy_3": "—", "label": "statement 2"}
+    assert result.rows[2]["anatomy_1"] == "—"
+    if output_format == "chat":
+        assert "| Anatomy 1 | Anatomy 2 | Anatomy 3 | Statement |" in result.chat_output
+    else:
+        content = _projection_content_for_file_type(output_format=output_format, projection=result)
+        rows = list(csv.reader(io.StringIO(content), delimiter="," if output_format == "csv" else "\t"))
+        assert len(rows) == 4
+        _no_object_text(content)
+
+
+def test_split_list_header_template_and_explicit_headers():
+    bundle = _split_bundle()
+    templated = finalize_output_projection(bundle, _split_plan(split={"header_template": "Anatomy Term {n}"}))
+    assert [c.header for c in templated.columns][:3] == ["Anatomy Term 1", "Anatomy Term 2", "Anatomy Term 3"]
+    exact = finalize_output_projection(bundle, _split_plan(split={"headers": ["First", "Second", "Third"]}))
+    assert [c.header for c in exact.columns] == ["First", "Second", "Third", "Statement"]
+    wider = finalize_output_projection(bundle, _split_plan(split={"headers": ["A1", "A2", "A3", "A4"]}))
+    assert [c.header for c in wider.columns][:4] == ["A1", "A2", "A3", "A4"]
+    assert wider.rows[0]["anatomy_4"] == "—"
+    with pytest.raises(ValueError, match="names 2 headers but the longest list has 3"):
+        finalize_output_projection(bundle, _split_plan(split={"headers": ["First", "Second"]}))
+    # Expanded headers take part in table-wide header uniqueness.
+    with pytest.raises(ValueError, match="headers must be distinct after split_list expansion; duplicated: Statement"):
+        finalize_output_projection(bundle, _split_plan(split={"headers": ["Statement", "B", "C"]}))
+
+
+@pytest.mark.parametrize("split,message", [
+    ({"header_template": "Anatomy Term"}, "must contain {n}"),
+    ({"header_template": "A {n}", "headers": ["x"]}, "not both"),
+    ({"headers": ["x", "x"]}, "headers must be distinct"),
+    ({"max_columns": 0}, "max_columns must be between"),
+])
+def test_split_list_rejects_invalid_options(split, message):
+    errors, _, _ = __import__("src.lib.flows.output_projection", fromlist=["x"]).validate_projection_plan(
+        _split_bundle(), _split_plan(split=split))
+    assert any(message in error for error in errors), errors
+
+
+def test_split_list_requires_list_field_and_non_json():
+    from src.lib.flows.output_projection import validate_projection_plan
+
+    bundle = _split_bundle()
+    scalar = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object",
+        "columns": [{"key": "label", "field_ref": "object.label", "split_list": {}}],
+    })
+    errors, _, _ = validate_projection_plan(bundle, scalar)
+    assert any("needs a list-valued field" in error for error in errors)
+    errors, _, _ = validate_projection_plan(bundle, _split_plan("json"))
+    assert any("JSON keeps lists lossless" in error for error in errors)
+
+
+def test_split_list_limits_fail_explicitly(monkeypatch):
+    from src.lib.flows.output_projection import FlowOutputOperationalCeilingError
+
+    bundle = _split_bundle()
+    with pytest.raises(ValueError, match="needs 3 split columns .* limit of 2"):
+        finalize_output_projection(bundle, _split_plan(split={"max_columns": 2}))
+    monkeypatch.setenv("FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", "2")
+    with pytest.raises(FlowOutputOperationalCeilingError) as error:
+        finalize_output_projection(bundle, _split_plan())
+    assert error.value.setting == "FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS"
+    assert (error.value.measured, error.value.limit) == (3, 2)
+
+
+def test_split_list_sized_after_filters_and_overrides_target_expanded_keys():
+    bundle = _split_bundle()
+    plan = _split_plan(filters=[{"field_ref": "object.object_id", "op": "ne", "value": "o1"}],
+                       overrides=[{"row_ref": "object#2", "column_key": "anatomy_1", "value": "sperm cell"}])
+    result = finalize_output_projection(bundle, plan)
+    assert [column.key for column in result.columns] == ["anatomy_1", "label"]
+    assert result.rows[0]["anatomy_1"] == "sperm cell"
+    bad = _split_plan(overrides=[{"row_ref": "object#2", "column_key": "anatomy_9", "value": "x"}])
+    with pytest.raises(ValueError, match="not an output column after split_list"):
+        finalize_output_projection(bundle, bad)
+
+
+@pytest.mark.asyncio
+async def test_split_list_through_formatter_tools_with_lock_and_inventory():
+    from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
+
+    async def save(*_args):
+        return {"file_id": "f", "filename": "f.csv", "download_url": "/f"}
+
+    bundle = _split_bundle()
+    plan = _split_plan(split={"header_template": "Anatomy Term {n}"})
+    tools = {tool.name: tool for tool in build_output_formatter_tools(
+        bundle=bundle, output_format="csv", formatter_agent_id="csv_formatter", save_projected_output=save)}
+
+    async def call(name, payload):
+        raw = await tools[name].on_invoke_tool(SimpleNamespace(tool_name=name), json.dumps(payload))
+        return json.loads(raw)
+
+    inventory = await call("inspect_output_artifacts", {"catalog_query": "anatomy_terms"})
+    entry = inventory["inventory"]["field_catalog"]["entries"][0]
+    assert entry["max_list_length"] == 3
+    values = await call("inspect_field_values", {"row_source": "object", "field_ref": TERMS})
+    assert values["max_list_length"] == 3
+    preview = await call("preview_output_projection", {"plan_json": plan.model_dump_json()})
+    assert preview["preview"]["preview_rows"][0]["anatomy_1"] == "hypodermis (WBbt:1)"
+    assert [c["header"] for c in preview["preview"]["columns"]][:3] == [
+        "Anatomy Term 1", "Anatomy Term 2", "Anatomy Term 3"]
+    rejected = await call("validate_output_projection", {"plan_json": json.dumps({
+        **json.loads(plan.model_dump_json()),
+        "columns": [{**json.loads(plan.model_dump_json())["columns"][0], "split_list": {"bogus": 1}}]})})
+    assert rejected["status"] == "invalid"
+
+    # The selected-fields lock compares whole plans, so a changed split_list is a change.
+    from src.lib.flows.output_projection import FlowOutputProjectionPlan as Plan
+
+    locked = {**json.loads(plan.model_dump_json()), "selection_mode": "selected_fields"}
+    changed = {**locked, "columns": [{**locked["columns"][0], "split_list": {"header_template": "Other {n}"}},
+                                     locked["columns"][1]]}
+    assert Plan.model_validate(locked) != Plan.model_validate(changed)
+
+
+def test_declared_field_never_substitutes_another_field():
+    """A resolved field renders only its own label/id (Chris, Sep 22)."""
+
+    # Label and id empty: the mention is a separate column, not a substitute.
+    assert display_text({"curie": None, "name": None, "mention": "PPIT-2"}, TERM) == ""
+    assert display_text({"label": "", "mention": "gene X", "curie": ""},
+                        {"label": "label", "id": "curie"}) == ""
+    compose = {"compose": [{"path": "anatomical_structure", "display": TERM}], "separator": "; "}
+    assert display_text({"anatomical_structure": {}, "statement": "free text"}, compose) == ""
+    assert display_text({"mention": {"text": "unc-54(e190)"}}, {"label": "mention.text"}) == "unc-54(e190)"
+
+
+def test_display_roles_must_be_single_leaf_paths():
+    field = SimpleNamespace(field_path="gene_product", metadata={"display": {"label": ["label", "mention"]}},
+                            model_ref=None, object_type_ref=None)
+    with pytest.raises(ValueError, match="single leaf path"):
+        export_fields._field_display(field, {})
+
+
+_SHAPES_FIXTURE = (
+    __import__("pathlib").Path(__file__).resolve().parents[3] / "fixtures" / "flows" / "display_value_shapes.json"
+)
+
+
+def _shape_cases(section):
+    if not _SHAPES_FIXTURE.exists():
+        return []
+    return json.loads(_SHAPES_FIXTURE.read_text())[section]
+
+
+@pytest.mark.skipif(not _SHAPES_FIXTURE.exists(), reason="display_value_shapes.json comes with the ALL-1282 packs")
+@pytest.mark.parametrize("shape", _shape_cases("packaged"), ids=lambda shape: shape["shape_id"])
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
+def test_production_value_shapes_render_without_object_text(shape, output_format):
+    step = {
+        "step": 1, "node_id": "node_1", "agent_id": "shape_source", "agent_name": "Shape",
+        "candidate": SimpleNamespace(
+            agent_key="shape_source", adapter_key=shape["pack_id"], candidate_count=1,
+            conversation_summary="shape",
+            payload_json={"domain_pack_id": shape["pack_id"], "envelope_id": f"env-{shape['shape_id']}",
+                          "extracted_objects": [{"object_type": shape["object_type"],
+                                                 "object_id": shape["shape_id"], "payload": shape["payload"]}]},
+        ),
+    }
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Shapes", output_format=output_format)
+    refs = [field.ref for field in bundle.field_catalog
+            if field.row_source == "object" and field.ref.startswith("object.pack.")]
+    assert refs, "shape must map to declared pack fields"
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": output_format, "row_source": "object",
+        "columns": [{"key": f"c{index}", "header": ref, "field_ref": ref} for index, ref in enumerate(refs)],
+    })
+    result = finalize_output_projection(bundle, plan)
+    for value in result.rows[0].values():
+        _no_object_text(str(value))
+    default = finalize_output_projection(
+        bundle, default_projection_plan(bundle, output_format=output_format, row_source="object"),
+    )
+    for value in default.rows[0].values():
+        _no_object_text(str(value))
+
+
+@pytest.mark.skipif(not _SHAPES_FIXTURE.exists(), reason="display_value_shapes.json comes with the ALL-1282 packs")
+@pytest.mark.parametrize("shape", _shape_cases("custom_profiles"), ids=lambda shape: shape["shape_id"])
+def test_custom_profile_value_shapes_render_without_object_text(shape):
+    for value in (shape["payload"].get("attributes") or {}).values():
+        _no_object_text(display_text(value))

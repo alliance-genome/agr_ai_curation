@@ -265,7 +265,7 @@ def test_selected_export_preserves_schema_empty_results_and_nested_values(profil
         assert rows[0] == ["stocks count", "stocks status", "stocks sources"]
         if not empty:
             assert rows[1][:2] == ["0", ""]
-            assert json.loads(rows[1][2])[1] == {"name": "B"}
+            assert rows[1][2] == "A (A:1); B; C:3"
 
 
 def test_selected_export_keeps_sources_separate_and_rejects_stale_or_invented_fields(profile_step):

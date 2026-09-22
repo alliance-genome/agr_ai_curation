@@ -446,7 +446,7 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
     rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
     assert len(rows) == 3
     assert [row["Gene"] for row in rows] == ["dma-1", "dma-1", "tiam-1"]
-    assert all(json.loads(row["Anatomy"]) == {"curie": "WBbt:0006831", "name": "PVD"} for row in rows)
+    assert all(row["Anatomy"] == "PVD (WBbt:0006831)" for row in rows)
     assert all(row["Stage"] == "" for row in rows)
 
 
@@ -1220,7 +1220,7 @@ def test_object_projection_supports_rename_omit_reorder_filter_sort_and_concat()
         {
             "gene_symbol": "BRCA1",
             "gene_label": "BRCA1",
-            "evidence_record_ids": ["ev-1"],
+            "evidence_record_ids": "ev-1",
             "gene_ref": "TEST:GENE001 BRCA1",
         }
     ]

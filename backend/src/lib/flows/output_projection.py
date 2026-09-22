@@ -17,6 +17,7 @@ from src.lib.curation_workspace.domain_envelope_normalization import (
     is_canonical_domain_envelope_payload,
 )
 from src.lib.openai_agents.config import (
+    get_flow_output_split_list_max_columns,
     get_flow_output_projection_preview_max_depth,
     get_flow_projection_max_field_examples,
     get_flow_projection_max_list_items,
@@ -30,6 +31,7 @@ from src.schemas.domain_validator import ValidatorOutputProjection
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
+from src.lib.flows.value_display import display_text
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
 ProfileResolver = Callable[[AgentExecutionReceipt], ResolvedGenericProfile | None]
@@ -286,12 +288,25 @@ class FlowOutputOverrideSpec(BaseModel):
     exclude: bool = False
 
 
+class FlowOutputSplitListSpec(BaseModel):
+    """Expand one list field into one column per item (never extra rows).
+
+    Headers come from ``header_template`` (must contain ``{n}``; default
+    "<header> {n}") or explicit ``headers``, not both.
+    """
+
+    max_columns: int | None = None
+    header_template: str | None = None
+    headers: list[str] = Field(default_factory=list)
+
+
 class FlowOutputColumnSpec(BaseModel):
     key: str
     header: str | None = None
     field_ref: str | None = None
     transform: FlowOutputTransformSpec | None = None
     source_node_id: str | None = None
+    split_list: FlowOutputSplitListSpec | None = None
 
 
 class FlowOutputFilterSpec(BaseModel):
@@ -349,6 +364,8 @@ class FlowOutputField(BaseModel):
     non_empty_count: int = 0
     examples: list[Any] = Field(default_factory=list)
     profile_bindings: list[FlowOutputProfileBinding] = Field(default_factory=list)
+    # Declared display spec (see value_display); None uses the generic reading.
+    display: dict[str, Any] | None = None
 
 
 class FlowOutputArtifact(BaseModel):
@@ -377,6 +394,8 @@ class FlowOutputArtifact(BaseModel):
     ] = "non_structured"
     warnings: list[str] = Field(default_factory=list)
     rows_by_source: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    # Standard object columns from the source's declared layout, in order.
+    default_object_refs: list[str] = Field(default_factory=list)
 
 
 class FlowOutputArtifactBundle(BaseModel):
@@ -750,7 +769,9 @@ def _object_label(
     for key in dict.fromkeys(
         (*label_fields, "label", "symbol", "name", "normalized_symbol", "mention", "entity")
     ):
-        value = _string_value(payload.get(key))
+        raw = payload.get(key)
+        # Structured label values read as display text, never JSON.
+        value = display_text(raw) if isinstance(raw, (Mapping, list)) else _string_value(raw)
         if value:
             return value
     for key in ("label", "symbol", "name"):
@@ -1614,15 +1635,34 @@ def _build_artifact_from_step(
     if shape == "non_structured":
         warnings.append("No canonical curation object rows are available for this artifact.")
 
-    from src.lib.flows.export_fields import packaged_export_fields, packaged_field_value, profile_export_fields, source_catalog
+    from src.lib.flows.export_fields import (
+        packaged_default_layout,
+        packaged_display_specs,
+        packaged_export_fields,
+        packaged_field_value,
+        profile_export_fields,
+        source_catalog,
+    )
+    display_specs: dict[str, dict[str, Any]] = {}
+    default_object_refs: list[str] = []
     if profile_fields is not None:
         export_fields = profile_export_fields(profile_fields)
+        # Custom profiles: top-level contract fields in declaration order.
+        default_object_refs = [
+            field.row_ref
+            for field in profile_fields
+            if "." not in field.profile_path.removeprefix("attributes.")
+        ]
     else:
         # A persisted envelope declares its pack independently of whether the
         # producer was a custom agent with an execution receipt.
-        export_fields = packaged_export_fields(
+        pack_entry = {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None
+        export_fields = packaged_export_fields(agent_id, pack_entry)
+        display_specs = packaged_display_specs(agent_id, pack_entry)
+        default_object_refs = packaged_default_layout(
             agent_id,
-            {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None,
+            pack_entry,
+            sorted({str(item.get("object_type") or "") for item in object_items}),
         )
         for row, item in zip(rows_by_source["object"], object_items):
             for field in export_fields:
@@ -1639,7 +1679,8 @@ def _build_artifact_from_step(
     for rows in rows_by_source.values():
         for row in rows:
             row["artifact.node_id"] = node_id
-    extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object")
+    extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object",
+                                      display=display_specs.get(f["ref"]))
                       for f in catalog["fields"] if not f["ref"].startswith("object.attribute.")]
     return FlowOutputArtifact(
         node_id=node_id, export_schema_fingerprint=catalog["schema_fingerprint"],
@@ -1668,6 +1709,7 @@ def _build_artifact_from_step(
         artifact_shape=shape,
         warnings=warnings,
         rows_by_source=rows_by_source,
+        default_object_refs=default_object_refs,
     )
 
 
@@ -1757,6 +1799,8 @@ def _build_artifact_bundle(
             else:
                 existing.profile_bindings.extend(declared.profile_bindings)
                 existing.label = declared.label
+                if declared.display is not None:
+                    existing.display = declared.display
             existing.value_type = declared.value_type if len(declared_types[key]) == 1 else "mixed"
     warnings = [
         warning
@@ -1919,6 +1963,29 @@ def default_columns_for_row_source(
 ) -> list[FlowOutputColumnSpec]:
     available = available_refs if available_refs is not None else bundle.field_refs_for_source(row_source)
     selected_rows = rows if rows is not None else bundle.rows_for_source(row_source)
+    layout_refs = (
+        _declared_layout_refs(bundle, selected_rows, available)
+        if row_source == "object" and row_strategy in {"object", "wide_union"}
+        else []
+    )
+    if layout_refs and (
+        row_strategy == "object"
+        or not any(
+            str(ref).startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+            for row in selected_rows
+            for ref in row
+        )
+    ):
+        labels = {field.ref: field.label for field in bundle.field_catalog if field.row_source == "object"}
+        refs = [*layout_refs, *(["object.validation_status"] if "object.validation_status" in available else [])]
+        return [
+            FlowOutputColumnSpec(
+                key=_column_key_from_ref(field_ref),
+                header=labels.get(field_ref) or _field_label(field_ref),
+                field_ref=field_ref,
+            )
+            for field_ref in dict.fromkeys(refs)
+        ]
     attribute_field_refs: list[str] = []
     if row_source == "object" and row_strategy == "wide_union":
         all_attribute_refs = _first_seen_refs(selected_rows, prefix=_OBJECT_ATTRIBUTE_FIELD_PREFIX)
@@ -2006,6 +2073,22 @@ def default_columns_for_row_source(
         )
         for field_ref in selected
     ]
+
+
+def _declared_layout_refs(
+    bundle: FlowOutputArtifactBundle,
+    rows: Sequence[Mapping[str, Any]],
+    available: set[str],
+) -> list[str]:
+    """Declared standard columns of the artifacts that own ``rows``."""
+
+    row_ids = {id(row) for row in rows}
+    refs: list[str] = []
+    for artifact in bundle.artifacts:
+        if not any(id(row) in row_ids for row in artifact.rows_by_source.get("object") or []):
+            continue
+        refs.extend(ref for ref in artifact.default_object_refs if ref in available and ref not in refs)
+    return refs
 
 
 def _field_catalog_map(bundle: FlowOutputArtifactBundle) -> dict[str, FlowOutputField]:
@@ -2132,19 +2215,33 @@ def _pair_join_value_groups(left: Any, right: Any) -> list[tuple[Any, Any]]:
     )
 
 
+# Renders one stored value (field ref, value, list element index) as display text.
+ValueRenderer = Callable[[str, Any, "int | None"], str]
+
+
+def _plain_text(_field_ref: str, value: Any, _index: int | None = None) -> str:
+    return str(value)
+
+
 def _pair_join_value(
     row: Mapping[str, Any],
     transform: FlowOutputTransformSpec,
     *,
     missing_value: str,
+    render: ValueRenderer = _plain_text,
 ) -> str:
     if len(transform.field_refs) != 2:
         raise ValueError("pair_join requires exactly two field_refs.")
     left_ref, right_ref = transform.field_refs
     pairs = _pair_join_value_groups(row.get(left_ref), row.get(right_ref))
     rendered: list[str] = []
-    for left, right in pairs:
-        parts = [str(value) for value in (left, right) if not _is_empty(value)]
+    for index, (left, right) in enumerate(pairs):
+        position = index if len(pairs) > 1 else None
+        parts = [
+            text
+            for ref, value in ((left_ref, left), (right_ref, right))
+            if not _is_empty(value) and (text := render(ref, value, position))
+        ]
         if parts:
             rendered.append(transform.pair_separator.join(parts))
     return transform.separator.join(rendered) if rendered else missing_value
@@ -2205,6 +2302,7 @@ def _format_elements_value(
     transform: FlowOutputTransformSpec,
     *,
     missing_value: str | None,
+    render: ValueRenderer | None = None,
 ) -> str | None:
     refs = list(transform.field_refs)
     selector_ref = transform.field_ref
@@ -2212,7 +2310,8 @@ def _format_elements_value(
     if selector_ref:
         values.append(row.get(selector_ref))
     rendered: list[str] = []
-    for element in _aligned_elements(values):
+    elements = _aligned_elements(values)
+    for position, element in enumerate(elements):
         field_values = element[: len(refs)]
         if all(_is_empty(value) for value in field_values):
             continue
@@ -2224,8 +2323,13 @@ def _format_elements_value(
                 template = transform.mapping[selector_key]
 
         def substitute(match: re.Match[str]) -> str:
-            value = field_values[int(match.group(1)) - 1]
-            return (missing_value or "") if _is_empty(value) else _string_value(value)
+            slot = int(match.group(1)) - 1
+            value = field_values[slot]
+            if _is_empty(value):
+                return missing_value or ""
+            if render is None:
+                return _string_value(value)
+            return render(refs[slot], value, position if len(elements) > 1 else None)
 
         rendered.append(_ELEMENT_PLACEHOLDER.sub(substitute, str(template)))
     return transform.separator.join(rendered) if rendered else missing_value
@@ -2433,7 +2537,13 @@ def _override_errors(
         for row_id, ref in bundle_row_refs(bundle, plan.row_source).items()
         if row_id in selected_row_ids
     }
-    column_keys = {column.key for column in columns}
+    column_keys = {column.key for column in columns if column.split_list is None}
+    split_keys = {column.key for column in columns if column.split_list is not None}
+    for override in plan.overrides:
+        base, _, number = str(override.column_key or "").rpartition("_")
+        if base in split_keys and number.isdigit():
+            # Expanded split columns are checked against the data at render time.
+            column_keys.add(str(override.column_key))
     excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
     seen: set[tuple[str, str | None]] = set()
     for index, override in enumerate(plan.overrides, start=1):
@@ -2464,6 +2574,118 @@ def _override_errors(
             errors.append(f"{context}: duplicate override for {identity[0]} {identity[1] or '(row)'}.")
         seen.add(identity)
     return errors
+
+
+def _split_list_errors(
+    plan: FlowOutputProjectionPlan,
+    column: FlowOutputColumnSpec,
+    rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Static checks for a split_list column; data-sized checks run at render."""
+
+    split = column.split_list
+    assert split is not None
+    context = f"Column '{column.key}' split_list"
+    errors: list[str] = []
+    if plan.format == "json":
+        errors.append(f"{context} applies to CSV, TSV and chat output; JSON keeps lists lossless.")
+    if column.transform is not None or not column.field_ref:
+        errors.append(f"{context} needs a list-valued field_ref, not a transform.")
+    elif any(
+        not isinstance(row.get(column.field_ref), list) and not _is_empty(row.get(column.field_ref))
+        for row in rows
+    ):
+        errors.append(
+            f"{context} needs a list-valued field; '{column.field_ref}' holds single values. "
+            "Choose a list field or remove split_list."
+        )
+    if split.header_template is not None and split.headers:
+        errors.append(f"{context} takes header_template or headers, not both.")
+    if split.header_template is not None and "{n}" not in split.header_template:
+        errors.append(f"{context} header_template must contain {{n}} (e.g. 'Anatomy Term {{n}}').")
+    if any(not str(header).strip() for header in split.headers):
+        errors.append(f"{context} headers cannot be blank.")
+    if len(set(split.headers)) != len(split.headers):
+        errors.append(f"{context} headers must be distinct.")
+    ceiling = get_flow_output_split_list_max_columns()
+    if split.max_columns is not None and not 1 <= split.max_columns <= ceiling:
+        errors.append(f"{context} max_columns must be between 1 and {ceiling}.")
+    if len(split.headers) > (split.max_columns or ceiling):
+        errors.append(f"{context} has more headers than its column limit {split.max_columns or ceiling}.")
+    return errors
+
+
+def _split_list_headers(column: FlowOutputColumnSpec, count: int) -> list[str]:
+    split = column.split_list
+    assert split is not None
+    if split.headers:
+        return list(split.headers[:count])
+    template = split.header_template or f"{column.header or column.key} {{n}}"
+    return [template.replace("{n}", str(number)) for number in range(1, count + 1)]
+
+
+def _expand_split_columns(
+    columns: Sequence[FlowOutputColumnSpec],
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[list[FlowOutputColumnSpec], dict[str, tuple[FlowOutputColumnSpec, int]]]:
+    """Output columns with split lists expanded, sized by the longest list in ``rows``.
+
+    Returns the output columns and, per expanded key, its source column and item
+    index. Fails explicitly rather than dropping items or inventing names.
+    """
+
+    output: list[FlowOutputColumnSpec] = []
+    items: dict[str, tuple[FlowOutputColumnSpec, int]] = {}
+    ceiling = get_flow_output_split_list_max_columns()
+    for column in columns:
+        split = column.split_list
+        if split is None:
+            output.append(column)
+            continue
+        longest = max(
+            (len(row.get(column.field_ref or "")) for row in rows
+             if isinstance(row.get(column.field_ref or ""), list)),
+            default=0,
+        )
+        count = max(1, longest, len(split.headers))
+        limit = min(split.max_columns or ceiling, ceiling)
+        if count > limit:
+            message = (
+                f"Column '{column.key}' needs {count} split columns for its longest list, "
+                f"above the limit of {limit}. No items were dropped; filter rows, raise "
+                "max_columns, or keep the list in one column."
+            )
+            if split.max_columns is None or split.max_columns >= ceiling:
+                raise FlowOutputOperationalCeilingError(
+                    message, measured=count, limit=ceiling,
+                    setting="FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", unit="columns",
+                )
+            raise ValueError(message)
+        if split.headers and len(split.headers) < longest:
+            raise ValueError(
+                f"Column '{column.key}' split_list names {len(split.headers)} headers but the "
+                f"longest list has {longest} items. Add headers or use header_template."
+            )
+        for number, header in enumerate(_split_list_headers(column, count), start=1):
+            key = f"{column.key}_{number}"
+            output.append(FlowOutputColumnSpec(key=key, header=header, field_ref=column.field_ref,
+                                               source_node_id=column.source_node_id))
+            items[key] = (column, number - 1)
+    headers = [column.header or column.key for column in output]
+    duplicates = sorted({header for header in headers if headers.count(header) > 1})
+    if items and duplicates:
+        raise ValueError(
+            "Output headers must be distinct after split_list expansion; duplicated: "
+            + ", ".join(duplicates)
+        )
+    keys = [column.key for column in output]
+    duplicate_keys = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicate_keys:
+        raise ValueError(
+            "Output column keys must be distinct after split_list expansion; duplicated: "
+            + ", ".join(duplicate_keys)
+        )
+    return output, items
 
 
 def validate_projection_plan(
@@ -2590,6 +2812,8 @@ def validate_projection_plan(
         if column.key in seen_keys:
             errors.append(f"Duplicate output column key '{column.key}'.")
         seen_keys.add(column.key)
+        if column.split_list is not None:
+            errors.extend(_split_list_errors(plan, column, rows))
         if column.transform is None:
             _validate_ref(
                 field_ref=column.field_ref,
@@ -2767,40 +2991,53 @@ def _transform_value(
     transform: FlowOutputTransformSpec,
     *,
     missing_value: str,
+    render: ValueRenderer | None = None,
 ) -> Any:
+    text = render or _plain_text
     if transform.type == "literal":
         return transform.value
     if transform.type == "first_non_empty":
         for field_ref in transform.field_refs:
             value = row.get(field_ref)
             if not _is_empty(value):
-                return value
+                return render(field_ref, value, None) if render else value
         return missing_value
     if transform.type == "concat":
         parts: list[str] = []
         for value in transform.values:
             if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
-                part = row.get(str(value["field_ref"]))
-            elif isinstance(value, str) and value in row:
+                ref = str(value["field_ref"])
+                part = row.get(ref)
+                if not _is_empty(part):
+                    parts.append(text(ref, part, None))
+                continue
+            if isinstance(value, str) and value in row:
                 part = row.get(value)
-            else:
-                part = value
-            if not _is_empty(part):
-                parts.append(str(part))
-        return transform.separator.join(parts)
+                if not _is_empty(part):
+                    parts.append(text(value, part, None))
+                continue
+            if not _is_empty(value):
+                parts.append(str(value))
+        return transform.separator.join(part for part in parts if part)
     if transform.type == "join_list":
-        value = row.get(transform.field_ref or "")
+        ref = transform.field_ref or ""
+        value = row.get(ref)
         if isinstance(value, list):
-            return transform.separator.join(str(item) for item in value if not _is_empty(item))
-        return missing_value if _is_empty(value) else str(value)
+            items = [
+                text(ref, item, index)
+                for index, item in enumerate(value)
+                if not _is_empty(item)
+            ]
+            return transform.separator.join(item for item in items if item)
+        return missing_value if _is_empty(value) else text(ref, value, None)
     if transform.type == "pair_join":
-        return _pair_join_value(row, transform, missing_value=missing_value)
+        return _pair_join_value(row, transform, missing_value=missing_value, render=text)
     if transform.type == "conditional":
         condition = _conditional_filter(transform)
         branch = transform.when_true if _row_matches_filter(row, condition) else transform.when_false
         if branch is None:
             raise ValueError("conditional selected an undefined branch.")
-        return _transform_value(row, branch, missing_value=missing_value)
+        return _transform_value(row, branch, missing_value=missing_value, render=render)
     if transform.type == "count":
         value = row.get(transform.field_ref or "")
         if isinstance(value, (list, tuple, set, dict)):
@@ -2813,7 +3050,7 @@ def _transform_value(
             return transform.mapping[key]
         return transform.default if transform.default is not None else missing_value
     if transform.type == "format_elements":
-        return _format_elements_value(row, transform, missing_value=missing_value)
+        return _format_elements_value(row, transform, missing_value=missing_value, render=render)
     if transform.type == "boolean_label":
         value = row.get(transform.field_ref or "")
         if isinstance(value, bool):
@@ -2833,19 +3070,105 @@ def _project_row(
     *,
     missing_value: str | None,
     preserve_empty: bool = False,
+    render: ValueRenderer | None = None,
 ) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for column in columns:
         if column.source_node_id and row.get("artifact.node_id") != column.source_node_id:
             value = None
         elif column.transform is not None:
-            value = _transform_value(row, column.transform, missing_value=missing_value)
+            value = _transform_value(
+                row, column.transform, missing_value=missing_value, render=render,
+            )
         else:
             value = row.get(column.field_ref or "")
+            # Numbers and booleans stay typed; text and structured values render.
+            if render is not None and not _is_empty(value) and (
+                isinstance(value, (str, list, tuple, dict))
+            ):
+                value = render(column.field_ref or "", value, None)
+        if render is not None and value is not None and not isinstance(value, (str, int, float, bool)):
+            value = display_text(value)
         if value is None or (not preserve_empty and _is_empty(value)):
             value = missing_value
         output[column.key] = _jsonable(value)
     return output
+
+
+def _payload_path_for_ref(field_ref: str) -> str | None:
+    """The object payload path a projection field reads, when it has one."""
+
+    if field_ref.startswith("object.pack."):
+        _, _, rest = field_ref.removeprefix("object.pack.").partition(".")
+        return rest or None
+    if field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX):
+        return "attributes." + field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+    if field_ref.startswith("object.payload."):
+        return field_ref.removeprefix("object.payload.")
+    return None
+
+
+def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[str, list[str]]:
+    """Open validation finding paths per object reference, relative to the payload.
+
+    Findings reference their object by object_id or pending_ref_id.
+    """
+
+    paths: dict[str, list[str]] = defaultdict(list)
+    for row in bundle.rows_for_source("validation_finding"):
+        if str(row.get("validation.status") or "").strip().lower() != "open":
+            continue
+        field_path = _string_value(row.get("validation.field_path")).removeprefix("payload.")
+        if not field_path:
+            continue
+        for key in ("object.object_id", "object.pending_ref_id"):
+            reference = _string_value(row.get(key))
+            if reference:
+                paths[reference].append(field_path)
+    return paths
+
+
+def _unresolved_for(finding_paths: Sequence[str], payload_path: str | None) -> bool | frozenset[int]:
+    """Whole-value or per-element unresolved state from open findings."""
+
+    if not payload_path:
+        return False
+    indexes: set[int] = set()
+    for finding_path in finding_paths:
+        if finding_path == payload_path or finding_path.startswith(payload_path + "."):
+            return True
+        if finding_path.startswith(payload_path + "["):
+            index_text = finding_path[len(payload_path) + 1 :].split("]", 1)[0]
+            if index_text.isdigit():
+                indexes.add(int(index_text))
+            else:
+                return True
+    return frozenset(indexes) if indexes else False
+
+
+def _display_renderer(
+    bundle: FlowOutputArtifactBundle,
+    plan: FlowOutputProjectionPlan,
+    row: Mapping[str, Any],
+    specs: Mapping[str, Any],
+    open_paths: Mapping[str, list[str]],
+) -> ValueRenderer:
+    finding_paths = [
+        path
+        for reference in dict.fromkeys(
+            _string_value(row.get(key)) for key in ("object.object_id", "object.pending_ref_id")
+        )
+        if reference
+        for path in open_paths.get(reference, [])
+    ]
+
+    def render(field_ref: str, value: Any, index: int | None) -> str:
+        unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref))
+        if not isinstance(unresolved, bool) and (index is not None or not isinstance(value, list)):
+            unresolved = (index or 0) in unresolved
+        return display_text(value, specs.get(field_ref), unresolved=unresolved)
+
+    return render
 
 
 def _group_projected_rows(
@@ -2872,7 +3195,13 @@ def apply_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
     *, preview_limit: int | None = None,
+    render_display: bool = True,
 ) -> FlowOutputProjectionResult:
+    """Project rows; non-JSON cells become display text (``value_display``).
+
+    JSON output always keeps the raw structured values. Inspection tools pass
+    ``render_display=False`` to see the stored values.
+    """
     errors, warnings, columns = validate_projection_plan(bundle, plan)
     if errors:
         raise ValueError("; ".join(errors))
@@ -2911,10 +3240,51 @@ def apply_projection_plan(
         plan.max_rows is not None and total_count > plan.max_rows
     )
     row_refs = [ref_by_row_id.get(id(row), "") for row in limited_rows]
-    projected_rows = [
-        _project_row(row, columns, missing_value=plan.missing_value, preserve_empty=plan.selection_mode == "selected_fields")
-        for row in limited_rows
-    ]
+    display = render_display and plan.format != "json"
+    specs = (
+        {field.ref: field.display for field in bundle.field_catalog if field.row_source == plan.row_source}
+        if display
+        else {}
+    )
+    open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
+    # Split lists are sized by the longest list across all filtered rows.
+    output_columns, split_items = (
+        _expand_split_columns(columns, rows)
+        if any(column.split_list is not None for column in columns)
+        else (list(columns), {})
+    )
+    base_columns = [column for column in columns if column.split_list is None]
+    preserve_empty = plan.selection_mode == "selected_fields"
+    projected_rows = []
+    for row in limited_rows:
+        render = _display_renderer(bundle, plan, row, specs, open_paths) if display else None
+        base = _project_row(
+            row,
+            base_columns,
+            missing_value=plan.missing_value,
+            preserve_empty=preserve_empty,
+            render=render,
+        )
+        if not split_items:
+            projected_rows.append(base)
+            continue
+        projected: dict[str, Any] = {}
+        for column in output_columns:
+            if column.key not in split_items:
+                projected[column.key] = base[column.key]
+                continue
+            source_column, position = split_items[column.key]
+            values = row.get(source_column.field_ref or "")
+            item = values[position] if isinstance(values, list) and position < len(values) else None
+            if source_column.source_node_id and row.get("artifact.node_id") != source_column.source_node_id:
+                item = None
+            if not _is_empty(item) and render is not None:
+                item = render(source_column.field_ref or "", item, position)
+            if item is None or (not preserve_empty and _is_empty(item)):
+                item = plan.missing_value
+            projected[column.key] = _jsonable(item)
+        projected_rows.append(projected)
+    columns = output_columns
     cell_overrides = [override for override in plan.overrides if not override.exclude]
     if cell_overrides:
         position_by_ref = {ref: position for position, ref in enumerate(row_refs)}
@@ -2926,7 +3296,13 @@ def apply_projection_plan(
                 "Override row_ref(s) fall outside the output row limit: "
                 + ", ".join(beyond_limit)
             )
+        output_keys = {column.key for column in columns}
         for override in cell_overrides:
+            if override.column_key not in output_keys:
+                raise ValueError(
+                    f"Override column_key '{override.column_key}' is not an output column "
+                    "after split_list expansion."
+                )
             position = position_by_ref.get(override.row_ref)
             if position is not None and override.column_key is not None:
                 projected_rows[position][override.column_key] = _jsonable(override.value)
@@ -3041,7 +3417,7 @@ def preview_output_projection(
             errors=errors,
             warnings=warnings,
         )
-    result = apply_projection_plan(bundle, plan, preview_limit=limit)
+    result = apply_projection_plan(bundle, plan, preview_limit=limit, render_display=True)
     return FlowOutputProjectionPreview(
         status="ok",
         warnings=_bounded_projection_warnings(result.warnings),
@@ -3061,7 +3437,7 @@ def finalize_output_projection(
     rows beyond ``FLOW_PROJECTION_MAX_ROWS`` are never silently dropped.
     """
 
-    result = apply_projection_plan(bundle, plan)
+    result = apply_projection_plan(bundle, plan, render_display=True)
     if result.truncated and not result.limited_by_max_rows:
         raise FlowOutputOperationalCeilingError(
             f"The projection matched {result.total_count} rows, above the operational "
@@ -3173,6 +3549,7 @@ __all__ = [
     "FlowOutputFilterSpec",
     "FlowOutputOperationalCeilingError",
     "FlowOutputOverrideSpec",
+    "FlowOutputSplitListSpec",
     "FlowOutputProjectionPlan",
     "FlowOutputProjectionPreview",
     "FlowOutputProjectionResult",

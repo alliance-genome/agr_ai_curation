@@ -129,6 +129,9 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Semantic chat-output fixture reproduces a curator's C. elegans
     # gene-expression result (WormBase identifiers) for the payload hotfix.
     Path("backend/tests/fixtures/flows/semantic_chat_output.py"),
+    # Standard display rendering is checked against the installed Alliance
+    # gene-expression pack and production value shapes (ALL-1282).
+    Path("backend/tests/unit/lib/flows/test_value_display.py"),
     # Immutable execution migrations preserve the shipped Alliance group prompts
     # and packaged builder identities, including historical access boundaries.
     Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),
