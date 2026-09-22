@@ -4038,6 +4038,21 @@ def _configured_ontology_mapping_results(
     return helper_results
 
 
+def _term_lookup_limit(limit: Optional[int], default: int) -> int:
+    """Clamp a term-lookup candidate limit to TOOL_PAGE_MAX_LIMIT (default 50).
+
+    Same variable and default as the backend ``get_tool_page_max_limit``; read
+    directly because package code must not import backend. The resolver and
+    term-search tools previously used ``limit or N`` with no maximum.
+    """
+    effective, _ = clamp_page_limit(
+        limit,
+        default=default,
+        maximum=env_positive_int("TOOL_PAGE_MAX_LIMIT", 50),
+    )
+    return effective
+
+
 @function_tool(strict_mode=False)
 def get_domain_field_term_options(
     domain_pack_id: str,
@@ -4067,7 +4082,7 @@ def get_domain_field_term_options(
         phrase = str(phrase_value) if phrase_value is not None else None
     normalized_phrase = phrase.strip() if isinstance(phrase, str) else None
     normalized_query = query.strip() if isinstance(query, str) and query.strip() else None
-    limit_value = limit or 25
+    limit_value = _term_lookup_limit(limit, 25)
     queried_at = datetime.now(timezone.utc).isoformat()
     attempted_query = _helper_attempt(
         domain_pack_id=domain_pack_id,
@@ -4374,7 +4389,7 @@ def search_domain_field_terms(
 
     evidence_context = evidence_context or {}
     normalized_query = query.strip() if isinstance(query, str) and query.strip() else None
-    limit_value = limit or 10
+    limit_value = _term_lookup_limit(limit, 10)
     attempted_query = _attempt_query(
         "search_domain_field_terms",
         domain_pack_id=domain_pack_id,
@@ -4718,7 +4733,7 @@ def inspect_ontology_term(
     """Inspect one authoritative ontology term and bounded graph context."""
 
     normalized_curie = curie.strip() if isinstance(curie, str) and curie.strip() else None
-    limit_value = limit or 25
+    limit_value = _term_lookup_limit(limit, 25)
     attempted_query = _attempt_query(
         "inspect_ontology_term",
         domain_pack_id=domain_pack_id,
@@ -5000,7 +5015,7 @@ def _resolve_domain_field_term_impl(
         if isinstance(candidate_value, str) and candidate_value.strip()
         else None
     )
-    limit_value = limit or 10
+    limit_value = _term_lookup_limit(limit, 10)
     attempted_query = _attempt_query(
         "resolve_domain_field_term",
         domain_pack_id=domain_pack_id,
