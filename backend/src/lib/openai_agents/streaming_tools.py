@@ -2608,6 +2608,7 @@ def _build_structured_specialist_finalization_tool(
     tool_calls: List["SpecialistToolCall"],
     live_evidence_records: List[Dict[str, Any]],
     function_tool_factory: Any,
+    compact_runtime: Any = None,
 ) -> Any:
     @function_tool_factory(
         name_override=finalization_state.tool_name,
@@ -2625,13 +2626,23 @@ def _build_structured_specialist_finalization_tool(
                 finalization_state
             )
         else:
-            feedback = _structured_specialist_finalization_feedback(
-                result,
-                expected_output_type=expected_output_type,
-                finalization_config=finalization_state.config,
-                tool_calls=tool_calls,
-                live_evidence_records=live_evidence_records,
-            )
+            try:
+                if compact_runtime is not None:
+                    result = compact_runtime.assemble(result).model_dump(mode="json")
+                feedback = _structured_specialist_finalization_feedback(
+                    result,
+                    expected_output_type=expected_output_type,
+                    finalization_config=finalization_state.config,
+                    tool_calls=tool_calls,
+                    live_evidence_records=live_evidence_records,
+                )
+            except (ValueError, TypeError, KeyError) as exc:
+                if compact_runtime is None:
+                    raise
+                feedback = _StructuredSpecialistFinalizationFeedback(
+                    accepted_payload=None, message=str(exc),
+                    repair_instructions=["Repair the compact scientific decision using this invocation's references."],
+                )
         if feedback.accepted_payload is not None:
             finalization_state.accepted_payload = feedback.accepted_payload
             finalization_state.last_rejection = None
@@ -2660,6 +2671,9 @@ def _build_structured_specialist_finalization_tool(
         )
         return _structured_specialist_finalization_tool_payload(feedback)
 
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import compact_finalization_schema
+        return compact_finalization_schema(finalize_structured_specialist_result, compact_runtime)
     return finalize_structured_specialist_result
 
 
@@ -2668,6 +2682,7 @@ def _append_structured_specialist_finalization_instruction(
     source_agent: Agent,
     *,
     finalization_state: _StructuredSpecialistFinalizationState,
+    compact_runtime: Any = None,
 ) -> Agent:
     instruction = (
         "Structured result finalization is mandatory. Before your final answer, "
@@ -2697,6 +2712,9 @@ def _append_structured_specialist_finalization_instruction(
                 "from a query filter, CURIE prefix, species, or another candidate. This applies to "
                 "candidate records, resolved_objects and resolved_values."
             )
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import compact_finalization_instruction
+        instruction = compact_finalization_instruction(compact_runtime, tool_name=finalization_state.tool_name)
     return _append_agent_runtime_instruction(
         runtime_agent,
         source_agent,
@@ -2715,6 +2733,7 @@ def _configure_structured_specialist_finalization(
     finalization_state: _StructuredSpecialistFinalizationState,
     tool_calls: List["SpecialistToolCall"],
     live_evidence_records: List[Dict[str, Any]],
+    compact_runtime: Any = None,
 ) -> Agent:
     from agents import function_tool
 
@@ -2728,6 +2747,7 @@ def _configure_structured_specialist_finalization(
             tool_calls=tool_calls,
             live_evidence_records=live_evidence_records,
             function_tool_factory=function_tool,
+            compact_runtime=compact_runtime,
         ),
     ]
     if getattr(runtime_agent, "output_type", None) is expected_output_type:
@@ -2735,10 +2755,14 @@ def _configure_structured_specialist_finalization(
             expected_output_type,
             strict_json_schema=False,
         )
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import prepare_compact_tools
+        prepare_compact_tools(runtime_agent, compact_runtime)
     return _append_structured_specialist_finalization_instruction(
         runtime_agent,
         source_agent,
         finalization_state=finalization_state,
+        compact_runtime=compact_runtime,
     )
 
 
@@ -4849,6 +4873,14 @@ async def run_specialist_with_events(
         )
 
     if structured_finalization_state.required:
+        from src.lib.domain_packs.compact_runtime import runtime_for_schema
+        trusted_request = getattr(agent, "_compact_validation_request", None)
+        compact_runtime = runtime_for_schema(
+            [trusted_request] if trusted_request is not None else None,
+            result_schema=expected_output_type, input_text=input_text, evidence=live_evidence_records,
+            profile_request_ids=(trusted_request.request_id,) if trusted_request is not None
+                and getattr(agent, "_compact_profile_mapped", False) else (),
+        )
         runtime_agent = _configure_structured_specialist_finalization(
             runtime_agent,
             agent,
@@ -4856,6 +4888,7 @@ async def run_specialist_with_events(
             finalization_state=structured_finalization_state,
             tool_calls=tool_calls,
             live_evidence_records=live_evidence_records,
+            compact_runtime=compact_runtime,
         )
         logger.info(
             "%s applying mandatory structured finalization tool %s",

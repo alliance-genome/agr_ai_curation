@@ -689,6 +689,66 @@ def _lookup_tool_call(
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_mapped", [False, True])
+async def test_compact_streaming_finalization_copies_provider_facts_and_counts(
+    monkeypatch, _repo_package_curation_registry, profile_mapped,
+):
+    from agents import function_tool
+    from agents.tool_context import ToolContext
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema
+    from src.schemas.domain_validator import DomainValidationRequest
+
+    schema = _package_schema("AlleleResultEnvelope")
+    request = DomainValidationRequest(request_id="compact", validator_binding_id="allele",
+        validator_agent={"package_id": "agr.alliance", "agent_id": "allele_validation"},
+        target={"domain_pack_id": "test"}, selected_inputs={"symbol": "Example"},
+        expected_result_fields={"curie": "allele.curie"})
+    source = {"status": "ok", "data": {"items": [{"input": "Example", "results": [
+        {"curie": f"MGI:{i}", "symbol": "Example", "data_provider": None} for i in range(26)
+    ]}]}}
+
+    @function_tool
+    def agr_curation_query(method: str, symbol: str) -> dict:
+        return source
+
+    runtime = runtime_for_schema([request], result_schema=schema,
+        profile_request_ids=("compact",) if profile_mapped else ())
+    config = _finalization_config("ask_allele_validation_specialist")
+    state = streaming_tools._StructuredSpecialistFinalizationState(
+        required=True, tool_name="finalize_allele_validation_result", config=config,
+        output_type_name="AlleleResultEnvelope", agent_name="Allele")
+    calls = []
+    source_agent = SimpleNamespace(tools=[agr_curation_query], output_type=schema, instructions="")
+    agent = streaming_tools._configure_structured_specialist_finalization(source_agent, source_agent,
+        expected_output_type=schema, finalization_state=state, tool_calls=calls,
+        live_evidence_records=[], compact_runtime=runtime)
+    assert agent.output_type is None
+    assert source_agent.output_type is schema
+    args = {"method": "search_alleles", "symbol": "Example"}
+    context = ToolContext(context=None, tool_name="agr_curation_query", tool_call_id="raw-lookup",
+                          tool_arguments=json.dumps(args))
+    response = json.loads(await agent.tools[0].on_invoke_tool(context, json.dumps(args)))
+    calls.append(streaming_tools.SpecialistToolCall(tool_name="agr_curation_query", tool_args=args,
+        output_payload=streaming_tools._tool_output_payload_for_finalization("agr_curation_query", response,
+            finalization_config=config)))
+    ref = response["validator_record_refs"][0]["record_ref"]
+    decision = {"request_id": "compact", "status": "resolved", "explanation": "Evidence supports this allele.",
+        "candidates": [{"record_ref": ref, "disposition": "selected", "explanation": "Scientific match."}],
+        "slots": {"curie": {"kind": "record", "record_ref": ref, "field": "curie"}}}
+    finalizer = agent.tools[-1]
+    finalized = await finalizer.on_invoke_tool(ToolContext(context=None, tool_name=finalizer.name,
+        tool_call_id="finalize", tool_arguments=json.dumps({"result": decision})), json.dumps({"result": decision}))
+    assert finalized["status"] == "accepted", finalized
+    assert state.accepted_payload["resolved_values"] == {"curie": "MGI:0"}
+    assert state.accepted_payload["lookup_attempts"][0]["result_count"] == 26
+    assert state.accepted_payload["allele_candidates"][0]["data_provider"] is None
+    assert state.accepted_payload["candidates"][0]["details"]["scientific_assessment"]["explanation"] == "Scientific match."
+    if profile_mapped:
+        assert state.accepted_payload["resolved_objects"] == []
+    assert "validator_result" not in finalized
+
+
 @pytest.mark.parametrize("change", [
     {"method": "get_allele"},
     {"query": {"symbol": "other", "data_provider": "MGI"}},

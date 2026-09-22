@@ -1322,6 +1322,10 @@ async def _run_custom_flow_validator_agent(
         agent_kwargs["execution_receipt"] = node_data.get("execution_receipt")
     agent_kwargs["additional_runtime_context"] = runtime_context
     agent = get_agent_by_id(validator_agent_id, **agent_kwargs)
+    # Preserve the complete trusted request through the streaming boundary;
+    # the model-facing payload may deliberately omit duplicate source metadata.
+    agent._compact_validation_request = request
+    agent._compact_profile_mapped = bool(binding_match.binding.raw.get("profile_validation"))
 
     tool_name = (
         "validate_"

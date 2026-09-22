@@ -21,6 +21,9 @@ ComponentValidationStatus = Literal[
 ]
 
 
+COMPACT_VALIDATOR_RUNTIME = ("agr.alliance", "agr_ai_curation_alliance.compact_adapter:build_compact_validator_runtime")
+
+
 class ExperimentalConditionNormalizedComponent(DomainValidatorBaseModel):
     """One normalized condition component selected from lower-level evidence."""
 

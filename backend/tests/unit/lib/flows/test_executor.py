@@ -4145,10 +4145,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
         monkeypatch.setattr(
             executor,
             "_create_streaming_tool",
-            lambda **_kwargs: _FakeTool(),
+            lambda **kwargs: captured.update(runtime_agent=kwargs["agent"]) or _FakeTool(),
         )
         binding = SimpleNamespace(
-            identity_details=lambda: {"binding_id": "custom.supplemental"}
+            identity_details=lambda: {"binding_id": "custom.supplemental"},
+            raw={"profile_validation": {"mapping": {}}},
         )
         binding_match = SimpleNamespace(binding=binding)
 
@@ -4165,6 +4166,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         payload = json.loads(captured["args"]["query"])
         validation_request = payload["validation_request"]
+        assert captured["runtime_agent"]._compact_validation_request is request
+        assert captured["runtime_agent"]._compact_profile_mapped is True
         assert captured["tool_name"] == f"validate_{agent_id}_custom_supplemental"
         if agent_id.startswith("ca_"):
             assert captured["agent_kwargs"]["execution_revision_id"] == "pinned-revision"

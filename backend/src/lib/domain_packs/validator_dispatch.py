@@ -1567,6 +1567,11 @@ def run_package_scoped_validator_agent(
         }
     _configure_accepted_finalization_stop(agent, finalization_state, batch=False)
     output_type = getattr(agent, "output_type", None)
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema, prepare_compact_tools
+    compact_runtime = runtime_for_schema(
+        [request], result_schema=output_type,
+        profile_request_ids=(request.request_id,) if binding.raw.get("profile_validation") else (),
+    )
     if is_domain_validator_result_schema(output_type):
         agent.output_type = AgentOutputSchema(
             output_type,
@@ -1577,6 +1582,7 @@ def run_package_scoped_validator_agent(
         *_validator_runtime_tools(request, runtime_context),
         _build_finalize_validator_result_tool(
             request,
+            compact_runtime=compact_runtime,
             finalization_state=finalization_state,
             function_tool_factory=function_tool,
             profile_mapped=bool(binding.raw.get("profile_validation")),
@@ -1587,6 +1593,8 @@ def run_package_scoped_validator_agent(
             ),
         ),
     ]
+    if compact_runtime is not None:
+        prepare_compact_tools(agent, compact_runtime)
     _append_validator_source_context_instructions(
         agent,
         batch=False,
@@ -1594,6 +1602,7 @@ def run_package_scoped_validator_agent(
     )
     _append_validator_finalization_instructions(
         agent, batch=False,
+        compact_runtime=compact_runtime,
         profile_request_ids=(request.request_id,) if binding.raw.get("profile_validation") else (),
     )
 
@@ -1763,6 +1772,11 @@ def run_package_scoped_validator_agent_batch(
         }
     output_type = getattr(agent, "output_type", None)
     batch_output_type = _batch_output_schema_for_agent_output(output_type)
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema, prepare_compact_tools
+    compact_runtime = runtime_for_schema(
+        [job.request for job in jobs], result_schema=output_type,
+        profile_request_ids=tuple(job.request.request_id for job in jobs if job.match.binding.raw.get("profile_validation")),
+    )
     if batch_output_type is not None:
         agent.output_type = AgentOutputSchema(
             batch_output_type,
@@ -1776,10 +1790,13 @@ def run_package_scoped_validator_agent_batch(
         *_validator_document_tools(runtime_context),
         _build_finalize_validator_batch_results_tool(
             jobs,
+            compact_runtime=compact_runtime,
             finalization_state=finalization_state,
             function_tool_factory=function_tool,
         ),
     ]
+    if compact_runtime is not None:
+        prepare_compact_tools(agent, compact_runtime)
     _append_validator_source_context_instructions(
         agent,
         batch=True,
@@ -1787,6 +1804,7 @@ def run_package_scoped_validator_agent_batch(
     )
     _append_validator_finalization_instructions(
         agent, batch=True,
+        compact_runtime=compact_runtime,
         profile_request_ids=tuple(
             job.request.request_id for job in jobs
             if job.match.binding.raw.get("profile_validation")
@@ -1814,6 +1832,13 @@ def run_package_scoped_validator_agent_batch(
             for job in jobs
         ],
     }
+    if compact_runtime is not None:
+        provider_payload["instructions"] = (
+            "Assess every request scientifically and finalize exactly one compact decision per request_id. "
+            "Use one bulk lookup tool call per compatible shared lookup group when a bulk method exists, "
+            "using list inputs such as gene_symbols or allele_symbols. Do not loop one lookup per request "
+            "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
+        )
     validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
@@ -2243,6 +2268,7 @@ def validator_request_payload_for_agent(
 
 def _append_validator_finalization_instructions(
     agent: Any, *, batch: bool, profile_request_ids: tuple[str, ...] = (),
+    compact_runtime: Any = None,
 ) -> None:
     tool_name = (
         "finalize_validator_batch_results" if batch else "finalize_validator_result"
@@ -2260,7 +2286,10 @@ def _append_validator_finalization_instructions(
         "rejects validator runs that do not complete this tool with "
         "`status: accepted`."
     )
-    if profile_request_ids:
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import compact_finalization_instruction
+        instruction_block = compact_finalization_instruction(compact_runtime, tool_name=tool_name, batch=batch)
+    elif profile_request_ids:
         instruction_block += (
             "\nCustom-profile output contract for request_ids "
             + json.dumps(profile_request_ids)
@@ -2399,11 +2428,18 @@ def _build_finalize_validator_result_tool(
     function_tool_factory: Any,
     result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
     profile_mapped: bool = False,
+    compact_runtime: Any = None,
 ) -> Any:
     @function_tool_factory(name_override="finalize_validator_result", strict_mode=False)
     def finalize_validator_result(result: dict[str, Any]) -> dict[str, Any]:
         """Validate the final DomainValidatorResultBase before answering."""
 
+        if compact_runtime is not None:
+            try:
+                result = compact_runtime.assemble(result).model_dump(mode="json")
+            except (ValueError, TypeError, KeyError) as exc:
+                finalization_state.accepted_result = None
+                return {"status": "rejected", "message": str(exc)}
         feedback = _validator_result_finalization_feedback(
             result,
             request=request,
@@ -2414,8 +2450,14 @@ def _build_finalize_validator_result_tool(
             finalization_state.accepted_result = feedback.accepted_result
         else:
             finalization_state.accepted_result = None
-        return _validator_finalization_tool_payload(feedback)
+        payload = _validator_finalization_tool_payload(feedback)
+        if compact_runtime is not None:
+            payload.pop("validator_result", None)
+        return payload
 
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import compact_finalization_schema
+        return compact_finalization_schema(finalize_validator_result, compact_runtime)
     return finalize_validator_result
 
 
@@ -2424,6 +2466,7 @@ def _build_finalize_validator_batch_results_tool(
     *,
     finalization_state: _ValidatorFinalizationState,
     function_tool_factory: Any,
+    compact_runtime: Any = None,
 ) -> Any:
     @function_tool_factory(
         name_override="finalize_validator_batch_results",
@@ -2434,6 +2477,25 @@ def _build_finalize_validator_batch_results_tool(
     ) -> dict[str, Any]:
         """Validate the final batch results before answering."""
 
+        if compact_runtime is not None:
+            try:
+                assembled = compact_runtime.assemble_batch(results)
+            except (ValueError, TypeError, KeyError) as exc:
+                finalization_state.accepted_results = ()
+                return {"status": "rejected", "message": str(exc)}
+            checked = []
+            for result in assembled:
+                contract = compact_runtime.contracts[result.request_id]
+                feedback = _validator_result_finalization_feedback(
+                    result.model_dump(mode="json"), request=contract.request,
+                    result_schema=contract.result_schema, profile_mapped=contract.profile_mapped,
+                )
+                if feedback.accepted_result is None:
+                    finalization_state.accepted_results = ()
+                    return {"status": "rejected", "message": feedback.message}
+                checked.append(feedback.accepted_result)
+            finalization_state.accepted_results = tuple(checked)
+            return {"status": "accepted", "message": "All compact decisions assembled and validated."}
         feedback = _validator_batch_results_finalization_feedback(
             results,
             jobs=jobs,
@@ -2444,6 +2506,9 @@ def _build_finalize_validator_batch_results_tool(
             finalization_state.accepted_results = ()
         return _validator_finalization_tool_payload(feedback)
 
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import compact_finalization_schema
+        return compact_finalization_schema(finalize_validator_batch_results, compact_runtime, batch=True)
     return finalize_validator_batch_results
 
 

@@ -69,6 +69,9 @@ INSUFFICIENT_EVIDENCE_MESSAGE = (
 )
 
 
+COMPACT_VALIDATOR_RUNTIME = ("agr.alliance", "agr_ai_curation_alliance.compact_adapter:build_compact_validator_runtime")
+
+
 class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
     """One typed decision under the approved RGD specialist policy profile."""
 
@@ -153,6 +156,13 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
         info: ValidationInfo,
     ) -> "RGDGOEvidencePolicyValidationResult":
         self._enforce_canonical_request_copies(info)
+        violations = self.computed_policy_violations(info)
+
+        self._validate_policy_consequences(violations)
+        return self
+
+    def computed_policy_violations(self, info: ValidationInfo) -> list[str]:
+        """Evaluate the approved policy from typed scientific judgments and facts."""
         violations: list[str] = []
 
         if self.evidence_basis == "ambiguous":
@@ -216,6 +226,10 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
         if self.proposed_negated and self.proposed_annotation_extensions:
             violations.append("negated_extension_disallowed")
 
+        return violations
+
+    def _validate_policy_consequences(self, violations: list[str]) -> None:
+
         if self.policy_violations != violations:
             raise ValueError(
                 "policy_violations must exactly match the approved RGD GO policy: "
@@ -276,7 +290,6 @@ class RGDGOEvidencePolicyValidationResult(DomainValidatorResultBase):
             raise ValueError(
                 "insufficient primary evidence must use the approved curator finding message"
             )
-        return self
 
     def _enforce_canonical_request_copies(self, info: ValidationInfo) -> None:
         context = info.context
