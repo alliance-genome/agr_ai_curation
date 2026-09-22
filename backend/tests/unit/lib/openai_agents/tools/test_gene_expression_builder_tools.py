@@ -530,8 +530,14 @@ def test_finalize_returns_compact_builder_summary(active_builder_context):
     finalization = result.data["builder_finalization"]
     assert finalization["status"] == "finalized"
     assert finalization["candidate_ids"] == ["gex-candidate-1"]
-    assert finalization["source_candidate_ids"] == ["gex-candidate-1"]
-    assert finalization["evidence_record_ids"] == ["evidence-67598e5688f123c8"]
+    # ALL-1278: the model-facing receipt carries counts; the full id lists stay
+    # on the workspace finalization.
+    assert finalization["source_candidate_count"] == 1
+    assert finalization["evidence_record_count"] == 1
+    assert "source_candidate_ids" not in finalization
+    assert "evidence_record_ids" not in finalization
+    assert workspace.finalization.source_candidate_ids == ("gex-candidate-1",)
+    assert workspace.finalization.evidence_record_ids == ("evidence-67598e5688f123c8",)
     assert finalization["resolver_selection_count"] == 4
     assert "GeneExpressionEnvelope" not in result.data
     payload = workspace.finalization.payload

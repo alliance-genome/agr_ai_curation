@@ -71,7 +71,7 @@ tools:
       audit:
         display_name: AGR Curation Query
       documentation:
-        summary: A single tool for looking up Alliance curation data. It offers many specific methods — search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them.
+        summary: A single tool for looking up Alliance curation data. It offers many specific methods — search for a gene, fetch an allele by ID, look up an ontology term, list member groups, and more. Different agents use the methods that fit their job. A gene search (search_genes) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. An allele search (search_alleles) matches by exact, then prefix, then contains (case-insensitive), across symbols, full names, and synonyms, so a shorter query returns more candidates and adding characters narrows them. When a lookup returns more than fits in one reply, the reply comes in pages with instructions for continuing, and a single very large record is read back exactly in pieces, so no records or fields are dropped.
         example_queries:
           - Find gene daf-2 in WormBase
           - Get allele information for e1370
@@ -2181,7 +2181,7 @@ tools:
       name: Search Document
       category: Document
       documentation:
-        summary: Finds passages in the uploaded PDF that match a query. The default blended search combines meaning-based and exact-word matching, so it catches passages worded differently from the query (for example "expressed in" versus "detected in"). Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers, and very short queries automatically lean on exact-word matching. The search can be limited to particular sections, such as Results or figure legends. The matching passages can then be read in full to pick out exact supporting quotes.
+        summary: Finds passages in the uploaded PDF that match a query. The default blended search combines meaning-based and exact-word matching, so it catches passages worded differently from the query (for example "expressed in" versus "detected in"). Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers, and very short queries automatically lean on exact-word matching. The search can be limited to particular sections, such as Results or figure legends. The matching passages can then be read in full to pick out exact supporting quotes. Every match is listed in rank order; a match whose text does not fit in the reply is still listed, marked for reading in full with Read Chunk.
         parameters:
         - name: query
           type: string
@@ -2216,12 +2216,16 @@ tools:
       name: Read Chunk
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence.
+        summary: Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence. A passage too long for one reply, such as a very long table, is shown in consecutive exact windows so every character and snippet is still reachable.
         parameters:
         - name: chunk_id
           type: string
           required: true
           description: Which passage to read, taken from a search result or a section's list of passages.
+        - name: span_offset
+          type: integer
+          required: false
+          description: Only for a passage shown in windows, where the next window starts, as given in the previous reply.
   - tool_id: read_section
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_section_tool
@@ -2234,7 +2238,7 @@ tools:
       name: Read Section
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. The individual passages it lists can then be read in full to pick out exact supporting quotes.
+        summary: Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Long sections come back one page at a time; a page can end early when the reply reaches its size limit, and a single passage too long for one reply is listed for reading with Read Chunk. The individual passages it lists can then be read in full to pick out exact supporting quotes.
         parameters:
         - name: section_name
           type: string
@@ -2264,7 +2268,7 @@ tools:
       name: Read Subsection
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. The relevant passages can then be read in full to pick out exact supporting quotes.
+        summary: Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Long subsections come back one page at a time; a page can end early when the reply reaches its size limit, and a single passage too long for one reply is listed for reading with Read Chunk. The relevant passages can then be read in full to pick out exact supporting quotes.
         parameters:
         - name: section_name
           type: string
@@ -2324,7 +2328,7 @@ tools:
       name: List Recorded Evidence
       category: PDF Extraction
       documentation:
-        summary: Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Results come back one page at a time; step through the pages to see them all, or search by quote text to find a specific piece. Withdrawn evidence is left out unless it is explicitly included.
+        summary: Shows the pieces of evidence saved so far in this run, so the agent can confirm the full set of support before finishing. Results come back one page at a time; step through the pages to see them all, or search by quote text to find a specific piece. A page can end early when the reply reaches its size limit, and requests for very large pages are reduced to the configured maximum; the reply says what was applied and where to continue. Quotes are not repeated in the list; each piece can be read in full with Get Recorded Evidence. Withdrawn evidence is left out unless it is explicitly included.
         parameters:
         - name: include_discarded
           type: boolean
@@ -2362,12 +2366,28 @@ tools:
       name: Get Recorded Evidence
       category: PDF Extraction
       documentation:
-        summary: Returns the complete details of one saved piece of evidence from this run.
+        summary: Returns the complete details of one saved piece of evidence from this run. When a piece of evidence is too long to show in one reply (for example a very long quote), its long parts are set aside and read back exactly, one piece at a time, so nothing is cut off.
         parameters:
         - name: evidence_record_id
           type: string
           required: true
           description: Which saved piece of evidence to look at.
+        - name: detail_path
+          type: string
+          required: false
+          description: Which set-aside part to read back, as named in the previous reply.
+        - name: detail_cursor
+          type: integer
+          required: false
+          description: Where to continue reading a set-aside part, as given at the end of the previous piece.
+        - name: result_offset
+          type: integer
+          required: false
+          description: Where to continue a long list inside the evidence, as given in the previous reply.
+        - name: result_sha256
+          type: string
+          required: false
+          description: The fingerprint from the previous reply, so a change to the evidence is noticed instead of mixing old and new text.
   - tool_id: attach_evidence_to_object
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_attach_evidence_to_object_tool

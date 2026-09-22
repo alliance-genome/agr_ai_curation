@@ -43,6 +43,20 @@ from src.lib.prompts.assembly import (
     prompt_templates_for_bundle,
 )
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
+from src.lib.openai_agents.tool_result_bounds import (
+    RESULT_VIEW_ARGUMENTS,
+    ToolResultBudgetError,
+    bounded_json_result,
+    budget_failure,
+    full_tool_results_are_requested,
+    invalid_cursor,
+    is_budget_failure,
+    report_budget_failure_result,
+    report_tool_result_budget_escape,
+    result_view_schema_properties,
+    serialized_size,
+    tool_result_budget,
+)
 
 # Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry
@@ -687,20 +701,37 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
 
     tracker = execution_context.tool_tracker
     base_on_invoke_tool = base_tool.on_invoke_tool
+    execute_inline = _should_execute_package_tool_inline(binding)
+    # Stateless re-query paging is only safe for read-only lookups. Builder
+    # run-state tools mutate the workspace and bound their own results.
+    metadata = getattr(binding, "metadata", None)
+    requery_pages = not execute_inline and not (
+        isinstance(metadata, dict) and metadata.get("builder_run_state")
+    )
 
     async def _runner_invoke(ctx, input_str):
         if tracker:
             tracker.record_call(tool_id)
 
-        if _should_execute_package_tool_inline(binding):
+        if execute_inline:
             inline_ctx = ctx or SimpleNamespace(tool_name=tool_id, run_config=None)
             result = base_on_invoke_tool(inline_ctx, input_str)
             if inspect.isawaitable(result):
-                return await result
+                result = await result
+            _report_inline_package_result(tool_id, result)
             return result
 
         runner = _get_package_tool_runner()
         decoded_kwargs = _decode_tool_input(tool_id, input_str)
+        view_arguments = (
+            {
+                key: decoded_kwargs.pop(key)
+                for key in RESULT_VIEW_ARGUMENTS
+                if key in decoded_kwargs
+            }
+            if requery_pages
+            else {}
+        )
         execute_kwargs = {
             "kwargs": decoded_kwargs,
             "context": {
@@ -732,9 +763,162 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             raise RuntimeError(
                 f"Package tool '{tool_id}' execution failed: {error_message}"
             )
-        return result.result
+        if not requery_pages:
+            _report_inline_package_result(tool_id, result.result)
+            return result.result
+        return _bounded_package_result(
+            tool_id,
+            result.result,
+            view_arguments,
+            repeatable=not _is_non_idempotent_http_call(decoded_kwargs),
+        )
 
-    return replace(base_tool, on_invoke_tool=_runner_invoke)
+    if not requery_pages:
+        return replace(base_tool, on_invoke_tool=_runner_invoke)
+    return replace(
+        base_tool,
+        on_invoke_tool=_runner_invoke,
+        params_json_schema=_with_result_view_arguments(base_tool),
+    )
+
+
+def _with_result_view_arguments(tool: Any) -> Dict[str, Any]:
+    """Add the bounded page/detail arguments to a subprocess package tool schema.
+
+    Subprocess package tools return complete results to the backend; the
+    backend serves the model budget-bounded pages and exact detail chunks, so
+    the continuation arguments belong to this adapter, not to package code.
+    """
+    schema = json.loads(json.dumps(getattr(tool, "params_json_schema", None) or {}))
+    schema.setdefault("type", "object")
+    properties = schema.setdefault("properties", {})
+    collisions = sorted(set(properties) & set(RESULT_VIEW_ARGUMENTS))
+    if collisions:
+        raise ValueError(
+            f"Package tool '{getattr(tool, 'name', '')}' declares reserved result view "
+            f"arguments: {', '.join(collisions)}"
+        )
+    properties.update(result_view_schema_properties())
+    if getattr(tool, "strict_json_schema", False):
+        # Strict schemas require every property; the view arguments are nullable.
+        schema["required"] = [*schema.get("required", []), *RESULT_VIEW_ARGUMENTS]
+    return schema
+
+
+_NON_IDEMPOTENT_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _is_non_idempotent_http_call(arguments: Dict[str, Any]) -> bool:
+    """Whether a REST-style package call would repeat a side effect if re-run."""
+    method = arguments.get("method")
+    return isinstance(method, str) and method.strip().upper() in _NON_IDEMPOTENT_HTTP_METHODS
+
+
+def _bounded_package_result(
+    tool_id: str,
+    payload: Any,
+    view_arguments: Dict[str, Any],
+    *,
+    repeatable: bool = True,
+) -> Any:
+    """Serve one subprocess package result within the model-facing budget.
+
+    Results that fit are returned unchanged. Larger ones become a first page
+    with explicit continuation; repeating the call with ``result_offset`` /
+    ``result_sha256`` or ``detail_path`` / ``detail_cursor`` pages the same
+    (recomputed and hash-checked) result. Application-side captures that need
+    the complete result (validator lookup capture) request it explicitly.
+
+    Continuation re-runs the call, so a non-repeatable call (a REST write) is
+    never paged: an oversized result is a reported contract failure instead of
+    an invitation to repeat the side effect.
+    """
+    view_arguments = {
+        key: value for key, value in view_arguments.items() if value is not None
+    }
+    if full_tool_results_are_requested():
+        if view_arguments:
+            raise ValueError(
+                f"Tool '{tool_id}' was asked for a complete result and a page at once"
+            )
+        return payload
+    if not repeatable:
+        if view_arguments:
+            return invalid_cursor(
+                "Results of write requests cannot be paged because paging repeats the request.",
+                tool_name=tool_id,
+            )
+        measured = serialized_size(payload)
+        budget = tool_result_budget()
+        if measured <= budget:
+            return payload
+        failure = budget_failure(tool_name=tool_id, measured=measured, limit=budget)
+        report_budget_failure_result(
+            failure,
+            tool_name=tool_id,
+            component="package_tool_adapter",
+        )
+        return failure
+    body = payload if isinstance(payload, dict) else {"data": payload}
+    try:
+        bounded = bounded_json_result(
+            body,
+            budget=tool_result_budget(),
+            offset=view_arguments.get("result_offset"),
+            expected_sha256=view_arguments.get("result_sha256"),
+            detail_path=view_arguments.get("detail_path"),
+            detail_cursor=view_arguments.get("detail_cursor"),
+        )
+    except ValueError as exc:
+        return invalid_cursor(str(exc), tool_name=tool_id)
+    except ToolResultBudgetError as exc:
+        failure = budget_failure(
+            tool_name=tool_id,
+            measured=exc.measured,
+            limit=exc.limit,
+            field=view_arguments.get("detail_path"),
+        )
+        report_budget_failure_result(
+            failure,
+            tool_name=tool_id,
+            component="package_tool_adapter",
+        )
+        return failure
+    return payload if bounded is None else bounded
+
+
+# Inline tools whose result contract is owned by a sibling change (ALL-1277
+# agent contract discovery); they are neither measured nor reported here.
+_INLINE_TOOLS_WITH_SEPARATE_RESULT_CONTRACT = frozenset({"get_agent_contract"})
+
+
+def _report_inline_package_result(tool_id: str, result: Any) -> None:
+    """Report a self-bounded package tool result that broke its size contract.
+
+    Inline document/evidence tools and builder run-state tools bound their own
+    results: a ``tool_result_budget_unmet`` result is reported once, and any
+    other result over the budget is reported as an escape (observed, result
+    unchanged).
+    """
+    if tool_id in _INLINE_TOOLS_WITH_SEPARATE_RESULT_CONTRACT:
+        return
+    if is_budget_failure(result):
+        report_budget_failure_result(
+            result,
+            tool_name=tool_id,
+            component="package_tool_adapter",
+        )
+        return
+    budget = tool_result_budget()
+    measured = serialized_size(result)
+    if measured > budget:
+        report_tool_result_budget_escape(
+            tool_name=tool_id,
+            measured=measured,
+            limit=budget,
+            component="package_tool_adapter",
+            enforced=False,
+        )
 
 
 def _tool_category_for_binding(binding: Any) -> str:

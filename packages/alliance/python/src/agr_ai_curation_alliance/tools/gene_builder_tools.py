@@ -57,6 +57,7 @@ from agr_ai_curation_alliance.domain_packs.gene import (
 # keeps the gene tool-result shape identical to gene_expression (AgrQueryResult, ok/blocked).
 from .agr_curation import (
     AgrQueryResult,
+    _builder_finalization_summary,
     _builder_summary,
     _builder_candidate_list,
     _search_builder_candidates,
@@ -481,7 +482,10 @@ def _discard_gene_mention_evidence_impl(
             method="discard_gene_mention_evidence",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_gene_builder_event(
         "gene_builder.discard_completed",
         action="discard",
@@ -701,7 +705,7 @@ def _finalize_gene_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
 
     finalization = outcome.finalization
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_gene_builder_event(

@@ -599,8 +599,12 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                 "score": 0.91,
                 "content": "Wingless expression expanded in the mutant tissue.",
                 "doc_items": [{"id": "bbox-search"}],
+                "content_withheld": None,
+                "content_chars": None,
             }
         ],
+        "error_code": None,
+        "result_bounds": None,
     }
     _assert_isolated_python(env_manager)
 
@@ -705,6 +709,7 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                     "subsection": "Animals",
                     "char_count": 13,
                     "snippet": None,
+                    "content_withheld": None,
                 },
                 {
                     "chunk_id": "chunk-methods-2",
@@ -714,10 +719,19 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                     "subsection": None,
                     "char_count": 13,
                     "snippet": None,
+                    "content_withheld": None,
                 },
             ],
             "doc_items": [{"id": "bbox-1"}, {"id": "bbox-2"}],
+            # ALL-1278: page bounds are reported alongside the unchanged content.
+            "page_ended_by": "end",
+            "requested_max_chunks": 30,
+            "effective_max_chunks": 30,
+            "max_chunks_clamped": False,
+            "budget_bytes": 32768,
         },
+        "error_code": None,
+        "result_bounds": None,
     }
     assert "evidence_spans" not in section_result.result["section"]["source_chunks"][0]
     # E2a guard: no full chunk text is echoed back in source_chunks entries.

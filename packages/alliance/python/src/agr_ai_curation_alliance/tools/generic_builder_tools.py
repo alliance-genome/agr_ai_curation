@@ -44,6 +44,7 @@ from .agr_curation import (
     AgrQueryResult,
     _BUILDER_LIST_DEFAULT_LIMIT,
     _builder_candidate_list,
+    _builder_finalization_summary,
     _builder_summary,
     _ok,
     _search_builder_candidates,
@@ -157,41 +158,43 @@ def _generic_attribute_key_notices(
     )
 
 
-def _augment_generic_candidate_summaries(
-    workspace: Any,
-    summary: dict[str, Any],
-) -> dict[str, Any]:
-    """Add generic shape hints to redacted candidate pages."""
+def _generic_candidate_decorator(workspace: Any) -> Any:
+    """Return a per-candidate decorator adding generic shape hints to page rows.
 
-    try:
-        candidates = workspace.snapshot(redact_payload=False).get("candidates", [])
-    except Exception:
-        return summary
+    The shared builder page helper applies it before measuring each row, so
+    the attribute keys and drift notices count toward the page's size budget.
+    """
+
+    candidates = workspace.snapshot(redact_payload=False).get("candidates", [])
     candidates_by_id = {
         candidate.get("candidate_id"): candidate
         for candidate in candidates
         if candidate.get("candidate_id")
     }
-    for redacted_candidate in summary.get("candidates") or []:
+
+    def decorate(redacted_candidate: dict[str, Any]) -> dict[str, Any]:
         candidate = candidates_by_id.get(redacted_candidate.get("candidate_id"))
         staged_fields = (candidate or {}).get("staged_fields") or {}
         if not isinstance(staged_fields, Mapping):
-            continue
+            return redacted_candidate
         if str(staged_fields.get("class_key") or "").strip() != "generic:generic_object":
-            continue
-        redacted_candidate["class_key"] = "generic:generic_object"
-        redacted_candidate["semantic_class"] = staged_fields.get("semantic_class") or ""
-        redacted_candidate["attribute_keys"] = _staged_attribute_keys(staged_fields)
-        redacted_candidate["attribute_key_notices"] = (
-            _generic_attribute_key_notices_from_candidates(
+            return redacted_candidate
+        attribute_keys = _staged_attribute_keys(staged_fields)
+        return {
+            **redacted_candidate,
+            "class_key": "generic:generic_object",
+            "semantic_class": staged_fields.get("semantic_class") or "",
+            "attribute_keys": attribute_keys,
+            "attribute_key_notices": _generic_attribute_key_notices_from_candidates(
                 candidates,
                 candidate_id=str(redacted_candidate.get("candidate_id") or ""),
                 class_key="generic:generic_object",
                 semantic_class=staged_fields.get("semantic_class"),
-                attribute_keys=redacted_candidate["attribute_keys"],
-            )
-        )
-    return summary
+                attribute_keys=attribute_keys,
+            ),
+        }
+
+    return decorate
 
 
 class _StrictToolModel(BaseModel):
@@ -877,7 +880,10 @@ def _discard_generic_object_impl(
             method="discard_generic_object",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_generic_builder_event(
         "generic_builder.discard_completed",
         action="discard",
@@ -924,8 +930,8 @@ def _list_staged_generic_objects_impl(
         include_discarded=list_input.include_discarded,
         limit=list_input.limit,
         offset=list_input.offset,
+        decorate=_generic_candidate_decorator(workspace),
     )
-    summary = _augment_generic_candidate_summaries(workspace, summary)
     _emit_generic_builder_event(
         "generic_builder.list_completed",
         action="list",
@@ -994,8 +1000,8 @@ def _find_staged_generic_objects_impl(
         include_discarded=find_input.include_discarded,
         limit=find_input.limit,
         offset=find_input.offset,
+        decorate=_generic_candidate_decorator(workspace),
     )
-    summary = _augment_generic_candidate_summaries(workspace, summary)
     _emit_generic_builder_event(
         "generic_builder.find_completed",
         action="find",
@@ -1119,7 +1125,7 @@ def _finalize_generic_extraction_impl(candidate_ids: List[str]) -> AgrQueryResul
             attempted_query=attempted_query,
         )
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_generic_builder_event(
