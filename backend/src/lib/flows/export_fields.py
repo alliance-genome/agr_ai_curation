@@ -73,13 +73,20 @@ def source_catalog(fields: list[dict], receipt: Any = None) -> dict:
     return {**identity, "schema_fingerprint": "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()}
 
 
-def _field_display(field: Any, models: dict[str, Any]) -> dict[str, Any] | None:
-    """Field-level display wins over its model's display; None when undeclared."""
+def _field_display(
+    field: Any,
+    models: dict[str, Any],
+    object_models: dict[str, str | None] | None = None,
+) -> dict[str, Any] | None:
+    """Field-level display wins, then its model's (or referenced object's model's)."""
 
     display = field.metadata.get("display")
     if isinstance(display, dict) and display:
         return dict(display)
-    model = models.get(field.model_ref) if field.model_ref else None
+    model_ref = field.model_ref
+    if model_ref is None and getattr(field, "object_type_ref", None):
+        model_ref = (object_models or {}).get(field.object_type_ref)
+    model = models.get(model_ref) if model_ref else None
     display = model.metadata.get("display") if model is not None else None
     return dict(display) if isinstance(display, dict) and display else None
 
@@ -96,11 +103,14 @@ def packaged_display_specs(agent_id: str, entry: dict | None = None) -> dict[str
     if domain_pack is None:
         return {}
     models = {model.model_id: model for model in domain_pack.metadata.model_definitions}
+    object_models = {
+        obj.object_type: obj.model_ref for obj in domain_pack.metadata.object_definitions
+    }
     specs: dict[str, dict[str, Any]] = {}
     for obj in domain_pack.metadata.object_definitions:
         by_path = {field.field_path: field for field in obj.fields}
         for field in obj.fields:
-            display = _field_display(field, models)
+            display = _field_display(field, models, object_models)
             if display is None:
                 continue
             if display.get("compose"):
@@ -108,7 +118,7 @@ def packaged_display_specs(agent_id: str, entry: dict | None = None) -> dict[str
                     {
                         "path": str(child),
                         "display": (
-                            _field_display(by_path[f"{field.field_path}.{child}"], models)
+                            _field_display(by_path[f"{field.field_path}.{child}"], models, object_models)
                             if f"{field.field_path}.{child}" in by_path
                             else None
                         ),

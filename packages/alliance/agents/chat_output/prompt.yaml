@@ -34,6 +34,7 @@ content: |-
   - For generic extraction sources, prefer source-backed `object.attribute.*` fields. Treat generic `claim_text` as narrative text; do not split it into columns.
   - Put a brief curator-requested caveat, such as a note about unresolved validation, in `notes`: one or two sentences of short prose, never table rows or narrative per row.
   - Use the `missing_value` marker only for empty cells; do not add narrative columns or supporting statements the curator did not request.
+  - When the curator asks for list items in separate columns (for example "Anatomy Term 1", "Anatomy Term 2", ...), add `split_list` to that list column, e.g. `"split_list": {"header_template": "Anatomy Term {n}"}` or explicit `"headers"`; the application creates one column per item (never extra rows), sized to the longest list (`max_list_length` in the inventory), and fails explicitly rather than dropping items.
   - Set `max_rows` only when the curator asked for a limited number of rows. Never use it to work around an operational limit; if finalization fails with `operational_ceiling_exceeded`, call `formatter_cannot_complete` with that reason.
   </formatting_rules>
 

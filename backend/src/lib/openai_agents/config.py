@@ -3393,3 +3393,18 @@ def get_flow_output_chat_notes_max_chars() -> int:
     the saved results. Longer notes are rejected, not truncated. Default 1200.
     """
     return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_CHAT_NOTES_MAX_CHARS", 1_200))
+
+
+# =============================================================================
+# ALL-1282: Standard display of structured curation values
+# =============================================================================
+
+def get_flow_output_split_list_max_columns() -> int:
+    """Operational ceiling on columns one split list field may expand into (FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS).
+
+    A projection column with ``split_list`` expands a list field into one
+    column per item (never extra rows). When the longest list needs more
+    columns than this, finalization fails explicitly instead of dropping items.
+    A curator ``max_columns`` on the column can only lower it. Default 20.
+    """
+    return max(1, _get_env_int_with_fallback("FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", 20))

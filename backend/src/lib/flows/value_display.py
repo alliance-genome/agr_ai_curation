@@ -42,8 +42,10 @@ def _scalar_text(value: Any) -> str:
 
 
 def _first(value: Mapping[str, Any], keys: Sequence[str]) -> str:
+    """First non-empty scalar at the given keys; declared keys may be dotted paths."""
+
     for key in keys:
-        candidate = value.get(key)
+        candidate = _child(value, key) if "." in str(key) else value.get(key)
         if not _is_empty(candidate) and not isinstance(candidate, (dict, list)):
             return _scalar_text(candidate)
     return ""
@@ -99,7 +101,7 @@ def _mapping_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None, unre
         identifier = _first(value, [spec["id"]]) if spec.get("id") else ""
         state_key = spec.get("state")
         if state_key:
-            state = value.get(state_key)
+            state = _child(value, state_key)
             if not _is_empty(state) and _scalar_text(state) not in {
                 str(item) for item in spec.get("resolved_states") or []
             }:

@@ -37,6 +37,7 @@ from src.lib.flows.output_projection import (
     FlowOutputRowSource,
     FlowOutputRowStrategy,
     FlowOutputSortSpec,
+    FlowOutputSplitListSpec,
     FlowOutputTransformSpec,
     apply_projection_plan,
     bundle_row_for_ref,
@@ -562,6 +563,16 @@ def _formatter_plan_constraint_errors(
         errors.extend(_literal_value_errors(column.key, context=f"Column '{column.key}' key"))
         if column.header is not None:
             errors.extend(_literal_value_errors(column.header, context=f"Column '{column.key}' header"))
+        if column.split_list is not None:
+            if column.split_list.header_template is not None:
+                errors.extend(_literal_value_errors(
+                    column.split_list.header_template,
+                    context=f"Column '{column.key}' split_list header_template",
+                ))
+            for header in column.split_list.headers:
+                errors.extend(_literal_value_errors(
+                    header, context=f"Column '{column.key}' split_list header",
+                ))
         source_ref_count += len(_source_refs_for_column(column))
         if column.transform is not None:
             errors.extend(
@@ -637,6 +648,15 @@ def _projection_plan_extra_key_errors(raw_plan: Mapping[str, Any]) -> list[str]:
                     context=f"Column {index}",
                 )
             )
+            raw_split = raw_column.get("split_list")
+            if isinstance(raw_split, Mapping):
+                errors.extend(
+                    _reject_extra_keys(
+                        raw_split,
+                        model=FlowOutputSplitListSpec,
+                        context=f"Column {index} split_list",
+                    )
+                )
             raw_transform = raw_column.get("transform")
             if isinstance(raw_transform, Mapping):
                 errors.extend(
@@ -1238,6 +1258,15 @@ def _capabilities_payload(
             "{row_ref, exclude: true} drops one row. row_ref values come from "
             "inspect_output_rows or preview_output_projection. Saved results never change."
         ),
+        "split_list": (
+            "To put list items in separate columns (never extra rows), add split_list to a "
+            "column whose field_ref is a list: {\"header_template\": \"Anatomy Term {n}\"} "
+            "or {\"headers\": [\"First\", \"Second\"]} (not both), optional max_columns. "
+            "The application sizes it to the longest list, renders each item as display "
+            "text and uses missing_value for shorter rows. Too few headers or more items "
+            "than the limit fail with an explicit error; items are never dropped. "
+            "inspect_output_artifacts and inspect_field_values report max_list_length."
+        ),
         "value_display": (
             "CSV, TSV and chat cells render structured values as display text: "
             "\"label (ID)\" from the pack's declared roles (generic curie/id plus "
@@ -1317,7 +1346,12 @@ def _next_row_cursor(offset: int, page_length: int, available: int) -> str:
     return str(next_offset) if next_offset < available else ""
 
 
-def _catalog_entry(field: Any, *, example_limit: int) -> dict[str, Any]:
+def _max_list_length(rows: Sequence[Mapping[str, Any]], field_ref: str) -> int | None:
+    lengths = [len(row[field_ref]) for row in rows if isinstance(row.get(field_ref), list)]
+    return max(lengths) if lengths else None
+
+
+def _catalog_entry(field: Any, *, example_limit: int, bundle: Any = None) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "ref": field.ref,
         "label": field.label,
@@ -1325,6 +1359,11 @@ def _catalog_entry(field: Any, *, example_limit: int) -> dict[str, Any]:
         "value_type": field.value_type,
         "non_empty_count": field.non_empty_count,
     }
+    if bundle is not None:
+        # Lets the formatter size and explain split_list columns.
+        longest = _max_list_length(bundle.rows_for_source(field.row_source), field.ref)
+        if longest is not None:
+            entry["max_list_length"] = longest
     if example_limit:
         entry["examples"] = [
             _example_preview(example) for example in list(field.examples)[:example_limit]
@@ -1583,7 +1622,7 @@ def build_output_formatter_tools(
                 raise ValueError(
                     f"cursor {offset} is beyond the {len(matching)} matching catalog fields."
                 )
-            entries = [_catalog_entry(field, example_limit=examples) for field in matching]
+            entries = matching
             row_sources = {
                 source: {
                     "row_count": len(bundle.rows_for_source(source)),  # type: ignore[arg-type]
@@ -1635,7 +1674,11 @@ def build_output_formatter_tools(
                 }
 
             page, next_cursor = _page_to_budget(
-                entries, start=offset, max_count=page_size, build_payload=build
+                entries,
+                start=offset,
+                max_count=page_size,
+                build_payload=build,
+                render=lambda field: _catalog_entry(field, example_limit=examples, bundle=bundle),
             )
             return respond("inspect_output_artifacts", build(page, next_cursor))
         except Exception as exc:
@@ -1800,6 +1843,10 @@ def build_output_formatter_tools(
                 ceiling=_MAX_PROJECTION_ROWS,
             )
             values = counts.most_common()
+            longest_list = _max_list_length(
+                [{selected_field_ref: row.get("value")} for row in result.rows],
+                selected_field_ref,
+            )
 
             def build(page: list[Any], next_cursor: str) -> dict[str, Any]:
                 return {
@@ -1808,6 +1855,11 @@ def build_output_formatter_tools(
                     "field_ref": selected_field_ref,
                     "total_rows": result.total_count,
                     "distinct_count": len(counts),
+                    **(
+                        {"max_list_length": longest_list}
+                        if longest_list is not None
+                        else {}
+                    ),
                     "values": page,
                     "cursor": str(offset),
                     "next_cursor": next_cursor,

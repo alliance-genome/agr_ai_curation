@@ -17,6 +17,7 @@ from src.lib.curation_workspace.domain_envelope_normalization import (
     is_canonical_domain_envelope_payload,
 )
 from src.lib.openai_agents.config import (
+    get_flow_output_split_list_max_columns,
     get_flow_output_projection_preview_max_depth,
     get_flow_projection_max_field_examples,
     get_flow_projection_max_list_items,
@@ -287,12 +288,25 @@ class FlowOutputOverrideSpec(BaseModel):
     exclude: bool = False
 
 
+class FlowOutputSplitListSpec(BaseModel):
+    """Expand one list field into one column per item (never extra rows).
+
+    Headers come from ``header_template`` (must contain ``{n}``; default
+    "<header> {n}") or explicit ``headers``, not both.
+    """
+
+    max_columns: int | None = None
+    header_template: str | None = None
+    headers: list[str] = Field(default_factory=list)
+
+
 class FlowOutputColumnSpec(BaseModel):
     key: str
     header: str | None = None
     field_ref: str | None = None
     transform: FlowOutputTransformSpec | None = None
     source_node_id: str | None = None
+    split_list: FlowOutputSplitListSpec | None = None
 
 
 class FlowOutputFilterSpec(BaseModel):
@@ -2521,7 +2535,13 @@ def _override_errors(
         for row_id, ref in bundle_row_refs(bundle, plan.row_source).items()
         if row_id in selected_row_ids
     }
-    column_keys = {column.key for column in columns}
+    column_keys = {column.key for column in columns if column.split_list is None}
+    split_keys = {column.key for column in columns if column.split_list is not None}
+    for override in plan.overrides:
+        base, _, number = str(override.column_key or "").rpartition("_")
+        if base in split_keys and number.isdigit():
+            # Expanded split columns are checked against the data at render time.
+            column_keys.add(str(override.column_key))
     excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
     seen: set[tuple[str, str | None]] = set()
     for index, override in enumerate(plan.overrides, start=1):
@@ -2552,6 +2572,118 @@ def _override_errors(
             errors.append(f"{context}: duplicate override for {identity[0]} {identity[1] or '(row)'}.")
         seen.add(identity)
     return errors
+
+
+def _split_list_errors(
+    plan: FlowOutputProjectionPlan,
+    column: FlowOutputColumnSpec,
+    rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Static checks for a split_list column; data-sized checks run at render."""
+
+    split = column.split_list
+    assert split is not None
+    context = f"Column '{column.key}' split_list"
+    errors: list[str] = []
+    if plan.format == "json":
+        errors.append(f"{context} applies to CSV, TSV and chat output; JSON keeps lists lossless.")
+    if column.transform is not None or not column.field_ref:
+        errors.append(f"{context} needs a list-valued field_ref, not a transform.")
+    elif any(
+        not isinstance(row.get(column.field_ref), list) and not _is_empty(row.get(column.field_ref))
+        for row in rows
+    ):
+        errors.append(
+            f"{context} needs a list-valued field; '{column.field_ref}' holds single values. "
+            "Choose a list field or remove split_list."
+        )
+    if split.header_template is not None and split.headers:
+        errors.append(f"{context} takes header_template or headers, not both.")
+    if split.header_template is not None and "{n}" not in split.header_template:
+        errors.append(f"{context} header_template must contain {{n}} (e.g. 'Anatomy Term {{n}}').")
+    if any(not str(header).strip() for header in split.headers):
+        errors.append(f"{context} headers cannot be blank.")
+    if len(set(split.headers)) != len(split.headers):
+        errors.append(f"{context} headers must be distinct.")
+    ceiling = get_flow_output_split_list_max_columns()
+    if split.max_columns is not None and not 1 <= split.max_columns <= ceiling:
+        errors.append(f"{context} max_columns must be between 1 and {ceiling}.")
+    if len(split.headers) > (split.max_columns or ceiling):
+        errors.append(f"{context} has more headers than its column limit {split.max_columns or ceiling}.")
+    return errors
+
+
+def _split_list_headers(column: FlowOutputColumnSpec, count: int) -> list[str]:
+    split = column.split_list
+    assert split is not None
+    if split.headers:
+        return list(split.headers[:count])
+    template = split.header_template or f"{column.header or column.key} {{n}}"
+    return [template.replace("{n}", str(number)) for number in range(1, count + 1)]
+
+
+def _expand_split_columns(
+    columns: Sequence[FlowOutputColumnSpec],
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[list[FlowOutputColumnSpec], dict[str, tuple[FlowOutputColumnSpec, int]]]:
+    """Output columns with split lists expanded, sized by the longest list in ``rows``.
+
+    Returns the output columns and, per expanded key, its source column and item
+    index. Fails explicitly rather than dropping items or inventing names.
+    """
+
+    output: list[FlowOutputColumnSpec] = []
+    items: dict[str, tuple[FlowOutputColumnSpec, int]] = {}
+    ceiling = get_flow_output_split_list_max_columns()
+    for column in columns:
+        split = column.split_list
+        if split is None:
+            output.append(column)
+            continue
+        longest = max(
+            (len(row.get(column.field_ref or "")) for row in rows
+             if isinstance(row.get(column.field_ref or ""), list)),
+            default=0,
+        )
+        count = max(1, longest, len(split.headers))
+        limit = min(split.max_columns or ceiling, ceiling)
+        if count > limit:
+            message = (
+                f"Column '{column.key}' needs {count} split columns for its longest list, "
+                f"above the limit of {limit}. No items were dropped; filter rows, raise "
+                "max_columns, or keep the list in one column."
+            )
+            if split.max_columns is None or split.max_columns >= ceiling:
+                raise FlowOutputOperationalCeilingError(
+                    message, measured=count, limit=ceiling,
+                    setting="FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", unit="columns",
+                )
+            raise ValueError(message)
+        if split.headers and len(split.headers) < longest:
+            raise ValueError(
+                f"Column '{column.key}' split_list names {len(split.headers)} headers but the "
+                f"longest list has {longest} items. Add headers or use header_template."
+            )
+        for number, header in enumerate(_split_list_headers(column, count), start=1):
+            key = f"{column.key}_{number}"
+            output.append(FlowOutputColumnSpec(key=key, header=header, field_ref=column.field_ref,
+                                               source_node_id=column.source_node_id))
+            items[key] = (column, number - 1)
+    headers = [column.header or column.key for column in output]
+    duplicates = sorted({header for header in headers if headers.count(header) > 1})
+    if items and duplicates:
+        raise ValueError(
+            "Output headers must be distinct after split_list expansion; duplicated: "
+            + ", ".join(duplicates)
+        )
+    keys = [column.key for column in output]
+    duplicate_keys = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicate_keys:
+        raise ValueError(
+            "Output column keys must be distinct after split_list expansion; duplicated: "
+            + ", ".join(duplicate_keys)
+        )
+    return output, items
 
 
 def validate_projection_plan(
@@ -2678,6 +2810,8 @@ def validate_projection_plan(
         if column.key in seen_keys:
             errors.append(f"Duplicate output column key '{column.key}'.")
         seen_keys.add(column.key)
+        if column.split_list is not None:
+            errors.extend(_split_list_errors(plan, column, rows))
         if column.transform is None:
             _validate_ref(
                 field_ref=column.field_ref,
@@ -3111,16 +3245,44 @@ def apply_projection_plan(
         else {}
     )
     open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
-    projected_rows = [
-        _project_row(
+    # Split lists are sized by the longest list across all filtered rows.
+    output_columns, split_items = (
+        _expand_split_columns(columns, rows)
+        if any(column.split_list is not None for column in columns)
+        else (list(columns), {})
+    )
+    base_columns = [column for column in columns if column.split_list is None]
+    preserve_empty = plan.selection_mode == "selected_fields"
+    projected_rows = []
+    for row in limited_rows:
+        render = _display_renderer(bundle, plan, row, specs, open_paths) if display else None
+        base = _project_row(
             row,
-            columns,
+            base_columns,
             missing_value=plan.missing_value,
-            preserve_empty=plan.selection_mode == "selected_fields",
-            render=_display_renderer(bundle, plan, row, specs, open_paths) if display else None,
+            preserve_empty=preserve_empty,
+            render=render,
         )
-        for row in limited_rows
-    ]
+        if not split_items:
+            projected_rows.append(base)
+            continue
+        projected: dict[str, Any] = {}
+        for column in output_columns:
+            if column.key not in split_items:
+                projected[column.key] = base[column.key]
+                continue
+            source_column, position = split_items[column.key]
+            values = row.get(source_column.field_ref or "")
+            item = values[position] if isinstance(values, list) and position < len(values) else None
+            if source_column.source_node_id and row.get("artifact.node_id") != source_column.source_node_id:
+                item = None
+            if not _is_empty(item) and render is not None:
+                item = render(source_column.field_ref or "", item, position)
+            if item is None or (not preserve_empty and _is_empty(item)):
+                item = plan.missing_value
+            projected[column.key] = _jsonable(item)
+        projected_rows.append(projected)
+    columns = output_columns
     cell_overrides = [override for override in plan.overrides if not override.exclude]
     if cell_overrides:
         position_by_ref = {ref: position for position, ref in enumerate(row_refs)}
@@ -3132,7 +3294,13 @@ def apply_projection_plan(
                 "Override row_ref(s) fall outside the output row limit: "
                 + ", ".join(beyond_limit)
             )
+        output_keys = {column.key for column in columns}
         for override in cell_overrides:
+            if override.column_key not in output_keys:
+                raise ValueError(
+                    f"Override column_key '{override.column_key}' is not an output column "
+                    "after split_list expansion."
+                )
             position = position_by_ref.get(override.row_ref)
             if position is not None and override.column_key is not None:
                 projected_rows[position][override.column_key] = _jsonable(override.value)
@@ -3379,6 +3547,7 @@ __all__ = [
     "FlowOutputFilterSpec",
     "FlowOutputOperationalCeilingError",
     "FlowOutputOverrideSpec",
+    "FlowOutputSplitListSpec",
     "FlowOutputProjectionPlan",
     "FlowOutputProjectionPreview",
     "FlowOutputProjectionResult",

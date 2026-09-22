@@ -339,3 +339,164 @@ def test_packaged_gene_expression_declarations_render_daniela_values():
         assert "knock-in in situ reporter assay (MMO:0000672)" in values
         if output_format == "csv":
             _no_object_text(_projection_content_for_file_type(output_format="csv", projection=result))
+
+
+# --- split_list: list items in separate columns, never extra rows ---------------------
+
+TERMS = "object.pack.GeneExpressionAnnotation.anatomy_terms"
+
+
+def _split_bundle():
+    rows = [
+        {"artifact.is_canonical_curation_data": True, "object.object_id": f"o{index}",
+         "object.label": f"statement {index}", TERMS: terms}
+        for index, terms in enumerate([
+            [{"curie": "WBbt:1", "name": "hypodermis"}, {"curie": "WBbt:2", "name": "vulva"},
+             {"name": "residual body"}],
+            [{"curie": "WBbt:3", "name": "sperm"}],
+            [],
+        ], start=1)
+    ]
+    catalog = [
+        FlowOutputField(ref=TERMS, label="Anatomy", value_type="list", row_source="object", display=TERM),
+        FlowOutputField(ref="object.label", label="Label", value_type="string", row_source="object"),
+        FlowOutputField(ref="object.object_id", label="Object", value_type="string", row_source="object"),
+    ]
+    return _bundle(rows, catalog)
+
+
+def _split_plan(output_format="csv", split=None, **extra):
+    return FlowOutputProjectionPlan.model_validate({
+        "format": output_format, "row_source": "object", "missing_value": "—",
+        "columns": [
+            {"key": "anatomy", "header": "Anatomy", "field_ref": TERMS, "split_list": split or {}},
+            {"key": "label", "header": "Statement", "field_ref": "object.label"},
+        ],
+        **extra,
+    })
+
+
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
+def test_split_list_expands_columns_with_display_items(output_format):
+    bundle = _split_bundle()
+    result = finalize_output_projection(bundle, _split_plan(output_format))
+    assert [column.header for column in result.columns] == ["Anatomy 1", "Anatomy 2", "Anatomy 3", "Statement"]
+    assert len(result.rows) == 3 and result.row_refs == ["object#1", "object#2", "object#3"]
+    assert result.rows[0] == {"anatomy_1": "hypodermis (WBbt:1)", "anatomy_2": "vulva (WBbt:2)",
+                              "anatomy_3": "residual body (unresolved)", "label": "statement 1"}
+    assert result.rows[1] == {"anatomy_1": "sperm (WBbt:3)", "anatomy_2": "—",
+                              "anatomy_3": "—", "label": "statement 2"}
+    assert result.rows[2]["anatomy_1"] == "—"
+    if output_format == "chat":
+        assert "| Anatomy 1 | Anatomy 2 | Anatomy 3 | Statement |" in result.chat_output
+    else:
+        content = _projection_content_for_file_type(output_format=output_format, projection=result)
+        rows = list(csv.reader(io.StringIO(content), delimiter="," if output_format == "csv" else "\t"))
+        assert len(rows) == 4
+        _no_object_text(content)
+
+
+def test_split_list_header_template_and_explicit_headers():
+    bundle = _split_bundle()
+    templated = finalize_output_projection(bundle, _split_plan(split={"header_template": "Anatomy Term {n}"}))
+    assert [c.header for c in templated.columns][:3] == ["Anatomy Term 1", "Anatomy Term 2", "Anatomy Term 3"]
+    exact = finalize_output_projection(bundle, _split_plan(split={"headers": ["First", "Second", "Third"]}))
+    assert [c.header for c in exact.columns] == ["First", "Second", "Third", "Statement"]
+    wider = finalize_output_projection(bundle, _split_plan(split={"headers": ["A1", "A2", "A3", "A4"]}))
+    assert [c.header for c in wider.columns][:4] == ["A1", "A2", "A3", "A4"]
+    assert wider.rows[0]["anatomy_4"] == "—"
+    with pytest.raises(ValueError, match="names 2 headers but the longest list has 3"):
+        finalize_output_projection(bundle, _split_plan(split={"headers": ["First", "Second"]}))
+    # Expanded headers take part in table-wide header uniqueness.
+    with pytest.raises(ValueError, match="headers must be distinct after split_list expansion; duplicated: Statement"):
+        finalize_output_projection(bundle, _split_plan(split={"headers": ["Statement", "B", "C"]}))
+
+
+@pytest.mark.parametrize("split,message", [
+    ({"header_template": "Anatomy Term"}, "must contain {n}"),
+    ({"header_template": "A {n}", "headers": ["x"]}, "not both"),
+    ({"headers": ["x", "x"]}, "headers must be distinct"),
+    ({"max_columns": 0}, "max_columns must be between"),
+])
+def test_split_list_rejects_invalid_options(split, message):
+    errors, _, _ = __import__("src.lib.flows.output_projection", fromlist=["x"]).validate_projection_plan(
+        _split_bundle(), _split_plan(split=split))
+    assert any(message in error for error in errors), errors
+
+
+def test_split_list_requires_list_field_and_non_json():
+    from src.lib.flows.output_projection import validate_projection_plan
+
+    bundle = _split_bundle()
+    scalar = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object",
+        "columns": [{"key": "label", "field_ref": "object.label", "split_list": {}}],
+    })
+    errors, _, _ = validate_projection_plan(bundle, scalar)
+    assert any("needs a list-valued field" in error for error in errors)
+    errors, _, _ = validate_projection_plan(bundle, _split_plan("json"))
+    assert any("JSON keeps lists lossless" in error for error in errors)
+
+
+def test_split_list_limits_fail_explicitly(monkeypatch):
+    from src.lib.flows.output_projection import FlowOutputOperationalCeilingError
+
+    bundle = _split_bundle()
+    with pytest.raises(ValueError, match="needs 3 split columns .* limit of 2"):
+        finalize_output_projection(bundle, _split_plan(split={"max_columns": 2}))
+    monkeypatch.setenv("FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS", "2")
+    with pytest.raises(FlowOutputOperationalCeilingError) as error:
+        finalize_output_projection(bundle, _split_plan())
+    assert error.value.setting == "FLOW_OUTPUT_SPLIT_LIST_MAX_COLUMNS"
+    assert (error.value.measured, error.value.limit) == (3, 2)
+
+
+def test_split_list_sized_after_filters_and_overrides_target_expanded_keys():
+    bundle = _split_bundle()
+    plan = _split_plan(filters=[{"field_ref": "object.object_id", "op": "ne", "value": "o1"}],
+                       overrides=[{"row_ref": "object#2", "column_key": "anatomy_1", "value": "sperm cell"}])
+    result = finalize_output_projection(bundle, plan)
+    assert [column.key for column in result.columns] == ["anatomy_1", "label"]
+    assert result.rows[0]["anatomy_1"] == "sperm cell"
+    bad = _split_plan(overrides=[{"row_ref": "object#2", "column_key": "anatomy_9", "value": "x"}])
+    with pytest.raises(ValueError, match="not an output column after split_list"):
+        finalize_output_projection(bundle, bad)
+
+
+@pytest.mark.asyncio
+async def test_split_list_through_formatter_tools_with_lock_and_inventory():
+    from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
+
+    async def save(*_args):
+        return {"file_id": "f", "filename": "f.csv", "download_url": "/f"}
+
+    bundle = _split_bundle()
+    plan = _split_plan(split={"header_template": "Anatomy Term {n}"})
+    tools = {tool.name: tool for tool in build_output_formatter_tools(
+        bundle=bundle, output_format="csv", formatter_agent_id="csv_formatter", save_projected_output=save)}
+
+    async def call(name, payload):
+        raw = await tools[name].on_invoke_tool(SimpleNamespace(tool_name=name), json.dumps(payload))
+        return json.loads(raw)
+
+    inventory = await call("inspect_output_artifacts", {"catalog_query": "anatomy_terms"})
+    entry = inventory["inventory"]["field_catalog"]["entries"][0]
+    assert entry["max_list_length"] == 3
+    values = await call("inspect_field_values", {"row_source": "object", "field_ref": TERMS})
+    assert values["max_list_length"] == 3
+    preview = await call("preview_output_projection", {"plan_json": plan.model_dump_json()})
+    assert preview["preview"]["preview_rows"][0]["anatomy_1"] == "hypodermis (WBbt:1)"
+    assert [c["header"] for c in preview["preview"]["columns"]][:3] == [
+        "Anatomy Term 1", "Anatomy Term 2", "Anatomy Term 3"]
+    rejected = await call("validate_output_projection", {"plan_json": json.dumps({
+        **json.loads(plan.model_dump_json()),
+        "columns": [{**json.loads(plan.model_dump_json())["columns"][0], "split_list": {"bogus": 1}}]})})
+    assert rejected["status"] == "invalid"
+
+    # The selected-fields lock compares whole plans, so a changed split_list is a change.
+    from src.lib.flows.output_projection import FlowOutputProjectionPlan as Plan
+
+    locked = {**json.loads(plan.model_dump_json()), "selection_mode": "selected_fields"}
+    changed = {**locked, "columns": [{**locked["columns"][0], "split_list": {"header_template": "Other {n}"}},
+                                     locked["columns"][1]]}
+    assert Plan.model_validate(locked) != Plan.model_validate(changed)
