@@ -3169,3 +3169,30 @@ def log_agent_config(agent_name: str, config: AgentConfig) -> None:
         config.reasoning,
         config.tool_choice,
     )
+
+
+# =============================================================================
+# ALL-1277: Agent contract discovery bounds
+# =============================================================================
+
+def get_agent_contract_max_response_chars() -> int:
+    """Total serialized size budget for one get_agent_contract result.
+
+    Environment variable: AGENT_CONTRACT_MAX_RESPONSE_CHARS. Default 24000.
+    Pages stop early when the next item would exceed this budget and return an
+    explicit continuation cursor. Values below 4000 use 4000 so one bounded
+    item plus the response envelope always fits.
+    """
+    return max(4000, _get_env_int_with_fallback("AGENT_CONTRACT_MAX_RESPONSE_CHARS", 24000))
+
+
+def get_agent_contract_max_item_chars() -> int:
+    """Serialized size budget for one item inside a get_agent_contract page.
+
+    Environment variable: AGENT_CONTRACT_MAX_ITEM_CHARS. Default 8000. A larger
+    item is returned as an outline whose omitted values are read through
+    item_ref and detail_pointer drilldown. Clamped to 1000 at minimum and to
+    half of AGENT_CONTRACT_MAX_RESPONSE_CHARS at maximum.
+    """
+    configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_ITEM_CHARS", 8000)
+    return max(1000, min(configured, get_agent_contract_max_response_chars() // 2))

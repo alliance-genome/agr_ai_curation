@@ -150,8 +150,10 @@ def test_compact_summary_response_is_read_only_and_deterministic(tmp_path):
     assert result["deterministic"] is True
     assert result["live_state"] is False
     assert result["writes"] is False
-    assert result["tools"] == [
+    assert result["items"] == [
         {
+            "ref": "tool|fixture_lookup",
+            "kind": "tool",
             "tool_id": "fixture_lookup",
             "name": "Fixture Lookup",
             "category": "Lookup",
@@ -166,9 +168,9 @@ def test_tools_topic_uses_default_catalog_resolver_for_real_agent():
     result = get_agent_contract("gene_extractor", "tools")
 
     assert result["success"] is True
-    assert result["tools"]
-    assert all(tool.get("resolved", True) is True for tool in result["tools"])
-    tool_ids = {tool["tool_id"] for tool in result["tools"]}
+    assert result["items"]
+    assert all(tool.get("resolved", True) is True for tool in result["items"])
+    tool_ids = {tool["tool_id"] for tool in result["items"]}
     assert "get_agent_contract" in tool_ids
     assert "search_document" in tool_ids
 
@@ -186,12 +188,12 @@ def test_field_specific_detail_response_uses_domain_pack_metadata(tmp_path):
     )
 
     assert result["success"] is True
-    field = result["matches"][0]["fields"][0]["field"]
+    field = result["items"][0]["field"]
     assert field["field_path"] == "assertion.curie"
     assert field["required"] is True
     assert field["source_of_truth"] == "fixture_schema"
     assert field["provider_refs"]["fixture_provider"]["slot"] == "assertion_curie"
-    binding = result["matches"][0]["fields"][0]["validator_bindings"][0]
+    binding = result["items"][0]["validator_bindings"][0]
     assert binding["validator_agent"] == {
         "package_id": "org.validators",
         "agent_id": "fixture_validator",
@@ -214,8 +216,9 @@ def test_output_schema_detail_can_focus_field(tmp_path):
     assert result["success"] is True
     assert result["output_schema"] == "FixtureEnvelope"
     assert result["schema_resolved"] is True
-    assert result["field"]["field_path"] == "assertion_id"
-    assert result["field"]["required"] is True
+    assert [item["field_path"] for item in result["items"]] == ["assertion_id"]
+    assert result["items"][0]["required"] is True
+    assert result["items"][0]["schema"]["type"] == "string"
 
 
 def test_invalid_topic_and_missing_field_paths_return_structured_errors(tmp_path):
@@ -270,8 +273,10 @@ def test_invalid_detail_level_and_unresolved_tool_details_are_explicit(tmp_path)
     assert invalid_detail_level["success"] is False
     assert "Unsupported detail_level" in invalid_detail_level["error"]
     assert unresolved_tool["success"] is True
-    assert unresolved_tool["tools"] == [
+    assert unresolved_tool["items"] == [
         {
+            "ref": "tool|fixture_lookup",
+            "kind": "tool",
             "tool_id": "fixture_lookup",
             "resolved": False,
             "error": "Tool details were not found.",
@@ -293,8 +298,10 @@ def test_partial_resolved_tool_details_keep_missing_metadata_visible(tmp_path):
     )
 
     assert result["success"] is True
-    assert result["tools"] == [
+    assert result["items"] == [
         {
+            "ref": "tool|fixture_lookup",
+            "kind": "tool",
             "tool_id": "fixture_lookup",
             "name": "Partial Fixture Lookup",
             "category": None,
@@ -328,17 +335,16 @@ def test_validator_agent_contract_is_project_agnostic_and_uses_same_service(tmp_
     )
 
     assert result["success"] is True
-    assert result["domain_packs"][0]["targeted_to_agent"] is True
-    assert result["domain_packs"][0]["bindings"][0]["validator_binding_id"] == (
-        "fixture_assertion_lookup"
-    )
+    bindings = [item for item in result["items"] if item["kind"] == "validator_binding"]
+    assert bindings[0]["targeted_to_agent"] is True
+    assert bindings[0]["validator_binding_id"] == "fixture_assertion_lookup"
     assert "Alliance" not in json.dumps(result)
     assert "agr" + ".alliance" not in json.dumps(result)
     assert alias_result["success"] is True
     assert extraction_alias["success"] is True
 
 
-def test_output_schema_returns_all_fields_by_default(tmp_path):
+def test_output_schema_returns_bounded_first_page_by_default(tmp_path):
     registry = _fixture_registry(tmp_path)
 
     result = get_agent_contract(
@@ -349,12 +355,13 @@ def test_output_schema_returns_all_fields_by_default(tmp_path):
         output_schema_resolver=_schema_resolver,
     )
 
-    field_paths = [field["field_path"] for field in result["fields"]]
+    field_paths = [field["field_path"] for field in result["items"]]
     assert field_paths == ["assertion_id", "assertion_label"]
-    assert result["field_total_count"] == 2
-    assert result["returned_field_count"] == 2
-    assert result["fields_truncated"] is False
-    assert result["next_field_cursor"] is None
+    assert result["page"]["total_count"] == 2
+    assert result["page"]["returned_count"] == 2
+    assert result["page"]["truncated"] is False
+    assert result["page"]["next_cursor"] is None
+    assert result["page"]["limit"] == 20
 
 
 def test_output_schema_field_list_is_pageable(tmp_path):
@@ -363,29 +370,30 @@ def test_output_schema_field_list_is_pageable(tmp_path):
     first = get_agent_contract(
         "fixture_extractor",
         "output_schema",
-        field_limit=1,
+        limit=1,
         agent_registry=_agent_registry(),
         registries={"fixture.contract": registry},
         output_schema_resolver=_schema_resolver,
     )
 
-    assert [field["field_path"] for field in first["fields"]] == ["assertion_id"]
-    assert first["field_total_count"] == 2
-    assert first["returned_field_count"] == 1
-    assert first["fields_truncated"] is True
-    assert first["next_field_cursor"] == "1"
-    assert first["field_limit"] == 1
+    assert [field["field_path"] for field in first["items"]] == ["assertion_id"]
+    assert first["page"]["total_count"] == 2
+    assert first["page"]["returned_count"] == 1
+    assert first["page"]["truncated"] is True
+    assert first["page"]["next_cursor"].startswith("1:")
+    assert first["page"]["limit"] == 1
+    assert first["page"]["stopped_by"] == "limit"
 
     second = get_agent_contract(
         "fixture_extractor",
         "output_schema",
-        field_limit=1,
-        field_cursor=first["next_field_cursor"],
+        limit=1,
+        cursor=first["page"]["next_cursor"],
         agent_registry=_agent_registry(),
         registries={"fixture.contract": registry},
         output_schema_resolver=_schema_resolver,
     )
 
-    assert [field["field_path"] for field in second["fields"]] == ["assertion_label"]
-    assert second["fields_truncated"] is False
-    assert second["next_field_cursor"] is None
+    assert [field["field_path"] for field in second["items"]] == ["assertion_label"]
+    assert second["page"]["truncated"] is False
+    assert second["page"]["next_cursor"] is None

@@ -51,7 +51,7 @@ TOOL_POLICY_SUMMARIES = {
     ),
     "get_agent_contract": (
         "- Detailed field, tool, schema, validator, and ontology facts are served "
-        "by the read-only get_agent_contract helper."
+        "by the read-only get_agent_contract helper, scoped by field_path and paged."
     ),
 }
 
@@ -473,9 +473,8 @@ def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
         lines.append(
             "- Validators own these fields; do not invent their identifiers: "
             f"{validator_fields}. "
-            "Use get_agent_contract (topics validator_bindings and "
-            "ontology_constraints, detail_level=detail) for the full bindings, "
-            "selectors, and accepted ontology terms."
+            "For one field's bindings, selectors, and accepted ontology terms, "
+            "call get_agent_contract with topic=field and that field_path."
         )
 
     active_bindings = [

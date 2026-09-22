@@ -13,7 +13,7 @@ tools:
       audit:
         display_name: Agent Contract Lookup
       documentation:
-        summary: 'Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. It only reports the setup; it does not run the agent or change anything.'
+        summary: 'Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. Answers come back a page at a time and can be narrowed to one data package, record type, or field, so a question about one field only returns that field''s rules. It only reports the setup; it does not run the agent or change anything.'
         parameters:
           - name: agent_id
             type: string
@@ -26,19 +26,35 @@ tools:
           - name: field_path
             type: string
             required: false
-            description: The specific field to look at, when you want details on just one field.
+            description: The specific field to look at, when you want details on just one field. An unknown field name returns an error with close matches instead of every field.
           - name: detail_level
             type: string
             required: false
             description: Choose a short overview or the full details.
-          - name: field_limit
+          - name: limit
             type: integer
             required: false
-            description: When an output schema has many fields, how many to show at once.
-          - name: field_cursor
+            description: How many entries to show on one page. Pages also stop early when they reach the size limit.
+          - name: cursor
             type: string
             required: false
-            description: Page marker from a previous call to fetch the next batch of fields.
+            description: Page marker from a previous answer, used to fetch the next page.
+          - name: domain_pack_id
+            type: string
+            required: false
+            description: Limit the answer to one data package, useful when the same field name appears in several.
+          - name: object_type
+            type: string
+            required: false
+            description: Limit the answer to one record type within the data packages.
+          - name: item_ref
+            type: string
+            required: false
+            description: Reference of one entry from a previous answer, to read that entry on its own.
+          - name: detail_pointer
+            type: string
+            required: false
+            description: Which part of that entry to read when it was too large to show in full.
   - tool_id: agr_curation_query
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query

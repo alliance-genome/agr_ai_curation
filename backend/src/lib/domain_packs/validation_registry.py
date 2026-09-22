@@ -625,6 +625,46 @@ class DomainPackValidationRegistry:
 
         return self.field_policies_by_key.get((object_type, field_path))
 
+    def bindings_for_field(
+        self,
+        object_type: str,
+        field_path: str,
+    ) -> tuple[ValidatorBinding, ...]:
+        """Return bindings whose declared targets cover one object field.
+
+        Uses the same selectors as ``match_bindings``: field-constrained bindings
+        must select the field itself, object-targeted bindings cover every field
+        of the objects they select, and untargeted bindings cover the whole pack.
+        """
+
+        object_definition = self.object_definitions_by_type.get(object_type)
+        if object_definition is None:
+            return ()
+        if all(candidate.field_path != field_path for candidate in object_definition.fields):
+            return ()
+
+        matches: list[ValidatorBinding] = []
+        for binding in self.bindings:
+            if (
+                binding.applies_to_domain_pack_id is not None
+                and binding.applies_to_domain_pack_id != self.domain_pack.pack_id
+            ):
+                continue
+            if (binding.object_types or binding.object_roles) and not (
+                _binding_target_object_definitions(
+                    binding,
+                    {object_type: object_definition},
+                )
+            ):
+                continue
+            if _binding_has_field_constraints(binding) and field_path not in {
+                matched.field_path
+                for matched in _matching_fields(binding, object_definition)
+            }:
+                continue
+            matches.append(binding)
+        return tuple(matches)
+
     def match_bindings(
         self,
         envelope: DomainEnvelope,
