@@ -1438,7 +1438,6 @@ async def _collect_flow_validator_materialization_inputs(
     list[dict[str, Any]],
 ]:
     authenticated_groups = _authenticated_groups_from_agent_context(agent_context)
-    groups = effective_flow_validation_groups(groups)
     if profile_context is not None:
         from src.lib.domain_packs.profile_validation import profile_dispatch_matches, profile_mapping_binding_id
         from src.lib.agent_studio.profile_conformance import ProfileIdentityError
@@ -1457,6 +1456,7 @@ async def _collect_flow_validator_materialization_inputs(
             source_envelope, profile_context, authenticated_groups=authenticated_groups,
         )
     else:
+        groups = effective_flow_validation_groups(groups)
         eligible_matches, group_scope_findings, binding_audit = resolve_group_scoped_validator_matches(
             list(
                 registry.match_bindings(
