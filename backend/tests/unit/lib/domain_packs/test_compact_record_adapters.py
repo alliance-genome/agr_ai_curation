@@ -320,6 +320,27 @@ def test_all_alliance_validator_schemas_load_the_package_runtime(schemas):
         assert contract.request.validator_agent.package_id == "agr.alliance"
 
 
+@pytest.mark.parametrize("name,raw,slots,expected", [
+    ("DiseaseValidationResult", {"curie": "DOID:1", "name": "disease", "ontology_type": "DOTerm"},
+     {"label": "name", "ontology_term_type": "ontology_type"}, {"label": "disease", "ontology_term_type": "DOTerm"}),
+    ("ChemicalValidationResult", {"id": 17234, "chebi_accession": "CHEBI:17234", "name": "glucose",
+        "chemical_data": {"formula": "C6H12O6", "charge": 0, "mass": "180.156", "monoisotopic_mass": "180.06339"},
+        "default_structure": {"smiles": "provider-smiles", "standard_inchi": "provider-inchi", "standard_inchi_key": "provider-key"}},
+     {"formula": "formula", "charge": "charge", "mass": "mass", "inchi": "inchi", "smiles": "smiles", "inchikey": "inchikey"},
+     {"formula": "C6H12O6", "charge": 0, "mass": "180.156", "inchi": "provider-inchi", "smiles": "provider-smiles", "inchikey": "provider-key"}),
+])
+def test_supported_disease_and_chemical_slots_copy_actual_provider_fields(schemas, name, raw, slots, expected):
+    contract, workspace = _simple_workspace(schemas, name, expected_result_fields={key: key for key in slots})
+    refs = _capture(workspace, schemas[name], [raw])
+    result = workspace.assemble(contract.decision_schema.model_validate({
+        "request_id": "test", "status": "resolved", "explanation": "Selected database record.",
+        "candidates": [_assessment(refs[0])], "slots": {key: {"kind": "record", "record_ref": refs[0], "field": field}
+                                                       for key, field in slots.items()},
+    }))
+    assert result.resolved_values == expected
+    assert result.candidates[0].details["source_record"] == raw
+
+
 def test_standalone_preserves_structured_inputs_and_new_runtime_evidence(schemas):
     import json
     from src.lib.domain_packs.compact_runtime import runtime_for_schema

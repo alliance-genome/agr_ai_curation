@@ -31,7 +31,10 @@ _SLOT_FIELDS = {
     "OntologyTermValidationResult": {"term_curie": ("curie",), "term_name": ("name", "label")},
     "GOTermResultEnvelope": {"go_id": ("go_id", "id")},
     "ChemicalValidationResult": {"chebi_id": ("chebi_id", "id", "curie")},
-    "DiseaseValidationResult": {"disease_id": ("curie", "id")},
+    "DiseaseValidationResult": {
+        "disease_id": ("curie", "id"), "label": ("label", "name"),
+        "ontology_term_type": ("ontology_term_type", "ontology_type"),
+    },
 }
 
 

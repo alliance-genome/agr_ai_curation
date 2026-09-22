@@ -66,6 +66,17 @@ def canonical_record(record: Mapping[str, Any], result_schema: type, *, request=
             record["chebi_id"] = record["chebi_accession"]
         if "_score" in raw:
             record["raw_score"] = raw["_score"]
+        properties = record.get("chemical_data")
+        if isinstance(properties, Mapping):
+            for key in ("formula", "charge", "mass", "monoisotopic_mass"):
+                if key in properties:
+                    record[key] = deepcopy(properties[key])
+        structure = record.get("default_structure")
+        if isinstance(structure, Mapping):
+            for field, source in (("smiles", "smiles"), ("inchi", "standard_inchi"),
+                                  ("inchikey", "standard_inchi_key")):
+                if source in structure:
+                    record[field] = deepcopy(structure[source])
     elif name == "OrthologsResult" and "geneToGeneOrthologyGenerated" in record:
         record = _ortholog_record(record)
     elif name == "SubjectEntityValidationResult":

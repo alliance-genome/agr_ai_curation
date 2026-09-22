@@ -2750,6 +2750,69 @@ def test_package_scoped_validator_agent_uses_compact_finalization_schema(
     assert ("data", "ai_curation.validation.status", "accepted") in sentry_calls
 
 
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "json"])
+def test_compact_candidate_science_survives_materialization_and_formatter_cells(tmp_path, output_format):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema
+    from src.lib.flows.output_projection import (
+        build_flow_output_artifact_bundle, apply_projection_plan, FlowOutputProjectionPlan,
+    )
+    captured = {}
+
+    def runner(request, *, binding):
+        runtime = runtime_for_schema([request], result_schema=GeneResultEnvelope)
+        from agr_ai_curation_alliance.compact_adapter import capture_lookup
+        call = capture_lookup(next(iter(runtime.contracts.values())), "agr_curation_query",
+            {"method": "search_genes", "symbol": "ABC-1"}, {"status": "ambiguous", "data": [
+                {"curie": "RGD:1", "symbol": "ABC-1", "data_provider": None},
+                {"curie": "RGD:2", "symbol": "ABC-1", "data_provider": "RGD"},
+            ]})
+        refs = runtime.workspace.record_lookup(request.request_id, call_id="source-call",
+            attempt=call.attempt, records=call.records)
+        result = runtime.assemble({"request_id": request.request_id, "status": "unresolved",
+            "explanation": "Two candidates remain plausible.", "candidates": [
+                {"record_ref": ref, "disposition": "plausible", "explanation": "Paper does not distinguish the candidates.",
+                 "evidence_record_ids": ["evidence-1"]} for ref in refs
+            ]})
+        captured["result"] = result
+        from src.lib.domain_packs.validator_dispatch import _ValidatorAgentRunOutput
+        return _ValidatorAgentRunOutput(raw_output=None, accepted_result=result)
+
+    dispatched = dispatch_active_validator_bindings(
+        _envelope(evidence_records=[{"evidence_record_id": "evidence-1", "quote": "ABC-1 was observed."}]),
+        _loaded_pack(tmp_path), runner=runner)
+    finding = _single_result_finding(dispatched)
+    assert "candidate_matches" in finding.details, finding.model_dump(mode="json")
+    assert [row["value"] for row in finding.details["candidate_matches"]] == ["RGD:1", "RGD:2"]
+    bundle = build_flow_output_artifact_bundle(completed_steps=[{
+        "step": 1, "agent_id": "gene_extractor", "agent_name": "Gene",
+        "candidate": SimpleNamespace(agent_key="gene_extractor", adapter_key="gene", candidate_count=1,
+            conversation_summary="Ambiguous gene.", payload_json=dispatched.envelope.model_dump(mode="json")),
+    }], flow_name="Compact validation", output_format=output_format)
+    projection = apply_projection_plan(bundle, FlowOutputProjectionPlan.model_validate({
+        "format": output_format, "row_source": "validation_finding", "columns": [
+            {"key": "candidates", "field_ref": "validation.candidate_matches"},
+            {"key": "lookups", "field_ref": "validation.lookup_attempts"},
+            {"key": "target", "field_ref": "validation.target"},
+        ],
+    }))
+    assert projection.rows
+    row = projection.rows[0]
+    candidates = json.loads(row["candidates"]) if isinstance(row["candidates"], str) else row["candidates"]
+    assert [candidate["value"] for candidate in candidates] == ["RGD:1", "RGD:2"]
+    for candidate in candidates:
+        science = candidate["details"]["scientific_assessment"]
+        assert science["explanation"] == "Paper does not distinguish the candidates."
+        assert science["evidence_record_ids"] == ["evidence-1"]
+        assert candidate["details"]["source_call_id"] == "source-call"
+    attempts = json.loads(row["lookups"]) if isinstance(row["lookups"], str) else row["lookups"]
+    assert attempts[0]["candidate_count"] == 2  # Existing finding/export name for the returned lookup count.
+    assert attempts[0]["attempted_query"]["provider_query"] == {"method": "search_genes", "symbol": "ABC-1"}
+    target = json.loads(row["target"]) if isinstance(row["target"], str) else row["target"]
+    assert target["object_id"] == captured["result"].target.object_id
+    assert target["field_path"] == captured["result"].target.field_path
+
+
 def test_validator_finalization_feedback_accepts_valid_result():
     request = _verbose_validation_request()
 

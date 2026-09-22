@@ -74,6 +74,15 @@ Runtime finalization instructions supersede older full-result authoring
 instructions without modifying saved custom prompts or execution revisions.
 No saved data is migrated by this change.
 
+Before production, inventory saved agents and flow attachments using these
+schemas, including their pinned execution revisions, inherited tools, prompts
+and finalization settings. Rehearse those exact snapshots on an isolated copy:
+confirm compact finalizer schemas and reference-bearing tools, accepted stopping,
+canonical artifacts and profile output mappings. Keep authored scientific policy
+unchanged. If a snapshot needs a prompt/schema/tool repair, record the exact
+agent, revision, flow and proposed replacement and obtain approval before writing
+saved state. Do not rewrite historical revisions or silently repoint flows.
+
 ## Verification
 
 Run focused Docker unit tests for `test_compact_decisions.py`,
