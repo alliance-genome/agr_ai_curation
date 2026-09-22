@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.lib.config import schema_discovery
-from ..packages import find_repo_root
+from tests.unit.lib.packages import find_repo_root
 
 
 @pytest.fixture(autouse=True)
@@ -305,8 +305,14 @@ def test_chebi_search_and_compound_use_accession_not_internal_elasticsearch_id(s
     assert canonical_record(search, schemas["ChemicalValidationResult"]).values["raw_score"] == 45.4
 
 
-def test_all_alliance_validator_schemas_load_the_package_runtime(schemas):
+@pytest.mark.parametrize("source_checkout", [False, True])
+def test_all_alliance_validator_schemas_load_the_package_runtime(schemas, monkeypatch, tmp_path, source_checkout):
     from src.lib.domain_packs.compact_runtime import runtime_for_schema
+    if source_checkout:
+        monkeypatch.delenv("AGR_RUNTIME_PACKAGES_DIR")
+        monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+        schema_discovery.reset_cache()
+        schemas = schema_discovery.discover_agent_schemas(force_reload=True)
     names = ["GeneResultEnvelope", "AlleleResultEnvelope", "AgmValidationResult",
         "SubjectEntityValidationResult", "OntologyTermValidationResult", "ControlledVocabularyValidationResult",
         "DataProviderValidationResult", "GOTermResultEnvelope", "GOAnnotationsResult", "ReferenceValidationResult",

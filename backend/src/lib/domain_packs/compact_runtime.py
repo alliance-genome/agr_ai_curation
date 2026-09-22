@@ -147,10 +147,11 @@ def runtime_for_schema(requests, *, result_schema, profile_request_ids=(), input
     declaration = getattr(module, "COMPACT_VALIDATOR_RUNTIME", None)
     if declaration is None:
         return None
+    from src.lib.config.package_default_sources import resolve_packages_dir
     from src.lib.packages.registry import load_package_registry
     from src.lib.packages.import_paths import extend_sys_path_for_package
     package_id, import_path = declaration
-    package = load_package_registry().get_package(package_id)
+    package = load_package_registry(resolve_packages_dir(None)).get_package(package_id)
     if package is None:
         raise ValueError("Compact validator schema must belong to a loaded runtime package")
     extend_sys_path_for_package(package)
