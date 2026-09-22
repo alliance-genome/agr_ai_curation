@@ -53,7 +53,8 @@ model_definitions:
       - Payload is evidence/reference data only and is not an Alliance Gene write DTO.
     metadata:
       display:
-        label: mention
+        label: gene_symbol
+        id: primary_external_id
 object_definitions:
   - object_type: gene_mention_evidence
     display_name: Gene mention

@@ -42,7 +42,7 @@ model_definitions:
             class: AlleleAssociation
     metadata:
       display:
-        label: allele_label
+        id: allele_identifier
   - model_id: AlleleReferencePayload
     display_name: Allele validated-reference payload
     schema_ref:
