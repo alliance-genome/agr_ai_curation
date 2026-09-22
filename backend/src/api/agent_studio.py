@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, NoReturn, Optional
 
 import boto3
 import openai
-from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
+from agents import FunctionTool, MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -180,7 +180,7 @@ from src.lib.config.models_loader import is_model_selectable
 from src.lib.packages import load_installed_agent_studio_prompt
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
-from src.lib.runtime_payload_budget import provider_context_preflight
+from src.lib.runtime_payload_budget import json_size, provider_context_preflight
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.openai_agents import run_agent_streamed
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
@@ -4413,6 +4413,24 @@ async def chat_with_opus(
         )
 
         try:
+            # Deferred definitions are transported for hosted tool search but are
+            # not model-visible until the provider loads them, so they are
+            # sized separately from the initially visible surface (ALL-1279).
+            initially_visible_tool_names = {
+                tool.name
+                for tool in tools
+                if isinstance(tool, FunctionTool) and not tool.defer_loading
+            }
+            initially_visible_definitions = [
+                definition
+                for definition in tool_definitions
+                if definition.get("name") in initially_visible_tool_names
+            ]
+            deferred_definitions = [
+                definition
+                for definition in tool_definitions
+                if definition.get("name") not in initially_visible_tool_names
+            ]
             preflight = provider_context_preflight(
                 surface="agent_studio",
                 operation="agents_sdk_run",
@@ -4421,7 +4439,7 @@ async def chat_with_opus(
                 payload={
                     "instructions": system_prompt,
                     "input": input_items,
-                    "tools": tool_definitions,
+                    "initially_visible_tools": initially_visible_definitions,
                     "tool_search": {
                         "forced_tool_name": forced_tool_name,
                         "authorization_fingerprint": authorized_tools.fingerprint,
@@ -4433,6 +4451,11 @@ async def chat_with_opus(
                     "session_id": prepared_turn.session_id,
                     "turn_id": prepared_turn.turn_id,
                     "trace_id": run_state.trace_id,
+                    "deferred_tool_definitions": {
+                        "count": len(deferred_definitions),
+                        "json_chars": json_size(deferred_definitions).json_chars,
+                        "loaded_status": "provider_managed",
+                    },
                 },
                 emit_trace_event=True,
             )

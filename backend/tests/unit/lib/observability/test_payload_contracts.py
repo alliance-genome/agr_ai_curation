@@ -138,3 +138,60 @@ def test_diagnostic_is_compact_and_actionable():
         "setting": "OPENAI_INSTRUCTIONS_MAX_CHARS",
         "message": "instructions exceed the provider limit",
     }
+
+
+def test_caught_tool_result_budget_escape_reports_once_with_bounded_context(monkeypatch):
+    """A tool that turns its budget escape into a tool-result error still reports it once."""
+    from src.lib.observability import sentry as sentry_module
+
+    calls = _fake_sentry(monkeypatch)
+    violation = payload_contracts.PayloadContractViolation(
+        category="tool_result_budget_escape",
+        component="inspect_output_rows",
+        message="tool result exceeds its response budget",
+        measured=1_276_154,
+        limit=60_000,
+        setting="EXAMPLE_TOOL_RESULT_MAX_CHARS",
+    )
+
+    def tool():
+        try:
+            raise violation
+        except payload_contracts.PayloadContractViolation as exc:
+            payload_contracts.report_payload_contract_violation(
+                exc,
+                phase="tool_result",
+                tool_name="inspect_output_rows",
+                correlation={"rows_preview": "r" * 50_000},
+            )
+            return {"success": False, "error": exc.diagnostic()}
+
+    result = tool()
+    assert result["error"]["category"] == "tool_result_budget_escape"
+    assert calls["exceptions"] == [violation]
+    context = dict(calls["contexts"])["runtime_exception"]
+    # Oversized correlation values are bounded, never a second dataset copy.
+    assert len(context["rows_preview"]) <= 500
+    # A wrapper that later logs the same failure does not create a second event.
+    record = logging.LogRecord("wrapper", logging.ERROR, __file__, 1, "tool failed: %s", (violation,), None)
+    assert sentry_module.before_send({"message": "tool failed"}, {"log_record": record}) is None
+
+
+def test_caught_finalization_failure_is_not_duplicated_by_wrappers(monkeypatch):
+    from src.lib.observability import sentry as sentry_module
+
+    calls = _fake_sentry(monkeypatch)
+    violation = payload_contracts.PayloadContractViolation(
+        category="output_delivery_failure",
+        component="flow_chat_output",
+        message="rendered output could not be delivered",
+    )
+    payload_contracts.report_payload_contract_violation(violation, phase="finalization")
+    try:
+        raise RuntimeError("flow finalization failed") from violation
+    except RuntimeError as wrapper:
+        assert runtime.report_runtime_exception(wrapper, component="flow", operation="finalize") is False
+        assert sentry_module.before_send(
+            {"message": "x"}, {"exc_info": (RuntimeError, wrapper, None)}
+        ) is None
+    assert calls["exceptions"] == [violation]

@@ -136,3 +136,33 @@ def test_missing_usage_zero_cost_and_mismatched_totals():
     mismatch = usage_cost_summary({"usage": {"input": 10, "output": 5, "total": 20}})
     assert mismatch["total_tokens"] == 15
     assert mismatch["usage_issues"] == ["total_tokens_mismatch"]
+
+
+def test_model_request_measurement_events_add_no_calls_or_cost():
+    """ALL-1279: per-request measurement events are EVENT observations.
+
+    They carry provider usage for correlation only, so the exclusive cost
+    report must not count them as calls, add cost, or turn missing usage into
+    reported usage.
+    """
+    baseline = build_report(fixture(), start=START, end=END, filters={"environment": "production"})
+    traces = fixture()
+    measured = traces[0]["observations"][0]
+    for index in range(2):  # a retried request produces two measurement records
+        traces[0]["observations"].append({
+            "id": f"measurement-{index}", "traceId": measured["traceId"], "type": "EVENT",
+            "name": "extraction_trace_event", "startTime": START,
+            "metadata": {"event_payload": {
+                "event_type": "runtime.model_request_measurement",
+                "input_summary": {"preview": {
+                    "provider_response_id": "resp-a1e", "attempt": index + 1,
+                    "provider_usage": {"status": "reported", "input_tokens": 100, "output_tokens": 20},
+                    "model_visible": {"estimated_tokens": 30},
+                }},
+            }},
+        })
+    report = build_report(traces, start=START, end=END, filters={"environment": "production"})
+    assert report["totals"]["calls"] == baseline["totals"]["calls"] == 11
+    assert report["totals"]["total_cost"] == baseline["totals"]["total_cost"]
+    assert report["duplicate_observations"] == baseline["duplicate_observations"] == 1
+    assert report["totals"]["missing_usage_calls"] == baseline["totals"]["missing_usage_calls"]

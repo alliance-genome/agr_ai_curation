@@ -315,10 +315,20 @@ async def execute_direct_openai_adjudication(
 
     from openai import AsyncOpenAI
 
-    response = await AsyncOpenAI(max_retries=0).responses.parse(
-        model=model,
-        input=prompt,
-        text_format=AdjudicationDecision,
+    from src.lib.openai_agents.model_request_measurement import (
+        call_measured_direct_request,
+    )
+
+    response = await call_measured_direct_request(
+        surface="benchmark_adjudication",
+        provider="openai",
+        api="responses",
+        kwargs={
+            "model": model,
+            "input": prompt,
+            "text_format": AdjudicationDecision,
+        },
+        call=AsyncOpenAI(max_retries=0).responses.parse,
     )
     parsed = response.output_parsed
     if parsed is None:
