@@ -133,6 +133,34 @@ def test_detail_on_demand_exposes_distinguishing_facts(context):
     )
 
 
+@pytest.mark.parametrize("method", ["search_alleles", "search_alleles_bulk"])
+def test_search_supplies_detail_facts_without_requiring_confirmation(context, method):
+    query, db, _ = context
+    args = {"allele_symbol": "H2-Ab1"} if method == "search_alleles" else {"allele_symbols": ["H2-Ab1"]}
+    search = query(method=method, **args)
+    item = search.model_dump() if method == "search_alleles" else search.data["items"][0]
+    rows = item["data"] if method == "search_alleles" else item["results"]
+    detail = query(method="get_allele_by_id", allele_id=rows[0]["curie"])
+    for field in ("curie", "symbol", "name", "taxon", "synonyms", "genes", "functional_impacts", "mutation_types"):
+        assert rows[0][field] == detail.data[field]
+    assert "Do not reread an already returned record" in item["explanation"]
+    assert "missing required facts" in item["explanation"]
+    assert "conflicting records" in item["explanation"]
+    assert item["lookup_status"] == "ambiguous"
+    assert rows[0]["identity_status"] == "unconfirmed"
+
+
+def test_missing_search_details_do_not_claim_complete_identity(context):
+    query, db, _ = context
+    db.result["coverage"]["detail_missing_count"] = 1
+    db.result["candidates"][0]["annotations_capped"] = ["synonyms"]
+    result = query(method="search_alleles", allele_symbol="H2-Ab1")
+    assert result.coverage["detail_missing_count"] == 1
+    assert result.data[0]["annotations_capped"] == ["synonyms"]
+    assert "capped annotations are not complete evidence" in result.explanation
+    assert result.lookup_status == "ambiguous"
+
+
 def test_identifier_collision_preserves_all_candidates(context, monkeypatch):
     query, db, _ = context
     monkeypatch.setattr(

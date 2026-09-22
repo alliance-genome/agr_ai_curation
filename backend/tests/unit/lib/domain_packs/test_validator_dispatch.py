@@ -43,6 +43,12 @@ from src.schemas.domain_validator import (
 from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
 
 
+@pytest.fixture(autouse=True)
+def _runtime_packages(monkeypatch):
+    from ..packages import find_repo_root
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(find_repo_root(Path(__file__)) / "packages"))
+
+
 class _FakeContextManager:
     def __init__(self, value: Any = None):
         self.value = value
@@ -955,6 +961,89 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
         materialized_gene.to_object_ref()
     ]
     assert result.validator_results[0].status == "resolved"
+
+
+@pytest.mark.parametrize("state", ["replaced", "supplemental", "skipped"])
+def test_flow_selection_suppresses_upstream_before_any_model_call(tmp_path, state):
+    from src.lib.domain_packs.flow_validator_selection import (
+        set_flow_validator_selections, reset_flow_validator_selections,
+    )
+    pack = _loaded_pack(tmp_path, second_binding=True)
+    calls = []
+
+    def runner(request, *, binding):
+        calls.append(request.validator_binding_id)
+        return _result_payload(request)
+
+    token = set_flow_validator_selections([{
+        "binding_id": "fixture.identifier_lookup", "state": state,
+        "validator_node_id": "custom-validator" if state != "skipped" else None,
+    }])
+    try:
+        # The real extraction dispatcher crosses an asyncio.to_thread boundary.
+        async def dispatch():
+            return await asyncio.to_thread(dispatch_active_validator_bindings,
+                _envelope(), pack, runner=runner)
+        result = asyncio.run(dispatch())
+    finally:
+        reset_flow_validator_selections(token)
+    assert calls == ["fixture.symbol_lookup"]
+    audit = result.envelope.metadata["suppressed_upstream_validators"]
+    assert audit[0]["validator_binding_id"] == "fixture.identifier_lookup"
+    assert audit[0]["reason"] == ("flow_skip" if state == "skipped" else "custom_replacement")
+    assert audit[0]["target"]["pending_ref_id"] == "object-1"
+    calls.clear()
+    dispatch_active_validator_bindings(_envelope(), pack, runner=runner)
+    assert set(calls) == {"fixture.identifier_lookup", "fixture.symbol_lookup"}
+
+
+@pytest.mark.parametrize("custom_fails", [False, True])
+def test_extractor_to_flow_runs_custom_once_without_standard_fallback(tmp_path, monkeypatch, custom_fails):
+    from src.lib.flows import executor
+    from src.lib.domain_packs.flow_validator_selection import (
+        set_flow_validator_selections, reset_flow_validator_selections,
+    )
+    from src.lib.domain_packs.materialization import materialize_validator_results_into_envelope
+    pack = _loaded_pack(tmp_path)
+    groups = [{"group_id": "custom", "binding_id": "fixture.identifier_lookup",
+               "state": "replaced", "validator_node_id": "custom-node"}]
+    calls = []
+
+    def standard(*args, **kwargs):
+        calls.append("standard")
+        raise AssertionError("standard must not run")
+
+    async def custom(request, **kwargs):
+        calls.append("custom")
+        assert request.validator_agent.agent_id == "custom-agent"
+        if custom_fails:
+            raise RuntimeError("custom source failed")
+        return _result_payload(request)
+
+    monkeypatch.setattr(executor, "_run_custom_flow_validator_agent", custom)
+    token = set_flow_validator_selections(groups)
+    try:
+        upstream = dispatch_active_validator_bindings(_envelope(), pack, runner=standard)
+    finally:
+        reset_flow_validator_selections(token)
+    assert upstream.validator_agent_run_count == 0
+    flow = SimpleNamespace(flow_definition={"nodes": [{"id": "custom-node", "data": {"agent_id": "custom-agent"}}]})
+    units, findings, audit = asyncio.run(executor._collect_flow_validator_materialization_inputs(
+        source_envelope=upstream.envelope, source_envelope_revision=1,
+        registry=upstream.registry, groups=groups, flow=flow, agent_context={},
+    ))
+    assert calls == ["custom"]
+    assert not findings
+    assert len(units) == 1
+    assert audit[-1]["validator_agent"]["agent_id"] == "custom-agent"
+    assert audit[-1]["status"] == ("unresolved" if custom_fails else "resolved")
+    materialized = materialize_validator_results_into_envelope(
+        upstream.envelope, pack.metadata, units, actor_id="flow", source_envelope_revision=1,
+    )
+    results = [f.details["validation_result"] for f in materialized.envelope.validation_findings
+               if "validation_result" in f.details]
+    assert results
+    assert all(r["validator_agent"]["agent_id"] == "custom-agent" for r in results)
 
 
 def test_group_scope_normalizes_and_matching_authenticated_group_dispatches(
@@ -2657,7 +2746,33 @@ def test_ambiguous_optional_selector_still_blocks_dispatch(tmp_path: Path):
     assert result.validator_results == ()
 
 
-def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
+def _compact_lookup_tool():
+    from agents import function_tool
+
+    @function_tool(strict_mode=False)
+    async def agr_curation_query(method: str, gene_id: str) -> dict:
+        return {"status": "ok", "data": [{"curie": gene_id, "symbol": "fixture", "identifier": gene_id}]}
+
+    return agr_curation_query
+
+
+def _compact_test_decision(agent, request):
+    import asyncio
+    from agents.tool_context import ToolContext
+    from uuid import uuid4
+    lookup = next(tool for tool in agent.tools if tool.name == "agr_curation_query")
+    arguments = json.dumps({
+        "method": "get_gene_by_id", "gene_id": "AGR:0001",
+    })
+    context = ToolContext(context=None, tool_name=lookup.name, tool_call_id=uuid4().hex, tool_arguments=arguments)
+    response = json.loads(asyncio.run(lookup.on_invoke_tool(context, arguments)))
+    reference = response["validator_record_refs"][0]["record_ref"]
+    return {"request_id": request.request_id, "status": "resolved", "explanation": "Verified identity.",
+            "candidates": [{"record_ref": reference, "disposition": "selected", "explanation": "Matches the source."}],
+            "slots": {"identifier": {"kind": "record", "record_ref": reference, "field": "identifier"}}}
+
+
+def test_package_scoped_validator_agent_uses_compact_finalization_schema(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -2668,7 +2783,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     request = _verbose_validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
         model="validator-model",
     )
@@ -2728,7 +2843,7 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_result"
         )
-        _unwrap_function_tool(tool)(result=_result_payload(request))
+        _unwrap_function_tool(tool)(result=_compact_test_decision(agent, request))
         return {"status": "resolved"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -2754,13 +2869,11 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
 
     runtime_agent = captured["agent"]
     assert runtime_agent is not source_agent
-    assert runtime_agent.output_type.__class__.__name__ == "AgentOutputSchema"
-    assert runtime_agent.output_type.output_type is GeneResultEnvelope
-    assert runtime_agent.output_type.is_strict_json_schema() is False
+    assert runtime_agent.output_type is None
     assert [tool.name for tool in runtime_agent.tools] == [
-        "finalize_validator_result"
+        "agr_curation_query", "finalize_validator_result"
     ]
-    assert source_agent.tools == []
+    assert [tool.name for tool in source_agent.tools] == ["agr_curation_query"]
     assert source_agent.instructions == "Base validator instructions."
     assert "finalize_validator_result" in runtime_agent.instructions
     runtime_payload = json.loads(captured["kwargs"]["input"])
@@ -2788,6 +2901,69 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     )
     assert span_call[1]["span_data"]["ai_curation.validator.request_id"] == request.request_id
     assert ("data", "ai_curation.validation.status", "accepted") in sentry_calls
+
+
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "json"])
+def test_compact_candidate_science_survives_materialization_and_formatter_cells(tmp_path, output_format):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema
+    from src.lib.flows.output_projection import (
+        build_flow_output_artifact_bundle, apply_projection_plan, FlowOutputProjectionPlan,
+    )
+    captured = {}
+
+    def runner(request, *, binding):
+        runtime = runtime_for_schema([request], result_schema=GeneResultEnvelope)
+        from agr_ai_curation_alliance.compact_adapter import capture_lookup
+        call = capture_lookup(next(iter(runtime.contracts.values())), "agr_curation_query",
+            {"method": "search_genes", "symbol": "ABC-1"}, {"status": "ambiguous", "data": [
+                {"curie": "RGD:1", "symbol": "ABC-1", "data_provider": None},
+                {"curie": "RGD:2", "symbol": "ABC-1", "data_provider": "RGD"},
+            ]})
+        refs = runtime.workspace.record_lookup(request.request_id, call_id="source-call",
+            attempt=call.attempt, records=call.records)
+        result = runtime.assemble({"request_id": request.request_id, "status": "unresolved",
+            "explanation": "Two candidates remain plausible.", "candidates": [
+                {"record_ref": ref, "disposition": "plausible", "explanation": "Paper does not distinguish the candidates.",
+                 "evidence_record_ids": ["evidence-1"]} for ref in refs
+            ]})
+        captured["result"] = result
+        from src.lib.domain_packs.validator_dispatch import _ValidatorAgentRunOutput
+        return _ValidatorAgentRunOutput(raw_output=None, accepted_result=result)
+
+    dispatched = dispatch_active_validator_bindings(
+        _envelope(evidence_records=[{"evidence_record_id": "evidence-1", "quote": "ABC-1 was observed."}]),
+        _loaded_pack(tmp_path), runner=runner)
+    finding = _single_result_finding(dispatched)
+    assert "candidate_matches" in finding.details, finding.model_dump(mode="json")
+    assert [row["value"] for row in finding.details["candidate_matches"]] == ["RGD:1", "RGD:2"]
+    bundle = build_flow_output_artifact_bundle(completed_steps=[{
+        "step": 1, "agent_id": "gene_extractor", "agent_name": "Gene",
+        "candidate": SimpleNamespace(agent_key="gene_extractor", adapter_key="gene", candidate_count=1,
+            conversation_summary="Ambiguous gene.", payload_json=dispatched.envelope.model_dump(mode="json")),
+    }], flow_name="Compact validation", output_format=output_format)
+    projection = apply_projection_plan(bundle, FlowOutputProjectionPlan.model_validate({
+        "format": output_format, "row_source": "validation_finding", "columns": [
+            {"key": "candidates", "field_ref": "validation.candidate_matches"},
+            {"key": "lookups", "field_ref": "validation.lookup_attempts"},
+            {"key": "target", "field_ref": "validation.target"},
+        ],
+    }))
+    assert projection.rows
+    row = projection.rows[0]
+    candidates = json.loads(row["candidates"]) if isinstance(row["candidates"], str) else row["candidates"]
+    assert [candidate["value"] for candidate in candidates] == ["RGD:1", "RGD:2"]
+    for candidate in candidates:
+        science = candidate["details"]["scientific_assessment"]
+        assert science["explanation"] == "Paper does not distinguish the candidates."
+        assert science["evidence_record_ids"] == ["evidence-1"]
+        assert candidate["details"]["source_call_id"] == "source-call"
+    attempts = json.loads(row["lookups"]) if isinstance(row["lookups"], str) else row["lookups"]
+    assert attempts[0]["candidate_count"] == 2  # Existing finding/export name for the returned lookup count.
+    assert attempts[0]["attempted_query"]["provider_query"] == {"method": "search_genes", "symbol": "ABC-1"}
+    target = json.loads(row["target"]) if isinstance(row["target"], str) else row["target"]
+    assert target["object_id"] == captured["result"].target.object_id
+    assert target["field_path"] == captured["result"].target.field_path
 
 
 def test_validator_finalization_feedback_accepts_valid_result():
@@ -2834,7 +3010,7 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
     request = _validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
     )
 
@@ -2858,15 +3034,11 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
         )
         result = _result_payload(request)
         feedback = _unwrap_function_tool(tool)(result=result)
-        if profile_mapped:
-            assert "Custom-profile output contract" in agent.instructions
-            assert feedback["status"] == "rejected"
-            result["resolved_objects"] = []
-            result["resolved_values"] = {"identifier": "AGR:0001"}
-            assert _unwrap_function_tool(tool)(result=result)["status"] == "accepted"
-        else:
-            assert "Custom-profile output contract" not in agent.instructions
-            assert feedback["status"] == "accepted"
+        assert feedback["status"] == "rejected"  # Full model-authored copies are no longer accepted.
+        assert "Runtime compact-decision contract" in agent.instructions
+        feedback = _unwrap_function_tool(tool)(result=_compact_test_decision(agent, request))
+        assert feedback["status"] == "accepted"
+        assert "validator_result" not in feedback
         return {"status": "resolved"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -2882,6 +3054,8 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
 
     assert result.status == "resolved"
     assert result.resolved_values["identifier"] == "AGR:0001"
+    if profile_mapped:
+        assert result.resolved_objects == []
 
 
 def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
@@ -2926,7 +3100,7 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
     )
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
     )
     captured = {}
@@ -2957,7 +3131,7 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_result"
         )
-        _unwrap_function_tool(tool)(result=_result_payload(request))
+        _unwrap_function_tool(tool)(result=_compact_test_decision(agent, request))
         return {"status": "resolved"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -2970,6 +3144,7 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
 
     tool_names = [tool.name for tool in captured["agent"].tools]
     assert tool_names == [
+        "agr_curation_query",
         "search_document",
         "read_chunk",
         "read_section",
@@ -3007,7 +3182,7 @@ def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
     request = _validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
     )
     captured = {}
@@ -3038,7 +3213,7 @@ def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_result"
         )
-        _unwrap_function_tool(tool)(result=_result_payload(request))
+        _unwrap_function_tool(tool)(result=_compact_test_decision(agent, request))
         return {"status": "resolved"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -3049,7 +3224,7 @@ def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
     )
 
     assert [tool.name for tool in captured["agent"].tools] == [
-        "finalize_validator_result"
+        "agr_curation_query", "finalize_validator_result"
     ]
     instructions = captured["agent"].instructions
     assert "Paper search and evidence update tools are unavailable" in instructions
@@ -3072,7 +3247,7 @@ def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
     request = _validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
     )
 
@@ -3095,8 +3270,10 @@ def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
             tool for tool in agent.tools if tool.name == "finalize_validator_result"
         )
         finalize = _unwrap_function_tool(tool)
-        finalize(result=_result_payload(request))
-        finalize(result=_result_payload(request, outcome="ambiguous"))
+        accepted = finalize(result=_compact_test_decision(agent, request))
+        assert accepted["status"] == "accepted"
+        rejected = finalize(result=_result_payload(request, outcome="ambiguous"))
+        assert rejected["status"] == "rejected"
         return _result_payload(request)
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -3116,7 +3293,7 @@ def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
     request = _validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
     )
 
@@ -3145,7 +3322,7 @@ def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
         )
 
 
-def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
+def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -3156,7 +3333,7 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     request = _verbose_validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
         model="validator-batch-model",
     )
@@ -3197,7 +3374,7 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_batch_results"
         )
-        _unwrap_function_tool(tool)(results=[_result_payload(request)])
+        _unwrap_function_tool(tool)(results=[_compact_test_decision(agent, request)])
         return {"results": [_result_payload(request)]}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -3211,13 +3388,11 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
 
     runtime_agent = captured["agent"]
     assert runtime_agent is not source_agent
-    assert runtime_agent.output_type.__class__.__name__ == "AgentOutputSchema"
-    assert runtime_agent.output_type.output_type.__name__ == "GeneResultEnvelopeBatchEnvelope"
-    assert runtime_agent.output_type.is_strict_json_schema() is False
+    assert runtime_agent.output_type is None
     assert [tool.name for tool in runtime_agent.tools] == [
-        "finalize_validator_batch_results"
+        "agr_curation_query", "finalize_validator_batch_results"
     ]
-    assert source_agent.tools == []
+    assert [tool.name for tool in source_agent.tools] == ["agr_curation_query"]
     assert source_agent.instructions == "Base validator instructions."
     assert "finalize_validator_batch_results" in runtime_agent.instructions
     payload = json.loads(captured["kwargs"]["input"])
@@ -3227,7 +3402,9 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     ]
     assert captured_preflight["provider"] == "gemini"
     assert captured_preflight["model"] == "validator-batch-model"
-    assert "gene_symbols" in payload["instructions"]
+    assert "tool's declared bulk/list input" in payload["instructions"]
+    assert "gene_symbols" not in payload["instructions"]
+    assert "allele_symbols" not in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
     assert payload["requests"][0]["selected_inputs"] == request.selected_inputs
     assert "input_selectors" not in payload["requests"][0]
@@ -3387,7 +3564,7 @@ def test_package_scoped_validator_agent_sets_max_turns_when_max_tool_calls_unset
     request = _validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
     )
     monkeypatch.setattr(
@@ -3410,7 +3587,7 @@ def test_package_scoped_validator_agent_sets_max_turns_when_max_tool_calls_unset
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_result"
         )
-        _unwrap_function_tool(tool)(result=_result_payload(request))
+        _unwrap_function_tool(tool)(result=_compact_test_decision(agent, request))
         return {"status": "resolved"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -3436,7 +3613,7 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
     request = _verbose_validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
         model="validator-batch-model",
     )
@@ -3471,7 +3648,7 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
             for tool in agent.tools
             if tool.name == "finalize_validator_batch_results"
         )
-        _unwrap_function_tool(tool)(results=[_result_payload(request)])
+        _unwrap_function_tool(tool)(results=[_compact_test_decision(agent, request)])
         return {"results": [_result_payload(request)]}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -3518,7 +3695,7 @@ def test_package_scoped_validator_batch_agent_max_turns_scales_with_job_count(
 
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
         model="validator-batch-model",
     )
@@ -3576,7 +3753,7 @@ def test_package_scoped_validator_batch_agent_prefers_accepted_finalization_resu
     job = cast(Any, SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={}))))
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
     )
 
@@ -3607,7 +3784,7 @@ def test_package_scoped_validator_batch_agent_prefers_accepted_finalization_resu
         tool = next(
             tool for tool in agent.tools if tool.name == "finalize_validator_batch_results"
         )
-        _unwrap_function_tool(tool)(results=[_result_payload(request)])
+        _unwrap_function_tool(tool)(results=[_compact_test_decision(agent, request)])
         return {"results": [conflicting_final_result]}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
@@ -3631,7 +3808,7 @@ def test_package_scoped_validator_batch_agent_requires_accepted_finalization_too
     request = _validation_request()
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
-        tools=[],
+        tools=[_compact_lookup_tool()],
         instructions="Base validator instructions.",
     )
 

@@ -1017,7 +1017,7 @@ def test_execute_flow_accepts_nonfatal_validator_warning(monkeypatch):
         "\n"
         'data: {"type":"FLOW_STEP_EVIDENCE","evidence_count":1}\n'
         "\n"
-        'data: {"type":"RUN_FINISHED","response":"Extracted crb with one evidence record."}\n'
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"Extracted crb with one evidence record."}\n'
         "\n"
         'data: {"type":"FLOW_FINISHED","status":"completed","flow_run_id":"run-1","total_evidence_records":1}\n'
         "\n"
@@ -1051,6 +1051,32 @@ def test_execute_flow_accepts_nonfatal_validator_warning(monkeypatch):
     assert checks[-1]["payload"]["nonfatal_error_events"] == [warning_event]
 
 
+@pytest.mark.parametrize(
+    "completion,status,evidence_count,error",
+    [
+        ({"type": "TEXT_MESSAGE_CONTENT", "content": " "}, "completed", 1, "visible text"),
+        ({"type": "RUN_FINISHED", "response": "old contract"}, "completed", 1, "visible completion text"),
+        ({"type": "TEXT_MESSAGE_CONTENT", "content": "result"}, "failed", 1, "did not complete successfully"),
+        ({"type": "TEXT_MESSAGE_CONTENT", "content": "result"}, "completed", 0, "without persisted evidence"),
+    ],
+)
+def test_execute_flow_rejects_invalid_visible_completion(monkeypatch, completion, status, evidence_count, error):
+    smoke = _load_smoke_module()
+    events = [
+        {"type": "FLOW_STARTED", "flow_id": "flow-1"},
+        {"type": "RUN_STARTED", "trace_id": "trace-flow"},
+        {"type": "FLOW_STEP_EVIDENCE", "evidence_count": evidence_count},
+        completion,
+        {"type": "FLOW_FINISHED", "status": status, "flow_run_id": "run-1", "total_evidence_records": evidence_count},
+    ]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+    monkeypatch.setattr(smoke, "http_request", lambda *args, **kwargs: smoke.Response(
+        status_code=200, body=body.encode(), text=body, json_body=None))
+    with pytest.raises(smoke.SmokeFailure, match=error):
+        smoke.execute_flow(base_url="http://example.test", headers={}, flow_id="flow-1",
+            document_id="doc-1", user_query="Extract crb.", flow_timeout_seconds=5, checks=[])
+
+
 def test_execute_flow_rejects_fatal_specialist_error(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []
@@ -1072,7 +1098,7 @@ def test_execute_flow_rejects_fatal_specialist_error(monkeypatch):
         "\n"
         'data: {"type":"FLOW_STEP_EVIDENCE","evidence_count":1}\n'
         "\n"
-        'data: {"type":"RUN_FINISHED","response":"Extracted crb with one evidence record."}\n'
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"Extracted crb with one evidence record."}\n'
         "\n"
         'data: {"type":"FLOW_FINISHED","status":"completed","flow_run_id":"run-1","total_evidence_records":1}\n'
         "\n"

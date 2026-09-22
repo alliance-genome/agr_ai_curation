@@ -2057,7 +2057,7 @@ def execute_flow(
     event_types = [str(event.get("type", "")) for event in events]
     require("FLOW_STARTED" in event_types, f"Missing FLOW_STARTED in flow events: {event_types}")
     require("RUN_STARTED" in event_types, f"Missing RUN_STARTED in flow events: {event_types}")
-    require("RUN_FINISHED" in event_types, f"Missing RUN_FINISHED in flow events: {event_types}")
+    require("TEXT_MESSAGE_CONTENT" in event_types, f"Missing visible completion text in flow events: {event_types}")
     require("FLOW_FINISHED" in event_types, f"Missing FLOW_FINISHED in flow events: {event_types}")
     require(
         "FLOW_STEP_EVIDENCE" in event_types,
@@ -2089,9 +2089,10 @@ def execute_flow(
     )
 
     run_started = next(event for event in events if event.get("type") == "RUN_STARTED")
-    run_finished = next(event for event in events if event.get("type") == "RUN_FINISHED")
-    run_output = str(run_finished.get("response", "")).strip()
-    require(run_output, f"RUN_FINISHED did not include a response payload: {run_finished}")
+    # execute-flow projects durable RUN_FINISHED into the visible text contract.
+    completion_events = [event for event in events if event.get("type") == "TEXT_MESSAGE_CONTENT"]
+    run_output = "".join(str(event.get("content") or "") for event in completion_events).strip()
+    require(run_output, f"Flow completion did not include visible text: {completion_events}")
     append_check(
         checks,
         step="execute_flow",
@@ -2100,7 +2101,7 @@ def execute_flow(
         payload={
             "event_types": event_types,
             "run_started": run_started,
-            "run_finished": run_finished,
+            "completion_events": completion_events,
             "flow_finished": flow_finished,
             "flow_step_evidence_events": flow_step_evidence_events,
             "nonfatal_error_events": [
@@ -2111,7 +2112,7 @@ def execute_flow(
     return {
         "event_types": event_types,
         "run_started": run_started,
-        "run_finished": run_finished,
+        "completion_events": completion_events,
         "flow_finished": flow_finished,
         "flow_run_id": flow_run_id,
         "total_evidence_records": total_evidence_records,

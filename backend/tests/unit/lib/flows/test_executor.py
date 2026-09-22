@@ -2001,6 +2001,33 @@ class TestGetAllAgentToolsStepOrderRuntime:
     @pytest.mark.asyncio
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    async def test_flow_selection_reaches_extractor_and_resets(self, mock_get_agent, mock_streaming):
+        from src.lib.domain_packs.flow_validator_selection import current_flow_validator_selections
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        observed = []
+
+        def make_tool(agent, tool_name, tool_description, specialist_name, **kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def tool(query: str) -> str:
+                observed.append(await asyncio.to_thread(current_flow_validator_selections))
+                return "ok"
+            return tool
+
+        mock_streaming.side_effect = make_tool
+        flow = _make_flow([_agent_node("source", "gene", validation_groups=[{
+            "group_id": "custom", "state": "replaced", "binding_id": "fixture.identifier",
+            "validator_node_id": "custom-node",
+        }])])
+        tools, _ = get_all_agent_tools(flow)
+        # This fixture stops at the structured-envelope guard after invocation.
+        with pytest.raises(RuntimeError, match="structured extraction envelope"):
+            await tools[0].on_invoke_tool(SimpleNamespace(tool_name="flow", run_config=None), json.dumps({"query": "run"}))
+        assert observed == [{"fixture.identifier": {"state": "replaced", "validator_node_id": "custom-node"}}]
+        assert current_flow_validator_selections() == {}
+
+    @pytest.mark.asyncio
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     async def test_concurrent_duplicate_claim_invokes_specialist_once(
         self, mock_get_agent, mock_streaming
     ):
@@ -4100,7 +4127,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @pytest.mark.parametrize("benchmark", [False, True])
     @pytest.mark.parametrize("custom", [False, True])
-    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, benchmark, custom):
+    @pytest.mark.parametrize("accepted_status", ["resolved", "unresolved", None])
+    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, benchmark, custom, accepted_status):
         executor = _executor_module()
         from src.schemas.domain_validator import (
             DomainValidationRequest,
@@ -4144,12 +4172,30 @@ class TestGetAllAgentToolsStepOrderRuntime:
         def build_agent(agent_id, **kwargs):
             captured["agent_kwargs"] = kwargs
             return SimpleNamespace(agent_id=agent_id)
+        accepted_payload = {
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "status": accepted_status,
+            "resolved_values": {"identifier": "AGR:0001"} if accepted_status == "resolved" else {},
+            "resolved_objects": [],
+            "missing_expected_fields": [] if accepted_status == "resolved" else ["identifier"],
+            "candidates": [{"value": "AGR:0001", "details": {"evidence_record_ids": ["evidence-1"], "source_record": {"curie": "AGR:0001"}}}],
+            "lookup_attempts": [{"provider": "fixture", "method": "search", "query": {"identifier": "AGR:0001"}, "result_count": 1, "outcome": "success"}],
+            "curator_message": None,
+            "allele_candidates": [{"allele_id": "AGR:0001"}],
+            "explanation": "Accepted scientific decision",
+        }
 
         class _FakeTool:
             async def on_invoke_tool(self, tool_ctx, args_json):
                 captured["tool_name"] = tool_ctx.tool_name
                 captured["args"] = json.loads(args_json)
-                return {"status": "resolved"}
+                callback = captured.get("validated_result_callback")
+                if callback is not None and accepted_status is not None:
+                    callback(accepted_payload)
+                return "AlleleResultEnvelope validated: one result; supervisor display only"
 
         monkeypatch.setattr(
             executor,
@@ -4160,10 +4206,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
         monkeypatch.setattr(
             executor,
             "_create_streaming_tool",
-            lambda **_kwargs: _FakeTool(),
+            lambda **kwargs: captured.update(runtime_agent=kwargs["agent"], validated_result_callback=kwargs.get("validated_result_callback")) or _FakeTool(),
         )
         binding = SimpleNamespace(
-            identity_details=lambda: {"binding_id": "custom.supplemental"}
+            identity_details=lambda: {"binding_id": "custom.supplemental"},
+            raw={"profile_validation": {"mapping": {}}},
         )
         binding_match = SimpleNamespace(binding=binding)
 
@@ -4174,15 +4221,30 @@ class TestGetAllAgentToolsStepOrderRuntime:
         pinned_receipt = source_receipt().model_copy(update={"agent_key": agent_key})
         pin_revision = str(pinned_receipt.agent_revision_id)
         frozen_sources = {f"agent:{agent_key}": pinned_receipt} if (benchmark and custom) else {}
-        with benchmark_route_plan(routes) if benchmark else nullcontext(), benchmark_source_revisions(frozen_sources):
-            asyncio.run(executor._run_custom_flow_validator_agent(
+        async def run():
+            return await executor._run_custom_flow_validator_agent(
                 request,
                 binding_match=binding_match,
                 validator_node={"data": {"agent_id": agent_key, "agent_revision_id": pin_revision, "execution_receipt": pinned_receipt.model_dump(mode="json")}},
                 agent_context={"user_id": "curator-1", "execution_revision_id": "extractor-revision", "execution_receipt": {"agent_revision_id": "extractor-revision"}},
                 source_envelope_id="env-1",
                 source_envelope_revision=3,
-            ))
+            )
+
+        with benchmark_route_plan(routes) if benchmark else nullcontext(), benchmark_source_revisions(frozen_sources):
+            if accepted_status is None:
+                with pytest.raises(ValueError, match="accepted structured result"):
+                    asyncio.run(run())
+                return
+            result = asyncio.run(run())
+
+        assert result.candidates[0].details == accepted_payload["candidates"][0]["details"]
+        assert result.lookup_attempts[0].result_count == 1
+        materialized = executor.validator_result_from_agent_output(result, request=request)
+        assert materialized.status == accepted_status
+        assert materialized.resolved_values == accepted_payload["resolved_values"]
+        assert materialized.target == request.target
+        assert materialized.explanation == "Accepted scientific decision"
 
         if benchmark and custom:
             assert captured["agent_kwargs"]["benchmark_slot"] == f"agent:{agent_key}"
@@ -4199,6 +4261,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         payload = json.loads(captured["args"]["query"])
         validation_request = payload["validation_request"]
+        assert captured["runtime_agent"]._compact_validation_request is request
+        assert captured["runtime_agent"]._compact_profile_mapped is True
         assert captured["tool_name"] == f"validate_{agent_key}_custom_supplemental"
         if custom and not benchmark:
             assert captured["agent_kwargs"]["execution_revision_id"] == pin_revision
@@ -8963,6 +9027,7 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
             rows_by_source={"object": rows, "evidence": [{"evidence.evidence_record_id": "evidence-81", "evidence.verified_quote": "Exact source quote"}],
                             "validation_finding": [{"validation.message": "Requires review",
                                 "validation.candidate_matches": [{"value": "TEST:1", "label": "Possible match"}],
+                                "validation.lookup_attempts": [{"method": "search_alleles_bulk", "candidate_count": 26, "lookup_status": "ambiguous"}],
                                 "validation.target": {"object_id": "observation-81", "field_path": "attributes.identity"}}]},
         )], field_catalog=[FlowOutputField(ref="object.attribute.phenotype", label="Phenotype", row_source="object", value_type="string")],
     )
@@ -9014,6 +9079,8 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
     assert payload["rows"]["evidence"][0]["evidence.verified_quote"] == "Exact source quote"
     assert payload["rows"]["validation_finding"][0]["validation.message"] == "Requires review"
     assert payload["rows"]["validation_finding"][0]["validation.candidate_matches"] == [{"value": "TEST:1", "label": "Possible match"}]
+    assert payload["rows"]["validation_finding"][0]["validation.lookup_attempts"] == [
+        {"method": "search_alleles_bulk", "candidate_count": 26, "lookup_status": "ambiguous"}]
     assert payload["rows"]["validation_finding"][0]["validation.target"]["object_id"] == "observation-81"
     assert payload["curator_output_request"]["custom_instructions"] == instructions
     assert captured["query"] == "Use the requested six columns"

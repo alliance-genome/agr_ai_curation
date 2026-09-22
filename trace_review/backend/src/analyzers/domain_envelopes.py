@@ -141,6 +141,7 @@ class DomainEnvelopeTraceAnalyzer:
             "validator_group_scope_audits": list(
                 summary.get("validator_group_scope_audits") or []
             ),
+            "suppressed_upstream_validators": list(summary.get("suppressed_upstream_validators") or []),
             "validation_state_counts": dict(summary.get("validation_state_counts") or {}),
             "definition_state_counts": dict(summary.get("definition_state_counts") or {}),
             "has_blockers": bool(summary_counts.get("blocker_count")),
@@ -176,6 +177,7 @@ class DomainEnvelopeTraceAnalyzer:
             "objects": [],
             "validation_findings": [],
             "validator_group_scope_audits": [],
+            "suppressed_upstream_validators": [],
             "definition_state_flags": [],
             "blockers": [],
             "curator_edits": [],
@@ -224,6 +226,10 @@ class DomainEnvelopeTraceAnalyzer:
         object_id, pending_ref_id, object_type = cls._object_reference(payload)
         finding_id = _as_string(payload.get("finding_id"))
         field_path = cls._field_path(payload)
+        for record in _iter_mappings(payload.get("suppressed_upstream_validators")):
+            cls._add_detail(accumulator, "suppressed_upstream_validators",
+                json.dumps(record, sort_keys=True, default=str),
+                {**dict(record), "source_path": source_path})
         nested_envelope_object = cls._is_marked_nested_path(
             source_path,
             accumulator["_nested_envelope_object_paths"],
@@ -1035,6 +1041,7 @@ class DomainEnvelopeTraceAnalyzer:
             "validator_group_scope_audit_count": len(
                 accumulator["validator_group_scope_audits"]
             ),
+            "suppressed_upstream_validator_count": len(accumulator["suppressed_upstream_validators"]),
             "field_path_count": len(accumulator["field_paths"]),
             "definition_state_flag_count": len(accumulator["definition_state_flags"]),
             "blocker_count": max(
@@ -1051,6 +1058,7 @@ class DomainEnvelopeTraceAnalyzer:
                 "envelope_ids",
                 "objects",
                 "validation_findings",
+                "suppressed_upstream_validators",
                 "blockers",
                 "projections",
                 "submission_states",

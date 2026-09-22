@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-import asyncio
+import copy
 import os
 import uuid
 from pathlib import Path
@@ -216,6 +216,59 @@ def test_extract_model_identifier_handles_string_and_object():
     assert streaming_tools._extract_model_identifier("gpt-4o") == "gpt-4o"
     assert streaming_tools._extract_model_identifier(SimpleNamespace(model=" groq/llama ")) == "groq/llama"
     assert streaming_tools._extract_model_identifier(SimpleNamespace()) == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accept", [True, False])
+async def test_structured_result_callback_only_receives_accepted_copy(monkeypatch, accept):
+    captured = []
+    states = []
+    accepted = {"status": "unresolved", "resolved_values": {}, "evidence": [{"evidence_record_id": "ev-1"}]}
+    original_state = streaming_tools._StructuredSpecialistFinalizationState
+
+    def state_factory(**kwargs):
+        state = original_state(**{**kwargs, "required": True})
+        states.append(state)
+        return state
+
+    class RepairResult(_FakeRunResult):
+        async def stream_events(self):
+            states[0].last_rejection = {"message": "Repair the rejected decision"}
+            assert captured == []
+            if accept:
+                states[0].accepted_payload = json.loads(json.dumps(accepted))
+            if False:
+                yield None
+
+    monkeypatch.setattr(streaming_tools, "_StructuredSpecialistFinalizationState", state_factory)
+    monkeypatch.setattr(streaming_tools, "_configure_structured_specialist_finalization", lambda runtime, *args, **kwargs: runtime)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda agent: None)
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *args, **kwargs: RepairResult(final_output="untrusted prose"))
+
+    def display_only(*args, **kwargs):
+        assert len(captured) == 1
+        return "supervisor display summary"
+
+    monkeypatch.setattr(streaming_tools, "_reduce_specialist_output_for_supervisor", display_only)
+
+    def receive(payload):
+        captured.append(payload)
+        payload["evidence"][0]["evidence_record_id"] = "consumer-local-change"
+
+    agent = SimpleNamespace(name="Fixture validator", tools=[], output_type=None,
+                            instructions="", model="gpt-4o")
+    run = streaming_tools.run_specialist_with_events(agent, "validate", "Fixture validator",
+        max_turns=3, tool_name="validate_fixture", inline_chat_persistence=False,
+        validated_result_callback=receive)
+    if not accept:
+        with pytest.raises(streaming_tools.SpecialistOutputError):
+            await run
+        assert captured == []
+        return
+    assert await run == "supervisor display summary"
+    assert len(captured) == 1
+    assert states[0].accepted_payload == accepted
+    assert captured[0] is not states[0].accepted_payload
 
 
 @pytest.mark.asyncio
@@ -693,6 +746,230 @@ def _lookup_tool_call(
             "data": data if data is not None else {"results": [{"id": "GO:0003677"}]},
         },
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_mapped", [False, True])
+async def test_compact_streaming_finalization_copies_provider_facts_and_counts(
+    monkeypatch, _repo_package_curation_registry, profile_mapped,
+):
+    from agents import function_tool
+    from agents.tool_context import ToolContext
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema
+    from src.schemas.domain_validator import DomainValidationRequest
+
+    schema = _package_schema("AlleleResultEnvelope")
+    request = DomainValidationRequest(request_id="compact", validator_binding_id="allele",
+        validator_agent={"package_id": "agr.alliance", "agent_id": "allele_validation"},
+        target={"domain_pack_id": "test"}, selected_inputs={"symbol": "Example"},
+        expected_result_fields={"curie": "allele.curie"})
+    source = {"status": "ok", "data": {"items": [{"input": "Example", "results": [
+        {"curie": f"MGI:{i}", "symbol": "Example", "data_provider": None} for i in range(26)
+    ]}]}}
+
+    @function_tool
+    def agr_curation_query(method: str, symbol: str) -> dict:
+        return source
+
+    runtime = runtime_for_schema([request], result_schema=schema,
+        profile_request_ids=("compact",) if profile_mapped else ())
+    config = _finalization_config("ask_allele_validation_specialist")
+    state = streaming_tools._StructuredSpecialistFinalizationState(
+        required=True, tool_name="finalize_allele_validation_result", config=config,
+        output_type_name="AlleleResultEnvelope", agent_name="Allele")
+    calls = []
+    source_agent = SimpleNamespace(tools=[agr_curation_query], output_type=schema, instructions="")
+    agent = streaming_tools._configure_structured_specialist_finalization(source_agent, source_agent,
+        expected_output_type=schema, finalization_state=state, tool_calls=calls,
+        live_evidence_records=[], compact_runtime=runtime)
+    assert agent.output_type is None
+    assert source_agent.output_type is schema
+    args = {"method": "search_alleles", "symbol": "Example"}
+    context = ToolContext(context=None, tool_name="agr_curation_query", tool_call_id="raw-lookup",
+                          tool_arguments=json.dumps(args))
+    response = json.loads(await agent.tools[0].on_invoke_tool(context, json.dumps(args)))
+    calls.append(streaming_tools.SpecialistToolCall(tool_name="agr_curation_query", tool_args=args,
+        output_payload=streaming_tools._tool_output_payload_for_finalization("agr_curation_query", response,
+            finalization_config=config)))
+    ref = response["validator_record_refs"][0]["record_ref"]
+    decision = {"request_id": "compact", "status": "resolved", "explanation": "Evidence supports this allele.",
+        "candidates": [{"record_ref": ref, "disposition": "selected", "explanation": "Scientific match."}],
+        "slots": {"curie": {"kind": "record", "record_ref": ref, "field": "curie"}}}
+    finalizer = agent.tools[-1]
+    finalized = await finalizer.on_invoke_tool(ToolContext(context=None, tool_name=finalizer.name,
+        tool_call_id="finalize", tool_arguments=json.dumps({"result": decision})), json.dumps({"result": decision}))
+    assert finalized["status"] == "accepted", finalized
+    assert state.accepted_payload["resolved_values"] == {"curie": "MGI:0"}
+    assert state.accepted_payload["lookup_attempts"][0]["result_count"] == 26
+    assert state.accepted_payload["allele_candidates"][0]["data_provider"] is None
+    assert state.accepted_payload["candidates"][0]["details"]["scientific_assessment"]["explanation"] == "Scientific match."
+    if profile_mapped:
+        assert state.accepted_payload["resolved_objects"] == []
+    assert "validator_result" not in finalized
+
+
+@pytest.mark.parametrize("change", [
+    {"method": "get_allele"},
+    {"query": {"symbol": "other", "data_provider": "MGI"}},
+    {"query": {"data_provider": "MGI"}},
+])
+def test_lookup_attempt_requires_exact_method_and_query(change):
+    call = streaming_tools.SpecialistToolCall(
+        tool_name="agr_curation_query",
+        tool_args={"method": "search_alleles", "symbol": "Example", "data_provider": "MGI"},
+    )
+    attempt = {"method": "search_alleles", "query": {"symbol": "Example", "data_provider": "MGI"}}
+    assert streaming_tools._lookup_attempt_matches_tool_call(attempt, call)
+    attempt.update(change)
+    assert not streaming_tools._lookup_attempt_matches_tool_call(attempt, call)
+
+
+@pytest.mark.parametrize("reported", [0, 1, 27])
+def test_lookup_count_must_equal_returned_bulk_records(reported, _repo_package_curation_registry):
+    config = _finalization_config("ask_allele_validation_specialist")
+    args = {"method": "search_alleles", "symbol": "Example"}
+    call = streaming_tools.SpecialistToolCall(
+        tool_name="agr_curation_query", tool_args=args,
+        output_payload={"status": "ok", "data": {"items": [
+            {"results": [{"curie": f"MGI:{group}-{i}"} for i in range(count)]}
+            for group, count in enumerate((1, 20, 5))
+        ]}},
+    )
+    payload = _validator_result_payload(status="unresolved", missing_expected_fields=["results"],
+        lookup_attempts=[{"provider": "agr_curation_query", "method": args["method"],
+                          "query": {"symbol": "Example"}, "outcome": "success", "result_count": reported}])
+    errors, _ = streaming_tools._lookup_provenance_finalization_errors(
+        payload, output_type_name="AlleleResultEnvelope", finalization_config=config, tool_calls=[call])
+    assert any(error["field"].endswith(".result_count") for error in errors)
+    payload["lookup_attempts"][0]["result_count"] = 26
+    errors, _ = streaming_tools._lookup_provenance_finalization_errors(
+        payload, output_type_name="AlleleResultEnvelope", finalization_config=config, tool_calls=[call])
+    assert not errors
+
+
+@pytest.mark.parametrize("path", ["allele_candidates", "resolved_objects", "resolved_values"])
+@pytest.mark.parametrize("source_provider,claimed,accepted", [(None, "MGI", False), ("WB", "MGI", False), ("MGI", "MGI", True), (None, None, True)])
+def test_allele_provider_requires_same_record(path, source_provider, claimed, accepted,
+                                             _repo_package_curation_registry):
+    config = _finalization_config("ask_allele_validation_specialist")
+    raw = {"status": "ok", "data": {"items": [{"results": [
+        {"curie": "MGI:1", "symbol": "Example", "data_provider": source_provider},
+        {"curie": "MGI:2", "symbol": "Other", "data_provider": "MGI"},
+    ]}]}}
+    call = streaming_tools.SpecialistToolCall(
+        tool_name="agr_curation_query", tool_args={"method": "search_alleles", "symbol": "Example"},
+        output_payload=streaming_tools._tool_output_payload_for_finalization(
+            "agr_curation_query", raw, finalization_config=config),
+    )
+    record = {"allele_id": "MGI:1", "symbol": "Example", "data_provider": claimed}
+    payload = _validator_result_payload(status="unresolved", missing_expected_fields=["results"],
+        lookup_attempts=[{"provider": "agr_curation_query", "method": "search_alleles",
+                          "query": {"symbol": "Example"}, "outcome": "success", "result_count": 2}])
+    payload[path] = record if path == "resolved_values" else [record]
+    errors, _ = streaming_tools._lookup_provenance_finalization_errors(
+        payload, output_type_name="AlleleResultEnvelope", finalization_config=config, tool_calls=[call])
+    assert (not errors) == accepted, errors
+
+
+def test_lookup_attempts_cannot_reuse_a_call(_repo_package_curation_registry):
+    config = _finalization_config("ask_gene_ontology_specialist")
+    first = _lookup_tool_call()
+    second = _lookup_tool_call(url="https://example.org/different")
+    payload = _validator_result_payload(status="unresolved", missing_expected_fields=["results"],
+        lookup_attempts=[_lookup_attempt(), _lookup_attempt()])
+    errors, _ = streaming_tools._lookup_provenance_finalization_errors(
+        payload, output_type_name="GOTermResultEnvelope", finalization_config=config, tool_calls=[first, second])
+    assert any(error["field"] == "lookup_attempts[1].query" for error in errors)
+
+
+def test_identical_query_retries_retain_individual_counts(_repo_package_curation_registry):
+    config = _finalization_config("ask_gene_ontology_specialist")
+    payload = _validator_result_payload(status="unresolved", missing_expected_fields=["results"],
+        lookup_attempts=[_lookup_attempt(result_count=1), _lookup_attempt(result_count=0, outcome="not_found")])
+    errors, _ = streaming_tools._lookup_provenance_finalization_errors(
+        payload, output_type_name="GOTermResultEnvelope", finalization_config=config,
+        tool_calls=[_lookup_tool_call(data={"results": []}), _lookup_tool_call()])
+    assert not errors
+
+
+@pytest.mark.parametrize("shape", ["direct", "list", "results", "bulk"])
+def test_allele_grounding_preserves_record_beyond_preview(shape, _repo_package_curation_registry):
+    config = _finalization_config("ask_allele_validation_specialist")
+    record = {"curie": "MGI:51", "symbol": "Example", "data_provider": "MGI"}
+    records = [{"curie": f"MGI:{i}", "symbol": "Other"} for i in range(51)] + [record]
+    data = {"direct": record, "list": records, "results": {"results": records},
+            "bulk": {"items": [{"results": records}]}}[shape]
+    captured = streaming_tools._tool_output_payload_for_finalization(
+        "agr_curation_query", {"status": "ok", "data": data}, finalization_config=config)
+    assert captured is not None
+    assert {"curie": "MGI:51", "data_provider": "MGI"} in captured["grounding_records"]
+    call = streaming_tools.SpecialistToolCall(tool_name="agr_curation_query", output_payload=captured)
+    assert not streaming_tools._lookup_record_grounding_errors(
+        {"resolved_values": {"primary_external_id": "MGI:51", "data_provider": "MGI"}},
+        config=config["lookup"], successful_calls=[call])
+
+
+def test_discovery_total_without_rows_has_unknown_count():
+    assert streaming_tools._lookup_tool_data_result_count({"status": "ok", "data": {"total_count": 500}}) is None
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_function_tool_configured_returned_count_is_preserved(count, monkeypatch):
+    monkeypatch.setattr(streaming_tools, "_lookup_finalization_config_for_tool", lambda _: {
+        "tool_output_paths": ["count", "candidate_references"]})
+    captured = streaming_tools._tool_output_payload_for_finalization("reference_lookup", {
+        "status": "ok", "count": count, "candidate_references": [{"curie": f"REF:{i}"} for i in range(count)]})
+    assert streaming_tools._lookup_tool_data_result_count(captured) == count
+
+
+def test_active_lookup_config_wins_over_shared_tool_default(monkeypatch, _repo_package_curation_registry):
+    monkeypatch.setattr(streaming_tools, "_lookup_finalization_config_for_tool", lambda _: pytest.fail("must use active config"))
+    captured = streaming_tools._tool_output_payload_for_finalization(
+        "agr_curation_query", {"status": "ok", "data": {"curie": "MGI:1", "data_provider": "MGI"}},
+        finalization_config=_finalization_config("ask_allele_validation_specialist"))
+    assert captured is not None
+    assert captured["grounding_records"] == [{"curie": "MGI:1", "data_provider": "MGI"}]
+    assert streaming_tools._tool_output_payload_for_finalization("other_tool", {},
+        finalization_config=_finalization_config("ask_allele_validation_specialist")) is None
+
+
+def test_saved_custom_prompt_receives_lookup_provenance_instruction(_repo_package_curation_registry):
+    config = _finalization_config("ask_allele_validation_specialist")
+    source = SimpleNamespace(instructions="Curator's custom instructions.", name="Custom allele", tools=[])
+    runtime = copy.copy(source)
+    state = streaming_tools._StructuredSpecialistFinalizationState(
+        required=True, tool_name="finalize_allele_lookup", agent_name="Custom allele",
+        output_type_name="AlleleResultEnvelope", config=config, max_attempts=3)
+    updated = streaming_tools._append_structured_specialist_finalization_instruction(runtime, source, finalization_state=state)
+    assert "Curator's custom instructions." in updated.instructions
+    assert "including all bulk groups" in updated.instructions
+    assert "data_provider must be null when absent" in updated.instructions
+    assert source.instructions == "Curator's custom instructions."
+
+
+@pytest.mark.parametrize("status", ["resolved", "unresolved"])
+def test_allele_finalization_accepts_truthful_metadata_without_changing_decision(status, _repo_package_curation_registry):
+    config = _finalization_config("ask_allele_validation_specialist")
+    record = {"allele_id": "MGI:1", "symbol": "Example", "data_provider": None}
+    payload = _validator_result_payload(
+        status=status, agent_id="allele_validation", target_inputs={"allele_symbol": "Example"},
+        expected_fields=["allele_id"], missing_expected_fields=["allele_id"] if status == "unresolved" else [],
+        resolved_values={"allele_id": "MGI:1", "data_provider": None} if status == "resolved" else {},
+        allele_candidates=[record],
+        lookup_attempts=[{"provider": "agr_curation_query", "method": "search_alleles",
+                          "query": {"allele_symbol": "Example"}, "result_count": 1, "outcome": "success"}])
+    captured = streaming_tools._tool_output_payload_for_finalization("agr_curation_query",
+        {"status": "ok", "data": [{"curie": "MGI:1", "symbol": "Example"}]}, finalization_config=config)
+    feedback = streaming_tools._structured_specialist_finalization_feedback(payload,
+        expected_output_type=_package_schema("AlleleResultEnvelope"), finalization_config=config,
+        tool_calls=[streaming_tools.SpecialistToolCall(tool_name="agr_curation_query",
+            tool_args={"method": "search_alleles", "allele_symbol": "Example"}, output_payload=captured)],
+        live_evidence_records=[])
+    assert feedback.accepted_payload is not None, feedback.field_errors
+    assert feedback.accepted_payload["status"] == status
+    assert feedback.accepted_payload["allele_candidates"][0]["allele_id"] == "MGI:1"
+    assert feedback.accepted_payload["allele_candidates"][0]["data_provider"] is None
+    assert feedback.accepted_payload["lookup_attempts"][0]["result_count"] == 1
 
 
 def _search_document_stream_events() -> list[SimpleNamespace]:
@@ -1893,6 +2170,57 @@ def test_lookup_finalization_preserves_true_result_count_above_compact_limit(
     assert output_payload["data"]["annotations"]["__full_count"] == 60
 
 
+@pytest.mark.parametrize("group_sizes", [(1, 2), (1, 20, 5), (0, 0), (51, 2), (1,) * 51])
+def test_lookup_finalization_preserves_returned_bulk_count_after_compaction(
+    monkeypatch, group_sizes,
+):
+    monkeypatch.setattr(
+        streaming_tools, "_lookup_finalization_config_for_tool", lambda _: {},
+    )
+    groups = [
+        {
+            "results": [{"curie": f"TEST:{group}-{index}"} for index in range(size)],
+            "count": size,
+            "coverage": {"discovered_count": size + 10, "display_capped": True},
+        }
+        for group, size in enumerate(group_sizes)
+    ]
+    output = {
+        "status": "ok",
+        "count": sum(group_sizes),
+        "data": {
+            "items": groups,
+            "total_matches": sum(group_sizes),
+            "bulk_match_totals": {
+                "returned_count": sum(group_sizes),
+                "total_count": sum(group_sizes),
+                "truncated": False,
+            },
+        },
+    }
+    captured = streaming_tools._tool_output_payload_for_finalization("lookup", output)
+
+    assert streaming_tools._lookup_tool_data_result_count(captured) == sum(group_sizes)
+
+
+def test_lookup_count_uses_returned_records_not_discovered_total():
+    output = {
+        "status": "ok",
+        "data": {"results": [{"curie": "TEST:1"}], "total_count": 50},
+    }
+    assert streaming_tools._lookup_tool_data_result_count(output) == 1
+
+
+def test_unknown_bulk_returned_count_remains_unknown_after_compaction(monkeypatch):
+    monkeypatch.setattr(
+        streaming_tools, "_lookup_finalization_config_for_tool", lambda _: {},
+    )
+    captured = streaming_tools._tool_output_payload_for_finalization(
+        "lookup", {"status": "ok", "data": {"items": [{"total_count": 50}]}},
+    )
+    assert streaming_tools._lookup_tool_data_result_count(captured) is None
+
+
 def test_chemical_finalization_rejects_invented_resolved_identity(
     _repo_package_curation_registry,
 ):
@@ -2020,7 +2348,7 @@ def test_reference_finalization_accepts_api_grounded_reference(
             {
                 "provider": "agr_literature_reference_lookup",
                 "method": "get_literature_reference",
-                "query": {"value": "PMID:123456"},
+                "query": {"identifier": "PMID:123456"},
                 "result_count": 1,
                 "outcome": "success",
             }

@@ -267,6 +267,29 @@ Document extractors use Sol medium instead, for example
 
 Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 
+## Lookup finalization provenance
+
+Agents with the `lookup_provenance` structured-finalization check must log one
+`lookup_attempt` per concrete tool call. Preserve the method and complete non-null
+arguments (method may be separate from `query`). Counts describe returned records,
+not selected candidates or discovered totals; bulk counts sum each group's returned
+rows. Unknown counts are not replaced with discovery totals. Capture uses the active
+agent's finalization configuration, even when several agents share a lookup tool.
+
+For fields that require same-record grounding, configure
+`structured_finalization.lookup.record_grounding` with `source_paths` relative to
+`{data: <tool data>}`, `result_paths` relative to the final envelope,
+`identity_fields` (equivalent identifier keys), and `fields` to check. Only the
+configured identifiers and fields are retained before display compaction. Non-null
+claims must match a record with the same identity; missing source metadata remains
+null. The allele package uses this for `data_provider`, which cannot be inferred
+from an identifier prefix, species, query filter, or a different candidate.
+
+Runtime finalization instructions also explain these rules to custom agents with
+the active contract without changing their authored prompts. Existing immutable
+execution snapshots must still receive the reviewed contract through the release
+upgrade procedure; changing a package does not rewrite saved snapshots or results.
+
 ## Troubleshooting
 
 | Issue | Solution |

@@ -284,11 +284,17 @@ def _coerce_structured_tool_output(output: Any) -> Optional[Dict[str, Any]]:
 def _tool_output_payload_for_finalization(
     tool_name: str,
     output: Any,
+    *,
+    finalization_config: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return compact structured tool output used only by finalization checks."""
 
-    lookup_config = _lookup_finalization_config_for_tool(tool_name)
-    if lookup_config is None:
+    lookup_config = (
+        _lookup_finalization_config(finalization_config)
+        if finalization_config is not None
+        else _lookup_finalization_config_for_tool(tool_name)
+    )
+    if lookup_config is None or lookup_config.get("tool_name", tool_name) != tool_name:
         return None
 
     payload = _coerce_structured_tool_output(output)
@@ -308,8 +314,15 @@ def _tool_output_payload_for_finalization(
     else:
         data = _lookup_tool_configured_result_payload(payload, config=lookup_config)
     if data is not None:
+        # Count actual returned records before compaction can truncate bulk groups
+        # or discard their shape. Discovered totals are not returned candidates.
+        compact["returned_count"] = _lookup_tool_data_result_count(
+            {**compact, "data": data}
+        )
         compact["data"] = _compact_lookup_tool_data(data)
         compact["scalar_tokens"] = sorted(_lookup_scalar_tokens(data))
+        if lookup_config.get("record_grounding"):
+            compact["grounding_records"] = _lookup_grounding_records(data, config=lookup_config)
         fidelity = _lookup_fact_fidelity_signatures(data, config=lookup_config)
         if fidelity:
             compact["fact_fidelity"] = fidelity
@@ -1718,18 +1731,70 @@ def _lookup_attempt_matches_tool_call(
     if not isinstance(query, dict) or not query:
         return False
 
-    call_url = str(tool_args.get("url") or "").strip()
-    query_url = str(query.get("url") or query.get("endpoint") or "").strip()
+    method = tool_args.get("method")
+    if method is not None and attempt.get("method") != method:
+        return False
+    # SDK optional arguments may be explicit nulls. Preserve every supplied
+    # value, including nested hints, booleans and pagination, not shared tokens.
+    expected = {key: value for key, value in tool_args.items() if key != "method" and value is not None}
+    actual = {key: value for key, value in query.items() if value is not None}
+    if "method" in actual:
+        if actual.pop("method") != attempt.get("method"):
+            return False
+    if "endpoint" in actual and "url" not in actual:
+        actual["url"] = actual.pop("endpoint")
+    return json.dumps(actual, sort_keys=True) == json.dumps(expected, sort_keys=True)
 
-    if query_url and call_url and query_url == call_url:
-        return True
 
-    tool_text = json.dumps(tool_args, sort_keys=True, default=str).lower()
-    for value in _scalar_strings(query):
-        normalized = value.lower()
-        if normalized and normalized in tool_text:
-            return True
-    return False
+def _lookup_grounding_records(data: Any, *, config: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Preserve configured record associations before preview compaction."""
+    rule = config.get("record_grounding") or {}
+    fields = [*rule.get("identity_fields", ()), *rule.get("fields", ())]
+    records = []
+    for path in rule.get("source_paths", ()):
+        for record in _lookup_values_at_path({"data": data}, path):
+            if isinstance(record, dict) and any(record.get(key) for key in rule.get("identity_fields", ())):
+                records.append({key: record[key] for key in fields if key in record})
+    return records
+
+
+def _lookup_record_grounding_errors(
+    payload: Dict[str, Any],
+    *,
+    config: Mapping[str, Any],
+    successful_calls: List["SpecialistToolCall"],
+) -> List[Dict[str, Any]]:
+    rule = config.get("record_grounding") or {}
+    identity_fields = rule.get("identity_fields", ())
+    records = []
+    for call in successful_calls:
+        output = call.output_payload or {}
+        records.extend(
+            output["grounding_records"] if "grounding_records" in output
+            else _lookup_grounding_records(output.get("data"), config=config)
+        )
+    errors = []
+    for path in rule.get("result_paths", ()):
+        for result in _lookup_values_at_path(payload, path):
+            if not isinstance(result, dict):
+                continue
+            identities = {
+                result[key] for key in identity_fields
+                if isinstance(result.get(key), str) and result[key]
+            }
+            matching = [
+                record for record in records if identities and identities.issubset({
+                    record[key] for key in identity_fields if isinstance(record.get(key), str)
+                })
+            ]
+            for field_name in rule.get("fields", ()):
+                value = result.get(field_name)
+                if value is not None and not any(record.get(field_name) == value for record in matching):
+                    errors.append({"field": f"{path}.{field_name}", "message": (
+                        f"{field_name} must be explicitly returned on the same identified API record; "
+                        "use null when absent. Query filters, identifier prefixes, species, and other records are not evidence."
+                    )})
+    return errors
 
 
 def _lookup_tool_data_result_count(payload: Optional[Dict[str, Any]]) -> Optional[int]:
@@ -1739,11 +1804,24 @@ def _lookup_tool_data_result_count(payload: Optional[Dict[str, Any]]) -> Optiona
         SpecialistToolCall(tool_name="", output_payload=payload)
     ):
         return 0
+    if "returned_count" in payload:
+        returned_count = payload["returned_count"]
+        return returned_count if type(returned_count) is int and returned_count >= 0 else None
     data = payload.get("data")
     if isinstance(data, list):
         return len(data)
     if not isinstance(data, dict):
         return 1 if data else 0
+    # Bulk search returns groups, each with its own results list. Count records,
+    # not groups, and never substitute per-group discovered/database totals.
+    items = data.get("items")
+    if isinstance(items, list):
+        if all(
+            isinstance(item, dict) and isinstance(item.get("results"), list)
+            for item in items
+        ):
+            return sum(len(item["results"]) for item in items)
+        return None
     full_count = data.get("__full_count")
     if isinstance(full_count, int):
         return full_count
@@ -1758,7 +1836,10 @@ def _lookup_tool_data_result_count(payload: Optional[Dict[str, Any]]) -> Optiona
     for key in ("numberOfHits", "total", "total_count"):
         value = data.get(key)
         if isinstance(value, int):
-            return value
+            return None  # Discovery totals alone do not establish returned counts.
+    count = data.get("count")
+    if type(count) is int and count >= 0:
+        return count  # Explicit returned count in configured function-tool payloads.
     return 1 if data else 0
 
 
@@ -2218,7 +2299,9 @@ def _lookup_provenance_finalization_errors(
         config=config,
         successful_calls=successful_calls,
     ))
+    errors.extend(_lookup_record_grounding_errors(payload, config=config, successful_calls=successful_calls))
 
+    remaining_calls = list(concrete_calls)
     for index, attempt in enumerate(matching_attempts):
         if not isinstance(attempt.get("query"), dict) or not attempt.get("query"):
             errors.append({
@@ -2226,27 +2309,29 @@ def _lookup_provenance_finalization_errors(
                 "message": "lookup_attempts[].query must preserve the API query payload.",
             })
             continue
-        if concrete_calls and not any(
-            _lookup_attempt_matches_tool_call(attempt, call)
-            for call in concrete_calls
-        ):
+        matches = [call for call in remaining_calls if _lookup_attempt_matches_tool_call(attempt, call)]
+        if not matches:
             errors.append({
                 "field": f"lookup_attempts[{index}].query",
                 "message": "lookup_attempts[].query must correspond to an API tool call made in this run.",
             })
+            continue
         result_count = attempt.get("result_count")
-        if isinstance(result_count, int) and result_count > 0:
-            matching_counts = [
-                _lookup_tool_data_result_count(call.output_payload)
-                for call in concrete_calls
-                if _lookup_attempt_matches_tool_call(attempt, call)
-            ]
-            known_counts = [count for count in matching_counts if count is not None]
-            if known_counts and result_count > max(known_counts):
-                errors.append({
-                    "field": f"lookup_attempts[{index}].result_count",
-                    "message": "lookup_attempts[].result_count exceeds the API tool output count.",
-                })
+        # Repeated identical queries may return different counts. Match each
+        # occurrence once, preferring the occurrence with the reported count.
+        call = next(
+            (call for call in matches if _lookup_tool_data_result_count(call.output_payload) == result_count),
+            matches[0],
+        )
+        remaining_calls.pop(next(i for i, item in enumerate(remaining_calls) if item is call))
+        count = _lookup_tool_data_result_count(call.output_payload)
+        if count is not None and result_count != count:
+            errors.append({
+                "field": f"lookup_attempts[{index}].result_count",
+                "message": f"lookup_attempts[].result_count must equal the returned API record count ({count}), not selected candidates or discovered totals.",
+            })
+    if remaining_calls:
+        errors.append({"field": "lookup_attempts", "message": "Record each concrete API call exactly once with its method and complete query."})
 
     requested_values = _lookup_requested_values(
         payload,
@@ -2563,10 +2648,12 @@ def _build_structured_specialist_finalization_tool(
     tool_calls: List["SpecialistToolCall"],
     live_evidence_records: List[Dict[str, Any]],
     function_tool_factory: Any,
+    compact_runtime: Any = None,
 ) -> Any:
     @function_tool_factory(
         name_override=finalization_state.tool_name,
         strict_mode=False,
+        **({"failure_error_function": None} if compact_runtime is not None else {}),
     )
     def finalize_structured_specialist_result(result: dict[str, Any]) -> dict[str, Any]:
         """Validate the final structured specialist result before answering."""
@@ -2580,13 +2667,29 @@ def _build_structured_specialist_finalization_tool(
                 finalization_state
             )
         else:
-            feedback = _structured_specialist_finalization_feedback(
-                result,
-                expected_output_type=expected_output_type,
-                finalization_config=finalization_state.config,
-                tool_calls=tool_calls,
-                live_evidence_records=live_evidence_records,
-            )
+            try:
+                if compact_runtime is not None:
+                    result = compact_runtime.assemble(result).model_dump(mode="json")
+                feedback = _structured_specialist_finalization_feedback(
+                    result,
+                    expected_output_type=expected_output_type,
+                    finalization_config=finalization_state.config,
+                    tool_calls=tool_calls,
+                    live_evidence_records=live_evidence_records,
+                )
+            except (TypeError, KeyError):
+                if compact_runtime is None:
+                    raise
+                from src.lib.domain_packs.compact_runtime import fail_compact_assembly
+                finalization_state.accepted_payload = None
+                fail_compact_assembly()
+            except ValueError as exc:
+                if compact_runtime is None:
+                    raise
+                feedback = _StructuredSpecialistFinalizationFeedback(
+                    accepted_payload=None, message=str(exc),
+                    repair_instructions=["Repair the compact scientific decision using this invocation's references."],
+                )
         if feedback.accepted_payload is not None:
             finalization_state.accepted_payload = feedback.accepted_payload
             finalization_state.last_rejection = None
@@ -2615,6 +2718,9 @@ def _build_structured_specialist_finalization_tool(
         )
         return _structured_specialist_finalization_tool_payload(feedback)
 
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import compact_finalization_schema
+        return compact_finalization_schema(finalize_structured_specialist_result, compact_runtime)
     return finalize_structured_specialist_result
 
 
@@ -2623,6 +2729,7 @@ def _append_structured_specialist_finalization_instruction(
     source_agent: Agent,
     *,
     finalization_state: _StructuredSpecialistFinalizationState,
+    compact_runtime: Any = None,
 ) -> Agent:
     instruction = (
         "Structured result finalization is mandatory. Before your final answer, "
@@ -2636,6 +2743,25 @@ def _append_structured_specialist_finalization_instruction(
         f"{finalization_state.max_attempts} rejected finalization attempt(s) "
         "in this run; after that the specialist output fails finalization."
     )
+    lookup_config = _lookup_finalization_config(finalization_state.config)
+    if lookup_config is not None:
+        instruction += (
+            " Record each concrete lookup call exactly once in lookup_attempts. Preserve its method "
+            "and all non-null input arguments in query (method may be recorded separately). "
+            "result_count is the number of records actually returned by that call, including all bulk "
+            "groups, not the number selected, the number of groups, or the database's discovered total. "
+            "Never change a positive returned count to zero to pass finalization."
+        )
+        if lookup_config.get("record_grounding"):
+            instruction += (
+                " Fields governed by record_grounding must come explicitly from the same identified "
+                "API record. In particular, data_provider must be null when absent; do not infer it "
+                "from a query filter, CURIE prefix, species, or another candidate. This applies to "
+                "candidate records, resolved_objects and resolved_values."
+            )
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import compact_finalization_instruction
+        instruction = compact_finalization_instruction(compact_runtime, tool_name=finalization_state.tool_name)
     return _append_agent_runtime_instruction(
         runtime_agent,
         source_agent,
@@ -2654,6 +2780,7 @@ def _configure_structured_specialist_finalization(
     finalization_state: _StructuredSpecialistFinalizationState,
     tool_calls: List["SpecialistToolCall"],
     live_evidence_records: List[Dict[str, Any]],
+    compact_runtime: Any = None,
 ) -> Agent:
     from agents import function_tool
 
@@ -2667,6 +2794,7 @@ def _configure_structured_specialist_finalization(
             tool_calls=tool_calls,
             live_evidence_records=live_evidence_records,
             function_tool_factory=function_tool,
+            compact_runtime=compact_runtime,
         ),
     ]
     if getattr(runtime_agent, "output_type", None) is expected_output_type:
@@ -2674,10 +2802,14 @@ def _configure_structured_specialist_finalization(
             expected_output_type,
             strict_json_schema=False,
         )
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import prepare_compact_tools
+        prepare_compact_tools(runtime_agent, compact_runtime)
     return _append_structured_specialist_finalization_instruction(
         runtime_agent,
         source_agent,
         finalization_state=finalization_state,
+        compact_runtime=compact_runtime,
     )
 
 
@@ -4626,6 +4758,7 @@ async def run_specialist_with_events(
     validated_handoff_callback: Optional[
         Callable[[SupervisorExtractionHandoff], None]
     ] = None,
+    validated_result_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     """
     Run a specialist agent and collect its internal tool call events.
@@ -4650,6 +4783,9 @@ async def run_specialist_with_events(
             only after a validated builder payload has been persisted and converted to
             a canonical extraction-result handoff. This lets a caller retain validated
             partial state while later stream/provider cleanup is still cancellable.
+        validated_result_callback: Trusted caller callback for an accepted structured
+            specialist result. Receives an independent canonical payload copy before
+            supervisor display reduction; never receives rejected or bare model output.
 
     Returns:
         The specialist's final output as a string
@@ -4793,6 +4929,14 @@ async def run_specialist_with_events(
         )
 
     if structured_finalization_state.required:
+        from src.lib.domain_packs.compact_runtime import runtime_for_schema
+        trusted_request = getattr(agent, "_compact_validation_request", None)
+        compact_runtime = runtime_for_schema(
+            [trusted_request] if trusted_request is not None else None,
+            result_schema=expected_output_type, input_text=input_text, evidence=live_evidence_records,
+            profile_request_ids=(trusted_request.request_id,) if trusted_request is not None
+                and getattr(agent, "_compact_profile_mapped", False) else (),
+        )
         runtime_agent = _configure_structured_specialist_finalization(
             runtime_agent,
             agent,
@@ -4800,6 +4944,7 @@ async def run_specialist_with_events(
             finalization_state=structured_finalization_state,
             tool_calls=tool_calls,
             live_evidence_records=live_evidence_records,
+            compact_runtime=compact_runtime,
         )
         logger.info(
             "%s applying mandatory structured finalization tool %s",
@@ -5426,6 +5571,7 @@ async def run_specialist_with_events(
                         output_payload = _tool_output_payload_for_finalization(
                             current_tool_name,
                             output,
+                            finalization_config=finalization_config,
                         )
                         structured_output = _coerce_structured_tool_output(output)
                         result_classification = _classify_structured_tool_result(
@@ -6486,6 +6632,10 @@ async def run_specialist_with_events(
         and structured_finalization_state.required
         and structured_finalization_state.accepted_payload is not None
     ):
+        if validated_result_callback is not None:
+            validated_result_callback(
+                copy.deepcopy(structured_finalization_state.accepted_payload)
+            )
         add_specialist_event(
             _build_structured_finalization_internal_result_event(
                 tool_name=tool_name,
