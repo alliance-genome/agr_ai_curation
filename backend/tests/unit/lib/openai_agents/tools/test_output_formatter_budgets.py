@@ -682,7 +682,7 @@ async def test_giant_nested_field_is_marked_not_escalated(reports):
     page, raw = await _call(_tool(tools, "inspect_output_rows"), {"row_source": "validation_finding"})
     assert page["status"] == "ok", page
     assert len(raw) <= output_formatter_tools.get_output_tool_max_response_chars()
-    marker = page["rows"][0]["validation_lookup_attempts"]
+    marker = page["rows"][0]["validation.lookup_attempts"]
     assert marker["_value_omitted"] is True
     assert marker["total_chars"] == len(encoded)
     assert marker["sha256"] == hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -691,9 +691,9 @@ async def test_giant_nested_field_is_marked_not_escalated(reports):
         "row_ref": "validation_finding#1",
         "field_ref": "validation.lookup_attempts",
     }
-    assert page["rows"][0]["validation_message"] == "Could not resolve 'vulval muscle'."
+    assert page["rows"][0]["validation.message"] == "Could not resolve 'vulval muscle'."
     # Empty values project to the plan's missing_value (empty string by default).
-    assert page["rows"][1]["validation_lookup_attempts"] == ""
+    assert page["rows"][1]["validation.lookup_attempts"] == ""
 
     values, raw = await _call(
         _tool(tools, "inspect_field_values"),
@@ -712,4 +712,45 @@ async def test_giant_nested_field_is_marked_not_escalated(reports):
         {"row_ref": "validation_finding#1", "field_ref": "validation.lookup_attempts", "max_chars": 500},
     )
     assert read["value_slice"] == encoded[:500]
+    assert reports == []
+
+
+@pytest.mark.asyncio
+async def test_default_row_page_over_wide_source_fits_several_rows(reports):
+    """Reviewer nit b: no field_refs over ~150 columns must not echo every column."""
+
+    bundle = _wide_bundle(field_count=150, row_count=12)
+    rows_tool = _tool(_chat_tools(bundle), "inspect_output_rows")
+    budget = output_formatter_tools.get_output_tool_max_response_chars()
+
+    payload, raw = await _call(rows_tool, {"row_source": "object"})
+    assert payload["status"] == "ok", payload
+    assert len(raw) <= budget
+    assert payload["columns"]["column_count"] == 152
+    assert payload["columns"]["row_keys"] == "field_refs"
+    assert len(payload["rows"]) > 1
+    first = payload["rows"][0]
+    # Previews normalize surrounding whitespace; exact text comes from read_output_value.
+    assert first["object.attribute.field_000"] == ("value 0 for row 0 " * 4).strip()
+    assert first["_truncated_preview"] is True
+    assert first["_omitted_field_count"] > len(first["_omitted_fields_first"])
+    assert len(first["_omitted_fields_first"]) == output_formatter_tools._MAX_LIST_ITEMS
+    assert payload["next_cursor"] == str(len(payload["rows"]))
+
+    seen = list(payload["row_refs"])
+    cursor = payload["next_cursor"]
+    while cursor:
+        page, raw = await _call(rows_tool, {"row_source": "object", "cursor": cursor})
+        assert page["status"] == "ok"
+        assert len(raw) <= budget
+        seen.extend(page["row_refs"])
+        cursor = page["next_cursor"]
+    assert seen == [f"object#{index}" for index in range(1, 13)]
+
+    selected, _ = await _call(
+        rows_tool,
+        {"row_source": "object", "field_refs_json": json.dumps(["object.attribute.field_149"])},
+    )
+    assert [column["field_ref"] for column in selected["columns"]] == ["object.attribute.field_149"]
+    assert selected["rows"][0] == {"object_attribute_field_149": ("value 149 for row 0 " * 4).strip()}
     assert reports == []
