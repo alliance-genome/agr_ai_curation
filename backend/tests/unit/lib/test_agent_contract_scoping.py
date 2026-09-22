@@ -909,3 +909,47 @@ def test_contract_budget_settings_are_env_configurable_and_clamped(monkeypatch):
     assert config.get_agent_contract_max_item_chars() == 1000
     responses, _items = _all_pages(**RECORDED_CALL)
     assert all(_chars(response) <= 6000 for response in responses)
+
+
+@pytest.mark.parametrize("pointer", ["/validator_bindings/²", "/validator_bindings/00", "field"])
+def test_malformed_detail_pointers_are_structured_errors(pointer, reported):
+    base = {
+        "agent_id": VALIDATOR_AGENT,
+        "topic": "field",
+        "field_path": STAGE_FIELD,
+        "domain_pack_id": "fixture.expression",
+    }
+    ref = _call(**base)["items"][0]["ref"]
+
+    result = _call(**base, item_ref=ref, detail_pointer=pointer)
+
+    assert result["success"] is False
+    assert "detail_pointer" in result["error"]
+    assert reported == []
+
+
+def test_known_field_without_covering_entries_explains_empty_page():
+    result = _call(
+        agent_id=VALIDATOR_AGENT,
+        topic="ontology_constraints",
+        field_path="stage_kind",
+        domain_pack_id="fixture.expression",
+    )
+
+    assert result["success"] is True
+    assert result["items"] == []
+    assert "exists in scope" in result["note"]
+
+
+def test_declared_validators_keep_their_attachment_options():
+    _, items = _all_pages(
+        agent_id="fixture_expression_extractor",
+        topic="validator_bindings",
+        detail_level="detail",
+    )
+
+    validators = [item for item in items if item["kind"] == "validator"]
+    assert [item["validator_id"] for item in validators] == [
+        "fixture.expression.declared_validator"
+    ]
+    assert validators[0]["validation_attachments"][0]["scope"] == "pack"

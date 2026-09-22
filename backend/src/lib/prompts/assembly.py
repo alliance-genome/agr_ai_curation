@@ -474,7 +474,7 @@ def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
             "- Validators own these fields; do not invent their identifiers: "
             f"{validator_fields}. "
             "For one field's bindings, selectors, and accepted ontology terms, "
-            "call get_agent_contract with topic=field and that field_path."
+            "call get_agent_contract with topic=field, detail_level=detail, and that field_path."
         )
 
     active_bindings = [

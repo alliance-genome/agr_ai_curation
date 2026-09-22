@@ -2470,7 +2470,7 @@
           "type": "string"
         },
         {
-          "description": "The specific field to look at, when you want details on just one field.",
+          "description": "The specific field to look at, when you want details on just one field. An unknown field name returns an error with close matches instead of every field.",
           "name": "field_path",
           "required": false,
           "type": "string"
@@ -2482,19 +2482,43 @@
           "type": "string"
         },
         {
-          "description": "When an output schema has many fields, how many to show at once.",
-          "name": "field_limit",
+          "description": "How many entries to show on one page. Pages also stop early when they reach the size limit.",
+          "name": "limit",
           "required": false,
           "type": "integer"
         },
         {
-          "description": "Page marker from a previous call to fetch the next batch of fields.",
-          "name": "field_cursor",
+          "description": "Page marker from a previous answer, used to fetch the next page.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Limit the answer to one data package, useful when the same field name appears in several.",
+          "name": "domain_pack_id",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Limit the answer to one record type within the data packages.",
+          "name": "object_type",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Reference of one entry from a previous answer, to read that entry on its own.",
+          "name": "item_ref",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Which part of that entry to read when it was too large to show in full.",
+          "name": "detail_pointer",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. It only reports the setup; it does not run the agent or change anything."
+      "summary": "Shows a read-only summary of how a configured agent is set up: its tools, its output structure, the specialists tied to it, the ontology rules on its fields, and field-by-field details. Answers come back a page at a time and can be narrowed to one data package, record type, or field, so a question about one field only returns that field's rules. It only reports the setup; it does not run the agent or change anything."
     },
     "methods": null,
     "name": "Agent Contract Lookup",

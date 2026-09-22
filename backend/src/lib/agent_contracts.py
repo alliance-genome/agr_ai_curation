@@ -65,6 +65,7 @@ TOPIC_SELECTORS: Mapping[str, frozenset[str]] = {
 
 _TOOL_NAME = "get_agent_contract"
 _CURSOR_PATTERN = re.compile(r"^(0|[1-9][0-9]*):([0-9a-f]{12})$")
+_LIST_INDEX_PATTERN = re.compile(r"0|[1-9][0-9]*")
 # Room kept for the page envelope, continuation cursor and drilldown hint.
 _PAGE_ENVELOPE_RESERVE_CHARS = 700
 # Room kept per omitted-value stub when an oversized item is outlined.
@@ -267,8 +268,18 @@ def get_agent_contract(
 
     try:
         header, items = _TOPIC_BUILDERS[normalized_topic](request)
+        if not items and request.field_path is not None:
+            header = {
+                **header,
+                "note": (
+                    f"Field '{request.field_path}' exists in scope, but no "
+                    f"{normalized_topic} entries for agent {normalized_agent_id} "
+                    "cover it."
+                ),
+            }
         fingerprint = _request_fingerprint(
             request,
+            item_refs=[item["ref"] for item in items],
             item_ref=normalized_item_ref,
             detail_pointer=detail_pointer,
         )
@@ -585,6 +596,12 @@ def _validator_bindings_topic(
                     "kind": "validator",
                     "domain_pack_id": pack_id,
                     **entry.identity_details(),
+                    "validation_attachments": [
+                        option.to_dict()
+                        for option in attachments
+                        if option.validator_binding_id is None
+                        and option.validator_id == entry.validator_id
+                    ],
                 }
                 for entry in registry.validator_metadata
                 if not targeted
@@ -1090,6 +1107,7 @@ def _cursor_offset(cursor: Any, *, fingerprint: str, total: int) -> int:
 def _request_fingerprint(
     request: _Request,
     *,
+    item_refs: Sequence[str],
     item_ref: str | None,
     detail_pointer: str | None,
 ) -> str:
@@ -1109,6 +1127,7 @@ def _request_fingerprint(
             item_ref,
             detail_pointer or "",
             pack_versions,
+            list(item_refs),
         ]
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
@@ -1144,7 +1163,11 @@ def _resolve_pointer(document: Any, pointer: str) -> Any:
         token = raw_token.replace("~1", "/").replace("~0", "~")
         if isinstance(current, Mapping) and token in current:
             current = current[token]
-        elif isinstance(current, list) and token.isdigit() and int(token) < len(current):
+        elif (
+            isinstance(current, list)
+            and _LIST_INDEX_PATTERN.fullmatch(token)
+            and int(token) < len(current)
+        ):
             current = current[int(token)]
         else:
             available = sorted(str(key) for key in current) if isinstance(current, Mapping) else []

@@ -3183,7 +3183,11 @@ def get_agent_contract_max_response_chars() -> int:
     explicit continuation cursor. Values below 4000 use 4000 so one bounded
     item plus the response envelope always fits.
     """
-    return max(4000, _get_env_int_with_fallback("AGENT_CONTRACT_MAX_RESPONSE_CHARS", 24000))
+    configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_RESPONSE_CHARS", 24000)
+    if configured < 4000:
+        logger.warning("AGENT_CONTRACT_MAX_RESPONSE_CHARS=%s is below minimum 4000; using 4000", configured)
+        return 4000
+    return configured
 
 
 def get_agent_contract_max_item_chars() -> int:
@@ -3195,4 +3199,15 @@ def get_agent_contract_max_item_chars() -> int:
     half of AGENT_CONTRACT_MAX_RESPONSE_CHARS at maximum.
     """
     configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_ITEM_CHARS", 8000)
-    return max(1000, min(configured, get_agent_contract_max_response_chars() // 2))
+    maximum = get_agent_contract_max_response_chars() // 2
+    if configured < 1000:
+        logger.warning("AGENT_CONTRACT_MAX_ITEM_CHARS=%s is below minimum 1000; using 1000", configured)
+        return 1000
+    if configured > maximum:
+        logger.warning(
+            "AGENT_CONTRACT_MAX_ITEM_CHARS=%s exceeds half of AGENT_CONTRACT_MAX_RESPONSE_CHARS; using %s",
+            configured,
+            maximum,
+        )
+        return maximum
+    return configured
