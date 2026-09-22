@@ -205,6 +205,9 @@ def simple_decision_contract(request, result_schema, *, profile_mapped=False, sc
         scientific_slots=scientific_slots or {}, decision_schema=decision_schema,
         record_slot_fields=_SLOT_FIELDS.get(name, {}),
         selected_result_fields=frozenset({"results", "annotations", "orthologs"}),
+        domain_contract=({"not_found_inputs":
+            "GO not_found_inputs are JSON pointers into that request's selected_inputs, not copied terms."}
+            if name == "GOTermResultEnvelope" else {}),
         assemble_domain=assemble_domain,
     )
 

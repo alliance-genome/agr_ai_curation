@@ -37,6 +37,16 @@ def decision(identifier, reference):
     }
 
 
+def test_core_compact_instruction_does_not_inject_package_semantics():
+    from src.lib.domain_packs.compact_runtime import compact_finalization_instruction
+
+    runtime = CompactValidatorRuntime([contract("a")], adapter)
+    text = compact_finalization_instruction(runtime, tool_name="finalize_fixture")
+    assert "GO not_found_inputs" not in text
+    assert "gene_symbols" not in text
+    assert "allele_symbols" not in text
+
+
 @pytest.mark.asyncio
 async def test_batch_lookup_preserves_raw_count_and_projects_records_by_request():
     calls = []

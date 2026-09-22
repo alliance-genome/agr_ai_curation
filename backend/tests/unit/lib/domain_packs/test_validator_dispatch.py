@@ -3402,7 +3402,9 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     ]
     assert captured_preflight["provider"] == "gemini"
     assert captured_preflight["model"] == "validator-batch-model"
-    assert "gene_symbols" in payload["instructions"]
+    assert "tool's declared bulk/list input" in payload["instructions"]
+    assert "gene_symbols" not in payload["instructions"]
+    assert "allele_symbols" not in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
     assert payload["requests"][0]["selected_inputs"] == request.selected_inputs
     assert "input_selectors" not in payload["requests"][0]

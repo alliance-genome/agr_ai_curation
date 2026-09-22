@@ -223,6 +223,7 @@ def _assessment(ref, disposition="selected"):
 
 def test_go_selected_rows_not_found_and_hierarchy_are_assembled(schemas):
     contract, workspace = _simple_workspace(schemas, "GOTermResultEnvelope", selected_inputs={"terms": ["absent"]})
+    assert "JSON pointers" in contract.domain_contract["not_found_inputs"]
     schema = schemas["GOTermResultEnvelope"]
     refs = _capture(workspace, schema, [
         {"id": "GO:1", "name": "binding", "aspect": "molecular_function", "ancestors": ["GO:2"]},

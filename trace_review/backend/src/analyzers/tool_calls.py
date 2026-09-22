@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .domain_envelopes import DomainEnvelopeTraceAnalyzer
+from .compact_validators import annotate_compact_validator_calls
 
 
 class ToolResultParser:
@@ -867,6 +868,8 @@ class ToolCallAnalyzer:
                 source_name=f"tool_calls[{tc.get('call_id') or tc.get('id') or tc.get('name')}]",
             )
             tc["domain_envelope"] = DomainEnvelopeTraceAnalyzer.compact(domain_summary)
+
+        annotate_compact_validator_calls(tool_calls)
 
         # Detect duplicates
         duplicates_info = ToolCallAnalyzer._detect_duplicates(tool_calls)

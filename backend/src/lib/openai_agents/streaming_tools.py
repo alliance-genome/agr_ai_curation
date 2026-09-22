@@ -2653,6 +2653,7 @@ def _build_structured_specialist_finalization_tool(
     @function_tool_factory(
         name_override=finalization_state.tool_name,
         strict_mode=False,
+        **({"failure_error_function": None} if compact_runtime is not None else {}),
     )
     def finalize_structured_specialist_result(result: dict[str, Any]) -> dict[str, Any]:
         """Validate the final structured specialist result before answering."""
@@ -2676,7 +2677,13 @@ def _build_structured_specialist_finalization_tool(
                     tool_calls=tool_calls,
                     live_evidence_records=live_evidence_records,
                 )
-            except (ValueError, TypeError, KeyError) as exc:
+            except (TypeError, KeyError):
+                if compact_runtime is None:
+                    raise
+                from src.lib.domain_packs.compact_runtime import fail_compact_assembly
+                finalization_state.accepted_payload = None
+                fail_compact_assembly()
+            except ValueError as exc:
                 if compact_runtime is None:
                     raise
                 feedback = _StructuredSpecialistFinalizationFeedback(

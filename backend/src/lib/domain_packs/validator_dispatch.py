@@ -1935,7 +1935,7 @@ def run_package_scoped_validator_agent_batch(
         provider_payload["instructions"] = (
             "Assess every request scientifically and finalize exactly one compact decision per request_id. "
             "Use one bulk lookup tool call per compatible shared lookup group when a bulk method exists, "
-            "using list inputs such as gene_symbols or allele_symbols. Do not loop one lookup per request "
+            "using the tool's declared bulk/list input. Do not loop one lookup per request "
             "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
         )
     validator_model = str(getattr(agent, "model", "") or "")
@@ -2529,14 +2529,19 @@ def _build_finalize_validator_result_tool(
     profile_mapped: bool = False,
     compact_runtime: Any = None,
 ) -> Any:
-    @function_tool_factory(name_override="finalize_validator_result", strict_mode=False)
+    @function_tool_factory(name_override="finalize_validator_result", strict_mode=False,
+                          **({"failure_error_function": None} if compact_runtime is not None else {}))
     def finalize_validator_result(result: dict[str, Any]) -> dict[str, Any]:
         """Validate the final DomainValidatorResultBase before answering."""
 
         if compact_runtime is not None:
             try:
                 result = compact_runtime.assemble(result).model_dump(mode="json")
-            except (ValueError, TypeError, KeyError) as exc:
+            except (TypeError, KeyError):
+                from src.lib.domain_packs.compact_runtime import fail_compact_assembly
+                finalization_state.accepted_result = None
+                fail_compact_assembly()
+            except ValueError as exc:
                 finalization_state.accepted_result = None
                 return {"status": "rejected", "message": str(exc)}
         feedback = _validator_result_finalization_feedback(
@@ -2570,6 +2575,7 @@ def _build_finalize_validator_batch_results_tool(
     @function_tool_factory(
         name_override="finalize_validator_batch_results",
         strict_mode=False,
+        **({"failure_error_function": None} if compact_runtime is not None else {}),
     )
     def finalize_validator_batch_results(
         results: list[dict[str, Any]],
@@ -2579,7 +2585,11 @@ def _build_finalize_validator_batch_results_tool(
         if compact_runtime is not None:
             try:
                 assembled = compact_runtime.assemble_batch(results)
-            except (ValueError, TypeError, KeyError) as exc:
+            except (TypeError, KeyError):
+                from src.lib.domain_packs.compact_runtime import fail_compact_assembly
+                finalization_state.accepted_results = ()
+                fail_compact_assembly()
+            except ValueError as exc:
                 finalization_state.accepted_results = ()
                 return {"status": "rejected", "message": str(exc)}
             checked = []

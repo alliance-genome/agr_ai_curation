@@ -95,6 +95,17 @@ Runtime finalization instructions supersede older full-result authoring
 instructions without modifying saved custom prompts or execution revisions.
 No saved data is migrated by this change.
 
+Expected decision/schema errors remain repairable finalizer rejections. Unexpected
+adapter type/key errors clear accepted state, report a content-free operational
+failure through the runtime observability facade, and terminate the SDK run;
+they are not instructions for the model to repair server code.
+
+TraceReview preserves raw lookup catalogs and compact decisions, and adds
+request-scoped record/lookup reference joins. Unmatched or contradictory catalogs
+remain explicit diagnostic gaps, not reconstructed scientific results. Suppressed
+upstream validators are exposed separately from validation findings. These joins
+do not claim to reconstruct committed custom findings absent from a trace.
+
 Before production, inventory saved agents and flow attachments using these
 schemas, including their pinned execution revisions, inherited tools, prompts
 and finalization settings. Rehearse those exact snapshots on an isolated copy:

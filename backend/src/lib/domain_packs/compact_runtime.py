@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import json
 import sys
 import importlib
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, NoReturn
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -30,6 +30,16 @@ class CapturedValidatorLookup:
 
 
 LookupAdapter = Callable[[DecisionContract, str, Mapping[str, Any], Mapping[str, Any]], CapturedValidatorLookup]
+
+
+def fail_compact_assembly() -> NoReturn:
+    """Report an adapter defect without source content, then stop the run."""
+    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+    failure = sanitized_runtime_error("Compact validator assembly failed")
+    report_runtime_exception(failure, component="compact_validator",
+                             operation="compact_validator_assembly_failed")
+    raise failure from None
 
 
 class CompactValidatorRuntime:
@@ -201,7 +211,6 @@ def compact_finalization_instruction(runtime, *, tool_name, batch=False):
         "For batch lookups, validator_request_ids must identify only the requests served by that call. "
         "Each reference is valid only for its named request and this invocation. "
         "source_path is a JSON pointer into the lookup response, distinguishing records with identical IDs or labels. "
-        "GO not_found_inputs are JSON pointers into that request's selected_inputs, not copied terms. "
         "Slot contracts: " + json.dumps(contracts)
         + " Supplied-context/scientific-option references (not database verification): " + json.dumps(runtime.source_catalog)
     )
