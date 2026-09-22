@@ -223,7 +223,8 @@ def _bounded_row(
         if len(json.dumps(candidate, ensure_ascii=False, default=str)) > _MAX_ROW_CHARS:
             bounded["_truncated_preview"] = True
             bounded["_truncated_after_field"] = name
-            bounded["_omitted_fields"] = keys[index:]
+            bounded["_omitted_field_count"] = len(keys) - index
+            bounded["_omitted_fields_first"] = keys[index:index + _MAX_LIST_ITEMS]
             break
         bounded[name] = preview
     return bounded
@@ -1636,9 +1637,10 @@ def build_output_formatter_tools(
         name_override="inspect_output_rows",
         description_override=(
             "Inspect a bounded page of saved rows or selected field refs after optional "
-            "projection-style filters and sorts. Returns row_refs for overrides and "
-            "read_output_value, plus next_cursor. Inputs are field refs and plan "
-            "metadata only, never row contents."
+            "projection-style filters and sorts. Without field_refs_json, rows are keyed "
+            "by field ref and only a column count is returned. Returns row_refs for "
+            "overrides and read_output_value, plus next_cursor. Inputs are field refs "
+            "and plan metadata only, never row contents."
         ),
         strict_mode=False,
     )
@@ -1674,12 +1676,38 @@ def build_output_formatter_tools(
                     f"cursor {offset} is beyond the {available} inspectable matching rows."
                 )
             items = list(zip(result.row_refs, result.rows))
+            # Without requested field refs every field is a column; key rows by
+            # field ref and send only a count instead of the full column list
+            # on every page, so wide row sources still fit several rows.
+            all_fields = not str(field_refs_json or "").strip()
+            columns_payload: Any = (
+                {
+                    "column_count": len(result.columns),
+                    "row_keys": "field_refs",
+                    "list_fields_with": (
+                        f"inspect_output_artifacts(row_source='{result.row_source}') "
+                        "pages the full field catalog"
+                    ),
+                }
+                if all_fields
+                else _compact_columns(result.columns)
+            )
+
+            def render_row(item: tuple[str, Mapping[str, Any]]) -> dict[str, Any]:
+                row_ref, row = item
+                if all_fields:
+                    keyed = {column_field_refs.get(key) or key: value for key, value in row.items()}
+                    return {"row_ref": row_ref, "row": _bounded_row(keyed, row_ref=row_ref)}
+                return {
+                    "row_ref": row_ref,
+                    "row": _bounded_row(row, row_ref=row_ref, field_refs=column_field_refs),
+                }
 
             def build(page: list[Any], next_cursor: str) -> dict[str, Any]:
                 return {
                     "status": "ok",
                     "row_source": result.row_source,
-                    "columns": _compact_columns(result.columns),
+                    "columns": columns_payload,
                     "rows": [item["row"] for item in page],
                     "row_refs": [item["row_ref"] for item in page],
                     "total_count": result.total_count,
@@ -1704,10 +1732,7 @@ def build_output_formatter_tools(
                 start=offset,
                 max_count=page_size,
                 build_payload=build,
-                render=lambda item: {
-                    "row_ref": item[0],
-                    "row": _bounded_row(item[1], row_ref=item[0], field_refs=column_field_refs),
-                },
+                render=render_row,
             )
             next_cursor = _next_row_cursor(offset, len(page), available)
             return respond("inspect_output_rows", build(page, next_cursor))
