@@ -1108,6 +1108,12 @@
           "name": "source_ref",
           "required": false,
           "type": "string"
+        },
+        {
+          "description": "Column cursor returned for a wide plan.",
+          "name": "cursor",
+          "required": false,
+          "type": "string"
         }
       ],
       "summary": "Build and validate the default source-backed projection plan for the bound formatter format."
@@ -4023,13 +4029,13 @@
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
     "category": "Output",
-    "description": "Validate and preview a source-backed projection plan without saving a file.",
+    "description": "Validate and preview a page of a source-backed projection without saving or delivering output.",
     "documentation": {
       "parameters": [
         {
-          "description": "Projection plan JSON using field refs and plan metadata.",
+          "description": "Projection plan JSON using field refs and plan metadata. Empty input previews the default or curator-fixed plan.",
           "name": "plan_json",
-          "required": true,
+          "required": false,
           "type": "string"
         },
         {
@@ -4045,7 +4051,7 @@
           "type": "string"
         }
       ],
-      "summary": "Validate and preview a source-backed projection plan without saving a file."
+      "summary": "Validate and preview a page of a source-backed projection without saving or delivering output."
     },
     "methods": null,
     "name": "Preview Output Projection",
@@ -6021,17 +6027,23 @@
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
     "category": "Output",
-    "description": "Validate a projection plan over saved bundle fields. The file format is forced to the bound formatter type.",
+    "description": "Validate a projection plan over saved bundle fields. The output format is forced to the bound formatter type.",
     "documentation": {
       "parameters": [
         {
-          "description": "Projection plan JSON using field refs and plan metadata.",
+          "description": "Projection plan JSON using field refs and plan metadata. Empty input validates the default or curator-fixed plan.",
           "name": "plan_json",
-          "required": true,
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Column cursor returned for a wide plan.",
+          "name": "cursor",
+          "required": false,
           "type": "string"
         }
       ],
-      "summary": "Validate a projection plan over saved bundle fields. The file format is forced to the bound formatter type."
+      "summary": "Validate a projection plan over saved bundle fields. The output format is forced to the bound formatter type."
     },
     "methods": null,
     "name": "Validate Output Projection",

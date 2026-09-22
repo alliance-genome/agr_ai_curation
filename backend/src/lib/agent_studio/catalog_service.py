@@ -308,35 +308,53 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
                 "required": False,
                 "description": "Optional source id or source key to restrict rows.",
             },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Column cursor returned for a wide plan.",
+            },
         ],
     },
     "validate_output_projection": {
         "name": "Validate Output Projection",
         "description": (
-            "Validate a projection plan over saved bundle fields. The file "
+            "Validate a projection plan over saved bundle fields. The output "
             "format is forced to the bound formatter type."
         ),
         "parameters": [
             {
                 "name": "plan_json",
                 "type": "string",
-                "required": True,
-                "description": "Projection plan JSON using field refs and plan metadata.",
-            }
+                "required": False,
+                "description": (
+                    "Projection plan JSON using field refs and plan metadata. Empty "
+                    "input validates the default or curator-fixed plan."
+                ),
+            },
+            {
+                "name": "cursor",
+                "type": "string",
+                "required": False,
+                "description": "Column cursor returned for a wide plan.",
+            },
         ],
     },
     "preview_output_projection": {
         "name": "Preview Output Projection",
         "description": (
-            "Validate and preview a source-backed projection plan without saving "
-            "a file."
+            "Validate and preview a page of a source-backed projection without "
+            "saving or delivering output."
         ),
         "parameters": [
             {
                 "name": "plan_json",
                 "type": "string",
-                "required": True,
-                "description": "Projection plan JSON using field refs and plan metadata.",
+                "required": False,
+                "description": (
+                    "Projection plan JSON using field refs and plan metadata. Empty "
+                    "input previews the default or curator-fixed plan."
+                ),
             },
             {
                 "name": "limit",
@@ -1773,7 +1791,7 @@ def _build_runtime_context(
             preamble_lines.append(
                 f'You are helping the user with the document: "{document_name}"'
             )
-        if tool_id_set & _OUTPUT_FORMATTER_RUNTIME_TOOL_ID_SET:
+        if "finalize_and_save" in tool_id_set:
             try:
                 sanitized_stem = sanitize_output_descriptor(document_name)
             except FileValidationError:

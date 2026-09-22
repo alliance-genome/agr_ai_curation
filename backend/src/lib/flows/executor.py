@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from src.lib.context import (
     get_current_flow_output_attachment,
     get_current_run_config,
+    get_current_session_id,
     get_current_trace_id,
     reset_current_flow_output_attachment,
     reset_current_output_filename_stem,
@@ -106,6 +107,7 @@ from src.lib.flows.chat_output_delivery import (
     chat_output_delivery_scope,
     current_chat_output_delivery,
 )
+from src.lib.flows.outcome import FORMATTER_OUTPUT_FAILURE_REPORTED
 from src.lib.flows.output_projection import (
     FlowOutputArtifactBundle,
     build_flow_output_artifact_bundle,
@@ -469,7 +471,11 @@ def _flow_formatter_failure_reason(completed_step: Mapping[str, Any]) -> str | N
             parsed_output = raw_output
 
     if isinstance(parsed_output, Mapping):
-        if str(parsed_output.get("status") or "") != "cannot_complete":
+        status = str(parsed_output.get("status") or "")
+        if status == "failed":
+            reason = " ".join(str(error) for error in parsed_output.get("errors") or [])
+            return _truncate_tool_output(reason) if reason else None
+        if status != "cannot_complete":
             return None
         reason_parts = [
             str(parsed_output.get(key) or "").strip()
@@ -480,6 +486,23 @@ def _flow_formatter_failure_reason(completed_step: Mapping[str, Any]) -> str | N
 
     reason = _truncate_tool_output(parsed_output)
     return reason or None
+
+
+def _formatter_failure_reported(*outputs: Any) -> bool:
+    """Whether a formatter output records a failure already reported to Sentry."""
+
+    for output in outputs:
+        parsed = output
+        if isinstance(output, str):
+            try:
+                parsed = json.loads(output)
+            except (TypeError, ValueError):
+                continue
+        if isinstance(parsed, Mapping) and (
+            parsed.get("failure_reported") is True or parsed.get("status") == "failed"
+        ):
+            return True
+    return False
 
 
 def _build_flow_step_instruction_prefix(
@@ -1122,6 +1145,7 @@ def _make_flow_chat_output_tool(
                     "delivered": False,
                     "reason": " ".join(str(error) for error in delivery.failure.get("errors") or []),
                     "code": delivery.failure.get("code"),
+                    "failure_reported": True,
                 },
                 ensure_ascii=False,
                 default=str,
@@ -1136,6 +1160,8 @@ def _make_flow_chat_output_tool(
             phase="flow_chat_output_finalization",
             agent=agent_id,
             tool_name=tool_name,
+            trace_id=get_current_trace_id(),
+            session_id=get_current_session_id(),
             correlation={
                 "flow_run_id": flow_run_id,
                 "document_id": document_id,
@@ -1152,6 +1178,7 @@ def _make_flow_chat_output_tool(
                     "The chat output formatter finished without delivering the requested "
                     "output. The saved results are unchanged."
                 ),
+                "failure_reported": True,
             }
         )
 
@@ -3118,6 +3145,22 @@ def get_all_agent_tools(
                 if formatter_format is not None
                 else None
             )
+            formatter_failure_reported = _formatter_failure_reported(
+                result_text,
+                (
+                    _internal_specialist_tool_output_since(
+                        internal_event_cursor,
+                        tool_name="finalize_and_save",
+                    )
+                    if formatter_format is not None
+                    else None
+                ),
+            )
+            if formatter_failure_reported and formatter_failure_output is None and formatter_format is not None:
+                formatter_failure_output = _internal_specialist_tool_output_since(
+                    internal_event_cursor,
+                    tool_name="finalize_and_save",
+                )
             validation_schedule = validation_schedule_from_node_data(node_data)
             validation_schedule_metadata = (
                 {"validation_schedule": validation_schedule}
@@ -3251,6 +3294,11 @@ def get_all_agent_tools(
                 **(
                     {"formatter_failure_output": formatter_failure_output}
                     if formatter_failure_output is not None
+                    else {}
+                ),
+                **(
+                    {"formatter_failure_reported": True}
+                    if formatter_failure_reported
                     else {}
                 ),
                 "candidate": candidate,
@@ -5473,6 +5521,8 @@ async def execute_flow(
             branch_failure_reason = _flow_formatter_failure_reason(completed_step)
             if branch_failure_reason:
                 branch_outcome["failure_reason"] = branch_failure_reason
+            if completed_step.get("formatter_failure_reported"):
+                branch_outcome["failure_reported"] = True
         return branch_outcome
 
     output_branches = [
@@ -5504,11 +5554,21 @@ async def execute_flow(
                     "formatter attachment."
                 )
             )
+            # A finalization failure already reported through the payload
+            # contract must not produce a second terminal-outcome event.
+            failure_already_reported = bool(missing_output_branches) and all(
+                branch.get("failure_reported") for branch in missing_output_branches
+            )
             yield {
                 "type": "FLOW_ERROR",
                 "timestamp": _now_iso(),
                 "details": {
                     "reason": "missing_formatter_outputs",
+                    **(
+                        {"error_type": FORMATTER_OUTPUT_FAILURE_REPORTED}
+                        if failure_already_reported
+                        else {}
+                    ),
                     "message": failure_reason,
                     "missing_output_node_ids": [
                         branch["output_node_id"] for branch in missing_output_branches

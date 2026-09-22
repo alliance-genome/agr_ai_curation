@@ -12,10 +12,14 @@ FlowPersistenceStatus = Literal["pending", "succeeded", "failed"]
 
 _TYPED_SUCCESS_OUTPUT_EVENTS = {"FILE_READY", "CHAT_OUTPUT_READY"}
 _MACHINE_FAILURE_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
+# A formatter finalization/delivery failure reported through the payload
+# contract (ALL-1275); the terminal outcome must not capture it again.
+FORMATTER_OUTPUT_FAILURE_REPORTED = "formatter_output_failure_reported"
 FLOW_FAILURE_REASONS_REPORTED_UPSTREAM = {
     "extraction_persistence_empty_result",
     "extraction_persistence_failed",
     "extraction_persistence_partial_result",
+    FORMATTER_OUTPUT_FAILURE_REPORTED,
 }
 
 

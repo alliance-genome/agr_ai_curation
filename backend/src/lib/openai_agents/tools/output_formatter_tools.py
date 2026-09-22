@@ -18,6 +18,7 @@ from typing import Any, cast, get_args
 from agents import function_tool
 from pydantic import BaseModel, ValidationError
 
+from src.lib.context import get_current_session_id, get_current_trace_id
 from src.lib.flows.chat_output_delivery import (
     record_chat_output_cannot_complete,
     record_chat_output_failure,
@@ -167,16 +168,33 @@ def _bounded_row(row: Mapping[str, Any]) -> dict[str, Any]:
     return bounded
 
 
+def _report_context(bundle: FlowOutputArtifactBundle) -> dict[str, Any]:
+    """Trace correlation for payload-contract reports, without any row data."""
+
+    return {
+        "trace_id": get_current_trace_id(),
+        "session_id": get_current_session_id(),
+        "correlation": {
+            "flow_run_id": bundle.flow_run_id,
+            "document_id": bundle.document_id,
+        },
+    }
+
+
 def _budgeted_tool_json(
     payload: Mapping[str, Any],
     *,
     tool_name: str,
     formatter_agent_id: str,
+    report_context: Mapping[str, Any],
+    committed_keys: Sequence[str] = (),
 ) -> str:
     """Serialize one tool response, never exceeding the configured total budget.
 
     Paged tools size their pages to the budget, so an escape here is a contract
     failure: it is reported once and replaced by a compact, actionable error.
+    A committed result (a saved file or delivered output) is never rewritten as
+    an error; it is reduced to its ``committed_keys`` instead.
     """
 
     encoded = _tool_json(payload)
@@ -196,7 +214,17 @@ def _budgeted_tool_json(
         phase="formatter_tool_response",
         tool_name=tool_name,
         agent=formatter_agent_id,
+        trace_id=report_context.get("trace_id"),
+        session_id=report_context.get("session_id"),
+        correlation=report_context.get("correlation"),
     )
+    if committed_keys:
+        return _tool_json(
+            {
+                **{key: payload[key] for key in committed_keys if key in payload},
+                "receipt_reduced_to_budget": True,
+            }
+        )
     return _tool_json(
         {
             "status": "invalid",
@@ -217,18 +245,21 @@ def _page_to_budget(
     start: int,
     max_count: int,
     build_payload: Callable[[list[Any], str], Mapping[str, Any]],
+    render: Callable[[Any], Any] = lambda item: item,
 ) -> tuple[list[Any], str]:
     """Take up to ``max_count`` items from ``start`` that fit the response budget.
 
-    Returns the page and the next cursor ("" when the items are exhausted).
-    At least one item is returned so continuation always advances; a single
-    oversized item is then caught by the final response budget guard.
+    ``render`` converts each item only as it is paged. Returns the rendered page
+    and the next cursor ("" when the items are exhausted). At least one item is
+    returned so continuation always advances; a single oversized item is then
+    caught by the final response budget guard.
     """
 
     limit = get_output_tool_max_response_chars()
     used = len(_tool_json(build_payload([], _CURSOR_PLACEHOLDER)))
     page: list[Any] = []
-    for item in items[start : start + max_count]:
+    for raw_item in items[start : start + max_count]:
+        item = render(raw_item)
         item_chars = len(_tool_json({"i": item})) - len('{"i": }') + 2
         if page and used + item_chars > limit:
             break
@@ -626,10 +657,18 @@ def _projection_plan_from_tool_payload(
 def _projection_summary(result: FlowOutputProjectionResult) -> dict[str, Any]:
     """Compact receipt facts about a finalized projection; never its rows."""
 
+    headers = [column.header or column.key for column in result.columns]
+    column_limit = get_output_tool_catalog_page_size()
     return {
         "format": result.format,
         "row_source": result.row_source,
-        "columns": [column.header or column.key for column in result.columns],
+        "columns": headers[:column_limit],
+        **(
+            {"columns_omitted": len(headers) - column_limit}
+            if len(headers) > column_limit
+            else {}
+        ),
+        "column_count": len(headers),
         "total_count": result.total_count,
         "row_count": len(result.rows),
         "truncated": result.truncated,
@@ -1057,26 +1096,6 @@ def _apply_bundle_default_source(
     )
 
 
-def _validate_plan_payload(
-    bundle: FlowOutputArtifactBundle,
-    plan: FlowOutputProjectionPlan,
-) -> dict[str, Any]:
-    errors, warnings, columns = validate_projection_plan(bundle, plan)
-    if not errors:
-        errors.extend(_formatter_plan_constraint_errors(plan, columns))
-    status = "invalid" if errors else "ok"
-    return {
-        "status": status,
-        "errors": errors,
-        "warnings": [
-            _bounded_text(warning)
-            for warning in warnings[:_MAX_LIST_ITEMS]
-        ],
-        "columns": _compact_columns(columns),
-        "plan": plan.model_dump(mode="json", exclude_defaults=True),
-    }
-
-
 def _plan_from_args(
     *,
     bundle: FlowOutputArtifactBundle,
@@ -1188,6 +1207,46 @@ def _capabilities_payload(
     }
 
 
+def _bounded_list_fields(payload: dict[str, Any], keys: Sequence[str]) -> dict[str, Any]:
+    """Cap summary lists at the preview item limit with explicit omitted counts."""
+
+    for key in keys:
+        values = payload.get(key)
+        if isinstance(values, list) and len(values) > _MAX_LIST_ITEMS:
+            payload[key] = values[:_MAX_LIST_ITEMS]
+            payload[f"{key}_omitted"] = len(values) - _MAX_LIST_ITEMS
+    return payload
+
+
+def _bounded_generic_source_summary(bundle: FlowOutputArtifactBundle) -> dict[str, Any]:
+    """Generic-source summary with bounded key lists; the catalog lists every key."""
+
+    summary = _generic_source_summary(bundle)
+    key_lists = ("all_attribute_keys", "shared_attribute_keys", "keys_missing_from_some_objects")
+    for source in summary["sources"]:
+        _bounded_list_fields(
+            source,
+            (*key_lists, "adapter_keys", "domain_pack_ids", "object_types", "semantic_classes"),
+        )
+        for group in source["semantic_class_attribute_groups"]:
+            _bounded_list_fields(group, key_lists)
+        for notice in source["notices"]:
+            _bounded_list_fields(notice, ("keys_missing_from_some_objects",))
+        _bounded_list_fields(source, ("semantic_class_attribute_groups", "notices"))
+    _bounded_list_fields(summary, ("sources",))
+    if "_omitted" in json.dumps(summary):
+        summary["complete_keys"] = (
+            "Some lists are shortened; search inspect_output_artifacts with "
+            "catalog_query='object.attribute.' for every attribute field."
+        )
+    return summary
+
+
+def _next_row_cursor(offset: int, page_length: int, available: int) -> str:
+    next_offset = offset + page_length
+    return str(next_offset) if next_offset < available else ""
+
+
 def _catalog_entry(field: Any, *, example_limit: int) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "ref": field.ref,
@@ -1209,6 +1268,7 @@ def _report_delivery_failure(
     tool_name: str,
     formatter_agent_id: str,
     output_format: str,
+    report_context: Mapping[str, Any],
     measured: int | None = None,
     limit: int | None = None,
     setting: str | None = None,
@@ -1231,7 +1291,13 @@ def _report_delivery_failure(
         phase="formatter_finalization",
         tool_name=tool_name,
         agent=formatter_agent_id,
-        correlation={"output_format": output_format, **dict(correlation or {})},
+        trace_id=report_context.get("trace_id"),
+        session_id=report_context.get("session_id"),
+        correlation={
+            **dict(report_context.get("correlation") or {}),
+            "output_format": output_format,
+            **dict(correlation or {}),
+        },
     )
     return violation.diagnostic()
 
@@ -1276,12 +1342,73 @@ def build_output_formatter_tools(
             raise ValueError("The curator selected fixed output fields. Use build_default_projection_plan and keep that exact plan; edit the flow to change it.")
         return plan
 
-    def respond(tool_name: str, payload: Mapping[str, Any]) -> str:
+    def respond(
+        tool_name: str,
+        payload: Mapping[str, Any],
+        *,
+        committed_keys: Sequence[str] = (),
+    ) -> str:
         return _budgeted_tool_json(
             payload,
             tool_name=tool_name,
             formatter_agent_id=formatter_agent_id,
+            report_context=_report_context(bundle),
+            committed_keys=committed_keys,
         )
+
+    def plan_response(
+        tool_name: str,
+        plan: FlowOutputProjectionPlan,
+        cursor: str = "",
+    ) -> str:
+        """Validated plan echo; wide plans page their columns within the budget."""
+
+        errors, warnings, columns = validate_projection_plan(bundle, plan)
+        if not errors:
+            errors.extend(_formatter_plan_constraint_errors(plan, columns))
+        base = {
+            "status": "invalid" if errors else "ok",
+            "errors": [_bounded_text(error) for error in errors[:_MAX_LIST_ITEMS]],
+            "error_count": len(errors),
+            "warnings": [_bounded_text(warning) for warning in warnings[:_MAX_LIST_ITEMS]],
+        }
+        offset = _parse_cursor(cursor)
+        if not offset:
+            full = {
+                **base,
+                "columns": _compact_columns(columns),
+                "plan": plan.model_dump(mode="json", exclude_defaults=True),
+            }
+            if len(_tool_json(full)) <= get_output_tool_max_response_chars():
+                return respond(tool_name, full)
+        if offset > len(columns):
+            raise ValueError(f"cursor {offset} is beyond the plan's {len(columns)} columns.")
+        column_specs = [column.model_dump(mode="json", exclude_defaults=True) for column in columns]
+        plan_metadata = plan.model_dump(mode="json", exclude_defaults=True, exclude={"columns"})
+
+        def build(page: list[Any], next_cursor: str) -> dict[str, Any]:
+            return {
+                **base,
+                "plan": plan_metadata,
+                "plan_columns_paged": True,
+                "column_count": len(columns),
+                "columns_cursor": str(offset),
+                "next_columns_cursor": next_cursor,
+                "columns": page,
+                "note": (
+                    "This plan's columns are paged. Pass an empty plan_json to "
+                    "validate/preview/finalize to use this plan unchanged, or rebuild "
+                    "plan.columns from all pages before changing it."
+                ),
+            }
+
+        page, next_cursor = _page_to_budget(
+            column_specs,
+            start=offset,
+            max_count=max(1, len(column_specs)),
+            build_payload=build,
+        )
+        return respond(tool_name, build(page, next_cursor))
 
     def resolve_final_plan(plan_json: str) -> FlowOutputProjectionPlan:
         if str(plan_json or "").strip():
@@ -1393,14 +1520,21 @@ def build_output_formatter_tools(
                     "catalog_field_count": sum(
                         1 for field in bundle.field_catalog if field.row_source == source
                     ),
-                    "default_column_refs": [
-                        column.field_ref
-                        for column in default_columns_for_row_source(bundle, source)  # type: ignore[arg-type]
-                        if column.field_ref
-                    ],
+                    **_bounded_list_fields(
+                        {
+                            "default_column_refs": [
+                                column.field_ref
+                                for column in default_columns_for_row_source(bundle, source)  # type: ignore[arg-type]
+                                if column.field_ref
+                            ]
+                        },
+                        ("default_column_refs",),
+                    ),
                 }
                 for source in get_args(FlowOutputRowSource)
             }
+
+            generic_summary = _bounded_generic_source_summary(bundle)
 
             def build(page: list[Any], next_cursor: str) -> dict[str, Any]:
                 return {
@@ -1413,7 +1547,7 @@ def build_output_formatter_tools(
                         "artifact_count": len(bundle.artifacts),
                         "row_sources": row_sources,
                         "source_refs": _available_source_refs(bundle),
-                        "generic_source_summary": _generic_source_summary(bundle),
+                        "generic_source_summary": generic_summary,
                         "warning_count": len(bundle.warnings),
                         "warnings": [
                             _bounded_text(warning) for warning in bundle.warnings[:_MAX_LIST_ITEMS]
@@ -1472,14 +1606,12 @@ def build_output_formatter_tools(
                 limit=min(offset + page_size, _MAX_PROJECTION_ROWS),
             )
             result = apply_projection_plan(bundle, plan)
-            if offset > result.total_count:
+            available = min(result.total_count, _MAX_PROJECTION_ROWS)
+            if offset > available:
                 raise ValueError(
-                    f"cursor {offset} is beyond the {result.total_count} matching rows."
+                    f"cursor {offset} is beyond the {available} inspectable matching rows."
                 )
-            items = [
-                {"row_ref": row_ref, "row": _bounded_row(row)}
-                for row_ref, row in zip(result.row_refs, result.rows)
-            ]
+            items = list(zip(result.row_refs, result.rows))
 
             def build(page: list[Any], next_cursor: str) -> dict[str, Any]:
                 return {
@@ -1489,6 +1621,14 @@ def build_output_formatter_tools(
                     "rows": [item["row"] for item in page],
                     "row_refs": [item["row_ref"] for item in page],
                     "total_count": result.total_count,
+                    **(
+                        {
+                            "rows_beyond_inspection_ceiling": result.total_count - available,
+                            "narrow_with": "filters_json",
+                        }
+                        if result.total_count > available
+                        else {}
+                    ),
                     "cursor": str(offset),
                     "next_cursor": next_cursor,
                     "truncated": bool(next_cursor),
@@ -1497,11 +1637,14 @@ def build_output_formatter_tools(
                     ],
                 }
 
-            page, next_cursor = _page_to_budget(
-                items, start=offset, max_count=page_size, build_payload=build
+            page, _ = _page_to_budget(
+                items,
+                start=offset,
+                max_count=page_size,
+                build_payload=build,
+                render=lambda item: {"row_ref": item[0], "row": _bounded_row(item[1])},
             )
-            if not next_cursor and offset + len(page) < result.total_count:
-                next_cursor = str(offset + len(page))
+            next_cursor = _next_row_cursor(offset, len(page), available)
             return respond("inspect_output_rows", build(page, next_cursor))
         except Exception as exc:
             return respond("inspect_output_rows", {"status": "invalid", "errors": [str(exc)]})
@@ -1666,13 +1809,11 @@ def build_output_formatter_tools(
         row_source: str = "",
         row_strategy: str = "",
         source_ref: str = "",
+        cursor: str = "",
     ) -> str:
         try:
             if locked_plan is not None:
-                return respond(
-                    "build_default_projection_plan",
-                    _validate_plan_payload(bundle, locked_plan),
-                )
+                return plan_response("build_default_projection_plan", locked_plan, cursor)
             selected_row_source = _coerce_row_source(row_source, bundle.default_row_source)
             selected_row_strategy = _coerce_row_strategy(row_strategy)
             plan = _default_projection_plan_for_formatter(
@@ -1682,26 +1823,23 @@ def build_output_formatter_tools(
                 row_strategy=selected_row_strategy,
                 source_ref=source_ref,
             )
-            return respond("build_default_projection_plan", _validate_plan_payload(bundle, plan))
+            return plan_response("build_default_projection_plan", plan, cursor)
         except Exception as exc:
             return respond("build_default_projection_plan", {"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="validate_output_projection",
         description_override=(
-            "Validate a projection plan over saved bundle fields. The format is "
-            "forced to this formatter's output type. Extra raw-content keys are rejected."
+            "Validate a projection plan over saved bundle fields. Empty plan_json "
+            "validates the default (or curator-fixed) plan. The format is forced to "
+            "this formatter's output type. Extra raw-content keys are rejected."
         ),
         strict_mode=False,
     )
-    async def _validate_output_projection(plan_json: str) -> str:
+    async def _validate_output_projection(plan_json: str = "", cursor: str = "") -> str:
         try:
-            plan = _projection_plan_from_tool_payload(
-                plan_json,
-                output_format=resolved_output_format,
-            )
-            plan = enforce_selection(plan) if locked_plan is not None else _apply_bundle_default_source(bundle, plan)
-            return respond("validate_output_projection", _validate_plan_payload(bundle, plan))
+            plan = resolve_final_plan(plan_json)
+            return plan_response("validate_output_projection", plan, cursor)
         except Exception as exc:
             return respond("validate_output_projection", {"status": "invalid", "errors": [str(exc)]})
 
@@ -1715,16 +1853,12 @@ def build_output_formatter_tools(
         strict_mode=False,
     )
     async def _preview_output_projection(
-        plan_json: str,
+        plan_json: str = "",
         limit: int | None = None,
         cursor: str = "",
     ) -> str:
         try:
-            plan = _projection_plan_from_tool_payload(
-                plan_json,
-                output_format=resolved_output_format,
-            )
-            plan = enforce_selection(plan) if locked_plan is not None else _apply_bundle_default_source(bundle, plan)
+            plan = resolve_final_plan(plan_json)
             errors, warnings, columns = validate_projection_plan(bundle, plan)
             if not errors:
                 errors.extend(_formatter_plan_constraint_errors(plan, columns))
@@ -1754,14 +1888,13 @@ def build_output_formatter_tools(
                 plan,
                 preview_limit=min(offset + preview_limit, _MAX_PROJECTION_ROWS),
             )
-            if offset > result.total_count:
+            # Rows a finalized output would contain: an explicit max_rows limits them.
+            available = min(result.total_count, plan.max_rows or _MAX_PROJECTION_ROWS)
+            if offset > available:
                 raise ValueError(
-                    f"cursor {offset} is beyond the {result.total_count} projected rows."
+                    f"cursor {offset} is beyond the {available} rows this projection outputs."
                 )
-            items = [
-                {"row_ref": row_ref, "row": _bounded_row(row)}
-                for row_ref, row in zip(result.row_refs, result.rows)
-            ]
+            items = list(zip(result.row_refs, result.rows))
 
             def build(page: list[Any], next_cursor: str) -> dict[str, Any]:
                 return {
@@ -1776,17 +1909,24 @@ def build_output_formatter_tools(
                         "preview_rows": [item["row"] for item in page],
                         "row_refs": [item["row_ref"] for item in page],
                         "total_count": result.total_count,
+                        "output_row_count": available,
+                        "limited_by_max_rows": bool(
+                            plan.max_rows is not None and result.total_count > plan.max_rows
+                        ),
                         "cursor": str(offset),
                         "next_cursor": next_cursor,
                         "truncated": bool(next_cursor),
                     },
                 }
 
-            page, next_cursor = _page_to_budget(
-                items, start=offset, max_count=preview_limit, build_payload=build
+            page, _ = _page_to_budget(
+                items,
+                start=offset,
+                max_count=preview_limit,
+                build_payload=build,
+                render=lambda item: {"row_ref": item[0], "row": _bounded_row(item[1])},
             )
-            if not next_cursor and offset + len(page) < result.total_count:
-                next_cursor = str(offset + len(page))
+            next_cursor = _next_row_cursor(offset, len(page), available)
             return respond("preview_output_projection", build(page, next_cursor))
         except Exception as exc:
             return respond("preview_output_projection", {"status": "invalid", "errors": [str(exc)]})
@@ -1858,6 +1998,7 @@ def build_output_formatter_tools(
                     tool_name="finalize_and_save",
                     formatter_agent_id=formatter_agent_id,
                     output_format=resolved_output_format,
+                    report_context=_report_context(bundle),
                     measured=exc.measured,
                     limit=exc.limit,
                     setting=exc.setting,
@@ -1895,6 +2036,7 @@ def build_output_formatter_tools(
                     tool_name="finalize_and_save",
                     formatter_agent_id=formatter_agent_id,
                     output_format=resolved_output_format,
+                    report_context=_report_context(bundle),
                     measured=projection.total_count,
                     unit="rows",
                 )
@@ -1923,7 +2065,14 @@ def build_output_formatter_tools(
                     "projection_summary",
                 }
             }
-            return respond("finalize_and_save", _jsonable(file_info))
+            return respond(
+                "finalize_and_save",
+                _jsonable(file_info),
+                committed_keys=(
+                    "status", "file_id", "filename", "format", "download_url",
+                    "size_bytes", "saved_file",
+                ),
+            )
 
     @function_tool(
         name_override="finalize_chat_output",
@@ -2007,6 +2156,7 @@ def build_output_formatter_tools(
                     tool_name="finalize_chat_output",
                     formatter_agent_id=formatter_agent_id,
                     output_format=resolved_output_format,
+                    report_context=_report_context(bundle),
                     measured=exc.measured,
                     limit=exc.limit,
                     setting=exc.setting,
@@ -2039,6 +2189,7 @@ def build_output_formatter_tools(
                     tool_name="finalize_chat_output",
                     formatter_agent_id=formatter_agent_id,
                     output_format=resolved_output_format,
+                    report_context=_report_context(bundle),
                     measured=len(content),
                     limit=content_limit,
                     setting="FLOW_OUTPUT_CHAT_MAX_CHARS",
@@ -2072,6 +2223,7 @@ def build_output_formatter_tools(
                     tool_name="finalize_chat_output",
                     formatter_agent_id=formatter_agent_id,
                     output_format=resolved_output_format,
+                    report_context=_report_context(bundle),
                     measured=len(content),
                 )
                 return chat_failure(
@@ -2086,7 +2238,11 @@ def build_output_formatter_tools(
             finalized_chat_receipt = {
                 key: _jsonable(value) for key, value in delivered.items()
             }
-            return respond("finalize_chat_output", finalized_chat_receipt)
+            return respond(
+                "finalize_chat_output",
+                finalized_chat_receipt,
+                committed_keys=("status", "delivered", "chat_output_id", "format", "output_chars"),
+            )
 
     @function_tool(
         name_override="formatter_cannot_complete",

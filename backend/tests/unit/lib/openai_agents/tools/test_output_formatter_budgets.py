@@ -498,3 +498,140 @@ def test_projection_row_refs_follow_filters_and_sorts():
     })
     result = apply_projection_plan(bundle, plan)
     assert result.row_refs == ["object#3", "object#1"]
+
+
+@pytest.mark.asyncio
+async def test_wide_plans_page_columns_and_empty_plan_uses_default(monkeypatch, reports):
+    monkeypatch.setenv("OUTPUT_TOOL_MAX_RESPONSE_CHARS", "8000")
+    bundle = _wide_bundle(field_count=160)
+    tools = _chat_tools(bundle)
+    wide_plan = {
+        "format": "chat",
+        "row_source": "object",
+        "columns": [
+            {"key": f"field_{n:03d}", "header": f"Field {n:03d}", "field_ref": f"object.attribute.field_{n:03d}"}
+            for n in range(160)
+        ],
+    }
+    collected: list[dict] = []
+    cursor = ""
+    while True:
+        payload, raw = await _call(
+            _tool(tools, "validate_output_projection"),
+            {"plan_json": json.dumps(wide_plan), "cursor": cursor},
+        )
+        assert payload["status"] == "ok", payload
+        assert len(raw) <= 8000
+        assert payload["plan_columns_paged"] is True
+        assert "columns" not in payload["plan"]
+        collected.extend(payload["columns"])
+        cursor = payload["next_columns_cursor"]
+        if not cursor:
+            break
+    assert collected == wide_plan["columns"]
+    assert reports == []
+
+    default_plan, raw = await _call(_tool(tools, "build_default_projection_plan"))
+    assert default_plan["status"] == "ok"
+    assert len(raw) <= 8000
+    preview, _ = await _call(_tool(tools, "preview_output_projection"), {"plan_json": ""})
+    assert preview["status"] == "ok"
+    assert preview["preview"]["total_count"] == 3
+    assert reports == []
+
+
+@pytest.mark.asyncio
+async def test_generic_summary_lists_are_bounded_with_omitted_counts(monkeypatch):
+    rows = [
+        {
+            "artifact.adapter_key": "generic",
+            "artifact.extraction_result_id": "generic-result",
+            "object.object_type": "generic_object",
+            **{f"object.attribute.key_{n:02d}": f"v{n}" for n in range(30)},
+        }
+    ]
+    bundle = FlowOutputArtifactBundle(
+        flow_name="Generic",
+        artifacts=[FlowOutputArtifact(source_key="generic", rows_by_source={"object": rows})],
+        field_catalog=[
+            FlowOutputField(ref=f"object.attribute.key_{n:02d}", label=f"Key {n}", value_type="string", row_source="object")
+            for n in range(30)
+        ],
+        default_row_source="object",
+    )
+    payload, _ = await _call(_tool(_chat_tools(bundle), "inspect_output_artifacts"))
+    source = payload["inventory"]["generic_source_summary"]["sources"][0]
+    limit = output_formatter_tools._MAX_LIST_ITEMS
+    assert source["all_attribute_keys"] == [f"key_{n:02d}" for n in range(limit)]
+    assert source["all_attribute_keys_omitted"] == 30 - limit
+    assert "catalog_query" in payload["inventory"]["generic_source_summary"]["complete_keys"]
+
+
+@pytest.mark.asyncio
+async def test_preview_cursor_stops_at_curator_max_rows():
+    tools = _chat_tools(_rows_bundle(20))
+    plan = {**_NAME_PLAN, "max_rows": 5}
+    first, _ = await _call(
+        _tool(tools, "preview_output_projection"), {"plan_json": json.dumps(plan), "limit": 3}
+    )
+    assert first["preview"]["row_refs"] == ["object#1", "object#2", "object#3"]
+    assert first["preview"]["next_cursor"] == "3"
+    second, _ = await _call(
+        _tool(tools, "preview_output_projection"),
+        {"plan_json": json.dumps(plan), "limit": 3, "cursor": "3"},
+    )
+    assert second["preview"]["row_refs"] == ["object#4", "object#5"]
+    assert second["preview"]["next_cursor"] == ""
+    assert second["preview"]["limited_by_max_rows"] is True
+    assert second["preview"]["output_row_count"] == 5
+    beyond, _ = await _call(
+        _tool(tools, "preview_output_projection"),
+        {"plan_json": json.dumps(plan), "cursor": "6"},
+    )
+    assert beyond["status"] == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_committed_receipt_is_reduced_not_rewritten_as_error(monkeypatch, reports):
+    async def save(*_args):
+        return {
+            "file_id": "file-1",
+            "filename": "wide.csv",
+            "format": "csv",
+            "download_url": "/api/files/file-1/download",
+            "source_extraction_result_ids": [f"result-{n}" for n in range(400)],
+        }
+
+    monkeypatch.setenv("OUTPUT_TOOL_MAX_RESPONSE_CHARS", "2000")
+    tools = build_output_formatter_tools(
+        bundle=_rows_bundle(2),
+        output_format="csv",
+        formatter_agent_id="csv_formatter",
+        save_projected_output=save,
+    )
+    payload, raw = await _call(
+        _tool(tools, "finalize_and_save"), {"plan_json": json.dumps({**_NAME_PLAN, "format": "csv"})}
+    )
+    assert payload["status"] == "ok"
+    assert payload["file_id"] == "file-1"
+    assert payload["download_url"] == "/api/files/file-1/download"
+    assert payload["receipt_reduced_to_budget"] is True
+    assert len(raw) <= 2000
+    assert len(reports) == 1
+
+
+@pytest.mark.asyncio
+async def test_editing_an_excluded_row_is_rejected_at_validation():
+    plan = {
+        **_NAME_PLAN,
+        "overrides": [
+            {"row_ref": "object#1", "exclude": True},
+            {"row_ref": "object#1", "column_key": "name", "value": "x"},
+        ],
+    }
+    payload, _ = await _call(
+        _tool(_chat_tools(_rows_bundle(2)), "validate_output_projection"),
+        {"plan_json": json.dumps(plan)},
+    )
+    assert payload["status"] == "invalid"
+    assert "is excluded" in payload["errors"][0]

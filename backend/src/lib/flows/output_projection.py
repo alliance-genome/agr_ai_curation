@@ -2219,8 +2219,9 @@ def _format_elements_value(
         template = transform.default
         if selector_ref:
             selector = element[len(refs)]
-            if not _is_empty(selector) and str(selector) in transform.mapping:
-                template = transform.mapping[str(selector)]
+            selector_key = str(selector).lower() if isinstance(selector, bool) else str(selector)
+            if not _is_empty(selector) and selector_key in transform.mapping:
+                template = transform.mapping[selector_key]
 
         def substitute(match: re.Match[str]) -> str:
             value = field_values[int(match.group(1)) - 1]
@@ -2433,6 +2434,7 @@ def _override_errors(
         if row_id in selected_row_ids
     }
     column_keys = {column.key for column in columns}
+    excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
     seen: set[tuple[str, str | None]] = set()
     for index, override in enumerate(plan.overrides, start=1):
         context = f"Override {index}"
@@ -2452,6 +2454,10 @@ def _override_errors(
         elif not override.column_key or override.column_key not in column_keys:
             errors.append(
                 f"{context}: column_key '{override.column_key}' is not an output column key."
+            )
+        elif override.row_ref in excluded_refs:
+            errors.append(
+                f"{context}: row_ref '{override.row_ref}' is excluded, so its cells cannot be edited."
             )
         identity = (override.row_ref, None if override.exclude else override.column_key)
         if identity in seen:

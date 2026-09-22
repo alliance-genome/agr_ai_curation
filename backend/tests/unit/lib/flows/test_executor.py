@@ -7062,6 +7062,79 @@ class TestExecuteFlowTermination:
         assert cannot_complete_finished["data"]["failure_reason"].startswith(
             "Formatter could not create an output: Unable to create JSON"
         )
+        # An unreported formatter failure keeps the terminal-outcome report.
+        assert "error_type" not in formatter_error["details"]
+
+    @pytest.mark.asyncio
+    async def test_reported_chat_delivery_failure_is_not_reported_again(self, monkeypatch):
+        from src.lib.flows.outcome import FORMATTER_OUTPUT_FAILURE_REPORTED, FlowRunOutcome
+
+        flow = _make_output_attachment_flow([
+            _task_input_node(),
+            _agent_node("n1", "pdf_extraction", step_goal="Read document"),
+            _agent_node("n2", "chat_output_formatter", step_goal="Show table"),
+        ], source_node_id="n1", output_node_id="n2")
+        pdf_step = {
+            "step": 1,
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "PDF specialist completed document access.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        chat_step = {
+            "step": 2,
+            "node_id": "n2",
+            "agent_id": "chat_output_formatter",
+            "agent_name": "Chat Output",
+            "tool_name": "ask_chat_output_formatter_specialist",
+            "output": json.dumps({
+                "status": "cannot_complete",
+                "delivered": False,
+                "code": "operational_ceiling_exceeded",
+                "reason": "The projection matched 12000 rows, above the operational ceiling of 10000 rows.",
+                "failure_reported": True,
+            }),
+            "formatter_failure_reported": True,
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=["ask_pdf_extraction_specialist", "ask_chat_output_formatter_specialist"],
+        )
+        monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **_kwargs: supervisor)
+        monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *_args, **_kwargs: "run flow")
+
+        async def _fake_run(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-chat"}}
+            supervisor._flow_execution_state["completed_steps"].append(chat_step)
+            yield {"type": "TOOL_COMPLETE", "details": {"toolName": chat_step["tool_name"]}}
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_streamed", _fake_run)
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s4")]
+
+        assert not any(event.get("type") == "CHAT_OUTPUT_READY" for event in events)
+        flow_error = next(
+            event for event in events
+            if event.get("details", {}).get("reason") == "missing_formatter_outputs"
+        )
+        assert flow_error["details"]["error_type"] == FORMATTER_OUTPUT_FAILURE_REPORTED
+        assert flow_error["details"]["output_branches"][0]["failure_reported"] is True
+        finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert finished["data"]["status"] == "failed"
+        assert "operational ceiling of 10000 rows" in finished["data"]["failure_reason"]
+        outcome = FlowRunOutcome()
+        outcome.observe(flow_error)
+        outcome.observe({"type": "FLOW_FINISHED", **finished["data"]})
+        assert outcome.status == "failed"
+        assert outcome.failure_already_reported is True
 
     @pytest.mark.parametrize(
         "drain_error_timing",
@@ -8921,3 +8994,49 @@ async def test_chat_formatter_delivers_all_custom_rows_through_bound_tools(monke
     assert payload["row_sources"] == {"artifact": 0, "object": 82, "evidence": 1, "validation_finding": 1}
     assert payload["curator_output_request"]["custom_instructions"] == instructions
     assert captured["query"] == "Use the requested columns"
+
+
+def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_result(monkeypatch):
+    """The executor holds rendered chat content; the supervisor sees only a receipt."""
+    from src.lib.flows.chat_output_delivery import deliver_projected_chat_output
+
+    executor = _executor_module()
+    table = "| Gene |\n| --- |\n| unc-54 |"
+
+    def _chat_tool(*, tool_name, tool_description, **_kwargs):
+        @function_tool(name_override=tool_name, description_override=tool_description)
+        async def _tool(query: str) -> str:
+            receipt = await deliver_projected_chat_output(table, {"status": "ok", "delivered": True})
+            return json.dumps(receipt)
+
+        return _tool
+
+    def _streaming_tool(*, tool_name, tool_description, **_kwargs):
+        @function_tool(name_override=tool_name, description_override=tool_description)
+        async def _tool(query: str) -> str:
+            return "Document read."
+
+        return _tool
+
+    monkeypatch.setattr(executor, "get_agent_by_id", lambda *_args, **_kwargs: MagicMock(spec=Agent))
+    monkeypatch.setattr(executor, "_create_streaming_tool", _streaming_tool)
+    monkeypatch.setattr(executor, "_make_flow_chat_output_tool", _chat_tool)
+    flow = _make_output_attachment_flow([
+        _task_input_node(),
+        _agent_node("gene", "gene"),
+        _agent_node("chat", "chat_output_formatter"),
+    ], source_node_id="gene", output_node_id="chat")
+    tools, _, _, execution_state = get_all_agent_tools(
+        flow, document_id="doc-1", include_unavailable=True
+    )
+    tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+    asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
+    result = asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "show"})))
+
+    completed_step = execution_state["completed_steps"][1]
+    assert completed_step["agent_id"] == "chat_output_formatter"
+    assert completed_step["projected_chat_output"] == table
+    assert "unc-54" not in result
+    assert "unc-54" not in completed_step["output"]
+    assert json.loads(completed_step["output"])["delivered"] is True

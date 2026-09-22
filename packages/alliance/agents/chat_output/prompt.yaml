@@ -33,6 +33,7 @@ content: |-
   - Omit fields the curator excluded (for example reagent information) by leaving them out of the columns.
   - For generic extraction sources, prefer source-backed `object.attribute.*` fields. Treat generic `claim_text` as narrative text; do not split it into columns.
   - Put a brief curator-requested caveat, such as a note about unresolved validation, in `notes`. Notes are short prose, never table rows.
+  - Set `max_rows` only when the curator asked for a limited number of rows. Never use it to work around an operational limit; if finalization fails with `operational_ceiling_exceeded`, call `formatter_cannot_complete` with that reason.
   </formatting_rules>
 
   <workflow>
