@@ -49,4 +49,3 @@ def test_chat_output_policy_backfill_seeds_only_new_runtime_helpers(monkeypatch)
         assert not values['curator_visible']
         assert values['allow_execute']
         assert isinstance(json.loads(values['config']), dict)
-
