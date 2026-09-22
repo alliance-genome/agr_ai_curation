@@ -1125,11 +1125,36 @@ def _make_flow_chat_output_tool(
         tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=getattr(ctx, "run_config", None))
         # The specialist's own final text is a confirmation; delivered content
         # and the receipt come only from the application-held delivery.
-        await streaming_tool.on_invoke_tool(tool_ctx, json.dumps({"query": query}))
+        post_delivery_error: str | None = None
+        try:
+            await streaming_tool.on_invoke_tool(tool_ctx, json.dumps({"query": query}))
+        except Exception as exc:
+            if not delivery.delivered:
+                raise
+            # The application already rendered and holds the complete table, so
+            # it is still delivered once; the specialist error is reported and
+            # recorded on the receipt rather than discarding finished output.
+            post_delivery_error = type(exc).__name__
+            report_runtime_exception(
+                exc,
+                component="flow_chat_output",
+                operation="specialist_error_after_delivery",
+                context={
+                    "flow_run_id": flow_run_id,
+                    "document_id": document_id,
+                    "trace_id": get_current_trace_id(),
+                    "session_id": get_current_session_id(),
+                },
+            )
         if delivery.delivered:
             return json.dumps(
                 {
                     **delivery.receipt,
+                    **(
+                        {"post_delivery_error": post_delivery_error}
+                        if post_delivery_error
+                        else {}
+                    ),
                     "message": (
                         "The chat output was delivered to the curator. Do not repeat or "
                         "summarize its rows."
@@ -1138,23 +1163,34 @@ def _make_flow_chat_output_tool(
                 ensure_ascii=False,
                 default=str,
             )
-        if delivery.cannot_complete is not None:
-            return json.dumps(delivery.cannot_complete, ensure_ascii=False, default=str)
         if delivery.failure is not None:
-            # Already reported by the finalizer; surface its explicit reason.
+            # Already reported by the finalizer: surface its explicit reason, and
+            # keep any later cannot-complete explanation from the formatter.
+            failure_errors = [str(error) for error in delivery.failure.get("errors") or []]
             return json.dumps(
                 {
                     "status": "cannot_complete",
                     "format": output_format,
                     "formatter_agent_id": agent_id,
                     "delivered": False,
-                    "reason": " ".join(str(error) for error in delivery.failure.get("errors") or []),
+                    **(delivery.cannot_complete or {}),
+                    "reason": " ".join(
+                        part
+                        for part in (
+                            " ".join(failure_errors),
+                            str((delivery.cannot_complete or {}).get("reason") or ""),
+                        )
+                        if part
+                    ),
                     "code": delivery.failure.get("code"),
+                    "failure_errors": failure_errors,
                     "failure_reported": True,
                 },
                 ensure_ascii=False,
                 default=str,
             )
+        if delivery.cannot_complete is not None:
+            return json.dumps(delivery.cannot_complete, ensure_ascii=False, default=str)
         violation = PayloadContractViolation(
             category="output_delivery_failure",
             component="flow_chat_output",

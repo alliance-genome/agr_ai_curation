@@ -389,3 +389,102 @@ async def test_operational_ceiling_in_flow_chat_step_fails_once_with_saved_data_
     assert len(reports) == 1
     assert reports[0][0].category == "output_delivery_failure"
     assert len(step["candidate"].payload_json["extracted_objects"]) == 7
+
+
+@pytest.mark.asyncio
+async def test_cannot_complete_after_reported_ceiling_keeps_one_capture(monkeypatch):
+    """Following the prompt after a ceiling failure must not add a second capture."""
+    from src.lib.flows import output_projection
+    from src.lib.flows.outcome import FORMATTER_OUTPUT_FAILURE_REPORTED, FlowRunOutcome
+    from src.lib.openai_agents.tools import output_formatter_tools
+
+    executor = _executor_module()
+    reports: list[tuple[Any, dict[str, Any]]] = []
+
+    def record(violation, **kwargs):
+        reports.append((violation, kwargs))
+
+    monkeypatch.setattr(executor, "report_payload_contract_violation", record)
+    monkeypatch.setattr(output_formatter_tools, "report_payload_contract_violation", record)
+    monkeypatch.setattr(output_projection, "MAX_PROJECTION_ROWS", 5)
+    model = _ScriptedFormatterModel(
+        [
+            ("finalize_chat_output", {"plan_json": json.dumps(SEMANTIC_CHAT_PLAN)}),
+            (
+                "formatter_cannot_complete",
+                {"reason": "The requested table exceeds the operational row limit."},
+            ),
+        ]
+    )
+    _install_scripted_formatter(monkeypatch, executor, model)
+    tool = _chat_tool(executor, completed_steps=[build_semantic_output_step(min_diagnostic_chars=10_000)])
+
+    with chat_output_delivery_scope() as delivery:
+        raw = await _invoke(tool, "Render the table.")
+    result = json.loads(raw)
+
+    assert delivery.output is None
+    assert result["status"] == "cannot_complete"
+    assert result["failure_reported"] is True
+    assert result["code"] == "operational_ceiling_exceeded"
+    assert "7 rows" in result["reason"]
+    assert "operational row limit" in result["reason"]
+    assert executor._formatter_failure_reported(raw)
+    assert "operational ceiling" in executor._flow_formatter_failure_reason({"output": raw})
+    assert len(reports) == 1
+
+    outcome = FlowRunOutcome()
+    outcome.observe({
+        "type": "FLOW_ERROR",
+        "details": {"reason": "missing_formatter_outputs", "error_type": FORMATTER_OUTPUT_FAILURE_REPORTED},
+    })
+    outcome.observe({"type": "FLOW_FINISHED", "status": "failed", "failure_reason": "Formatter could not create an output"})
+    assert outcome.status == "failed"
+    assert outcome.failure_already_reported is True
+
+
+class _FailAfterFinalizeModel(_ScriptedFormatterModel):
+    async def get_response(self, *args, **kwargs):
+        if len(self.requests) >= len(self.steps):
+            self.requests.append({"instructions": "", "input": [], "tool_names": []})
+            raise RuntimeError("provider stream dropped after finalization")
+        return await super().get_response(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_specialist_error_after_delivery_still_delivers_table_once(monkeypatch):
+    executor = _executor_module()
+    runtime_reports: list[tuple[BaseException, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        executor,
+        "report_runtime_exception",
+        lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
+    )
+    model = _FailAfterFinalizeModel(
+        [("finalize_chat_output", {"plan_json": json.dumps(SEMANTIC_CHAT_PLAN)})]
+    )
+    _install_scripted_formatter(monkeypatch, executor, model)
+    tool = _chat_tool(executor, completed_steps=[build_semantic_output_step(min_diagnostic_chars=10_000)])
+
+    with chat_output_delivery_scope() as delivery:
+        receipt = json.loads(await _invoke(tool, "Render the table."))
+
+    assert delivery.delivered
+    assert (delivery.output or "").split("\n")[: len(EXPECTED_ROWS) + 2] == _expected_table_lines()
+    assert receipt["delivered"] is True
+    assert receipt["post_delivery_error"] == "RuntimeError"
+    assert len(runtime_reports) == 1
+    assert runtime_reports[0][1]["operation"] == "specialist_error_after_delivery"
+
+
+@pytest.mark.asyncio
+async def test_specialist_error_before_delivery_still_propagates(monkeypatch):
+    executor = _executor_module()
+    model = _FailAfterFinalizeModel([])
+    _install_scripted_formatter(monkeypatch, executor, model)
+    tool = _chat_tool(executor, completed_steps=[build_semantic_output_step(min_diagnostic_chars=10_000)])
+
+    with chat_output_delivery_scope() as delivery:
+        with pytest.raises(Exception, match="provider stream dropped"):
+            await _invoke(tool, "Render the table.")
+    assert delivery.output is None

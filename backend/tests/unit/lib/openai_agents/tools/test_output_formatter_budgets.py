@@ -635,3 +635,81 @@ async def test_editing_an_excluded_row_is_rejected_at_validation():
     )
     assert payload["status"] == "invalid"
     assert "is excluded" in payload["errors"][0]
+
+
+@pytest.mark.asyncio
+async def test_giant_nested_field_is_marked_not_escalated(reports):
+    import hashlib
+
+    giant = [
+        {
+            "method": f"lookup-{n}",
+            "candidates": [
+                {"curie": f"WBbt:{n:04d}{m:03d}", "label": "candidate é " * 40, "synonyms": ["s" * 60] * 8}
+                for m in range(20)
+            ],
+            "request_payload": {"term": "vulval muscle", "notes": "n" * 400, "nested": {"deep": ["x" * 90] * 10}},
+        }
+        for n in range(200)
+    ]
+    encoded = json.dumps(giant, ensure_ascii=False, sort_keys=True)
+    assert len(encoded) > 1_500_000
+    rows = [
+        {
+            "object.object_id": "statement-1",
+            "validation.status": "open",
+            "validation.message": "Could not resolve 'vulval muscle'.",
+            "validation.lookup_attempts": giant,
+        },
+        {
+            "object.object_id": "statement-2",
+            "validation.status": "resolved",
+            "validation.message": "Resolved.",
+            "validation.lookup_attempts": [],
+        },
+    ]
+    bundle = FlowOutputArtifactBundle(
+        flow_name="Diagnostics",
+        artifacts=[FlowOutputArtifact(source_key="diag", rows_by_source={"validation_finding": rows})],
+        field_catalog=[
+            FlowOutputField(ref=ref, label=ref, value_type="string", row_source="validation_finding")
+            for ref in ("object.object_id", "validation.status", "validation.message", "validation.lookup_attempts")
+        ],
+        default_row_source="validation_finding",
+    )
+    tools = _chat_tools(bundle)
+
+    page, raw = await _call(_tool(tools, "inspect_output_rows"), {"row_source": "validation_finding"})
+    assert page["status"] == "ok", page
+    assert len(raw) <= output_formatter_tools.get_output_tool_max_response_chars()
+    marker = page["rows"][0]["validation_lookup_attempts"]
+    assert marker["_value_omitted"] is True
+    assert marker["total_chars"] == len(encoded)
+    assert marker["sha256"] == hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    assert marker["read_with"] == {
+        "tool": "read_output_value",
+        "row_ref": "validation_finding#1",
+        "field_ref": "validation.lookup_attempts",
+    }
+    assert page["rows"][0]["validation_message"] == "Could not resolve 'vulval muscle'."
+    # Empty values project to the plan's missing_value (empty string by default).
+    assert page["rows"][1]["validation_lookup_attempts"] == ""
+
+    values, raw = await _call(
+        _tool(tools, "inspect_field_values"),
+        {"row_source": "validation_finding", "field_ref": "validation.lookup_attempts"},
+    )
+    assert values["status"] == "ok"
+    assert len(raw) <= output_formatter_tools.get_output_tool_max_response_chars()
+    assert any(entry["value"] == "" for entry in values["values"])
+    assert any(
+        isinstance(entry["value"], dict) and entry["value"].get("_value_omitted")
+        for entry in values["values"]
+    )
+
+    read, _ = await _call(
+        _tool(tools, "read_output_value"),
+        {"row_ref": "validation_finding#1", "field_ref": "validation.lookup_attempts", "max_chars": 500},
+    )
+    assert read["value_slice"] == encoded[:500]
+    assert reports == []

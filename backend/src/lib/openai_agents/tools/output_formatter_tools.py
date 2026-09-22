@@ -9,6 +9,7 @@ chooses projection operations and application code renders all rows.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from collections import Counter
@@ -156,15 +157,75 @@ def _bounded_value(value: Any, *, depth: int = 0) -> Any:
     return _bounded_text(value)
 
 
-def _bounded_row(row: Mapping[str, Any]) -> dict[str, Any]:
+def _value_marker(
+    value: Any,
+    *,
+    row_ref: str | None = None,
+    field_ref: str | None = None,
+) -> dict[str, Any]:
+    """Compact stand-in for a value too large to preview; exact reads stay available."""
+
+    text = value if isinstance(value, str) else json.dumps(
+        _jsonable(value), ensure_ascii=False, sort_keys=True, default=str
+    )
+    marker: dict[str, Any] = {
+        "_value_omitted": True,
+        "value_type": type(value).__name__,
+        "total_chars": len(text),
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    }
+    if row_ref and field_ref:
+        marker["read_with"] = {
+            "tool": "read_output_value",
+            "row_ref": row_ref,
+            "field_ref": field_ref,
+        }
+    else:
+        marker["read_with"] = (
+            "Use inspect_output_rows to get row_refs, then read_output_value "
+            "for the exact value."
+        )
+    return marker
+
+
+def _bounded_field_value(
+    value: Any,
+    *,
+    row_ref: str | None = None,
+    field_ref: str | None = None,
+) -> Any:
+    """Bounded preview of one value, or a marker when even the preview is too large."""
+
+    bounded = _bounded_value(value)
+    if len(json.dumps(bounded, ensure_ascii=False, default=str)) <= _MAX_ROW_CHARS:
+        return bounded
+    return _value_marker(value, row_ref=row_ref, field_ref=field_ref)
+
+
+def _bounded_row(
+    row: Mapping[str, Any],
+    *,
+    row_ref: str | None = None,
+    field_refs: Mapping[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """Row preview within the row limit; oversized fields become exact-read markers."""
+
     bounded: dict[str, Any] = {}
-    for key, value in row.items():
-        bounded[str(key)] = _bounded_value(value)
-        encoded = json.dumps(bounded, ensure_ascii=False, default=str)
-        if len(encoded) > _MAX_ROW_CHARS:
+    keys = [str(key) for key in row]
+    for index, (key, value) in enumerate(row.items()):
+        name = str(key)
+        field_ref = (field_refs or {}).get(name, name)
+        preview = _bounded_field_value(value, row_ref=row_ref, field_ref=field_ref)
+        candidate = {**bounded, name: preview}
+        if len(json.dumps(candidate, ensure_ascii=False, default=str)) > _MAX_ROW_CHARS:
+            preview = _value_marker(value, row_ref=row_ref, field_ref=field_ref)
+            candidate = {**bounded, name: preview}
+        if len(json.dumps(candidate, ensure_ascii=False, default=str)) > _MAX_ROW_CHARS:
             bounded["_truncated_preview"] = True
-            bounded["_truncated_after_field"] = str(key)
+            bounded["_truncated_after_field"] = name
+            bounded["_omitted_fields"] = keys[index:]
             break
+        bounded[name] = preview
     return bounded
 
 
@@ -1606,6 +1667,7 @@ def build_output_formatter_tools(
                 limit=min(offset + page_size, _MAX_PROJECTION_ROWS),
             )
             result = apply_projection_plan(bundle, plan)
+            column_field_refs = {column.key: column.field_ref for column in result.columns}
             available = min(result.total_count, _MAX_PROJECTION_ROWS)
             if offset > available:
                 raise ValueError(
@@ -1642,7 +1704,10 @@ def build_output_formatter_tools(
                 start=offset,
                 max_count=page_size,
                 build_payload=build,
-                render=lambda item: {"row_ref": item[0], "row": _bounded_row(item[1])},
+                render=lambda item: {
+                    "row_ref": item[0],
+                    "row": _bounded_row(item[1], row_ref=item[0], field_refs=column_field_refs),
+                },
             )
             next_cursor = _next_row_cursor(offset, len(page), available)
             return respond("inspect_output_rows", build(page, next_cursor))
@@ -1701,13 +1766,7 @@ def build_output_formatter_tools(
                 default=_MAX_LIST_ITEMS,
                 ceiling=_MAX_PROJECTION_ROWS,
             )
-            values = [
-                {
-                    "value": _bounded_value(examples[encoded]),
-                    "count": count,
-                }
-                for encoded, count in counts.most_common()
-            ]
+            values = counts.most_common()
 
             def build(page: list[Any], next_cursor: str) -> dict[str, Any]:
                 return {
@@ -1726,7 +1785,14 @@ def build_output_formatter_tools(
                 }
 
             page, next_cursor = _page_to_budget(
-                values, start=offset, max_count=value_limit, build_payload=build
+                values,
+                start=offset,
+                max_count=value_limit,
+                build_payload=build,
+                render=lambda item: {
+                    "value": _bounded_field_value(examples[item[0]], field_ref=selected_field_ref),
+                    "count": item[1],
+                },
             )
             return respond("inspect_field_values", build(page, next_cursor))
         except Exception as exc:
@@ -1888,6 +1954,7 @@ def build_output_formatter_tools(
                 plan,
                 preview_limit=min(offset + preview_limit, _MAX_PROJECTION_ROWS),
             )
+            column_field_refs = {column.key: column.field_ref for column in result.columns}
             # Rows a finalized output would contain: an explicit max_rows limits them.
             available = min(result.total_count, plan.max_rows or _MAX_PROJECTION_ROWS)
             if offset > available:
@@ -1924,7 +1991,10 @@ def build_output_formatter_tools(
                 start=offset,
                 max_count=preview_limit,
                 build_payload=build,
-                render=lambda item: {"row_ref": item[0], "row": _bounded_row(item[1])},
+                render=lambda item: {
+                    "row_ref": item[0],
+                    "row": _bounded_row(item[1], row_ref=item[0], field_refs=column_field_refs),
+                },
             )
             next_cursor = _next_row_cursor(offset, len(page), available)
             return respond("preview_output_projection", build(page, next_cursor))
