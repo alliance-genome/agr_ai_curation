@@ -13,9 +13,7 @@ model_definitions:
       - This local payload is not a submission or export DTO and does not change Alliance LinkML.
     metadata:
       display:
-        label:
-          - gene_product.label
-          - gene_product.mention
+        label: gene_product.label
         state: resolution_state
         resolved_states:
           - resolved
@@ -108,9 +106,7 @@ object_definitions:
         required: true
         metadata:
           display:
-            label:
-              - label
-              - mention
+            label: label
             id: curie
       - field_path: gene_product.mention
         field_type: string
