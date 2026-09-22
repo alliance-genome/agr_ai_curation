@@ -107,6 +107,15 @@ tool_policies:
     allow_execute: true
     config: {}
 
+  read_output_value:
+    display_name: Read Output Value
+    description: Read an exact bounded slice of one saved value by row and field reference.
+    category: Output
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
   build_default_projection_plan:
     display_name: Build Default Projection Plan
     description: Build and validate a default source-backed export projection plan.
@@ -137,6 +146,15 @@ tool_policies:
   finalize_and_save:
     display_name: Finalize And Save
     description: Finalize a validated source-backed projection and save one output file.
+    category: Output
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config: {}
+
+  finalize_chat_output:
+    display_name: Finalize Chat Output
+    description: Render a validated source-backed projection over every saved row and deliver it to chat once.
     category: Output
     curator_visible: false
     allow_attach: false

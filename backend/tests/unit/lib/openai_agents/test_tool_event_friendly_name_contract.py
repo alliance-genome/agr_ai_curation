@@ -864,7 +864,7 @@ async def test_runner_accepts_schema_defined_retained_collection_without_items(m
 
 
 @pytest.mark.asyncio
-async def test_runner_emits_reasoning_file_ready_chat_output_and_handoff_events(monkeypatch):
+async def test_runner_emits_reasoning_file_ready_and_handoff_events_without_chat_receipt(monkeypatch):
     class _FakeTextDelta:
         def __init__(self, delta):
             self.delta = delta
@@ -937,7 +937,9 @@ async def test_runner_emits_reasoning_file_ready_chat_output_and_handoff_events(
     assert "TEXT_MESSAGE_CONTENT" in event_types
     assert "TOOL_CALL_ARGS" in event_types
     assert "AGENT_THINKING" in event_types
-    assert "CHAT_OUTPUT_READY" in event_types
+    # Flow chat output is emitted once by the flow executor from the
+    # application-held rendering; the runner never republishes a tool receipt.
+    assert "CHAT_OUTPUT_READY" not in event_types
     assert "FILE_READY" in event_types
     file_ready = next(event for event in emitted_events if event.get("type") == "FILE_READY")
     assert file_ready["details"]["formatter_label"] == "Allele CSV"

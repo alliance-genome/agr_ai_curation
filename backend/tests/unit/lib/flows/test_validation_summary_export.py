@@ -183,8 +183,10 @@ async def test_inventory_inspect_validate_preview_and_saved_csv(tmp_path):
     async def invoke(name, **kwargs):
         tool = next(tool for tool in tools if tool.name == name)
         return json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name=name), json.dumps(kwargs)))
-    inventory = await invoke("inspect_output_artifacts")
-    assert PREFIX + "resolved.curie" in {field["ref"] for field in inventory["inventory"]["field_catalog"]}
+    inventory = await invoke("inspect_output_artifacts", catalog_query="resolved.curie")
+    assert PREFIX + "resolved.curie" in {
+        field["ref"] for field in inventory["inventory"]["field_catalog"]["entries"]
+    }
     rejected = await invoke("inspect_output_rows", row_source="validation_finding", field_refs_json=json.dumps([
         "validation.target.input_values.mention", "validation.resolved_values.symbol",
         "validation.resolved_values.curie", "validation.status"]))

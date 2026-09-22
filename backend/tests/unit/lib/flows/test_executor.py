@@ -7062,6 +7062,79 @@ class TestExecuteFlowTermination:
         assert cannot_complete_finished["data"]["failure_reason"].startswith(
             "Formatter could not create an output: Unable to create JSON"
         )
+        # An unreported formatter failure keeps the terminal-outcome report.
+        assert "error_type" not in formatter_error["details"]
+
+    @pytest.mark.asyncio
+    async def test_reported_chat_delivery_failure_is_not_reported_again(self, monkeypatch):
+        from src.lib.flows.outcome import FORMATTER_OUTPUT_FAILURE_REPORTED, FlowRunOutcome
+
+        flow = _make_output_attachment_flow([
+            _task_input_node(),
+            _agent_node("n1", "pdf_extraction", step_goal="Read document"),
+            _agent_node("n2", "chat_output_formatter", step_goal="Show table"),
+        ], source_node_id="n1", output_node_id="n2")
+        pdf_step = {
+            "step": 1,
+            "agent_id": "pdf_extraction",
+            "agent_name": "PDF Extraction",
+            "tool_name": "ask_pdf_extraction_specialist",
+            "output": "PDF specialist completed document access.",
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        chat_step = {
+            "step": 2,
+            "node_id": "n2",
+            "agent_id": "chat_output_formatter",
+            "agent_name": "Chat Output",
+            "tool_name": "ask_chat_output_formatter_specialist",
+            "output": json.dumps({
+                "status": "cannot_complete",
+                "delivered": False,
+                "code": "operational_ceiling_exceeded",
+                "reason": "The projection matched 12000 rows, above the operational ceiling of 10000 rows.",
+                "failure_reported": True,
+            }),
+            "formatter_failure_reported": True,
+            "candidate": None,
+            "evidence_records": [],
+            "evidence_count": 0,
+        }
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            pdf_step,
+            ordered_tool_names=["ask_pdf_extraction_specialist", "ask_chat_output_formatter_specialist"],
+        )
+        monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **_kwargs: supervisor)
+        monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *_args, **_kwargs: "run flow")
+
+        async def _fake_run(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-chat"}}
+            supervisor._flow_execution_state["completed_steps"].append(chat_step)
+            yield {"type": "TOOL_COMPLETE", "details": {"toolName": chat_step["tool_name"]}}
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_streamed", _fake_run)
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s4")]
+
+        assert not any(event.get("type") == "CHAT_OUTPUT_READY" for event in events)
+        flow_error = next(
+            event for event in events
+            if event.get("details", {}).get("reason") == "missing_formatter_outputs"
+        )
+        assert flow_error["details"]["error_type"] == FORMATTER_OUTPUT_FAILURE_REPORTED
+        assert flow_error["details"]["output_branches"][0]["failure_reported"] is True
+        finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
+        assert finished["data"]["status"] == "failed"
+        assert "operational ceiling of 10000 rows" in finished["data"]["failure_reason"]
+        outcome = FlowRunOutcome()
+        outcome.observe(flow_error)
+        outcome.observe({"type": "FLOW_FINISHED", **finished["data"]})
+        assert outcome.status == "failed"
+        assert outcome.failure_already_reported is True
 
     @pytest.mark.parametrize(
         "drain_error_timing",
@@ -7102,13 +7175,17 @@ class TestExecuteFlowTermination:
             adapter_key="gene",
             payload=_structured_step_output("TP53", actor="gene", destination="gene"),
         )
+        # The chat step returns only a compact receipt to the supervisor; the
+        # application-held rendering is the single CHAT_OUTPUT_READY source.
         chat_step = {
             "step": 2,
             "node_id": "n2",
             "agent_id": "chat_output_formatter",
             "agent_name": "Chat Output",
             "tool_name": "ask_chat_output_specialist",
-            "output": "Found one supported gene.",
+            "output": json.dumps(
+                {"status": "ok", "delivered": True, "chat_output_id": "chat-output-1"}
+            ),
             "projected_chat_output": "Found one supported gene.",
             "candidate": None,
             "evidence_records": [],
@@ -7376,6 +7453,12 @@ class TestExecuteFlowTermination:
         assert lifecycle_order == expected_lifecycle_order
         chat_ready = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
         assert chat_ready["details"]["output"] == "Found one supported gene."
+        assert chat_ready["details"]["formatter_node_id"] == "n2"
+        assert not any(
+            "chat-output-1" in json.dumps(event, default=str)
+            for event in events
+            if event.get("type") == "CHAT_OUTPUT_READY"
+        )
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"
         assert flow_finished["data"]["review_session_ids"] == ["session-gene"]
@@ -8821,10 +8904,15 @@ class TestExecuteFlowTermination:
 
 
 @pytest.mark.asyncio
-async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypatch):
-    """A long custom extraction must not become a default fifty-row metadata preview."""
+async def test_chat_formatter_delivers_all_custom_rows_through_bound_tools(monkeypatch):
+    """A long custom extraction is rendered in full by the application, not the model."""
     from agents.tool_context import ToolContext
+    from src.lib.flows.chat_output_delivery import (
+        chat_output_delivery_scope,
+        deliver_projected_chat_output,
+    )
     from src.lib.flows.output_projection import FlowOutputArtifact, FlowOutputArtifactBundle, FlowOutputField
+    from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
     executor = _executor_module()
     rows = [
         {"object.object_id": f"observation-{i}", "object.attribute.phenotype": f"Phenotype {i}",
@@ -8839,7 +8927,10 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
                                 "validation.candidate_matches": [{"value": "TEST:1", "label": "Possible match"}],
                                 "validation.lookup_attempts": [{"method": "search_alleles_bulk", "candidate_count": 26, "lookup_status": "ambiguous"}],
                                 "validation.target": {"object_id": "observation-81", "field_path": "attributes.identity"}}]},
-        )], field_catalog=[FlowOutputField(ref="object.attribute.phenotype", label="Phenotype", row_source="object", value_type="string")],
+        )], field_catalog=[
+            FlowOutputField(ref="object.attribute.phenotype", label="Phenotype", row_source="object", value_type="string"),
+            FlowOutputField(ref="object.attribute.genotype", label="Genotype", row_source="object", value_type="string"),
+        ],
     )
     monkeypatch.setattr(executor, "_build_terminal_flow_artifact_bundle", lambda **kwargs: bundle)
     captured = {}
@@ -8848,38 +8939,104 @@ async def test_chat_formatter_uses_authored_agent_with_all_custom_rows(monkeypat
         captured.update(agent_id=agent_id, kwargs=kwargs)
         return agent
     monkeypatch.setattr(executor, "get_agent_by_id", get_agent)
+    plan = {"format": "chat", "row_source": "object", "columns": [
+        {"key": "genotype", "header": "Genotype", "field_ref": "object.attribute.genotype"},
+        {"key": "phenotype", "header": "Phenotype", "field_ref": "object.attribute.phenotype"},
+    ]}
     async def invoke(ctx, arguments):
         captured["query"] = json.loads(arguments)["query"]
         captured["run_config"] = ctx.run_config
-        return "Authored six-column table with all 82 records"
+        tools = build_output_formatter_tools(
+            bundle=captured["kwargs"]["formatter_bundle"], output_format="chat",
+            formatter_agent_id="chat_output_formatter", deliver_chat_output=deliver_projected_chat_output,
+        )
+        finalize = next(tool for tool in tools if tool.name == "finalize_chat_output")
+        finalize_args = json.dumps({"plan_json": json.dumps(plan)})
+        captured["finalize"] = json.loads(await finalize.on_invoke_tool(
+            ToolContext(context=None, tool_name=finalize.name, tool_call_id="finalize", tool_arguments=finalize_args),
+            finalize_args,
+        ))
+        return "Chat output delivered."
     def streaming(**kwargs):
         assert kwargs["agent"] is agent and kwargs["propagate_errors"]
         assert kwargs["inline_chat_persistence"] is False
         return SimpleNamespace(on_invoke_tool=invoke)
     monkeypatch.setattr(executor, "_create_streaming_tool", streaming)
-    instructions = "Show all records in six columns: Figure, Genotype, Stage, Conditions, Phenotype, Qualifier."
+    instructions = "Show all records in two columns: Genotype, Phenotype."
     tool = executor._make_flow_chat_output_tool(
         agent_id="chat_output_formatter", output_format="chat", tool_name="ask_chat_output_formatter_specialist",
         tool_description="Display results", specialist_name="Chat Output", base_context={"db_user_id": 22, "authenticated_groups": []},
         step_instruction_prefix=instructions, completed_steps=[], flow_name="Phenotype flow", flow_run_id="run", document_id="paper",
         node_data={"custom_instructions": instructions, "step_goal": "Display every phenotype"}, source_node_ids=["extractor"],
     )
-    arguments = json.dumps({"query": "Use the requested six columns"})
+    arguments = json.dumps({"query": "Use the requested columns"})
     ctx = ToolContext(context=None, tool_name=tool.name, tool_call_id="chat-call", tool_arguments=arguments)
-    output = await tool.on_invoke_tool(ctx, arguments)
-    assert output == "Authored six-column table with all 82 records"
+    with chat_output_delivery_scope() as delivery:
+        output = await tool.on_invoke_tool(ctx, arguments)
+    receipt = json.loads(output)
+    assert receipt["delivered"] is True
+    assert receipt["projection_summary"]["row_count"] == 82
+    assert "Phenotype 81" not in output
+    table_lines = (delivery.output or "").split("\n")
+    assert len(table_lines) == 84
+    assert table_lines[-1] == "| genotype-81 | Phenotype 81 |"
+    assert "Showing" not in (delivery.output or "")
     assert captured["agent_id"] == "chat_output_formatter"
     assert captured["kwargs"]["db_user_id"] == 22
     assert captured["kwargs"]["authenticated_groups"] == []
+    assert captured["kwargs"]["formatter_bundle"] is bundle
     contexts = captured["kwargs"]["additional_runtime_context"]
     assert contexts[0] == instructions
-    payload = json.loads(contexts[1].split("\n", 2)[2])
-    assert payload["rows"]["object"] == rows
-    assert payload["rows"]["evidence"][0]["evidence.verified_quote"] == "Exact source quote"
-    assert payload["rows"]["validation_finding"][0]["validation.message"] == "Requires review"
-    assert payload["rows"]["validation_finding"][0]["validation.candidate_matches"] == [{"value": "TEST:1", "label": "Possible match"}]
-    assert payload["rows"]["validation_finding"][0]["validation.lookup_attempts"] == [
-        {"method": "search_alleles_bulk", "candidate_count": 26, "lookup_status": "ambiguous"}]
-    assert payload["rows"]["validation_finding"][0]["validation.target"]["object_id"] == "observation-81"
+    assert "Phenotype 81" not in contexts[1]
+    assert "search_alleles_bulk" not in contexts[1]
+    assert "Exact source quote" not in contexts[1]
+    payload = json.loads(contexts[1][contexts[1].index("{"):])
+    assert payload["row_sources"] == {"artifact": 0, "object": 82, "evidence": 1, "validation_finding": 1}
     assert payload["curator_output_request"]["custom_instructions"] == instructions
-    assert captured["query"] == "Use the requested six columns"
+    assert captured["query"] == "Use the requested columns"
+
+
+def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_result(monkeypatch):
+    """The executor holds rendered chat content; the supervisor sees only a receipt."""
+    from src.lib.flows.chat_output_delivery import deliver_projected_chat_output
+
+    executor = _executor_module()
+    table = "| Gene |\n| --- |\n| unc-54 |"
+
+    def _chat_tool(*, tool_name, tool_description, **_kwargs):
+        @function_tool(name_override=tool_name, description_override=tool_description)
+        async def _tool(query: str) -> str:
+            receipt = await deliver_projected_chat_output(table, {"status": "ok", "delivered": True})
+            return json.dumps(receipt)
+
+        return _tool
+
+    def _streaming_tool(*, tool_name, tool_description, **_kwargs):
+        @function_tool(name_override=tool_name, description_override=tool_description)
+        async def _tool(query: str) -> str:
+            return "Document read."
+
+        return _tool
+
+    monkeypatch.setattr(executor, "get_agent_by_id", lambda *_args, **_kwargs: MagicMock(spec=Agent))
+    monkeypatch.setattr(executor, "_create_streaming_tool", _streaming_tool)
+    monkeypatch.setattr(executor, "_make_flow_chat_output_tool", _chat_tool)
+    flow = _make_output_attachment_flow([
+        _task_input_node(),
+        _agent_node("gene", "gene"),
+        _agent_node("chat", "chat_output_formatter"),
+    ], source_node_id="gene", output_node_id="chat")
+    tools, _, _, execution_state = get_all_agent_tools(
+        flow, document_id="doc-1", include_unavailable=True
+    )
+    tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+
+    asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
+    result = asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "show"})))
+
+    completed_step = execution_state["completed_steps"][1]
+    assert completed_step["agent_id"] == "chat_output_formatter"
+    assert completed_step["projected_chat_output"] == table
+    assert "unc-54" not in result
+    assert "unc-54" not in completed_step["output"]
+    assert json.loads(completed_step["output"])["delivered"] is True

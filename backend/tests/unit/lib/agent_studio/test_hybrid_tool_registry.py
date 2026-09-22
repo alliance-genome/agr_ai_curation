@@ -425,7 +425,10 @@ def test_runtime_formatter_tool_docs_are_projection_based():
     assert finalize_params["plan_json"]["required"] is False
     assert finalize_params["filename_hint"]["required"] is False
     assert "Projection plan JSON" in finalize_params["plan_json"]["description"]
-    assert preview_params["plan_json"]["required"] is True
+    # Empty plan_json previews the default or curator-fixed plan, so wide plans
+    # never need to be echoed back through model input.
+    assert preview_params["plan_json"]["required"] is False
+    assert "default or curator-fixed plan" in preview_params["plan_json"]["description"]
 
     forbidden_params = {"data_json", "rows", "raw_csv", "raw_tsv", "raw_json"}
     assert not forbidden_params & set(finalize_params)

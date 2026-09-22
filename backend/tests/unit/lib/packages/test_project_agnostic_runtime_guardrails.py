@@ -126,6 +126,9 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Semantic chat-output fixture reproduces a curator's C. elegans
+    # gene-expression result (WormBase identifiers) for the payload hotfix.
+    Path("backend/tests/fixtures/flows/semantic_chat_output.py"),
     # Immutable execution migrations preserve the shipped Alliance group prompts
     # and packaged builder identities, including historical access boundaries.
     Path("backend/tests/integration/persistence/test_agent_execution_revision_persistence.py"),

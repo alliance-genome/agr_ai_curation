@@ -2,7 +2,9 @@
 # AGENT DEFINITION: chat_output
 # =============================================================================
 # Formats and displays results directly in the chat window.
-# Flow terminal agent - not routable by supervisor.
+# Flow terminal agent - not routable by supervisor. Context-bound output
+# terminal: projection tools run over the saved result bundle, and the
+# application renders and delivers every requested row to chat.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -29,7 +31,17 @@ supervisor_routing:
 # -----------------------------------------------------------------------------
 # TOOLS
 # -----------------------------------------------------------------------------
-tools: []
+tools:
+  - explain_formatter_capabilities
+  - inspect_output_artifacts
+  - inspect_output_rows
+  - inspect_field_values
+  - read_output_value
+  - build_default_projection_plan
+  - validate_output_projection
+  - preview_output_projection
+  - finalize_chat_output
+  - formatter_cannot_complete
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA

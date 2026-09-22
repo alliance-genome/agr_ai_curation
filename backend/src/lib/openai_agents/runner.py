@@ -1812,25 +1812,9 @@ async def _run_agent_with_owned_resources(
                         )
                         yield tool_complete_event
 
-                        # Check if chat_output agent completed (for flow termination)
-                        # This signals that a chat-based flow has produced its final output
-                        if last_tool == "ask_chat_output_specialist":
-                            full_output = str(output) if output is not None else ""
-                            logger.info(
-                                "Chat output agent completed",
-                                extra={"trace_id": trace_id, "user_id": user_id},
-                            )
-                            chat_ready_event = {
-                                "type": "CHAT_OUTPUT_READY",
-                                "timestamp": _now_iso(),
-                                "details": {
-                                    "output": full_output,
-                                    "output_preview": output_preview,
-                                    "output_length": len(full_output),
-                                }
-                            }
-                            write_stream_event(chat_ready_event, trace_id=trace_id)
-                            yield chat_ready_event
+                        # Flow chat output is not emitted here: the chat-output tool
+                        # returns only a compact receipt, and the flow executor emits
+                        # CHAT_OUTPUT_READY once from the application-held rendering.
 
                         # Check if tool output contains FileInfo (file download).
                         # Runtime formatter projection tools return FileInfo as JSON.
