@@ -22,7 +22,8 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -1332,6 +1333,12 @@ async def _run_custom_flow_validator_agent(
         f"{_tool_safe_agent_id(validator_agent_id)}_"
         f"{_tool_safe_agent_id(request.validator_binding_id)}"
     )
+    accepted_payload: dict[str, Any] | None = None
+
+    def capture_accepted_result(payload: dict[str, Any]) -> None:
+        nonlocal accepted_payload
+        accepted_payload = payload
+
     streaming_tool: Any = _create_streaming_tool(
         agent=agent,
         tool_name=tool_name,
@@ -1342,6 +1349,7 @@ async def _run_custom_flow_validator_agent(
         inline_chat_persistence=False,
         isolate_run_config=True,
         propagate_errors=True,
+        validated_result_callback=capture_accepted_result,
     )
     provider_payload = {
         "source_envelope": {
@@ -1383,11 +1391,21 @@ async def _run_custom_flow_validator_agent(
         # wrapper clones it onto a step-owned provider so the validator WebSocket
         # closes cleanly before flow teardown.
         tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=get_current_run_config())
-        return await streaming_tool.on_invoke_tool(
+        await streaming_tool.on_invoke_tool(
             tool_ctx,
             json.dumps({"query": payload}),
         )
-    return await streaming_tool(query=payload)
+    else:
+        await streaming_tool(query=payload)
+    if accepted_payload is None:
+        raise ValueError("Flow validator did not deliver an accepted structured result")
+    # Match the dispatcher's existing typed-subclass projection: package-specific
+    # views stay in the accepted audit payload; materialization consumes the shared
+    # canonical fields (including full candidates, facts and lookup provenance).
+    return DomainValidatorResultBase.model_validate({
+        key: value for key, value in accepted_payload.items()
+        if key in DomainValidatorResultBase.model_fields
+    })
 
 
 def _ordered_validation_matches(
@@ -2069,6 +2087,9 @@ async def _execute_validation_groups_for_step(
                 checkpoint_started_at
             )
 
+        # The checkpoint writer also normalizes authenticated context. Snapshot
+        # its exact flushed row before commit expiration, but publish only on success.
+        validated_payload = deepcopy(envelope_row.envelope_json)
         session.commit()
         _emit_validation_group_timing(
             status="success",
@@ -2083,6 +2104,9 @@ async def _execute_validation_groups_for_step(
             },
         )
         return {
+            "validated_candidate": replace(
+                candidate, payload_json=validated_payload
+            ),
             "validation_group_results": {
                 "source_envelope_id": source_envelope.envelope_id,
                 "source_envelope_revision": source_envelope_revision,
@@ -3102,6 +3126,9 @@ def get_all_agent_tools(
             phase_timings_ms["validation_groups_ms"] = _elapsed_ms(
                 validation_started_at
             )
+            # Keep immutable extraction persistence separate from the exact committed
+            # validation checkpoint used by downstream output projections.
+            validated_candidate = validation_group_metadata.pop("validated_candidate", None)
             state_update_started_at = time.monotonic()
             total_step_duration_ms = _elapsed_ms(step_started_at)
             step_timing = {
@@ -3144,6 +3171,7 @@ def get_all_agent_tools(
                     else {}
                 ),
                 "candidate": candidate,
+                "validated_candidate": validated_candidate,
                 "timing": step_timing,
                 **(
                     {"projected_chat_output": projected_chat_output}

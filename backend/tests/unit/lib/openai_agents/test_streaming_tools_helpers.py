@@ -213,6 +213,59 @@ def test_extract_model_identifier_handles_string_and_object():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("accept", [True, False])
+async def test_structured_result_callback_only_receives_accepted_copy(monkeypatch, accept):
+    captured = []
+    states = []
+    accepted = {"status": "unresolved", "resolved_values": {}, "evidence": [{"evidence_record_id": "ev-1"}]}
+    original_state = streaming_tools._StructuredSpecialistFinalizationState
+
+    def state_factory(**kwargs):
+        state = original_state(**{**kwargs, "required": True})
+        states.append(state)
+        return state
+
+    class RepairResult(_FakeRunResult):
+        async def stream_events(self):
+            states[0].last_rejection = {"message": "Repair the rejected decision"}
+            assert captured == []
+            if accept:
+                states[0].accepted_payload = json.loads(json.dumps(accepted))
+            if False:
+                yield None
+
+    monkeypatch.setattr(streaming_tools, "_StructuredSpecialistFinalizationState", state_factory)
+    monkeypatch.setattr(streaming_tools, "_configure_structured_specialist_finalization", lambda runtime, *args, **kwargs: runtime)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda agent: None)
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *args, **kwargs: RepairResult(final_output="untrusted prose"))
+
+    def display_only(*args, **kwargs):
+        assert len(captured) == 1
+        return "supervisor display summary"
+
+    monkeypatch.setattr(streaming_tools, "_reduce_specialist_output_for_supervisor", display_only)
+
+    def receive(payload):
+        captured.append(payload)
+        payload["evidence"][0]["evidence_record_id"] = "consumer-local-change"
+
+    agent = SimpleNamespace(name="Fixture validator", tools=[], output_type=None,
+                            instructions="", model="gpt-4o")
+    run = streaming_tools.run_specialist_with_events(agent, "validate", "Fixture validator",
+        max_turns=3, tool_name="validate_fixture", inline_chat_persistence=False,
+        validated_result_callback=receive)
+    if not accept:
+        with pytest.raises(streaming_tools.SpecialistOutputError):
+            await run
+        assert captured == []
+        return
+    assert await run == "supervisor display summary"
+    assert len(captured) == 1
+    assert states[0].accepted_payload == accepted
+    assert captured[0] is not states[0].accepted_payload
+
+
+@pytest.mark.asyncio
 async def test_run_specialist_preserves_parent_tracing_and_enables_sensitive_data(monkeypatch):
     captured = {}
     sentry_calls = []

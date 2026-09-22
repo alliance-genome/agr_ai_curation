@@ -4095,7 +4095,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
         )
 
     @pytest.mark.parametrize("agent_id", ["custom_validator", "ca_pinned_validator"])
-    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, agent_id):
+    @pytest.mark.parametrize("accepted_status", ["resolved", "unresolved", None])
+    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, agent_id, accepted_status):
         executor = _executor_module()
         from src.schemas.domain_validator import (
             DomainValidationRequest,
@@ -4130,12 +4131,30 @@ class TestGetAllAgentToolsStepOrderRuntime:
             expected_result_fields={"identifier": "gene.identifier"},
         )
         captured = {}
+        accepted_payload = {
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "status": accepted_status,
+            "resolved_values": {"identifier": "AGR:0001"} if accepted_status == "resolved" else {},
+            "resolved_objects": [],
+            "missing_expected_fields": [] if accepted_status == "resolved" else ["identifier"],
+            "candidates": [{"value": "AGR:0001", "details": {"evidence_record_ids": ["evidence-1"], "source_record": {"curie": "AGR:0001"}}}],
+            "lookup_attempts": [{"provider": "fixture", "method": "search", "query": {"identifier": "AGR:0001"}, "result_count": 1, "outcome": "success"}],
+            "curator_message": None,
+            "allele_candidates": [{"allele_id": "AGR:0001"}],
+            "explanation": "Accepted scientific decision",
+        }
 
         class _FakeTool:
             async def on_invoke_tool(self, tool_ctx, args_json):
                 captured["tool_name"] = tool_ctx.tool_name
                 captured["args"] = json.loads(args_json)
-                return {"status": "resolved"}
+                callback = captured.get("validated_result_callback")
+                if callback is not None and accepted_status is not None:
+                    callback(accepted_payload)
+                return "AlleleResultEnvelope validated: one result; supervisor display only"
 
         monkeypatch.setattr(
             executor,
@@ -4145,7 +4164,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         monkeypatch.setattr(
             executor,
             "_create_streaming_tool",
-            lambda **kwargs: captured.update(runtime_agent=kwargs["agent"]) or _FakeTool(),
+            lambda **kwargs: captured.update(runtime_agent=kwargs["agent"], validated_result_callback=kwargs.get("validated_result_callback")) or _FakeTool(),
         )
         binding = SimpleNamespace(
             identity_details=lambda: {"binding_id": "custom.supplemental"},
@@ -4153,8 +4172,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
         )
         binding_match = SimpleNamespace(binding=binding)
 
-        asyncio.run(
-            executor._run_custom_flow_validator_agent(
+        async def run():
+            return await executor._run_custom_flow_validator_agent(
                 request,
                 binding_match=binding_match,
                 validator_node={"data": {"agent_id": agent_id, "agent_revision_id": "pinned-revision", "execution_receipt": {"agent_revision_id": "pinned-revision"}}},
@@ -4162,7 +4181,19 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 source_envelope_id="env-1",
                 source_envelope_revision=3,
             )
-        )
+
+        if accepted_status is None:
+            with pytest.raises(ValueError, match="accepted structured result"):
+                asyncio.run(run())
+            return
+        result = asyncio.run(run())
+        assert result.candidates[0].details == accepted_payload["candidates"][0]["details"]
+        assert result.lookup_attempts[0].result_count == 1
+        materialized = executor.validator_result_from_agent_output(result, request=request)
+        assert materialized.status == accepted_status
+        assert materialized.resolved_values == accepted_payload["resolved_values"]
+        assert materialized.target == request.target
+        assert materialized.explanation == "Accepted scientific decision"
 
         payload = json.loads(captured["args"]["query"])
         validation_request = payload["validation_request"]

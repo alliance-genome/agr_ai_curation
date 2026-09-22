@@ -4706,6 +4706,7 @@ async def run_specialist_with_events(
     validated_handoff_callback: Optional[
         Callable[[SupervisorExtractionHandoff], None]
     ] = None,
+    validated_result_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     """
     Run a specialist agent and collect its internal tool call events.
@@ -4730,6 +4731,9 @@ async def run_specialist_with_events(
             only after a validated builder payload has been persisted and converted to
             a canonical extraction-result handoff. This lets a caller retain validated
             partial state while later stream/provider cleanup is still cancellable.
+        validated_result_callback: Trusted caller callback for an accepted structured
+            specialist result. Receives an independent canonical payload copy before
+            supervisor display reduction; never receives rejected or bare model output.
 
     Returns:
         The specialist's final output as a string
@@ -6522,6 +6526,10 @@ async def run_specialist_with_events(
         and structured_finalization_state.required
         and structured_finalization_state.accepted_payload is not None
     ):
+        if validated_result_callback is not None:
+            validated_result_callback(
+                copy.deepcopy(structured_finalization_state.accepted_payload)
+            )
         add_specialist_event(
             _build_structured_finalization_internal_result_event(
                 tool_name=tool_name,

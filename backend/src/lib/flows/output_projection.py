@@ -1372,8 +1372,12 @@ def _artifact_source_key(
 def _build_artifact_from_step(
     step: Mapping[str, Any], *, profile_resolver: ProfileResolver | None = None,
 ) -> FlowOutputArtifact | None:
-    candidate = _step_attr(step, "candidate")
+    candidate = _step_attr(step, "validated_candidate")
+    if candidate is None:
+        candidate = _step_attr(step, "candidate")
     payload = _candidate_attr(candidate, "payload_json")
+    if _step_attr(step, "validated_candidate") is not None and not isinstance(payload, Mapping):
+        raise ValueError("Validated flow candidate is missing its committed envelope payload")
     payload_from_candidate = payload is not None
     if payload is None:
         payload = _payload_from_step_output(step)

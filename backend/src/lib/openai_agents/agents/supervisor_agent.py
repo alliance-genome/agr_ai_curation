@@ -657,6 +657,7 @@ async def _run_streaming_specialist_tool(
     inline_chat_persistence: bool = True,
     isolate_run_config: bool = False,
     input_validation: Optional[Dict[str, Any]] = None,
+    validated_result_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     """Run a specialist through the streaming event wrapper."""
 
@@ -713,6 +714,7 @@ async def _run_streaming_specialist_tool(
                 validated_handoff_callback=(
                     _record_validated_handoff if ledger is not None else None
                 ),
+                validated_result_callback=validated_result_callback,
             )
             handoff = pop_last_supervisor_extraction_handoff()
             if ledger is not None and handoff is not None and validated_handoff is None:
@@ -901,6 +903,7 @@ def _create_streaming_tool(
     input_validation: Optional[Dict[str, Any]] = None,
     *,
     propagate_errors: bool,
+    validated_result_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Callable:
     """
     Create a streaming tool wrapper for a specialist agent.
@@ -930,6 +933,8 @@ def _create_streaming_tool(
         propagate_errors: When True, disable the Agents SDK's default conversion of
             raised exceptions into tool-output strings. Flow execution uses this so a
             failed specialist reaches the run error path instead of completing a step.
+        validated_result_callback: Trusted invocation-local consumer of accepted
+            canonical structured data, separate from the supervisor display return.
 
     Returns:
         A function_tool decorated async function
@@ -948,6 +953,7 @@ def _create_streaming_tool(
             inline_chat_persistence=inline_chat_persistence,
             isolate_run_config=isolate_run_config,
             input_validation=input_validation,
+            validated_result_callback=validated_result_callback,
         )
 
     tool_decorator = function_tool(

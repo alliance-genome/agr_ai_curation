@@ -61,6 +61,18 @@ streaming allocates request identity and accepts either a free-text query or
 structured JSON inputs; it does not invent missing structured component/policy
 inputs from prose.
 
+Custom flow attachments receive accepted canonical results through an invocation-local
+callback, not the human-readable supervisor summary. Only accepted finalization can
+trigger that callback; a missing result fails closed. The dispatcher still checks
+request, binding, validator and target identity. Supervisor consumers continue to
+receive compact display summaries.
+
+After sidecar validation commits its domain-envelope checkpoint, downstream
+formatters use a separate validated candidate carrying that exact envelope. The
+original extraction candidate remains unchanged for immutable persistence and
+payload-hash checks. Exports therefore include committed validation findings and
+resolved or unresolved summaries, without re-reading a mutable latest revision.
+
 GO result collections include selected records only; unresolved input strings are
 copied using JSON pointers into supplied inputs. Hierarchy details may be joined
 from same-identity lookups, with final schema validation rejecting incomplete
