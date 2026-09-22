@@ -1022,6 +1022,11 @@ def _make_flow_runtime_formatter_tool(
                 )
                 output = await finalizer.on_invoke_tool(finalizer_context, arguments)
                 outcome = json.loads(output)
+                if outcome.get("status") == "failed":
+                    # The finalizer already reported this save/ceiling failure once;
+                    # fail the output branch with its reason instead of raising a
+                    # second runtime error for the same failure.
+                    return output
                 if outcome.get("status") != "ok":
                     raise ValueError("Selected-fields export failed: " + "; ".join(outcome.get("errors") or ["File was not saved"]))
                 return output
