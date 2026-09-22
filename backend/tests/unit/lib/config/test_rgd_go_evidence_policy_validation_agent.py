@@ -30,7 +30,8 @@ INSUFFICIENT_EVIDENCE_MESSAGE = (
 
 
 @pytest.fixture(autouse=True)
-def _reset_loader_caches():
+def _reset_loader_caches(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_PACKAGES_DIR / "alliance" / "python" / "src"))
     agent_loader.reset_cache()
     prompt_loader.reset_cache()
     schema_discovery.reset_cache()
@@ -459,6 +460,69 @@ def _selected_inputs_for_result(payload):
             }
         ],
     }
+
+
+@pytest.mark.parametrize("basis, expected", [
+    ("direct_assay", []),
+    ("insufficient", ["insufficient_primary_evidence"]),
+    ("physical_interaction", ["evidence_code_mismatch", "eco_mapping_mismatch", "with_from_required"]),
+])
+def test_compact_policy_assembles_request_facts_and_computes_consequences(monkeypatch, basis, expected):
+    from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
+    from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)["RGDGOEvidencePolicyValidationResult"]
+    original = _result_payload()
+    request = DomainValidationRequest(
+        request_id=original["request_id"], validator_binding_id=original["validator_binding_id"],
+        validator_agent=original["validator_agent"], target=original["target"],
+        selected_inputs=_selected_inputs_for_result(original),
+    )
+    contract = policy_decision_contract(request, schema)
+    scientific = {name: original[name] for name in _SCIENTIFIC_FIELDS}
+    scientific["evidence_basis"] = basis
+    decision = contract.decision_schema(
+        request_id=request.request_id, status="unresolved" if expected else "resolved",
+        explanation="Assessment of the supplied evidence.", scientific=scientific,
+    )
+    result = ValidatorDecisionWorkspace([contract]).assemble(decision)
+    assert result.policy_violations == expected
+    assert result.status == ("unresolved" if expected else "resolved")
+    assert result.proposed_go_term_curie == original["proposed_go_term_curie"]
+    assert result.proposed_rationale == original["proposed_rationale"]
+    assert result.primary_evidence_record_ids == ["evidence-1"]
+    assert result.lookup_attempts[0].method == "approved_rgd_evidence_policy"
+    assert result.lookup_attempts[0].outcome == ("conflict" if expected else "success")
+    if basis == "insufficient":
+        assert result.curator_message == INSUFFICIENT_EVIDENCE_MESSAGE
+
+
+def test_compact_policy_cannot_supply_proposal_copies_or_foreign_evidence(monkeypatch):
+    from agr_ai_curation_alliance.compact_policy import policy_decision_contract, _SCIENTIFIC_FIELDS
+    from src.lib.domain_packs.compact_decisions import ValidatorDecisionWorkspace
+
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema = schema_discovery.discover_agent_schemas(force_reload=True)["RGDGOEvidencePolicyValidationResult"]
+    original = _result_payload()
+    request = DomainValidationRequest(
+        request_id=original["request_id"], validator_binding_id=original["validator_binding_id"],
+        validator_agent=original["validator_agent"], target=original["target"],
+        selected_inputs=_selected_inputs_for_result(original),
+    )
+    contract = policy_decision_contract(request, schema)
+    scientific = {name: original[name] for name in _SCIENTIFIC_FIELDS}
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        contract.decision_schema(
+            request_id=request.request_id, status="resolved", explanation="Assessed.",
+            scientific={**scientific, "proposed_evidence_code": "IPI"},
+        )
+    scientific["primary_evidence_record_ids"] = ["foreign-evidence"]
+    decision = contract.decision_schema(
+        request_id=request.request_id, status="resolved", explanation="Assessed.", scientific=scientific,
+    )
+    with pytest.raises(ValidationError, match="supplied exact evidence"):
+        ValidatorDecisionWorkspace([contract]).assemble(decision)
 
 
 def test_validator_finalization_applies_the_typed_policy_schema(monkeypatch):

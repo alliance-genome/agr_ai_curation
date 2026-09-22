@@ -1141,7 +1141,14 @@ def _rich_allele_search(
         "Counts are not an exact database total. Ranking and missing annotations do not confirm or exclude "
         "paper identity. Retain plausible candidates; if coverage is capped, refine separate gene/attribution/"
         "functional-impact clues or increase discovery_limit within its configured maximum. "
-        "Use get_allele_by_id for details."
+        "Search results already include database record details: use the returned full name, "
+        "synonyms, genes, taxon, attribution and structured annotations for comparison. "
+        "Do not reread an already returned record solely to confirm its ID or repeat facts "
+        "that are present. Use get_allele_by_id for unseen IDs, missing required facts, "
+        "conflicting records or an explicit freshness requirement. Missing or capped "
+        "annotations are not complete evidence; another read may still leave them unknown. "
+        "An ID read confirms database existence, not identity with the source mention. "
+        "Preserve unresolved supplier, gene, taxon and allele-design questions."
     )
     lightweight = [{key: row.get(key) for key in ("curie", "symbol", "taxon", "match_type")} for row in rows]
     payload = _lookup_response_payload(method="search_alleles", data=lightweight, count=len(rows),

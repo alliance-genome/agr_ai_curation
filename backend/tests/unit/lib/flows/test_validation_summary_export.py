@@ -83,6 +83,47 @@ def test_same_source_only_and_no_row_expansion():
     assert result.rows[2]["source"] == "result-1"
 
 
+@pytest.mark.parametrize("status", ["resolved", "unresolved"])
+def test_sidecar_checkpoint_reaches_json_without_rewriting_extraction(status):
+    from dataclasses import replace
+    from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
+
+    validated = fixture()
+    finding = validated["validation_findings"][0]
+    finding["status"] = "resolved" if status == "resolved" else "open"
+    finding["details"]["validation_result"]["status"] = status
+    if status == "unresolved":
+        finding["details"]["validation_result"]["resolved_values"] = {}
+    original = deepcopy(validated)
+    original["validation_findings"] = []
+    candidate = ExtractionEnvelopeCandidate(agent_key="allele_extractor", payload_json=original,
+                                           adapter_key="allele", metadata={"producer": "original"})
+    checkpoint_candidate = replace(candidate, payload_json=validated)
+    artifact_bundle = build_flow_output_artifact_bundle(completed_steps=[{
+        "step": 1, "node_id": "extract", "agent_id": "allele_extractor",
+        "candidate": candidate, "validated_candidate": checkpoint_candidate,
+        "validation_group_results": {"source_envelope_id": "env-1", "materialized_envelope_revision": 2},
+    }], flow_name="Checkpoint export", output_format="json")
+    json_plan = plan().model_copy(update={"format": "json", "missing_value": None})
+    projection = apply_projection_plan(artifact_bundle, json_plan)
+    downloaded = json.loads(_projection_content_for_file_type(output_format="json", projection=projection))
+    assert downloaded[0]["status"] == status
+    assert downloaded[0]["id"] == ("MGI:3716464" if status == "resolved" else None)
+    assert downloaded[0]["evidence"]
+    assert candidate.payload_json == original
+    assert isinstance(candidate.payload_json, dict)
+    assert candidate.payload_json["validation_findings"] == []
+    assert checkpoint_candidate.metadata is candidate.metadata
+
+
+def test_invalid_validated_candidate_does_not_fall_back_to_original_or_text():
+    with pytest.raises(ValueError, match="committed envelope payload"):
+        build_flow_output_artifact_bundle(completed_steps=[{
+            "agent_id": "allele_extractor", "candidate": {"payload_json": fixture()},
+            "validated_candidate": {"payload_json": None}, "output": json.dumps(fixture()),
+        }], flow_name="Invalid checkpoint", output_format="json")
+
+
 @pytest.mark.parametrize("change", ["duplicate_identity", "ambiguous_pending_ref", "null_values", "wrong_target", "wrong_pack", "mixed", "conflicting_values", "bare_ref"])
 def test_unsafe_links_do_not_supply_identity(change):
     payload = fixture()

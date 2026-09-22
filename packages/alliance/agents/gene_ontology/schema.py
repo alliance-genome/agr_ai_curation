@@ -10,6 +10,9 @@ from src.schemas.domain_validator import (  # type: ignore[reportMissingImports]
 )
 
 
+COMPACT_VALIDATOR_RUNTIME = ("agr.alliance", "agr_ai_curation_alliance.compact_adapter:build_compact_validator_runtime")
+
+
 class GOHierarchyEntry(DomainValidatorBaseModel):
     """One typed GO hierarchy relation returned with a term."""
 

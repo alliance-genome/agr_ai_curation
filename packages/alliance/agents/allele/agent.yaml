@@ -59,6 +59,11 @@ structured_finalization:
     - lookup_provenance
   lookup:
     tool_name: agr_curation_query
+    record_grounding:
+      source_paths: [data, 'data[]', 'data.results[]', 'data.items[].results[]']
+      result_paths: [resolved_values, 'resolved_objects[]', 'allele_candidates[]']
+      identity_fields: [curie, primary_external_id, allele_id]
+      fields: [data_provider]
     provider_terms:
       - agr_curation_query
     request_keys:

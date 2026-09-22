@@ -205,6 +205,31 @@ async def test_automatic_specialist_deadline_cancels_and_returns_unresolved(monk
 
 
 @pytest.mark.asyncio
+async def test_structured_callbacks_are_invocation_local_and_not_model_arguments(monkeypatch):
+    supervisor = _supervisor_module()
+    captured = {"one": [], "two": []}
+    agent = SimpleNamespace(name="Shared validator")
+
+    async def run_specialist(**kwargs):
+        await asyncio.sleep(0)
+        kwargs["validated_result_callback"]({"request_id": kwargs["input_text"]})
+        return "human summary"
+
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", run_specialist)
+
+    async def invoke(label):
+        tool = supervisor._create_streaming_tool(agent=agent, tool_name="validate_" + label,
+            tool_description="Validate", specialist_name="Validator", propagate_errors=True,
+            inline_chat_persistence=False, validated_result_callback=captured[label].append)
+        assert "validated_result_callback" not in tool.params_json_schema["properties"]
+        return await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, run_config=None),
+                                         json.dumps({"query": label}))
+
+    assert await asyncio.gather(invoke("one"), invoke("two")) == ["human summary", "human summary"]
+    assert captured == {"one": [{"request_id": "one"}], "two": [{"request_id": "two"}]}
+
+
+@pytest.mark.asyncio
 async def test_automatic_specialist_deadline_does_not_wait_for_slow_cleanup(monkeypatch):
     supervisor = _supervisor_module()
     from src.lib.openai_agents import config

@@ -207,8 +207,8 @@ async def test_flow_requires_each_saved_mapping_exactly_once(example, group_coun
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalid_second,omit_groups", [(False, False), (True, False), (False, True)])
-async def test_flow_step_commits_profile_record_atomically(example, monkeypatch, invalid_second, omit_groups):
+@pytest.mark.parametrize("invalid_second,omit_groups,commit_fails", [(False, False, False), (True, False, False), (False, True, False), (False, False, True)])
+async def test_flow_step_commits_profile_record_atomically(example, monkeypatch, invalid_second, omit_groups, commit_fails):
     source, context = prepared(example, per_element=True,
         attributes={"records": [{"paper_name": "A"}, {"paper_name": "B"}]})
     items = results(source, context, [{"identifier": "EX:1"}, {"identifier": 2 if invalid_second else "EX:2"}])
@@ -224,16 +224,25 @@ async def test_flow_step_commits_profile_record_atomically(example, monkeypatch,
         project_key="fixture", document_id=None, session_id=None, flow_run_id=None,
         object_model_ref_json={}, model_field_ref_json={})
     db = SimpleNamespace(get=lambda *args: row, commit=Mock(), rollback=Mock(), close=Mock())
+    if commit_fails:
+        db.commit.side_effect = RuntimeError("checkpoint commit failed")
     monkeypatch.setattr(executor, "SessionLocal", lambda: db)
     monkeypatch.setattr(executor, "resolve_curation_domain_pack_by_id", lambda key: example[2])
     monkeypatch.setattr("src.lib.curation_workspace.execution_contracts.resolve_receipt_profile",
                         lambda session, receipt: context.profile)
     monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog", lambda **kwargs: [example[1]])
     checkpoints = []
-    monkeypatch.setattr(executor, "write_domain_envelope_checkpoint",
-        lambda session, request: (checkpoints.append(request), SimpleNamespace(revision=2))[1])
+    def write_checkpoint(session, request):
+        checkpoints.append(request)
+        row.envelope_json = request.envelope.model_dump(mode="json")
+        row.envelope_json["authenticated_context"] = {"active_groups": ["fixture-checkpoint-group"]}
+        return SimpleNamespace(revision=2)
+
+    monkeypatch.setattr(executor, "write_domain_envelope_checkpoint", write_checkpoint)
+    from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
+    candidate = ExtractionEnvelopeCandidate(agent_key=context.receipt.agent_key,
+        payload_json=source.model_dump(mode="json"), execution_receipt=context.receipt)
     if omit_groups:
-        from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
         with pytest.raises(ValueError, match="once each"):
             await executor._execute_validation_groups_for_step(
                 flow=SimpleNamespace(id="flow", name="Profile", flow_definition={}),
@@ -244,15 +253,29 @@ async def test_flow_step_commits_profile_record_atomically(example, monkeypatch,
         assert not checkpoints
         db.rollback.assert_called_once()
         return
-    result = await executor._execute_validation_groups_for_step(
-        flow=SimpleNamespace(id="flow", name="Profile", flow_definition={"nodes": []}), candidate=object(),
-        node_data={"validation_groups": [{"group_id": "profile", "state": "automatic",
-                    "binding_id": context.registry.bindings[0].binding_id}]},
-        document_id="document", user_id="curator", session_id="session", flow_run_id="run",
-        agent_context={}, flow_conversation_summary="Profile fixture",
-    )
+    async def execute():
+        return await executor._execute_validation_groups_for_step(
+            flow=SimpleNamespace(id="flow", name="Profile", flow_definition={"nodes": []}), candidate=candidate,
+            node_data={"validation_groups": [{"group_id": "profile", "state": "automatic",
+                        "binding_id": context.registry.bindings[0].binding_id}]},
+            document_id="document", user_id="curator", session_id="session", flow_run_id="run",
+            agent_context={}, flow_conversation_summary="Profile fixture",
+        )
+    if commit_fails:
+        with pytest.raises(RuntimeError, match="checkpoint commit failed"):
+            await execute()
+        assert candidate.payload_json == source.model_dump(mode="json")
+        db.rollback.assert_called_once()
+        db.close.assert_called_once()
+        return
+    result = await execute()
     assert result["validation_group_results"]["materialized_envelope_revision"] == 2
     saved = checkpoints[0].envelope
+    assert result["validated_candidate"].payload_json == row.envelope_json
+    assert result["validated_candidate"].payload_json is not row.envelope_json
+    assert result["validated_candidate"].payload_json["authenticated_context"] == {"active_groups": ["fixture-checkpoint-group"]}
+    assert result["validated_candidate"].execution_receipt is candidate.execution_receipt
+    assert candidate.payload_json == source.model_dump(mode="json")
     records = saved.extracted_objects[0].payload["attributes"]["records"]
     if invalid_second:
         assert saved.extracted_objects == source.extracted_objects

@@ -1554,6 +1554,8 @@ def test_ambiguous_validator_result_preserves_candidate_diagnostics():
         ],
         lookup_outcome="ambiguous",
     )
+    # Returned rows and retained candidates are different quantities.
+    item.result.lookup_attempts[0].result_count = 26
 
     result = materialize_validator_results_into_envelope(envelope, metadata, [item])
 
@@ -1563,7 +1565,7 @@ def test_ambiguous_validator_result_preserves_candidate_diagnostics():
         "DEMO:Allele0001817",
         "DEMO:Allele9999999",
     ]
-    assert finding.details["lookup_attempts"][0]["candidate_count"] == 2
+    assert finding.details["lookup_attempts"][0]["candidate_count"] == 26
 
 
 def test_invalid_resolved_object_materializes_open_finding_without_reference():
