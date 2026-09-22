@@ -301,7 +301,13 @@ def _recall_budget_failure(exc: ToolResultBudgetError, *, detail: str) -> str:
 
 
 def _recall_cursor(cursor: str | int | None, *, total: int) -> int:
-    """Parse a recall page cursor strictly; malformed or stale cursors fail."""
+    """Parse a recall page cursor strictly.
+
+    Malformed cursors and cursors past the current end fail explicitly instead
+    of restarting at zero. Only the past-the-end case is detected as stale: a
+    transcript that gained messages between pages is not detected, so a recent
+    page requested after new messages arrive can repeat a boundary message.
+    """
 
     if cursor is None or cursor == "":
         return 0
@@ -311,10 +317,16 @@ def _recall_cursor(cursor: str | int | None, *, total: int) -> int:
     value = int(text)
     if value > total:
         raise ValueError(
-            f"cursor {value} is past the end of the {total} available messages; the "
-            "transcript may have changed. Restart without a cursor."
+            f"cursor {_preview_text(text)} is past the end of the {total} available "
+            "messages; the transcript may have changed. Restart without a cursor."
         )
     return value
+
+
+def _echo(value: Any) -> str:
+    """Short preview of model-supplied input echoed back in a response."""
+
+    return _preview_text(value, limit=_TEXT_PREVIEW_LIMIT)
 
 
 def _withheld_message(payload: dict[str, Any]) -> dict[str, Any]:
@@ -325,18 +337,35 @@ def _withheld_message(payload: dict[str, Any]) -> dict[str, Any]:
         for key in ("ordinal", "message_id", "turn_id", "role", "message_type", "created_at")
     }
     withheld["withheld"] = True
+    present = []
     for field in _RECALL_MESSAGE_FIELDS:
         value = payload.get(field)
         if isinstance(value, str):
             withheld[f"{field}_chars"] = len(value)
             withheld[f"{field}_sha256"] = content_sha256(value)
-    withheld["detail_call"] = {
-        "detail": "message",
-        "message_id": payload["message_id"],
-        "message_field": "content",
-        "content_cursor": 0,
-    }
+            present.append((len(value), field))
+    # One exact read per text field, longest first: a flow row keeps its long
+    # text in flow_assistant_message, not in content.
+    withheld["detail_calls"] = [
+        {
+            "detail": "message",
+            "message_id": payload["message_id"],
+            "message_field": field,
+            "content_cursor": 0,
+        }
+        for _length, field in sorted(present, reverse=True)
+    ]
     return withheld
+
+
+def _withheld_note(page: list[dict[str, Any]]) -> str:
+    count = sum(1 for item in page if item.get("withheld"))
+    if not count:
+        return ""
+    return (
+        f" {count} message(s) on this page were too long to include and are withheld;"
+        " read each exactly with its detail_calls."
+    )
 
 
 def _fit_recall_messages(
@@ -476,7 +505,7 @@ async def recall_chat_history(
 
     Every response fits TOOL_RESULT_MAX_BYTES. Pages end at the message limit
     or the size budget and carry ``next_cursor``; a message too large for any
-    page is withheld with a ``detail_call`` that reads it exactly in chunks
+    page is withheld with ``detail_calls`` that read it exactly in chunks
     (``detail="message"``). All reads are scoped to the curator's own session.
     """
 
@@ -528,6 +557,7 @@ async def recall_chat_history(
                 "message": (
                     f"Returned {returned} exact transcript message(s) from this chat."
                     + _page_note(ended_by)
+                    + _withheld_note(page)
                 ),
                 "detail": "recent",
                 "session_id": session_id,
@@ -569,7 +599,7 @@ async def recall_chat_history(
                 "No transcript turn matched that reference in this chat.",
                 detail="turn",
                 session_id=session_id,
-                turn_ref=normalized_turn_ref,
+                turn_ref=_echo(normalized_turn_ref),
                 messages=[],
             )
         payloads = [
@@ -581,7 +611,7 @@ async def recall_chat_history(
             cursor=cursor,
             detail="turn",
             message="Returned exact transcript rows for the requested turn.",
-            extra={"session_id": session_id, "turn_ref": normalized_turn_ref},
+            extra={"session_id": session_id, "turn_ref": _echo(normalized_turn_ref)},
         )
 
     if normalized_detail == "search":
@@ -590,6 +620,14 @@ async def recall_chat_history(
             return _recall_response(
                 "invalid_query",
                 "Search detail requires a non-empty query.",
+                detail="search",
+            )
+        if len(normalized_query) > _FIELD_TEXT_LIMIT:
+            # A caller input error, not a result-budget escape.
+            return _recall_response(
+                "invalid_request",
+                f"Search query is longer than {_FIELD_TEXT_LIMIT} characters; "
+                "search for a shorter distinctive phrase.",
                 detail="search",
             )
         db = SessionLocal()
@@ -616,13 +654,13 @@ async def recall_chat_history(
             cursor=cursor,
             detail="search",
             message=f"Found {len(results)} exact transcript message(s) in this chat.",
-            extra={"session_id": session_id, "query": normalized_query},
+            extra={"session_id": session_id, "query": _echo(normalized_query)},
         )
 
     return _recall_response(
         "invalid_detail",
         "Unsupported recall detail. Use recent, turn, search, or message.",
-        detail=normalized_detail,
+        detail=_echo(normalized_detail),
     )
 
 
@@ -648,7 +686,7 @@ def _forward_recall_page(
         ended_by = "size_budget" if truncated else "end"
         response = {
             "status": "ok",
-            "message": message + _page_note(ended_by),
+            "message": message + _page_note(ended_by) + _withheld_note(page),
             "detail": detail,
             **extra,
             "messages": page,

@@ -84,10 +84,12 @@ def _recall(**kwargs):
     return json.loads(raw)
 
 
-def _read_exact(message_id: str) -> str:
+def _read_exact(message_id: str, field: str = "content") -> str:
     chunks, cursor = [], 0
     while cursor is not None:
-        chunk = _recall(detail="message", message_id=message_id, content_cursor=cursor)
+        chunk = _recall(
+            detail="message", message_id=message_id, message_field=field, content_cursor=cursor
+        )
         assert chunk["status"] == "ok"
         chunks.append(chunk["content"])
         cursor = chunk["next_content_cursor"]
@@ -111,7 +113,10 @@ def test_recent_pages_by_size_and_withheld_messages_read_exactly(monkeypatch, re
     withheld = [item for page in pages for item in page["messages"] if item.get("withheld")]
     assert [item["message_id"] for item in withheld] == [str(messages[17].message_id)]
     assert withheld[0]["content_chars"] == len(messages[17].content)
-    assert _read_exact(withheld[0]["detail_call"]["message_id"]) == messages[17].content
+    call = withheld[0]["detail_calls"][0]
+    assert call["message_field"] == "content"
+    assert _read_exact(call["message_id"]) == messages[17].content
+    assert any("withheld" in page["message"] for page in pages)
     assert reported == []  # paging is normal, not an alert
 
 
@@ -170,3 +175,47 @@ def test_unmeetable_budget_returns_compact_failure_and_reports_once(monkeypatch,
     assert result["error_code"] == "tool_result_budget_unmet"
     assert len(reported) == 1
     assert reported[0][1]["tool_name"] == "recall_chat_history"
+
+
+def test_withheld_flow_row_points_at_its_long_field(monkeypatch):
+    from src.lib.chat_transcript import FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+
+    long_text = "Flow summary " + UNICODE * 2000
+    flow_row = ChatMessageRecord(
+        message_id=uuid4(),
+        session_id="session-recall",
+        chat_kind=ASSISTANT_CHAT_KIND,
+        turn_id="turn-flow",
+        role="flow",
+        message_type="text",
+        content="Flow finished.",
+        payload_json={FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: long_text},
+        trace_id=None,
+        created_at=datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc),
+    )
+    _install_repo(monkeypatch, [flow_row])
+
+    page = _recall(detail="recent")
+
+    withheld = page["messages"][0]
+    assert withheld["withheld"] is True
+    fields = [call["message_field"] for call in withheld["detail_calls"]]
+    assert fields == ["flow_assistant_message", "content"]
+    assert _read_exact(str(flow_row.message_id), "flow_assistant_message") == long_text.strip()
+    assert _read_exact(str(flow_row.message_id), "content") == "Flow finished."
+
+
+def test_echoed_inputs_stay_short_and_long_queries_are_rejected(monkeypatch, reported):
+    _install_repo(monkeypatch, [_message("text", index=1)])
+    huge = "x" * 200000
+
+    turn = _recall(detail="turn", turn_ref=huge)
+    unknown = _recall(detail=huge)
+    search = _recall(detail="search", query=huge)
+    cursor = _recall(detail="recent", cursor="9" * 5000)
+
+    assert turn["status"] == "not_found" and len(turn["turn_ref"]) < 300
+    assert unknown["status"] == "invalid_detail" and len(unknown["detail"]) < 300
+    assert search["status"] == "invalid_request"
+    assert cursor["status"] == "invalid_cursor" and len(cursor["message"]) < 600
+    assert reported == []
