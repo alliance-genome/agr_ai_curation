@@ -47,6 +47,15 @@ from src.lib.openai_agents.config import (
 from src.lib.openai_agents.chat_compaction_session import (
     CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE,
 )
+from src.lib.openai_agents.tool_result_bounds import (
+    ToolResultBudgetError,
+    budget_failure,
+    content_sha256,
+    fit_page,
+    fit_text_window,
+    report_budget_failure_result,
+    tool_result_budget,
+)
 from src.models.sql.database import SessionLocal
 
 
@@ -272,6 +281,186 @@ def _direct_recall_turn_messages(
         db.close()
 
 
+_RECALL_TOOL_NAME = "recall_chat_history"
+_RECALL_MESSAGE_FIELDS = ("content", "flow_assistant_message")
+
+
+def _recall_budget_failure(exc: ToolResultBudgetError, *, detail: str) -> str:
+    failure = budget_failure(
+        tool_name=_RECALL_TOOL_NAME,
+        measured=exc.measured,
+        limit=exc.limit,
+        field=detail,
+    )
+    report_budget_failure_result(
+        failure,
+        tool_name=_RECALL_TOOL_NAME,
+        component="supervisor_recall_chat_history",
+    )
+    return json.dumps(failure, ensure_ascii=True, default=str)
+
+
+def _recall_cursor(cursor: str | int | None, *, total: int) -> int:
+    """Parse a recall page cursor strictly; malformed or stale cursors fail."""
+
+    if cursor is None or cursor == "":
+        return 0
+    text = str(cursor).strip()
+    if isinstance(cursor, bool) or not text.isdigit():
+        raise ValueError("cursor must be a non-negative integer from a previous next_cursor")
+    value = int(text)
+    if value > total:
+        raise ValueError(
+            f"cursor {value} is past the end of the {total} available messages; the "
+            "transcript may have changed. Restart without a cursor."
+        )
+    return value
+
+
+def _withheld_message(payload: dict[str, Any]) -> dict[str, Any]:
+    """Identity and exact detail pointers for a message too large for one page."""
+
+    withheld = {
+        key: payload[key]
+        for key in ("ordinal", "message_id", "turn_id", "role", "message_type", "created_at")
+    }
+    withheld["withheld"] = True
+    for field in _RECALL_MESSAGE_FIELDS:
+        value = payload.get(field)
+        if isinstance(value, str):
+            withheld[f"{field}_chars"] = len(value)
+            withheld[f"{field}_sha256"] = content_sha256(value)
+    withheld["detail_call"] = {
+        "detail": "message",
+        "message_id": payload["message_id"],
+        "message_field": "content",
+        "content_cursor": 0,
+    }
+    return withheld
+
+
+def _fit_recall_messages(
+    payloads: list[dict[str, Any]],
+    *,
+    start: int,
+    limit: int,
+    render: Any,
+) -> dict[str, Any]:
+    response, _ = fit_page(
+        payloads,
+        start=start,
+        limit=limit,
+        render=render,
+        budget=tool_result_budget(),
+        oversized=lambda payload, _index: _withheld_message(payload),
+    )
+    return response
+
+
+def _page_note(ended_by: str) -> str:
+    if ended_by == "size_budget":
+        return (
+            " The page ended at the tool result size budget; continue with next_cursor."
+        )
+    return ""
+
+
+async def _recall_message_detail(
+    *,
+    session_id: str,
+    user_id: str,
+    message_id: str | None,
+    message_field: str,
+    content_cursor: int | None,
+) -> str:
+    """Exact bounded chunks of one message in the active chat session."""
+
+    parsed_id = _uuid_ref(str(message_id or "").strip())
+    if parsed_id is None:
+        return _recall_response(
+            "invalid_request",
+            "detail=\"message\" requires the message_id of a message in this chat.",
+            detail="message",
+        )
+    if message_field not in _RECALL_MESSAGE_FIELDS:
+        return _recall_response(
+            "invalid_request",
+            f"message_field must be one of: {', '.join(_RECALL_MESSAGE_FIELDS)}.",
+            detail="message",
+        )
+    db = SessionLocal()
+    try:
+        # Scoped to the curator's own active session: other sessions' ids miss.
+        message = ChatHistoryRepository(db).get_message_by_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
+            message_id=parsed_id,
+            excluded_message_types={CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE},
+        )
+    except ChatHistorySessionNotFoundError:
+        message = None
+    finally:
+        db.close()
+    if message is None:
+        return _recall_response(
+            "not_found",
+            "No message with that id exists in this chat.",
+            detail="message",
+            message_id=str(parsed_id),
+        )
+    text = (
+        message.content
+        if message_field == "content"
+        else extract_flow_assistant_message(message)
+    )
+    if not isinstance(text, str):
+        return _recall_response(
+            "not_found",
+            f"This message has no {message_field}.",
+            detail="message",
+            message_id=str(parsed_id),
+        )
+    start = 0 if content_cursor is None else content_cursor
+    digest = content_sha256(text)
+
+    def render(chunk: str, end: int) -> dict[str, Any]:
+        complete = end >= len(text)
+        return {
+            "status": "ok",
+            "message": "Returned an exact chunk of one transcript message.",
+            "detail": "message",
+            "session_id": session_id,
+            "message_id": str(message.message_id),
+            "turn_id": message.turn_id,
+            "role": message.role,
+            "message_type": message.message_type,
+            "created_at": message.created_at.isoformat(),
+            "message_field": message_field,
+            "content": chunk,
+            "content_range": {"start": start, "end": end, "total_chars": len(text)},
+            "content_sha256": digest,
+            "next_content_cursor": None if complete else end,
+            "complete": complete,
+        }
+
+    try:
+        return json.dumps(
+            fit_text_window(text, cursor=start, render=render, budget=tool_result_budget()),
+            ensure_ascii=True,
+            default=str,
+        )
+    except ValueError as exc:
+        return _recall_response(
+            "invalid_cursor",
+            str(exc),
+            detail="message",
+            message_id=str(parsed_id),
+        )
+    except ToolResultBudgetError as exc:
+        return _recall_budget_failure(exc, detail="message")
+
+
 async def recall_chat_history(
     *,
     detail: str = "recent",
@@ -279,8 +468,17 @@ async def recall_chat_history(
     query: str | None = None,
     limit: int | None = None,
     cursor: str | None = None,
+    message_id: str | None = None,
+    message_field: str = "content",
+    content_cursor: int | None = None,
 ) -> str:
-    """Recall exact transcript text for the active standard chat session."""
+    """Recall exact transcript text for the active standard chat session.
+
+    Every response fits TOOL_RESULT_MAX_BYTES. Pages end at the message limit
+    or the size budget and carry ``next_cursor``; a message too large for any
+    page is withheld with a ``detail_call`` that reads it exactly in chunks
+    (``detail="message"``). All reads are scoped to the curator's own session.
+    """
 
     session_id = get_current_session_id()
     user_id = get_current_user_id()
@@ -291,6 +489,14 @@ async def recall_chat_history(
         )
 
     normalized_detail = str(detail or "recent").strip() or "recent"
+    if normalized_detail == "message":
+        return await _recall_message_detail(
+            session_id=session_id,
+            user_id=user_id,
+            message_id=message_id,
+            message_field=str(message_field or "content"),
+            content_cursor=content_cursor,
+        )
     bounded_limit = normalize_page_limit(
         limit,
         default=get_supervisor_recall_chat_history_default_limit(),
@@ -298,25 +504,50 @@ async def recall_chat_history(
     )
     if normalized_detail == "recent":
         messages = _recall_visible_messages(session_id=session_id, user_id=user_id)
-        page, truncated, next_cursor = recent_page(
-            [
-                _recall_message_payload(message, ordinal=index + 1)
-                for index, message in enumerate(messages)
-            ],
-            limit=bounded_limit,
-            cursor=cursor,
-        )
+        payloads = [
+            _recall_message_payload(message, ordinal=index + 1)
+            for index, message in enumerate(messages)
+        ]
         total_count = len(messages)
-        return _recall_response(
-            "ok",
-            f"Returned {len(page)} exact transcript message(s) from this chat.",
-            detail="recent",
-            session_id=session_id,
-            messages=page,
-            total_count=total_count,
-            truncated=truncated,
-            next_cursor=next_cursor,
-        )
+        try:
+            served = _recall_cursor(cursor, total=total_count)
+        except ValueError as exc:
+            return _recall_response("invalid_cursor", str(exc), detail="recent")
+        end = total_count - served
+        # Newest first while fitting, so a size-ended page keeps the latest turns.
+        newest_first = list(reversed(payloads[max(0, end - bounded_limit):end]))
+
+        def render_recent(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
+            remaining = end - returned
+            truncated = remaining > 0
+            ended_by = "end" if not truncated else (
+                "limit" if returned >= bounded_limit else "size_budget"
+            )
+            return {
+                "status": "ok",
+                "message": (
+                    f"Returned {returned} exact transcript message(s) from this chat."
+                    + _page_note(ended_by)
+                ),
+                "detail": "recent",
+                "session_id": session_id,
+                "messages": list(reversed(page)),
+                "total_count": total_count,
+                "truncated": truncated,
+                "next_cursor": str(served + returned) if truncated else None,
+                "page_ended_by": ended_by,
+            }
+
+        try:
+            response = _fit_recall_messages(
+                newest_first,
+                start=0,
+                limit=len(newest_first),
+                render=render_recent,
+            )
+        except ToolResultBudgetError as exc:
+            return _recall_budget_failure(exc, detail="recent")
+        return json.dumps(response, ensure_ascii=True, default=str)
 
     if normalized_detail == "turn":
         normalized_turn_ref = str(turn_ref or "latest").strip() or "latest"
@@ -332,18 +563,25 @@ async def recall_chat_history(
                 user_id=user_id,
                 turn_ref=normalized_turn_ref,
             )
-        return _recall_response(
-            "ok" if selected else "not_found",
-            "Returned exact transcript rows for the requested turn."
-            if selected
-            else "No transcript turn matched that reference in this chat.",
+        if not selected:
+            return _recall_response(
+                "not_found",
+                "No transcript turn matched that reference in this chat.",
+                detail="turn",
+                session_id=session_id,
+                turn_ref=normalized_turn_ref,
+                messages=[],
+            )
+        payloads = [
+            _recall_message_payload(message, ordinal=index + 1)
+            for index, message in enumerate(selected)
+        ]
+        return _forward_recall_page(
+            payloads,
+            cursor=cursor,
             detail="turn",
-            session_id=session_id,
-            turn_ref=normalized_turn_ref,
-            messages=[
-                _recall_message_payload(message, ordinal=index + 1)
-                for index, message in enumerate(selected)
-            ],
+            message="Returned exact transcript rows for the requested turn.",
+            extra={"session_id": session_id, "turn_ref": normalized_turn_ref},
         )
 
     if normalized_detail == "search":
@@ -369,23 +607,66 @@ async def recall_chat_history(
             results = []
         finally:
             db.close()
-        return _recall_response(
-            "ok",
-            f"Found {len(results)} exact transcript message(s) in this chat.",
+        payloads = [
+            _recall_message_payload(message, ordinal=index + 1)
+            for index, message in enumerate(results)
+        ]
+        return _forward_recall_page(
+            payloads,
+            cursor=cursor,
             detail="search",
-            session_id=session_id,
-            query=normalized_query,
-            messages=[
-                _recall_message_payload(message, ordinal=index + 1)
-                for index, message in enumerate(results)
-            ],
+            message=f"Found {len(results)} exact transcript message(s) in this chat.",
+            extra={"session_id": session_id, "query": normalized_query},
         )
 
     return _recall_response(
         "invalid_detail",
-        "Unsupported recall detail. Use recent, turn, or search.",
+        "Unsupported recall detail. Use recent, turn, search, or message.",
         detail=normalized_detail,
     )
+
+
+def _forward_recall_page(
+    payloads: list[dict[str, Any]],
+    *,
+    cursor: str | int | None,
+    detail: str,
+    message: str,
+    extra: Mapping[str, Any],
+) -> str:
+    """One size-fitted forward page of turn or search results."""
+
+    total = len(payloads)
+    try:
+        start = _recall_cursor(cursor, total=total)
+    except ValueError as exc:
+        return _recall_response("invalid_cursor", str(exc), detail=detail)
+
+    def render(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
+        next_offset = start + returned
+        truncated = next_offset < total
+        ended_by = "size_budget" if truncated else "end"
+        response = {
+            "status": "ok",
+            "message": message + _page_note(ended_by),
+            "detail": detail,
+            **extra,
+            "messages": page,
+        }
+        if truncated or start:
+            response.update(
+                total_count=total,
+                truncated=truncated,
+                next_cursor=str(next_offset) if truncated else None,
+                page_ended_by=ended_by,
+            )
+        return response
+
+    try:
+        response = _fit_recall_messages(payloads, start=start, limit=total - start, render=render)
+    except ToolResultBudgetError as exc:
+        return _recall_budget_failure(exc, detail=detail)
+    return json.dumps(response, ensure_ascii=True, default=str)
 
 
 def _trace_inventory_records(

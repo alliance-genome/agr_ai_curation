@@ -82,7 +82,8 @@ All of these results are returned to a model. Test files are shortened as follow
 |---|---|---|
 | Flow chat-output and formatter tools (`explain_formatter_capabilities`, `inspect_output_*`, `build_default_projection_plan`, `validate_output_projection`, `preview_output_projection`, `finalize_and_save`, `formatter_cannot_complete`), plus flow chat output in `flows/executor.py` | Yes | **Owned by ALL-1275** (application-owned rendering and bounded output inspection). Not edited here. |
 | `inspect_results` (chat and preferred flow) | Yes | Existing bounds: list, manifest and evidence page limits; per-field `_bounded_json` limits (`SUPERVISOR_FIELD_TEXT_LIMIT`); a 500-character detail cursor. No total byte budget. **Blocker B1.** |
-| `recall_chat_history`, `inspect_chat_traces` | Yes | Existing message-count and page limits, with no total byte budget. `recall_chat_history` returns full message content. **Blocker B1.** |
+| `recall_chat_history` | Yes | Closed (B1). `recent`, `turn` and `search` pages are fitted by bytes and continue with `next_cursor`; malformed or stale cursors return `invalid_cursor`. A message too large for a page is withheld with its size and `sha256` and a `detail_call`; `detail="message"` reads its `content` or `flow_assistant_message` exactly in chunks (`content_cursor`, `next_content_cursor`). Every read is scoped to the curator's own active session. | `test_supervisor_recall_result_bounds.py::test_recent_pages_by_size_and_withheld_messages_read_exactly`, `::test_turn_and_search_results_page_by_size`, `::test_message_detail_is_scoped_to_the_active_session`, `::test_invalid_or_stale_recent_cursor_is_explicit`, `::test_invalid_content_cursor_is_explicit`, `::test_unmeetable_budget_returns_compact_failure_and_reports_once`; `test_all1278_regressions.py::test_b1_recall_chat_history_recent_page_is_bounded` |
+| `inspect_chat_traces` | Yes | Existing page limits, and each string is cut to 1200 characters, so results are bounded in practice. There is no total byte budget. A possible loss where the 1200-character cap meets 8000-character conversation chunks is unconfirmed. Deferred with B1's remainder. |
 | `ask_*_specialist` and specialist-as-tool wrappers, flow step tools, flow curation prep and handoff | Yes (to the supervisor) | Structured results are reduced to manifests (`_reduce_specialist_output_for_supervisor`). Unstructured answer text and the curation-prep `envelope_refs` are not size-budgeted. **Blocker B2.** |
 | `finalize_structured_result`, `finalize_validator_result`, `finalize_validator_batch_results` | Yes | In compact validator runtime mode, only the acceptance receipt is returned. The non-compact validator mode echoes the accepted result. **Blocker B2.** |
 | `prepare_for_curation` | Yes | Short status that echoes the model-supplied `result_refs`, so its size depends only on the model's own input. |
@@ -102,10 +103,9 @@ views). This ticket leaves all of that unchanged. Evidence:
 
 ## Recorded blockers
 
-- **B1. Supervisor context recall tools** (`inspect_results`, `recall_chat_history`, `inspect_chat_traces`) have page and field limits but no total byte budget.
-  - Bounding them means applying `fit_page` over the rendered response in `supervisor_context_tools.py` and `inspect_results.py`, which are shared with preferred-flow result inspection.
-  - These tools are not in the confirmed production defects, and ALL-1279's provider-boundary measurement covers them meanwhile.
-  - A possible loss issue in `inspect_chat_traces` (1200-character string cap applied to 8000-character conversation chunks) needs confirmation before any fix.
+The coordinator deferred B2, the rest of B3, and B4 through B7 to follow-up tickets on 2026-09-22. Each keeps the disposition recorded below.
+
+- **B1. Supervisor context recall tools. Closed for `recall_chat_history`** (the path that was reachable and unbounded); see its table entry. Remainder deferred: `inspect_results` and `inspect_chat_traces` keep their existing page limits and per-field caps without a total byte budget. They are bounded in practice, and ALL-1279's provider-boundary measurement covers them.
 - **B2. Specialist and validator result echoes** (unstructured specialist answers, curation-prep `envelope_refs`, non-compact `finalize_validator_*` echoes) are not size-budgeted.
   - These are handoff contracts rather than inspection tools. Bounding them changes supervisor and validator semantics, which belong to the compact-decision design (ALL-1270 follow-up) and ALL-1279 measurement.
 - **B3. `resolve_domain_field_term`** now clamps its candidate limit to `TOOL_PAGE_MAX_LIMIT`, but its total byte size is observed and reported, not replaced, because the resolver ledger records the complete output.
