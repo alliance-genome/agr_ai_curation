@@ -4,7 +4,8 @@ Non-JSON flow outputs (CSV, TSV, chat tables) render structured payload values f
 pack-declared display roles instead of JSON text. The declaration contract is:
 
 * ``model_definitions[].metadata.display``: ``{label, id, state, resolved_states}``
-  where each value except ``resolved_states`` is a payload path relative to the value.
+  where each value except ``resolved_states`` is a payload path relative to the value;
+  ``label`` and ``id`` may also list candidate paths (the first non-empty one is used).
 * ``fields[].metadata.display`` overrides the model spec for that field, either with
   the same role keys or with ``{compose: [child paths], separator}``.
 
@@ -48,6 +49,7 @@ PACK_PATHS = {
 SHAPES_PATH = REPO_ROOT / "backend" / "tests" / "fixtures" / "flows" / "display_value_shapes.json"
 
 ROLE_KEYS = {"label", "id", "state"}
+LIST_ROLE_KEYS = {"label", "id"}
 SPEC_KEYS = ROLE_KEYS | {"resolved_states", "compose", "separator"}
 
 # Models no display can be declared for yet, each with the reason. Keep this list short:
@@ -201,14 +203,25 @@ def _spec_errors(
     if not {"label", "id"} & set(spec):
         errors.append(f"{where}: display needs a label or id role")
     for role in sorted(ROLE_KEYS & set(spec)):
-        if spec[role] not in children:
-            errors.append(f"{where}: {role} leaf {spec[role]!r} is not a declared child path")
-        elif children[spec[role]].field_type in {
-            DomainPackFieldType.OBJECT,
-            DomainPackFieldType.OBJECT_REF,
-            DomainPackFieldType.ARRAY,
-        }:
-            errors.append(f"{where}: {role} {spec[role]!r} must name a scalar leaf")
+        value = spec[role]
+        if isinstance(value, list) and role in LIST_ROLE_KEYS:
+            if not value or len(value) != len(set(value)):
+                errors.append(f"{where}: {role} candidates must be a non-empty unique list")
+            paths = value
+        elif isinstance(value, str):
+            paths = [value]
+        else:
+            errors.append(f"{where}: {role} must be a leaf path or list of leaf paths")
+            continue
+        for path in paths:
+            if path not in children:
+                errors.append(f"{where}: {role} leaf {path!r} is not a declared child path")
+            elif children[path].field_type in {
+                DomainPackFieldType.OBJECT,
+                DomainPackFieldType.OBJECT_REF,
+                DomainPackFieldType.ARRAY,
+            }:
+                errors.append(f"{where}: {role} {path!r} must name a scalar leaf")
     if ("state" in spec) != ("resolved_states" in spec):
         errors.append(f"{where}: state and resolved_states must be declared together")
     resolved = spec.get("resolved_states")
@@ -365,7 +378,12 @@ def test_production_shapes_expose_a_declared_display_leaf(shape: dict[str, Any])
             if spec is None:
                 errors.append(f"{where}: structured value without a display spec")
                 continue
-            paths = spec.get("compose") or [spec[role] for role in ("label", "id") if role in spec]
+            paths = spec.get("compose") or [
+                path
+                for role in ("label", "id")
+                if role in spec
+                for path in (spec[role] if isinstance(spec[role], list) else [spec[role]])
+            ]
             if not any(_leaf_present(value, path) for path in paths):
                 errors.append(f"{where}: none of {paths} is present in {sorted(value)}")
     assert errors == []

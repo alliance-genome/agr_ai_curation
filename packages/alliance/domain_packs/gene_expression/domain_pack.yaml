@@ -241,7 +241,9 @@ model_definitions:
             class: ExperimentalCondition
     metadata:
       display:
-        label: condition_summary
+        label:
+          - condition_summary
+          - condition_free_text
         id: condition_class.curie
   - model_id: ExpressionPatternPayload
     display_name: Expression pattern payload

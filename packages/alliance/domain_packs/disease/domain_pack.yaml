@@ -186,7 +186,9 @@ model_definitions:
             class: ExperimentalCondition
     metadata:
       display:
-        label: condition_summary
+        label:
+          - condition_summary
+          - condition_free_text
         id: condition_class.curie
   - model_id: EvidenceRecordPayload
     display_name: Verified evidence record payload

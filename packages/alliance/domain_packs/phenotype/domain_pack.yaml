@@ -131,7 +131,9 @@ model_definitions:
             class: Reference
     metadata:
       display:
-        label: title
+        label:
+          - title
+          - filename
         id: reference_id
   - model_id: EvidenceQuotePayload
     display_name: Verified evidence quote payload
@@ -179,7 +181,9 @@ model_definitions:
             class: ExperimentalCondition
     metadata:
       display:
-        label: condition_summary
+        label:
+          - condition_summary
+          - condition_free_text
         id: condition_class.curie
 object_definitions:
   - object_type: PhenotypeAnnotation
