@@ -55,6 +55,7 @@ from agr_ai_curation_alliance.domain_packs.phenotype import (
 # Shared result/builder-summary helpers live in the sibling agr_curation module.
 from .agr_curation import (
     AgrQueryResult,
+    _builder_finalization_summary,
     _builder_summary,
     _builder_candidate_list,
     _search_builder_candidates,
@@ -604,7 +605,10 @@ def _discard_phenotype_observation_impl(
             method="discard_phenotype_observation",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_phenotype_builder_event(
         "phenotype_builder.discard_completed",
         action="discard",
@@ -821,7 +825,7 @@ def _finalize_phenotype_extraction_impl(candidate_ids: List[str]) -> AgrQueryRes
 
     finalization = outcome.finalization
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_phenotype_builder_event(

@@ -87,6 +87,14 @@ from .extraction_trace_events import (
     write_extraction_trace_event,
     write_stream_event,
 )
+from .tool_result_bounds import (
+    budget_failure,
+    is_budget_failure,
+    report_budget_failure_result,
+    report_tool_result_budget_escape,
+    serialized_size,
+    tool_result_budget,
+)
 from .resolver_call_ledger import (
     ResolverCallLedger,
     reset_active_resolver_call_ledger,
@@ -3386,9 +3394,11 @@ def _build_run_state_bound_tool(
 
     from agents import function_tool
 
+    tool_name = getattr(existing_tool, "name", None) or raw_func.__name__
+
     @function_tool(
         strict_mode=bool(getattr(existing_tool, "strict_json_schema", True)),
-        name_override=getattr(existing_tool, "name", None) or raw_func.__name__,
+        name_override=tool_name,
         description_override=getattr(existing_tool, "description", "") or "",
     )
     @functools.wraps(raw_func)
@@ -3397,16 +3407,67 @@ def _build_run_state_bound_tool(
         bw_token = set_active_extraction_builder_workspace(builder_workspace)
         rl_token = set_active_resolver_call_ledger(resolver_ledger)
         try:
-            return raw_func(*args, **kwargs)
+            result = raw_func(*args, **kwargs)
         finally:
             reset_active_resolver_call_ledger(rl_token)
             reset_active_extraction_builder_workspace(bw_token)
             reset_active_evidence_records(ev_token)
+        return _enforce_run_state_tool_result_budget(tool_name, result)
 
     if hasattr(existing_tool, "profile_bound_schema"):
         from src.lib.agent_studio.profile_tools import preserve_profile_tool_contract
         return preserve_profile_tool_contract(_run_state_bound, existing_tool)
     return _run_state_bound
+
+
+# Run-state tools whose results feed the resolver ledger: their complete
+# output is application input, so an oversized result is observed and reported
+# but not replaced (recorded as a blocker in TOOL_RESULT_BOUNDS_INVENTORY.md).
+_RUN_STATE_OBSERVE_ONLY_TOOLS = frozenset({"resolve_domain_field_term"})
+
+
+def _enforce_run_state_tool_result_budget(tool_name: str, result: Any) -> Any:
+    """Keep builder tool results inside the model-facing budget.
+
+    Builder acknowledgments and pages are compact by construction, so an
+    oversized result is an unexpected contract escape: it is reported once and
+    replaced by a compact failure that still states the operation's outcome.
+    """
+    # Builder helpers return their compact failure as the result body.
+    body = getattr(result, "data", result)
+    if is_budget_failure(body):
+        report_budget_failure_result(
+            body,
+            tool_name=tool_name,
+            component="builder_tool_adapter",
+        )
+        return result
+    budget = tool_result_budget()
+    measured = serialized_size(result)
+    if measured <= budget:
+        return result
+    enforced = tool_name not in _RUN_STATE_OBSERVE_ONLY_TOOLS
+    report_tool_result_budget_escape(
+        tool_name=tool_name,
+        measured=measured,
+        limit=budget,
+        component="builder_tool_adapter",
+        enforced=enforced,
+    )
+    if not enforced:
+        return result
+    plain = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    failure = budget_failure(tool_name=tool_name, measured=measured, limit=budget)
+    failure["result_bounds"]["reported"] = True
+    if isinstance(plain, dict):
+        failure["operation_status"] = plain.get("status")
+        failure["operation_lookup_status"] = plain.get("lookup_status")
+    failure["message"] = (
+        "The operation ran, but its result was too large to return. Page staged "
+        "candidates with this builder's list_staged_* or find_staged_* tool to "
+        "inspect the current state."
+    )
+    return failure
 
 
 def _bind_run_state_into_tools(

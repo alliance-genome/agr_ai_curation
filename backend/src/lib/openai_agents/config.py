@@ -3169,3 +3169,59 @@ def log_agent_config(agent_name: str, config: AgentConfig) -> None:
         config.reasoning,
         config.tool_choice,
     )
+
+
+# =============================================================================
+# ALL-1278: Bounded tool results
+# =============================================================================
+# Isolated package tools read these same variables directly (without importing
+# backend) through agr_ai_curation_runtime.tool_result_bounds and their own
+# modules; keep names and defaults aligned.
+
+def get_tool_result_max_bytes() -> int:
+    """Total serialized budget for one bounded model-facing tool result (TOOL_RESULT_MAX_BYTES).
+
+    Measured as UTF-8 bytes of the largest model-visible serialization (Python
+    string form and JSON with and without ASCII escaping), including page
+    metadata, descriptors and errors. Evidence, builder, document retrieval and
+    package lookup/query tools page by this budget and expose exact detail
+    chunks for anything larger. Default 32768 (about 8k tokens: under 1% of a
+    1M-token window and about 3% of a 272k window per result, while still
+    fitting a typical page of about 20 section passages or the default page of
+    most lookups). Minimum 2048, below which the compact page frame and
+    failure receipts cannot be expressed.
+    """
+    return max(2048, _get_env_int_with_fallback("TOOL_RESULT_MAX_BYTES", 32768))
+
+
+def get_evidence_list_max_limit() -> int:
+    """Largest page list_recorded_evidence serves (EVIDENCE_LIST_MAX_LIMIT).
+
+    Larger requested limits are clamped to this value and the response reports
+    the requested and effective limits plus the next offset. The byte budget
+    (TOOL_RESULT_MAX_BYTES) can end a page earlier. Default 100, matching the
+    historical default page (LIST_RECORDED_EVIDENCE_LIMIT).
+    """
+    return max(1, _get_env_int_with_fallback("EVIDENCE_LIST_MAX_LIMIT", 100))
+
+
+def get_builder_list_max_limit() -> int:
+    """Largest page the builder list_staged_*/find_staged_* tools serve (BUILDER_LIST_MAX_LIMIT).
+
+    Read directly by the isolated alliance package builder tools. Larger
+    requested limits are clamped with requested/effective counts and next
+    offset; the byte budget can end a page earlier. Default 100 (twice the
+    BUILDER_LIST_DEFAULT_LIMIT default page of 50).
+    """
+    return max(1, _get_env_int_with_fallback("BUILDER_LIST_MAX_LIMIT", 100))
+
+
+def get_section_read_page_max_chunks() -> int:
+    """Largest page of passages read_section/read_subsection serve (SECTION_READ_PAGE_MAX_CHUNKS).
+
+    Read directly by the isolated alliance package document tools. Larger
+    max_chunks requests are clamped with requested/effective counts and next
+    offset; the byte budget can end a page earlier. Default 100 (above the
+    SECTION_READ_MAX_CHUNKS default page of 30).
+    """
+    return max(1, _get_env_int_with_fallback("SECTION_READ_PAGE_MAX_CHUNKS", 100))

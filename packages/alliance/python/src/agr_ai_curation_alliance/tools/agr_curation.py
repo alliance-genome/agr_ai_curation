@@ -61,6 +61,17 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (
     GENE_EXPRESSION_MATERIALIZER_ID,
     materialize_gene_expression_builder_state,
 )
+from agr_ai_curation_runtime.tool_result_bounds import (
+    ToolResultBudgetError,
+    budget_failure,
+    clamp_page_limit,
+    env_positive_int,
+    fit_page,
+    invalid_cursor,
+    parse_offset,
+    serialized_size,
+    tool_result_max_bytes,
+)
 from .builder_finalization import finalize_builder_extraction
 from .search_helpers import (
     enrich_with_match_context,
@@ -5654,17 +5665,49 @@ def _stage_payload_from_gene_expression_input(
 _BUILDER_LIST_DEFAULT_LIMIT = int(os.getenv("BUILDER_LIST_DEFAULT_LIMIT", "50"))
 
 
+def _builder_list_max_limit() -> int:
+    """Largest builder list/find page (BUILDER_LIST_MAX_LIMIT, default 100).
+
+    Same variable and default as the backend config getter
+    ``get_builder_list_max_limit``; read directly because package code must
+    not import backend.
+    """
+    return env_positive_int("BUILDER_LIST_MAX_LIMIT", 100)
+
+
+def _builder_finalization_summary(summary: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Model-facing finalization receipt: identity, outcome and counts.
+
+    The full finalization (every source candidate and evidence id) stays in
+    the workspace and trace events; echoing those lists back grows with the
+    extraction and repeats ids the model already supplied.
+    """
+    if summary is None:
+        return None
+    return {
+        "status": summary.get("status"),
+        "builder_run_id": summary.get("builder_run_id"),
+        "builder_invocation_id": summary.get("builder_invocation_id"),
+        "finalized_candidate_count": summary.get("finalized_candidate_count"),
+        "candidate_ids": list(summary.get("candidate_ids") or []),
+        "source_candidate_count": len(summary.get("source_candidate_ids") or []),
+        "evidence_record_count": len(summary.get("evidence_record_ids") or []),
+        "resolver_selection_count": summary.get("resolver_selection_count"),
+        "validation_errors": list(summary.get("validation_errors") or []),
+    }
+
+
 def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict[str, Any]:
     """Compact, model-facing builder acknowledgment.
 
-    Deliberately does NOT embed the full per-candidate list. That list scales
-    O(staged candidates) and, for data-rich papers (hundreds of staged
-    observations), blew past the model context window — a single
-    ``patch_*_observation`` return reached ~240K chars / ~600K tokens because it
-    echoed every staged candidate back to the model. The authoritative staged
-    state stays in the backend workspace and in trace events; the model only
-    needs counts + id-lists here. Use ``list_staged_*`` (bounded) to inspect
-    individual candidates.
+    Reports workspace identity, state and counts only. Neither the per-candidate
+    list nor the workspace-wide id lists are embedded: both scale with staged
+    candidates, and echoing them on every mutation made acknowledgments grow
+    without bound (a single ``patch_*_observation`` return once reached ~240K
+    chars). The authoritative staged state stays in the backend workspace and
+    in trace events. Candidate ids and each candidate's pending refs, evidence
+    ids and resolver selections are paged by the ``list_staged_*`` and
+    ``find_staged_*`` tools.
     """
     snapshot = workspace.snapshot(redact_payload=True)
     all_candidates = snapshot["candidates"]
@@ -5676,22 +5719,118 @@ def _builder_summary(workspace: Any, *, include_discarded: bool = False) -> Dict
         "state": snapshot.get("state"),
         "candidate_count": len(counted),
         "discarded_candidate_count": len(discarded),
-        "candidate_ids": [candidate.get("candidate_id") for candidate in counted],
-        "pending_ref_ids": snapshot["pending_ref_ids"],
-        "evidence_record_ids": snapshot["evidence_record_ids"],
-        "resolver_selection_refs": snapshot["resolver_selection_refs"],
-        "finalization": snapshot.get("finalization"),
+        "pending_ref_count": len(snapshot["pending_ref_ids"]),
+        "evidence_record_count": len(snapshot["evidence_record_ids"]),
+        "resolver_selection_ref_count": len(snapshot["resolver_selection_refs"]),
+        "finalization": _builder_finalization_summary(snapshot.get("finalization")),
+        "reference_access": (
+            "Page candidate ids and each candidate's pending refs, evidence ids and "
+            "resolver selections with this builder's list_staged_* or find_staged_* tool."
+        ),
     }
 
 
-def _normalize_builder_page_limit(limit: int) -> int:
-    """Clamp a caller-supplied page size to a positive integer (default cap)."""
-    return max(1, int(limit)) if limit else _BUILDER_LIST_DEFAULT_LIMIT
+def _oversized_builder_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]:
+    """Identity and counts for a candidate summary too large for one page."""
+    staged_fields = candidate.get("staged_fields") or {}
+    return {
+        "candidate_id": candidate.get("candidate_id"),
+        "status": candidate.get("status"),
+        "withheld": True,
+        "summary_bytes": serialized_size(candidate),
+        "pending_ref_count": len(candidate.get("pending_ref_ids") or []),
+        "evidence_record_count": len(candidate.get("evidence_record_ids") or []),
+        "resolver_selection_ref_count": len(candidate.get("resolver_selection_refs") or []),
+        "validation_error_count": len(candidate.get("validation_errors") or []),
+        "staged_field_count": (
+            staged_fields.get("field_count") if isinstance(staged_fields, Mapping) else None
+        ),
+    }
 
 
-def _normalize_builder_page_offset(offset: int) -> int:
-    """Clamp a caller-supplied page offset to a non-negative integer."""
-    return max(0, int(offset)) if offset else 0
+def _builder_page(
+    workspace: Any,
+    candidates: List[Dict[str, Any]],
+    *,
+    include_discarded: bool,
+    limit: Any,
+    offset: Any,
+    total_key: str,
+    decorate: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Render one size- and count-bounded page of redacted candidate summaries.
+
+    Requested limits above BUILDER_LIST_MAX_LIMIT clamp (reported, not an
+    error); the page also ends before TOOL_RESULT_MAX_BYTES. A malformed or
+    out-of-range offset is an explicit ``invalid_request``.
+    """
+    base = _builder_summary(workspace, include_discarded=include_discarded)
+    total = len(candidates)
+    try:
+        cap, limit_metadata = clamp_page_limit(
+            limit,
+            default=_BUILDER_LIST_DEFAULT_LIMIT,
+            maximum=_builder_list_max_limit(),
+        )
+        start = parse_offset(offset, total=total)
+    except ValueError as exc:
+        return {
+            **base,
+            **invalid_cursor(str(exc)),
+            total_key: total,
+            "candidates": [],
+        }
+    budget = tool_result_max_bytes()
+    items = candidates if decorate is None else None
+
+    def render(page: List[Dict[str, Any]], returned: int) -> Dict[str, Any]:
+        next_offset = start + returned
+        has_more = total > next_offset
+        if not has_more:
+            ended_by = "end"
+        elif returned >= cap:
+            ended_by = "limit"
+        else:
+            ended_by = "size_budget"
+        return {
+            **base,
+            "candidates": page,
+            total_key: total,
+            "returned_candidate_count": returned,
+            "offset": start,
+            "next_offset": next_offset if has_more else None,
+            "truncated": has_more,
+            "page_ended_by": ended_by,
+            **limit_metadata,
+            "budget_bytes": budget,
+        }
+
+    if items is None:
+        # Decorate only the rows that can appear on this page.
+        items = list(candidates[:start]) + [
+            decorate(candidate) for candidate in candidates[start : start + cap]
+        ]
+    try:
+        page, _ = fit_page(
+            items,
+            start=start,
+            limit=cap,
+            render=render,
+            budget=budget,
+            oversized=lambda candidate, _index: _oversized_builder_candidate(candidate),
+        )
+    except ToolResultBudgetError as exc:
+        return {
+            **base,
+            **budget_failure(
+                tool_name="builder_candidate_page",
+                measured=exc.measured,
+                limit=exc.limit,
+            ),
+            total_key: total,
+            "candidates": [],
+        }
+    return page
 
 
 def _builder_candidate_list(
@@ -5700,33 +5839,31 @@ def _builder_candidate_list(
     include_discarded: bool = False,
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
+    decorate: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Bounded, pageable per-candidate listing for the ``list_staged_*`` tools.
 
-    Returns the compact builder ack plus a CAPPED page of redacted candidate
-    snapshots (never the unbounded full set), with ``truncated`` /
-    ``total_listed_candidate_count`` so the model knows more exist. The cap is
-    surpassable by paging: pass ``offset`` to step past earlier candidates and
-    read ``next_offset`` to continue. This keeps each page within the model
-    context even for hundreds of staged observations.
+    Returns the compact builder ack plus one page of redacted candidate
+    snapshots, with ``truncated`` / ``total_listed_candidate_count`` so the
+    model knows more exist. Pass ``offset`` to step past earlier candidates and
+    read ``next_offset`` to continue. Pages are bounded by
+    BUILDER_LIST_MAX_LIMIT and by the serialized TOOL_RESULT_MAX_BYTES budget,
+    including any per-candidate ``decorate`` additions, so hundreds of staged
+    observations never produce an oversized result.
     """
     snapshot = workspace.snapshot(redact_payload=True)
     candidates = snapshot["candidates"]
     if not include_discarded:
         candidates = [c for c in candidates if c.get("status") != "discarded"]
-    total = len(candidates)
-    cap = _normalize_builder_page_limit(limit)
-    start = _normalize_builder_page_offset(offset)
-    returned = candidates[start : start + cap]
-    result = _builder_summary(workspace, include_discarded=include_discarded)
-    result["candidates"] = returned
-    result["returned_candidate_count"] = len(returned)
-    result["total_listed_candidate_count"] = total
-    result["offset"] = start
-    has_more = total > start + len(returned)
-    result["next_offset"] = start + len(returned) if has_more else None
-    result["truncated"] = has_more
-    return result
+    return _builder_page(
+        workspace,
+        candidates,
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
+        total_key="total_listed_candidate_count",
+        decorate=decorate,
+    )
 
 
 def _search_builder_candidates(
@@ -5740,6 +5877,7 @@ def _search_builder_candidates(
     include_discarded: bool = False,
     limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
+    decorate: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Pageable search over staged candidates for the ``find_staged_*`` tools.
 
@@ -5758,8 +5896,10 @@ def _search_builder_candidates(
         the JSON-serialized staged-field values.
 
     Discarded drafts are skipped unless ``include_discarded`` is set. Matches are
-    paged with ``offset`` / ``limit`` and the result carries ``matched_candidate_count``
-    (total before paging), ``offset``, ``next_offset`` and ``truncated``.
+    paged with ``offset`` / ``limit`` (bounded by BUILDER_LIST_MAX_LIMIT and the
+    TOOL_RESULT_MAX_BYTES budget) and the result carries
+    ``matched_candidate_count`` (total before paging), ``offset``,
+    ``next_offset`` and ``truncated``.
     """
     needle = field_value_contains.lower() if field_value_contains else None
     unredacted = workspace.snapshot(redact_payload=False)["candidates"]
@@ -5790,33 +5930,27 @@ def _search_builder_candidates(
             )
             if needle not in serialized.lower():
                 continue
-        matched.append(candidate)
+        # RETURN redacted summaries only: collapse staged-field values to keys/count
+        # so the searched field text is never echoed back to the model.
+        matched.append(
+            {
+                **candidate,
+                "staged_fields": {
+                    "keys": sorted((candidate.get("staged_fields") or {}).keys()),
+                    "field_count": len(candidate.get("staged_fields") or {}),
+                },
+            }
+        )
 
-    matched_total = len(matched)
-    cap = _normalize_builder_page_limit(limit)
-    start = _normalize_builder_page_offset(offset)
-    page = matched[start : start + cap]
-    # RETURN redacted summaries only: collapse staged-field values to keys/count
-    # so the searched field text is never echoed back to the model.
-    redacted_page = [
-        {
-            **candidate,
-            "staged_fields": {
-                "keys": sorted((candidate.get("staged_fields") or {}).keys()),
-                "field_count": len(candidate.get("staged_fields") or {}),
-            },
-        }
-        for candidate in page
-    ]
-    result = _builder_summary(workspace, include_discarded=include_discarded)
-    result["candidates"] = redacted_page
-    result["matched_candidate_count"] = matched_total
-    result["returned_candidate_count"] = len(redacted_page)
-    result["offset"] = start
-    has_more = matched_total > start + len(redacted_page)
-    result["next_offset"] = start + len(redacted_page) if has_more else None
-    result["truncated"] = has_more
-    return result
+    return _builder_page(
+        workspace,
+        matched,
+        include_discarded=include_discarded,
+        limit=limit,
+        offset=offset,
+        total_key="matched_candidate_count",
+        decorate=decorate,
+    )
 
 
 def _stage_gene_expression_observation_impl(
@@ -6114,7 +6248,10 @@ def _discard_gene_expression_observation_impl(
             method="discard_gene_expression_observation",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_gene_expression_builder_event(
         "gene_expression_builder.discard_completed",
         action="discard",
@@ -6376,7 +6513,7 @@ def _finalize_gene_expression_extraction_impl(
 
     finalization = outcome.finalization
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_gene_expression_builder_event(

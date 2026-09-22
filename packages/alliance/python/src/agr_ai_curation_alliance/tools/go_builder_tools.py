@@ -44,6 +44,7 @@ from .agr_curation import (
     AgrQueryResult,
     _BUILDER_LIST_DEFAULT_LIMIT,
     _builder_candidate_list,
+    _builder_finalization_summary,
     _builder_summary,
     _ok,
     _search_builder_candidates,
@@ -789,7 +790,10 @@ def _discard_go_recommendation_impl(
             method="discard_go_recommendation",
             attempted_query=attempted_query,
         )
-    summary = _builder_summary(workspace, include_discarded=True)
+    summary = {
+        **_builder_summary(workspace, include_discarded=True),
+        "discarded_candidate_id": discard_input.candidate_id,
+    }
     _emit_go_builder_event(
         "go_builder.discard_completed",
         action="discard",
@@ -1002,7 +1006,7 @@ def _finalize_go_extraction_impl(candidate_ids: List[str]) -> AgrQueryResult:
             attempted_query=attempted_query,
         )
     summary = {
-        "builder_finalization": finalization.summary(),
+        "builder_finalization": _builder_finalization_summary(finalization.summary()),
         "builder": _builder_summary(workspace, include_discarded=True),
     }
     _emit_go_builder_event(

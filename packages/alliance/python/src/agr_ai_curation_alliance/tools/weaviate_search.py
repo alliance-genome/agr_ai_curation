@@ -20,6 +20,16 @@ from agr_ai_curation_runtime.evidence_spans import (
     build_evidence_spans,
 )
 from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
+from agr_ai_curation_runtime.tool_result_bounds import (
+    TOOL_RESULT_BUDGET_UNMET,
+    ToolResultBudgetError,
+    clamp_page_limit,
+    env_positive_int,
+    fit_page,
+    parse_offset,
+    serialized_size,
+    tool_result_max_bytes,
+)
 from agr_ai_curation_runtime.weaviate_chunks import (
     hybrid_search_chunks,
     get_chunk_by_id,
@@ -94,6 +104,17 @@ def _env_unit_float(key: str, default: float) -> float:
 # Env-configurable via SECTION_READ_MAX_CHUNKS (default 30).
 _DEFAULT_SECTION_MAX_CHUNKS = _env_int("SECTION_READ_MAX_CHUNKS", 30, minimum=1)
 
+
+def _section_read_page_max_chunks() -> int:
+    """Largest section/subsection page (SECTION_READ_PAGE_MAX_CHUNKS, default 100).
+
+    Same variable and default as the backend getter
+    ``get_section_read_page_max_chunks``. Larger requests clamp and report the
+    requested and effective values; the TOOL_RESULT_MAX_BYTES budget can end a
+    page earlier.
+    """
+    return env_positive_int("SECTION_READ_PAGE_MAX_CHUNKS", 100)
+
 # How much surrounding text to return around a text_contains match. Bounded so a
 # matched passage gives the model enough context to decide whether to read the full
 # chunk without pulling the entire section back.
@@ -135,11 +156,16 @@ class ChunkHit(BaseModel):
     score: Optional[float]
     content: str
     doc_items: Optional[List[dict]] = None  # Bounding box data for PDF highlighting
+    # Set when the hit's text did not fit the result budget; read it with read_chunk.
+    content_withheld: Optional[bool] = None
+    content_chars: Optional[int] = None
 
 
 class ChunkSearchResult(BaseModel):
     summary: str
     hits: List[ChunkHit]
+    error_code: Optional[str] = None
+    result_bounds: Optional[dict] = None
 
 
 class EvidenceSpanResult(BaseModel):
@@ -166,11 +192,18 @@ class ChunkReadContent(BaseModel):
     content: str
     evidence_spans: List[EvidenceSpanResult]
     doc_items: Optional[List[dict]] = None
+    # Present only when the chunk is too large for one result: ``content`` is
+    # then the exact slice covering the returned spans, and next_span_offset
+    # continues the chunk.
+    content_range: Optional[dict] = None
+    span_page: Optional[dict] = None
 
 
 class ChunkReadResult(BaseModel):
     summary: str
     chunk: Optional[ChunkReadContent]
+    error_code: Optional[str] = None
+    result_bounds: Optional[dict] = None
 
 
 def _coerce_chunk_index(value: Any) -> Optional[int]:
@@ -240,6 +273,10 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         section_keywords to scope the search to named sections (e.g. Results or
         figure legends) before retrieval runs.
 
+        Hits are returned in rank order with their full text while the response
+        fits its size budget; any hit whose text does not fit is still listed, with
+        content_withheld and content_chars, so read it with read_chunk.
+
         Args:
             query: Search terms or natural-language retrieval query.
             limit: Maximum number of chunks to return, capped at 10.
@@ -305,15 +342,115 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
                     )
                 )
 
-            summary = f"Found {len(hits)} chunks"
             logger.debug("Returning %s structured chunks", len(hits))
-            return ChunkSearchResult(summary=summary, hits=hits)
+            return _bounded_search_result(hits)
 
         except Exception as e:
             logger.error("Search error: %s", e, exc_info=True)
             return ChunkSearchResult(summary=f"Error searching document: {str(e)}", hits=[])
 
     return search_document
+
+
+
+def _search_summary(hits: List[ChunkHit]) -> str:
+    withheld = [hit.chunk_id or "" for hit in hits if hit.content_withheld]
+    summary = f"Found {len(hits)} chunks"
+    if withheld:
+        summary += (
+            f"; {len(withheld)} too long to include in full here "
+            f"(content_withheld): {', '.join(withheld)}. Read them with read_chunk"
+        )
+    return summary
+
+
+def _bounded_search_result(hits: List[ChunkHit]) -> ChunkSearchResult:
+    """Keep every hit, with full text in rank order while the budget allows.
+
+    Hits whose text does not fit stay listed as pointers (content withheld,
+    char count kept), so no ranked result disappears from the model's view.
+    """
+    budget = tool_result_max_bytes()
+    shown = [
+        hit.model_copy(
+            update={"content": "", "content_withheld": True, "content_chars": len(hit.content)}
+        )
+        for hit in hits
+    ]
+
+    def result() -> ChunkSearchResult:
+        return ChunkSearchResult(summary=_search_summary(shown), hits=shown)
+
+    measured = serialized_size(result())
+    if measured > budget:
+        return ChunkSearchResult(
+            summary="The search results could not fit the tool result budget.",
+            hits=[],
+            error_code=TOOL_RESULT_BUDGET_UNMET,
+            result_bounds={
+                "measured_bytes": measured,
+                "limit_bytes": budget,
+                "setting": "TOOL_RESULT_MAX_BYTES",
+            },
+        )
+    for index, hit in enumerate(hits):
+        pointer = shown[index]
+        shown[index] = hit
+        if serialized_size(result()) > budget:
+            shown[index] = pointer
+    return result()
+
+
+def _chunk_window(
+    *,
+    content: str,
+    spans: List[EvidenceSpanResult],
+    span_offset: int,
+    render: Any,
+    budget: int,
+) -> Any:
+    """Exact slice of an oversized chunk covering whole evidence spans.
+
+    ``render(content_slice, content_range, span_page_spans, span_page)`` builds
+    the complete result. Spans are added in order from ``span_offset`` while the
+    result fits; the slice starts where the previous window ended so that every
+    character of the chunk appears in exactly one window.
+    """
+    total = len(spans)
+    if total == 0:
+        # Windows are span-aligned; text without spans cannot be windowed.
+        raise ToolResultBudgetError(measured=len(content), limit=budget)
+    start_char = 0 if span_offset == 0 else spans[span_offset].char_start
+
+    def build(page: List[EvidenceSpanResult], returned: int) -> Any:
+        next_offset = span_offset + returned
+        more = next_offset < total
+        end_char = spans[next_offset].char_start if more else len(content)
+        if returned == 0:
+            end_char = start_char
+        return render(
+            content[start_char:end_char],
+            {"start": start_char, "end": end_char, "total_chars": len(content)},
+            page,
+            {
+                "span_offset": span_offset,
+                "returned_spans": returned,
+                "total_spans": total,
+                "next_span_offset": next_offset if more else None,
+                "complete": not more,
+            },
+        )
+
+    result, returned = fit_page(
+        spans,
+        start=span_offset,
+        limit=total - span_offset,
+        render=build,
+        budget=budget,
+    )
+    if returned == 0 and span_offset < total:
+        raise ToolResultBudgetError(measured=serialized_size(result), limit=budget)
+    return result
 
 
 def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -325,7 +462,7 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
     """
 
     @function_tool
-    async def read_chunk(chunk_id: str) -> ChunkReadResult:
+    async def read_chunk(chunk_id: str, span_offset: int = 0) -> ChunkReadResult:
         """Read one PDF chunk and return its full text plus selectable evidence_spans.
 
         This is the evidence-selection step: it returns the complete chunk text and
@@ -334,8 +471,14 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
         record_evidence(span_ids=[...]); the backend copies the exact source text into
         verified_quote. Do not write evidence quote text yourself.
 
+        A chunk too large for one response (for example a very long table) is
+        returned in consecutive exact windows: chunk.content_range gives the
+        character range shown, and chunk.span_page.next_span_offset continues with
+        the following spans until span_page.complete is true.
+
         Args:
             chunk_id: Chunk identifier returned by search_document or section source chunks.
+            span_offset: Only for a chunk returned in windows: the next_span_offset from the previous window.
         """
         if tracker:
             tracker.record_call("read_chunk")
@@ -390,25 +533,73 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
         ]
 
         page_text = f" from page {page_number}" if page_number else ""
-        return ChunkReadResult(
-            summary=(
-                f"Read chunk '{actual_chunk_id}'{page_text}. "
-                "Select evidence_spans[].span_id for record_evidence."
-            ),
-            chunk=ChunkReadContent(
-                chunk_id=actual_chunk_id,
-                chunk_index=chunk_index,
-                chunk_number=chunk_index + 1 if chunk_index is not None else None,
-                previous_chunk_id=neighbor_ids.get("previous_chunk_id"),
-                next_chunk_id=neighbor_ids.get("next_chunk_id"),
-                page_number=page_number,
-                section_title=section_title,
-                subsection=chunk.get("subsection") or metadata.get("subsection"),
+
+        def render(
+            window: str,
+            content_range: Optional[dict],
+            window_spans: List[EvidenceSpanResult],
+            span_page: Optional[dict],
+        ) -> ChunkReadResult:
+            window_note = ""
+            if span_page is not None:
+                window_note = (
+                    f" This chunk is shown in windows: characters {content_range['start']}"
+                    f"-{content_range['end']} of {content_range['total_chars']}."
+                )
+                if span_page["next_span_offset"] is not None:
+                    window_note += (
+                        " Continue with read_chunk(chunk_id, "
+                        f"span_offset={span_page['next_span_offset']})."
+                    )
+            return ChunkReadResult(
+                summary=(
+                    f"Read chunk '{actual_chunk_id}'{page_text}.{window_note} "
+                    "Select evidence_spans[].span_id for record_evidence."
+                ),
+                chunk=ChunkReadContent(
+                    chunk_id=actual_chunk_id,
+                    chunk_index=chunk_index,
+                    chunk_number=chunk_index + 1 if chunk_index is not None else None,
+                    previous_chunk_id=neighbor_ids.get("previous_chunk_id"),
+                    next_chunk_id=neighbor_ids.get("next_chunk_id"),
+                    page_number=page_number,
+                    section_title=section_title,
+                    subsection=chunk.get("subsection") or metadata.get("subsection"),
+                    content=window,
+                    evidence_spans=window_spans,
+                    doc_items=chunk.get("doc_items") or metadata.get("doc_items") or None,
+                    content_range=content_range,
+                    span_page=span_page,
+                ),
+            )
+
+        budget = tool_result_max_bytes()
+        if span_offset in (0, None):
+            whole = render(content, None, spans, None)
+            if serialized_size(whole) <= budget:
+                return whole
+        try:
+            window_start = parse_offset(span_offset, total=max(0, len(spans) - 1), name="span_offset")
+            return _chunk_window(
                 content=content,
-                evidence_spans=spans,
-                doc_items=chunk.get("doc_items") or metadata.get("doc_items") or None,
-            ),
-        )
+                spans=spans,
+                span_offset=window_start,
+                render=render,
+                budget=budget,
+            )
+        except ValueError as exc:
+            return ChunkReadResult(
+                summary=f"Invalid read_chunk request: {exc}",
+                chunk=None,
+                error_code="invalid_result_cursor",
+            )
+        except ToolResultBudgetError as exc:
+            return ChunkReadResult(
+                summary="The chunk could not fit the tool result budget, even one span at a time.",
+                chunk=None,
+                error_code=TOOL_RESULT_BUDGET_UNMET,
+                result_bounds=_budget_unmet_bounds(exc),
+            )
 
     return read_chunk
 
@@ -426,6 +617,9 @@ class SectionChunkSource(BaseModel):
     subsection: Optional[str] = None
     char_count: int
     snippet: Optional[str] = None  # Only populated when text_contains matched this chunk
+    # Set when this passage alone exceeds the result budget; its text is not in
+    # ``content``. Read it with read_chunk.
+    content_withheld: Optional[bool] = None
 
 
 class SectionContent(BaseModel):
@@ -440,11 +634,18 @@ class SectionContent(BaseModel):
     truncated: bool
     source_chunks: Optional[List[SectionChunkSource]] = None
     doc_items: Optional[List[dict]] = None  # Combined bounding boxes from all chunks
+    page_ended_by: Optional[str] = None
+    requested_max_chunks: Optional[int] = None
+    effective_max_chunks: Optional[int] = None
+    max_chunks_clamped: Optional[bool] = None
+    budget_bytes: Optional[int] = None
 
 
 class SectionReadResult(BaseModel):
     summary: str
     section: Optional[SectionContent]
+    error_code: Optional[str] = None
+    result_bounds: Optional[dict] = None
 
 
 def _best_effort_metadata(chunk: dict) -> dict:
@@ -506,6 +707,172 @@ def _build_snippet(text: str, needle_lower: str) -> str:
     return excerpt
 
 
+
+def _section_entries(
+    chunks: List[dict],
+    *,
+    start: int,
+    needle: Optional[str],
+    section_fallback: Optional[str],
+    subsection_fallback: Optional[str],
+) -> List[dict]:
+    """Per-passage pieces of one section page, in order, before size fitting."""
+    entries: List[dict] = []
+    for index, chunk in enumerate(chunks, start=start):
+        text = _chunk_text(chunk)
+        metadata = _best_effort_metadata(chunk)
+        page_number = _chunk_page(chunk, metadata)
+        chunk_id = resolve_chunk_identifier(chunk, metadata)
+        if not (chunk_id and text):
+            entries.append({"page_number": page_number})
+            continue
+        snippet = _build_snippet(text, needle) if needle else None
+        entries.append(
+            {
+                "page_number": page_number,
+                # Assembled section text is the full chunk text when surveying, or
+                # the bounded excerpt when filtering, never both the joined text
+                # and a per-chunk copy of it.
+                "part": snippet if snippet is not None else text,
+                "source": SectionChunkSource(
+                    chunk_id=chunk_id,
+                    chunk_index=index,
+                    page_number=page_number,
+                    section_title=_chunk_section_title(chunk, metadata, section_fallback),
+                    subsection=_chunk_subsection(chunk, metadata, subsection_fallback),
+                    char_count=len(text),
+                    snippet=snippet,
+                ),
+                "doc_items": metadata.get("doc_items") or chunk.get("doc_items") or [],
+            }
+        )
+    return entries
+
+
+def _withhold_section_entry(entry: dict, _index: int) -> dict:
+    """Stand-in for one passage too large for a page: pointer only, no text."""
+    if "source" not in entry:
+        return entry
+    return {
+        **entry,
+        "part": None,
+        "source": entry["source"].model_copy(update={"content_withheld": True}),
+    }
+
+
+def _assemble_section_entries(entries: List[dict]) -> dict:
+    sources = [entry["source"] for entry in entries if "source" in entry]
+    return {
+        "content": "\n\n".join(
+            entry["part"] for entry in entries if entry.get("part") is not None
+        ),
+        "page_numbers": sorted(
+            {entry["page_number"] for entry in entries if entry.get("page_number")}
+        ),
+        "source_chunks": sources,
+        "doc_items": [item for entry in entries for item in entry.get("doc_items") or []],
+        "withheld": [source.chunk_id for source in sources if source.content_withheld],
+    }
+
+
+def _section_page_note(
+    *,
+    returned: int,
+    total: int,
+    start: int,
+    ended_by: str,
+    withheld: List[str],
+) -> str:
+    notes = []
+    if ended_by != "end":
+        reason = " (the response reached its size budget)" if ended_by == "size_budget" else ""
+        notes.append(f" More remain{reason}; call again with offset={start + returned}.")
+    if withheld:
+        notes.append(
+            " Passages too long to include here were withheld (content_withheld): "
+            + ", ".join(withheld)
+            + "; read each with read_chunk."
+        )
+    return "".join(notes)
+
+
+def _bounded_section_read(
+    selected: List[dict],
+    *,
+    max_chunks: Any,
+    offset: Any,
+    needle: Optional[str],
+    section_fallback: Optional[str],
+    subsection_fallback: Optional[str],
+    render_result: Any,
+) -> Any:
+    """Serve one count- and size-bounded page of section passages.
+
+    ``render_result(assembled, meta)`` builds the tool's result model for the
+    passages on the page; the whole model is measured against the budget.
+    Raises ValueError for malformed max_chunks/offset and ToolResultBudgetError
+    when not even a pointer page fits.
+    """
+    total = len(selected)
+    cap, limit_metadata = clamp_page_limit(
+        max_chunks,
+        default=_DEFAULT_SECTION_MAX_CHUNKS,
+        maximum=_section_read_page_max_chunks(),
+        name="max_chunks",
+    )
+    start = parse_offset(offset, total=total)
+    budget = tool_result_max_bytes()
+    entries = _section_entries(
+        selected[start : start + cap],
+        start=start,
+        needle=needle,
+        section_fallback=section_fallback,
+        subsection_fallback=subsection_fallback,
+    )
+    aligned = [None] * start + entries
+
+    def render(page: List[dict], returned: int) -> Any:
+        next_offset = start + returned
+        has_more = total > next_offset
+        if not has_more:
+            ended_by = "end"
+        elif returned >= cap:
+            ended_by = "limit"
+        else:
+            ended_by = "size_budget"
+        return render_result(
+            _assemble_section_entries(page),
+            {
+                "returned": returned,
+                "total": total,
+                "start": start,
+                "next_offset": next_offset if has_more else None,
+                "has_more": has_more,
+                "ended_by": ended_by,
+                "budget": budget,
+                **limit_metadata,
+            },
+        )
+
+    result, _ = fit_page(
+        aligned,
+        start=start,
+        limit=cap,
+        render=render,
+        budget=budget,
+        oversized=_withhold_section_entry,
+    )
+    return result
+
+
+def _budget_unmet_bounds(exc: ToolResultBudgetError) -> dict:
+    return {
+        "measured_bytes": exc.measured,
+        "limit_bytes": exc.limit,
+        "setting": "TOOL_RESULT_MAX_BYTES",
+    }
+
+
 def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
     """
     Create a read_section tool bound to a specific document and user.
@@ -537,9 +904,13 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
 
         A long section is returned one page of chunks at a time. The result reports
         total_chunk_count and, when more remain, next_offset; pass that next_offset back
-        in to continue. If you only need the part of a long section that mentions a
-        specific term, set text_contains to return just the matching passages and a short
-        excerpt around each match instead of the whole section.
+        in to continue. A page also ends early when the response reaches its size
+        budget, and max_chunks above the configured maximum is clamped (the section
+        reports requested and effective values). A single passage too long for one
+        response is listed with content_withheld; read it with read_chunk. If you only
+        need the part of a long section that mentions a specific term, set text_contains
+        to return just the matching passages and a short excerpt around each match
+        instead of the whole section.
 
         section.source_chunks lists the passages on this page as lightweight pointers
         (chunk_id, location, size) without repeating their text. Read one passage in full
@@ -597,91 +968,75 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                 ]
             else:
                 selected = chunks
-
-            total_chunk_count = len(selected)
-            cap = max(1, int(max_chunks))
-            start = max(0, int(offset))
-            page = selected[start : start + cap]
-            has_more = total_chunk_count > start + len(page)
-
-            content_parts: List[str] = []
-            page_numbers = set()
-            all_doc_items: List[dict] = []
-            source_chunks: List[SectionChunkSource] = []
-
-            for index, chunk in enumerate(page, start=start):
-                text = _chunk_text(chunk)
-                metadata = _best_effort_metadata(chunk)
-                page_number = _chunk_page(chunk, metadata)
-                if page_number:
-                    page_numbers.add(page_number)
-
-                chunk_id = resolve_chunk_identifier(chunk, metadata)
-                if not (chunk_id and text):
-                    continue
-
-                snippet = _build_snippet(text, needle) if needle else None
-                # Assembled section text is the full chunk text when surveying, or the
-                # bounded excerpt when filtering, never both the joined text and a
-                # per-chunk copy of it.
-                content_parts.append(snippet if snippet is not None else text)
-
-                source_chunks.append(
-                    SectionChunkSource(
-                        chunk_id=chunk_id,
-                        chunk_index=index,
-                        page_number=page_number,
-                        section_title=_chunk_section_title(chunk, metadata, resolved_section_title),
-                        subsection=_chunk_subsection(chunk, metadata, None),
-                        char_count=len(text),
-                        snippet=snippet,
-                    )
-                )
-
-                chunk_doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
-                if chunk_doc_items:
-                    all_doc_items.extend(chunk_doc_items)
-
-            full_content = "\n\n".join(content_parts)
-            sorted_pages = sorted(page_numbers) if page_numbers else []
             resolved_section_title = resolved_section_title or section_name
-
-            logger.info(
-                "Read %s/%s chunks from section '%s', pages %s, %s doc_items",
-                len(page),
-                total_chunk_count,
-                resolved_section_title,
-                sorted_pages,
-                len(all_doc_items),
-            )
-
             filter_note = f" matching '{text_contains}'" if text_contains else ""
-            more_note = (
-                f" More remain; call again with offset={start + len(page)}."
-                if has_more
-                else ""
-            )
-            return SectionReadResult(
-                summary=(
-                    f"Read {len(page)} of {total_chunk_count} chunks{filter_note} from "
-                    f"'{resolved_section_title}'.{more_note} "
-                    "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
-                    "evidence_spans[].span_id values to record_evidence."
-                ),
-                section=SectionContent(
-                    section_title=resolved_section_title,
-                    page_numbers=sorted_pages,
-                    content=full_content,
-                    chunk_count=len(page),
-                    returned_chunk_count=len(page),
-                    total_chunk_count=total_chunk_count,
-                    offset=start,
-                    next_offset=start + len(page) if has_more else None,
-                    truncated=has_more,
-                    source_chunks=source_chunks if source_chunks else None,
-                    doc_items=all_doc_items if all_doc_items else None,
+
+            def render_result(assembled: dict, meta: dict) -> SectionReadResult:
+                note = _section_page_note(
+                    returned=meta["returned"],
+                    total=meta["total"],
+                    start=meta["start"],
+                    ended_by=meta["ended_by"],
+                    withheld=assembled["withheld"],
                 )
+                return SectionReadResult(
+                    summary=(
+                        f"Read {meta['returned']} of {meta['total']} chunks{filter_note} from "
+                        f"'{resolved_section_title}'.{note} "
+                        "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
+                        "evidence_spans[].span_id values to record_evidence."
+                    ),
+                    section=SectionContent(
+                        section_title=resolved_section_title,
+                        page_numbers=assembled["page_numbers"],
+                        content=assembled["content"],
+                        chunk_count=meta["returned"],
+                        returned_chunk_count=meta["returned"],
+                        total_chunk_count=meta["total"],
+                        offset=meta["start"],
+                        next_offset=meta["next_offset"],
+                        truncated=meta["has_more"],
+                        source_chunks=assembled["source_chunks"] or None,
+                        doc_items=assembled["doc_items"] or None,
+                        page_ended_by=meta["ended_by"],
+                        requested_max_chunks=meta["requested_max_chunks"],
+                        effective_max_chunks=meta["effective_max_chunks"],
+                        max_chunks_clamped=meta["max_chunks_clamped"],
+                        budget_bytes=meta["budget"],
+                    ),
+                )
+
+            try:
+                result = _bounded_section_read(
+                    selected,
+                    max_chunks=max_chunks,
+                    offset=offset,
+                    needle=needle,
+                    section_fallback=resolved_section_title,
+                    subsection_fallback=None,
+                    render_result=render_result,
+                )
+            except ValueError as exc:
+                return SectionReadResult(
+                    summary=f"Invalid read_section request: {exc}",
+                    section=None,
+                    error_code="invalid_result_cursor",
+                )
+            except ToolResultBudgetError as exc:
+                return SectionReadResult(
+                    summary="The section page could not fit the tool result budget.",
+                    section=None,
+                    error_code=TOOL_RESULT_BUDGET_UNMET,
+                    result_bounds=_budget_unmet_bounds(exc),
+                )
+            logger.info(
+                "Read %s/%s chunks from section '%s', pages %s",
+                result.section.returned_chunk_count,
+                result.section.total_chunk_count,
+                resolved_section_title,
+                result.section.page_numbers,
             )
+            return result
 
         except Exception as e:
             logger.error("Read section error: %s", e, exc_info=True)
@@ -710,11 +1065,18 @@ class SubsectionContent(BaseModel):
     truncated: bool
     source_chunks: Optional[List[SectionChunkSource]] = None
     doc_items: Optional[List[dict]] = None
+    page_ended_by: Optional[str] = None
+    requested_max_chunks: Optional[int] = None
+    effective_max_chunks: Optional[int] = None
+    max_chunks_clamped: Optional[bool] = None
+    budget_bytes: Optional[int] = None
 
 
 class SubsectionReadResult(BaseModel):
     summary: str
     subsection: Optional[SubsectionContent]
+    error_code: Optional[str] = None
+    result_bounds: Optional[dict] = None
 
 
 def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -741,7 +1103,10 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
 
         A long subsection is returned one page of chunks at a time. The result reports
         total_chunk_count and, when more remain, next_offset; pass that next_offset back
-        in to continue. Set text_contains to return only passages that mention a specific
+        in to continue. A page also ends early when the response reaches its size
+        budget, and max_chunks above the configured maximum is clamped. A single passage
+        too long for one response is listed with content_withheld; read it with
+        read_chunk. Set text_contains to return only passages that mention a specific
         term, each with a short excerpt around the match, instead of the whole subsection.
 
         subsection.source_chunks lists the passages on this page as lightweight pointers
@@ -798,86 +1163,74 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                 ]
             else:
                 selected = chunks
+            filter_note = f" matching '{text_contains}'" if text_contains else ""
 
-            total_chunk_count = len(selected)
-            cap = max(1, int(max_chunks))
-            start = max(0, int(offset))
-            page = selected[start : start + cap]
-            has_more = total_chunk_count > start + len(page)
-
-            content_parts: List[str] = []
-            page_numbers = set()
-            all_doc_items: List[dict] = []
-            source_chunks: List[SectionChunkSource] = []
-
-            for index, chunk in enumerate(page, start=start):
-                text = _chunk_text(chunk)
-                metadata = _best_effort_metadata(chunk)
-                page_number = _chunk_page(chunk, metadata)
-                if page_number:
-                    page_numbers.add(page_number)
-
-                chunk_id = resolve_chunk_identifier(chunk, metadata)
-                if not (chunk_id and text):
-                    continue
-
-                snippet = _build_snippet(text, needle) if needle else None
-                content_parts.append(snippet if snippet is not None else text)
-
-                source_chunks.append(
-                    SectionChunkSource(
-                        chunk_id=chunk_id,
-                        chunk_index=index,
-                        page_number=page_number,
-                        section_title=_chunk_section_title(chunk, metadata, parent_section),
-                        subsection=_chunk_subsection(chunk, metadata, subsection),
-                        char_count=len(text),
-                        snippet=snippet,
-                    )
+            def render_result(assembled: dict, meta: dict) -> SubsectionReadResult:
+                note = _section_page_note(
+                    returned=meta["returned"],
+                    total=meta["total"],
+                    start=meta["start"],
+                    ended_by=meta["ended_by"],
+                    withheld=assembled["withheld"],
+                )
+                return SubsectionReadResult(
+                    summary=(
+                        f"Read {meta['returned']} of {meta['total']} chunks{filter_note} from "
+                        f"'{parent_section} > {subsection}'.{note} "
+                        "Use subsection.source_chunks[].chunk_id with read_chunk for final evidence span selection."
+                    ),
+                    subsection=SubsectionContent(
+                        parent_section=parent_section,
+                        subsection=subsection,
+                        page_numbers=assembled["page_numbers"],
+                        content=assembled["content"],
+                        chunk_count=meta["returned"],
+                        returned_chunk_count=meta["returned"],
+                        total_chunk_count=meta["total"],
+                        offset=meta["start"],
+                        next_offset=meta["next_offset"],
+                        truncated=meta["has_more"],
+                        source_chunks=assembled["source_chunks"] or None,
+                        doc_items=assembled["doc_items"] or None,
+                        page_ended_by=meta["ended_by"],
+                        requested_max_chunks=meta["requested_max_chunks"],
+                        effective_max_chunks=meta["effective_max_chunks"],
+                        max_chunks_clamped=meta["max_chunks_clamped"],
+                        budget_bytes=meta["budget"],
+                    ),
                 )
 
-                doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
-                if doc_items:
-                    all_doc_items.extend(doc_items)
-
-            full_content = "\n\n".join(content_parts)
-            sorted_pages = sorted(page_numbers) if page_numbers else []
-
+            try:
+                result = _bounded_section_read(
+                    selected,
+                    max_chunks=max_chunks,
+                    offset=offset,
+                    needle=needle,
+                    section_fallback=parent_section,
+                    subsection_fallback=subsection,
+                    render_result=render_result,
+                )
+            except ValueError as exc:
+                return SubsectionReadResult(
+                    summary=f"Invalid read_subsection request: {exc}",
+                    subsection=None,
+                    error_code="invalid_result_cursor",
+                )
+            except ToolResultBudgetError as exc:
+                return SubsectionReadResult(
+                    summary="The subsection page could not fit the tool result budget.",
+                    subsection=None,
+                    error_code=TOOL_RESULT_BUDGET_UNMET,
+                    result_bounds=_budget_unmet_bounds(exc),
+                )
             logger.info(
                 "Read %s/%s chunks from subsection '%s', pages %s",
-                len(page),
-                total_chunk_count,
+                result.subsection.returned_chunk_count,
+                result.subsection.total_chunk_count,
                 subsection,
-                sorted_pages,
+                result.subsection.page_numbers,
             )
-
-            filter_note = f" matching '{text_contains}'" if text_contains else ""
-            more_note = (
-                f" More remain; call again with offset={start + len(page)}."
-                if has_more
-                else ""
-            )
-            return SubsectionReadResult(
-                summary=(
-                    f"Read {len(page)} of {total_chunk_count} chunks{filter_note} from "
-                    f"'{parent_section} > {subsection}'.{more_note} "
-                    "Use subsection.source_chunks[].chunk_id with read_chunk for final evidence span selection."
-                ),
-                subsection=SubsectionContent(
-                    parent_section=parent_section,
-                    subsection=subsection,
-                    page_numbers=sorted_pages,
-                    content=full_content,
-                    chunk_count=len(page),
-                    returned_chunk_count=len(page),
-                    total_chunk_count=total_chunk_count,
-                    offset=start,
-                    next_offset=start + len(page) if has_more else None,
-                    truncated=has_more,
-                    source_chunks=source_chunks if source_chunks else None,
-                    doc_items=all_doc_items if all_doc_items else None,
-                )
-            )
+            return result
 
         except Exception as e:
             logger.error("Read subsection error: %s", e, exc_info=True)

@@ -1,7 +1,7 @@
 """Unit tests for catalog_service tool binding resolution."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -34,6 +34,8 @@ class _FakeTool:
 class _FakeFunctionTool:
     name: str
     on_invoke_tool: object
+    params_json_schema: dict = field(default_factory=dict)
+    strict_json_schema: bool = False
 
 
 class _FakeQuery:
