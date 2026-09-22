@@ -2798,6 +2798,18 @@ def test_compact_candidate_science_survives_materialization_and_formatter_cells(
     }))
     assert projection.rows
     row = projection.rows[0]
+    if output_format in {"csv", "tsv"}:
+        # File cells hold display text: every candidate, its science and the
+        # lookup audit stay visible (ALL-1115), with no JSON in the cell.
+        cells = " ".join(str(value) for value in row.values())
+        assert "{" not in cells
+        for expected in ("value: RGD:1", "value: RGD:2", "Paper does not distinguish the candidates.",
+                         "evidence-1", "source_call_id: source-call", "method: search_genes",
+                         "symbol: ABC-1", "candidate_count: 2",
+                         f"object_id: {captured['result'].target.object_id}",
+                         f"field_path: {captured['result'].target.field_path}"):
+            assert expected in cells, expected
+        return
     candidates = json.loads(row["candidates"]) if isinstance(row["candidates"], str) else row["candidates"]
     assert [candidate["value"] for candidate in candidates] == ["RGD:1", "RGD:2"]
     for candidate in candidates:

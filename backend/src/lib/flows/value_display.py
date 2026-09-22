@@ -3,14 +3,16 @@
 Domain packs declare how a structured value reads through a display spec on a
 model definition or a field (``metadata.display``):
 
-- ``{label: <leaf key>, id: <leaf key>}`` renders "label (id)"; either role is
-  optional. ``state`` plus ``resolved_states`` name an explicit resolution leaf.
+- ``{label: <leaf path>, id: <leaf path>}`` renders "label (id)"; either role is
+  optional and each is one (possibly dotted) leaf path, never a list of
+  fallbacks. ``state`` plus ``resolved_states`` name an explicit resolution
+  leaf. A declared value whose own label and id are empty renders empty.
 - ``{compose: [<child path>, ...], separator: "; "}`` joins the display text of
   child values (each child carries its own resolved spec).
 
-Without a spec a generic reading applies: ``curie|id|identifier`` with
-``name|label|display_name`` as "label (id)", otherwise ``key: value`` pairs of
-the value's leaves. Lists join with "; ". CSV, TSV and chat cells therefore
+Without a spec a generic reading applies: a term-like value holding only
+``curie|id|identifier`` and ``name|label|display_name`` reads "label (id)";
+any other value renders all its ``key: value`` pairs so nothing is dropped. Lists join with "; ". CSV, TSV and chat cells therefore
 never contain JSON or Python object text; JSON output keeps the raw values.
 """
 
@@ -94,7 +96,8 @@ def _mapping_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None, unre
             text = display_text(_child(value, path), child_spec)
             if text:
                 parts.append(text)
-        text = separator.join(parts) or _pairs_text(value)
+        # A composite renders only its declared parts; nothing else substitutes.
+        text = separator.join(parts)
         return f"{text} ({UNRESOLVED})" if unresolved and text else text
     if spec and (spec.get("label") or spec.get("id")):
         label = _first(value, [spec["label"]]) if spec.get("label") else ""
@@ -110,14 +113,18 @@ def _mapping_text(value: Mapping[str, Any], spec: Mapping[str, Any] | None, unre
         # a paper-grounded proposal that was not resolved.
         if spec.get("id") and not identifier and label:
             unresolved = True
+        # A declared field renders only its own label and id: when both are
+        # empty the cell is empty, never another field such as a mention.
+        return _labeled(label, identifier, unresolved) if label or identifier else ""
+    # The generic "label (id)" reading only applies to term-like values whose
+    # content is exactly those keys; anything more renders every key so no
+    # undeclared content (e.g. candidate matches) is dropped from a cell.
+    present = {key for key, item in value.items() if not _is_empty(item)}
+    if present and present <= set(GENERIC_LABEL_KEYS) | set(GENERIC_ID_KEYS):
+        label = _first(value, GENERIC_LABEL_KEYS)
+        identifier = _first(value, GENERIC_ID_KEYS)
         if label or identifier:
             return _labeled(label, identifier, unresolved)
-        text = _pairs_text(value)
-        return f"{text} ({UNRESOLVED})" if unresolved and text else text
-    label = _first(value, GENERIC_LABEL_KEYS)
-    identifier = _first(value, GENERIC_ID_KEYS)
-    if label or identifier:
-        return _labeled(label, identifier, unresolved)
     text = _pairs_text(value)
     return f"{text} ({UNRESOLVED})" if unresolved and text else text
 

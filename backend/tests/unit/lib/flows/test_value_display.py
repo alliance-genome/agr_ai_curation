@@ -500,3 +500,72 @@ async def test_split_list_through_formatter_tools_with_lock_and_inventory():
     changed = {**locked, "columns": [{**locked["columns"][0], "split_list": {"header_template": "Other {n}"}},
                                      locked["columns"][1]]}
     assert Plan.model_validate(locked) != Plan.model_validate(changed)
+
+
+def test_declared_field_never_substitutes_another_field():
+    """A resolved field renders only its own label/id (Chris, Sep 22)."""
+
+    # Label and id empty: the mention is a separate column, not a substitute.
+    assert display_text({"curie": None, "name": None, "mention": "PPIT-2"}, TERM) == ""
+    assert display_text({"label": "", "mention": "gene X", "curie": ""},
+                        {"label": "label", "id": "curie"}) == ""
+    compose = {"compose": [{"path": "anatomical_structure", "display": TERM}], "separator": "; "}
+    assert display_text({"anatomical_structure": {}, "statement": "free text"}, compose) == ""
+    assert display_text({"mention": {"text": "unc-54(e190)"}}, {"label": "mention.text"}) == "unc-54(e190)"
+
+
+def test_display_roles_must_be_single_leaf_paths():
+    field = SimpleNamespace(field_path="gene_product", metadata={"display": {"label": ["label", "mention"]}},
+                            model_ref=None, object_type_ref=None)
+    with pytest.raises(ValueError, match="single leaf path"):
+        export_fields._field_display(field, {})
+
+
+_SHAPES_FIXTURE = (
+    __import__("pathlib").Path(__file__).resolve().parents[3] / "fixtures" / "flows" / "display_value_shapes.json"
+)
+
+
+def _shape_cases(section):
+    if not _SHAPES_FIXTURE.exists():
+        return []
+    return json.loads(_SHAPES_FIXTURE.read_text())[section]
+
+
+@pytest.mark.skipif(not _SHAPES_FIXTURE.exists(), reason="display_value_shapes.json comes with the ALL-1282 packs")
+@pytest.mark.parametrize("shape", _shape_cases("packaged"), ids=lambda shape: shape["shape_id"])
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "chat"])
+def test_production_value_shapes_render_without_object_text(shape, output_format):
+    step = {
+        "step": 1, "node_id": "node_1", "agent_id": "shape_source", "agent_name": "Shape",
+        "candidate": SimpleNamespace(
+            agent_key="shape_source", adapter_key=shape["pack_id"], candidate_count=1,
+            conversation_summary="shape",
+            payload_json={"domain_pack_id": shape["pack_id"], "envelope_id": f"env-{shape['shape_id']}",
+                          "extracted_objects": [{"object_type": shape["object_type"],
+                                                 "object_id": shape["shape_id"], "payload": shape["payload"]}]},
+        ),
+    }
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Shapes", output_format=output_format)
+    refs = [field.ref for field in bundle.field_catalog
+            if field.row_source == "object" and field.ref.startswith("object.pack.")]
+    assert refs, "shape must map to declared pack fields"
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": output_format, "row_source": "object",
+        "columns": [{"key": f"c{index}", "header": ref, "field_ref": ref} for index, ref in enumerate(refs)],
+    })
+    result = finalize_output_projection(bundle, plan)
+    for value in result.rows[0].values():
+        _no_object_text(str(value))
+    default = finalize_output_projection(
+        bundle, default_projection_plan(bundle, output_format=output_format, row_source="object"),
+    )
+    for value in default.rows[0].values():
+        _no_object_text(str(value))
+
+
+@pytest.mark.skipif(not _SHAPES_FIXTURE.exists(), reason="display_value_shapes.json comes with the ALL-1282 packs")
+@pytest.mark.parametrize("shape", _shape_cases("custom_profiles"), ids=lambda shape: shape["shape_id"])
+def test_custom_profile_value_shapes_render_without_object_text(shape):
+    for value in (shape["payload"].get("attributes") or {}).values():
+        _no_object_text(display_text(value))

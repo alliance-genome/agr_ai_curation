@@ -769,7 +769,9 @@ def _object_label(
     for key in dict.fromkeys(
         (*label_fields, "label", "symbol", "name", "normalized_symbol", "mention", "entity")
     ):
-        value = _string_value(payload.get(key))
+        raw = payload.get(key)
+        # Structured label values read as display text, never JSON.
+        value = display_text(raw) if isinstance(raw, (Mapping, list)) else _string_value(raw)
         if value:
             return value
     for key in ("label", "symbol", "name"):

@@ -73,6 +73,21 @@ def source_catalog(fields: list[dict], receipt: Any = None) -> dict:
     return {**identity, "schema_fingerprint": "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()}
 
 
+_DISPLAY_ROLES = ("label", "id", "state")
+
+
+def _checked_display(display: dict[str, Any], where: str) -> dict[str, Any]:
+    """A display role is one leaf path; lists of fallback leaves are not allowed."""
+
+    for role in _DISPLAY_ROLES:
+        if role in display and not (isinstance(display[role], str) and display[role].strip()):
+            raise ValueError(
+                f"{where} metadata.display.{role} must be a single leaf path string; "
+                "fallback lists are not supported."
+            )
+    return display
+
+
 def _field_display(
     field: Any,
     models: dict[str, Any],
@@ -82,13 +97,15 @@ def _field_display(
 
     display = field.metadata.get("display")
     if isinstance(display, dict) and display:
-        return dict(display)
+        return _checked_display(dict(display), f"Field '{field.field_path}'")
     model_ref = field.model_ref
     if model_ref is None and getattr(field, "object_type_ref", None):
         model_ref = (object_models or {}).get(field.object_type_ref)
     model = models.get(model_ref) if model_ref else None
     display = model.metadata.get("display") if model is not None else None
-    return dict(display) if isinstance(display, dict) and display else None
+    if isinstance(display, dict) and display:
+        return _checked_display(dict(display), f"Model '{model.model_id}'")
+    return None
 
 
 def packaged_display_specs(agent_id: str, entry: dict | None = None) -> dict[str, dict[str, Any]]:
@@ -149,19 +166,28 @@ def packaged_default_layout(agent_id: str, entry: dict | None, object_types: lis
         for group in layout.get("groups") or []:
             paths.extend(group.get("fields") or [])
         declared = {field.field_path for field in obj.fields}
+        chosen_paths: list[str] = []
         for path in paths:
             chosen = path
             parts = path.split(".")
-            for size in range(len(parts) - 1, 0, -1):
-                parent = ".".join(parts[:size])
-                if f"object.pack.{obj.object_type}.{parent}" in specs:
-                    chosen = parent
+            # The path itself when it has a display, else its nearest parent that does.
+            for size in range(len(parts), 0, -1):
+                candidate = ".".join(parts[:size])
+                if f"object.pack.{obj.object_type}.{candidate}" in specs:
+                    chosen = candidate
                     break
             if chosen not in declared:
                 continue
-            ref = f"object.pack.{obj.object_type}.{chosen}"
-            if ref not in refs:
-                refs.append(ref)
+            # Skip a column already covered by a chosen ancestor or descendant.
+            if any(
+                existing == chosen
+                or existing.startswith(chosen + ".")
+                or chosen.startswith(existing + ".")
+                for existing in chosen_paths
+            ):
+                continue
+            chosen_paths.append(chosen)
+            refs.append(f"object.pack.{obj.object_type}.{chosen}")
     return refs
 
 
