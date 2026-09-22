@@ -1884,11 +1884,20 @@ def _reports_already_captured_exception(hint: Mapping[str, Any] | None) -> bool:
         candidates.append(exc_info[1])
     log_record = hint.get("log_record")
     if isinstance(log_record, logging.LogRecord):
-        if isinstance(log_record.exc_info, tuple) and len(log_record.exc_info) >= 2:
-            candidates.append(log_record.exc_info[1])
-        args = log_record.args
-        if isinstance(args, tuple):
-            candidates.extend(arg for arg in args if isinstance(arg, BaseException))
+        record_exc_info = log_record.exc_info
+        if (
+            isinstance(record_exc_info, tuple)
+            and len(record_exc_info) >= 2
+            and record_exc_info[1] is not None
+        ):
+            # The record's own exception is the failure being reported; a
+            # captured exception merely mentioned in its arguments must not
+            # suppress a distinct error.
+            candidates.append(record_exc_info[1])
+        elif isinstance(log_record.args, tuple):
+            candidates.extend(
+                arg for arg in log_record.args if isinstance(arg, BaseException)
+            )
     return any(_exception_chain_already_captured(candidate) for candidate in candidates)
 
 

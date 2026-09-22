@@ -127,7 +127,11 @@ def sentry_calls(monkeypatch):
         raise ImportError(name)
 
     monkeypatch.setattr(observability_runtime.importlib, "import_module", fake_import)
-    return calls
+    # The patch is process-global; never let a lazily cached importlib lookup
+    # (for example sentry._owned_diagnostic_error_types) outlive this test.
+    observability_sentry._owned_diagnostic_error_types.cache_clear()
+    yield calls
+    observability_sentry._owned_diagnostic_error_types.cache_clear()
 
 
 def _usage(input_tokens=1200, cached=300, output_tokens=80, reasoning=20) -> Usage:
@@ -798,10 +802,12 @@ def test_repeated_block_in_same_trace_and_wrapper_reports_once(published, sentry
     assert [record["outcome"] for record in published] == ["blocked_before_send"] * 2
 
 
-def test_before_send_drops_log_events_that_repeat_a_captured_failure(sentry_calls):
+def test_before_send_drops_log_events_that_repeat_a_captured_failure():
+    # No importlib patch here: before_send runs its real enrichment path.
     model = FakeResponsesHTTPModel([_final()])
     with pytest.raises(ModelRequestBlockedError) as raised:
         _run(Agent(name="spec", instructions="x" * DANIELA_INSTRUCTION_CHARS, model=model))
+    assert getattr(raised.value, "_ai_curation_sentry_captured", False)
 
     record = logging.LogRecord(
         "src.lib.openai_agents.streaming_tools", logging.ERROR, __file__, 1,
@@ -817,6 +823,15 @@ def test_before_send_drops_log_events_that_repeat_a_captured_failure(sentry_call
     assert observability_sentry.before_send(
         {"message": "x"}, {"exc_info": (RuntimeError, unrelated, None)}
     ) is not None
+
+    # A distinct error logged with its own exc_info is kept even when the
+    # captured violation is also mentioned as a message argument.
+    distinct = ValueError("different failure")
+    mixed = logging.LogRecord(
+        "src.lib.flows.executor", logging.ERROR, __file__, 1,
+        "cleanup failed after %s", (raised.value,), (ValueError, distinct, None),
+    )
+    assert observability_sentry.before_send({"message": "x"}, {"log_record": mixed}) is not None
 
 
 def test_sentry_unavailable_keeps_original_failure_and_structured_log(monkeypatch, caplog):
