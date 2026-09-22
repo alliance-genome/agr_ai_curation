@@ -1238,6 +1238,14 @@ def _capabilities_payload(
             "{row_ref, exclude: true} drops one row. row_ref values come from "
             "inspect_output_rows or preview_output_projection. Saved results never change."
         ),
+        "value_display": (
+            "CSV, TSV and chat cells render structured values as display text: "
+            "\"label (ID)\" from the pack's declared roles (generic curie/id plus "
+            "name/label otherwise), lists joined with \"; \", and unresolved values "
+            "marked \"(unresolved)\" from declared resolution state, open validation "
+            "findings on that field, or a declared ID that is missing. Select the parent "
+            "structured field instead of composing leaves. JSON keeps raw values."
+        ),
         "detail_access": (
             "inspect_output_artifacts pages and searches the field catalog; "
             "inspect_output_rows and preview_output_projection page rows with row_refs; "
@@ -1668,7 +1676,7 @@ def build_output_formatter_tools(
                 sort_json=sort_json,
                 limit=min(offset + page_size, _MAX_PROJECTION_ROWS),
             )
-            result = apply_projection_plan(bundle, plan)
+            result = apply_projection_plan(bundle, plan, render_display=False)
             column_field_refs = {column.key: column.field_ref for column in result.columns}
             available = min(result.total_count, _MAX_PROJECTION_ROWS)
             if offset > available:
@@ -1774,7 +1782,7 @@ def build_output_formatter_tools(
                 filters=_parse_filters(filters_json),
                 max_rows=_MAX_PROJECTION_ROWS,
             )
-            result = apply_projection_plan(bundle, plan)
+            result = apply_projection_plan(bundle, plan, render_display=False)
             counts: Counter[str] = Counter()
             examples: dict[str, Any] = {}
             for row in result.rows:
@@ -1937,7 +1945,8 @@ def build_output_formatter_tools(
     @function_tool(
         name_override="preview_output_projection",
         description_override=(
-            "Validate and preview a bounded page of projected rows with row_refs; "
+            "Validate and preview a bounded page of projected rows with row_refs, "
+            "showing the rendered cell text (structured values as \"label (ID)\"); "
             "continue with next_cursor. Accepts plan JSON only, never replacement "
             "row contents."
         ),
@@ -1978,6 +1987,7 @@ def build_output_formatter_tools(
                 bundle,
                 plan,
                 preview_limit=min(offset + preview_limit, _MAX_PROJECTION_ROWS),
+                render_display=True,
             )
             column_field_refs = {column.key: column.field_ref for column in result.columns}
             # Rows a finalized output would contain: an explicit max_rows limits them.

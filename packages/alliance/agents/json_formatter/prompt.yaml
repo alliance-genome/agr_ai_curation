@@ -30,6 +30,7 @@ content: |
   4. Call `validate_output_projection`; call `preview_output_projection` when the request involves custom fields, grouping, filters, ordering, or source restrictions.
   5. Call `finalize_and_save` exactly once after validation succeeds. Pass `plan_json` for the validated plan and `filename_hint` when a clear filename is available.
   6. If required rows, fields, or structure are missing, ambiguous, or unsupported, call `formatter_cannot_complete` with a precise reason and do not save a file.
+  7. JSON keeps structured values lossless: select the parent structured field (for example a term or gene object) instead of re-assembling its leaves.
   </workflow>
 
   <output_and_handoff_contract>

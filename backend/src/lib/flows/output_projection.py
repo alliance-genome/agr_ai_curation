@@ -30,6 +30,7 @@ from src.schemas.domain_validator import ValidatorOutputProjection
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
+from src.lib.flows.value_display import display_text
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
 ProfileResolver = Callable[[AgentExecutionReceipt], ResolvedGenericProfile | None]
@@ -349,6 +350,8 @@ class FlowOutputField(BaseModel):
     non_empty_count: int = 0
     examples: list[Any] = Field(default_factory=list)
     profile_bindings: list[FlowOutputProfileBinding] = Field(default_factory=list)
+    # Declared display spec (see value_display); None uses the generic reading.
+    display: dict[str, Any] | None = None
 
 
 class FlowOutputArtifact(BaseModel):
@@ -377,6 +380,8 @@ class FlowOutputArtifact(BaseModel):
     ] = "non_structured"
     warnings: list[str] = Field(default_factory=list)
     rows_by_source: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    # Standard object columns from the source's declared layout, in order.
+    default_object_refs: list[str] = Field(default_factory=list)
 
 
 class FlowOutputArtifactBundle(BaseModel):
@@ -1614,15 +1619,34 @@ def _build_artifact_from_step(
     if shape == "non_structured":
         warnings.append("No canonical curation object rows are available for this artifact.")
 
-    from src.lib.flows.export_fields import packaged_export_fields, packaged_field_value, profile_export_fields, source_catalog
+    from src.lib.flows.export_fields import (
+        packaged_default_layout,
+        packaged_display_specs,
+        packaged_export_fields,
+        packaged_field_value,
+        profile_export_fields,
+        source_catalog,
+    )
+    display_specs: dict[str, dict[str, Any]] = {}
+    default_object_refs: list[str] = []
     if profile_fields is not None:
         export_fields = profile_export_fields(profile_fields)
+        # Custom profiles: top-level contract fields in declaration order.
+        default_object_refs = [
+            field.row_ref
+            for field in profile_fields
+            if "." not in field.profile_path.removeprefix("attributes.")
+        ]
     else:
         # A persisted envelope declares its pack independently of whether the
         # producer was a custom agent with an execution receipt.
-        export_fields = packaged_export_fields(
+        pack_entry = {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None
+        export_fields = packaged_export_fields(agent_id, pack_entry)
+        display_specs = packaged_display_specs(agent_id, pack_entry)
+        default_object_refs = packaged_default_layout(
             agent_id,
-            {"curation": {"domain_pack_id": domain_pack_id}} if domain_pack_id else None,
+            pack_entry,
+            sorted({str(item.get("object_type") or "") for item in object_items}),
         )
         for row, item in zip(rows_by_source["object"], object_items):
             for field in export_fields:
@@ -1639,7 +1663,8 @@ def _build_artifact_from_step(
     for rows in rows_by_source.values():
         for row in rows:
             row["artifact.node_id"] = node_id
-    extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object")
+    extra_declared = [FlowOutputField(ref=f["ref"], label=f["label"], value_type=f["value_type"], row_source="object",
+                                      display=display_specs.get(f["ref"]))
                       for f in catalog["fields"] if not f["ref"].startswith("object.attribute.")]
     return FlowOutputArtifact(
         node_id=node_id, export_schema_fingerprint=catalog["schema_fingerprint"],
@@ -1668,6 +1693,7 @@ def _build_artifact_from_step(
         artifact_shape=shape,
         warnings=warnings,
         rows_by_source=rows_by_source,
+        default_object_refs=default_object_refs,
     )
 
 
@@ -1757,6 +1783,8 @@ def _build_artifact_bundle(
             else:
                 existing.profile_bindings.extend(declared.profile_bindings)
                 existing.label = declared.label
+                if declared.display is not None:
+                    existing.display = declared.display
             existing.value_type = declared.value_type if len(declared_types[key]) == 1 else "mixed"
     warnings = [
         warning
@@ -1919,6 +1947,29 @@ def default_columns_for_row_source(
 ) -> list[FlowOutputColumnSpec]:
     available = available_refs if available_refs is not None else bundle.field_refs_for_source(row_source)
     selected_rows = rows if rows is not None else bundle.rows_for_source(row_source)
+    layout_refs = (
+        _declared_layout_refs(bundle, selected_rows, available)
+        if row_source == "object" and row_strategy in {"object", "wide_union"}
+        else []
+    )
+    if layout_refs and (
+        row_strategy == "object"
+        or not any(
+            str(ref).startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+            for row in selected_rows
+            for ref in row
+        )
+    ):
+        labels = {field.ref: field.label for field in bundle.field_catalog if field.row_source == "object"}
+        refs = [*layout_refs, *(["object.validation_status"] if "object.validation_status" in available else [])]
+        return [
+            FlowOutputColumnSpec(
+                key=_column_key_from_ref(field_ref),
+                header=labels.get(field_ref) or _field_label(field_ref),
+                field_ref=field_ref,
+            )
+            for field_ref in dict.fromkeys(refs)
+        ]
     attribute_field_refs: list[str] = []
     if row_source == "object" and row_strategy == "wide_union":
         all_attribute_refs = _first_seen_refs(selected_rows, prefix=_OBJECT_ATTRIBUTE_FIELD_PREFIX)
@@ -2006,6 +2057,22 @@ def default_columns_for_row_source(
         )
         for field_ref in selected
     ]
+
+
+def _declared_layout_refs(
+    bundle: FlowOutputArtifactBundle,
+    rows: Sequence[Mapping[str, Any]],
+    available: set[str],
+) -> list[str]:
+    """Declared standard columns of the artifacts that own ``rows``."""
+
+    row_ids = {id(row) for row in rows}
+    refs: list[str] = []
+    for artifact in bundle.artifacts:
+        if not any(id(row) in row_ids for row in artifact.rows_by_source.get("object") or []):
+            continue
+        refs.extend(ref for ref in artifact.default_object_refs if ref in available and ref not in refs)
+    return refs
 
 
 def _field_catalog_map(bundle: FlowOutputArtifactBundle) -> dict[str, FlowOutputField]:
@@ -2132,19 +2199,33 @@ def _pair_join_value_groups(left: Any, right: Any) -> list[tuple[Any, Any]]:
     )
 
 
+# Renders one stored value (field ref, value, list element index) as display text.
+ValueRenderer = Callable[[str, Any, "int | None"], str]
+
+
+def _plain_text(_field_ref: str, value: Any, _index: int | None = None) -> str:
+    return str(value)
+
+
 def _pair_join_value(
     row: Mapping[str, Any],
     transform: FlowOutputTransformSpec,
     *,
     missing_value: str,
+    render: ValueRenderer = _plain_text,
 ) -> str:
     if len(transform.field_refs) != 2:
         raise ValueError("pair_join requires exactly two field_refs.")
     left_ref, right_ref = transform.field_refs
     pairs = _pair_join_value_groups(row.get(left_ref), row.get(right_ref))
     rendered: list[str] = []
-    for left, right in pairs:
-        parts = [str(value) for value in (left, right) if not _is_empty(value)]
+    for index, (left, right) in enumerate(pairs):
+        position = index if len(pairs) > 1 else None
+        parts = [
+            text
+            for ref, value in ((left_ref, left), (right_ref, right))
+            if not _is_empty(value) and (text := render(ref, value, position))
+        ]
         if parts:
             rendered.append(transform.pair_separator.join(parts))
     return transform.separator.join(rendered) if rendered else missing_value
@@ -2205,6 +2286,7 @@ def _format_elements_value(
     transform: FlowOutputTransformSpec,
     *,
     missing_value: str | None,
+    render: ValueRenderer | None = None,
 ) -> str | None:
     refs = list(transform.field_refs)
     selector_ref = transform.field_ref
@@ -2212,7 +2294,8 @@ def _format_elements_value(
     if selector_ref:
         values.append(row.get(selector_ref))
     rendered: list[str] = []
-    for element in _aligned_elements(values):
+    elements = _aligned_elements(values)
+    for position, element in enumerate(elements):
         field_values = element[: len(refs)]
         if all(_is_empty(value) for value in field_values):
             continue
@@ -2224,8 +2307,13 @@ def _format_elements_value(
                 template = transform.mapping[selector_key]
 
         def substitute(match: re.Match[str]) -> str:
-            value = field_values[int(match.group(1)) - 1]
-            return (missing_value or "") if _is_empty(value) else _string_value(value)
+            slot = int(match.group(1)) - 1
+            value = field_values[slot]
+            if _is_empty(value):
+                return missing_value or ""
+            if render is None:
+                return _string_value(value)
+            return render(refs[slot], value, position if len(elements) > 1 else None)
 
         rendered.append(_ELEMENT_PLACEHOLDER.sub(substitute, str(template)))
     return transform.separator.join(rendered) if rendered else missing_value
@@ -2767,40 +2855,53 @@ def _transform_value(
     transform: FlowOutputTransformSpec,
     *,
     missing_value: str,
+    render: ValueRenderer | None = None,
 ) -> Any:
+    text = render or _plain_text
     if transform.type == "literal":
         return transform.value
     if transform.type == "first_non_empty":
         for field_ref in transform.field_refs:
             value = row.get(field_ref)
             if not _is_empty(value):
-                return value
+                return render(field_ref, value, None) if render else value
         return missing_value
     if transform.type == "concat":
         parts: list[str] = []
         for value in transform.values:
             if isinstance(value, Mapping) and isinstance(value.get("field_ref"), str):
-                part = row.get(str(value["field_ref"]))
-            elif isinstance(value, str) and value in row:
+                ref = str(value["field_ref"])
+                part = row.get(ref)
+                if not _is_empty(part):
+                    parts.append(text(ref, part, None))
+                continue
+            if isinstance(value, str) and value in row:
                 part = row.get(value)
-            else:
-                part = value
-            if not _is_empty(part):
-                parts.append(str(part))
-        return transform.separator.join(parts)
+                if not _is_empty(part):
+                    parts.append(text(value, part, None))
+                continue
+            if not _is_empty(value):
+                parts.append(str(value))
+        return transform.separator.join(part for part in parts if part)
     if transform.type == "join_list":
-        value = row.get(transform.field_ref or "")
+        ref = transform.field_ref or ""
+        value = row.get(ref)
         if isinstance(value, list):
-            return transform.separator.join(str(item) for item in value if not _is_empty(item))
-        return missing_value if _is_empty(value) else str(value)
+            items = [
+                text(ref, item, index)
+                for index, item in enumerate(value)
+                if not _is_empty(item)
+            ]
+            return transform.separator.join(item for item in items if item)
+        return missing_value if _is_empty(value) else text(ref, value, None)
     if transform.type == "pair_join":
-        return _pair_join_value(row, transform, missing_value=missing_value)
+        return _pair_join_value(row, transform, missing_value=missing_value, render=text)
     if transform.type == "conditional":
         condition = _conditional_filter(transform)
         branch = transform.when_true if _row_matches_filter(row, condition) else transform.when_false
         if branch is None:
             raise ValueError("conditional selected an undefined branch.")
-        return _transform_value(row, branch, missing_value=missing_value)
+        return _transform_value(row, branch, missing_value=missing_value, render=render)
     if transform.type == "count":
         value = row.get(transform.field_ref or "")
         if isinstance(value, (list, tuple, set, dict)):
@@ -2813,7 +2914,7 @@ def _transform_value(
             return transform.mapping[key]
         return transform.default if transform.default is not None else missing_value
     if transform.type == "format_elements":
-        return _format_elements_value(row, transform, missing_value=missing_value)
+        return _format_elements_value(row, transform, missing_value=missing_value, render=render)
     if transform.type == "boolean_label":
         value = row.get(transform.field_ref or "")
         if isinstance(value, bool):
@@ -2833,19 +2934,92 @@ def _project_row(
     *,
     missing_value: str | None,
     preserve_empty: bool = False,
+    render: ValueRenderer | None = None,
 ) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for column in columns:
         if column.source_node_id and row.get("artifact.node_id") != column.source_node_id:
             value = None
         elif column.transform is not None:
-            value = _transform_value(row, column.transform, missing_value=missing_value)
+            value = _transform_value(
+                row, column.transform, missing_value=missing_value, render=render,
+            )
         else:
             value = row.get(column.field_ref or "")
+            # Numbers and booleans stay typed; text and structured values render.
+            if render is not None and not _is_empty(value) and (
+                isinstance(value, (str, list, tuple, dict))
+            ):
+                value = render(column.field_ref or "", value, None)
+        if render is not None and value is not None and not isinstance(value, (str, int, float, bool)):
+            value = display_text(value)
         if value is None or (not preserve_empty and _is_empty(value)):
             value = missing_value
         output[column.key] = _jsonable(value)
     return output
+
+
+def _payload_path_for_ref(field_ref: str) -> str | None:
+    """The object payload path a projection field reads, when it has one."""
+
+    if field_ref.startswith("object.pack."):
+        _, _, rest = field_ref.removeprefix("object.pack.").partition(".")
+        return rest or None
+    if field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX):
+        return "attributes." + field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+    if field_ref.startswith("object.payload."):
+        return field_ref.removeprefix("object.payload.")
+    return None
+
+
+def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[str, list[str]]:
+    """Open validation finding paths per object id, relative to the payload."""
+
+    paths: dict[str, list[str]] = defaultdict(list)
+    for row in bundle.rows_for_source("validation_finding"):
+        if str(row.get("validation.status") or "").strip().lower() != "open":
+            continue
+        object_id = _string_value(row.get("object.object_id"))
+        field_path = _string_value(row.get("validation.field_path")).removeprefix("payload.")
+        if object_id and field_path:
+            paths[object_id].append(field_path)
+    return paths
+
+
+def _unresolved_for(finding_paths: Sequence[str], payload_path: str | None) -> bool | frozenset[int]:
+    """Whole-value or per-element unresolved state from open findings."""
+
+    if not payload_path:
+        return False
+    indexes: set[int] = set()
+    for finding_path in finding_paths:
+        if finding_path == payload_path or finding_path.startswith(payload_path + "."):
+            return True
+        if finding_path.startswith(payload_path + "["):
+            index_text = finding_path[len(payload_path) + 1 :].split("]", 1)[0]
+            if index_text.isdigit():
+                indexes.add(int(index_text))
+            else:
+                return True
+    return frozenset(indexes) if indexes else False
+
+
+def _display_renderer(
+    bundle: FlowOutputArtifactBundle,
+    plan: FlowOutputProjectionPlan,
+    row: Mapping[str, Any],
+    specs: Mapping[str, Any],
+    open_paths: Mapping[str, list[str]],
+) -> ValueRenderer:
+    finding_paths = open_paths.get(_string_value(row.get("object.object_id")), [])
+
+    def render(field_ref: str, value: Any, index: int | None) -> str:
+        unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref))
+        if not isinstance(unresolved, bool) and (index is not None or not isinstance(value, list)):
+            unresolved = (index or 0) in unresolved
+        return display_text(value, specs.get(field_ref), unresolved=unresolved)
+
+    return render
 
 
 def _group_projected_rows(
@@ -2872,7 +3046,13 @@ def apply_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
     *, preview_limit: int | None = None,
+    render_display: bool = True,
 ) -> FlowOutputProjectionResult:
+    """Project rows; non-JSON cells become display text (``value_display``).
+
+    JSON output always keeps the raw structured values. Inspection tools pass
+    ``render_display=False`` to see the stored values.
+    """
     errors, warnings, columns = validate_projection_plan(bundle, plan)
     if errors:
         raise ValueError("; ".join(errors))
@@ -2911,8 +3091,21 @@ def apply_projection_plan(
         plan.max_rows is not None and total_count > plan.max_rows
     )
     row_refs = [ref_by_row_id.get(id(row), "") for row in limited_rows]
+    display = render_display and plan.format != "json"
+    specs = (
+        {field.ref: field.display for field in bundle.field_catalog if field.row_source == plan.row_source}
+        if display
+        else {}
+    )
+    open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
     projected_rows = [
-        _project_row(row, columns, missing_value=plan.missing_value, preserve_empty=plan.selection_mode == "selected_fields")
+        _project_row(
+            row,
+            columns,
+            missing_value=plan.missing_value,
+            preserve_empty=plan.selection_mode == "selected_fields",
+            render=_display_renderer(bundle, plan, row, specs, open_paths) if display else None,
+        )
         for row in limited_rows
     ]
     cell_overrides = [override for override in plan.overrides if not override.exclude]
@@ -3041,7 +3234,7 @@ def preview_output_projection(
             errors=errors,
             warnings=warnings,
         )
-    result = apply_projection_plan(bundle, plan, preview_limit=limit)
+    result = apply_projection_plan(bundle, plan, preview_limit=limit, render_display=True)
     return FlowOutputProjectionPreview(
         status="ok",
         warnings=_bounded_projection_warnings(result.warnings),
@@ -3061,7 +3254,7 @@ def finalize_output_projection(
     rows beyond ``FLOW_PROJECTION_MAX_ROWS`` are never silently dropped.
     """
 
-    result = apply_projection_plan(bundle, plan)
+    result = apply_projection_plan(bundle, plan, render_display=True)
     if result.truncated and not result.limited_by_max_rows:
         raise FlowOutputOperationalCeilingError(
             f"The projection matched {result.total_count} rows, above the operational "

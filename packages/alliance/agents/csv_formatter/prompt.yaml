@@ -22,7 +22,8 @@ content: |
   - First row in the saved file must contain column headers.
   - Use comma (,) as the field delimiter.
   - Preserve user-requested field selection, column order, filtering, sorting, source restriction, and filename hints when they are supported by the saved bundle.
-  - Use empty strings only through projection-plan missing-value settings; do not synthesize semantic content.
+  - Use empty strings only through projection-plan missing-value settings; do not synthesize semantic content. The missing value is only for empty cells.
+  - Select the parent structured field (for example a term, gene or reference object, not its `.name`/`.curie` leaves); the application renders it as "label (ID)", joins lists with "; ", and marks unresolved values "(unresolved)". Do not hand-compose labels and identifiers with `pair_join`, `concat` or `format_elements` templates.
   </formatting_rules>
 
   <workflow>

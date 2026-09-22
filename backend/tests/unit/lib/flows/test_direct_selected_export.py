@@ -78,7 +78,11 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
     assert saved[0][3] == expected_agent_id
     assert saved[0][1].total_count == (0 if empty else 1)
     if not empty:
-        assert saved[0][1].rows[0]["stocks sources"][1] == {"name": "B"}
+        if format == "json":
+            assert saved[0][1].rows[0]["stocks sources"][1] == {"name": "B"}
+        else:
+            # CSV/TSV cells hold display text for structured values, never JSON.
+            assert saved[0][1].rows[0]["stocks sources"] == "A (A:1); B; C:3"
     assert saved[0][4]["source_keys"] == [a.source_key for a in bundle.artifacts if a.source_key]
     assert get_current_flow_output_attachment() == before
 
