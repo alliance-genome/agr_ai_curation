@@ -122,3 +122,29 @@ def test_term_resolver_limit_is_capped(monkeypatch):
         domain_pack_id="pack", object_type="Obj", field_path="f", source_phrase=" ", limit=10**6)
     assert result.status == "error"
     assert _lookup_limit(result) == 50
+
+
+def test_b1_recall_chat_history_recent_page_is_bounded(monkeypatch):
+    import asyncio
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatMessageRecord
+    from src.lib.openai_agents import supervisor_context_tools as recall_module
+
+    messages = [
+        ChatMessageRecord(
+            message_id=uuid4(), session_id="s", chat_kind=ASSISTANT_CHAT_KIND,
+            turn_id=f"t{i}", role="user", message_type="text",
+            content="pasted table row " * 12000, payload_json=None, trace_id=None,
+            created_at=datetime(2026, 9, 22, tzinfo=timezone.utc),
+        )
+        for i in range(3)
+    ]
+    monkeypatch.setattr(recall_module, "get_current_session_id", lambda: "s")
+    monkeypatch.setattr(recall_module, "get_current_user_id", lambda: "u")
+    monkeypatch.setattr(recall_module, "_list_session_messages", lambda **_kwargs: messages)
+
+    raw = asyncio.run(recall_module.recall_chat_history(detail="recent"))
+
+    assert len(raw.encode("utf-8")) <= BUDGET

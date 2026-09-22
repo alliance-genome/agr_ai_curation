@@ -1329,7 +1329,9 @@ def _build_runtime_tool_availability_note(
         "after explicit confirmation. Use inspect_chat_traces for behavior/debug questions "
         "about why a previous answer behaved a certain way or what tools ran. "
         "Use recall_chat_history for exact prior user/assistant transcript text "
-        "when earlier chat turns may have been compacted out of live context."
+        "when earlier chat turns may have been compacted out of live context; "
+        "continue truncated pages with next_cursor and read a withheld long "
+        "message exactly with detail=\"message\"."
     )
 
     return "\n\n".join(notes)
@@ -1777,7 +1779,12 @@ def create_supervisor_agent(
             "detail=\"recent\" for a bounded recent transcript page, detail=\"turn\" "
             "with turn_ref=\"latest\", a turn id, message id, or 1-based turn ordinal "
             "to fetch a specific turn, and detail=\"search\" with query to full-text "
-            "search this conversation. Use this when earlier turns may have been "
+            "search this conversation. Pages are size-bounded: when truncated is true, "
+            "call again with the returned next_cursor. A message too long for a page "
+            "is marked withheld; read it exactly with the arguments in its "
+            "detail_calls (detail=\"message\", message_id, message_field content or "
+            "flow_assistant_message, content_cursor), following next_content_cursor "
+            "until complete. Use this when earlier turns may have been "
             "compacted or summarized and you need exact user/assistant wording. This "
             "does not inspect TraceReview behavior; use inspect_chat_traces for why "
             "tools ran or failed."
@@ -1789,8 +1796,22 @@ def create_supervisor_agent(
         query: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        message_id: str | None = None,
+        message_field: str = "content",
+        content_cursor: int | None = None,
     ) -> str:
-        """Recall exact transcript text for the active main chat."""
+        """Recall exact transcript text for the active main chat.
+
+        Args:
+            detail: recent, turn, search, or message (one exact message in chunks).
+            turn_ref: For detail="turn": latest, a turn id, message id, or 1-based turn ordinal.
+            query: For detail="search": text to find in this conversation.
+            limit: Most messages on one page.
+            cursor: The next_cursor from the previous page of the same request.
+            message_id: For detail="message": the message to read exactly.
+            message_field: For detail="message": content or flow_assistant_message.
+            content_cursor: For detail="message": the next_content_cursor from the previous chunk.
+        """
 
         return await recall_chat_history(
             detail=detail,
@@ -1798,6 +1819,9 @@ def create_supervisor_agent(
             query=query,
             limit=limit,
             cursor=cursor,
+            message_id=message_id,
+            message_field=message_field,
+            content_cursor=content_cursor,
         )
 
     specialist_tools.append(recall_chat_history_tool)
