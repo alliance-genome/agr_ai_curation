@@ -953,3 +953,71 @@ def test_declared_validators_keep_their_attachment_options():
         "fixture.expression.declared_validator"
     ]
     assert validators[0]["validation_attachments"][0]["scope"] == "pack"
+
+
+def test_cursor_is_invalidated_when_collection_changes_without_version_bump():
+    registries = _wide_registries()
+    first = _call(**RECORDED_CALL, limit=5, registries=registries)
+    cursor = first["page"]["next_cursor"]
+
+    expression = registries["fixture.expression"]
+    source = next(b for b in expression.bindings if b.binding_id == "stage_term_lookup_00")
+    added = replace(source, binding_id="stage_term_lookup_added")
+    changed = {
+        **registries,
+        "fixture.expression": replace(expression, bindings=(*expression.bindings, added)),
+    }
+    assert (
+        changed["fixture.expression"].domain_pack.metadata.version
+        == expression.domain_pack.metadata.version
+    )
+
+    stale = _call(**RECORDED_CALL, limit=5, cursor=cursor, registries=changed)
+    assert stale["success"] is False
+    assert "belongs to a different request" in stale["error"]
+    assert _call(**RECORDED_CALL, limit=5, cursor=cursor, registries=registries)["success"] is True
+
+
+def test_contract_clamp_warnings_are_emitted_once_per_value(monkeypatch, caplog):
+    from src.lib.openai_agents import config
+
+    monkeypatch.setattr(config, "_AGENT_CONTRACT_CLAMP_WARNINGS", set())
+    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "10")
+    monkeypatch.setenv("AGENT_CONTRACT_MAX_ITEM_CHARS", "5")
+    with caplog.at_level("WARNING", logger=config.logger.name):
+        for _ in range(3):
+            config.get_agent_contract_max_item_chars()
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages.count(
+        "AGENT_CONTRACT_MAX_RESPONSE_CHARS=10 is below minimum 4000; using 4000"
+    ) == 1
+    assert messages.count("AGENT_CONTRACT_MAX_ITEM_CHARS=5 is below minimum 1000; using 1000") == 1
+
+    caplog.clear()
+    monkeypatch.setenv("AGENT_CONTRACT_MAX_ITEM_CHARS", "7")
+    with caplog.at_level("WARNING", logger=config.logger.name):
+        config.get_agent_contract_max_item_chars()
+        config.get_agent_contract_max_item_chars()
+    assert [record.getMessage() for record in caplog.records] == [
+        "AGENT_CONTRACT_MAX_ITEM_CHARS=7 is below minimum 1000; using 1000"
+    ]
+
+
+def test_default_item_budget_caps_silently_but_explicit_value_warns(monkeypatch, caplog):
+    from src.lib.openai_agents import config
+
+    monkeypatch.setattr(config, "_AGENT_CONTRACT_CLAMP_WARNINGS", set())
+    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "10000")
+    monkeypatch.delenv("AGENT_CONTRACT_MAX_ITEM_CHARS", raising=False)
+    with caplog.at_level("WARNING", logger=config.logger.name):
+        assert config.get_agent_contract_max_item_chars() == 5000
+    assert caplog.records == []
+
+    monkeypatch.setenv("AGENT_CONTRACT_MAX_ITEM_CHARS", "9000")
+    with caplog.at_level("WARNING", logger=config.logger.name):
+        assert config.get_agent_contract_max_item_chars() == 5000
+        assert config.get_agent_contract_max_item_chars() == 5000
+    assert [record.getMessage() for record in caplog.records] == [
+        "AGENT_CONTRACT_MAX_ITEM_CHARS=9000 exceeds half of "
+        "AGENT_CONTRACT_MAX_RESPONSE_CHARS; using 5000"
+    ]

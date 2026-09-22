@@ -186,6 +186,13 @@ def test_core_generated_contract_summarizes_tool_and_domain_metadata(monkeypatch
     assert "Validators own these fields" in generated
     assert "do not invent" in generated
     assert "PhenotypeTerm.curie" in generated  # at least one field named in the capped list
+    # ALL-1277: the directive asks for one field's scoped contract, not inventories.
+    assert (
+        "call get_agent_contract with topic=field, detail_level=detail, and that field_path."
+        in generated
+    )
+    assert "topics validator_bindings and ontology_constraints" not in generated
+    assert "for the full bindings" not in generated
 
     # REMOVED — audit enumeration must no longer be inlined
     assert "Tool inventory from agent.yaml" not in generated

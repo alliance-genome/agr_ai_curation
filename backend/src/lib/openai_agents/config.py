@@ -3175,6 +3175,18 @@ def log_agent_config(agent_name: str, config: AgentConfig) -> None:
 # ALL-1277: Agent contract discovery bounds
 # =============================================================================
 
+_AGENT_CONTRACT_CLAMP_WARNINGS: set[tuple[str, str]] = set()
+
+
+def _warn_agent_contract_clamp_once(key: str, message: str, *args: object) -> None:
+    """Warn once per distinct (setting, raw environment value) clamp."""
+    marker = (key, str(os.getenv(key)))
+    if marker in _AGENT_CONTRACT_CLAMP_WARNINGS:
+        return
+    _AGENT_CONTRACT_CLAMP_WARNINGS.add(marker)
+    logger.warning(message, *args)
+
+
 def get_agent_contract_max_response_chars() -> int:
     """Total serialized size budget for one get_agent_contract result.
 
@@ -3185,7 +3197,11 @@ def get_agent_contract_max_response_chars() -> int:
     """
     configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_RESPONSE_CHARS", 24000)
     if configured < 4000:
-        logger.warning("AGENT_CONTRACT_MAX_RESPONSE_CHARS=%s is below minimum 4000; using 4000", configured)
+        _warn_agent_contract_clamp_once(
+            "AGENT_CONTRACT_MAX_RESPONSE_CHARS",
+            "AGENT_CONTRACT_MAX_RESPONSE_CHARS=%s is below minimum 4000; using 4000",
+            configured,
+        )
         return 4000
     return configured
 
@@ -3196,18 +3212,26 @@ def get_agent_contract_max_item_chars() -> int:
     Environment variable: AGENT_CONTRACT_MAX_ITEM_CHARS. Default 8000. A larger
     item is returned as an outline whose omitted values are read through
     item_ref and detail_pointer drilldown. Clamped to 1000 at minimum and to
-    half of AGENT_CONTRACT_MAX_RESPONSE_CHARS at maximum.
+    half of AGENT_CONTRACT_MAX_RESPONSE_CHARS at maximum; the default is capped
+    to that half silently, an explicit operator value is capped with a warning.
     """
     configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_ITEM_CHARS", 8000)
     maximum = get_agent_contract_max_response_chars() // 2
     if configured < 1000:
-        logger.warning("AGENT_CONTRACT_MAX_ITEM_CHARS=%s is below minimum 1000; using 1000", configured)
+        _warn_agent_contract_clamp_once(
+            "AGENT_CONTRACT_MAX_ITEM_CHARS",
+            "AGENT_CONTRACT_MAX_ITEM_CHARS=%s is below minimum 1000; using 1000",
+            configured,
+        )
         return 1000
     if configured > maximum:
-        logger.warning(
-            "AGENT_CONTRACT_MAX_ITEM_CHARS=%s exceeds half of AGENT_CONTRACT_MAX_RESPONSE_CHARS; using %s",
-            configured,
-            maximum,
-        )
+        if os.getenv("AGENT_CONTRACT_MAX_ITEM_CHARS") is not None:
+            _warn_agent_contract_clamp_once(
+                "AGENT_CONTRACT_MAX_ITEM_CHARS",
+                "AGENT_CONTRACT_MAX_ITEM_CHARS=%s exceeds half of "
+                "AGENT_CONTRACT_MAX_RESPONSE_CHARS; using %s",
+                configured,
+                maximum,
+            )
         return maximum
     return configured
