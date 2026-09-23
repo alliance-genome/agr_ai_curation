@@ -64,7 +64,10 @@ from src.lib.domain_packs.validator_result_policies import (
     allowed_term_policy_violations,
 )
 from src.lib.domain_packs.resolvable_values import (
+    DECISIVE_OUTCOMES,
+    LOOKUP_OUTCOME_LABELS,
     OUTCOME_INVALID_SCHEMA,
+    OUTCOME_MATCHED,
     OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
     VALIDATOR_CURATOR_MESSAGE_KEY,
@@ -73,6 +76,7 @@ from src.lib.domain_packs.resolvable_values import (
     ResolvableValueError,
     copy_resolution,
     declared_resolvable_fields,
+    is_curator_override,
     declared_spec_for,
     validator_event_covers,
     lookup_outcome_for_failure,
@@ -477,6 +481,12 @@ def _materialize_one_result(
     target_type = (
         item.match.object_envelope.object_type if item.match.object_envelope is not None else None
     )
+    overrides = _curator_overridden_values(
+        working_envelope,
+        item,
+        object_definitions=object_definitions,
+        resolvable_fields=resolvable_fields_by_type.get(target_type or "", {}),
+    )
     (
         working_envelope,
         patch_problem,
@@ -514,9 +524,16 @@ def _materialize_one_result(
             item,
             source_envelope_revision=source_envelope_revision,
         )
+        if overrides.covers_every_write:
+            # Every value this binding writes is a curator override, which wins:
+            # the validator's own outcome is not an open problem.
+            validator_finding = _as_curator_override_finding(validator_finding)
         findings.append(validator_finding)
         findings.extend(
-            _field_findings_for_expected_result_fields(
+            _as_curator_override_finding(finding)
+            if finding.field_ref is not None and overrides.covers_field(finding.field_ref.field_path)
+            else finding
+            for finding in _field_findings_for_expected_result_fields(
                 working_envelope,
                 item,
                 validator_finding=validator_finding,
@@ -525,6 +542,9 @@ def _materialize_one_result(
                 source_envelope_revision=source_envelope_revision,
                 resolvable_fields_by_type=resolvable_fields_by_type,
             )
+        )
+        findings.extend(
+            _curator_override_disagreements(item, overrides, source_envelope_revision=source_envelope_revision)
         )
         return working_envelope, findings, tuple(linked_objects)
 
@@ -536,6 +556,146 @@ def _materialize_one_result(
         )
     )
     return working_envelope, findings, ()
+
+
+@dataclass(frozen=True)
+class _CuratorOverrides:
+    """The curator-overridden values a validator result writes into (container path -> value)."""
+
+    target: CuratableObjectEnvelope | None
+    values: Mapping[str, Mapping[str, Any]]
+    # Expected-result fields per overridden value: [(result field, materialized path)].
+    fields: Mapping[str, Sequence[tuple[str, str]]]
+    covers_every_write: bool
+
+    def covers_field(self, field_path: str) -> bool:
+        try:
+            parts = parse_field_path(field_path)
+        except ValueError:
+            return False
+        return _format_field_path(parts[:-1]) in self.values or field_path in self.values
+
+
+def _curator_overridden_values(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> _CuratorOverrides:
+    matched_target = item.match.object_envelope
+    target = _current_object_for_match(envelope, matched_target) if matched_target is not None else None
+    object_definition = item.match.object_definition or (
+        object_definitions.get(target.object_type) if target is not None else None
+    )
+    if target is None or object_definition is None:
+        return _CuratorOverrides(target, {}, {}, False)
+    declared_fields = {field.field_path: field for field in object_definition.fields}
+    values: dict[str, Mapping[str, Any]] = {}
+    fields: dict[str, list[tuple[str, str]]] = {}
+    mapped = 0
+    for result_field, raw_field_path in item.request.expected_result_fields.items():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            continue
+        materialized_field_path = _materialized_field_path(raw_field_path, declared_fields=declared_fields)
+        if materialized_field_path is None:
+            continue
+        mapped += 1
+        container_path = _resolvable_container_path(
+            target.payload, materialized_field_path, resolvable_fields=resolvable_fields
+        )
+        if container_path is None:
+            continue
+        container = _payload_container(target.payload, container_path)
+        if is_curator_override(container):
+            values[container_path] = container
+            fields.setdefault(container_path, []).append((result_field, materialized_field_path))
+    covered = sum(len(entries) for entries in fields.values())
+    return _CuratorOverrides(target, values, fields, bool(values) and covered == mapped)
+
+
+def _as_curator_override_finding(finding: ValidationFinding) -> ValidationFinding:
+    details = {
+        key: value for key, value in finding.details.items() if key != "failure_classification"
+    }
+    return finding.model_copy(update={
+        "severity": ValidationFindingSeverity.INFO,
+        "status": ValidationFindingStatus.RESOLVED,
+        "code": "domain_pack.curator_override",
+        "message": "A curator override sets this value; a validator result does not change it.",
+        "details": details,
+    })
+
+
+def _curator_override_disagreements(
+    item: ValidatorResultMaterializationInput,
+    overrides: _CuratorOverrides,
+    *,
+    source_envelope_revision: int | None,
+) -> list[ValidationFinding]:
+    """Open findings where a validator disagrees with a curator override (the override stands).
+
+    A validator disagrees when it resolves a different identity or decides
+    against the value (a decisive outcome); a non-decisive outcome or a
+    matching identity is no disagreement.
+    """
+
+    result = item.result
+    findings: list[ValidationFinding] = []
+    for container_path, value in overrides.values.items():
+        entries = overrides.fields[container_path]
+        resolution = next(
+            (
+                result.field_resolutions[key]
+                for key in result.field_resolutions
+                if key == container_path or key in {result_field for result_field, _ in entries}
+            ),
+            None,
+        )
+        if resolution is not None:
+            status, resolved_values, outcome = (
+                resolution.status, resolution.resolved_values, resolution.lookup_outcome,
+            )
+        elif result.status == "resolved":
+            status, resolved_values, outcome = "resolved", result.resolved_values, OUTCOME_MATCHED
+        else:
+            status, resolved_values = "unresolved", {}
+            outcome = lookup_outcome_for_failure(
+                validator_failure_classification(result, error_type=DomainEnvelopeMaterializationError)
+            )
+        if status == "resolved":
+            differing = {
+                str(parse_field_path(path)[-1]): resolved_values[result_field]
+                for result_field, path in entries
+                if not missing_resolved_value(resolved_values.get(result_field))
+                and resolved_values[result_field] != value.get(str(parse_field_path(path)[-1]))
+            }
+            if not differing:
+                continue
+            detail = "it resolved " + ", ".join(f"{key} {item!r}" for key, item in differing.items())
+        elif outcome in DECISIVE_OUTCOMES:
+            detail = f"its lookup result is {LOOKUP_OUTCOME_LABELS[outcome]}"
+        else:
+            continue
+        object_ref = overrides.target.to_object_ref()
+        findings.append(ValidationFinding(
+            severity=ValidationFindingSeverity.WARNING,
+            status=ValidationFindingStatus.OPEN,
+            code="domain_pack.validator_disagrees_with_curator_override",
+            message=f"Validator disagrees with the curator override: {detail}.",
+            object_ref=None if container_path else object_ref,
+            field_ref=FieldRef(object_ref=object_ref, field_path=container_path) if container_path else None,
+            details={
+                "validator_binding_id": result.validator_binding_id,
+                "request_id": result.request_id,
+                "lookup_outcome": outcome,
+                "validator_explanation": result.explanation,
+                **({"validator_curator_message": result.curator_message} if result.curator_message else {}),
+                **({"source_envelope_revision": source_envelope_revision}
+                   if source_envelope_revision is not None else {}),
+            },
+        ))
+    return findings
 
 
 def _patch_target_object_from_resolved_values(
@@ -676,6 +836,9 @@ def _patch_target_object_from_resolved_values(
 
     for container_path, writes in resolvable_writes.items():
         container = _payload_container(payload, container_path)
+        if is_curator_override(container):
+            # A curator override wins: the validator's result is reported, not written.
+            continue
         if any(value is _MISSING for _, value in writes):
             # A partial identity is not a validated value.
             before = copy.deepcopy(container)
@@ -825,6 +988,9 @@ def _patch_target_object_from_field_resolutions(
     for key, (container_path, fields) in targets.items():
         resolution = result.field_resolutions[key]
         container = _payload_container(payload, container_path)
+        if is_curator_override(container):
+            # A curator override wins: the validator's decision is reported, not written.
+            continue
         values = {
             materialized_field_path: resolution.resolved_values.get(result_field)
             for result_field, materialized_field_path in fields

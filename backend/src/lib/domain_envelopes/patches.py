@@ -12,6 +12,19 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.resolvable_values import (
+    CONTRACT_KEYS,
+    CURATOR_OVERRIDE_KEY,
+    CURATOR_OVERRIDE_METADATA_KEY,
+    LOOKUP_OUTCOME_KEY,
+    OVERRULED_KEY_PREFIX,
+    RESOLUTION_STATE_KEY,
+    ResolvableSpec,
+    ResolvableValueError,
+    apply_curator_identity,
+    declared_resolvable_fields,
+    declared_spec_for,
+)
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -164,6 +177,14 @@ def apply_curator_field_patch(
                 errors.append(
                     f"field_path '{patch.field_path}' is not declared editable"
                 )
+            else:
+                errors.extend(
+                    _resolvable_edit_errors(
+                        domain_object,
+                        patch,
+                        declared_resolvable_fields(domain_pack.metadata, domain_object.object_type),
+                    )
+                )
 
         before_value = _payload_value(domain_object.payload, patch.field_path)
         current_before = None if before_value is _MISSING else before_value
@@ -204,10 +225,19 @@ def apply_curator_field_patch(
             [{"field_path": patch.field_path, "value": patch.value}],
             candidate_id=patch.object_id,
         )
+    override_audit: dict[str, Any] | None = None
     try:
         if profile is None or not is_generic_attribute_path(patch.field_path):
-            set_payload_value(staged_payload, patch.field_path, patch.value)
-    except ValueError as exc:
+            handled, override_audit = _apply_resolvable_edit(
+                staged_payload,
+                patch,
+                domain_pack=domain_pack,
+                object_type=domain_object.object_type,
+                actor_id=actor_id,
+            )
+            if not handled:
+                set_payload_value(staged_payload, patch.field_path, patch.value)
+    except (ValueError, ResolvableValueError) as exc:
         rejected = _with_rejection_history(
             envelope=envelope,
             patch=patch,
@@ -229,7 +259,16 @@ def apply_curator_field_patch(
         )
 
     updated_objects = list(envelope.extracted_objects)
-    updated_object = domain_object.model_copy(update={"payload": staged_payload})
+    object_metadata = dict(domain_object.metadata)
+    if override_audit is not None:
+        # Audit trail of curator validation overrides: who, when, what was there before.
+        object_metadata[CURATOR_OVERRIDE_METADATA_KEY] = [
+            *object_metadata.get(CURATOR_OVERRIDE_METADATA_KEY, []),
+            {**override_audit, "field_path": patch.field_path, "patch_id": patch.patch_id},
+        ]
+    updated_object = domain_object.model_copy(
+        update={"payload": staged_payload, "metadata": object_metadata}
+    )
     updated_objects[object_index] = updated_object
 
     field_ref = FieldRef(
@@ -285,6 +324,149 @@ def apply_curator_field_patch(
             accepted_event.event_id or "",
         ),
     )
+
+
+def _resolvable_target(
+    field_path: str, resolvable_fields: Mapping[str, ResolvableSpec],
+) -> tuple[str, ResolvableSpec, str | None] | None:
+    """(value path, spec, edited key or None for the whole value) when a patch edits a declared resolvable value."""
+
+    tokens = parse_field_path(field_path)
+    spec = declared_spec_for(resolvable_fields, tokens)
+    if spec is not None:
+        return field_path, spec, None
+    if tokens and isinstance(tokens[-1], str):
+        spec = declared_spec_for(resolvable_fields, tokens[:-1])
+        if spec is not None:
+            return field_path.rpartition(".")[0] if "." in field_path else "", spec, tokens[-1]
+    return None
+
+
+def _set_by_validation(key: str) -> bool:
+    return key in CONTRACT_KEYS or key.startswith(OVERRULED_KEY_PREFIX)
+
+
+def _resolvable_edit_errors(
+    domain_object: CuratableObjectEnvelope,
+    patch: EnvelopeFieldPatch,
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> list[str]:
+    """Curators edit a resolvable value's identity, never its paper wording or validation state."""
+
+    target = _resolvable_target(patch.field_path, resolvable_fields)
+    if target is None:
+        return []
+    value_path, _spec, key = target
+    if key is not None:
+        if _set_by_validation(key):
+            return [
+                f"field_path '{patch.field_path}' is set by validation; edit the value's identity instead"
+            ]
+        return []
+    if not isinstance(patch.value, Mapping):
+        return [f"field_path '{patch.field_path}' is a resolvable value; edit its identity keys"]
+    current = _payload_value(domain_object.payload, value_path)
+    current = current if isinstance(current, Mapping) else {}
+    changed = sorted(
+        str(item_key) for item_key, item in patch.value.items()
+        if _set_by_validation(str(item_key)) and item != current.get(item_key)
+    )
+    if changed:
+        return [
+            f"field_path '{patch.field_path}' cannot change {', '.join(changed)}; "
+            "those are set by validation"
+        ]
+    return []
+
+
+def _apply_resolvable_edit(
+    payload: dict[str, Any],
+    patch: EnvelopeFieldPatch,
+    *,
+    domain_pack: LoadedDomainPack,
+    object_type: str,
+    actor_id: str,
+) -> tuple[bool, dict[str, Any] | None]:
+    """Apply a curator's edit of a declared resolvable value's identity as a validation override.
+
+    Returns (handled, override audit record). Not handled means an ordinary
+    field edit the caller sets; handled without a record means only a
+    value's other keys changed. Declared mirror copies follow an override.
+    """
+
+    resolvable_fields = declared_resolvable_fields(domain_pack.metadata, object_type)
+    target = _resolvable_target(patch.field_path, resolvable_fields)
+    if target is None:
+        return False, None
+    value_path, spec, key = target
+    if key is not None and key not in spec.identity_keys:
+        return False, None
+    container = _payload_value(payload, value_path) if value_path else payload
+    if not isinstance(container, dict):
+        set_payload_value(payload, value_path, {})
+        container = _payload_value(payload, value_path)
+    if key is not None:
+        edits = {key: copy.deepcopy(patch.value)}
+    else:
+        new_value = dict(patch.value)
+        for item_key, item in new_value.items():
+            if item_key not in spec.identity_keys and not _set_by_validation(str(item_key)):
+                container[item_key] = copy.deepcopy(item)
+        edits = {
+            identity_key: copy.deepcopy(new_value[identity_key])
+            for identity_key in spec.identity_keys
+            if identity_key in new_value and new_value[identity_key] != container.get(identity_key)
+        }
+        if not edits:
+            return True, None
+    audit = apply_curator_identity(
+        container,
+        edits,
+        identity_keys=spec.identity_keys,
+        actor_id=actor_id,
+        at=datetime.now(timezone.utc).isoformat(),
+    )
+    _follow_declared_mirrors(payload, value_path, container, domain_pack, object_type, resolvable_fields)
+    return True, {**audit, "value_path": value_path}
+
+
+def _follow_declared_mirrors(
+    payload: dict[str, Any],
+    value_path: str,
+    container: Mapping[str, Any],
+    domain_pack: LoadedDomainPack,
+    object_type: str,
+    resolvable_fields: Mapping[str, ResolvableSpec],
+) -> None:
+    """A declared mirror copy (``materializes_to_field_paths``) takes the curator's identity and state."""
+
+    object_definition = next(
+        (obj for obj in domain_pack.metadata.object_definitions if obj.object_type == object_type), None,
+    )
+    if object_definition is None:
+        return
+    prefix = f"{value_path}." if value_path else ""
+    mirror_values: set[str] = set()
+    for field_definition in object_definition.fields:
+        key = field_definition.field_path[len(prefix):] if field_definition.field_path.startswith(prefix) else ""
+        if not key or "." in key or key not in container:
+            continue
+        for mirror in field_definition.metadata.get("materializes_to_field_paths") or []:
+            mirror_path = str(mirror).strip()
+            mirror_value_path = mirror_path.rpartition(".")[0]
+            if not mirror_value_path or declared_spec_for(
+                resolvable_fields, parse_field_path(mirror_value_path)
+            ) is None:
+                continue
+            set_payload_value(payload, mirror_path, copy.deepcopy(container[key]))
+            mirror_values.add(mirror_value_path)
+    for mirror_value_path in mirror_values:
+        mirror = _payload_value(payload, mirror_value_path)
+        for contract_key in (RESOLUTION_STATE_KEY, LOOKUP_OUTCOME_KEY, CURATOR_OVERRIDE_KEY):
+            if contract_key in container:
+                mirror[contract_key] = copy.deepcopy(container[contract_key])
+            else:
+                mirror.pop(contract_key, None)
 
 
 def _rejected_without_history(

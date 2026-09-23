@@ -8,15 +8,18 @@ object. It keeps its domain's own id/label keys and adds:
   fixed-choice field). Written once by the builder; nothing overwrites it.
 - ``resolution_state``: the closed vocabulary ``ResolutionState``.
 - ``lookup_outcome``: the closed vocabulary ``LookupOutcome``; always set,
-  ``matched`` exactly when the value is resolved.
+  ``matched`` (a validator) or ``curator_override`` (a curator) exactly
+  when the value is resolved.
 - ``validator_explanation``: the validator's own explanation (free text,
   nullable), and ``validator_curator_message``: its curator message, kept
   apart from the explanation.
 
 The invariant: the state is ``resolved`` if and only if a validator (or a
-deterministic lookup that is the validation) supplied the identity, if and
-only if the lookup outcome is ``matched``; an unresolved value has empty
-id/label keys. A value the paper never mentions is absent, which is different
+deterministic lookup that is the validation), or a curator override,
+supplied the identity, if and only if the lookup outcome is ``matched`` or
+``curator_override``; an unresolved value has empty id/label keys. A
+curator override also records ``curator_override`` (who and when) and wins
+over later validator runs (``apply_curator_identity``). A value the paper never mentions is absent, which is different
 from unresolved.
 
 Values stored before this contract carry no contract state (no
@@ -35,6 +38,7 @@ none of them re-implements the rules.
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, replace
@@ -50,6 +54,8 @@ RESOLUTION_STATE_KEY = "resolution_state"
 LOOKUP_OUTCOME_KEY = "lookup_outcome"
 VALIDATOR_EXPLANATION_KEY = "validator_explanation"
 VALIDATOR_CURATOR_MESSAGE_KEY = "validator_curator_message"
+# Who overrode the value's validation and when (informational, never a validator input).
+CURATOR_OVERRIDE_KEY = "curator_override"
 # Every key the contract adds to a value; the rest are the domain's own keys.
 CONTRACT_KEYS = (
     MENTION_KEY,
@@ -57,6 +63,7 @@ CONTRACT_KEYS = (
     LOOKUP_OUTCOME_KEY,
     VALIDATOR_EXPLANATION_KEY,
     VALIDATOR_CURATOR_MESSAGE_KEY,
+    CURATOR_OVERRIDE_KEY,
 )
 
 
@@ -84,6 +91,8 @@ class LookupOutcome(StrEnum):
     NOT_VALIDATED = "not_validated"
     # Read time only, for values stored before this contract.
     LEGACY_UNVERIFIED = "legacy_unverified"
+    # A curator set the identity; it wins over later validator runs.
+    CURATOR_OVERRIDE = "curator_override"
 
 
 RESOLVED = ResolutionState.RESOLVED.value
@@ -92,6 +101,9 @@ RESOLUTION_STATES = tuple(state.value for state in ResolutionState)
 LOOKUP_OUTCOMES = tuple(outcome.value for outcome in LookupOutcome)
 
 OUTCOME_MATCHED = LookupOutcome.MATCHED.value
+OUTCOME_CURATOR_OVERRIDE = LookupOutcome.CURATOR_OVERRIDE.value
+# The outcomes of a resolved value.
+RESOLVED_OUTCOMES = (OUTCOME_MATCHED, OUTCOME_CURATOR_OVERRIDE)
 OUTCOME_NOT_FOUND = LookupOutcome.NOT_FOUND.value
 OUTCOME_AMBIGUOUS = LookupOutcome.AMBIGUOUS.value
 OUTCOME_CONFLICT = LookupOutcome.CONFLICT.value
@@ -129,7 +141,8 @@ DECISIVE_OUTCOMES = (
 STORED_UNRESOLVED_OUTCOMES = tuple(
     outcome.value
     for outcome in LookupOutcome
-    if outcome not in (LookupOutcome.MATCHED, LookupOutcome.LEGACY_UNVERIFIED)
+    if outcome
+    not in (LookupOutcome.MATCHED, LookupOutcome.CURATOR_OVERRIDE, LookupOutcome.LEGACY_UNVERIFIED)
 )
 
 # Plain words for curators, e.g. a "(lookup result)" column.
@@ -145,6 +158,7 @@ LOOKUP_OUTCOME_LABELS: dict[str, str] = {
     OUTCOME_REJECTED_CANDIDATES: "Candidates rejected",
     OUTCOME_NOT_VALIDATED: "Not validated yet",
     OUTCOME_LEGACY_UNVERIFIED: "Legacy, unverified",
+    OUTCOME_CURATOR_OVERRIDE: "Curator override",
 }
 RESOLUTION_STATE_LABELS: dict[str, str] = {RESOLVED: "Resolved", UNRESOLVED: "Unresolved"}
 
@@ -314,8 +328,16 @@ def _check_contract_fields(value: Any) -> tuple[str, str]:
         raise ResolvableValueError(f"resolution_state must be one of {RESOLUTION_STATES}, got {state!r}")
     if outcome not in LOOKUP_OUTCOMES:
         raise ResolvableValueError(f"lookup_outcome must be one of {LOOKUP_OUTCOMES}, got {outcome!r}")
-    if state == RESOLVED and outcome != OUTCOME_MATCHED:
-        raise ResolvableValueError(f"A resolved value's lookup_outcome is matched, got {outcome!r}")
+    if state == RESOLVED and outcome not in RESOLVED_OUTCOMES:
+        raise ResolvableValueError(
+            f"A resolved value's lookup_outcome is one of {RESOLVED_OUTCOMES}, got {outcome!r}"
+        )
+    override = value.get(CURATOR_OVERRIDE_KEY)
+    if outcome == OUTCOME_CURATOR_OVERRIDE:
+        if not (isinstance(override, Mapping) and override.get("actor_id") and override.get("at")):
+            raise ResolvableValueError("A curator override records who (actor_id) and when (at)")
+    elif CURATOR_OVERRIDE_KEY in value:
+        raise ResolvableValueError("Only a curator_override value records a curator override")
     if state == UNRESOLVED and outcome not in STORED_UNRESOLVED_OUTCOMES:
         raise ResolvableValueError(
             f"An unresolved value's lookup_outcome is one of {STORED_UNRESOLVED_OUTCOMES}, got {outcome!r}"
@@ -362,6 +384,16 @@ def stored_state_problem(value: Any, *, identity_keys: Sequence[str] = ()) -> st
     except ResolvableValueError as exc:
         return str(exc)
     return None
+
+
+def is_curator_override(value: Any) -> bool:
+    """Whether a curator set this value's identity (a valid ``curator_override`` state)."""
+
+    return (
+        has_resolution_state(value)
+        and value[LOOKUP_OUTCOME_KEY] == OUTCOME_CURATOR_OVERRIDE
+        and stored_state_problem(value) is None
+    )
 
 
 def is_resolved(value: Any, *, identity_keys: Sequence[str] = ()) -> bool:
@@ -465,6 +497,9 @@ def mark_resolved(
 
     if not identity or all(_is_empty(item) for item in identity.values()):
         raise ResolvableValueError("mark_resolved needs the identity a validator supplied")
+    if is_curator_override(value):
+        # A curator override wins over later validator runs.
+        return
     for key in identity_keys:
         if key not in identity and key in value:
             value[key] = None
@@ -532,6 +567,9 @@ def mark_unresolved(
         raise ResolvableValueError(
             f"lookup_outcome must be one of {STORED_UNRESOLVED_OUTCOMES}, got {outcome!r}"
         )
+    if is_curator_override(value):
+        # A curator override wins over later validator runs.
+        return
     if is_resolved(value):
         if outcome not in DECISIVE_OUTCOMES:
             return
@@ -569,12 +607,19 @@ def copy_resolution(
     source's own keys are added to them.
     """
 
+    if is_curator_override(target) and not is_curator_override(source):
+        # A curator override on the copy wins over a validator's write to its source.
+        return
     if source.get(RESOLUTION_STATE_KEY) == RESOLVED:
         target[RESOLUTION_STATE_KEY] = RESOLVED
-        target[LOOKUP_OUTCOME_KEY] = OUTCOME_MATCHED
+        target[LOOKUP_OUTCOME_KEY] = source[LOOKUP_OUTCOME_KEY]
         _write_validator_text(
             target, source.get(VALIDATOR_EXPLANATION_KEY), source.get(VALIDATOR_CURATOR_MESSAGE_KEY),
         )
+        if is_curator_override(source):
+            target[CURATOR_OVERRIDE_KEY] = copy.deepcopy(source[CURATOR_OVERRIDE_KEY])
+        else:
+            target.pop(CURATOR_OVERRIDE_KEY, None)
         _drop_overruled(target)
         _check_contract_fields(target)
     elif source.get(RESOLUTION_STATE_KEY) == UNRESOLVED:
@@ -595,6 +640,102 @@ def copy_resolution(
                 ),
             ])),
         )
+
+
+# --- Curator validation override ------------------------------------------------
+
+# Object metadata key of the audit trail of curator overrides.
+CURATOR_OVERRIDE_METADATA_KEY = "curator_resolution_overrides"
+
+
+def _resolution_snapshot(value: Mapping[str, Any], identity_keys: Sequence[str]) -> dict[str, Any]:
+    keys = (
+        *identity_keys,
+        RESOLUTION_STATE_KEY,
+        LOOKUP_OUTCOME_KEY,
+        VALIDATOR_EXPLANATION_KEY,
+        VALIDATOR_CURATOR_MESSAGE_KEY,
+    )
+    snapshot = {key: copy.deepcopy(value[key]) for key in keys if key in value}
+    snapshot.update(
+        (key, copy.deepcopy(item))
+        for key, item in value.items()
+        if isinstance(key, str) and key.startswith(OVERRULED_KEY_PREFIX)
+    )
+    return snapshot
+
+
+def apply_curator_identity(
+    value: MutableMapping[str, Any],
+    edits: Mapping[str, Any],
+    *,
+    identity_keys: Sequence[str],
+    actor_id: str,
+    at: str,
+) -> dict[str, Any]:
+    """A curator's edit of a resolvable value's identity keys: a validation override.
+
+    ``edits`` maps edited identity keys to their new values. The value becomes
+    resolved with ``lookup_outcome`` ``curator_override`` and a
+    ``curator_override`` record (who, when, and the state before the first
+    override); a validator identity it replaces moves to ``overruled_*``.
+    ``mention`` and the validator's explanation are kept. Clearing the whole
+    identity reverts to unresolved (the validator's last unresolved outcome,
+    else ``not_validated``); entering the identity the value had before the
+    override restores that state. Returns the audit record.
+    """
+
+    unknown = sorted(set(edits) - set(identity_keys))
+    if unknown:
+        raise ResolvableValueError(f"Only identity keys take a curator override, not {', '.join(unknown)}")
+    if not actor_id or not at:
+        raise ResolvableValueError("A curator override records who (actor_id) and when (at)")
+    overridden = is_curator_override(value)
+    before = _resolution_snapshot(value, identity_keys)
+    base = value[CURATOR_OVERRIDE_KEY]["previous"] if overridden else before
+    identity = {
+        key: edits[key] if key in edits else (value.get(key) if overridden else None)
+        for key in identity_keys
+    }
+
+    if all(_is_empty(item) for item in identity.values()):
+        # The curator cleared the identity: the override is withdrawn.
+        for key in identity_keys:
+            value[key] = None
+        previous_outcome = base.get(LOOKUP_OUTCOME_KEY)
+        value[RESOLUTION_STATE_KEY] = UNRESOLVED
+        value[LOOKUP_OUTCOME_KEY] = (
+            previous_outcome if previous_outcome in STORED_UNRESOLVED_OUTCOMES else OUTCOME_NOT_VALIDATED
+        )
+        value.pop(CURATOR_OVERRIDE_KEY, None)
+        action = "cleared"
+    elif all(identity[key] == base.get(key) for key in identity_keys) and has_resolution_state(base) and (
+        base.get(LOOKUP_OUTCOME_KEY) != OUTCOME_CURATOR_OVERRIDE
+    ):
+        # The curator entered the identity the value had before: restore that state.
+        for key in [key for key in value if isinstance(key, str) and key.startswith(OVERRULED_KEY_PREFIX)]:
+            del value[key]
+        for key in (*identity_keys, VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY):
+            value.pop(key, None)
+        value.update(copy.deepcopy(base))
+        value.pop(CURATOR_OVERRIDE_KEY, None)
+        action = "restored"
+    else:
+        if not overridden:
+            _overrule_identity(value, identity_keys)
+        value.update(identity)
+        value[RESOLUTION_STATE_KEY] = RESOLVED
+        value[LOOKUP_OUTCOME_KEY] = OUTCOME_CURATOR_OVERRIDE
+        value[CURATOR_OVERRIDE_KEY] = {"actor_id": actor_id, "at": at, "previous": copy.deepcopy(base)}
+        action = "override"
+    _check_contract_fields(value)
+    return {
+        "action": action,
+        "actor_id": actor_id,
+        "at": at,
+        "previous": before,
+        "identity": {key: copy.deepcopy(value.get(key)) for key in identity_keys},
+    }
 
 
 # --- Lists of resolvable values ------------------------------------------------
@@ -1216,6 +1357,8 @@ def unresolved_header_text(
 
 __all__ = [
     "CONTRACT_KEYS",
+    "CURATOR_OVERRIDE_KEY",
+    "CURATOR_OVERRIDE_METADATA_KEY",
     "EXTRACTOR_PROPOSAL_PREFIX",
     "DECISIVE_OUTCOMES",
     "INVALID_RECORD_EXPLANATION",
@@ -1232,6 +1375,7 @@ __all__ = [
     "NOT_VALIDATED_EXPLANATION",
     "OUTCOME_AMBIGUOUS",
     "OUTCOME_BLOCKED",
+    "OUTCOME_CURATOR_OVERRIDE",
     "OUTCOME_CONFLICT",
     "OUTCOME_INVALID_SCHEMA",
     "OUTCOME_LEGACY_UNVERIFIED",
@@ -1248,6 +1392,7 @@ __all__ = [
     "RESOLUTION_STATE_KEY",
     "RESOLUTION_STATE_LABELS",
     "RESOLVED",
+    "RESOLVED_OUTCOMES",
     "ResolutionState",
     "ResolvableSpec",
     "ResolvableValueError",
@@ -1260,6 +1405,7 @@ __all__ = [
     "VALIDATOR_EXPLANATION_SUFFIX",
     "VALIDATOR_MATERIALIZATION_METADATA_KEY",
     "VALIDATOR_MESSAGE_SUFFIX",
+    "apply_curator_identity",
     "check_resolvable_list",
     "check_resolvable_value",
     "copy_resolution",
@@ -1269,6 +1415,7 @@ __all__ = [
     "effective_resolution",
     "effective_value",
     "has_resolution_state",
+    "is_curator_override",
     "is_resolved",
     "lookup_outcome_for_failure",
     "mark_resolved",

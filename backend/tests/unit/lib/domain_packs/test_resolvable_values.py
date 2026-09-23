@@ -76,6 +76,7 @@ def test_vocabularies_are_closed_enums():
     assert LOOKUP_OUTCOMES == (
         "matched", "not_found", "ambiguous", "conflict", "blocked", "transient", "invalid_schema",
         "missing_expected_result_field", "rejected_candidates", "not_validated", "legacy_unverified",
+        "curator_override",
     )
     assert tuple(ResolutionState) == RESOLUTION_STATES
     assert tuple(LookupOutcome) == LOOKUP_OUTCOMES
