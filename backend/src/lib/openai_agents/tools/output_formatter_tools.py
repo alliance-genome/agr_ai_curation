@@ -1260,7 +1260,8 @@ def _capabilities_payload(
         ),
         "split_list": (
             "To put list items in separate columns (never extra rows), add split_list to a "
-            "column whose field_ref is a list: {\"header_template\": \"Anatomy Term {n}\"} "
+            "field_ref column (a single value counts as a one-item list, giving one numbered "
+            "column; do not invent more): {\"header_template\": \"Anatomy Term {n}\"} "
             "or {\"headers\": [\"First\", \"Second\"]} (not both), optional max_columns. "
             "The application sizes it to the longest list, renders each item as display "
             "text and uses missing_value for shorter rows. Too few headers or more items "

@@ -288,8 +288,18 @@ class FlowOutputOverrideSpec(BaseModel):
     exclude: bool = False
 
 
+def _split_items(value: Any) -> list[Any]:
+    """Items a split column spreads: a list's items, or one non-empty single value."""
+
+    if isinstance(value, list):
+        return value
+    return [] if _is_empty(value) else [value]
+
+
 class FlowOutputSplitListSpec(BaseModel):
-    """Expand one list field into one column per item (never extra rows).
+    """Expand one field into one column per item (never extra rows).
+
+    A single non-empty value counts as a one-item list.
 
     Headers come from ``header_template`` (must contain ``{n}``; default
     "<header> {n}") or explicit ``headers``, not both.
@@ -779,6 +789,26 @@ def _object_label(
         if value:
             return value
     return object_id
+
+
+def _declared_payload_label(item: Mapping[str, Any]) -> str | None:
+    """Custom and generic objects: their own payload ``label``, nothing else."""
+
+    raw = _object_payload(item).get("label")
+    text = display_text(raw)
+    return text or None
+
+
+def _declared_path_label(item: Mapping[str, Any], path: str | None) -> str | None:
+    """Packaged objects: the value at the pack-declared label path, nothing else."""
+
+    if not path:
+        return None
+    from src.lib.flows.export_fields import _walk_payload
+    from src.schemas.domain_envelope import parse_field_path
+
+    text = display_text(_walk_payload(_object_payload(item), list(parse_field_path(path))))
+    return text or None
 
 
 def _object_evidence_count(item: Mapping[str, Any]) -> int:
@@ -1640,11 +1670,15 @@ def _build_artifact_from_step(
         packaged_display_specs,
         packaged_export_fields,
         packaged_field_value,
+        packaged_object_label_paths,
         profile_export_fields,
         source_catalog,
     )
     display_specs: dict[str, dict[str, Any]] = {}
     default_object_refs: list[str] = []
+    # Object labels are the declared label only (Chris, Sep 22). The legacy
+    # label stays on the rows until here so record matching is unchanged.
+    declared_labels: list[Any] = [_declared_payload_label(item) for item in object_items]
     if profile_fields is not None:
         export_fields = profile_export_fields(profile_fields)
         # Custom profiles: top-level contract fields in declaration order.
@@ -1664,6 +1698,12 @@ def _build_artifact_from_step(
             pack_entry,
             sorted({str(item.get("object_type") or "") for item in object_items}),
         )
+        if domain_pack_id and domain_pack_id != "generic":
+            label_paths = packaged_object_label_paths(agent_id, pack_entry)
+            declared_labels = [
+                _declared_path_label(item, label_paths.get(str(item.get("object_type") or "")))
+                for item in object_items
+            ]
         for row, item in zip(rows_by_source["object"], object_items):
             for field in export_fields:
                 if "summary_key" not in field:
@@ -1674,6 +1714,18 @@ def _build_artifact_from_step(
             _explicit_validation_findings(payload) if isinstance(payload, Mapping) else [],
             export_fields, domain_pack_id,
         )
+    if shape == "structured_result":
+        # Validator result rows: the output projection's declared label fields.
+        label_fields = validator_projection.label_fields if validator_projection else ()
+        declared_labels = [
+            next(
+                (text for key in label_fields if (text := display_text(_object_payload(item).get(key)))),
+                None,
+            )
+            for item in object_items
+        ]
+    for row, label in zip(rows_by_source["object"], declared_labels):
+        row["object.label"] = label
     catalog = source_catalog(export_fields, receipt.model_dump(mode="json") if receipt else None)
     node_id = str(step.get("node_id") or "")
     for rows in rows_by_source.values():
@@ -2590,15 +2642,7 @@ def _split_list_errors(
     if plan.format == "json":
         errors.append(f"{context} applies to CSV, TSV and chat output; JSON keeps lists lossless.")
     if column.transform is not None or not column.field_ref:
-        errors.append(f"{context} needs a list-valued field_ref, not a transform.")
-    elif any(
-        not isinstance(row.get(column.field_ref), list) and not _is_empty(row.get(column.field_ref))
-        for row in rows
-    ):
-        errors.append(
-            f"{context} needs a list-valued field; '{column.field_ref}' holds single values. "
-            "Choose a list field or remove split_list."
-        )
+        errors.append(f"{context} needs a field_ref, not a transform.")
     if split.header_template is not None and split.headers:
         errors.append(f"{context} takes header_template or headers, not both.")
     if split.header_template is not None and "{n}" not in split.header_template:
@@ -2643,8 +2687,7 @@ def _expand_split_columns(
             output.append(column)
             continue
         longest = max(
-            (len(row.get(column.field_ref or "")) for row in rows
-             if isinstance(row.get(column.field_ref or ""), list)),
+            (len(_split_items(row.get(column.field_ref or ""))) for row in rows),
             default=0,
         )
         count = max(1, longest, len(split.headers))
@@ -3274,8 +3317,8 @@ def apply_projection_plan(
                 projected[column.key] = base[column.key]
                 continue
             source_column, position = split_items[column.key]
-            values = row.get(source_column.field_ref or "")
-            item = values[position] if isinstance(values, list) and position < len(values) else None
+            values = _split_items(row.get(source_column.field_ref or ""))
+            item = values[position] if position < len(values) else None
             if source_column.source_node_id and row.get("artifact.node_id") != source_column.source_node_id:
                 item = None
             if not _is_empty(item) and render is not None:

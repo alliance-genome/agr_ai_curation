@@ -424,18 +424,40 @@ def test_split_list_rejects_invalid_options(split, message):
     assert any(message in error for error in errors), errors
 
 
-def test_split_list_requires_list_field_and_non_json():
+def test_split_list_accepts_single_values_and_rejects_transforms_and_json():
     from src.lib.flows.output_projection import validate_projection_plan
 
     bundle = _split_bundle()
-    scalar = FlowOutputProjectionPlan.model_validate({
-        "format": "csv", "row_source": "object",
-        "columns": [{"key": "label", "field_ref": "object.label", "split_list": {}}],
+    single = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object", "missing_value": "\u2014",
+        "columns": [{"key": "label", "header": "Statement", "field_ref": "object.label",
+                     "split_list": {"header_template": "Statement {n}"}}],
     })
-    errors, _, _ = validate_projection_plan(bundle, scalar)
-    assert any("needs a list-valued field" in error for error in errors)
+    # A single-valued field is a one-item list: one numbered column, rows unchanged.
+    result = finalize_output_projection(bundle, single)
+    assert [column.header for column in result.columns] == ["Statement 1"]
+    assert [row["label_1"] for row in result.rows] == ["statement 1", "statement 2", "statement 3"]
+    transform = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object",
+        "columns": [{"key": "t", "transform": {"type": "literal", "value": "x"}, "split_list": {}},
+                    {"key": "label", "field_ref": "object.label"}],
+    })
+    errors, _, _ = validate_projection_plan(bundle, transform)
+    assert any("needs a field_ref, not a transform" in error for error in errors)
     errors, _, _ = validate_projection_plan(bundle, _split_plan("json"))
     assert any("JSON keeps lists lossless" in error for error in errors)
+
+
+def test_split_list_mixed_single_and_list_values_use_longest():
+    bundle = _split_bundle()
+    rows = bundle.rows_for_source("object")
+    rows[1][TERMS] = {"curie": "WBbt:3", "name": "sperm"}  # single value, not a list
+    rows[2][TERMS] = None
+    result = finalize_output_projection(bundle, _split_plan(split={"header_template": "Anatomy Term {n}"}))
+    assert [column.header for column in result.columns][:3] == ["Anatomy Term 1", "Anatomy Term 2", "Anatomy Term 3"]
+    assert [result.rows[1][f"anatomy_{n}"] for n in (1, 2, 3)] == ["sperm (WBbt:3)", "\u2014", "\u2014"]
+    assert [result.rows[2][f"anatomy_{n}"] for n in (1, 2, 3)] == ["\u2014", "\u2014", "\u2014"]
+    assert len(result.rows) == 3
 
 
 def test_split_list_limits_fail_explicitly(monkeypatch):
@@ -569,3 +591,71 @@ def test_production_value_shapes_render_without_object_text(shape, output_format
 def test_custom_profile_value_shapes_render_without_object_text(shape):
     for value in (shape["payload"].get("attributes") or {}).values():
         _no_object_text(display_text(value))
+
+
+# --- object.label is the declared label only (Chris, Sep 22) --------------------------
+
+def test_gene_expression_object_label_is_the_declared_label():
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_gene_expression_step()], flow_name="GE", output_format="csv",
+    )
+    labels = [row["object.label"] for row in bundle.rows_for_source("object")]
+    assert labels == ["Y71G12B.17", "Y71G12B.17"]
+
+
+def _gene_mention_step(payloads):
+    return {
+        "step": 1, "node_id": "node_1", "agent_id": "gene_extractor", "agent_name": "Gene",
+        "candidate": SimpleNamespace(
+            agent_key="gene_extractor", adapter_key="gene", candidate_count=len(payloads),
+            conversation_summary="genes",
+            payload_json={"domain_pack_id": "gene", "envelope_id": "env-gene", "extracted_objects": [
+                {"object_type": "gene_mention_evidence", "object_id": f"m{index}", "payload": payload}
+                for index, payload in enumerate(payloads)
+            ]},
+        ),
+    }
+
+
+def test_packaged_object_label_never_falls_back_to_mention(monkeypatch):
+    original = export_fields._packaged_domain_pack
+    pack = original("gene", {"curation": {"domain_pack_id": "gene"}})
+    declared = SimpleNamespace(metadata=pack.metadata.model_copy(deep=True))
+    for model in declared.metadata.model_definitions:
+        if model.model_id == "GeneMentionEvidencePayload":
+            model.metadata["display"] = {"label": "gene_symbol", "id": "primary_external_id"}
+    monkeypatch.setattr(export_fields, "_packaged_domain_pack", lambda *_args, **_kwargs: declared)
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_gene_mention_step([
+            {"gene_symbol": "unc-54", "primary_external_id": "WB:WBGene00006789", "mention": "UNC-54 myosin"},
+            {"gene_symbol": "", "mention": "PPIT-2", "symbol": "ppit-2", "name": "PPIT"},
+        ])],
+        flow_name="Genes", output_format="csv",
+    )
+    rows = bundle.rows_for_source("object")
+    assert [row["object.label"] for row in rows] == ["unc-54", None]
+    plan = FlowOutputProjectionPlan.model_validate({
+        "format": "csv", "row_source": "object", "missing_value": "—",
+        "columns": [{"key": "label", "header": "Label", "field_ref": "object.label"}],
+    })
+    result = finalize_output_projection(bundle, plan)
+    assert [row["label"] for row in result.rows] == ["unc-54", "—"]
+    json_result = finalize_output_projection(bundle, plan.model_copy(update={"format": "json"}))
+    assert json_result.rows[1]["label"] == "—" or json_result.rows[1]["label"] is None
+
+
+def test_custom_profile_object_label_is_its_payload_label():
+    step = {
+        "step": 1, "node_id": "node_1", "agent_id": "pdf_extraction", "agent_name": "PDF",
+        "candidate": SimpleNamespace(
+            agent_key="pdf_extraction", adapter_key="generic", candidate_count=2, conversation_summary="x",
+            payload_json={"domain_pack_id": "generic", "envelope_id": "env-generic", "extracted_objects": [
+                {"object_type": "generic_object", "object_id": "g1",
+                 "payload": {"label": "B cell lymphoma", "symbol": "BCL", "attributes": {"a": "b"}}},
+                {"object_type": "generic_object", "object_id": "g2",
+                 "payload": {"symbol": "TCL", "name": "T cell lymphoma", "attributes": {"a": "c"}}},
+            ]},
+        ),
+    }
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Generic", output_format="csv")
+    assert [row["object.label"] for row in bundle.rows_for_source("object")] == ["B cell lymphoma", None]

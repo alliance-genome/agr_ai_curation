@@ -146,6 +146,30 @@ def packaged_display_specs(agent_id: str, entry: dict | None = None) -> dict[str
     return specs
 
 
+def packaged_object_label_paths(agent_id: str, entry: dict | None = None) -> dict[str, str]:
+    """Declared object label path per object type (Chris, Sep 22).
+
+    The object-root model's display label, else workspace_display
+    primary_label_field; object types without either have no declared label.
+    """
+
+    domain_pack = _packaged_domain_pack(agent_id, entry)
+    if domain_pack is None:
+        return {}
+    models = {model.model_id: model for model in domain_pack.metadata.model_definitions}
+    paths: dict[str, str] = {}
+    for obj in domain_pack.metadata.object_definitions:
+        model = models.get(obj.model_ref) if obj.model_ref else None
+        display = model.metadata.get("display") if model is not None else None
+        if isinstance(display, dict) and display.get("label"):
+            paths[obj.object_type] = str(_checked_display(dict(display), f"Model '{model.model_id}'")["label"])
+            continue
+        primary = (obj.metadata.get("workspace_display") or {}).get("primary_label_field")
+        if isinstance(primary, str) and primary.strip():
+            paths[obj.object_type] = primary.strip()
+    return paths
+
+
 def packaged_default_layout(agent_id: str, entry: dict | None, object_types: list[str]) -> list[str]:
     """Default export refs from each object's workspace_display, in order.
 
